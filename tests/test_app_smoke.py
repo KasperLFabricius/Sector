@@ -944,10 +944,14 @@ def test_builder_does_not_touch_points_until_applied():
 
     # AppTest cannot continue reliably from the fragment-to-full-app rerun behind
     # Back because it retains removed builder nodes in its element tree. Serialize
-    # the exact post-Back state into an independent session and calculate there; this
-    # retains the engineering-result assertion without relying on stale test nodes.
+    # the complete current-schema state into an independent session and calculate
+    # there; action tables are inputs too and must not be replaced by empty defaults.
     post_back_project = project_io.dump_project(
-        {key: at.session_state[key] for key in project_io.TABLE_KEYS},
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
         {
             key: at.session_state[key]
             for key in project_io.SCALAR_KEYS
@@ -3410,6 +3414,7 @@ def test_calculate_requires_active_action_set_identifiers():
     at = _fresh()
     at.run()
     _set_and_click(at, "calculate", ("text_input", "pl_case_id", ""))
+    assert not at.exception
     assert "results" not in at.session_state
     assert any(
         "At least one Plastic case is required" in error.value
@@ -3452,18 +3457,20 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
     assert at.session_state["_input_tab"] == expected_outer[0]
     labels = [ex.label for ex in at.expander]
     assert labels == [
-        "Stress and crack-width criteria (Elastic)",
+        "Elastic crack-width method",
         "Reinforcement detailing",
         "Fatigue",
+        "Optional bridge calculations",
         "Shear, torsion & combined (Plastic)",
         "Bulk assignments",
     ]
     _goto_input_tab(at, "Project & report")
     labels = [ex.label for ex in at.expander]
     assert labels == [
-        "Stress and crack-width criteria (Elastic)",
+        "Elastic crack-width method",
         "Reinforcement detailing",
         "Fatigue",
+        "Optional bridge calculations",
         "Shear, torsion & combined (Plastic)",
         "Bulk assignments",
         "About",

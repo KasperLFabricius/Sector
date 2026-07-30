@@ -6615,7 +6615,19 @@ def results_overview_view(inp, results, *, stale=False):
             "View": row["view"],
             "Note": row["note"],
         })
-    summary = pd.DataFrame(display)
+    summary = pd.DataFrame(
+        display,
+        columns=(
+            "Check",
+            "Action set",
+            "Status",
+            "Result",
+            "Criterion",
+            "Governing",
+            "View",
+            "Note",
+        ),
+    )
     status_colours = {
         "PASS": "background-color: #E8F5E9; color: #1B5E20; font-weight: 600",
         "FAIL": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
