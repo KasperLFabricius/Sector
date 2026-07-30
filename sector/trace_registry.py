@@ -55,29 +55,26 @@ class TraceRegistryContract:
 
 
 def _require_id(value: object, label: str) -> None:
-    if not isinstance(value, str) or not _ID_RE.fullmatch(value):
+    if type(value) is not str or not _ID_RE.fullmatch(value):
         raise TraceValidationError(f"{label} must be a lowercase stable ID")
 
 
 def _require_text(value: object, label: str) -> None:
-    if not isinstance(value, str) or not value.strip() or value != value.strip():
+    if type(value) is not str or not value.strip() or value != value.strip():
         raise TraceValidationError(f"{label} must be non-empty trimmed text")
 
 
 def _validate_source_contract(source: object, label: str) -> None:
     if type(source) is not TraceSourceContract:
-        raise TraceValidationError(
-            f"{label} sources must contain TraceSourceContract values"
-        )
+        raise TraceValidationError(f"{label} sources must contain TraceSourceContract values")
+    _require_id(source.kind, f"{label} source kind")
     if source.kind not in SOURCE_KINDS:
         raise TraceValidationError(f"{label} has unknown source kind {source.kind!r}")
     _require_id(source.method_id, f"{label} source method_id")
     if source.kind == SOURCE_STANDARD:
         _require_text(source.edition, f"{label} source edition")
     elif source.edition is not None:
-        raise TraceValidationError(
-            f"{label} non-standard source cannot declare an edition"
-        )
+        raise TraceValidationError(f"{label} non-standard source cannot declare an edition")
 
 
 def _source_contract(source: TraceSource) -> TraceSourceContract:
@@ -88,13 +85,11 @@ def _source_contract(source: TraceSource) -> TraceSourceContract:
     )
 
 
-def _validate_registry(
-    registry: object,
-) -> dict[str, tuple[TraceFamilyContract, TraceMemberContract]]:
+def _validate_registry(registry: object) -> dict[str, tuple[TraceFamilyContract, TraceMemberContract]]:
     if type(registry) is not TraceRegistryContract:
         raise TraceValidationError("registry must be a TraceRegistryContract")
     _require_id(registry.registry_id, "registry_id")
-    if not isinstance(registry.families, tuple) or not registry.families:
+    if type(registry.families) is not tuple or not registry.families:
         raise TraceValidationError("registry needs an immutable non-empty family tuple")
 
     family_ids: set[str] = set()
@@ -102,24 +97,16 @@ def _validate_registry(
     expected: dict[str, tuple[TraceFamilyContract, TraceMemberContract]] = {}
     for family in registry.families:
         if type(family) is not TraceFamilyContract:
-            raise TraceValidationError(
-                "registry families must contain TraceFamilyContract values"
-            )
+            raise TraceValidationError("registry families must contain TraceFamilyContract values")
         _require_id(family.family_id, "registry family_id")
         if family.family_id in family_ids:
-            raise TraceValidationError(
-                f"{registry.registry_id} has duplicate family {family.family_id}"
-            )
+            raise TraceValidationError(f"{registry.registry_id} has duplicate family {family.family_id}")
         family_ids.add(family.family_id)
-        if not isinstance(family.members, tuple) or not family.members:
-            raise TraceValidationError(
-                f"{family.family_id} needs an immutable non-empty member tuple"
-            )
+        if type(family.members) is not tuple or not family.members:
+            raise TraceValidationError(f"{family.family_id} needs an immutable non-empty member tuple")
         for member in family.members:
             if type(member) is not TraceMemberContract:
-                raise TraceValidationError(
-                    f"{family.family_id} members must be TraceMemberContract values"
-                )
+                raise TraceValidationError(f"{family.family_id} members must be TraceMemberContract values")
             for label, value in (
                 ("member_id", member.member_id),
                 ("calculation_id", member.calculation_id),
@@ -137,7 +124,7 @@ def _validate_registry(
                     f"{registry.registry_id} has non-injective calculation ID "
                     f"{member.calculation_id}"
                 )
-            if not isinstance(member.axes, tuple):
+            if type(member.axes) is not tuple:
                 raise TraceValidationError(f"{member.member_id} axes must be a tuple")
             axis_names: set[str] = set()
             for axis in member.axes:
@@ -152,17 +139,22 @@ def _validate_registry(
                         f"{member.member_id} has duplicate axis {axis.name}"
                     )
                 axis_names.add(axis.name)
-            if not isinstance(member.sources, frozenset) or not member.sources:
+            if type(member.sources) is not frozenset or not member.sources:
                 raise TraceValidationError(
                     f"{member.member_id} needs a non-empty source contract set"
                 )
             for source in member.sources:
                 _validate_source_contract(source, member.member_id)
             if (
-                not isinstance(member.result_states, frozenset)
+                type(member.result_states) is not frozenset
                 or not member.result_states
-                or not member.result_states <= RESULT_STATES
             ):
+                raise TraceValidationError(
+                    f"{member.member_id} declares invalid result states"
+                )
+            for state in member.result_states:
+                _require_id(state, f"{member.member_id} result state")
+            if not member.result_states <= RESULT_STATES:
                 raise TraceValidationError(
                     f"{member.member_id} declares invalid result states"
                 )

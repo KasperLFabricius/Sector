@@ -148,9 +148,15 @@ def test_schema_rejects_top_level_and_nested_subclasses_before_sealing():
     class HostileStep(TraceStep):
         pass
 
+    class PoisonTuple(tuple):
+        def __iter__(self):
+            raise AssertionError("tuple subclass was iterated")
+
     bundle = _bundle()
     with pytest.raises(TraceValidationError, match="TraceBundle"):
         seal_bundle(HostileBundle(INPUT_SHA, RESULT_SHA, bundle.calculations))
+    with pytest.raises(TraceValidationError, match="calculation tuple"):
+        seal_bundle(dataclasses.replace(bundle, calculations=PoisonTuple(bundle.calculations)))
     step = bundle.calculations[0].steps[0]
     values = {field.name: getattr(step, field.name) for field in dataclasses.fields(step)}
     calculation = dataclasses.replace(
@@ -159,6 +165,9 @@ def test_schema_rejects_top_level_and_nested_subclasses_before_sealing():
     )
     with pytest.raises(TraceValidationError, match="TraceStep"):
         seal_bundle(_raw(calculation))
+    poisoned = dataclasses.replace(step, warnings=PoisonTuple())
+    with pytest.raises(TraceValidationError, match="immutable tuple"):
+        seal_bundle(_raw(dataclasses.replace(bundle.calculations[0], steps=(poisoned, *bundle.calculations[0].steps[1:]))))
 
 
 def test_canonical_round_trip_is_stable_and_preserves_exact_shapes():

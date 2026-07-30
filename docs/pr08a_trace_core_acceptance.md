@@ -6,7 +6,7 @@ renderers, reports, the manual, and project persistence are outside this change.
 
 | Invariant | Frozen acceptance |
 | --- | --- |
-| Schema identity | One immutable `sector.calculation-trace.v1` model accepts only its exact JSON fields and collection shapes. |
+| Schema identity | One immutable `sector.calculation-trace.v1` model accepts only its exact JSON fields, dataclasses, built-in scalars, and collection shapes. |
 | Dependency DAG | Every dependency ID is unique, resolves to an earlier step, and declares the exact unit it consumes; missing, duplicate, forward, cyclic, and unit-mismatched edges fail closed. |
 | Injectivity | Calculation and step IDs are unique, registry member IDs are unique, and arbitrary user-visible labels have a stable collision-free ID token. |
 | Explicit result state | Finite values are finite non-Boolean numbers. Positive infinity, negative infinity, undefined outcomes, and solver failures use named states, a null numeric value, and a non-empty reason; serialized NaN/Infinity is forbidden. |

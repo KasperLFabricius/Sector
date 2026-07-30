@@ -8,7 +8,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 
 TRACE_SCHEMA = "sector.calculation-trace.v1"
@@ -52,16 +52,18 @@ class TraceValidationError(ValueError):
 def trace_identity_token(label: str) -> str:
     """Encode an exact user-visible label as a stable, injective ID token."""
 
-    if not isinstance(label, str):
+    if type(label) is not str:
         raise TypeError("trace identity labels must be text")
     return "u" + label.encode("utf-8").hex()
 
 
 def _exact_mapping(
     value: Any, *, label: str, fields: frozenset[str]
-) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
+) -> dict[str, Any]:
+    if type(value) is not dict:
         raise TraceValidationError(f"{label} must be an object")
+    if any(type(key) is not str for key in value):
+        raise TraceValidationError(f"{label} field names must be plain text")
     actual = set(value)
     if actual != set(fields):
         missing = sorted(fields - actual)
@@ -76,14 +78,14 @@ def _exact_mapping(
 
 
 def _list(value: Any, *, label: str) -> list[Any]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         raise TraceValidationError(f"{label} must be a JSON list")
     return value
 
 
 def _text_list(value: Any, *, label: str) -> tuple[str, ...]:
     items = _list(value, label=label)
-    if any(not isinstance(item, str) for item in items):
+    if any(type(item) is not str for item in items):
         raise TraceValidationError(f"{label} entries must be text")
     return tuple(items)
 
@@ -391,7 +393,7 @@ class TraceBundle:
 
 
 def _require_text(value: Any, label: str) -> None:
-    if not isinstance(value, str) or not value.strip() or value != value.strip():
+    if type(value) is not str or not value.strip() or value != value.strip():
         raise TraceValidationError(f"{label} must be non-empty trimmed text")
 
 
@@ -404,7 +406,7 @@ def _require_id(value: Any, label: str) -> None:
 
 
 def _require_text_tuple(value: Any, label: str) -> None:
-    if not isinstance(value, tuple):
+    if type(value) is not tuple:
         raise TraceValidationError(f"{label} must be an immutable tuple")
     for position, item in enumerate(value, start=1):
         _require_text(item, f"{label} entry {position}")
@@ -420,6 +422,7 @@ def _validate_unit(unit: Any, label: str) -> None:
 def _validate_source(source: Any, label: str) -> None:
     if type(source) is not TraceSource:
         raise TraceValidationError(f"{label} must be a TraceSource")
+    _require_id(source.kind, f"{label} kind")
     if source.kind not in SOURCE_KINDS:
         raise TraceValidationError(f"{label} has unknown kind {source.kind!r}")
     _require_id(source.method_id, f"{label} method_id")
@@ -441,10 +444,11 @@ def _validate_source(source: Any, label: str) -> None:
 def _validate_result(result: Any, label: str) -> None:
     if type(result) is not TraceResult:
         raise TraceValidationError(f"{label} must be a TraceResult")
+    _require_id(result.state, f"{label} state")
     if result.state not in RESULT_STATES:
         raise TraceValidationError(f"{label} has unknown state {result.state!r}")
     if result.state == RESULT_FINITE:
-        if isinstance(result.value, bool) or not isinstance(result.value, (int, float)):
+        if type(result.value) not in {int, float}:
             raise TraceValidationError(f"{label} finite value must be a non-Boolean number")
         try:
             finite = math.isfinite(float(result.value))
@@ -467,7 +471,7 @@ def _validate_calculation(calculation: Any) -> None:
     _require_id(calculation.coverage_id, f"{calculation.calculation_id} coverage_id")
     _require_id(calculation.method_id, f"{calculation.calculation_id} method_id")
     _require_text(calculation.title, f"{calculation.calculation_id} title")
-    if not isinstance(calculation.axes, tuple):
+    if type(calculation.axes) is not tuple:
         raise TraceValidationError(f"{calculation.calculation_id} axes must be a tuple")
     axis_names: set[str] = set()
     for axis in calculation.axes:
@@ -485,7 +489,7 @@ def _validate_calculation(calculation: Any) -> None:
     _require_id(calculation.final_step_id, f"{calculation.calculation_id} final_step_id")
     _require_text_tuple(calculation.warnings, f"{calculation.calculation_id} warnings")
     _require_text_tuple(calculation.assumptions, f"{calculation.calculation_id} assumptions")
-    if not isinstance(calculation.steps, tuple) or not calculation.steps:
+    if type(calculation.steps) is not tuple or not calculation.steps:
         raise TraceValidationError(
             f"{calculation.calculation_id} needs an immutable non-empty step tuple"
         )
@@ -506,6 +510,7 @@ def _validate_calculation(calculation: Any) -> None:
         _require_text(
             step.substituted_expression, f"{label} substituted_expression"
         )
+        _require_id(step.quantity_role, f"{label} quantity_role")
         if step.quantity_role not in QUANTITY_ROLES:
             raise TraceValidationError(
                 f"{label} has unknown quantity role {step.quantity_role!r}"
@@ -515,7 +520,7 @@ def _validate_calculation(calculation: Any) -> None:
         _validate_result(step.result, f"{label} result")
         _require_text_tuple(step.warnings, f"{label} warnings")
         _require_text_tuple(step.assumptions, f"{label} assumptions")
-        if not isinstance(step.dependencies, tuple):
+        if type(step.dependencies) is not tuple:
             raise TraceValidationError(f"{label} dependencies must be a tuple")
 
         dependency_ids: set[str] = set()
@@ -613,21 +618,21 @@ def _content_sha256(bundle: TraceBundle) -> str:
 def _validate_structure(bundle: Any, *, require_seal: bool) -> TraceBundle:
     if type(bundle) is not TraceBundle:
         raise TraceValidationError("trace bundle must be a TraceBundle")
-    if bundle.schema != TRACE_SCHEMA:
+    if type(bundle.schema) is not str or bundle.schema != TRACE_SCHEMA:
         raise TraceValidationError(f"unsupported trace schema {bundle.schema!r}")
     for label, digest in (
         ("input_sha256", bundle.input_sha256),
         ("result_sha256", bundle.result_sha256),
     ):
-        if not isinstance(digest, str) or not _SHA256_RE.fullmatch(digest):
+        if type(digest) is not str or not _SHA256_RE.fullmatch(digest):
             raise TraceValidationError(f"{label} must be a lowercase SHA-256")
     if require_seal and (
-        not isinstance(bundle.content_sha256, str)
+        type(bundle.content_sha256) is not str
         or not _SHA256_RE.fullmatch(bundle.content_sha256)
     ):
         raise TraceValidationError("content_sha256 must be a lowercase SHA-256")
     _require_text_tuple(bundle.warnings, "trace bundle warnings")
-    if not isinstance(bundle.calculations, tuple) or not bundle.calculations:
+    if type(bundle.calculations) is not tuple or not bundle.calculations:
         raise TraceValidationError(
             "trace bundle needs an immutable non-empty calculation tuple"
         )
@@ -672,7 +677,7 @@ def create_bundle(
 
 
 def validate_bundle(
-    bundle: TraceBundle | Mapping[str, Any],
+    bundle: TraceBundle | dict[str, Any],
     *,
     expected_input_sha256: str | None = None,
     expected_result_sha256: str | None = None,
@@ -727,7 +732,7 @@ def _reject_json_constant(value: str) -> None:
 def bundle_from_json(payload: str) -> TraceBundle:
     """Deserialize canonical-compatible JSON into validated immutable trace data."""
 
-    if not isinstance(payload, str):
+    if type(payload) is not str:
         raise TraceValidationError("calculation trace JSON must be text")
     try:
         value = json.loads(
