@@ -247,6 +247,40 @@ def _seeded_text_area(box, label, default, key, **kw):
     return box.text_area(label, key=key, **_input_widget_kwargs(key, kw))
 
 
+_TORSION_GAMMA_METHOD_KEY = "_torsion_gamma_ct_default_method"
+_TORSION_GAMMA_MANAGED_KEY = "_torsion_gamma_ct_uses_method_default"
+
+
+def _mark_torsion_gamma_ct_custom():
+    """Stop method changes from replacing an explicitly edited factor."""
+    st.session_state[_TORSION_GAMMA_MANAGED_KEY] = False
+
+
+def _seed_torsion_gamma_ct(method):
+    """Seed or update the editable tensile factor from the selected method.
+
+    A fresh input follows the method default. Once the engineer edits it, later
+    method changes preserve that actual value. Loaded projects are marked
+    explicit in :func:`_apply_pending_project` before this helper runs.
+    """
+    code = _SHEAR_CODES.get(method, codes.EC2_2005_DKNA)
+    default = float(code.gamma_ct)
+    previous_method = st.session_state.get(_TORSION_GAMMA_METHOD_KEY)
+    if "torsion_gamma_ct" not in st.session_state:
+        st.session_state["torsion_gamma_ct"] = default
+        st.session_state[_TORSION_GAMMA_MANAGED_KEY] = True
+    elif previous_method is None:
+        st.session_state.setdefault(_TORSION_GAMMA_MANAGED_KEY, False)
+    elif (
+        previous_method != method
+        and st.session_state.get(_TORSION_GAMMA_MANAGED_KEY, False)
+    ):
+        st.session_state["torsion_gamma_ct"] = default
+        _journal_current_input_values("torsion_gamma_ct")
+    st.session_state[_TORSION_GAMMA_METHOD_KEY] = method
+    return default
+
+
 def _safe_build(box, builder, curve, vals, **extra):
     """Build a material from the flat parameter set, surviving degenerate input.
 
@@ -2440,6 +2474,18 @@ def _apply_pending_project() -> None:
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
     for key, value in scalars.items():
         st.session_state[key] = value
+    if "torsion_gamma_ct" in scalars:
+        effective_torsion_method = (
+            scalars.get("combined_method")
+            if scalars.get("combined_on")
+            else scalars.get("torsion_method")
+        )
+        st.session_state[_TORSION_GAMMA_METHOD_KEY] = (
+            effective_torsion_method or codes.EC2_2005_DKNA.label
+        )
+        # A loaded value is an explicit persisted input even when it happens to
+        # equal the selected method's current default.
+        st.session_state[_TORSION_GAMMA_MANAGED_KEY] = False
     if any(key in scalars for key in mat_catalog.CATALOG_KEYS):
         _bump_material_catalog_revision()
         st.session_state.pop("_material_alias_revision", None)
@@ -3223,6 +3269,7 @@ _SHEAR_SIG_KEYS = (
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
     "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
+    "torsion_gamma_ct",
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
     "torsion_sub_x2", "torsion_sub_y2", "torsion_sub_x3", "torsion_sub_y3",
@@ -3859,6 +3906,8 @@ def build_inputs(host=st):
              r"place of the recommended $\nu=0.6(1-f_{ck}/250)$.")
     if combined_on:
         sts.caption(f"Torsion method set by Combined: {combined_method}")
+    effective_torsion_method = combined_method if combined_on else torsion_method
+    torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
     sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
@@ -3869,6 +3918,43 @@ def build_inputs(host=st):
         "torsion_tef", disabled=not _tors,
         help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
              "the real wall for a hollow section); enter a value to override.")
+    torsion_gamma_ct = _seeded_number(
+        sts,
+        r"Concrete tensile factor $\gamma_{ct}$",
+        None,
+        None,
+        torsion_gamma_default,
+        0.05,
+        "torsion_gamma_ct",
+        disabled=not _tors,
+        format="%.3f",
+        on_change=_mark_torsion_gamma_ct_custom,
+        help=(
+            r"Direct positive-finite input used in "
+            r"$f_{ctd}=f_{ctk,0.05}/\gamma_{ct}$ and $T_{Rd,c}$. "
+            f"The selected method starts at {torsion_gamma_default:.2f}; "
+            "custom values are retained, not clamped or replaced."
+        ),
+    )
+    torsion_gamma_ct_error = None
+    if (
+        isinstance(torsion_gamma_ct, bool)
+        or not math.isfinite(float(torsion_gamma_ct))
+        or float(torsion_gamma_ct) <= 0.0
+    ):
+        torsion_gamma_ct_error = (
+            "Concrete tensile factor gamma_ct must be a positive finite real "
+            "number."
+        )
+        sts.error(torsion_gamma_ct_error)
+    elif not math.isclose(
+        float(torsion_gamma_ct), torsion_gamma_default, rel_tol=0.0, abs_tol=1e-12
+    ):
+        sts.caption(
+            f"Custom gamma_ct = {float(torsion_gamma_ct):g}; the selected "
+            f"method default is {torsion_gamma_default:g}. The custom value is "
+            "used unchanged."
+        )
     torsion_nu_v = _seeded_checkbox(
         sts, r"$\nu_t = \nu_v$ (closed stirrups + distributed long. steel)", False,
         "torsion_nu_v", disabled=not _tors,
@@ -4468,6 +4554,11 @@ def build_inputs(host=st):
     ]
     prestress = tendon_materials[0] if tendon_materials else selected_prestress
     material_error = material_assignment_error
+    if torsion_gamma_ct_error:
+        material_error = (
+            f"{material_error} {torsion_gamma_ct_error}".strip()
+            if material_error else torsion_gamma_ct_error
+        )
     if material_definition_errors:
         definition_message = (
             "Invalid material definition(s): "
@@ -4747,7 +4838,9 @@ def build_inputs(host=st):
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_T=torsion_T, torsion_tef=torsion_tef,
-                torsion_nu_v=torsion_nu_v, torsion_subdivide=torsion_subdivide,
+                torsion_nu_v=torsion_nu_v,
+                torsion_gamma_ct=torsion_gamma_ct,
+                torsion_subdivide=torsion_subdivide,
                 torsion_subrects=torsion_subrects,
                 combined_on=combined_on, combined_method=combined_method,
                 combined_mv_independent=combined_mv_independent,
@@ -5659,7 +5752,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                 t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
                 alpha_cw=tors_ctx["alpha_cw"], fctd=tors_ctx["fctd"],
-                gamma_c=tors_ctx["gamma_c"], gamma_s=tors_ctx["gamma_s"],
+                fctk_005=tors_ctx["fctk_005"],
+                gamma_c=tors_ctx["gamma_c"], gamma_ct=tors_ctx["gamma_ct"],
+                gamma_s=tors_ctx["gamma_s"],
                 nu_v_detailing=tors_ctx["nu_detail_applied"],
                 sigma_cp=tors_ctx["sigma_cp"], n_prestress=n_prestress,
                 asw_t=tors_ctx["asw_t"], asw_over_s=tors_ctx["asw_over_s_t"],
@@ -9100,6 +9195,13 @@ def torsion_view(inp, results):
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
         _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok)
 
+    st.caption(
+        "Torsional cracking provenance: "
+        f"$f_{{ctd}} = f_{{ctk,0.05}}/\\gamma_{{ct}} = "
+        f"{t['fctk_005']:.3f}/{t['gamma_ct']:.3f} = "
+        f"{t['fctd']:.3f}$ MPa. The actual direct gamma_ct input is used."
+    )
+
     if t.get("subdivided"):
         subs = t["subtubes"]
         c_tot = sum(s["stiffness"] for s in subs) or 1.0
@@ -9163,12 +9265,14 @@ def torsion_view(inp, results):
             {"Quantity": ["Gross area A", "Outer perimeter u", "Wall thickness tef",
                           "Enclosed area Ak", "Centre-line perimeter uk",
                           f"Strut factor {_NU}", f"Chord factor {_ALPHA}cw",
+                          "Concrete tensile factor gamma_ct",
                           "Required long. steel " + chr(0x03A3) + "Asl"],
              "Value": [f"{tube['A'] * 1e6:.0f} mm2", f"{tube['u'] * 1e3:.0f} mm",
                        f"{tube['tef']:.1f} mm ({tef_note})",
                        f"{tube['Ak'] * 1e6:.0f} mm2",
                        f"{tube['uk'] * 1e3:.0f} mm", f"{t['nu']:.3f}",
-                       f"{t['alpha_cw']:.3f}", f"{t['asl_req']:.0f} mm2"]},
+                       f"{t['alpha_cw']:.3f}", f"{t['gamma_ct']:.3f}",
+                       f"{t['asl_req']:.0f} mm2"]},
             hide_index=True, width="stretch")
         st.caption(
             r"$T_{Rd,s} = (A_{sw}/s)\,2 A_k f_{ywd}\cot\theta$ (6.28); "

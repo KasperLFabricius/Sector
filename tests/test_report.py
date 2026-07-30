@@ -51,6 +51,7 @@ def _inp():
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
         "nl": 15.0, "ns": 6.0, "sls_fctm": 2.9, "sls_cw": True,
         "conc_Ec": 33.0,
+        "torsion_gamma_ct": 1.70,
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
 
@@ -1825,10 +1826,12 @@ def _torsion_out(interaction=False):
     tube = {"A": 0.18, "u": 1.8, "tef": 100.0, "Ak": 0.1, "uk": 1.4,
             "tef_auto": 100.0, "tef_capped": False, "tef_user": False,
             "hollow": False, "valid": True}
-    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4, "trd_c": 31.0,
+    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4,
+           "trd_c": 26.435,
            "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
            "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
-           "nu": 0.3675, "alpha_cw": 1.0, "fctd": 1.55, "asw_t": 78.5,
+           "nu": 0.3675, "alpha_cw": 1.0, "fctk_005": 2.247,
+           "gamma_ct": 1.70, "fctd": 1.3218, "asw_t": 78.5,
            "asw_over_s": 0.5236, "dia": 10.0, "s": 150.0, "cot_min": 1.0,
            "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
            "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
@@ -1847,6 +1850,9 @@ def test_report_includes_torsion_section():
     assert "Torsion" in txt
     assert "6.30" in txt and "6.28" in txt          # the clause formulae
     assert "76.4" in txt                            # TRd
+    assert "26.435" in txt                          # TRd,c with gamma_ct = 1.70
+    assert "1.700" in txt                           # actual tensile factor provenance
+    assert "fctd = fctk,0.05 /" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1176" in txt                            # required Asl
     assert chr(0x2211) in txt                       # summation operator
@@ -1964,7 +1970,7 @@ def test_report_torsion_shows_min_reinf_screen():
     out = _out()
     t = _torsion_out()
     t["min_reinf"] = dict(applicable=True, value=0.52, ok=True, t_ed=40.0,
-                          trd_c=31.0, v_ed=30.0, vrd_c=136.0, solid=True,
+                          trd_c=26.435, v_ed=30.0, vrd_c=136.0, solid=True,
                           model_2023=False)
     out["torsion"] = t
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))

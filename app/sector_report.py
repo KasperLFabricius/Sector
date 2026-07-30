@@ -1473,9 +1473,10 @@ class ReportBuilder:
         inp = self.inp
         rows = [["Setting", "Value"]]
         rows.append(["Analysis mode", str(inp.get("mode", "-"))])
+        torsion_results = self._result_values("torsion")
         if (
             self._result_values("shear")
-            or self._result_values("torsion")
+            or torsion_results
             or self._result_values("combined")
         ):
             material_id = inp.get("capacity_steel_material_id") or "-"
@@ -1497,6 +1498,20 @@ class ReportBuilder:
                 [
                     "Shared compression-strut cot theta<sub>max</sub>",
                     _fmt(inp.get("strut_cot_max"), 2),
+                ],
+            ])
+        if torsion_results:
+            torsion_result = torsion_results[0]
+            rows.extend([
+                ["Torsion method", str(torsion_result.get("method") or "-")],
+                [
+                    "Concrete tensile factor gamma<sub>ct</sub>",
+                    _fmt(
+                        torsion_result.get(
+                            "gamma_ct", inp.get("torsion_gamma_ct")
+                        ),
+                        3,
+                    ),
                 ],
             ])
         plastic_results = self._result_values("plastic")
@@ -3674,6 +3689,14 @@ class ReportBuilder:
                         "outside the selected method's default range 1..2.5 "
                         "(6.7N / 6.7a NA). The actual values are retained in the "
                         "torsion and dependent interaction calculations.")
+        self._small(
+            "Torsional cracking uses the actual direct input "
+            "gamma<sub>ct</sub> = "
+            f"{_fmt(t.get('gamma_ct'), 3)}: "
+            "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / "
+            "gamma<sub>ct</sub> = "
+            f"{_fmt(t.get('fctd'), 3)} MPa."
+        )
         if t.get("subdivided"):
             self._h2("Sub-tubes (compound section, 6.3.1(3))")
             self._subtube_section(t)
@@ -3692,6 +3715,10 @@ class ReportBuilder:
                  f"(cot theta = {_fmt(t['cot'], 3)})"],
                 ["Strut factor", "nu", f"{_fmt(t['nu'], 3)}"],
                 ["Chord factor", "alpha<sub>cw</sub>", f"{_fmt(t['alpha_cw'], 3)}"],
+                ["Concrete tensile factor", "gamma<sub>ct</sub>",
+                 _fmt(t.get("gamma_ct"), 3)],
+                ["Design tensile strength", "f<sub>ctd</sub>",
+                 f"{_fmt(t.get('fctd'), 3)} MPa"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
@@ -3726,6 +3753,12 @@ class ReportBuilder:
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
                    f"(governed by {t['governs']})")
+        self._formula(
+            "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / gamma<sub>ct</sub>",
+            ref="selected torsion method; f<sub>ctk,0.05</sub> = 0.7 f<sub>ctm</sub>",
+            subst=f"{_fmt(t.get('fctk_005'), 3)} / "
+                  f"{_fmt(t.get('gamma_ct'), 3)}",
+            result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
         self._formula(
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
             ref="cracking (tau = f<sub>ctd</sub>)",

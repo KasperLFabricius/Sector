@@ -255,6 +255,7 @@ def _inputs() -> dict:
         "shear_fywk": 500.0,
         "torsion_on": True,
         "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_gamma_ct": codes.EC2_2005_DKNA.gamma_ct,
         "combined_on": True,
         "combined_method": codes.EC2_2005_DKNA.label,
         "combined_mv_independent": False,
@@ -375,6 +376,9 @@ def _results(inp: dict | None = None) -> dict:
     ]
     fyd_long = capacity_material.fytk / capacity_material.gamma_y
     fcd = 30.0 / 1.5
+    gamma_ct = float(inp["torsion_gamma_ct"])
+    fctk_005 = 0.7 * codes.fctm(30.0)
+    fctd = fctk_005 / gamma_ct
     shear_z_mm = 243.0
     link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
     link_asw_over_s = link_asw / link_spacing
@@ -404,7 +408,7 @@ def _results(inp: dict | None = None) -> dict:
             tube, 25.0, tcode=code, fck=30.0, fcd=fcd, alpha_cw=1.0,
             fywd=fywd, asw_over_s=torsion_asw_over_s,
             cot_min=cot, cot_max=cot, nu_detail=False,
-            fctd=1.35, fyd_long=fyd_long,
+            fctd=fctd, fyd_long=fyd_long,
         )
 
     def longitudinal_at(cot: float) -> dict:
@@ -639,7 +643,9 @@ def _results(inp: dict | None = None) -> dict:
         "fyd_long": fyd_long,
         "nu": primary_torsion["nu"],
         "alpha_cw": 1.0,
-        "fctd": 1.35,
+        "fctk_005": fctk_005,
+        "gamma_ct": gamma_ct,
+        "fctd": fctd,
         "asw_t": torsion_asw,
         "asw_over_s": torsion_asw_over_s,
         "dia": link_dia,
@@ -895,6 +901,16 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
     expected_fyd_long = capacity_material.fytk / capacity_material.gamma_y
     close("torsion longitudinal design strength", torsion_out["fyd_long"],
           expected_fyd_long)
+    close(
+        "torsion tensile factor",
+        torsion_out["gamma_ct"],
+        inp["torsion_gamma_ct"],
+    )
+    close(
+        "torsion design tensile strength",
+        torsion_out["fctd"],
+        torsion_out["fctk_005"] / torsion_out["gamma_ct"],
+    )
     close("TEd", torsion_out["t_ed"], case["t_ed_knm"])
     close(
         "TRd,s",
@@ -1249,6 +1265,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Closed stirrup",
         "Longitudinal reinforcement",
         "Torsion (thin-walled tube)",
+        "Concrete tensile factor",
         "125.0 %",
         "245.000 MPa",
         "Crack-width candidates",

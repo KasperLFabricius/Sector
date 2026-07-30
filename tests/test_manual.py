@@ -244,6 +244,18 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     assert "reverts to each" not in text
 
 
+def test_manual_documents_direct_torsion_tensile_factor_and_benchmark():
+    text = "\n".join(
+        str(value)
+        for block in manual.manual_blocks()
+        for value in block[1:]
+    )
+
+    assert "f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}" in text
+    assert "EN default 1.50; DK/NA default 1.70" in text
+    assert "T_{Rd,c} = 26.435" in text
+
+
 def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "general / other cases" in text

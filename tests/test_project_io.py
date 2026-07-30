@@ -70,6 +70,7 @@ def _current_project():
         "mode": "Both",
         "conc_gamma_c": 0.5,
         "mild_gamma_y": 2.0,
+        "torsion_gamma_ct": 2.0,
         "bridge_standard": "Independent component calculations",
         "rep_proj_no": "P-001",
     }
@@ -94,6 +95,7 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
 
     assert loaded_scalars["conc_gamma_c"] == pytest.approx(0.5)
     assert loaded_scalars["mild_gamma_y"] == pytest.approx(2.0)
+    assert loaded_scalars["torsion_gamma_ct"] == pytest.approx(2.0)
     assert (
         loaded_tables[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"]
         == "Only characteristic action"
@@ -171,3 +173,34 @@ def test_nonpositive_factor_is_rejected_but_positive_custom_values_are_not():
         assert loaded["conc_gamma_c"] == pytest.approx(value)
     with pytest.raises(ValueError, match="positive finite"):
         project_io.dump_project(tables, dict(scalars, conc_gamma_c=0.0))
+
+
+@pytest.mark.parametrize("value", [0.5, 2.0])
+def test_current_schema_retains_direct_torsion_tensile_factor(value):
+    tables, scalars = _current_project()
+    scalars.update(torsion_on=True, torsion_gamma_ct=value)
+
+    text = project_io.dump_project(tables, scalars)
+    _, loaded = project_io.parse_project(text)
+
+    assert loaded["torsion_gamma_ct"] == pytest.approx(value)
+
+
+@pytest.mark.parametrize(
+    "value", [True, False, 0.0, -1.0, float("inf"), float("-inf"), float("nan")]
+)
+def test_current_schema_rejects_invalid_torsion_tensile_factor(value):
+    tables, scalars = _current_project()
+    scalars.update(torsion_on=True, torsion_gamma_ct=value)
+
+    with pytest.raises(ValueError, match="positive finite real"):
+        project_io.dump_project(tables, scalars)
+
+
+def test_current_schema_requires_torsion_tensile_factor_when_active():
+    tables, scalars = _current_project()
+    scalars["torsion_on"] = True
+    scalars.pop("torsion_gamma_ct")
+
+    with pytest.raises(ValueError, match="torsion_gamma_ct is required"):
+        project_io.dump_project(tables, scalars)

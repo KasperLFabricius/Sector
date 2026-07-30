@@ -18,6 +18,21 @@ SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
 
 
+def _positive_finite_real(value, label):
+    """Return one calculation coefficient, rejecting only malformed values."""
+    if isinstance(value, (bool, str, bytes)):
+        raise ValueError(f"{label} must be a positive finite real number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{label} must be a positive finite real number"
+        ) from exc
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{label} must be a positive finite real number")
+    return number
+
+
 def _require_valid_input_geometry(inp):
     """Validate either a real Section or the raw headless geometry payload."""
     section = inp.get("section")
@@ -521,7 +536,9 @@ def build_torsion_context(inp, n_ed_comp):
         != tcode.torsion_nu(fck, closed_detailing=False)
     )
     gamma_c = inp["concrete"].gamma_c
-    fctd = 0.7 * codes.fctm(fck) / gamma_c
+    gamma_ct = _positive_finite_real(inp["torsion_gamma_ct"], "gamma_ct")
+    fctk_005 = 0.7 * codes.fctm(fck)
+    fctd = fctk_005 / gamma_ct
     t_ed = inp["torsion_T"]
     tube_kwargs = {
         "tcode": tcode,
@@ -602,9 +619,11 @@ def build_torsion_context(inp, n_ed_comp):
         "tcot_max": cot_max,
         "nu_detail": nu_detail,
         "nu_detail_applied": nu_detail_applied,
+        "fctk_005": fctk_005,
         "fctd": fctd,
         "sigma_cp": sigma_cp,
         "gamma_c": gamma_c,
+        "gamma_ct": gamma_ct,
         "gamma_s": gamma_s,
         "compound_detected": compound_detected,
         "subdivision_requested": subdivision_requested,

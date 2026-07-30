@@ -21,7 +21,9 @@ cross-section and reports, for the same section:
   cracking threshold, transformed properties and optional crack width `wk`,
   without specified-limit inputs or output-only verdicts.
 * **Section capacity checks** - shear, torsion and combined M-V-T checks where
-  supported by the selected Eurocode method.
+  supported by the selected Eurocode method. Torsional cracking uses the direct
+  positive-finite `gamma_ct` input (EN default 1.50; DK/NA default 1.70), and
+  reports the actual factor used.
 * **Reinforcement detailing checks** - per-case longitudinal minimum
   reinforcement and shear/torsion link ratio and spacing checks, plus a
   section-wide clear-spacing review with stable element IDs.

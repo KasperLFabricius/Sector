@@ -868,6 +868,9 @@ def manual_blocks() -> list:
        "override $t_{ef}$ (0 = auto). The compression-strut range is entered once "
        "under **Links / stirrups** and is shared with shear. "
        "The tube $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ are derived from the outline. "
+       "The concrete tensile factor $\\gamma_{ct}$ is a direct positive-finite "
+       "input in $f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}$ (EN default 1.50; DK/NA "
+       "default 1.70); a custom value is used and reported unchanged. "
        "The **stirrup is the shared closed stirrup** (defined once under Links / "
        "stirrups, and used by shear too -- one leg of the loop carries the torsion "
        "shear flow), and the longitudinal steel $\\sum A_{sl}$ uses the section's "
@@ -1523,7 +1526,10 @@ def manual_blocks() -> list:
        "longitudinal steel $\\sum A_{sl} = T_{Ed}\\,u_k\\,\\cot\\theta/(2A_k\\,"
        "f_{yd})$ (6.28), **in addition** to the bending reinforcement on the "
        "tension side, and the cracking torque is $T_{Rd,c} = 2A_k\\,t_{ef}\\,"
-       "f_{ctd}$ ($\\tau = f_{ctd}$).")
+       "f_{ctd}$ ($\\tau = f_{ctd}$), where "
+       "$f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}=0.7f_{ctm}/\\gamma_{ct}$. "
+       "The selected method supplies the editable starting value "
+       "$\\gamma_{ct}=1.50$ (EN) or 1.70 (DK/NA).")
     md("As for shear, $T_{Rd,s}$ rises with $\\cot\\theta$ and $T_{Rd,max}$ peaks "
        "at 45 degrees, so $T_{Rd} = \\min$ is largest at the crossover, which "
        "Sector auto-optimises within the $\\cot\\theta$ bounds. When shear and "
@@ -1549,7 +1555,7 @@ def manual_blocks() -> list:
        "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "
        "$\\cot\\theta = 1.75$ the stirrups and struts meet at "
        "$T_{Rd} \\approx 76.4$ kN$\\cdot$m, with "
-       "$T_{Rd,c} \\approx 31$ kN$\\cdot$m.")
+       "$\\gamma_{ct}=1.70$ and $T_{Rd,c} = 26.435$ kN$\\cdot$m.")
 
     h1("Combined M-V-T interaction")
     md("Bending, shear and torsion act together, so their checks are tied together "

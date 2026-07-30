@@ -16,6 +16,11 @@ method's default. It must not clamp, replace or reject that value merely because
 of the difference. Inputs are rejected only when malformed or when they make the
 selected mathematics undefined.
 
+That rule includes the direct concrete tensile factor `gamma_ct` used by the
+retained torsional-cracking calculation. Its selected-method default is 1.50
+for EN and 1.70 for DK/NA; any positive finite user value remains the actual
+solver, project and report input.
+
 PASS/FAIL is reserved for an implemented demand-versus-resistance equation.
 Stresses, crack widths and other output-only quantities carry no acceptance
 verdict. Sector does not issue a global compliance verdict.

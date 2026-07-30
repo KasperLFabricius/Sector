@@ -268,10 +268,10 @@ def test_trd_c_cracking_moment():
     code = codes.EC2_2005_DKNA
     t = _tube()
     fctm = codes.fctm(35.0)
-    fctd = 0.7 * fctm / code.gamma_c                   # fctk,0.05 / gamma_c
+    fctd = 0.7 * fctm / code.gamma_ct                # fctk,0.05 / gamma_ct
     tc = torsion.trd_c(fctd, t["Ak"], t["tef"])
     assert tc == pytest.approx(2.0 * t["Ak"] * (t["tef"] / 1000.0) * fctd * 1000.0)
-    assert tc == pytest.approx(31.0, abs=1.5)
+    assert tc == pytest.approx(26.434984813960778)
 
 
 def test_asl_required_longitudinal_steel():
@@ -382,6 +382,19 @@ def test_app_torsion_produces_a_resistance():
     assert t["asl_req"] > 0.0                       # torsion needs longitudinal steel
 
 
+def test_app_torsion_gamma_ct_defaults_follow_method_until_user_edit():
+    at = _fresh()
+    at.run()
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.70)
+
+    _set(at, ("selectbox", "torsion_method", codes.EC2_2005.label))
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.50)
+
+    _set(at, ("number_input", "torsion_gamma_ct", 2.0))
+    _set(at, ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label))
+    assert at.session_state["torsion_gamma_ct"] == pytest.approx(2.0)
+
+
 def test_app_torsion_uses_final_material_factors():
     at = _fresh()
     at.run()
@@ -390,6 +403,7 @@ def test_app_torsion_uses_final_material_factors():
         ("number_input", "conc_gamma_c", 1.80),
         ("number_input", "mild_gamma_y", 1.35),
         ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_gamma_ct", 2.0),
         ("number_input", "torsion_T", 40.0),
     )
     _calculate(at)
@@ -402,6 +416,39 @@ def test_app_torsion_uses_final_material_factors():
     )
     assert t["gamma_s"] == pytest.approx(1.35)
     assert t["fywd"] == pytest.approx(at.session_state["shear_fywk"] / 1.35)
+    assert t["gamma_ct"] == pytest.approx(2.0)
+    assert t["fctd"] == pytest.approx(t["fctk_005"] / 2.0)
+
+
+def test_torsion_gamma_ct_change_marks_results_stale_and_recalculates():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 28.0),
+    )
+    _calculate(at)
+    old_signature = at.session_state["result_sig"]
+    initial = at.session_state["results"]["torsion"]
+    assert initial["gamma_ct"] == pytest.approx(1.70)
+    assert initial["trd_c"] == pytest.approx(
+        2.0 * initial["tube"]["Ak"] * (initial["tube"]["tef"] / 1000.0)
+        * initial["fctd"] * 1000.0
+    )
+
+    _goto_page(at, "Inputs")
+    _set(at, ("number_input", "torsion_gamma_ct", 2.0))
+    assert at.session_state["_latest_inputs"]["signature"] != old_signature
+    assert at.session_state["result_sig"] == old_signature
+
+    _calculate(at)
+    result = at.session_state["results"]["torsion"]
+    assert result["gamma_ct"] == pytest.approx(2.0)
+    assert result["trd_c"] == pytest.approx(
+        2.0 * result["tube"]["Ak"] * (result["tube"]["tef"] / 1000.0)
+        * result["fctd"] * 1000.0
+    )
 
 
 def test_app_torsion_view_renders():
@@ -414,6 +461,9 @@ def test_app_torsion_view_renders():
     labels = [m.label for m in at.metric]
     assert any("Utilisation" in lbl for lbl in labels)
     assert any("T_{Rd" in lbl for lbl in labels)
+    captions = " ".join(item.value for item in at.caption)
+    assert "actual direct gamma_ct input is used" in captions
+    assert "1.700" in captions
 
 
 def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
@@ -862,7 +912,11 @@ def test_app_torsion_is_saved_and_restored():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    _set(at, ("number_input", "torsion_T", 55.0))
+    _set(
+        at,
+        ("number_input", "torsion_T", 55.0),
+        ("number_input", "torsion_gamma_ct", 2.0),
+    )
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     tables = {k: at.session_state[k] for k in project_io.PROJECT_TABLE_KEYS
@@ -875,6 +929,7 @@ def test_app_torsion_is_saved_and_restored():
     at2.run()
     assert not at2.exception
     assert at2.session_state["torsion_on"] is True
+    assert at2.session_state["torsion_gamma_ct"] == pytest.approx(2.0)
     assert first_case_value(at2, "torsion_T") == pytest.approx(55.0)
 
 

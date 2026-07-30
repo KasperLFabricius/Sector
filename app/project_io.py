@@ -330,6 +330,10 @@ def _canonical_scalars(scalars: Mapping) -> dict:
     standard = payload.get("bridge_standard")
     if standard is not None and standard not in bridge.METHODS:
         raise ValueError(f"unknown bridge_standard: {standard}")
+    if payload.get("torsion_on") and "torsion_gamma_ct" not in payload:
+        raise ValueError(
+            "torsion_gamma_ct is required when the torsion calculation is enabled"
+        )
     return payload
 
 
