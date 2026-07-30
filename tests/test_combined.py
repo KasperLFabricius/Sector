@@ -258,10 +258,13 @@ def test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim():
 
     assert not at.exception
     results = at.session_state["results"]
-    assert results["shear"]["status"] in {"REVIEW", "FAIL", "INVALID"}
-    assert results["shear"]["interaction_assessed"] is False
+    assert "generic_cross_direction_interaction_calculated" not in results["shear"]
+    assert "status" not in results["shear"]
+    assert "interaction_assessed" not in results["shear"]
     assert set(results["combined"]["directions"]) == {"vx", "vy"}
-    assert results["combined"]["interaction_status"] == "NOT ASSESSED"
+    assert "generic_cross_direction_interaction_calculated" not in results["combined"]
+    assert "status" not in results["combined"]
+    assert "interaction_status" not in results["combined"]
     assert set(results["torsion"]["directional_interactions"]) == {"vx", "vy"}
     for item in results["combined"]["directions"].values():
         assert item["governing_face"] in {"negative", "positive"}
@@ -269,7 +272,11 @@ def test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim():
 
     _select_view(at, "M-V-T Combined")
     assert not at.exception
-    assert any("NOT ASSESSED" in warning.value for warning in at.warning)
+    assert any(
+        "generic simultaneous" in item.value.lower()
+        and "not calculated" in item.value.lower()
+        for item in at.info
+    )
     table = next(
         frame.value for frame in at.dataframe
         if "Bending util." in frame.value.columns
@@ -278,7 +285,7 @@ def test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim():
     assert f"cot {chr(0x03B8)}" in table.columns
 
 
-def test_biaxial_combined_fails_when_torsion_drives_a_directional_failure():
+def test_biaxial_combined_keeps_directional_failure_without_aggregate_verdict():
     at = _fresh()
     at.run()
     _set(
@@ -306,15 +313,19 @@ def test_biaxial_combined_fails_when_torsion_drives_a_directional_failure():
     )
     combined = results["combined"]
     assert any(
-        direction["status"] == "FAIL"
+        not direction["dkna_ok"]
         for direction in combined["directions"].values()
     )
-    assert combined["status"] == "FAIL"
-    governing = combined["directions"][combined["governing_component"]]
-    assert governing["status"] == "FAIL"
+    assert all(
+        "status" not in direction and "governing_util" not in direction
+        for direction in combined["directions"].values()
+    )
+    assert "generic_cross_direction_interaction_calculated" not in combined
+    assert "status" not in combined
+    assert "governing_component" not in combined
 
 
-def test_biaxial_directional_vt_table_withholds_out_of_range_verdicts():
+def test_biaxial_directional_vt_table_retains_out_of_default_range_verdicts():
     at = _fresh()
     at.run()
     _set(
@@ -340,7 +351,7 @@ def test_biaxial_directional_vt_table_withholds_out_of_range_verdicts():
         "directional_interactions"
     ]
     assert all(
-        not item["interaction"]["code_applicable"]
+        "code_applicable" not in item["interaction"]
         for item in interactions.values()
     )
     _select_view(at, "Torsion")
@@ -348,7 +359,8 @@ def test_biaxial_directional_vt_table_withholds_out_of_range_verdicts():
         frame.value for frame in at.dataframe
         if "Directional screen" in frame.value.columns
     )
-    assert set(table["Status"]) == {"NOT ASSESSED"}
+    assert "NOT ASSESSED" not in set(table["Status"])
+    assert set(table["Status"]) <= {"PASS", "FAIL"}
 
 
 
@@ -532,18 +544,19 @@ def test_app_combined_view_renders():
     assert not any(lbl.startswith("Governing (") for lbl in labels)
 
 
-def test_app_combined_out_of_range_withholds_dependent_verdicts():
+def test_app_combined_out_of_default_range_warns_and_retains_verdicts():
     at = _fresh()
     at.run()
     at.number_input(key="strut_cot_max").set_value(3.0).run()
     _enable_all(at)
     assert not at.exception
     c = at.session_state["results"]["combined"]
-    assert c["code_applicable"] is False
-    assert c["crushing"]["code_applicable"] is False
-    assert c["longitudinal"]["code_applicable"] is False
+    assert c["outside_default_range"] is True
+    assert "code_applicable" not in c
+    assert "code_applicable" not in c["crushing"]
+    assert "code_applicable" not in c["longitudinal"]
     _select_view(at, "M-V-T Combined")
-    assert any("NO CODE VERDICT" in w.value for w in at.warning)
+    assert any("actual values are retained" in w.value.lower() for w in at.warning)
     verdict_labels = (
         r"$\sum(S_{Ed}/S_{Rd})$", "Sum",
         r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
@@ -555,7 +568,7 @@ def test_app_combined_out_of_range_withholds_dependent_verdicts():
         if m.label in verdict_labels
     ]
     assert verdict_metrics
-    assert all(not metric.delta for metric in verdict_metrics)
+    assert all(metric.delta in {"PASS", "FAIL"} for metric in verdict_metrics)
 
 
 def test_app_strut_angle_responds_to_loads():

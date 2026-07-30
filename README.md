@@ -4,6 +4,12 @@
 
 Current release: **Sector 0.91**. See [CHANGELOG.md](CHANGELOG.md).
 
+Sector is a transparent structural calculation tool, not a compliance,
+certification, sign-off or code-completeness system. The engineer controls
+methods, action sets and coefficients; selected standards supply equations,
+references, defaults and warnings. See the governing
+[product identity](docs/product_identity.md).
+
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
 cross-section and reports, for the same section:
 
@@ -11,9 +17,9 @@ cross-section and reports, for the same section:
   from long- and short-term action components, including creep.
 * **Plastic analysis** - nonlinear bending capacity at a given axial force,
   traced as a full biaxial M-M envelope with optional applied-action utilisation.
-* **Stress and crack-width acceptance** - user-defined stress limits, cracking
-  threshold, transformed properties and optional crack width `wk`, reported with
-  the elastic result.
+* **Elastic outputs and crack width** - concrete/reinforcement stresses,
+  cracking threshold, transformed properties and optional crack width `wk`,
+  without specified-limit inputs or output-only verdicts.
 * **Section capacity checks** - shear, torsion and combined M-V-T checks where
   supported by the selected Eurocode method.
 * **Reinforcement detailing checks** - per-case longitudinal minimum
@@ -21,12 +27,17 @@ cross-section and reports, for the same section:
   section-wide clear-spacing review with stable element IDs.
 * **Fatigue analysis** - grouped sustained/basic and cyclic action bins, using
   the cracked elastic section for reinforcing steel, tendons and concrete.
+* **Bridge-relevant numerical kernels** - optional brittle Method B with a method
+  warning, box-wall shear/torsion and web/flange minimum crack reinforcement;
+  concrete compression fatigue and direct crack width remain in their ordinary
+  analysis panels.
 
 Plastic and Elastic identify the calculation method, not the limit state. Each
 named row carries the user's project-defined description or classification (for
 example ULS, ALS, SLS or FLS). Plastic/capacity rows contain NEd, MxEd, MyEd,
 Vx,Ed, Vy,Ed and TEd. Elastic rows contain long- and short-term NEd/MxEd/MyEd components
-and select stress-limit and crack-width acceptance per row. Fatigue spectra
+and optionally request crack width per row. Any user-defined action set is
+permitted; Sector does not infer required combinations or code completeness. Fatigue spectra
 group named bins with cycle counts and sustained/basic plus cyclic NEd/MxEd/MyEd.
 
 Mild-steel and prestress catalogues provide stable material IDs. Each bar or
@@ -42,8 +53,10 @@ shape and reinforcement (not by typing coordinates), choose the analysis, press
 and the governing results visually. Reports and an in-app manual round it out.
 
 The numerical core is covered by independent hand checks, regression fixtures
-and automated tests. The project engineer remains responsible for inputs,
-method applicability and acceptance criteria.
+and automated tests. Positive finite custom coefficients are used exactly as
+entered; deviations from defaults may warn but are not silently clamped or
+replaced. The project engineer remains responsible for inputs and method
+applicability.
 
 ## Running the app
 
@@ -79,10 +92,12 @@ sector/        computation core (headless, regression-tested)
   capacity     headless shear, torsion, and M-V-T result orchestration
   detailing    modelled-direction reinforcement, link detailing and clear spacing
   serviceability  cracking threshold, tension stiffening, crack width
+  bridge       independent bridge numerical kernels
   templates    parametric section + reinforcement builders
 app/           Streamlit interface and canonical input models
   fatigue_inputs  stable S-N detail catalogue and grouped spectrum schema
   fatigue_analysis  validated application-to-fatigue-engine boundary
+  bridge_inputs / bridge_analysis  optional bridge tables and adapter
 tools/         developer tooling (e.g. regression-fixture generation)
 tests/         unit tests + the verification regression
 ```

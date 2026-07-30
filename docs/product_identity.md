@@ -25,5 +25,10 @@ calculation: application/source version, actual inputs, selected
 method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
+Sector is unreleased. By explicit owner decision for PR-07, project persistence
+supports only the new current schema. Earlier app/project/schema versions and
+their compliance, cover-calculator or authority metadata are deliberately
+unsupported; they are not migrated or carried forward.
+
 This contract is an acceptance criterion for every product change. A QA finding
 cannot expand Sector's product identity without explicit owner direction.

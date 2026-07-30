@@ -204,30 +204,6 @@ def test_concrete_fatigue_strength_matches_2005_and_2023_expressions():
     )
 
 
-def test_concrete_miner_properties_preserve_positive_c_and_method_label():
-    deviating_standard = fatigue.ConcreteFatigueProperties(
-        edition="DS/EN 1992-2:2005 + AC:2008",
-        fck_mpa=40.0,
-        gamma_c=1.5,
-        beta_cc_t0=1.0,
-        c=100.0,
-        method=fatigue.CONCRETE_MINER,
-    )
-    project = fatigue.ConcreteFatigueProperties(
-        edition="DS/EN 1992-2:2005 + AC:2008",
-        fck_mpa=40.0,
-        gamma_c=1.5,
-        beta_cc_t0=1.0,
-        c=100.0,
-        method=fatigue.CONCRETE_PROJECT_MINER,
-    )
-
-    assert deviating_standard.c == 100.0
-    assert deviating_standard.method == fatigue.CONCRETE_MINER
-    assert project.c == 100.0
-    assert project.method == fatigue.CONCRETE_PROJECT_MINER
-
-
 def test_concrete_life_matches_corrected_bridge_and_2023_equation():
     life = fatigue.concrete_fatigue_life(
         10.0,
@@ -664,10 +640,6 @@ def test_concrete_search_catches_governing_edge_fibre_missed_by_corners():
         - result.concrete_search.damage
     )
     assert result.concrete_search.relative_gap >= 0.0
-    assert (
-        result.concrete_search.relative_change
-        == result.concrete_search.relative_gap
-    )
     assert result.governing_concrete_fibre == corner_count
     assert result.concrete[corner_count].damage == pytest.approx(
         result.concrete_search.damage
@@ -724,7 +696,7 @@ def test_concrete_search_cannot_certify_a_hidden_narrow_damage_peak():
     assert result.passed is False
 
 
-def test_certified_search_kernel_matches_reported_fibre_damage_kernel():
+def test_bounded_search_kernel_matches_reported_fibre_damage_kernel():
     section = _section()
     properties = fatigue.ConcreteFatigueProperties(
         edition="2023",

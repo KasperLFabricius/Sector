@@ -73,13 +73,12 @@ CONCRETE_PRESETS = _concrete_presets()
 CONCRETE_FIELDS = ["fck", "gamma_c", "alpha_cc", "eps_c2", "eps_cu2", "n"]
 
 # Bounds are deliberately permissive: a preset only prefills typical values, and
-# every field stays freely editable. The lower bounds are the smallest the engine
-# accepts (concrete needs fck, gamma_c and alpha_cc strictly positive); they are
-# not code limits.
+# every field stays freely editable. Positive custom factors, including values
+# below or above a standard default, remain actual solver inputs.
 # Labels carry LaTeX ($...$) so Streamlit renders proper Greek and sub/superscripts.
 CONCRETE_FIELD_META = {
     "fck": (r"$f_{ck}$ (MPa)", 1.0, 200.0, 1.0),
-    "gamma_c": (r"$\gamma_c$", 1.0, 3.0, 0.01),
+    "gamma_c": (r"$\gamma_c$", 0.1, 10.0, 0.01),
     "alpha_cc": (r"$\alpha_{cc}$", 0.01, 1.2, 0.01),
     "eps_c2": (r"$\varepsilon_{c2}$ (permille)", 0.5, 5.0, 0.05),
     "eps_cu2": (r"$\varepsilon_{cu2}$ (permille)", 0.5, 8.0, 0.05),
@@ -189,10 +188,9 @@ def _mild_presets():
 
 MILD_PRESETS = _mild_presets()
 
-# Permissive bounds: stresses may be zero (e.g. a tendon-free compression yield
-# fyck = 0), partial factors run from 1 (characteristic) upward, and the modulus
-# factor may dip below 1 when Ep exceeds the 200 GPa reference. These are input
-# limits to keep the widgets sane, not Eurocode limits.
+# Permissive mathematical bounds: stresses may be zero (e.g. a tendon-free
+# compression yield) and every partial factor may be any positive custom value.
+# These are widget guardrails, not standard-default limits.
 MILD_FIELD_META = {
     "fytk": (r"$f_{ytk}$ (MPa)", 0.0, 5000.0, 10.0),
     "fyck": (r"$f_{yck}$ (MPa)", 0.0, 5000.0, 10.0),
@@ -200,9 +198,9 @@ MILD_FIELD_META = {
     # min 0 keeps the step grid (min + k*step) on round values like 50 and 1000;
     # the eut >= yield clamp guards the lower end at build time.
     "eut": (r"$\varepsilon_{ut}$ (permille)", 0.0, 2000.0, 0.5),
-    "gamma_y": (r"$\gamma_y$", 1.0, 2.0, 0.01),
-    "gamma_u": (r"$\gamma_u$", 1.0, 2.0, 0.01),
-    "gamma_E": (r"$\gamma_E$", 0.5, 2.0, 0.01),
+    "gamma_y": (r"$\gamma_y$", 0.1, 10.0, 0.01),
+    "gamma_u": (r"$\gamma_u$", 0.1, 10.0, 0.01),
+    "gamma_E": (r"$\gamma_E$", 0.1, 10.0, 0.01),
     "k": (r"$k$ ($f_1 / f_{ytk}$)", 0.0, 1.0, 0.01),
     "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
     "ey0c": (r"$\varepsilon_{0c}$ (permille)", 0.0, 1000.0, 0.1),
@@ -299,9 +297,9 @@ PRESTRESS_FIELD_META = {
     "fytk": (r"$f_{p0.1k}$ (MPa)", 0.0, 5000.0, 10.0),
     "futk": (r"$f_{pk}$ (MPa)", 0.0, 5000.0, 10.0),
     "eut": (r"$\varepsilon_{ut}$ (permille)", 0.0, 2000.0, 0.5),
-    "gamma_y": (r"$\gamma_y$", 1.0, 2.0, 0.01),
-    "gamma_u": (r"$\gamma_u$", 1.0, 2.0, 0.01),
-    "gamma_E": (r"$\gamma_E$", 0.5, 2.0, 0.01),
+    "gamma_y": (r"$\gamma_y$", 0.1, 10.0, 0.01),
+    "gamma_u": (r"$\gamma_u$", 0.1, 10.0, 0.01),
+    "gamma_E": (r"$\gamma_E$", 0.1, 10.0, 0.01),
     "k": (r"$k$ ($f_1 / f_{p0.1k}$)", 0.0, 1.0, 0.01),
     "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
     "Es": (r"$E_p$ (GPa)", 1.0, 500.0, 1.0),

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-from . import bridge, codes, combined, geometry, shear, templates, torsion
+from . import codes, combined, geometry, shear, templates, torsion
 from .plastic import FACE_ANGLE, conditional_capacity, plastic_capacity_at_angle
 
 
@@ -470,11 +470,10 @@ def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
 
 
 def build_shear_context(inp, n_prestress, n_ed_comp):
-    """Backward-compatible one-direction context builder.
+    """Build the current one-direction shear calculation context.
 
-    The application reuses :func:`shear_direction_specs` while passing each face
-    through the complete verified uniaxial pipeline. This wrapper preserves the
-    v6 headless API for callers and migration-equivalence tests.
+    The application reuses the same verified kernel for a direct one-direction
+    calculation and for each independently evaluated directional component.
     """
     if not inp.get("shear_on"):
         return None, None
@@ -490,68 +489,14 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
         v_ed=float(inp["shear_V"]),
         bw_override=float(inp["shear_bw"]),
         link_legs=float(inp["shear_link_legs"]),
-        face_mode="legacy",
+        face_mode="selected",
     )
-
-
-def torsion_factor_validation_error(inp):
-    """Return the active torsion factor error without constructing a resistance.
-
-    A current project may intentionally retain an approved-override mode while its
-    final tensile factor is absent.  This preflight keeps that missing state out of
-    the resistance model and lets callers issue an explicit INVALID result instead
-    of substituting an edition value.
-    """
-    if not inp.get("torsion_on") or inp.get("section") is None:
-        return None
-    factor_keys = {
-        "torsion_gamma0",
-        "torsion_gamma3",
-        "torsion_gamma_ct",
-    }
-    rejected_factor_keys = sorted(
-        {
-            key
-            for key in (inp.get("invalid_factor_input_keys") or ())
-            if key in factor_keys
-        }
-    )
-    if rejected_factor_keys:
-        return (
-            "Boolean/non-numeric values are not accepted for torsion material "
-            f"factors ({', '.join(rejected_factor_keys)}); enter explicit "
-            "positive numeric values"
-        )
-    factor_mode = str(
-        inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
-    )
-    tcode = SHEAR_CODES.get(
-        inp.get("torsion_method"), codes.EC2_2005_DKNA
-    )
-    try:
-        tcode.resolve_concrete_tension_factor(
-            mode=factor_mode,
-            gamma_ct=inp.get("torsion_gamma_ct"),
-            gamma0=inp.get("torsion_gamma0", 1.0),
-            gamma3=inp.get("torsion_gamma3", 1.0),
-        )
-        if inp.get("design_methodology") == bridge.EN1992_2_DK_NA:
-            codes.strict_positive_real(
-                inp.get("bridge_alpha_ct"),
-                "Danish bridge alpha_ct",
-            )
-    except (TypeError, ValueError) as exc:
-        return str(exc)
-    return None
 
 
 def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
     if not inp.get("torsion_on") or inp["section"] is None:
         return None
-    factor_error = torsion_factor_validation_error(inp)
-    if factor_error is not None:
-        raise ValueError(factor_error)
     _require_valid_input_geometry(inp)
     tcode = SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
     fck = inp["concrete"].fck
@@ -576,54 +521,7 @@ def build_torsion_context(inp, n_ed_comp):
         != tcode.torsion_nu(fck, closed_detailing=False)
     )
     gamma_c = inp["concrete"].gamma_c
-    factor_mode = str(
-        inp.get("torsion_factor_mode") or codes.FACTOR_MODE_PRESET
-    )
-    approval_reference = str(
-        inp.get("torsion_factor_approval") or ""
-    ).strip()
-    factor_approval_required = factor_mode == codes.FACTOR_MODE_OVERRIDE
-    factor_approval_valid = (
-        not factor_approval_required or bool(approval_reference)
-    )
-    factor_approval_reason = (
-        ""
-        if factor_approval_valid
-        else (
-            "approved final concrete tensile-factor override requires a stated "
-            "approval/source"
-        )
-    )
-    gamma0 = inp.get("torsion_gamma0", 1.0)
-    gamma3 = inp.get("torsion_gamma3", 1.0)
-    gamma_ct, material_factor_basis = (
-        tcode.resolve_concrete_tension_factor(
-            mode=factor_mode,
-            gamma_ct=inp.get("torsion_gamma_ct"),
-            gamma0=gamma0,
-            gamma3=gamma3,
-        )
-    )
-    material_factor_basis["compression_preset"] = (
-        material_factor_basis["compression_final"]
-    )
-    material_factor_basis["compression_final"] = float(gamma_c)
-    material_factor_basis["compression_source"] = (
-        "final concrete material input"
-    )
-    material_factor_basis["approval_reference"] = approval_reference
-    material_factor_basis["approval_required"] = factor_approval_required
-    material_factor_basis["approval_valid"] = factor_approval_valid
-    fctk_005 = 0.7 * codes.fctm(fck)
-    alpha_ct = (
-        codes.strict_positive_real(
-            inp.get("bridge_alpha_ct"),
-            "Danish bridge alpha_ct",
-        )
-        if inp.get("design_methodology") == bridge.EN1992_2_DK_NA
-        else 1.0
-    )
-    fctd = alpha_ct * fctk_005 / gamma_ct
+    fctd = 0.7 * codes.fctm(fck) / gamma_c
     t_ed = inp["torsion_T"]
     tube_kwargs = {
         "tcode": tcode,
@@ -704,17 +602,10 @@ def build_torsion_context(inp, n_ed_comp):
         "tcot_max": cot_max,
         "nu_detail": nu_detail,
         "nu_detail_applied": nu_detail_applied,
-        "fctk_005": fctk_005,
         "fctd": fctd,
-        "alpha_ct": alpha_ct,
         "sigma_cp": sigma_cp,
         "gamma_c": gamma_c,
-        "gamma_ct": gamma_ct,
         "gamma_s": gamma_s,
-        "material_factor_basis": material_factor_basis,
-        "factor_approval_required": factor_approval_required,
-        "factor_approval_valid": factor_approval_valid,
-        "factor_approval_reason": factor_approval_reason,
         "compound_detected": compound_detected,
         "subdivision_requested": subdivision_requested,
         "subdivision_valid": subdivision_valid,
@@ -750,9 +641,9 @@ def finalize_combined(inp, out):
     dk_sum = combined.dkna_sum(
         r_m, r_v, r_t, m_v_independent=independent_mv
     )
-    code_applicable = bool(
-        torsion_out.get("code_applicable", True)
-        and (links is None or links.get("code_applicable", True))
+    outside_default_range = bool(
+        torsion_out.get("out_of_limits")
+        or (links is not None and links.get("out_of_limits"))
     )
     payload = {
         "valid": True,
@@ -763,7 +654,7 @@ def finalize_combined(inp, out):
         "m_v_independent": independent_mv,
         "dkna_sum": dk_sum,
         "dkna_ok": dk_sum <= 1.0 + 1e-9,
-        "code_applicable": code_applicable,
+        "outside_default_range": outside_default_range,
         "crushing": torsion_out.get("interaction"),
         "asl_torsion": torsion_out["asl_req"],
         "delta_ftd": links["delta_ftd"] if links is not None else 0.0,

@@ -1037,7 +1037,7 @@ def test_fatigue_utilisation_map_is_qa_traceable_and_not_colour_only():
     assert list(reinforcement.textposition) == ["top center"]
 
 
-def test_fatigue_utilisation_map_marks_a_failing_certified_search_bound():
+def test_fatigue_utilisation_map_marks_a_failing_bounded_search_result():
     spectrum, _steel, concrete, _properties = _fatigue_figure_fixture()
     concrete.utilisation = 0.80
     concrete.stress_utilisation = 0.80
@@ -1054,12 +1054,12 @@ def test_fatigue_utilisation_map_marks_a_failing_certified_search_bound():
     names = [getattr(trace, "name", "") or "" for trace in fig.data]
     bound = next(
         trace for trace in fig.data
-        if trace.name == "certified search bound > 1.00"
+        if trace.name == "bounded search result > 1.00"
     )
     concrete_trace = next(
         trace for trace in fig.data if trace.name == "concrete fibres"
     )
-    assert "certified search bound > 1.00" in names
+    assert "bounded search result > 1.00" in names
     assert bound.marker.symbol == "x"
     assert list(concrete_trace.marker.symbol) == ["star"]
     assert fig.layout.coloraxis.cmax == pytest.approx(1.0)
@@ -1288,7 +1288,7 @@ def test_fatigue_utilisation_map_labels_equivalent_search_evidence():
     concrete_trace = next(
         trace for trace in fig.data if trace.name == "concrete fibres"
     )
-    assert "certified equivalent bound > 1.00" in names
+    assert "bounded equivalent result > 1.00" in names
     assert "equivalent utilisation = 0.820" in concrete_trace.customdata[0]
     assert "<br>damage =" not in concrete_trace.customdata[0]
 

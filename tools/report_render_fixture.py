@@ -29,20 +29,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import sector_report  # noqa: E402
+import bridge_analysis  # noqa: E402
+import bridge_inputs  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
-from sector import (  # noqa: E402
-    bridge,
-    capacity,
-    codes,
-    combined,
-    detailing,
-    shear,
-    sls,
-    torsion,
-)
+from sector import bridge, capacity, codes, combined, detailing, shear, torsion  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -117,30 +110,24 @@ def _inputs() -> dict:
         {
             "name": "EL-QA-1",
             "description": "Characteristic stresses | Source: QA register",
-            "long_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "total_combination": sls.COMBINATION_CHARACTERISTIC,
             "n_long_ed_kn": 0.0,
             "mx_long_ed_knm": 80.0,
             "my_long_ed_knm": 0.0,
             "n_short_ed_kn": 0.0,
             "mx_short_ed_knm": 20.0,
             "my_short_ed_knm": 0.0,
-            "check_stress": True,
-            "check_crack_width": True,
+            "calculate_crack_width": True,
         },
         {
             "name": "EL-QA-2",
             "description": "Frequent response | Source: QA register",
-            "long_combination": sls.COMBINATION_UNSPECIFIED,
-            "total_combination": sls.COMBINATION_UNSPECIFIED,
             "n_long_ed_kn": 0.0,
             "mx_long_ed_knm": 45.0,
             "my_long_ed_knm": 0.0,
             "n_short_ed_kn": 0.0,
             "mx_short_ed_knm": 10.0,
             "my_short_ed_knm": 0.0,
-            "check_stress": True,
-            "check_crack_width": False,
+            "calculate_crack_width": False,
         },
     ]
     mild_catalogue, second_id = material_catalog.add_entry(
@@ -196,19 +183,49 @@ def _inputs() -> dict:
     ]
     fatigue_basis = fatigue_inputs.default_basis()
     fatigue_basis.update({
-        "spectrum_source": "QA traffic spectrum REF-FAT-01",
-        "cycle_count_source": "QA cycle register REF-CYC-01",
-        "dynamic_effects": fatigue_inputs.DYNAMIC_INCLUDED,
-        "cycle_counting": fatigue_inputs.COUNTING_RAINFLOW,
-        "concurrence_basis": "Single loaded lane in the QA fixture",
-        "atypical_traffic": fatigue_inputs.ATYPICAL_CONSIDERED,
-        "approval_reference": "QA-FAT-APP-01",
-        "authority_adjustments": "No additional adjustment; actions are final",
-        "notes": "Issued-report regression spectrum",
+        "notes": (
+            "QA traffic spectrum REF-FAT-01; QA cycle register REF-CYC-01; "
+            "single loaded lane in the QA fixture; issued-report regression spectrum"
+        ),
     })
+    bridge_tables = {
+        bridge_inputs.BRITTLE_TABLE_KEY: bridge_inputs.normalise_table(
+            [{
+                "region_id": "Bottom chord",
+                "m_rep_knm": 1000.0,
+                "z_s_m": 0.8,
+                "f_yk_mpa": 500.0,
+                "as_provided_mm2": 3000.0,
+            }],
+            bridge_inputs.BRITTLE_TABLE_KEY,
+        ),
+        bridge_inputs.BOX_WALL_TABLE_KEY: bridge_inputs.normalise_table(
+            [{
+                "wall_id": "Left wall",
+                "cot_theta": 0.5,
+                "v_ed_kn": 200.0,
+                "v_rd_max_kn": 500.0,
+                "t_ed_equivalent_kn": 50.0,
+                "t_rd_max_equivalent_kn": 250.0,
+            }],
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+        ),
+        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: bridge_inputs.normalise_table(
+            [{
+                "component": "Web",
+                "act_mm2": 100000.0,
+                "k_c": 0.4,
+                "k": 0.8,
+                "fct_eff_mpa": 3.0,
+                "sigma_s_mpa": 200.0,
+                "as_provided_mm2": 600.0,
+                "restrained_shrinkage": False,
+            }],
+            bridge_inputs.MINIMUM_CRACK_TABLE_KEY,
+        ),
+    }
     return {
         "mode": "Both",
-        "design_methodology": bridge.COMPONENT_METHODS,
         "plastic_cases": plastic_cases,
         "elastic_cases": elastic_cases,
         "fatigue_on": True,
@@ -216,16 +233,9 @@ def _inputs() -> dict:
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
-        "fatigue_concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-        ),
-        "fatigue_concrete_miner_source": "QA-DB-FAT-MINER-01",
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
-        "fatigue_gamma0": 1.0,
-        "fatigue_gamma3": 1.0,
         "fatigue_gamma_ff": 1.0,
-        "fatigue_gamma_s": 1.32,
-        "fatigue_gamma_c": 1.595,
+        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.50,
         "fatigue_beta_cc_t0": 1.0,
         "fatigue_t0_days": 28.0,
         "fatigue_concrete_k1": 0.85,
@@ -233,6 +243,8 @@ def _inputs() -> dict:
         fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_catalogue,
         fatigue_inputs.SPECTRUM_TABLE_KEY: fatigue_spectrum,
         fatigue_inputs.BASIS_KEY: fatigue_basis,
+        "bridge_standard": bridge.EN1992_2_DK_NA,
+        **bridge_tables,
         "shear_on": True,
         "shear_links": True,
         "shear_method": codes.EC2_2005_DKNA.label,
@@ -243,11 +255,6 @@ def _inputs() -> dict:
         "shear_fywk": 500.0,
         "torsion_on": True,
         "torsion_method": codes.EC2_2005_DKNA.label,
-        "torsion_factor_mode": codes.FACTOR_MODE_PRESET,
-        "torsion_gamma0": 1.0,
-        "torsion_gamma3": 1.0,
-        "torsion_gamma_ct": 1.70,
-        "torsion_factor_approval": "",
         "combined_on": True,
         "combined_method": codes.EC2_2005_DKNA.label,
         "combined_mv_independent": False,
@@ -321,30 +328,6 @@ def _inputs() -> dict:
         "conc_Ec": 33.0,
         "sls_fctm": 2.9,
         "sls_cw": True,
-        "sls_phi": 0.0,
-        "sls_k1": 0.8,
-        "sls_tendon_bond": "Plain round (k1 = 1.6)",
-        "sls_tendon_k1": 1.6,
-        "sls_tendon_xi": 0.0,
-        "sls_code": "EN 1992-1-1:2005",
-        "sls_edition": "2004",
-        "sls_dk_na": False,
-        "sls_member": "Beam",
-        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
-        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
-        "sls_exposure_context": "XC3 / QA durability criterion",
-        "sls_check_appearance": False,
-        "sls_appearance_limit": 0.0,
-        "sls_check_durability": True,
-        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
-        "sls_project_characteristic_limit": 0.0,
-        "sls_project_frequent_limit": 0.0,
-        "sls_project_quasi_permanent_limit": 0.0,
-        "sls_wk_limit": 0.30,
-        "sls_conc_limit_pct": 60.0,
-        "sls_steel_limit_pct": 80.0,
-        "sls_pre_limit_pct": 75.0,
-        "sls_limit_source": "QA fixture SLS criteria",
         "v_min": 0.0,
         "v_max": 360.0,
         "v_inc": 90.0,
@@ -375,23 +358,8 @@ def _crack() -> dict:
         "k1_r": 1.0,
         "kfl": 1.0,
         "sr_max_geometric": False,
-        "as_eff": 0.0005,
-        "ap_eff": 0.0,
-        "ap_eff_weighted": 0.0,
-        "xi1": None,
-        "reinforcement_type": "mild",
-        "bc_ef": 0.0,
-        "direct_tension": False,
-        "scope": "dominant-direction",
-        "direction_deg": 90.0,
     }
-    return dict(
-        candidate,
-        gov_bar=1,
-        xi1_min=None,
-        xi1_max=None,
-        candidates=[candidate],
-    )
+    return dict(candidate, gov_bar=1, candidates=[candidate])
 
 
 def _results(inp: dict | None = None) -> dict:
@@ -406,28 +374,7 @@ def _results(inp: dict | None = None) -> dict:
         inp["capacity_steel_material_id"]
     ]
     fyd_long = capacity_material.fytk / capacity_material.gamma_y
-    fcd = inp["concrete"].fcd
-    gamma_ct, material_factor_basis = (
-        code.resolve_concrete_tension_factor(
-            mode=inp["torsion_factor_mode"],
-            gamma_ct=inp["torsion_gamma_ct"],
-            gamma0=inp["torsion_gamma0"],
-            gamma3=inp["torsion_gamma3"],
-        )
-    )
-    material_factor_basis["compression_preset"] = (
-        material_factor_basis["compression_final"]
-    )
-    material_factor_basis["compression_final"] = inp["concrete"].gamma_c
-    material_factor_basis["compression_source"] = (
-        "final concrete material input"
-    )
-    material_factor_basis["approval_reference"] = (
-        inp["torsion_factor_approval"]
-    )
-    fctk_005 = 0.7 * codes.fctm(inp["concrete"].fck)
-    alpha_ct = 1.0
-    fctd = alpha_ct * fctk_005 / gamma_ct
+    fcd = 30.0 / 1.5
     shear_z_mm = 243.0
     link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
     link_asw_over_s = link_asw / link_spacing
@@ -457,7 +404,7 @@ def _results(inp: dict | None = None) -> dict:
             tube, 25.0, tcode=code, fck=30.0, fcd=fcd, alpha_cw=1.0,
             fywd=fywd, asw_over_s=torsion_asw_over_s,
             cot_min=cot, cot_max=cot, nu_detail=False,
-            fctd=fctd, fyd_long=fyd_long,
+            fctd=1.35, fyd_long=fyd_long,
         )
 
     def longitudinal_at(cot: float) -> dict:
@@ -517,55 +464,6 @@ def _results(inp: dict | None = None) -> dict:
             "dy": 0.2,
         }],
     }
-    crack_long = _crack()
-    crack_total = copy.deepcopy(crack_long)
-    crack_total["wk"] = 0.31
-    crack_total["candidates"][0]["wk"] = 0.31
-    crack_contexts = {
-        "Long-term": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "Sustained / long-term response",
-            "response_id": "long",
-            "provenance": (
-                "Elastic case 'EL-QA-1', long_combination table field"
-            ),
-            "solver_provenance": {
-                "state": "long",
-                "elastic_case": {"id": "EL-QA-1"},
-            },
-        },
-        "Total (long + short)": {
-            "combination": sls.COMBINATION_CHARACTERISTIC,
-            "duration": "Instantaneous total (long + short) response",
-            "response_id": "total",
-            "provenance": (
-                "Elastic case 'EL-QA-1', total_combination table field"
-            ),
-            "solver_provenance": {
-                "state": "total",
-                "elastic_case": {"id": "EL-QA-1"},
-            },
-        },
-    }
-    crack_dispositions = {
-        name: {
-            "status": "CALCULATED",
-            "reason": "Fixture crack-width result calculated.",
-            "scope": "dominant-direction",
-        }
-        for name in crack_contexts
-    }
-    crack_criteria = sls.crack_criteria_from_inputs(inp)
-    crack_assessment = sls.crack_assessment(
-        {
-            "Long-term": crack_long,
-            "Total (long + short)": crack_total,
-        },
-        valid=True,
-        dispositions=crack_dispositions,
-        response_contexts=crack_contexts,
-        criteria=crack_criteria,
-    )
     elastic = {
         "total": [150.0],
         "long": [120.0],
@@ -613,20 +511,28 @@ def _results(inp: dict | None = None) -> dict:
              "x_mm": -100.0, "y_mm": 150.0,
              "strain_permille": 0.0, "stress_mpa": 0.0},
         ],
-        "stress_assessments": {
-            "concrete": {"value": 12.0, "limit": 18.0, "util": 2 / 3,
-                         "margin": 6.0, "status": "OK",
-                         "criterion": "60% fck"},
-            "reinforcement": {"value": 150.0, "limit": 400.0,
-                              "util": 0.375, "margin": 250.0,
-                              "status": "OK", "criterion": "80% fyk",
-                              "governing": "bar 1"},
-            "prestress": {"value": None, "limit": None, "util": None,
-                          "margin": None, "status": "NOT APPLICABLE",
-                          "criterion": "75% fpk"},
+        "stress_outputs": {
+            "concrete": {
+                "value": 12.0,
+                "quantity": "maximum concrete compression",
+                "unit": "MPa",
+                "calculation_state": "CALCULATED",
+            },
+            "reinforcement": {
+                "value": 150.0,
+                "quantity": "maximum reinforcement tension",
+                "unit": "MPa",
+                "governing": "bar 1",
+                "element_no": 1,
+                "calculation_state": "CALCULATED",
+            },
+            "prestress": {
+                "value": None,
+                "quantity": "maximum tendon tension",
+                "unit": "MPa",
+                "calculation_state": "NOT APPLICABLE",
+            },
         },
-        "sls_limit_source": "QA fixture SLS criteria",
-        "sls_wk_limit": 0.30,
         "props_un": {
             "area": 0.06,
             "cx": 0.0,
@@ -643,24 +549,17 @@ def _results(inp: dict | None = None) -> dict:
             "Iy": 1.0e-4,
             "Ixy": 0.0,
         },
-        "crack": crack_long,
-        "crack_short": crack_total,
-        "crack_criteria": crack_criteria,
-        "crack_dispositions": crack_dispositions,
-        "crack_response_contexts": crack_contexts,
-        "crack_responses": {
-            "Long-term": crack_long,
-            "Total (long + short)": crack_total,
+        "crack": _crack(),
+        "crack_short": _crack(),
+        "crack_output": {
+            "value": 0.213,
+            "case": "Long-term",
+            "governing": "bar 1",
+            "unit": "mm",
+            "calculation_state": "CALCULATED",
         },
-        "crack_assessment": crack_assessment,
         "crack_code": "EN 1992-1-1:2005",
-        "crack_edition": "2004",
         "crack_member": None,
-        "crack_scope_note": (
-            "One-directional dominant strain-gradient assessment only. "
-            "Orthogonal or inclined crack systems are not assessed; an explicit "
-            "multidirectional method is required for those systems."
-        ),
     }
     shear_payload = {
         "res": shear_res,
@@ -701,7 +600,6 @@ def _results(inp: dict | None = None) -> dict:
         "cot_limit_hi": 2.5,
         "z_source": "plastic internal lever arm",
         "out_of_limits": False,
-        "code_applicable": True,
         "required": bool(30.0 > shear_res["vrd_c"]),
         "theta_mode": "utilisation",
         "chord": None,
@@ -720,7 +618,6 @@ def _results(inp: dict | None = None) -> dict:
             25.0, primary_torsion["trd_max"],
             30.0, link_resistance["vrd_max"],
         ),
-        "code_applicable": True,
     }
     minimum_interaction = (
         25.0 / primary_torsion["trd_c"]
@@ -742,13 +639,7 @@ def _results(inp: dict | None = None) -> dict:
         "fyd_long": fyd_long,
         "nu": primary_torsion["nu"],
         "alpha_cw": 1.0,
-        "fctk_005": fctk_005,
-        "fctd": fctd,
-        "alpha_ct": alpha_ct,
-        "gamma_c": inp["concrete"].gamma_c,
-        "gamma_ct": gamma_ct,
-        "gamma_s": 1.15,
-        "material_factor_basis": material_factor_basis,
+        "fctd": 1.35,
         "asw_t": torsion_asw,
         "asw_over_s": torsion_asw_over_s,
         "dia": link_dia,
@@ -761,7 +652,6 @@ def _results(inp: dict | None = None) -> dict:
         "cot_limit_lo": 1.0,
         "cot_limit_hi": 2.5,
         "out_of_limits": False,
-        "code_applicable": True,
         "subdivided": False,
         "theta_mode": "utilisation",
         "primary": primary_torsion,
@@ -805,7 +695,6 @@ def _results(inp: dict | None = None) -> dict:
         gets_shift=True,
         off_not_evaluated=None,
         theta_mode="utilisation",
-        code_applicable=True,
     )
     dkna_sum = combined.dkna_sum(
         plastic["util"], shear_util, torsion_util,
@@ -820,7 +709,7 @@ def _results(inp: dict | None = None) -> dict:
         "m_v_independent": False,
         "dkna_sum": dkna_sum,
         "dkna_ok": bool(dkna_sum <= 1.0),
-        "code_applicable": True,
+        "outside_default_range": False,
         "crushing": interaction,
         "transverse": {
             "valid": True,
@@ -852,9 +741,7 @@ def _results(inp: dict | None = None) -> dict:
     elastic_2["show_cw"] = False
     elastic_2["max_steel"] = 245.0
     elastic_2["elements"][0]["total_mpa"] = 245.0
-    elastic_2["stress_assessments"]["reinforcement"].update(
-        value=245.0, util=245.0 / 400.0, margin=155.0
-    )
+    elastic_2["stress_outputs"]["reinforcement"]["value"] = 245.0
     minimum = {
         "status": "PASS",
         "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
@@ -924,6 +811,7 @@ def _results(inp: dict | None = None) -> dict:
         "plastic": plastic,
         "elastic": elastic,
         "fatigue": fatigue,
+        "bridge": bridge_analysis.run(inp),
         "shear": shear_payload,
         "torsion": torsion_payload,
         "combined": combined_payload,
@@ -1029,18 +917,6 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         "TRd,c",
         torsion_out["trd_c"],
         torsion.trd_c(torsion_out["fctd"], tube["Ak"], tube["tef"]),
-    )
-    close("torsion gamma_ct", torsion_out["gamma_ct"], 1.70)
-    close("torsion alpha_ct", torsion_out["alpha_ct"], 1.0)
-    close(
-        "torsion fctd",
-        torsion_out["fctd"],
-        (
-            torsion_out["alpha_ct"]
-            * 0.7
-            * codes.fctm(inp["concrete"].fck)
-            / 1.70
-        ),
     )
     close(
         "torsion longitudinal area",
@@ -1198,20 +1074,6 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             expected_longitudinal[key],
         )
 
-    fatigue_out = out["fatigue"]
-    close(
-        "fatigue gamma_s",
-        fatigue_out["partial_factors"]["gamma_s"],
-        1.20 * 1.10,
-    )
-    close(
-        "fatigue gamma_c",
-        fatigue_out["partial_factors"]["gamma_c"],
-        1.45 * 1.10,
-    )
-    if fatigue_out["factor_basis"]["mode"] != fatigue_inputs.FACTOR_MODE_PRESET:
-        raise AssertionError("the rendered fixture does not use the DK preset")
-
 
 @functools.lru_cache(maxsize=1)
 def build_fixture_pdf() -> bytes:
@@ -1243,7 +1105,6 @@ def validate_pdf_content(pdf: bytes) -> str:
     """Reject a report that lost figures or core engineering content."""
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    normalized_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the report contains an unavailable-figure placeholder")
     for token in (
@@ -1258,20 +1119,6 @@ def validate_pdf_content(pdf: bytes) -> str:
         if symbol not in text:
             raise AssertionError(
                 f"the report is missing rendered mathematics symbol U+{ord(symbol):04X}"
-            )
-    for expected in (
-        "Crack-control conclusion limitation",
-        "canonical crack response is a one-directional dominant "
-        "strain-gradient assessment",
-        "Assessment scope",
-        "Acceptance route",
-        "Quasi-permanent",
-        "Informational",
-        "long_combination table field",
-    ):
-        if expected not in normalized_text:
-            raise AssertionError(
-                f"expected crack-control report evidence is missing: {expected}"
             )
 
     images = 0
@@ -1339,30 +1186,6 @@ def validate_pdf_content(pdf: bytes) -> str:
     )
     if "Sweep start" not in settings_page:
         raise AssertionError("the analysis-settings heading is separated from its table")
-    torsion_factor_page = next(
-        (page.extract_text() or "" for page in reader.pages
-         if "Concrete tension coefficient" in (page.extract_text() or "")),
-        "",
-    )
-    if not all(value in torsion_factor_page for value in (
-        "Material-factor basis", "1.000", "fctd = 1.193 MPa",
-    )):
-        raise AssertionError(
-            "the torsion alpha_ct/fctd provenance trace is split across pages"
-        )
-    torsion_minimum_page = next(
-        (page.extract_text() or "" for page in reader.pages
-         if "Minimum-reinforcement screen (6.3.2(5), Eq 6.31)"
-         in (page.extract_text() or "")),
-        "",
-    )
-    if not all(value in torsion_minimum_page for value in (
-        "6.020 (designed reinforcement required)",
-        "If \u2264 1, only minimum shear + torsion reinforcement is required",
-    )):
-        raise AssertionError(
-            "the torsion minimum-reinforcement result is split across pages"
-        )
     for heading, first_case in (
         ("Plastic / capacity cases", "PL-QA-1"),
         ("Elastic cases", "EL-QA-1"),
@@ -1386,7 +1209,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "QA-REFERENCE",
         "Sweco Danmark A/S",
         "Rendered report regression",
-        "Results overview - FAIL",
+        "Results overview",
         "Governing combination",
         "M1 New B500 reinforcement",
         "M2 Existing reinforcement",
@@ -1402,13 +1225,11 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Closed-link spacing",
         "Reinforcement clear spacing",
         "R1 - R2",
-        "Elastic section response and stress limits - EL-QA-1",
-        "Elastic section response and stress limits - EL-QA-2",
+        "Elastic section response and stresses - EL-QA-1",
+        "Elastic section response and stresses - EL-QA-2",
         "Cracking and crack width - EL-QA-1",
         "Cracking threshold - EL-QA-2",
         "Grouped fatigue",
-        "1.20 x 1.10 x 1.000 x 1.000 = 1.320",
-        "1.45 x 1.10 x 1.000 x 1.000 = 1.595",
         "Road traffic",
         "FAT-QA-H",
         "FAT-QA-M",
@@ -1416,16 +1237,18 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Spectrum summary",
         "Reinforcement fatigue",
         "Concrete fatigue",
-        "Approved project-basis adoption",
-        "QA-DB-FAT-MINER-01",
-        "Certified governing-fibre search",
+        "Bounded governing-fibre search",
+        "Independent bridge calculations",
+        "Optional brittle Method B",
+        "Box-wall shear and torsion",
+        "Web/flange minimum crack reinforcement",
+        "generic bridge-code coverage and generic cross-method interaction are not calculated",
         "Torsion and shear fatigue are not assessed",
         "Physical resistance components",
         "Concrete compression strut",
         "Closed stirrup",
         "Longitudinal reinforcement",
         "Torsion (thin-walled tube)",
-        "1.70 x 1.000 x 1.000 = 1.700",
         "125.0 %",
         "245.000 MPa",
         "Crack-width candidates",

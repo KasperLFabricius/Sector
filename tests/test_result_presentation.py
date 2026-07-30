@@ -12,7 +12,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
-from sector import bridge, sls  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -102,22 +101,15 @@ def test_acceptance_status_label_uses_common_report_vocabulary(source, label):
 
 
 @pytest.mark.parametrize(
-    ("interaction", "applicable", "expected"),
+    ("interaction", "expected"),
     [
-        ({"valid": True, "value": 0.8, "code_applicable": True}, True, "PASS"),
-        ({"valid": True, "value": 1.2, "code_applicable": True}, True, "FAIL"),
-        ({"valid": True, "value": 0.8, "code_applicable": False}, True,
-         "NOT ASSESSED"),
-        ({"valid": True, "value": 0.8}, False, "NOT ASSESSED"),
-        ({"valid": False, "value": None}, True, "NOT ASSESSED"),
+        ({"valid": True, "value": 0.8}, "PASS"),
+        ({"valid": True, "value": 1.2}, "FAIL"),
+        ({"valid": False, "value": None}, "NOT ASSESSED"),
     ],
 )
-def test_vt_interaction_status_withholds_verdict_outside_applicability(
-    interaction, applicable, expected
-):
-    assert presentation.interaction_assessment_status(
-        interaction, applicable=applicable
-    ) == expected
+def test_vt_interaction_status_reports_mathematical_verdict(interaction, expected):
+    assert presentation.interaction_assessment_status(interaction) == expected
 
 
 def test_plastic_state_evidence_is_tension_positive_and_uses_mm2_area():
@@ -249,14 +241,15 @@ def test_action_sets_are_normalised_and_required_for_active_families():
 def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
     elastic = {
         "converged": True,
-        "stress_assessments": {
+        "stress_outputs": {
             "concrete": {
-                "value": 12.0, "limit": 18.0, "util": 2 / 3,
-                "status": "OK", "criterion": "60% fck",
+                "value": 12.0, "calculation_state": "CALCULATED",
+                "quantity": "maximum concrete compression",
             },
             "reinforcement": {
-                "value": 450.0, "limit": 400.0, "util": 1.125,
-                "status": "EXCEEDED", "criterion": "80% fyk",
+                "value": 450.0, "calculation_state": "CALCULATED",
+                "quantity": "maximum reinforcement tension",
+                "governing": "bar 1",
             },
         },
         "show_cw": False,
@@ -269,37 +262,10 @@ def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
     assert by_check["Plastic bending"]["case"] == "PL-17"
     assert by_check["Concrete stress"]["case"] == "EL-08"
     assert by_check["Plastic bending"]["status"] == "PASS"
-    assert by_check["Reinforcement stress"]["status"] == "FAIL"
-    assert presentation.overall_summary_status(rows) == "FAIL"
-
-
-def test_result_summary_formats_decompression_as_concrete_stress():
-    rows = presentation.result_summary_rows(
-        _inp(mode="Elastic", sls_cw=True),
-        {
-            "elastic": {
-                "converged": True,
-                "stress_assessments": {},
-                "show_cw": True,
-                "crack_assessment": {
-                    "status": "OK",
-                    "criterion": sls.CRITERION_DECOMPRESSION,
-                    "value": -0.25,
-                    "limit": None,
-                    "util": None,
-                    "reason": "Concrete remains in compression.",
-                },
-            },
-        },
-    )
-    by_check = {row["check"]: row for row in rows}
-
-    assert by_check["Decompression"]["status"] == "PASS"
-    assert by_check["Decompression"]["result"] == "-0.250 MPa"
-    assert by_check["Decompression"]["criterion"] == (
-        "concrete stress <= 0 MPa"
-    )
-    assert "Crack width" not in by_check
+    assert by_check["Reinforcement stress"]["status"] == "CALCULATED"
+    assert by_check["Reinforcement stress"]["criterion"] == "Output only"
+    assert by_check["Reinforcement stress"]["util"] is None
+    assert presentation.overall_summary_status(rows) == "PASS"
 
 
 def test_stale_summary_retains_last_status_as_evidence():
@@ -314,7 +280,6 @@ def test_stale_summary_retains_last_status_as_evidence():
 def test_combined_summary_cannot_hide_subordinate_failure():
     combined = {
         "valid": True,
-        "code_applicable": True,
         "method": "DK NA",
         "dkna_sum": 0.80,
         "crushing": {"valid": True, "value": 1.10, "cot": 1.5},
@@ -350,7 +315,6 @@ def test_combined_summary_cannot_hide_subordinate_failure():
 def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
     combined = {
         "valid": True,
-        "code_applicable": True,
         "method": "DK NA",
         "dkna_sum": 0.80,
         "crushing": None,
@@ -396,7 +360,6 @@ def test_combined_summary_marks_missing_prerequisites_not_assessed():
 def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
     combined = {
         "valid": True,
-        "code_applicable": True,
         "method": "DK NA",
         "dkna_sum": 0.80,
         "crushing": {"valid": True, "value": 0.70, "cot": 1.5},
@@ -428,7 +391,6 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
 
 def test_combined_physical_components_uses_the_governing_longitudinal_face():
     components = presentation.combined_physical_components({
-        "code_applicable": True,
         "transverse": {
             "valid": True, "cot": 1.6,
             "u_crush": 0.40, "u_stirrup": 0.55,
@@ -457,7 +419,6 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
 
 def test_combined_components_withhold_verdict_for_non_governing_fallback():
     components = presentation.combined_physical_components({
-        "code_applicable": True,
         "transverse": {
             "valid": True, "cot": 1.6,
             "u_crush": 0.40, "u_stirrup": 0.55,
@@ -476,7 +437,6 @@ def test_combined_components_withhold_verdict_for_non_governing_fallback():
     longitudinal = components[2]
     assert longitudinal["util"] == pytest.approx(0.85)
     assert longitudinal["status"] == "NOT ASSESSED"
-    assert longitudinal["applicable"] is False
     assert "pure-axis fallback" in longitudinal["note"]
     assert "x-axis negative face" in longitudinal["note"]
 
@@ -491,7 +451,6 @@ def test_combined_components_preserve_non_governing_face_fallback():
         "tension_low": True, "conditional": False,
     }
     components = presentation.combined_physical_components({
-        "code_applicable": True,
         "transverse": {
             "valid": True, "cot": 1.6,
             "u_crush": 0.40, "u_stirrup": 0.55,
@@ -504,7 +463,6 @@ def test_combined_components_preserve_non_governing_face_fallback():
     longitudinal = components[2]
     assert longitudinal["util"] == pytest.approx(0.85)
     assert longitudinal["status"] == "NOT ASSESSED"
-    assert longitudinal["applicable"] is False
     assert "x-axis negative face" in longitudinal["note"]
 
 
@@ -548,7 +506,6 @@ def test_shear_screening_does_not_fail_when_selected_links_pass():
         "links": {
             "res": {"valid": True, "governs": "links"},
             "util": 0.80,
-            "code_applicable": True,
         },
     }
     rows = presentation.result_summary_rows(
@@ -602,8 +559,6 @@ def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
         vx,
         directions={"vx": vx, "vy": vy},
         biaxial=True,
-        status="REVIEW",
-        interaction_assessed=False,
     )
 
     rows = presentation.result_summary_rows(
@@ -614,19 +569,25 @@ def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
 
     assert by_check["Shear Vx without links"]["status"] == "PASS"
     assert by_check["Shear Vy without links"]["status"] == "PASS"
-    assert by_check["Biaxial shear interaction"]["status"] == "NOT ASSESSED"
-    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+    assert by_check["Generic cross-direction shear interaction"]["status"] == (
+        "NOT CALCULATED"
+    )
+    assert presentation.overall_summary_status(rows) == "PASS"
 
 
-def test_biaxial_combined_summary_reports_directions_and_withholds_three_way_verdict():
+def test_biaxial_combined_summary_reports_directions_without_three_way_verdict():
     combined = {
         "biaxial": True,
         "directions": {
-            "vx": {"status": "PASS", "governing_util": 0.72},
-            "vy": {"status": "FAIL", "governing_util": 1.14},
+            "vx": {
+                "valid": True, "dkna_sum": 0.72, "dkna_ok": True,
+                "method": "DK NA",
+            },
+            "vy": {
+                "valid": True, "dkna_sum": 1.14, "dkna_ok": False,
+                "method": "DK NA",
+            },
         },
-        "status": "FAIL",
-        "interaction_assessed": False,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -634,9 +595,10 @@ def test_biaxial_combined_summary_reports_directions_and_withholds_three_way_ver
     )
     by_check = {row["check"]: row for row in rows}
 
-    assert by_check["Combined Vx+T directional screen"]["status"] == "PASS"
-    assert by_check["Combined Vy+T directional screen"]["status"] == "FAIL"
-    assert by_check["Combined Vx-Vy-T interaction"]["status"] == "NOT ASSESSED"
+    assert by_check["Combined Vx+T - DK NA sum"]["status"] == "PASS"
+    assert by_check["Combined Vy+T - DK NA sum"]["status"] == "FAIL"
+    assert by_check["Combined Vx+T - DK NA sum"]["criterion"] == "<= 100 %"
+    assert by_check["Generic Vx-Vy-T interaction"]["status"] == "NOT CALCULATED"
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
@@ -1058,72 +1020,3 @@ def test_multi_case_summary_adds_section_wide_spacing_only_once():
         if row["check"].startswith("Longitudinal minimum reinforcement")
     ]
     assert [row["case"] for row in minimum_rows] == ["PL-A", "PL-B"]
-
-
-def _bridge_snapshot():
-    decisions = tuple(
-        bridge.ApplicabilityDecision(
-            check_id=check_id,
-            applicability=(
-                bridge.REQUIRED
-                if check_id == "section_analysis"
-                else bridge.NOT_APPLICABLE
-            ),
-            source=f"DB-{check_id}",
-        )
-        for check_id in bridge.APPLICABILITY_CHECK_IDS
-    )
-    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
-        methodology=bridge.EN1992_2_BASE,
-        decisions=decisions,
-        has_tendons=False,
-        has_hollow_section=False,
-        fck_mpa=40.0,
-        section_analysis=bridge.ExternalEvidence(
-            status=bridge.STATUS_PASS,
-            result="section solve converged",
-            criterion="requested solver converges",
-            source="bridge inherited section solver",
-            reason="Elastic SLS-1 converged",
-        ),
-    ))
-
-
-def test_bridge_summary_uses_publication_safe_bound_evidence():
-    payload = _bridge_snapshot()
-    payload["checks"][0]["result"] = "mutated stored result"
-    inp = _inp(
-        design_methodology=bridge.EN1992_2_BASE,
-        mode="",
-    )
-
-    rows = presentation.multi_case_summary_rows(
-        inp,
-        {"bridge_methodology": payload},
-    )
-
-    assert any(
-        row["check"] == "Bridge methodology configuration"
-        and row["status"] == "INVALID"
-        and "fingerprint does not match" in row["note"]
-        for row in rows
-    )
-    assert presentation.overall_summary_status(rows) == "INVALID"
-
-
-def test_bridge_summary_rejects_snapshot_under_component_methodology():
-    rows = presentation.multi_case_summary_rows(
-        _inp(
-            design_methodology=bridge.COMPONENT_METHODS,
-            mode="",
-        ),
-        {"bridge_methodology": _bridge_snapshot()},
-    )
-
-    assert any(
-        row["check"] == "Bridge methodology configuration"
-        and row["status"] == "INVALID"
-        and "conflicts with the calculation input snapshot" in row["note"]
-        for row in rows
-    )
-    assert presentation.overall_summary_status(rows) == "INVALID"

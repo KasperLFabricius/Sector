@@ -3,26 +3,22 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import math
 import pathlib
 import sys
 from types import SimpleNamespace as NS
 
-import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
+import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
-import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import (bridge, conformance, danish_bridge, detailing,  # noqa: E402
-                    multidirectional, sls)
+from sector import bridge, detailing  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -50,37 +46,11 @@ def _inp():
         "concrete_eta_cc": 1.0,
         "mild_preset": "EN 1992-1-1:2005",
         "prestress_preset": "EN 1992-1-1:2005",
-        "design_basis": {
-            "status": "Edition-aligned: EN 1992-1-1:2005",
-            "components": [
-                {"role": "Concrete material", "selection": "EN 1992-1-1:2005"},
-                {"role": "Reinforcing steel", "selection": "EN 1992-1-1:2005"},
-            ],
-            "mixed": False, "limitations": [],
-        },
         "P_pl": 0.0, "Mx_pl": 100.0, "My_pl": 0.0,
         "P_el_l": 0.0, "Mx_el_l": 80.0, "My_el_l": 0.0,
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
         "nl": 15.0, "ns": 6.0, "sls_fctm": 2.9, "sls_cw": True,
-        "sls_phi": 0.0, "sls_k1": 0.8,
-        "sls_tendon_bond": "Plain round (k1 = 1.6)",
-        "sls_tendon_k1": 1.6, "sls_tendon_xi": 0.50,
         "conc_Ec": 33.0,
-        "sls_criterion_mode": sls.CRITERION_MODE_STANDARD,
-        "sls_prestress_class": sls.PRESTRESS_REINFORCED_UNBONDED,
-        "sls_protection_class": sls.PROTECTION_NOT_ESTABLISHED,
-        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
-        "sls_exposure_context": "XC3 / durability",
-        "sls_check_appearance": False,
-        "sls_appearance_limit": 0.0,
-        "sls_check_durability": True,
-        "sls_decompression_applicability": sls.DECOMPRESSION_NOT_REQUIRED,
-        "sls_project_characteristic_limit": 0.0,
-        "sls_project_frequent_limit": 0.0,
-        "sls_project_quasi_permanent_limit": 0.0,
-        "sls_wk_limit": 0.30, "sls_conc_limit_pct": 60.0,
-        "sls_steel_limit_pct": 80.0, "sls_pre_limit_pct": 75.0,
-        "sls_limit_source": "DB-SLS-01 section 4",
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
 
@@ -96,62 +66,12 @@ def _crack():
         "hc_ef": 0.125, "phi": 16.0, "cover": 40.0,
         "coarse": False, "edition": "2004", "kw": 1.0,
         "k1_r": 1.0, "kfl": 1.0, "sr_max_geometric": False,
-        "as_eff": 0.0005, "ap_eff": 0.0, "ap_eff_weighted": 0.0,
-        "xi1": None, "reinforcement_type": "mild", "bc_ef": 0.0,
-        "direct_tension": False, "scope": "dominant-direction",
-        "direction_deg": 90.0,
     }
-    return dict(
-        candidate,
-        gov_bar=1,
-        xi1_min=None,
-        xi1_max=None,
-        candidates=[candidate],
-    )
-
-
-def _report_mapping_scope(contexts):
-    scope = []
-    seen = set()
-    for name, context in contexts.items():
-        response_id = context["response_id"]
-        if response_id in seen:
-            continue
-        seen.add(response_id)
-        scope.append({
-            "combination": context["combination"],
-            "duration": context["duration"],
-            "response": name,
-            "response_id": response_id,
-            "elastic_case": "EL-TEST",
-            "state": response_id,
-            "provenance": context["provenance"],
-        })
-    return scope
-
-
-@pytest.mark.parametrize(
-    "key",
-    [
-        "sls_tendon_xi",
-        "sls_wk_limit",
-        "sls_appearance_limit",
-        "sls_project_characteristic_limit",
-        "sls_project_frequent_limit",
-        "sls_project_quasi_permanent_limit",
-    ],
-)
-@pytest.mark.parametrize("value", [True, np.bool_(True)])
-def test_report_boundary_rejects_boolean_crack_numerics(key, value):
-    inp = _inp()
-    inp[key] = value
-
-    with pytest.raises(ValueError, match=key):
-        sector_report.build_report({}, inp, _out(), figures=False)
+    return dict(candidate, gov_bar=1, candidates=[candidate])
 
 
 def _out():
-    out = {
+    return {
         "plastic": {"mx": [100.0, 0.0, -100.0, 0.0], "my": [0.0, 100.0, 0.0, -100.0],
                     "max_mx": 100.0, "max_my": 100.0, "min_mx": -100.0, "min_my": -100.0,
                     "util": 0.8, "closed": True,
@@ -189,158 +109,50 @@ def _out():
                          "x_mm": -100.0, "y_mm": 150.0,
                          "strain_permille": 0.0, "stress_mpa": 0.0},
                     ],
-                    "stress_assessments": {
-                        "concrete": {"value": 12.0, "limit": 18.0, "util": 2/3,
-                                     "margin": 6.0, "status": "OK",
-                                     "criterion": "60% fck"},
-                        "reinforcement": {"value": 150.0, "limit": 400.0,
-                                          "util": 0.375, "margin": 250.0,
-                                          "status": "OK", "criterion": "80% fyk",
-                                          "governing": "bar 1"},
-                        "prestress": {"value": None, "limit": None, "util": None,
-                                      "margin": None, "status": "NOT APPLICABLE",
-                                      "criterion": "75% fpk"},
+                    "stress_outputs": {
+                        "concrete": {
+                            "value": 12.0,
+                            "quantity": "maximum concrete compression",
+                            "unit": "MPa",
+                            "calculation_state": "CALCULATED",
+                        },
+                        "reinforcement": {
+                            "value": 150.0,
+                            "quantity": "maximum reinforcement tension",
+                            "unit": "MPa",
+                            "governing": "bar 1",
+                            "element_no": 1,
+                            "calculation_state": "CALCULATED",
+                        },
+                        "prestress": {
+                            "value": None,
+                            "quantity": "maximum tendon tension",
+                            "unit": "MPa",
+                            "calculation_state": "NOT APPLICABLE",
+                        },
                     },
-                    "sls_limit_source": "DB-SLS-01 section 4",
-                    "sls_wk_limit": 0.30,
                     "props_un": {"area": 0.06, "cx": 0.0, "cy": 0.0, "Ix": 4.5e-4,
                                  "Iy": 2.0e-4, "Ixy": 0.0},
                     "props_cr": {"area": 0.03, "cx": 0.0, "cy": 0.02, "Ix": 2.1e-4,
                                  "Iy": 1.0e-4, "Ixy": 0.0},
                     "crack": _crack(), "crack_short": _crack(),
-                    "crack_assessment": {
-                        "value": 0.213, "limit": 0.30, "util": 0.71,
-                        "margin": 0.087, "status": "OK",
+                    "crack_output": {
+                        "value": 0.213,
                         "case": "Long-term", "governing": "bar 1",
-                        "criterion": sls.CRITERION_DURABILITY,
-                        "required_combination": (
-                            sls.COMBINATION_QUASI_PERMANENT
-                        ),
-                        "criterion_source": (
-                            "DS/EN 1992-1-1:2004 section 7.3.1(5), "
-                            "Table 7.1N"
-                        ),
-                        "applicability": {},
-                        "criteria": [{
-                            "criterion_id": "standard-durability",
-                            "kind": sls.CRITERION_DURABILITY,
-                            "criterion_source_type": (
-                                sls.CRITERION_MODE_STANDARD
-                            ),
-                            "criterion_source": (
-                                "DS/EN 1992-1-1:2004 section 7.3.1(5), "
-                                "Table 7.1N"
-                            ),
-                            "required_combination": (
-                                sls.COMBINATION_QUASI_PERMANENT
-                            ),
-                            "matched_responses": ["Long-term"],
-                            "applicability": {},
-                            "limit": 0.30,
-                            "value": 0.213,
-                            "status": "OK",
-                        }],
-                        "response_contexts": {
-                            "Long-term": {
-                                "combination": (
-                                    sls.COMBINATION_QUASI_PERMANENT
-                                ),
-                                "response_id": "long",
-                                "duration": "Sustained / long-term response",
-                                "provenance": (
-                                    "Elastic case 'EL-TEST', "
-                                    "long_combination table field"
-                                ),
-                            },
-                            "Total (long + short)": {
-                                "combination": (
-                                    sls.COMBINATION_CHARACTERISTIC
-                                ),
-                                "response_id": "total",
-                                "duration": (
-                                    "Instantaneous total (long + short) response"
-                                ),
-                                "provenance": (
-                                    "Elastic case 'EL-TEST', "
-                                    "total_combination table field"
-                                ),
-                            },
-                        },
-                        "informational_responses": [
-                            "Total (long + short)"
-                        ],
+                        "unit": "mm", "calculation_state": "CALCULATED",
                     },
                     "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
-    elastic = out["elastic"]
-    contexts = copy.deepcopy(
-        elastic["crack_assessment"]["response_contexts"]
-    )
-    contexts["Long-term"]["solver_provenance"] = {"state": "long"}
-    contexts["Total (long + short)"]["solver_provenance"] = {
-        "state": "total",
-    }
-    mapping_scope = [
-        {
-            "combination": context["combination"],
-            "duration": context["duration"],
-            "response": name,
-            "response_id": context["response_id"],
-            "elastic_case": "EL-TEST",
-            "state": (
-                "long"
-                if name == "Long-term"
-                else "total"
-            ),
-            "provenance": context["provenance"],
-        }
-        for name, context in contexts.items()
-    ]
-    responses = {
-        "Long-term": elastic["crack"],
-        "Total (long + short)": elastic["crack_short"],
-    }
-    elastic["crack_assessment"] = sls.crack_assessment(
-        responses,
-        valid=True,
-        criteria=[{
-            "id": "standard-durability",
-            "kind": sls.CRITERION_DURABILITY,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": (
-                "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
-            ),
-            "required_combination": (
-                sls.COMBINATION_QUASI_PERMANENT
-            ),
-            "limit_mm": 0.30,
-            "applicability": {"member": "reinforced"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    elastic["crack_response_contexts"] = contexts
-    elastic["crack_response_mapping_scope"] = mapping_scope
-    elastic["crack_responses"] = responses
-    return out
 
 
 def _fatigue_report_fixture():
     inp = _inp()
     inp.update({
         "mode": "",
-        "design_methodology": bridge.COMPONENT_METHODS,
         "fatigue_on": True,
         "fatigue_edition": fatigue_inputs.EC2_2023,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
-        "fatigue_concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_2023_STANDARD
-        ),
-        "fatigue_concrete_miner_source": "",
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
-        "fatigue_gamma0": 1.0,
-        "fatigue_gamma3": 1.0,
         "fatigue_gamma_ff": 1.10,
         "fatigue_gamma_s": 1.15,
         "fatigue_gamma_c": 1.50,
@@ -360,17 +172,8 @@ def _fatigue_report_fixture():
         }],
         "tendon_elements": [],
         fatigue_inputs.BASIS_KEY: {
-            "authority": fatigue_inputs.AUTHORITY_USER,
-            "method": fatigue_inputs.METHOD_USER_GROUPED,
-            "spectrum_source": "Traffic model TM-7",
-            "cycle_count_source": "Cycle count CC-4",
-            "dynamic_effects": fatigue_inputs.DYNAMIC_INCLUDED,
-            "cycle_counting": fatigue_inputs.COUNTING_OTHER,
-            "concurrence_basis": "Concurrent lane model",
-            "atypical_traffic": fatigue_inputs.ATYPICAL_NOT_APPLICABLE,
-            "approval_reference": "DB-FAT-02",
-            "authority_adjustments": "None",
-            "notes": "Independent spectra",
+            "method": fatigue_inputs.METHOD_GROUPED,
+            "notes": "Traffic model TM-7; cycle count CC-4; independent spectra",
         },
         fatigue_inputs.SPECTRUM_TABLE_KEY:
             fatigue_inputs.normalise_spectrum_table([
@@ -505,43 +308,14 @@ def _fatigue_report_fixture():
         spectrum("Traffic A", "FAT-A1", 0.55),
         spectrum("Traffic B", "FAT-B1", 0.72),
     )
-    _gamma_s, _gamma_c, factor_basis = (
-        fatigue_inputs.resolve_fatigue_factors(
-            fatigue_inputs.EC2_2023,
-            mode=fatigue_inputs.FACTOR_MODE_PRESET,
-            gamma_s=1.15,
-            gamma_c=1.50,
-        )
-    )
-    miner_conformance = fatigue_analysis.concrete_miner_conformance(
-        edition=fatigue_inputs.EC2_2023,
-        concrete_method=fatigue_analysis.CONCRETE_MINER,
-        miner_basis=fatigue_inputs.MINER_BASIS_2023_STANDARD,
-        miner_source="",
-        coefficient_c=14.0,
-        design_methodology=bridge.COMPONENT_METHODS,
-    )
-    parameter_conformance = (
-        factor_basis["parameter_conformance"]["gamma_s"],
-        factor_basis["parameter_conformance"]["gamma_c"],
-        miner_conformance,
-    )
-    aggregate_conformance = conformance.aggregate(
-        parameter_conformance,
-        analytical_status=conformance.STATUS_PASS,
-        selected_standard=fatigue_inputs.EC2_2023,
-    )
     payload = {
-        "errors": (),
-        "valid": True,
         "edition": fatigue_inputs.EC2_2023,
-        "design_methodology": bridge.COMPONENT_METHODS,
         "checks": {"reinforcement": True, "concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
-        "concrete_miner_basis": fatigue_inputs.MINER_BASIS_2023_STANDARD,
-        "concrete_miner_source": "",
         "basis": inp[fatigue_inputs.BASIS_KEY],
-        "authority_reference": "Project-defined grouped spectrum",
+        "method_reference": fatigue_inputs.METHOD_REFERENCES[
+            fatigue_inputs.METHOD_GROUPED
+        ],
         "calculation_references": {
             "reinforcement": (
                 "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2"
@@ -554,12 +328,6 @@ def _fatigue_report_fixture():
             "gamma_s": 1.15,
             "gamma_ff": 1.10,
         },
-        "factor_basis": factor_basis,
-        "parameter_conformance": parameter_conformance,
-        "conformance": aggregate_conformance,
-        "assessment_status": aggregate_conformance["assessment_status"],
-        "qualified_verdict": aggregate_conformance["qualified_verdict"],
-        "standard_passed": True,
         "concrete_parameters": {
             "fck_mpa": 30.0,
             "beta_cc_t0": 0.92,
@@ -567,7 +335,6 @@ def _fatigue_report_fixture():
             "k1": 1.0,
             "c": 14.0,
             "method": "Explicit Palmgren-Miner spectrum",
-            "parameter_conformance": miner_conformance,
         },
         "reinforcement_properties": (
             NS(
@@ -607,47 +374,6 @@ def _fatigue_report_fixture():
     return inp, {"fatigue": payload}
 
 
-def _rebind_report_miner_conformance(payload):
-    miner = fatigue_analysis.concrete_miner_conformance(
-        edition=payload["edition"],
-        concrete_method=payload["concrete_method"],
-        miner_basis=payload["concrete_miner_basis"],
-        miner_source=payload["concrete_miner_source"],
-        coefficient_c=payload["concrete_parameters"]["c"],
-        design_methodology=payload["design_methodology"],
-    )
-    factor_records = payload["factor_basis"]["parameter_conformance"]
-    records = []
-    if payload["checks"]["reinforcement"]:
-        records.append(factor_records["gamma_s"])
-    if payload["checks"]["concrete"]:
-        records.append(factor_records["gamma_c"])
-        records.append(miner)
-    payload["concrete_parameters"]["parameter_conformance"] = miner
-    payload["parameter_conformance"] = tuple(records)
-    payload["conformance"] = conformance.aggregate(
-        payload["parameter_conformance"],
-        analytical_status=(
-            conformance.STATUS_PASS
-            if payload["passed"]
-            else conformance.STATUS_FAIL
-        ),
-        selected_standard=payload["edition"],
-    )
-    payload["assessment_status"] = payload["conformance"][
-        "assessment_status"
-    ]
-    payload["qualified_verdict"] = payload["conformance"][
-        "qualified_verdict"
-    ]
-    payload["standard_passed"] = bool(
-        payload["passed"]
-        and payload["conformance"]["state"]
-        == conformance.STATE_CONFORMS
-    )
-    return miner
-
-
 def test_report_includes_complete_grouped_fatigue_evidence():
     inp, out = _fatigue_report_fixture()
 
@@ -656,12 +382,12 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     )).split())
 
     assert "Grouped fatigue" in text
-    assert "PASS - STANDARD PASS | Traffic B" in text
+    assert "REVIEW - Traffic B" in text
     assert "Traffic A" in text and "Traffic B" in text
     assert "FAT-A1" in text and "FAT-B1" in text
     assert "Reinforcement fatigue" in text
     assert "Concrete fatigue" in text
-    assert "Certified governing-fibre search" in text
+    assert "Bounded governing-fibre search" in text
     assert "Upper D" in text
     assert "Fatigue total" in text
     assert "Bond factor / method" in text
@@ -669,8 +395,6 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "raw solver range" in text
     assert "action-level" in text
     assert "Annex E.5" in text and "Annex E.7-E.8" in text
-    assert fatigue_inputs.FACTOR_MODE_PRESET in text
-    assert "1.150 (edition tabulated value)" in text
     assert "different spectrum names are not combined" in text
     assert "Torsion and shear fatigue are not assessed" in text
     compact = text.replace(" ", "")
@@ -685,296 +409,6 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
 
 
-def test_report_rejects_missing_fatigue_basis_at_common_boundary():
-    inp, out = _fatigue_report_fixture()
-    del out["fatigue"]["basis"]
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {"proj_no": "FAT-BASIS-ATTACK"},
-        inp,
-        out,
-        figures=False,
-    )).split())
-
-    assert "INVALID - fatigue not assessed" in text
-    assert "Published fatigue basis is invalid" in text
-    assert "PASS - STANDARD PASS | Traffic B" not in text
-
-
-def test_report_rejects_stale_complete_fatigue_basis_against_current_inputs():
-    inp, out = _fatigue_report_fixture()
-    inp[fatigue_inputs.BASIS_KEY] = {
-        **inp[fatigue_inputs.BASIS_KEY],
-        "notes": "Current edited basis",
-    }
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {"proj_no": "FAT-BASIS-STALE"},
-        inp,
-        out,
-        figures=False,
-    )).split())
-
-    assert "INVALID - fatigue not assessed" in text
-    assert "basis conflicts with the calculation input snapshot" in text
-    assert "PASS - STANDARD PASS | Traffic B" not in text
-
-
-def test_report_includes_dk_fatigue_factor_derivations():
-    inp, out = _fatigue_report_fixture()
-    payload = out["fatigue"]
-    inp.update({
-        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
-        "fatigue_gamma_s": 1.32,
-        "fatigue_gamma_c": 1.595,
-        "fatigue_concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-        ),
-        "fatigue_concrete_miner_source": "DB-FAT-DK / checker A",
-    })
-    payload["edition"] = fatigue_inputs.EC2_2005_DKNA
-    payload["concrete_miner_basis"] = (
-        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-    )
-    payload["concrete_miner_source"] = "DB-FAT-DK / checker A"
-    payload["partial_factors"].update(gamma_s=1.32, gamma_c=1.595)
-    _gamma_s, _gamma_c, payload["factor_basis"] = (
-        fatigue_inputs.resolve_fatigue_factors(
-            fatigue_inputs.EC2_2005_DKNA,
-            mode=fatigue_inputs.FACTOR_MODE_PRESET,
-            gamma_s=1.32,
-            gamma_c=1.595,
-        )
-    )
-    _rebind_report_miner_conformance(payload)
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "Table 2.1Na NA" in text
-    assert "1.20 x 1.10 x 1.000 x 1.000 = 1.320" in text
-    assert "1.45 x 1.10 x 1.000 x 1.000 = 1.595" in text
-
-
-def test_report_keeps_spectrum_and_factor_approvals_distinct():
-    inp, out = _fatigue_report_fixture()
-    payload = out["fatigue"]
-    payload["basis"]["approval_reference"] = "VD-FLM5-AGREEMENT"
-    inp.update({
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-        "fatigue_factor_approval": "DB-FACT-12 / checker D",
-        "fatigue_gamma_s": 1.27,
-        "fatigue_gamma_c": 1.61,
-    })
-    gamma_s, gamma_c, payload["factor_basis"] = (
-        fatigue_inputs.resolve_fatigue_factors(
-            fatigue_inputs.EC2_2023,
-            mode=fatigue_inputs.FACTOR_MODE_OVERRIDE,
-            gamma_s=1.27,
-            gamma_c=1.61,
-            approval_reference="DB-FACT-12 / checker D",
-        )
-    )
-    payload["partial_factors"].update(
-        gamma_s=gamma_s,
-        gamma_c=gamma_c,
-    )
-    _rebind_report_miner_conformance(payload)
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False, qa_appendix=True
-    )).split())
-    appendix = text[text.index("QA appendix - references and notes"):]
-
-    assert "Spectrum-method approval/reference VD-FLM5-AGREEMENT" in text
-    assert (
-        "Factor override approval/source DB-FACT-12 / checker D"
-        in text
-    )
-    assert "approval/source: DB-FACT-12 / checker D" in appendix
-    assert "VD-FLM5-AGREEMENT" not in appendix.split(
-        "Partial-factor provenance", 1
-    )[1]
-
-
-def test_report_exposes_ordinary_miner_adoption_and_source():
-    inp, out = _fatigue_report_fixture()
-    payload = out["fatigue"]
-    inp["fatigue_edition"] = fatigue_inputs.EC2_2005
-    inp["fatigue_concrete_miner_basis"] = (
-        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-    )
-    inp["fatigue_concrete_miner_source"] = "DB-FAT-21 / checker approval"
-    inp["fatigue_gamma_s"] = 1.15
-    inp["fatigue_gamma_c"] = 1.50
-    payload["edition"] = fatigue_inputs.EC2_2005
-    payload["concrete_miner_basis"] = (
-        fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION
-    )
-    payload["concrete_miner_source"] = "DB-FAT-21 / checker approval"
-    payload["calculation_references"]["concrete"] = (
-        "Approved project-basis adoption of DS/EN 1992-2:2005/AC:2008 "
-        "corrected Expression (6.106); source: "
-        "DB-FAT-21 / checker approval"
-    )
-    _gamma_s, _gamma_c, payload["factor_basis"] = (
-        fatigue_inputs.resolve_fatigue_factors(
-            fatigue_inputs.EC2_2005,
-            mode=fatigue_inputs.FACTOR_MODE_PRESET,
-            gamma_s=1.15,
-            gamma_c=1.50,
-        )
-    )
-    _rebind_report_miner_conformance(payload)
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "Concrete Miner applicability" in text
-    assert fatigue_inputs.MINER_BASIS_PROJECT_ADOPTION in text
-    assert "Concrete Miner authority source" in text
-    assert "DB-FAT-21 / checker approval" in text
-    assert "corrected Expression (6.106)" in text
-    assert "APPROVED CUSTOM PASS" in text
-
-
-def test_report_fails_closed_if_standard_miner_c_is_mutated():
-    inp, out = _fatigue_report_fixture()
-    out["fatigue"]["concrete_parameters"]["c"] = 100.0
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "INVALID - fatigue not assessed" in text
-    assert "concrete Miner conformance is stale" in text
-    assert "C 100.000" not in text
-
-
-def test_report_publishes_consistent_standard_c100_as_analytical_review():
-    inp, out = _fatigue_report_fixture()
-    payload = out["fatigue"]
-    inp["fatigue_concrete_c"] = 100.0
-    payload["concrete_parameters"]["c"] = 100.0
-    _rebind_report_miner_conformance(payload)
-    payload["calculation_references"]["concrete"] = (
-        "Custom/deviating concrete Miner analysis; this is not an "
-        "unqualified selected-standard Miner check; C = 100"
-    )
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False, qa_appendix=True
-    )).split())
-
-    assert "REVIEW - REVIEW - analytical PASS | Traffic B" in text
-    assert "C 100.000" in text
-    assert "REVIEW REQUIRED" in text
-    assert "actual value 100 does not conform to prescribed value = 14" in text
-    assert "STANDARD PASS" not in text
-
-
-def test_report_fails_closed_if_miner_payload_is_relabelled_equivalent():
-    inp, out = _fatigue_report_fixture()
-    out["fatigue"]["concrete_method"] = (
-        "Damage-equivalent stress amplitude"
-    )
-    out["fatigue"]["concrete_parameters"]["c"] = 100.0
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "INVALID - fatigue not assessed" in text
-    assert "method conflicts with its calculation parameters" in text
-    assert "C 100.000" not in text
-
-
-def test_report_rejects_bridge_basis_relabel_under_component_methodology():
-    inp, out = _fatigue_report_fixture()
-    payload = out["fatigue"]
-    payload["concrete_miner_basis"] = (
-        fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-    )
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "INVALID - fatigue not assessed" in text
-    assert "concrete Miner conformance is stale" in text
-    assert "C 14.000" not in text
-
-
-def test_report_rejects_missing_fatigue_methodology_snapshot():
-    inp, out = _fatigue_report_fixture()
-    del inp["design_methodology"]
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "INVALID - fatigue not assessed" in text
-    assert (
-        "Current fatigue design methodology is unavailable for publication "
-        "correlation"
-    ) in text
-
-
-def test_report_fails_closed_on_malformed_fatigue_error_container():
-    inp, out = _fatigue_report_fixture()
-    out["fatigue"]["errors"] = 7
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "INVALID - fatigue not assessed" in text
-    assert "structured list of typed messages" in text
-
-
-def test_report_labels_nonstandard_c_as_sourced_project_sn_method():
-    inp, out = _fatigue_report_fixture()
-    payload = out["fatigue"]
-    inp.update({
-        "fatigue_concrete_method": (
-            "Project-approved Miner S-N relation"
-        ),
-        "fatigue_concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
-        ),
-        "fatigue_concrete_miner_source": "AUTH-SN-7 / checker approval",
-        "fatigue_concrete_c": 100.0,
-    })
-    payload.update({
-        "concrete_method": "Project-approved Miner S-N relation",
-        "concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_PROJECT_SN_RELATION
-        ),
-        "concrete_miner_source": "AUTH-SN-7 / checker approval",
-    })
-    payload["concrete_parameters"].update({
-        "c": 100.0,
-        "method": "Project-approved Miner S-N relation",
-    })
-    payload["calculation_references"]["concrete"] = (
-        "Approved project concrete fatigue S-N relation; source: "
-        "AUTH-SN-7 / checker approval"
-    )
-    _rebind_report_miner_conformance(payload)
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "Approved project S-N relation" in text
-    assert "AUTH-SN-7 / checker approval" in text
-    assert "C 100.000" in text
-    assert "APPROVED CUSTOM PASS" in text
-    assert "corrected Expression (6.106)" not in text
-
-
 def test_report_includes_damage_equivalent_concrete_method_evidence():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
@@ -985,24 +419,6 @@ def test_report_includes_damage_equivalent_concrete_method_evidence():
     payload["calculation_references"]["concrete"] = (
         "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
     )
-    factor_records = payload["factor_basis"]["parameter_conformance"]
-    payload["concrete_parameters"].pop("parameter_conformance")
-    payload["parameter_conformance"] = (
-        factor_records["gamma_s"],
-        factor_records["gamma_c"],
-    )
-    payload["conformance"] = conformance.aggregate(
-        payload["parameter_conformance"],
-        analytical_status=conformance.STATUS_PASS,
-        selected_standard=payload["edition"],
-    )
-    payload["assessment_status"] = payload["conformance"][
-        "assessment_status"
-    ]
-    payload["qualified_verdict"] = payload["conformance"][
-        "qualified_verdict"
-    ]
-    payload["standard_passed"] = True
     for spectrum in payload["spectra"]:
         spectrum.concrete_method = method
         for result in spectrum.concrete:
@@ -1041,24 +457,12 @@ def test_report_fatigue_chapter_uses_the_engine_failure_state():
     payload["governing_spectrum"] = "Traffic B"
     payload["spectra"][1].passed = False
     payload["spectra"][1].utilisation = 1.20
-    payload["conformance"] = conformance.aggregate(
-        payload["parameter_conformance"],
-        analytical_status=conformance.STATUS_FAIL,
-        selected_standard=payload["edition"],
-    )
-    payload["assessment_status"] = payload["conformance"][
-        "assessment_status"
-    ]
-    payload["qualified_verdict"] = payload["conformance"][
-        "qualified_verdict"
-    ]
-    payload["standard_passed"] = False
 
     text = " ".join(_pdf_text(sector_report.build_report(
         {}, inp, out, figures=False
     )).split())
 
-    assert "FAIL - STANDARD FAIL | Traffic B" in text
+    assert "FAIL - Traffic B" in text
     assert "120.0 %" in text
 
 
@@ -1106,7 +510,7 @@ def test_report_escapes_user_defined_fatigue_settings():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
     payload["governing_spectrum"] = "Traffic <A> & B"
-    payload["basis"]["spectrum_source"] = "Register A & B <issued>"
+    payload["basis"]["notes"] = "Register A & B <issued>"
     payload["fatigue_detail_basis"][0]["name"] = "Bar <detail> & coupler"
     payload["fatigue_detail_basis"][0]["source"] = "Drawing A&B <rev 2>"
 
@@ -1569,7 +973,8 @@ def test_report_front_matter_identifies_action_sets_and_result_statuses():
         _out(),
         figures=False,
     ))
-    assert "Results overview - PASS" in txt
+    assert "Results overview" in txt
+    assert "Results overview - PASS" not in txt
     assert "PL-TEST" in txt and "EL-TEST" in txt
     assert "Combination register C1" in txt
     assert "Combination register C2" in txt
@@ -1599,14 +1004,14 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
             "n_long_ed_kn": 0.0, "mx_long_ed_knm": 80.0,
             "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
             "mx_short_ed_knm": 20.0, "my_short_ed_knm": 0.0,
-            "check_stress": True, "check_crack_width": True,
+            "calculate_crack_width": True,
         },
         {
             "name": "EL-02", "description": "Frequent response",
             "n_long_ed_kn": 0.0, "mx_long_ed_knm": 45.0,
             "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
             "mx_short_ed_knm": 10.0, "my_short_ed_knm": 0.0,
-            "check_stress": True, "check_crack_width": False,
+            "calculate_crack_width": False,
         },
     ]
     inp["plastic_cases"] = plastic_rows
@@ -1645,16 +1050,17 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
 
     txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     flat = " ".join(txt.split())
-    assert "Results overview - FAIL" in flat
+    assert "Results overview" in flat
+    assert "Results overview - FAIL" not in flat
     assert all(case in flat for case in ("PL-01", "PL-02", "EL-01", "EL-02"))
     assert "Governing combination" in flat and "Frequent response" in flat
     assert flat.count(". Plastic section capacity") == 2
-    assert flat.count(". Elastic section response and stress limits") == 2
+    assert flat.count(". Elastic section response and stresses") == 2
     assert "Plastic section capacity - PL-02" in flat
-    assert "Elastic section response and stress limits - EL-02" in flat
+    assert "Elastic section response and stresses - EL-02" in flat
     assert "Cracking threshold - EL-02" in flat
-    assert "Acceptance: stress limits on; crack width off." in flat
-    assert "Gov. marks the highest PASS/FAIL utilisation" in flat
+    assert "Crack width was not requested for this run." in flat
+    assert "the project as a whole have no verdict" in flat
     assert "125.0 %" in flat
     assert "456.000 MPa" in flat
 
@@ -1672,31 +1078,21 @@ def test_report_escapes_user_entered_action_provenance():
 
 
 def test_report_mirrors_the_views():
-    out = _out()
-    binding_before = copy.deepcopy(
-        out["elastic"]["crack_assessment"]["criteria"][0][
-            "acceptance_evidence"
-        ]
-    )
-    txt = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
+    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
     flat = " ".join(txt.split())
     assert "Fc" in txt and "NA x" in txt           # full plastic table columns
     assert "PASS - Plastic bending" in txt
     assert " pp" not in flat
     assert "does not exceed" not in flat
-    assert "PASS - Crack width | governing" in flat
+    assert "Crack-width output | governing" in flat
+    assert "Calculation state: CALCULATED" in flat
     assert "Governing concrete corner response" in txt
     assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column
-    assert "both response states" in txt           # full crack-width table
+    assert "both load cases" in txt                # full crack-width table
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
     assert "Utilisation check" in txt              # analysis settings documented
     assert "Max / Min" in txt                      # both extremes for Mx and My
-    assert out["elastic"]["crack_assessment"]["criteria"][0][
-        "acceptance_evidence"
-    ] == binding_before
 
 
 def test_report_qa_appendix_is_optional_and_identified_on_the_cover():
@@ -1713,11 +1109,12 @@ def test_report_qa_appendix_is_optional_and_identified_on_the_cover():
     assert "QA appendix - references and notes" in qa_text
 
 
-def test_report_includes_sls_criteria_strain_and_candidate_evidence():
+def test_report_includes_sls_outputs_strain_and_candidate_evidence():
     txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
-    assert "Stress-limit assessment" in txt
-    assert "DB-SLS-01 section 4" in txt
-    assert "60% fck" in txt and "80% fyk" in txt
+    assert "Elastic stress outputs" in txt
+    assert "No stress-limit criterion is applied" in txt
+    assert "DB-SLS-01 section 4" not in txt
+    assert "60% fck" not in txt and "80% fyk" not in txt
     assert "Ixy" in txt
     assert "Reinforcement and tendon response" in txt
     assert "Concrete corner stress and strain" in txt
@@ -1726,12 +1123,8 @@ def test_report_includes_sls_criteria_strain_and_candidate_evidence():
     assert "Element diameter" in txt
     assert "Bar diameter" not in txt
     assert "bar 1" in txt
-    assert "0.300 mm" in txt and "0.213 mm" in txt
-    assert "Quasi-permanent" in txt
-    assert "Characteristic" in txt
-    assert "Informational" in txt
-    assert "Table 7.1N" in txt
-    assert "long_combination table" in txt
+    assert "0.213 mm" in txt
+    assert "0.300 mm" not in txt
     assert chr(0x394) + chr(0x3B5) in txt
     assert "delta eps" not in txt
 
@@ -1753,617 +1146,37 @@ def test_crack_candidate_table_stays_inside_a4_content_width():
 def test_report_marks_nonconverged_elastic_results_invalid():
     out = _out()
     out["elastic"]["converged"] = False
-    for item in out["elastic"]["stress_assessments"].values():
-        item["status"] = "INVALID"
-    out["elastic"]["crack_assessment"]["status"] = "INVALID"
+    for item in out["elastic"]["stress_outputs"].values():
+        item["calculation_state"] = "INVALID"
+        item["value"] = None
+    out["elastic"]["crack_output"]["calculation_state"] = "INVALID"
+    out["elastic"]["crack_output"]["value"] = None
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "INVALID - Elastic result" in txt
     assert "diagnostic only" in txt
     assert "no verified cracking classification" in txt
 
 
-def test_report_keeps_crack_criterion_when_no_width_is_calculated():
+def test_report_marks_no_crack_width_as_output_not_applicable():
     out = _out()
     elastic = out["elastic"]
     elastic.update(
         cracked=False,
         crack=None,
         crack_short=None,
-        crack_responses={
-            "Long-term": None,
-            "Total (long + short)": None,
-        },
-        crack_dispositions={
-            "Long-term": {
-                "status": "NOT APPLICABLE",
-                "reason": "The section remained uncracked.",
-            },
-            "Total (long + short)": {
-                "status": "NOT APPLICABLE",
-                "reason": "The section remained uncracked.",
-            },
-        },
-        crack_assessment={
+        crack_output={
             "value": None,
-            "limit": 0.30,
-            "util": None,
-            "margin": None,
-            "status": "NOT APPLICABLE",
+            "calculation_state": "NOT APPLICABLE",
             "case": None,
             "governing": None,
-            "criterion": "0.3 mm",
-            "reason": "The section remained uncracked.",
+            "unit": "mm",
         },
     )
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "NOT APPLICABLE" in txt
-    assert "limit 0.300 mm" in txt
     assert "No crack width:" in txt
-    assert "The section remained uncracked." in txt
-    assert "DB-SLS-01 section 4" in txt
-
-
-def test_report_never_publishes_pass_for_boolean_crack_result():
-    out = _out()
-    elastic = out["elastic"]
-    contexts = {
-        "Long-term": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "long",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-        "Total (long + short)": {
-            "combination": sls.COMBINATION_CHARACTERISTIC,
-            "duration": "short",
-            "response_id": "total",
-            "provenance": "controlled characteristic mapping",
-            "solver_provenance": {"state": "long-plus-short"},
-        },
-    }
-    mapping_scope = _report_mapping_scope(contexts)
-    assessment = sls.crack_assessment(
-        {
-            "Long-term": {
-                "wk": 0.22,
-                "element_id": "bar 1",
-            },
-            "Total (long + short)": {
-                "wk": 0.25,
-                "element_id": "bar 1",
-            },
-        },
-        valid=True,
-        criteria=[{
-            "id": "qa-durability",
-            "kind": sls.CRITERION_DURABILITY,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": 0.30,
-            "applicability": {"member": "reinforced"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["status"] == "OK"
-    assert assessment["verdict"] == "PASS"
-    elastic["crack"]["wk"] = 0.22
-    elastic["crack_short"]["wk"] = np.bool_(False)
-    elastic["crack_assessment"] = assessment
-    elastic["crack_response_contexts"] = contexts
-    elastic["crack_response_mapping_scope"] = mapping_scope
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-
-    assert "NOT ASSESSED - Crack width" in text
-    assert "PASS - Crack width" not in text
-    assert (
-        "prior acceptance assessment was invalidated"
-        in " ".join(text.split())
-    )
-
-
-def test_report_preserves_dk_coarse_matched_response_as_criterion_input():
-    out = _out()
-    elastic = out["elastic"]
-    responses = {
-        "Long-term (fine)": dict(_crack(), coarse=False, wk=0.20),
-        "Total (fine)": dict(_crack(), coarse=False, wk=0.25),
-        "Long-term (coarse)": dict(_crack(), coarse=True, wk=0.10),
-        "Total (coarse)": dict(_crack(), coarse=True, wk=0.12),
-    }
-    contexts = {
-        name: {
-            "combination": (
-                sls.COMBINATION_QUASI_PERMANENT
-                if name.startswith("Long-term")
-                else sls.COMBINATION_CHARACTERISTIC
-            ),
-            "duration": (
-                "long" if name.startswith("Long-term") else "short"
-            ),
-            "response_id": (
-                "long" if name.startswith("Long-term") else "total"
-            ),
-            "provenance": (
-                "controlled QP mapping"
-                if name.startswith("Long-term")
-                else "controlled characteristic mapping"
-            ),
-            "solver_provenance": {
-                "state": (
-                    "long" if name.startswith("Long-term") else "total"
-                ),
-            },
-        }
-        for name in responses
-    }
-    mapping_scope = _report_mapping_scope(contexts)
-    assessment = sls.crack_assessment(
-        responses,
-        valid=True,
-        criteria=[{
-            "id": "qa-durability",
-            "kind": sls.CRITERION_DURABILITY,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled DK criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": 0.30,
-            "applicability": {"member": "reinforced"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["status"] == "OK"
-    assert assessment["criteria"][0]["matched_responses"] == [
-        "Long-term (fine)",
-        "Long-term (coarse)",
-    ]
-    elastic.update(
-        crack=responses["Long-term (fine)"],
-        crack_short=responses["Total (fine)"],
-        crack_coarse=responses["Long-term (coarse)"],
-        crack_short_coarse=responses["Total (coarse)"],
-        crack_responses=responses,
-        crack_response_contexts=contexts,
-        crack_response_mapping_scope=mapping_scope,
-        crack_dispositions={
-            name: {"status": "CALCULATED"} for name in responses
-        },
-        crack_assessment=assessment,
-        crack_code="DS/EN 1992-1-1 + DK NA",
-    )
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-
-    assert "PASS - Crack width" in text
-    assert "NOT ASSESSED - Crack width" not in text
-
-
-def test_report_formats_decompression_as_concrete_stress_not_crack_width():
-    out = _out()
-    elastic = out["elastic"]
-    response = dict(
-        elastic["crack"],
-        decompression={
-            "status": "OK",
-            "value": -0.25,
-            "governing": "concrete point 1",
-            "solver_provenance": {"state": "long"},
-        },
-    )
-    contexts = {
-        "Long-term": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "long",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-        "Total (long + short)": {
-            "combination": sls.COMBINATION_CHARACTERISTIC,
-            "duration": "short",
-            "response_id": "total",
-            "provenance": "controlled characteristic mapping",
-            "solver_provenance": {"state": "total"},
-        },
-    }
-    mapping_scope = _report_mapping_scope(contexts)
-    assessment = sls.crack_assessment(
-        {
-            "Long-term": response,
-            "Total (long + short)": elastic["crack_short"],
-        },
-        valid=True,
-        criteria=[{
-            "id": "qa-decompression",
-            "kind": sls.CRITERION_DECOMPRESSION,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled decompression criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": None,
-            "applicability": {"member": "bonded prestress"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["criterion"] == sls.CRITERION_DECOMPRESSION
-    elastic.update(
-        crack=response,
-        crack_responses={
-            "Long-term": response,
-            "Total (long + short)": elastic["crack_short"],
-        },
-        crack_response_contexts=contexts,
-        crack_response_mapping_scope=mapping_scope,
-        crack_assessment=assessment,
-    )
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-    compact = " ".join(text.split())
-
-    assert "PASS - Decompression" in compact
-    assert "-0.250 MPa" in compact
-    assert "compression required" in compact
-    assert "-0.250 mm" not in compact
-
-
-def test_report_reapplies_failure_precedence_over_incomplete_criterion():
-    out = _out()
-    elastic = out["elastic"]
-    elastic["crack"]["wk"] = 0.31
-    elastic["crack"]["element_id"] = "bar 1"
-    assessment = sls.crack_assessment(
-        elastic["crack_responses"],
-        valid=True,
-        criteria=[
-            {
-                "id": "qa-width",
-                "kind": sls.CRITERION_DURABILITY,
-                "source_type": sls.CRITERION_MODE_STANDARD,
-                "source": "QA controlled durability criterion",
-                "required_combination": (
-                    sls.COMBINATION_QUASI_PERMANENT
-                ),
-                "limit_mm": 0.30,
-                "applicability": {
-                    "prestress_class": (
-                        sls.PRESTRESS_REINFORCED_UNBONDED
-                    ),
-                },
-            },
-            {
-                "id": "qa-decompression",
-                "kind": sls.CRITERION_DECOMPRESSION,
-                "source_type": sls.CRITERION_MODE_STANDARD,
-                "source": "QA controlled decompression criterion",
-                "required_combination": sls.COMBINATION_FREQUENT,
-                "limit_mm": None,
-                "applicability": {
-                    "prestress_class": (
-                        sls.PRESTRESS_REINFORCED_UNBONDED
-                    ),
-                },
-            },
-        ],
-        response_contexts=elastic["crack_response_contexts"],
-        response_mapping_scope=elastic["crack_response_mapping_scope"],
-    )
-    assert assessment["status"] == "EXCEEDED"
-    assessment.update(
-        status="NOT ASSESSED",
-        verdict="REVIEW",
-        value=None,
-        util=None,
-        margin=None,
-        acceptance_evidence=None,
-    )
-    elastic["crack_assessment"] = assessment
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-    compact = " ".join(text.split())
-
-    assert "FAIL - Crack width" in compact
-    assert "NOT ASSESSED - Crack width" not in compact
-    assert "0.310 mm" in compact
-
-
-def test_report_rejects_scalar_matched_response_evidence():
-    out = _out()
-    elastic = out["elastic"]
-    assessment = sls.crack_assessment(
-        {
-            "Long-term": {
-                "wk": elastic["crack"]["wk"],
-                "element_id": elastic["crack"]["element_id"],
-            },
-        },
-        valid=True,
-        criteria=[{
-            "id": "qa-width",
-            "kind": sls.CRITERION_DURABILITY,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled durability criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": 0.30,
-            "applicability": {},
-        }],
-        response_contexts={
-            "Long-term": {
-                "combination": sls.COMBINATION_QUASI_PERMANENT,
-                "response_id": "long",
-                "duration": "Sustained / long-term response",
-            },
-        },
-    )
-    assessment["criteria"][0]["matched_responses"] = True
-    elastic["crack_assessment"] = assessment
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-    compact = " ".join(text.split())
-
-    assert "NOT ASSESSED - Crack width" in compact
-    assert "PASS - Crack width" not in compact
-    assert "matched responses are not a structured list" in compact
-
-
-def test_report_invalidates_stale_pass_when_governing_width_changes():
-    out = _out()
-    elastic = out["elastic"]
-    assert elastic["crack_assessment"]["status"] == "OK"
-    assert elastic["crack_assessment"]["value"] == pytest.approx(0.213)
-    elastic["crack"]["wk"] = 0.45
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-    compact = " ".join(text.split())
-
-    assert "NOT ASSESSED - Crack width" in compact
-    assert "PASS - Crack width" not in compact
-    assert "immutable acceptance evidence does not match" in compact
-
-
-@pytest.mark.parametrize(
-    ("mutation", "changed_value"),
-    [
-        ("response_id", "other"),
-        ("duration", "short"),
-        ("provenance", "map-v2"),
-        ("solver_provenance", {"solve": "v2"}),
-        ("criterion_source", "Changed criterion"),
-        ("applicability", {"member": "changed"}),
-        ("required_combination", sls.COMBINATION_FREQUENT),
-        ("mapping_scope", None),
-    ],
-)
-def test_report_rejects_each_canonical_width_binding_mutation(
-    mutation,
-    changed_value,
-):
-    out = _out()
-    elastic = out["elastic"]
-    if mutation in {
-        "response_id",
-        "duration",
-        "provenance",
-        "solver_provenance",
-    }:
-        elastic["crack_response_contexts"]["Long-term"][
-            mutation
-        ] = copy.deepcopy(changed_value)
-    elif mutation == "mapping_scope":
-        elastic["crack_response_mapping_scope"] = [{
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "Sustained / long-term response",
-            "response": "Long-term",
-            "response_id": "long",
-            "elastic_case": "EL-TEST",
-            "state": "long",
-            "provenance": (
-                "Elastic case 'EL-TEST', long_combination table field"
-            ),
-        }]
-    else:
-        elastic["crack_assessment"]["criteria"][0][
-            mutation
-        ] = copy.deepcopy(changed_value)
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-    compact = " ".join(text.split())
-
-    assert "NOT ASSESSED - Crack width" in compact
-    assert "PASS - Crack width" not in compact
-    assert "prior acceptance assessment was invalidated" in compact
-
-
-@pytest.mark.parametrize(
-    "malformation",
-    [
-        pytest.param("response-container", id="response-container"),
-        pytest.param("text-width", id="text-crack-width"),
-    ],
-)
-def test_report_rejects_fingerprint_valid_malformed_binding_schema(
-    malformation,
-):
-    out = _out()
-    binding = out["elastic"]["crack_assessment"]["criteria"][0][
-        "acceptance_evidence"
-    ]
-    if malformation == "response-container":
-        binding["matched_responses"] = ["Long-term"]
-    else:
-        for response in binding["matched_responses"]:
-            acceptance = response["acceptance"]
-            acceptance["value_mm"] = str(acceptance["value_mm"])
-        binding["outcome"]["value"] = str(binding["outcome"]["value"])
-    body = {
-        key: value
-        for key, value in binding.items()
-        if key != "fingerprint"
-    }
-    binding["fingerprint"] = hashlib.sha256(
-        json.dumps(
-            body,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("utf-8")
-    ).hexdigest()
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-    compact = " ".join(text.split())
-
-    assert "NOT ASSESSED - Crack width" in compact
-    assert "PASS - Crack width" not in compact
-    assert "invalid immutable acceptance evidence" in compact
-
-
-@pytest.mark.parametrize(
-    ("field", "changed_value"),
-    [
-        ("status", "EXCEEDED"),
-        ("value", -0.10),
-        ("governing", "concrete point 2"),
-        ("solver_provenance", {"state": "changed"}),
-    ],
-)
-def test_report_rejects_each_decompression_binding_mutation(
-    field,
-    changed_value,
-):
-    out = _out()
-    elastic = out["elastic"]
-    response = dict(
-        elastic["crack"],
-        decompression={
-            "status": "OK",
-            "value": -0.25,
-            "governing": "concrete point 1",
-            "solver_provenance": {"state": "long"},
-        },
-    )
-    contexts = {
-        "Long-term": {
-            "combination": sls.COMBINATION_QUASI_PERMANENT,
-            "duration": "long",
-            "response_id": "long",
-            "provenance": "controlled QP mapping",
-            "solver_provenance": {"state": "long"},
-        },
-        "Total (long + short)": {
-            "combination": sls.COMBINATION_CHARACTERISTIC,
-            "duration": "short",
-            "response_id": "total",
-            "provenance": "controlled characteristic mapping",
-            "solver_provenance": {"state": "total"},
-        },
-    }
-    mapping_scope = _report_mapping_scope(contexts)
-    responses = {
-        "Long-term": response,
-        "Total (long + short)": elastic["crack_short"],
-    }
-    assessment = sls.crack_assessment(
-        responses,
-        valid=True,
-        criteria=[{
-            "id": "qa-decompression",
-            "kind": sls.CRITERION_DECOMPRESSION,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": "QA controlled decompression criterion",
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": None,
-            "applicability": {"member": "bonded prestress"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    assert assessment["verdict"] == "PASS"
-    response["decompression"][field] = copy.deepcopy(changed_value)
-    elastic.update(
-        crack=response,
-        crack_responses=responses,
-        crack_response_contexts=contexts,
-        crack_response_mapping_scope=mapping_scope,
-        crack_assessment=assessment,
-    )
-
-    text = _pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    ))
-    compact = " ".join(text.split())
-
-    assert "NOT ASSESSED - Decompression" in compact
-    assert "PASS - Decompression" not in compact
-    assert "prior acceptance assessment was invalidated" in compact
-
-
-def test_report_carries_2023_mixed_reinforcement_and_scope_provenance():
-    inp = _inp()
-    inp["tendons"] = [(0.0, -0.10, 400.0)]
-    out = _out()
-    elastic = out["elastic"]
-    for key in ("crack", "crack_short"):
-        crack = elastic[key]
-        crack.update(
-            edition="2023",
-            kw=1.7,
-            k1_r=1.15,
-            kfl=0.82,
-            as_eff=0.0005,
-            ap_eff=0.0004,
-            ap_eff_weighted=0.0002,
-            xi1_min=0.5,
-            xi1_max=0.5,
-            scope="dominant-direction",
-            direction_deg=90.0,
-        )
-    elastic.update(
-        crack_code="EN 1992-1-1:2023",
-        crack_edition="2023",
-        crack_scope_note=(
-            "One-directional dominant strain-gradient assessment only. "
-            "Orthogonal or inclined crack systems are not assessed."
-        ),
-    )
-
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
-    flat = " ".join(txt.split())
-    assert "Crack-control conclusion limitation" in flat
-    assert "One-directional dominant strain-gradient" in flat
-    assert "Prestressing-steel bond condition" in flat
-    assert "Prestressing bond-strength ratio" in flat
-    assert "per-tendon reinforcement-table values" in flat
-    assert "Weighted prestressing area" in flat
-    assert "Eq (9.12)" in flat
-    assert "0.000200" in flat
-
-    inp["sls_phi"] = 18.0
-    override_txt = _pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    )
-    override_flat = " ".join(override_txt.split())
-    assert "18.000 mm global crack-width override" in override_flat
-    assert "per-tendon reinforcement-table values" not in override_flat
+    assert "No crack-width limit" in txt
+    assert "DB-SLS-01 section 4" not in txt
 
 
 def test_report_renders_greek_glyphs():
@@ -2411,69 +1224,14 @@ def test_oversized_reinforcement_table_repeats_its_header():
     assert all("x (mm)" in page and "y (mm)" in page for page in bar_pages)
 
 
-def test_report_crack_worked_uses_the_routed_response_not_the_largest_response():
-    # The explicit QP criterion routes to the sustained response even when the
-    # unrelated total/characteristic response has a larger crack width.
+def test_report_crack_worked_uses_the_governing_case():
+    # When the short-term load gives the larger wk, the worked example uses it.
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), wk=0.15)
     out["elastic"]["crack_short"] = dict(_crack(), wk=0.30)
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "routed response (Long-term)" in txt
-    assert "informational example" not in txt
-
-
-def test_report_project_crack_basis_lists_only_explicit_project_limits():
-    inp = _inp()
-    inp.update({
-        "sls_criterion_mode": sls.CRITERION_MODE_PROJECT,
-        "sls_project_frequent_limit": 0.24,
-        "sls_project_quasi_permanent_limit": 0.21,
-        # This disabled standard-mode value is retained in session state but is
-        # not applicable and therefore must not be presented as an active input.
-        "sls_wk_limit": 0.30,
-    })
-
-    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
-
-    assert "Project criterion applicability / limits" in txt
-    assert "Frequent: 0.240 mm" in txt
-    assert "Quasi-permanent: 0.210 mm" in txt
-    assert "Durability crack-width criterion" not in txt
-
-
-def test_report_roundtrips_2023_structured_route_and_rejected_state():
-    inp = _inp()
-    inp.update({
-        "sls_edition": "2023",
-        "sls_prestress_class": sls.PRESTRESS_BONDED,
-        "sls_protection_class": sls.PROTECTION_LEVEL_2_OR_3,
-        "sls_exposure_class": sls.EXPOSURE_XC2_XC4,
-        "sls_invalid_numeric_inputs": ("sls_wk_limit",),
-    })
-    out = _out()
-    out["elastic"]["crack_assessment"] = {
-        "status": "NOT ASSESSED",
-        "verdict": "REVIEW",
-        "reason": "Rejected numeric state remains unrepaired.",
-        "criteria": [],
-        "informational_responses": [],
-    }
-
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
-
-    compact = " ".join(txt.split())
-    assert sls.PROTECTION_LEVEL_2_OR_3 in compact
-    assert sls.EXPOSURE_XC2_XC4 in compact
-    assert "sls_wk_limit" in compact
-    assert "NOT ASSESSED / REVIEW" in compact
-
-
-def test_report_rejects_stale_pass_with_retained_invalid_crack_state():
-    inp = _inp()
-    inp["sls_invalid_numeric_inputs"] = ("sls_wk_limit",)
-
-    with pytest.raises(ValueError, match="does not fail closed"):
-        sector_report.build_report({}, inp, _out(), figures=False)
+    assert "short-term" in txt
+    assert "governing case (long-term)" not in txt
 
 
 def test_report_wide_spacing_shows_geometric_formula():
@@ -2499,195 +1257,6 @@ def test_report_dk_na_shows_fine_and_coarse_columns():
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
-
-
-def test_report_identifies_danish_bridge_numerical_crack_method():
-    out = _out()
-    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.207333)
-    out["elastic"]["crack_short"] = dict(
-        _crack(), coarse=False, wk=0.207333
-    )
-    out["elastic"]["crack_coarse"] = dict(
-        _crack(), coarse=True, wk=0.097036
-    )
-    out["elastic"]["crack_short_coarse"] = dict(
-        _crack(), coarse=True, wk=0.097036
-    )
-    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
-    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
-    out["elastic"]["crack_member"] = "Beam"
-    inp = {
-        **_inp(),
-        "design_methodology": bridge.EN1992_2_DK_NA,
-        "sls_code": bridge.EN1992_2_DK_NA,
-        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
-        "sls_member": "Beam",
-        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
-        "sls_has_tendons": False,
-    }
-    out["elastic"]["crack_numerical_method"] = (
-        sls.expected_danish_bridge_crack_numerical_method(inp)
-    )
-    txt = _pdf_text(sector_report.build_report(
-        {},
-        inp,
-        out,
-        figures=False,
-    ))
-
-    assert "25/c" in txt
-    assert "7.3.4(3)" in txt
-    assert "DS/EN 1992-1-1 DK NA:2013" in txt
-    assert "Long-term (coarse)" in txt
-    assert "Numerical crack-method evidence rejected" not in txt
-
-
-def test_report_chunks_nested_bound_evidence_without_changing_content():
-    value = {
-        "acceptance_evidence": {
-            "response": "x" * 1200,
-            "source": "DS/EN 1992-1-1 DK NA:2013",
-        },
-    }
-    expected = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    )
-    parts = sector_report._bound_evidence_value_parts(value)
-
-    assert "".join(parts) == expected
-    assert len(parts) > 1
-    assert max(map(len, parts)) <= (
-        sector_report._BOUND_EVIDENCE_CHUNK_CHARS
-    )
-
-
-def test_report_rejects_stale_danish_bridge_base_crack_snapshot():
-    out = _out()
-    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
-    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
-    out["elastic"]["crack_member"] = "Beam"
-    inp = {
-        **_inp(),
-        "design_methodology": bridge.EN1992_2_DK_NA,
-        "sls_code": bridge.EN1992_2_DK_NA,
-        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
-        "sls_member": "Beam",
-        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
-        "sls_has_tendons": False,
-    }
-
-    txt = _pdf_text(sector_report.build_report(
-        {},
-        inp,
-        out,
-        figures=False,
-    ))
-
-    assert "NOT ASSESSED - Crack width" in txt
-    assert "Danish bridge crack numerical-method provenance is missing" in (
-        " ".join(txt.split())
-    )
-    assert "PASS - Crack width" not in txt
-
-
-def test_report_rejects_rehashed_danish_crack_result_after_check_disabled():
-    out = _out()
-    out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.207333)
-    out["elastic"]["crack_short"] = dict(
-        _crack(), coarse=False, wk=0.207333
-    )
-    out["elastic"]["crack_coarse"] = dict(
-        _crack(), coarse=True, wk=0.097036
-    )
-    out["elastic"]["crack_short_coarse"] = dict(
-        _crack(), coarse=True, wk=0.097036
-    )
-    out["elastic"]["crack_code"] = bridge.EN1992_2_DK_NA
-    out["elastic"]["crack_edition"] = sls.EDITION_BRIDGE_DK_2015
-    out["elastic"]["crack_member"] = "Beam"
-    method_inputs = {
-        **_inp(),
-        "design_methodology": bridge.EN1992_2_DK_NA,
-        "sls_code": bridge.EN1992_2_DK_NA,
-        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
-        "sls_member": "Beam",
-        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
-        "sls_has_tendons": False,
-    }
-    out["elastic"]["crack_numerical_method"] = (
-        sls.expected_danish_bridge_crack_numerical_method(
-            method_inputs
-        )
-    )
-    inp = {**method_inputs, "sls_cw": False}
-
-    text = _pdf_text(sector_report.build_report(
-        {},
-        inp,
-        out,
-        figures=False,
-    ))
-    compact = " ".join(text.split())
-
-    assert "NOT ASSESSED - Crack width" in compact
-    assert "do not request crack-width calculation" in compact
-    assert "PASS - Crack width" not in compact
-
-
-def test_report_rejects_uncracked_danish_legacy_two_response_snapshot():
-    out = _out()
-    elastic = out["elastic"]
-    elastic.update({
-        "cracked": False,
-        "crack": None,
-        "crack_short": None,
-        "crack_responses": {
-            "Long-term": None,
-            "Total (long + short)": None,
-        },
-        "crack_dispositions": {
-            "Long-term": {
-                "status": "NOT APPLICABLE",
-                "reason": "The section remained uncracked.",
-            },
-            "Total (long + short)": {
-                "status": "NOT APPLICABLE",
-                "reason": "The section remained uncracked.",
-            },
-        },
-        "crack_code": bridge.EN1992_2_DK_NA,
-        "crack_edition": sls.EDITION_BRIDGE_DK_2015,
-        "crack_member": "Beam",
-    })
-    elastic.pop("crack_coarse", None)
-    elastic.pop("crack_short_coarse", None)
-    inp = {
-        **_inp(),
-        "design_methodology": bridge.EN1992_2_DK_NA,
-        "sls_code": bridge.EN1992_2_DK_NA,
-        "sls_edition": sls.EDITION_BRIDGE_DK_2015,
-        "sls_member": "Beam",
-        "sls_dk_member_class": danish_bridge.MEMBER_NONPRESTRESSED,
-        "sls_has_tendons": False,
-    }
-    elastic["crack_numerical_method"] = (
-        sls.expected_danish_bridge_crack_numerical_method(inp)
-    )
-
-    text = _pdf_text(sector_report.build_report(
-        {},
-        inp,
-        out,
-        figures=False,
-    ))
-    compact = " ".join(text.split())
-
-    assert "NOT ASSESSED - Crack width" in compact
-    assert "omits required fine/coarse responses" in compact
-    assert "PASS - Crack width" not in compact
 
 
 def test_report_shows_coarse_only_results():
@@ -2933,6 +1502,31 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert "3.15" not in txt
 
 
+def test_report_prints_actual_custom_half_and_double_partial_factors():
+    inp = _inp()
+    inp["concrete"] = Concrete(
+        fck=30.0, gamma_c=0.5, alpha_cc=1.0, curve=2
+    )
+    inp["steel"] = MildSteel(
+        fytk=500.0,
+        fyck=500.0,
+        futk=550.0,
+        eut=0.05,
+        gamma_y=2.0,
+        curve=2,
+    )
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, {}, figures=False)
+    ).split())
+
+    assert "60.000 MPa" in text
+    assert "250.000 MPa" in text
+    assert "0.500" in text
+    assert "2.000" in text
+    assert "final effective user inputs" in text
+
+
 def test_report_ec2_2023_k_tc_one_states_the_full_assumption():
     inp = _inp()
     inp["concrete_preset"] = "DS/EN 1992-1-1:2023"
@@ -2945,7 +1539,7 @@ def test_report_ec2_2023_k_tc_one_states_the_full_assumption():
     assert "National" in txt and "Annex" in txt
 
 
-def test_report_discloses_mixed_design_basis_and_scope_limitations():
+def test_report_ignores_removed_design_basis_aggregate():
     inp = _inp()
     inp["design_basis"] = {
         "status": "Mixed/custom design basis - review every selected method",
@@ -2959,10 +1553,96 @@ def test_report_discloses_mixed_design_basis_and_scope_limitations():
         ],
     }
     txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
-    assert "Design basis qualification" in txt
-    assert "Mixed/custom design basis" in txt
-    assert "Scope limitation" in txt
-    assert "does not implement the torsion check" in txt
+    assert "Design basis qualification" not in txt
+    assert "Mixed/custom design basis" not in txt
+    assert "does not implement the torsion check" not in txt
+
+
+def test_report_ignores_removed_authority_approval_and_cover_calculator_metadata():
+    inp = _inp()
+    inp.update({
+        "infrastructure_manager": "OBSOLETE-MANAGER-MARKER",
+        "asset_class": "OBSOLETE-ASSET-MARKER",
+        "project_basis": "OBSOLETE-BASIS-MARKER",
+        "cover_calculator": {"cover_mm": 999.0},
+    })
+    meta = {
+        "checker": "OBSOLETE-CHECKER-MARKER",
+        "approver": "OBSOLETE-APPROVER-MARKER",
+    }
+
+    text = _pdf_text(sector_report.build_report(
+        meta, inp, _out(), figures=False
+    ))
+
+    for marker in (
+        "OBSOLETE-MANAGER-MARKER",
+        "OBSOLETE-ASSET-MARKER",
+        "OBSOLETE-BASIS-MARKER",
+        "OBSOLETE-CHECKER-MARKER",
+        "OBSOLETE-APPROVER-MARKER",
+        "999.0",
+    ):
+        assert marker not in text
+
+
+def test_report_publishes_retained_bridge_kernels_without_coverage_aggregate():
+    inp = _inp()
+    inp.update({
+        "bridge_standard": bridge.EN1992_2_DK_NA,
+        bridge_inputs.BRITTLE_TABLE_KEY: bridge_inputs.normalise_table(
+            [{
+                "region_id": "bottom",
+                "m_rep_knm": 1000.0,
+                "z_s_m": 0.8,
+                "f_yk_mpa": 500.0,
+                "as_provided_mm2": 3000.0,
+            }],
+            bridge_inputs.BRITTLE_TABLE_KEY,
+        ),
+        bridge_inputs.BOX_WALL_TABLE_KEY: bridge_inputs.normalise_table(
+            [{
+                "wall_id": "left",
+                "cot_theta": 0.5,
+                "v_ed_kn": 200.0,
+                "v_rd_max_kn": 500.0,
+                "t_ed_equivalent_kn": 50.0,
+                "t_rd_max_equivalent_kn": 250.0,
+            }],
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+        ),
+        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: bridge_inputs.normalise_table(
+            [{
+                "component": "web",
+                "act_mm2": 100000.0,
+                "k_c": 0.4,
+                "k": 0.8,
+                "fct_eff_mpa": 3.0,
+                "sigma_s_mpa": 200.0,
+                "as_provided_mm2": 600.0,
+                "restrained_shrinkage": False,
+            }],
+            bridge_inputs.MINIMUM_CRACK_TABLE_KEY,
+        ),
+    })
+    out = _out()
+    out["bridge"] = bridge_analysis.run(inp)
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "Independent bridge calculations" in text
+    assert "Optional brittle Method B" in text
+    assert "Box-wall shear and torsion" in text
+    assert "Web/flange minimum crack reinforcement" in text
+    assert "0.500" in text
+    assert "actual values were retained" in text
+    assert (
+        "generic bridge-code coverage and generic cross-method interaction "
+        "are not calculated"
+    ) in text
+    assert "approval" not in text.casefold()
 
 
 def test_report_handles_uncracked_section():
@@ -3033,7 +1713,7 @@ def test_report_audits_independent_governing_faces_and_angles():
     assert "V+T (6.29)" in text
 
 
-def test_report_biaxial_shear_separates_directions_and_withholds_interaction():
+def test_report_biaxial_shear_separates_directions_without_aggregate_interaction():
     out = _out()
     vx = copy.deepcopy(_shear_out())
     vx.update(component="vx", axis="y", tension_low=True, status="PASS")
@@ -3044,11 +1724,7 @@ def test_report_biaxial_shear_separates_directions_and_withholds_interaction():
         vx,
         directions={"vx": vx, "vy": vy},
         active_directions=["vx", "vy"],
-        governing_component="vx",
         biaxial=True,
-        interaction_assessed=False,
-        interaction_status="NOT ASSESSED",
-        status="REVIEW",
     )
 
     txt = " ".join(_pdf_text(
@@ -3056,389 +1732,9 @@ def test_report_biaxial_shear_separates_directions_and_withholds_interaction():
     ).split())
 
     assert "Vx,Ed" in txt and "Vy,Ed" in txt
-    assert "independent Vx/Vy checks" in txt
-    assert "Biaxial interaction: NOT ASSESSED" in txt
-    assert "undocumented interaction" in txt
-
-
-def _pr06_project_shear_report_case():
-    inp = {
-        **_inp(),
-        **multidirectional.crack_configuration({}),
-        **multidirectional.shear_configuration({}),
-        "shear_interaction_on": True,
-        "shear_interaction_method": (
-            multidirectional.SHEAR_METHOD_PROJECT
-        ),
-        "shear_interaction_axis_x": "deck longitudinal / Vx",
-        "shear_interaction_axis_y": "deck transverse / Vy",
-        "shear_interaction_domain_confirmed": True,
-        "shear_interaction_exponent": 2.0,
-        "shear_interaction_source": "Project DB clause INT-06",
-        "shear_interaction_approval": "Checker approval QA-06",
-        "shear_on": True,
-        "shear_components": {
-            "vx": {"signed_v_ed": 80.0},
-            "vy": {"signed_v_ed": 65.0},
-        },
-    }
-    out = _out()
-    vx = copy.deepcopy(_shear_out())
-    vx.update(
-        component="vx",
-        axis="y",
-        tension_low=True,
-        signed_v_ed=80.0,
-        status="PASS",
-    )
-    vy = copy.deepcopy(_shear_out())
-    vy.update(
-        component="vy",
-        axis="x",
-        tension_low=False,
-        v_ed=65.0,
-        signed_v_ed=65.0,
-        util=65.0 / vy["res"]["vrd_c"],
-        status="PASS",
-    )
-    out["shear"] = dict(
-        vx,
-        directions={"vx": vx, "vy": vy},
-        active_directions=["vx", "vy"],
-        governing_component="vx",
-        biaxial=True,
-        interaction_assessed=False,
-        interaction_status="NOT ASSESSED",
-        status="REVIEW",
-    )
-    multidirectional.apply_to_results(inp, out)
-    return inp, out
-
-
-def _reseal_pr06_result(record):
-    sealed = copy.deepcopy(record)
-    sealed.pop("evidence_fingerprint", None)
-    sealed["evidence_fingerprint"] = hashlib.sha256(json.dumps(
-        sealed,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode("utf-8")).hexdigest()
-    return sealed
-
-
-def test_report_binds_sourced_project_shear_interaction_evidence():
-    inp, out = _pr06_project_shear_report_case()
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "APPROVED CUSTOM PASS" in txt
-    assert "Project DB clause INT-06" in txt
-    assert "Checker approval QA-06" in txt
-    assert "deck longitudinal / Vx" in txt
-    assert "deck transverse / Vy" in txt
-    assert "eta = (abs(Vx)/VRd,x)^p + (abs(Vy)/VRd,y)^p" in txt
-    assert "Interaction evidence fingerprint" in txt
-    assert "Domain satisfied yes" in txt
-    assert "Full interaction rotationally invariant yes" in txt
-
-
-def test_report_rejects_joint_solver_aggregate_pass_without_action_authority():
-    inp, out = _pr06_project_shear_report_case()
-    inp.pop("shear_components")
-    for component_id, direction in out["shear"]["directions"].items():
-        forged_demand = 8.0 if component_id == "vx" else 6.5
-        direction["v_ed"] = forged_demand
-        direction["signed_v_ed"] = forged_demand
-        direction["util"] = forged_demand / direction["res"]["vrd_c"]
-        direction["status"] = "PASS"
-    multidirectional.apply_to_results(inp, out)
-    assert out["shear"]["interaction"]["status"] == "PASS"
-
-    safe = multidirectional.publication_safe_results(
-        out,
-        current_inputs=inp,
-    )
-    validation = safe["_publication_interaction_bundle"][
-        "publication_validation"
-    ]
-    assert validation["status"] == "REJECTED"
-    assert any(
-        "without both independent current authorities" in issue
-        and "action case/signed-demand authority" in issue
-        for issue in validation["issues"]
-    )
-    assert set(safe["shear"]["directions"]) == {"vx", "vy"}
-
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-    assert "Vx,Ed" in txt and "Vy,Ed" in txt
-    assert "PUBLICATION REJECTED" in txt
-    assert "APPROVED CUSTOM PASS" not in txt
-
-
-def test_report_distinguishes_resultant_demand_from_full_rotation_property():
-    inp, out = _pr06_project_shear_report_case()
-    inp.update({
-        "shear_interaction_method": (
-            multidirectional.SHEAR_METHOD_EN_2023
-        ),
-        "shear_interaction_planar_member": True,
-        "shear_interaction_same_control_point": True,
-        "shear_interaction_per_unit_width": True,
-        "shear_interaction_out_of_plane": True,
-        "shear_interaction_depth_route": (
-            multidirectional.DEPTH_ROUTE_ROTATED
-        ),
-        "shear_interaction_resultant_resistance_kn_per_m": 500.0,
-        "shear_interaction_source": "Directional resistance note SR-06",
-        "shear_interaction_approval": "Independent checker IC-06",
-    })
-    for direction in out["shear"]["directions"].values():
-        direction["method"] = multidirectional.SHEAR_CODE_EN_2023
-    multidirectional.apply_to_results(inp, out)
-
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "Full interaction rotationally invariant no" in txt
-    assert "Demand resultant rotationally invariant yes" in txt
-    assert "external resistance isotropy is not evidenced" in txt
-
-
-def test_report_rejects_conflicting_interaction_representations_but_keeps_vx_vy():
-    inp, out = _pr06_project_shear_report_case()
-    out["shear"]["interaction"]["utilisation"] = 0.0
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "Vx,Ed" in txt and "Vy,Ed" in txt
-    assert "PUBLICATION REJECTED" in txt
-    assert "top-level and current-case shear interaction evidence conflict" in txt
-    assert "APPROVED CUSTOM PASS" not in txt
-    assert "eta = (abs(Vx)/VRd,x)^p + (abs(Vy)/VRd,y)^p" not in txt
-    assert "utilisation 0.0000" not in txt
-    assert "Project DB clause INT-06" not in txt
-
-
-def test_report_rejects_jointly_resealed_directional_truncation():
-    inp, out = _pr06_project_shear_report_case()
-    forged = copy.deepcopy(out["shear"]["interaction"])
-    forged.update(
-        interaction_assessed=True,
-        status="NOT APPLICABLE",
-        verdict="NOT APPLICABLE",
-        qualification=None,
-        utilisation=None,
-        components=[
-            copy.deepcopy(forged["components"][0])
-        ],
-        terms=[],
-        reason="Forged jointly re-sealed directional truncation.",
-        issues=[],
-    )
-    for key in (
-        "approval",
-        "authority",
-        "axes",
-        "calculation_saturated",
-        "domain",
-        "formula",
-        "parameters",
-        "rotation_scope",
-        "rotationally_invariant",
-        "source",
-    ):
-        forged.pop(key, None)
-    forged = _reseal_pr06_result(forged)
-    out["shear"]["interaction"] = copy.deepcopy(forged)
-    out["shear_interactions"][0]["interaction"] = copy.deepcopy(forged)
-
-    safe = multidirectional.publication_safe_results(
-        out,
-        current_inputs=inp,
-    )
-    validation = safe["_publication_interaction_bundle"][
-        "publication_validation"
-    ]
-    assert validation["status"] == "REJECTED"
-    assert set(safe["shear"]["directions"]) == {"vx", "vy"}
-    assert safe["shear"]["interaction"]["status"] == "NOT ASSESSED"
-    assert any(
-        "independently reconstructed current case/demand authority" in issue
-        or "does not match current directional results" in issue
-        for issue in validation["issues"]
-    )
-
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-    assert "Vx,Ed" in txt and "Vy,Ed" in txt
-    assert "PUBLICATION REJECTED" in txt
-    assert "APPROVED CUSTOM PASS" not in txt
-
-
-def test_report_rejects_nested_shear_pass_after_bundle_fields_are_deleted():
-    inp, out = _pr06_project_shear_report_case()
-    out.pop("crack_interaction")
-    out.pop("shear_interactions")
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "Vx,Ed" in txt and "Vy,Ed" in txt
-    assert "PUBLICATION REJECTED" in txt
-    assert (
-        "current shear interaction is not represented exactly once"
-        in txt
-    )
-    assert "APPROVED CUSTOM PASS" not in txt
-
-
-def _pr06_project_crack_report_case():
-    inp = {
-        **_inp(),
-        **multidirectional.crack_configuration({}),
-        **multidirectional.shear_configuration({}),
-        "crack_interaction_on": True,
-        "crack_interaction_method": (
-            multidirectional.CRACK_METHOD_PROJECT
-        ),
-        "crack_interaction_case_id": "EL-TEST",
-        "crack_interaction_criterion_id": "standard-durability",
-        "crack_interaction_combination": sls.COMBINATION_QUASI_PERMANENT,
-        "crack_interaction_axis_x": "deck longitudinal reinforcement",
-        "crack_interaction_axis_y": "deck transverse reinforcement",
-        "crack_interaction_domain_confirmed": True,
-        "crack_interaction_component_x_mm": 0.18,
-        "crack_interaction_component_y_mm": 0.12,
-        "crack_interaction_limit_x_mm": 0.30,
-        "crack_interaction_limit_y_mm": 0.30,
-        "crack_interaction_exponent": 2.0,
-        "crack_interaction_source": "Project DB clause CR-06",
-        "crack_interaction_approval": "Checker approval QA-06",
-    }
-    out = _out()
-    elastic = out["elastic"]
-    elastic["elastic_case"] = {"id": "EL-TEST"}
-    contexts = elastic["crack_response_contexts"]
-    mapping_scope = copy.deepcopy(elastic["crack_response_mapping_scope"])
-    for entry in mapping_scope:
-        entry["solver_provenance"] = copy.deepcopy(
-            contexts[entry["response"]]["solver_provenance"]
-        )
-    elastic["crack_response_mapping_scope"] = mapping_scope
-    elastic["crack_assessment"] = sls.crack_assessment(
-        elastic["crack_responses"],
-        valid=True,
-        criteria=[{
-            "id": "standard-durability",
-            "kind": sls.CRITERION_DURABILITY,
-            "source_type": sls.CRITERION_MODE_STANDARD,
-            "source": (
-                "DS/EN 1992-1-1:2004 section 7.3.1(5), Table 7.1N"
-            ),
-            "required_combination": sls.COMBINATION_QUASI_PERMANENT,
-            "limit_mm": 0.30,
-            "applicability": {"member": "reinforced"},
-        }],
-        response_contexts=contexts,
-        response_mapping_scope=mapping_scope,
-    )
-    multidirectional.apply_to_results(inp, out)
-    return inp, out
-
-
-def test_report_binds_project_crack_interaction_to_current_pr03_evidence():
-    inp, out = _pr06_project_crack_report_case()
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "APPROVED CUSTOM PASS" in txt
-    assert "Project DB clause CR-06" in txt
-    assert "Checker approval QA-06" in txt
-    assert "deck longitudinal reinforcement" in txt
-    assert "deck transverse reinforcement" in txt
-    assert "standard-durability" in txt
-    assert "Quasi-permanent" in txt
-    assert "eta = (wk,x/wlim,x)^p + (wk,y/wlim,y)^p" in txt
-    assert "Canonical acceptance fingerprint" in txt
-    assert "Interaction evidence fingerprint" in txt
-
-
-def test_report_surfaces_failed_crack_interaction_on_selected_elastic_case():
-    inp, out = _pr06_project_crack_report_case()
-    target = out.pop("elastic")
-    elastic_rows = [
-        {
-            "name": name,
-            "description": description,
-            "n_long_ed_kn": 0.0,
-            "mx_long_ed_knm": 80.0,
-            "my_long_ed_knm": 0.0,
-            "n_short_ed_kn": 0.0,
-            "mx_short_ed_knm": 20.0,
-            "my_short_ed_knm": 0.0,
-            "check_stress": True,
-            "check_crack_width": True,
-        }
-        for name, description in (
-            ("EL-TEST", "Selected crack case"),
-            ("EL-OTHER", "Other crack case"),
-        )
-    ]
-    inp["elastic_cases"] = elastic_rows
-    out["elastic_cases"] = [
-        {
-            "name": elastic_rows[0]["name"],
-            "actions": elastic_rows[0],
-            "evaluated": True,
-            "results": {"elastic": target},
-        },
-        {
-            "name": elastic_rows[1]["name"],
-            "actions": elastic_rows[1],
-            "evaluated": True,
-            "results": {"elastic": copy.deepcopy(target)},
-        },
-    ]
-    inp.update({
-        "crack_interaction_method": (
-            multidirectional.CRACK_METHOD_EN_2023
-        ),
-        "sls_code": multidirectional.CRACK_CODE_DK_2004,
-        "sls_edition": "2004",
-    })
-    multidirectional.apply_to_results(inp, out)
-
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "Annex G.5 method requires the explicit EN 1992-1-1:2023" in txt
-    assert "NOT ASSESSED" in txt
-    assert "EL-TEST" in txt
-
-
-def test_report_rejects_malformed_crack_criterion_without_crashing():
-    inp, out = _pr06_project_crack_report_case()
-    out["crack_interaction"]["criterion"] = "not-an-evidence-object"
-    out["elastic"]["crack_interaction"]["criterion"] = (
-        "not-an-evidence-object"
-    )
-
-    txt = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "PUBLICATION REJECTED" in txt
-    assert "NOT ASSESSED" in txt
+    assert "calculated independently" in txt
+    assert "Generic cross-direction interaction is not calculated" in txt
+    assert "no aggregate shear verdict is issued" in txt
 
 
 def _shear_out_2023():
@@ -3529,38 +1825,18 @@ def _torsion_out(interaction=False):
     tube = {"A": 0.18, "u": 1.8, "tef": 100.0, "Ak": 0.1, "uk": 1.4,
             "tef_auto": 100.0, "tef_capped": False, "tef_user": False,
             "hollow": False, "valid": True}
-    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4, "trd_c": 26.44,
+    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4, "trd_c": 31.0,
            "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
            "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
-           "nu": 0.3675, "alpha_cw": 1.0, "fctk_005": 2.248,
-           "fctd": 1.322, "alpha_ct": 1.0,
-           "gamma_c": 1.45, "gamma_ct": 1.70,
-           "material_factor_basis": {
-               "mode": "Edition-derived preset",
-               "reference": (
-                   "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01, "
-                   "2.4.2.4(1), Table 2.1Na NA"
-               ),
-               "gamma0": 1.0,
-               "gamma3": 1.0,
-               "compression_preset": 1.45,
-               "compression_final": 1.45,
-               "tension_base": 1.70,
-               "tension_final": 1.70,
-               "tension_derivation": (
-                   "1.70 x 1.000 x 1.000 = 1.700"
-               ),
-           },
-           "asw_t": 78.5,
+           "nu": 0.3675, "alpha_cw": 1.0, "fctd": 1.55, "asw_t": 78.5,
            "asw_over_s": 0.5236, "dia": 10.0, "s": 150.0, "cot_min": 1.0,
            "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
            "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
-           "cot_limit_hi": 2.5, "out_of_limits": False, "code_applicable": True}
+           "cot_limit_hi": 2.5, "out_of_limits": False}
     if interaction:
         out["interaction"] = dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
                                   vrd_max=650.0, t_ed=40.0, v_ed=150.0,
-                                  value=40.0 / 88.7 + 150.0 / 650.0,
-                                  code_applicable=True)
+                                  value=40.0 / 88.7 + 150.0 / 650.0)
     return out
 
 
@@ -3571,10 +1847,6 @@ def test_report_includes_torsion_section():
     assert "Torsion" in txt
     assert "6.30" in txt and "6.28" in txt          # the clause formulae
     assert "76.4" in txt                            # TRd
-    assert "Table 2.1Na NA" in txt
-    assert "1.70 x 1.000 x 1.000 = 1.700" in txt
-    assert "26.44" in txt
-    assert "Concrete tension coefficient" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1176" in txt                            # required Asl
     assert chr(0x2211) in txt                       # summation operator
@@ -3585,95 +1857,13 @@ def test_report_includes_torsion_section():
     )
 
 
-def test_report_prints_actual_danish_alpha_ct_in_torsional_cracking_formula():
-    out = _out()
-    torsion = _torsion_out()
-    torsion["alpha_ct"] = 0.8
-    torsion["fctd"] = 0.8 * torsion["fctk_005"] / torsion["gamma_ct"]
-    torsion["trd_c"] *= 0.8
-    out["torsion"] = torsion
-    inp = _inp()
-    inp["design_methodology"] = bridge.EN1992_2_DK_NA
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert "Concrete tension coefficient" in text
-    assert "0.800" in text
-    assert "1.058" in text
-
-
-def test_report_keeps_torsion_factor_and_fctd_as_one_layout_block():
-    import io
-
-    builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, _inp(), _out(), figures=False
-    )
-    builder._p("Arbitrary preceding report content")
-    preceding = builder.flow[-1]
-    builder._torsion_material_factor_trace(_torsion_out())
-
-    assert builder.flow[0] is preceding
-    assert len(builder.flow) == 2
-    block = builder.flow[1]
-    assert isinstance(block, sector_report.KeepTogether)
-
-    text = []
-    for item in block._content:
-        if hasattr(item, "getPlainText"):
-            text.append(item.getPlainText())
-        elif isinstance(item, sector_report.Table):
-            text.extend(
-                cell.getPlainText()
-                for row in item._cellvalues
-                for cell in row
-                if hasattr(cell, "getPlainText")
-            )
-    normalized = " ".join(" ".join(text).split())
-    assert "Material-factor basis" in normalized
-    assert "Concrete tension coefficient" in normalized
-    assert "fctd = \u03b1ct fctk,0.05 / \u03b3ct" in normalized
-    assert "fctd = 1.322 MPa" in normalized
-
-
-def test_qa_appendix_distinguishes_factor_provenance_modes():
-    inp, out = _fatigue_report_fixture()
-    torsion = _torsion_out()
-    torsion["gamma_ct"] = 1.63
-    torsion["material_factor_basis"].update({
-        "mode": "Approved final override",
-        "tension_override": True,
-        "tension_final": 1.63,
-        "tension_derivation": "approved final override = 1.630",
-        "approval_reference": "DB-TOR-05 / checker D",
-    })
-    out["torsion"] = torsion
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False, qa_appendix=True
-    )).split())
-    appendix = text[text.index("QA appendix - references and notes"):]
-
-    assert "Partial-factor provenance" in appendix
-    assert "torsion" in appendix and "Approved final override" in appendix
-    assert "approval/source: DB-TOR-05 / checker D" in appendix
-    assert "fatigue factors - Edition-derived preset" in appendix
-    assert "provision: DS/EN 1992-1-1:2023" in appendix
-    assert "final user-entered partial factors" not in appendix
-    assert "final factors used in each calculation" in appendix
-    assert (
-        "distinguish edition-derived presets from approved final overrides"
-        in appendix
-    )
-
-
-def test_report_directional_vt_table_withholds_out_of_range_verdict():
+def test_report_directional_vt_table_retains_actual_verdict_outside_default_range():
     out = _out()
     torsion = _torsion_out(interaction=True)
     directional = copy.deepcopy(torsion)
-    directional["interaction"]["code_applicable"] = False
     directional.update(
+        cot_max=3.0,
+        out_of_limits=True,
         directional_governing_face="negative",
         directional_governing_cot=1.0,
         directional_min_reinf_governing_face="negative",
@@ -3694,81 +1884,10 @@ def test_report_directional_vt_table_withholds_out_of_range_verdict():
     ).split())
     for label in ("Vx+T", "Vy+T"):
         start = text.index(label)
-        assert "NOT ASSESSED" in text[start:start + 260]
+        assert "PASS" in text[start:start + 260]
     assert "Directional minimum-reinforcement screens" in text
     assert "minimum sufficient" in text
     assert "left (-x)" in text and "bottom (-y)" in text
-
-
-def test_report_identifies_unapproved_torsion_override_and_withholds_screens():
-    out = _out()
-    torsion = _torsion_out(interaction=True)
-    stale_direction = copy.deepcopy(torsion)
-    stale_direction.update(
-        directional_interaction_status="PASS",
-        min_reinf=dict(
-            applicable=True, value=0.52, ok=True, t_ed=40.0,
-            trd_c=100.0, v_ed=12.0, vrd_c=100.0, solid=True,
-            model_2023=False,
-        ),
-    )
-    torsion.update(
-        valid=False,
-        factor_approval_required=True,
-        factor_approval_valid=False,
-        factor_approval_reason=(
-            "approved final concrete tensile-factor override requires a stated "
-            "approval/source"
-        ),
-        reason=(
-            "approved final concrete tensile-factor override requires a stated "
-            "approval/source"
-        ),
-        directional_interactions={
-            "vx": stale_direction,
-            "vy": copy.deepcopy(stale_direction),
-        },
-    )
-    out["torsion"] = torsion
-
-    text = " ".join(_pdf_text(
-        sector_report.build_report({}, _inp(), out, figures=False)
-    ).split())
-    assert "tensile-factor override approval/source missing" in text
-    assert "No torsion, V+T (6.29), minimum-reinforcement (6.31)" in text
-    assert "tube could not be formed" not in text
-    assert "Directional minimum-reinforcement screens" not in text
-    assert "minimum sufficient" not in text
-
-
-def test_report_identifies_missing_approved_torsion_factor_and_withholds_screens():
-    out = _out()
-    torsion = _torsion_out(interaction=True)
-    torsion.update(
-        valid=False,
-        util=None,
-        factor_input_valid=False,
-        factor_input_reason=(
-            "an approved final concrete tensile factor is required"
-        ),
-        factor_approval_required=True,
-        factor_approval_valid=True,
-        reason="concrete tensile-factor input invalid",
-        min_reinf=dict(
-            applicable=False,
-            reason="concrete tensile-factor input invalid",
-        ),
-    )
-    out["torsion"] = torsion
-
-    text = " ".join(_pdf_text(
-        sector_report.build_report({}, _inp(), out, figures=False)
-    ).split())
-    assert "concrete tensile-factor override missing or invalid" in text
-    assert "No torsion, V+T (6.29), minimum-reinforcement (6.31)" in text
-    assert "76.4" not in text
-    assert "Combined shear" not in text
-    assert "minimum sufficient" not in text
 
 
 def test_report_compound_torsion_requires_subdivision():
@@ -3802,39 +1921,17 @@ def test_report_torsion_subdivided():
     t["subdivided"] = True
     t["subtubes"] = subs
     t["trd"] = 110.0
-    t["alpha_ct"] = 0.8
-    t["fctd"] = 0.8 * t["fctk_005"] / t["gamma_ct"]
-    subs[0]["trd_c"] = 12.345
-    subs[1]["trd_c"] = 6.789
     # P1: governing = the worst sub-tube (part 2 here), not the pooled TEd/sum(TRd).
     t["util"] = max(s["util"] for s in subs)
     t["governing_sub"] = 1
     t["asl_req"] = 1400.0
     out["torsion"] = t
-    pdf = sector_report.build_report({}, _inp(), out, figures=False)
-    txt = " ".join(_pdf_text(pdf).split())
+    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Sub-tubes" in txt                        # the compound-section heading
     assert "6.3.1(3)" in txt                         # the sub-division clause
     assert "web" in txt
     assert "governing" in txt                        # P1: governing (max) utilisation
     assert "6.29" in txt                             # P2: crushing printed in sub-report
-    assert "Concrete tension coefficient" in txt
-    assert "0.800" in txt and "1.058" in txt
-    assert "12.35" in txt and "6.79" in txt
-
-    import io
-    import pypdf
-
-    pages = [
-        page.extract_text() or ""
-        for page in pypdf.PdfReader(io.BytesIO(pdf)).pages
-    ]
-    interaction_page = next(
-        page for page in pages
-        if "Combined shear + torsion (concrete crushing)" in page
-    )
-    assert "68.2" in interaction_page
-    assert "Evaluated at the common strut angle" in interaction_page
 
 
 def test_report_invalid_subtube_partition_withholds_verdict():
@@ -3850,7 +1947,8 @@ def test_report_invalid_subtube_partition_withholds_verdict():
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Torsion not evaluated" in txt
     assert "positioned sub-rectangles" in txt
-    assert "No torsion or dependent interaction compliance verdict" in txt
+    assert "Torsion and dependent" in txt
+    assert "interaction are not calculated" in txt
 
 
 def test_report_torsion_shows_combined_interaction():
@@ -3893,7 +1991,7 @@ def test_report_includes_combined_section():
     txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
-    assert "EXCEEDED" in txt                        # sum 1.3 > 1
+    assert "FAIL" in txt                            # sum 1.3 > 1
     assert "Shared compression-strut cot " + chr(0x03B8) + "min" in txt
     assert "Shared compression-strut cot " + chr(0x03B8) + "max" in txt
 
@@ -3914,18 +2012,15 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
         vx,
         directions={"vx": vx, "vy": vy},
         biaxial=True,
-        interaction_assessed=False,
-        interaction_status="NOT ASSESSED",
-        status="REVIEW",
     )
 
     txt = " ".join(_pdf_text(
         sector_report.build_report({}, _inp(), out, figures=False)
     ).split())
 
-    assert "Vx+T and Vy+T screens" in txt
-    assert "simultaneous Vx,Ed + Vy,Ed + TEd interaction is NOT ASSESSED" in txt
-    assert "no three-component interaction expression is inferred" in txt
+    assert "calculated independently" in txt
+    assert "Generic simultaneous Vx + Vy + T interaction is not calculated" in txt
+    assert "no aggregate verdict is issued" in txt
     assert "Governing face" in txt
     assert "left (-x)" in txt and "top (+y)" in txt
     assert "1.250" in txt and "1.750" in txt
@@ -3943,9 +2038,6 @@ def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
         vx,
         directions={"vx": vx, "vy": vy},
         biaxial=True,
-        interaction_assessed=False,
-        interaction_status="NOT ASSESSED",
-        status="REVIEW",
     )
     builder = sector_report.ReportBuilder(
         io.BytesIO(), {}, _inp(), out, figures=False
@@ -3968,11 +2060,10 @@ def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
     assert all(f"{chr(0x2211)}(SEd/SRd)" in text for text in screen_blocks)
 
 
-def test_report_combined_out_of_range_withholds_dependent_verdicts():
+def test_report_combined_out_of_range_retains_values_and_verdicts():
     out = _out()
     c = _combined_out()
-    c["code_applicable"] = False
-    c["crushing"]["code_applicable"] = False
+    c["outside_default_range"] = True
     c["longitudinal"] = dict(
         valid=True, axis="x", z=0.54, m_ed=100.0, m_rd=400.0,
         ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
@@ -3980,8 +2071,9 @@ def test_report_combined_out_of_range_withholds_dependent_verdicts():
     )
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "exploratory" in txt
-    assert txt.count("NO CODE VERDICT") >= 3
+    assert "selected method's default range" in txt
+    assert "actual values are retained" in " ".join(txt.lower().split())
+    assert "NO CODE VERDICT" not in txt
 
 
 def test_report_combined_longitudinal_check():
@@ -4184,7 +2276,7 @@ def _links_out():
             "delta_ftd": 375.0, "cot_limit_lo": 1.0, "cot_limit_hi": 2.5,
             "longitudinal_shear_force": 375.0,
             "z_source": "plastic internal lever arm",
-            "out_of_limits": False, "code_applicable": True, "required": True}
+            "out_of_limits": False, "required": True}
 
 
 def test_report_includes_shear_links_section():
@@ -4242,7 +2334,6 @@ def test_report_includes_2023_shear_links_stress_checks():
         "model_2023": True,
         "z_source": "0.9 d",
         "out_of_limits": False,
-        "code_applicable": True,
         "required": False,
     }
     out["shear"] = sh
@@ -4256,22 +2347,24 @@ def test_report_shear_links_out_of_limits_note():
     out = _out()
     sh = _shear_out()
     lk = _links_out()
-    lk["cot_max"], lk["out_of_limits"], lk["code_applicable"] = 3.0, True, False
+    lk["cot_max"], lk["out_of_limits"] = 3.0, True
     sh["links"] = lk
     out["shear"] = sh
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "outside the code range" in txt
-    assert "NO CODE VERDICT" in txt
+    assert "outside the selected method's default range" in txt
+    assert "actual values are retained" in txt.lower()
+    assert "NO CODE VERDICT" not in txt
 
 
-def test_report_torsion_out_of_limits_withholds_verdict():
+def test_report_torsion_out_of_limits_retains_values_and_verdict():
     out = _out()
     t = _torsion_out()
-    t["cot_max"], t["out_of_limits"], t["code_applicable"] = 3.0, True, False
+    t["cot_max"], t["out_of_limits"] = 3.0, True
     out["torsion"] = t
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "exploratory" in txt
-    assert "NO CODE VERDICT" in txt
+    assert "outside the selected method's default range" in txt
+    assert "actual values are retained" in txt.lower()
+    assert "NO CODE VERDICT" not in txt
 
 
 def test_fig_png_times_out_instead_of_hanging():
@@ -4365,526 +2458,3 @@ def test_report_shared_longitudinal_note_states_the_common_angle():
         {}, _inp(), _combined_longitudinal("utilisation"), figures=False)).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt
-
-
-def _bridge_report_record():
-    check_ids = (
-        "section_analysis",
-        "prestress_brittle",
-        "member_shear",
-        "bridge_shear_detailing",
-        "box_wall_torsion",
-        "reinforcement_fatigue",
-        "concrete_fatigue",
-        "shear_torsion_fatigue",
-        "sls_stress",
-        "sls_crack",
-        "web_flange_minimum",
-        "deflection",
-        "segmental_joints",
-    )
-    record = {
-        "methodology": bridge.EN1992_2_BASE,
-        "active": True,
-        "status": bridge.STATUS_NOT_APPLICABLE,
-        "configuration_errors": [],
-        "checks": [
-            {
-                "check_id": check_id,
-                "status": bridge.STATUS_NOT_APPLICABLE,
-                "result": "-",
-                "criterion": "-",
-                "source": "DB-BRIDGE-01",
-                "reason": "Project applicability resolved as not applicable.",
-                "evidence": [],
-            }
-            for check_id in check_ids
-        ],
-    }
-    record["evidence_schema"] = bridge.BRIDGE_EVIDENCE_SCHEMA
-    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
-        record["checks"],
-        record["configuration_errors"],
-    )
-    return record
-
-
-def _bridge_report_input(methodology=bridge.EN1992_2_BASE):
-    inp = _inp()
-    inp["design_methodology"] = methodology
-    if methodology == bridge.EN1992_2_DK_NA:
-        inp[bridge_inputs.COVERAGE_TABLE_KEY] = (
-            bridge_inputs.table_from_records(
-                [
-                    {
-                        "check_id": check_id,
-                        "applicability": (
-                            bridge.REQUIRED
-                            if check_id == "section_analysis"
-                            else bridge.NOT_APPLICABLE
-                        ),
-                        "source": f"DB-{check_id}",
-                        "notes": "",
-                    }
-                    for check_id in bridge.APPLICABILITY_CHECK_IDS
-                ],
-                bridge_inputs.COVERAGE_TABLE_KEY,
-            )
-        )
-    return inp
-
-
-def _bridge_report_fatigue_input(*, custom=False):
-    inp = _bridge_report_input()
-    inp.update({
-        "fatigue_on": True,
-        "fatigue_check_steel": False,
-        "fatigue_check_concrete": True,
-        "fatigue_edition": fatigue_inputs.EC2_2_2005_AC,
-        "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_PRESET,
-        "fatigue_gamma_s": 1.15,
-        "fatigue_gamma_c": 1.50,
-        "fatigue_gamma_ff": 1.0,
-        "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
-        "fatigue_concrete_miner_basis": (
-            fatigue_inputs.MINER_BASIS_BRIDGE_STANDARD
-        ),
-        "fatigue_concrete_miner_source": "",
-        "fatigue_concrete_c": bridge.STANDARD_CONCRETE_MINER_C,
-        fatigue_inputs.BASIS_KEY: fatigue_inputs.default_basis(),
-    })
-    if custom:
-        inp.update({
-            "fatigue_factor_mode": fatigue_inputs.FACTOR_MODE_OVERRIDE,
-            "fatigue_factor_approval": (
-                "DB-FAT-OVERRIDE-02 / checker approval"
-            ),
-            "fatigue_gamma_c": 2.0,
-        })
-    return inp
-
-
-def _bridge_report_concrete_fatigue_record(inp):
-    context = fatigue_analysis.bridge_publication_context(inp)
-    assert context["errors"] == []
-    records = {
-        record["parameter_id"]: record
-        for record in context["parameter_conformance"]
-    }
-    concrete_records = (
-        records["fatigue.gamma_c"],
-        records["concrete_fatigue.miner_c"],
-    )
-    status = conformance.aggregate(
-        concrete_records,
-        analytical_status=conformance.STATUS_PASS,
-        selected_standard=context["edition"],
-    )["assessment_status"]
-    decisions = tuple(
-        bridge.ApplicabilityDecision(
-            check_id,
-            (
-                bridge.REQUIRED
-                if check_id in {"section_analysis", "concrete_fatigue"}
-                else bridge.NOT_APPLICABLE
-            ),
-            f"DB-{check_id}",
-        )
-        for check_id in bridge.APPLICABILITY_CHECK_IDS
-    )
-    return bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
-        methodology=bridge.EN1992_2_BASE,
-        decisions=decisions,
-        has_tendons=False,
-        has_hollow_section=False,
-        fck_mpa=40.0,
-        section_analysis=bridge.ExternalEvidence(
-            status=bridge.STATUS_PASS,
-            result="section solve converged",
-            criterion="requested solver converges",
-            source="bridge inherited section solver",
-            reason="Elastic SLS-1 converged",
-        ),
-        concrete_fatigue=bridge.ExternalEvidence(
-            status=status,
-            result="50.0 %",
-            criterion="<= 100 %",
-            source="DS/EN 1992-2:2005/AC:2008 Expression (6.106)",
-            reason="solver evidence retained",
-            utilisation=0.5,
-            evidence=({
-                "status": status,
-                "analytical_status": bridge.STATUS_PASS,
-                "methodology": bridge.EN1992_2_BASE,
-                "concrete_method": context["concrete_method"],
-                "concrete_miner_basis": context["concrete_miner_basis"],
-                "concrete_miner_source": context["concrete_miner_source"],
-                "miner_coefficient_c": records[
-                    "concrete_fatigue.miner_c"
-                ]["actual_value"],
-                "parameter_conformance": records[
-                    "concrete_fatigue.miner_c"
-                ],
-                "fatigue_parameter_conformance": concrete_records,
-                "fatigue_edition": context["edition"],
-                "fatigue_factor_mode": context["factor_mode"],
-                "fatigue_factor_approval": context["factor_approval"],
-                "fatigue_gamma_ff": context["gamma_ff"],
-                "fatigue_basis": context["basis"],
-            },),
-        ),
-    ))
-
-
-def test_report_publishes_bridge_coverage_and_check_gate():
-    out = _out()
-    out["bridge_methodology"] = _bridge_report_record()
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _bridge_report_input(), out, figures=False
-    )).split())
-
-    assert "Bridge methodology" in text
-    assert "Coverage matrix" in text
-    assert "inherited" in text
-    assert "overridden" in text
-    assert "added" in text
-    assert "not assessed" in text
-    assert "DB-BRIDGE-01" in text
-
-
-def test_report_publishes_bound_danish_manager_basis_and_mapped_deicing():
-    inp = _bridge_report_input(bridge.EN1992_2_DK_NA)
-    inp.update({
-        "bridge_asset_class": danish_bridge.ASSET_ROAD,
-        "bridge_infrastructure_manager": (
-            danish_bridge.MANAGER_ROAD_DIRECTORATE
-        ),
-        "bridge_manager_source": "VD bridge basis 2023+corr.2026",
-        "bridge_project_basis_source": "DB-05 section 2.3",
-        "bridge_authority_approval_reference": "",
-        "bridge_traffic_fatigue_applicability": (
-            danish_bridge.FATIGUE_NOT_APPLICABLE
-        ),
-        "bridge_traffic_fatigue_model": "",
-        "bridge_traffic_fatigue_source": "",
-        "bridge_environment_class": danish_bridge.ENVIRONMENT_AGGRESSIVE,
-        "bridge_environment_source": "DB-05 section 4.2",
-        "bridge_special_rules": "No mapped special relaxation",
-        "bridge_departure_applicability": (
-            danish_bridge.APPLICABILITY_NOT_APPLICABLE
-        ),
-        "bridge_departure_source": "",
-        "bridge_deviations": "",
-        "bridge_control_class": danish_bridge.CONTROL_NORMAL,
-        "bridge_control_source": "DB-05 section 2.4",
-        "bridge_consequence_class": danish_bridge.CONSEQUENCE_CC2,
-        "bridge_consequence_source": "DB-05 section 2.5",
-        "bridge_high_strength_approval": (
-            danish_bridge.APPROVAL_NOT_APPLICABLE
-        ),
-        "bridge_high_strength_approval_reference": "",
-        "bridge_execution_conditions_source": "",
-        "bridge_surface_condition": danish_bridge.SURFACE_WATERPROOFED,
-        "bridge_deicing_applicability": (
-            danish_bridge.APPLICABILITY_REQUIRED
-        ),
-        "bridge_deicing_source": "DB-05 drawing G-02",
-        "bridge_cover_category": danish_bridge.COVER_NONPRESTRESSED,
-        "bridge_nominal_cover_mm": 45.0,
-        "bridge_cover_source": "Drawing B-105 section A",
-        "bridge_collision_risk_applicability": (
-            danish_bridge.APPLICABILITY_NOT_APPLICABLE
-        ),
-        "bridge_alpha_cc_basis": conformance.STANDARD_BASIS,
-        "bridge_alpha_cc_custom_methodology": "",
-        "bridge_alpha_cc_approval_reference": "",
-        "bridge_alpha_ct": 1.0,
-        "bridge_alpha_ct_basis": conformance.STANDARD_BASIS,
-        "bridge_alpha_ct_custom_methodology": "",
-        "bridge_alpha_ct_approval_reference": "",
-    })
-    decisions = tuple(
-        bridge.ApplicabilityDecision(
-            check_id,
-            (
-                bridge.REQUIRED
-                if check_id == "section_analysis"
-                else bridge.NOT_APPLICABLE
-            ),
-            f"DB-{check_id}",
-        )
-        for check_id in bridge.APPLICABILITY_CHECK_IDS
-    )
-    record = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
-        methodology=bridge.EN1992_2_DK_NA,
-        decisions=decisions,
-        has_tendons=False,
-        has_hollow_section=False,
-        fck_mpa=inp["concrete"].fck,
-        section_analysis=bridge.ExternalEvidence(
-            status=bridge.STATUS_PASS,
-            result="section solve converged",
-            criterion="requested solver converges",
-            source="bridge inherited section solver",
-            reason="Elastic SLS-1 converged",
-        ),
-        danish_basis=bridge_inputs.danish_basis_from_inputs(inp),
-    ))
-    out = _out()
-    out["bridge_methodology"] = record
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False
-    )).split())
-
-    assert bridge.EN1992_2_DK_NA in text
-    assert "Publication validation status: ACCEPTED" in text
-    assert "Danish infrastructure-manager and project basis" in text
-    assert danish_bridge.MANAGER_ROAD_DIRECTORATE in text
-    assert "DB-05 section 4.2" in text
-    assert "DB-05 drawing G-02" in text
-    assert "Departure applicability" in text
-    assert danish_bridge.APPLICABILITY_NOT_APPLICABLE in text
-    assert "Departure methodology / source" in text
-    assert "Departure authority approval" in text
-    assert "mapped_deicing_x_m" in text
-    assert "mapped_deicing_y_m" in text
-    appendix = text[text.index("QA appendix - references and notes"):]
-    assert "Danish bridge QA basis" in appendix
-    assert danish_bridge.MANAGER_ROAD_DIRECTORATE in appendix
-    assert "VD bridge basis 2023+corr.2026" in appendix
-    assert "DB-05 section 2.3" in appendix
-    assert "departure applicability" in appendix
-    assert "Danish bridge applicability provenance" in appendix
-    assert "Danish bridge coefficient provenance" in appendix
-    assert "current Danish crack publication context is missing" not in text
-
-
-@pytest.mark.parametrize(
-    ("attack", "expected"),
-    [
-        ("stale_standard", "fatigue.gamma_c"),
-        ("omitted_gamma_c", "IDs/cardinality"),
-        ("stale_gamma_ff", "fatigue_gamma_ff"),
-    ],
-)
-def test_report_rejects_stale_or_omitted_bridge_fatigue_evidence(
-    attack,
-    expected,
-):
-    out = _out()
-    current_input = _bridge_report_fatigue_input(custom=True)
-    if attack == "stale_standard":
-        record = _bridge_report_concrete_fatigue_record(
-            _bridge_report_fatigue_input()
-        )
-    elif attack == "stale_gamma_ff":
-        current_input = _bridge_report_fatigue_input()
-        current_input["fatigue_gamma_ff"] = 2.0
-        record = _bridge_report_concrete_fatigue_record(
-            _bridge_report_fatigue_input()
-        )
-    else:
-        record = _bridge_report_concrete_fatigue_record(current_input)
-        concrete = next(
-            check for check in record["checks"]
-            if check["check_id"] == "concrete_fatigue"
-        )
-        row = concrete["evidence"][0]
-        row["fatigue_parameter_conformance"] = [
-            parameter
-            for parameter in row["fatigue_parameter_conformance"]
-            if parameter["parameter_id"] != "fatigue.gamma_c"
-        ]
-        row["status"] = bridge.STATUS_PASS
-        concrete["status"] = bridge.STATUS_PASS
-        record["status"] = bridge.STATUS_PASS
-        record["evidence_fingerprint"] = (
-            bridge.bridge_evidence_fingerprint(
-                record["checks"],
-                record["configuration_errors"],
-            )
-        )
-    out["bridge_methodology"] = record
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {},
-        current_input,
-        out,
-        figures=False,
-    )).split())
-
-    assert "Bridge methodology" in text
-    assert "INVALID" in text
-    assert "Publication validation" in text
-    assert "REJECTED" in text
-    assert "Concrete fatigue" in text and "NOT ASSESSED" in text
-    assert expected in text
-
-
-def test_report_publishes_bound_bridge_calculation_evidence():
-    out = _out()
-    record = _bridge_report_record()
-    stress = next(
-        check
-        for check in record["checks"]
-        if check["check_id"] == "sls_stress"
-    )
-    stress.update(
-        status=bridge.STATUS_PASS,
-        result="20.000 MPa (SLS-CHAR:total)",
-        criterion="characteristic compression <= 24.000 MPa",
-        utilisation=20.0 / 24.0,
-        evidence=[{
-            "response_id": "SLS-CHAR:total",
-            "combination": "Characteristic",
-            "compression_mpa": 20.0,
-            "limit_mpa": 24.0,
-            "solver_provenance": {"solve": "elastic-v1"},
-        }],
-    )
-    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
-        record["checks"],
-        record["configuration_errors"],
-    )
-    out["bridge_methodology"] = record
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _bridge_report_input(), out, figures=False
-    )).split())
-
-    assert "Bound calculation evidence" in text
-    assert "SLS-CHAR:total" in text
-    assert "compression_mpa" in text
-    assert "limit_mpa" in text
-    assert "elastic-v1" in text
-
-
-def test_report_keeps_custom_cot_theta_and_minimum_k_as_analytical_review():
-    out = _out()
-    decisions = tuple(
-        bridge.ApplicabilityDecision(
-            check_id,
-            (
-                bridge.REQUIRED
-                if check_id in {"box_wall_torsion", "web_flange_minimum"}
-                else bridge.NOT_APPLICABLE
-            ),
-            f"DB-{check_id}",
-        )
-        for check_id in bridge.APPLICABILITY_CHECK_IDS
-    )
-    record = bridge.assess_base_methodology(bridge.BridgeBaseEvidence(
-        methodology=bridge.EN1992_2_BASE,
-        decisions=decisions,
-        has_tendons=False,
-        has_hollow_section=True,
-        fck_mpa=40.0,
-        expected_box_walls=1,
-        box_walls=(
-            bridge.BoxWallEvidence(
-                "Wall",
-                10.0,
-                10.0,
-                100.0,
-                10.0,
-                100.0,
-            ),
-        ),
-        minimum_scope=bridge.MINIMUM_SCOPE_WEB,
-        minimum_components=(
-            bridge.MinimumCrackComponent(
-                "Web",
-                100_000.0,
-                0.4,
-                0.01,
-                3.0,
-                300.0,
-                5.0,
-            ),
-        ),
-    ))
-    out["bridge_methodology"] = record
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _bridge_report_input(), out, figures=False
-    )).split())
-
-    assert "REVIEW" in text
-    assert "analytical PASS" in text
-    assert "cot_theta" in text and "10.0" in text
-    assert "does not conform to 1 <= value <= 2.5" in text
-    assert "minimum-reinforcement k" in text
-    assert "does not conform to 0.65 <= value <= 1" in text
-    assert "NOT FULLY ASSESSED" in text
-
-
-def test_report_fails_closed_when_stored_bridge_check_is_missing():
-    out = _out()
-    record = _bridge_report_record()
-    record["checks"] = record["checks"][:-1]
-    out["bridge_methodology"] = record
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _bridge_report_input(), out, figures=False
-    )).split())
-
-    assert "Bridge methodology" in text
-    assert "INVALID" in text
-    assert "Publication validation" in text
-    assert "missing bridge check" in text
-
-
-def test_report_rejects_bridge_record_under_component_methodology():
-    out = _out()
-    out["bridge_methodology"] = _bridge_report_record()
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {},
-        _bridge_report_input(bridge.COMPONENT_METHODS),
-        out,
-        figures=False,
-    )).split())
-
-    assert "Bridge methodology" in text
-    assert "INVALID" in text
-    assert "Publication validation" in text
-    assert "conflicts with the calculation input snapshot" in text
-
-
-def test_report_preserves_unbounded_bridge_fatigue_governing_row():
-    out = _out()
-    record = _bridge_report_record()
-    concrete_fatigue = next(
-        check
-        for check in record["checks"]
-        if check["check_id"] == "concrete_fatigue"
-    )
-    concrete_fatigue.update(
-        status=bridge.STATUS_FAIL,
-        result="infinite Miner damage",
-        criterion="<= 100 %",
-        source="Unbounded concrete fibre",
-        reason="Spectrum A / fibre 4 governs.",
-        utilisation=None,
-        evidence=[{
-            "miner_coefficient_c": 14.0,
-            "methodology": bridge.EN1992_2_BASE,
-            "concrete_method": "Explicit Palmgren-Miner spectrum",
-            "unbounded_utilisation": True,
-        }],
-    )
-    record["evidence_fingerprint"] = bridge.bridge_evidence_fingerprint(
-        record["checks"],
-        record["configuration_errors"],
-    )
-    out["bridge_methodology"] = record
-
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, _bridge_report_input(), out, figures=False
-    )).split())
-
-    assert "infinite Miner damage" in text
-    assert "Unbounded concrete fibre" in text
-    assert "unbounded_utilisation" in text

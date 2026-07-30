@@ -85,25 +85,6 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
-def test_manual_documents_separate_sourced_pr06_methods_and_fallbacks():
-    text = "\n".join(
-        str(part)
-        for block in manual.manual_blocks()
-        for part in block[1:]
-    )
-    assert "Opt-in biaxial shear interaction" in text
-    assert "EN 1992-1-1:2023 8.2.1(5)" in text
-    assert "QUALIFIED PASS" in text
-    assert "full qualified interaction is recorded as directional" in text
-    assert "Approved project power sum" in text
-    assert "Opt-in multidirectional crack interaction" in text
-    assert "DK NA 7.3.4(4)" in text
-    assert "EN 1992-1-1:2023 Annex G.5" in text
-    assert "APPROVED CUSTOM PASS/FAIL" in text
-    assert "two component PASS results" in text
-    assert "NOT ASSESSED/INVALID" in text
-
-
 def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():
     # Adjacent Python string literals previously produced ``\quadf`` and
     # ``\qquadk``. KaTeX renders those invalid commands as red source text.
@@ -143,53 +124,6 @@ def test_manual_covers_both_examples_and_all_crack_editions():
     for edition in ("2005", "DK NA", "2023"):
         assert edition in text
     assert "mild steel" in text.lower() and "prestress" in text.lower()
-
-
-def test_manual_documents_2023_xi1_direct_tension_and_scope_gate():
-    text = "\n".join(
-        value
-        for block in manual.manual_blocks()
-        for value in block[1:]
-        if isinstance(value, str)
-    )
-    assert "Formula (9.12)" in text
-    assert "\\xi_1=\\sqrt{\\xi\\,\\phi_s/\\phi_p}" in text
-    assert "positive global diameter override" in text
-    assert "both $\\phi_s$ and every $\\phi_p$" in text
-    assert "solid rectangular-section branch" in text
-    assert "one-directional dominant strain-gradient assessment" in text
-    assert "blocking **NOT ASSESSED**" in text
-    assert "does not establish that edition as the currently applicable Danish" in text
-
-
-def test_manual_separates_crack_history_duration_and_acceptance_combination():
-    text = "\n".join(
-        value
-        for block in manual.manual_blocks()
-        for value in block[1:]
-        if isinstance(value, str)
-    )
-
-    assert "Acceptance combination is not load duration" in text
-    assert "never assumes that a long response is" in text
-    assert "quasi-permanent" in text
-    assert "Bonded prestress uses the **frequent** combination" in text
-    assert "Table 9.1 appearance and Table 9.2 durability" in text
-    assert "Protection Levels 2/3" in text
-    assert "XD/XS and XF require **frequent" in text
-    assert "separate positive crack-width limit for every applicable combination" in text
-    assert "project schema" in text
-    assert "Boolean values are never accepted" in text
-    assert "complete, non-empty mapping scope" in text
-    assert "strict fingerprint" in text
-    assert "response IDs, values and governing evidence" in text
-    assert "Every publication boundary validates and reconstructs it" in text
-    assert "NOT ASSESSED / REVIEW" in text
-    assert "Reinforcement rows require exactly" in text
-    assert "`fatigue.gamma_s`" in text
-    assert "`fatigue.gamma_c` and `concrete_fatigue.miner_c`" in text
-    assert "stale standard factors cannot publish beside a current custom" in text
-    assert "omitted factor record cannot turn a qualified custom result" in text
 
 
 def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
@@ -285,9 +219,6 @@ def test_manual_documents_project_recovery_and_ownership():
         "Project files and autosave",
         "five-minute interval",
         "autosave is recovery",
-        "actual material factors and Miner coefficient",
-        "selected-standard verdict",
-        "Save / Load panel",
     ):
         assert expected in text
     import pypdf
@@ -342,8 +273,8 @@ def test_manual_documents_native_case_tables_results_and_report():
     for expected in (
         "Plastic / capacity",
         "names are unique across the Plastic/capacity, Elastic and fatigue-bin",
-        "Stress limits and/or Crack width",
-        "zero means not evaluated",
+            "Stresses are always output; optionally calculate crack width",
+            "zero disables only that component",
         "single global creep coefficient",
         "Results overview",
         "Select a Plastic/capacity case",
@@ -361,15 +292,7 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "Fatigue Results",
         "Fatigue details",
         "Spectrum basis",
-        "gamma_0",
-        "gamma_3",
-        "Approved final override",
-        "Fatigue-factor approval / source",
-        "migrated legacy value",
-        "0.5 or 2.0",
-        "APPROVED CUSTOM",
-        "different positive finite coefficient",
-        "NOT FULLY ASSESSED",
+        "control-, construction- or consequence-class multiplier",
         "gamma_{Ff}",
         r"\\Delta\\sigma_{Ed,i}",
         "N_{R,i}",
@@ -382,50 +305,7 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "Shear and torsion fatigue are not included",
     ):
         assert expected in text
-    assert "A different coefficient requires" not in text
     assert "termination reason" not in text
-
-
-def test_manual_documents_bridge_methodology_routing_and_limitations():
-    text = "\n".join(str(block) for block in manual.manual_blocks())
-    for expected in (
-        "DS/EN 1992-2:2005 + AC:2008",
-        "DS/EN 1992-2:2005 + DK/NA:2015",
-        "whole-calculation methodology",
-        "Inherited",
-        "Overridden",
-        "Added",
-        "Not assessed",
-        "Method-b tensile region",
-        "one common",
-        "web/flange",
-        "Numerical validity and standards conformity are separate",
-        "Custom design basis",
-        "actual value",
-        "non-positive values remain hard input errors",
-        "Table 7.101N",
-        "Response duration and SLS combination class are separate",
-        "quasi-permanent response",
-        "unrelated calculated response",
-        "x = 3 m, y = 3 m",
-        "alpha_{ct}",
-        "Method A is mandatory",
-        "Frequent-combination crack width",
-        "a passing crack width cannot substitute",
-        "approved project-basis adoption",
-        "explicit departure/dispensation applicability decision",
-        "qualified project variation",
-        "departure applicability",
-        "existing reinforcement/concrete applicability rows",
-        "required-but-disabled route",
-        "exactly match the Fatigue panel's calculated",
-        "model/source mismatch",
-        "national routing information, not analysis evidence",
-        "Annex J, KK, NN or OO",
-        "Bridge Methodology",
-        "cannot retain a stronger report verdict",
-    ):
-        assert expected in text
 
 
 def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():

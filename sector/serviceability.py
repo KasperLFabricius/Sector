@@ -68,9 +68,8 @@ CRACK_SCOPE_DOMINANT_DIRECTION = "dominant-direction"
 CRACK_SCOPE_DIRECT_TENSION = "uniform-direct-tension"
 CRACK_DIRECTIONAL_LIMITATION = (
     "The canonical crack response is a one-directional dominant strain-gradient "
-    "assessment. Orthogonal or inclined systems are not included in that component "
-    "conclusion; only separately selected, in-domain multidirectional evidence can "
-    "provide an aggregate conclusion."
+    "calculation. Generic orthogonal or inclined crack-system interaction is not "
+    "calculated."
 )
 CRACK_DIRECT_TENSION_SCOPE = (
     "Validated uniform direct-tension branch for a solid rectangular section with "
@@ -92,7 +91,7 @@ class EffectiveReinforcement2023:
 
 @dataclass(frozen=True)
 class CrackWidthEvaluation:
-    """Numerical result plus the public applicability disposition."""
+    """Numerical result plus its calculation-scope state."""
 
     status: str
     reason: str
@@ -697,8 +696,8 @@ def _crack_width(
     if all_tension:
         return _not_assessed(
             "Uniform/direct tension is outside the validated 2005 crack-width "
-            "branch; select the 2023 direct-tension method or provide a separate "
-            "project-basis assessment."
+            "branch; select the 2023 direct-tension method or another applicable "
+            "numerical method."
         )
     if near_uniform:
         return _not_assessed(
@@ -1212,7 +1211,7 @@ def analyse_cracking(
     reinforcement_types, bond_ratio_xi:
         Per-element ``mild``/``prestress`` classification and the 2023 tendon
         bond-strength ratio ``xi`` used to derive ``xi1``. If no types are
-        supplied, all elements remain mild reinforcement for compatibility.
+        supplied, all elements are treated as mild reinforcement.
 
     Returns
     -------
@@ -1376,7 +1375,7 @@ def crack_width(
     reinforcement_types: Optional[Sequence[str]] = None,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]] = None,
 ) -> Optional[CrackWidthResult]:
-    """Compatibility wrapper returning only the numerical crack-width result."""
+    """Convenience wrapper returning only the numerical crack-width result."""
 
     return evaluate_crack_width(
         section,

@@ -36,7 +36,6 @@ def build_fixture_pdf() -> bytes:
 def validate_pdf_content(pdf: bytes) -> str:
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    normalized_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
     for token in (
@@ -109,12 +108,12 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Sweco Danmark A/S",
         "Contents",
         "Plastic / capacity",
-        "Stress limits and/or Crack width",
+        "Serviceability: cracking and crack width",
         "Grouped fatigue",
         "Fatigue Results",
         "Partial factor on the cyclic fatigue action",
         "Miner damage",
-        "certified concrete-search bound",
+        "bounded concrete-search result",
         "Results overview",
         "Reinforcement detailing",
         "Shear and torsion reinforcement",
@@ -123,29 +122,9 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Governing",
         "PDF report",
         "Every computed case",
-        "Formula (9.12)",
-        "solid rectangular-section branch",
-        "Crack-control scope",
-        "Orthogonal or inclined systems are not part",
-        "Opt-in multidirectional crack interaction",
-        "DS/EN 1992-1-1:2004 + DK NA 7.3.4(4)",
-        "EN 1992-1-1:2023 Annex G.5",
-        "Approved project crack power sum",
-        "Opt-in biaxial shear interaction",
-        "EN 1992-1-1:2023 8.2.1(5)",
-        "Approved project power sum",
-        "Annex LL is not offered as a Danish bridge",
-        "Acceptance combination is not load duration",
-        "DS/EN 1992-1-1 DK NA:2013 numerical method",
-        "Danish bridge numerical crack chain",
-        "cover-dependent",
-        "fine and coarse",
-        "Table 9.1 appearance",
-        "NOT ASSESSED / REVIEW",
-        "currently applicable Danish",
         "Part D - Reference",
     ):
-        if expected not in normalized_text:
+        if expected not in text:
             raise AssertionError(f"expected manual content is missing: {expected}")
     return text
 

@@ -4,7 +4,7 @@ The numerical calculation remains owned by ``sector_app.run_analysis``'s
 single-case implementation.  This module maps canonical table rows onto that
 stable input contract, invokes an injected single-case runner, and returns an
 ordered result per named case.  Keeping the orchestration free of Streamlit makes
-the rules for signs, skipped actions, acceptance flags and cache reuse directly
+the rules for signs, optional calculations and cache reuse directly
 unit-testable.
 """
 
@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 
 import load_cases
-from sector import sls as sls_core
 
 
 _PLASTIC_RESULT_KEYS = (
@@ -86,7 +85,7 @@ def _metadata(record: Mapping) -> dict:
 
 
 def plastic_case_input(base: Mapping, record: Mapping) -> dict:
-    """Map one Plastic table row onto the existing single-case input contract.
+    """Map one Plastic table row onto the current calculation input contract.
 
     N/M retain their signs. Shear and torsion are capacity magnitudes internally,
     while the signed source values remain in the case entry returned to callers.
@@ -94,9 +93,8 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
     method toggle. Combined M-V-T is live only when both actions are non-zero.
     """
     out = dict(base)
-    legacy_v = float(record.get("v_ed_kn", 0.0))
     vx_ed = float(record.get("vx_ed_kn", 0.0))
-    vy_ed = float(record.get("vy_ed_kn", legacy_v))
+    vy_ed = float(record.get("vy_ed_kn", 0.0))
     vx_face = str(record.get("vx_face", load_cases.FACE_AUTO))
     vy_face = str(record.get("vy_face", load_cases.FACE_AUTO))
     t_ed = float(record["t_ed_knm"])
@@ -158,116 +156,25 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
 
 
 def elastic_case_input(base: Mapping, record: Mapping) -> dict:
-    """Map one Elastic row and its independent duration/combination metadata."""
+    """Map one Elastic row and its optional crack-width calculation."""
     out = dict(base)
-    check_stress = bool(record["check_stress"])
-    check_crack_width = bool(record["check_crack_width"])
-    long_combination = str(
-        record.get(
-            "long_combination",
-            sls_core.COMBINATION_UNSPECIFIED,
-        )
-    )
-    total_combination = str(
-        record.get(
-            "total_combination",
-            sls_core.COMBINATION_UNSPECIFIED,
-        )
-    )
-    case_name = str(record[load_cases.NAME])
+    calculate_crack_width = bool(record["calculate_crack_width"])
     out.update(
         mode="Elastic",
         elastic_case=_metadata(record),
-        check_stress=check_stress,
-        check_crack_width=check_crack_width,
+        calculate_crack_width=calculate_crack_width,
         P_el_l=float(record["n_long_ed_kn"]),
         Mx_el_l=float(record["mx_long_ed_knm"]),
         My_el_l=float(record["my_long_ed_knm"]),
         P_el_s=float(record["n_short_ed_kn"]),
         Mx_el_s=float(record["mx_short_ed_knm"]),
         My_el_s=float(record["my_short_ed_knm"]),
-        sls_cw=check_crack_width,
-        sls_long_combination=long_combination,
-        sls_total_combination=total_combination,
-        sls_response_combinations={
-            "long": long_combination,
-            "total": total_combination,
-        },
-        sls_response_provenance={
-            "long": (
-                f"Elastic case {case_name!r}, long_combination table field"
-            ),
-            "total": (
-                f"Elastic case {case_name!r}, total_combination table field"
-            ),
-        },
-        sls_conc_limit_pct=(
-            float(base.get("sls_conc_limit_pct", 0.0)) if check_stress else 0.0
-        ),
-        sls_steel_limit_pct=(
-            float(base.get("sls_steel_limit_pct", 0.0)) if check_stress else 0.0
-        ),
-        sls_pre_limit_pct=(
-            float(base.get("sls_pre_limit_pct", 0.0)) if check_stress else 0.0
-        ),
+        sls_cw=calculate_crack_width,
         shear_on=False,
         torsion_on=False,
         combined_on=False,
     )
     return out
-
-
-def crack_response_mapping_scope(records: Sequence[Mapping]) -> list[dict]:
-    """Return the table-wide crack-response designations for checked cases.
-
-    A duration state is independent for each named Elastic case.  The case name
-    therefore forms part of ``response_id`` so duplicate combination mappings in
-    different rows cannot be mistaken for one response merely because both rows
-    use the local ``long`` or ``total`` state token.
-    """
-    scope = []
-    states = (
-        (
-            "long",
-            "long_combination",
-            "Sustained / long-term response",
-        ),
-        (
-            "total",
-            "total_combination",
-            "Instantaneous total (long + short) response",
-        ),
-    )
-    for record in records:
-        if not bool(record.get("check_crack_width")):
-            continue
-        case_name = str(record.get(load_cases.NAME) or "").strip()
-        for state, column, duration in states:
-            scope.append({
-                "combination": sls_core.canonical_combination(
-                    record.get(column, sls_core.COMBINATION_UNSPECIFIED)
-                ),
-                "duration": duration,
-                "response": f"{case_name} / {state}",
-                "response_id": f"{case_name}:{state}",
-                "elastic_case": case_name,
-                "state": state,
-                "provenance": (
-                    f"Elastic case {case_name!r}, {column} table field"
-                ),
-            })
-    return scope
-
-
-def _crack_mapping_scope_signature(scope: Sequence[Mapping]) -> tuple:
-    """Stable cache token for table-wide crack-combination applicability."""
-    return tuple(sorted(
-        (
-            str(item.get("response_id") or ""),
-            str(item.get("combination") or ""),
-        )
-        for item in scope
-    ))
 
 
 def _reuse_by_name(entries: Sequence[Mapping] | None) -> dict[str, Mapping]:
@@ -294,8 +201,8 @@ def _entry(record: dict, key: str, result: dict, *, evaluated: bool,
     return entry
 
 
-def _first_results(entries: Sequence[Mapping], keys: Sequence[str]) -> dict:
-    """Compatibility view for legacy callers that consume one flat result."""
+def _primary_results(entries: Sequence[Mapping], keys: Sequence[str]) -> dict:
+    """Expose the first current action as the primary interactive result."""
     if not entries:
         return {}
     result = entries[0].get("results") or {}
@@ -355,10 +262,6 @@ def run_case_tables(
 
     plastic_rows = _rows(plastic_table, load_cases.PLASTIC_TABLE_KEY)
     elastic_rows = _rows(elastic_table, load_cases.ELASTIC_TABLE_KEY)
-    crack_mapping_scope = crack_response_mapping_scope(elastic_rows)
-    crack_mapping_scope_signature = _crack_mapping_scope_signature(
-        crack_mapping_scope
-    )
     cached_plastic = _reuse_by_name(reuse_plastic)
     cached_plastic_bending = _reuse_by_name(reuse_plastic_bending)
     cached_elastic = _reuse_by_name(reuse_elastic)
@@ -414,52 +317,35 @@ def run_case_tables(
                 )
             )
         out["plastic_cases"] = plastic_entries
-        out.update(_first_results(plastic_entries, _PLASTIC_RESULT_KEYS))
+        out.update(_primary_results(plastic_entries, _PLASTIC_RESULT_KEYS))
 
     elastic_entries = []
     if elastic_required:
         for record in elastic_rows:
             signature = case_signature(record, load_cases.ELASTIC_TABLE_KEY)
-            record_scope_signature = (
-                crack_mapping_scope_signature
-                if bool(record.get("check_crack_width"))
-                else ()
-            )
             cached = cached_elastic.get(record[load_cases.NAME])
-            if (
-                cached is not None
-                and tuple(cached.get("signature") or ()) == signature
-                and tuple(
-                    cached.get("crack_mapping_scope_signature") or ()
-                ) == record_scope_signature
-            ):
-                entry = _entry(
+            if cached is not None and tuple(cached.get("signature") or ()) == signature:
+                elastic_entries.append(
+                    _entry(
+                        record,
+                        load_cases.ELASTIC_TABLE_KEY,
+                        cached.get("results") or {},
+                        evaluated=True,
+                        reused=True,
+                    )
+                )
+                continue
+            result = runner(elastic_case_input(inp, record))
+            elastic_entries.append(
+                _entry(
                     record,
                     load_cases.ELASTIC_TABLE_KEY,
-                    cached.get("results") or {},
+                    result,
                     evaluated=True,
-                    reused=True,
+                    reused=False,
                 )
-                entry["crack_mapping_scope_signature"] = (
-                    record_scope_signature
-                )
-                elastic_entries.append(entry)
-                continue
-            case_inp = elastic_case_input(inp, record)
-            case_inp["sls_response_mapping_scope"] = crack_mapping_scope
-            result = runner(case_inp)
-            entry = _entry(
-                record,
-                load_cases.ELASTIC_TABLE_KEY,
-                result,
-                evaluated=True,
-                reused=False,
             )
-            entry["crack_mapping_scope_signature"] = (
-                record_scope_signature
-            )
-            elastic_entries.append(entry)
         out["elastic_cases"] = elastic_entries
-        out.update(_first_results(elastic_entries, _ELASTIC_RESULT_KEYS))
+        out.update(_primary_results(elastic_entries, _ELASTIC_RESULT_KEYS))
 
     return out

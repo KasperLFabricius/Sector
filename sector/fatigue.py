@@ -43,7 +43,7 @@ EC2_2023 = "2023"
 MILD = "mild"
 PRESTRESS = "prestress"
 CONCRETE_MINER = "Explicit Palmgren-Miner spectrum"
-CONCRETE_PROJECT_MINER = "Project-approved Miner S-N relation"
+CONCRETE_PROJECT_MINER = "User-defined Miner S-N relation"
 CONCRETE_EQUIVALENT = "Damage-equivalent stress amplitude"
 CONCRETE_MINER_METHODS = (CONCRETE_MINER, CONCRETE_PROJECT_MINER)
 CONCRETE_METHODS = (*CONCRETE_MINER_METHODS, CONCRETE_EQUIVALENT)
@@ -98,7 +98,7 @@ def _normalise_concrete_method(value: str) -> str:
         return CONCRETE_MINER
     raise ValueError(
         "concrete fatigue method must identify the standard explicit "
-        "Palmgren-Miner, project-approved Miner S-N, or damage-equivalent method"
+        "Palmgren-Miner, user-defined Miner S-N, or damage-equivalent method"
     )
 
 
@@ -365,12 +365,6 @@ class ConcreteFibreSearch:
     relative_gap: float
     converged: bool
     method: str = CONCRETE_MINER
-
-    @property
-    def relative_change(self) -> float:
-        """Compatibility alias for the superseded heuristic-search field."""
-
-        return self.relative_gap
 
 
 @dataclass(frozen=True)
