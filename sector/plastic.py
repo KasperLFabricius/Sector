@@ -418,6 +418,13 @@ def plastic_capacity_at_angle(
         n_hi = net_axial(hi)
         grow += 1
 
+    # Residual tolerance alone cannot distinguish a genuine root from an endpoint
+    # clamp: a request just outside the achievable range can lie within that
+    # tolerance of the returned endpoint.  Keep reachability as explicit solver
+    # state so only an in-range request can converge.  Equality deliberately counts
+    # as reachable; the exact tension and compression endpoints are valid roots.
+    axial_reachable = n_lo <= P <= n_hi
+
     if P < n_lo:
         c = lo              # requested axial below the pure-tension state (unreachable)
     elif P > n_hi:
@@ -441,11 +448,13 @@ def plastic_capacity_at_angle(
         rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b, band_memo
     )
 
-    # Convergence is judged on the actual axial equilibrium at the returned depth,
-    # not merely on P having been bracketed: a monotonicity failure or a clamped
-    # (out-of-range) P leaves a residual that this catches, where the old
-    # "bracketable" test would have reported success.
-    converged = abs((comp_F + ten_F) - P) <= 1.0e-6 * max(1.0, abs(P))
+    # A valid root must be reachable by the endpoint responses *and* satisfy axial
+    # equilibrium.  The residual remains an independent guard for a failed search
+    # or an unexpected monotonicity violation inside an otherwise valid bracket.
+    axial_residual_ok = (
+        abs((comp_F + ten_F) - P) <= 1.0e-6 * max(1.0, abs(P))
+    )
+    converged = axial_reachable and axial_residual_ok
 
     Mx = comp_Fy + ten_Fy
     My = comp_Fx + ten_Fx
