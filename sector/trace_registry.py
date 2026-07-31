@@ -40,8 +40,6 @@ class TraceMemberContract:
     axes: tuple[TraceAxis, ...]
     sources: frozenset[TraceSourceContract]
     result_states: frozenset[str]
-    step_ids: tuple[str, ...] = ()
-    step_dependencies: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,34 +158,6 @@ def _validate_registry(registry: object) -> dict[str, tuple[TraceFamilyContract,
                 raise TraceValidationError(
                     f"{member.member_id} declares invalid result states"
                 )
-            if type(member.step_ids) is not tuple or type(member.step_dependencies) is not tuple:
-                raise TraceValidationError(
-                    f"{member.member_id} step contracts must be immutable tuples"
-                )
-            for step_id in member.step_ids:
-                _require_id(step_id, f"{member.member_id} step ID")
-            dependency_steps = []
-            for dependency in member.step_dependencies:
-                if type(dependency) is not tuple or len(dependency) != 2:
-                    raise TraceValidationError(
-                        f"{member.member_id} has malformed dependency contract"
-                    )
-                step_id, dependency_ids = dependency
-                _require_id(step_id, f"{member.member_id} dependency step ID")
-                if type(dependency_ids) is not tuple:
-                    raise TraceValidationError(
-                        f"{member.member_id} dependency IDs must be a tuple"
-                    )
-                for dependency_id in dependency_ids:
-                    _require_id(
-                        dependency_id,
-                        f"{member.member_id} dependency ID",
-                    )
-                dependency_steps.append(step_id)
-            if member.step_ids and tuple(dependency_steps) != member.step_ids:
-                raise TraceValidationError(
-                    f"{member.member_id} dependency map must match exact step order"
-                )
             expected[member.calculation_id] = (family, member)
     return expected
 
@@ -241,23 +211,6 @@ def audit_trace_registry(
                 f"result state {final.result.state!r}, expected one of "
                 f"{sorted(member.result_states)!r}"
             )
-        actual_step_ids = tuple(step.step_id for step in calculation.steps)
-        if member.step_ids and actual_step_ids != member.step_ids:
-            mismatches.append(
-                f"step IDs {actual_step_ids!r}, expected {member.step_ids!r}"
-            )
-        actual_dependencies = tuple(
-            (
-                step.step_id,
-                tuple(dependency.step_id for dependency in step.dependencies),
-            )
-            for step in calculation.steps
-        )
-        if (
-            member.step_dependencies
-            and actual_dependencies != member.step_dependencies
-        ):
-            mismatches.append("dependency graph differs from the selected contract")
         if mismatches:
             raise TraceValidationError(
                 f"{family.family_id}/{member.member_id} identity mismatch: "
