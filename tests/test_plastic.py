@@ -10,14 +10,97 @@ percent).
 
 from __future__ import annotations
 
+import inspect
 import math
+from dataclasses import MISSING, fields
 
 import numpy as np
 import pytest
 
+from sector import PlasticPoint
+from sector.calculation_trace import TraceValidationError
 from sector.materials import Concrete, MildSteel
 from sector.plastic import _band_stresses, plastic_capacity_at_angle, solve_plastic
+from sector.plastic_capacity_trace import _point_expected
 from sector.section import Section
+
+
+# Frozen from d01e6beb040f766985bf5547d99940d649f520c1, before CT-002.
+_LEGACY_PLASTIC_POINT_FIELDS = (
+    "V", "Mx", "My", "axial", "U", "R", "na_x_intercept",
+    "na_y_intercept", "eps_concrete", "eps_steel", "eps_steel_comp",
+    "eps_cable", "curvature", "compression_force", "lever_arm", "dx", "dy",
+    "converged",
+)
+_LEGACY_PLASTIC_POINT_VALUES = tuple(float(i) for i in range(1, 18)) + (True,)
+_FINITE_DIAGNOSTIC_FIELDS = (
+    "axial_requested", "axial_residual", "axial_tolerance", "compression_depth",
+    "neutral_axis_offset", "strain_gradient_x", "strain_gradient_y",
+    "strain_offset", "search_lower_depth", "search_upper_depth",
+    "search_lower_axial", "search_upper_axial", "concrete_force", "concrete_mx",
+    "concrete_my", "bar_force", "bar_mx", "bar_my", "tendon_force",
+    "tendon_mx", "tendon_my", "compression_mx", "compression_my",
+    "tension_force", "tension_mx", "tension_my",
+)
+
+
+def test_plastic_point_preserves_exact_legacy_positional_contract():
+    point = PlasticPoint(*_LEGACY_PLASTIC_POINT_VALUES)
+    assert tuple(getattr(point, name) for name in _LEGACY_PLASTIC_POINT_FIELDS) == (
+        _LEGACY_PLASTIC_POINT_VALUES
+    )
+
+    parameters = tuple(inspect.signature(PlasticPoint).parameters.values())
+    legacy_parameters = parameters[:len(_LEGACY_PLASTIC_POINT_FIELDS)]
+    assert tuple(parameter.name for parameter in legacy_parameters) == (
+        _LEGACY_PLASTIC_POINT_FIELDS
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        and parameter.default is inspect.Parameter.empty
+        for parameter in legacy_parameters
+    )
+
+    point_fields = fields(PlasticPoint)
+    assert tuple(field.name for field in point_fields[:len(legacy_parameters)]) == (
+        _LEGACY_PLASTIC_POINT_FIELDS
+    )
+    assert all(
+        not field.kw_only and field.default is MISSING
+        for field in point_fields[:len(legacy_parameters)]
+    )
+    assert all(
+        field.kw_only and field.default is None
+        for field in point_fields[len(legacy_parameters):]
+    )
+
+
+def test_plastic_point_preserves_exact_legacy_keyword_set():
+    legacy = dict(zip(_LEGACY_PLASTIC_POINT_FIELDS, _LEGACY_PLASTIC_POINT_VALUES))
+    point = PlasticPoint(**legacy)
+    assert tuple(getattr(point, name) for name in legacy) == _LEGACY_PLASTIC_POINT_VALUES
+    assert all(getattr(point, name) is None for name in _FINITE_DIAGNOSTIC_FIELDS)
+    assert point.axial_reachable is None
+    assert point.search_iterations is None
+
+
+def test_solver_points_carry_complete_finite_diagnostics():
+    section, concrete, steel = fundamentsbjaelke()
+    point = plastic_capacity_at_angle(section, concrete, steel, 0.0, 90.0)
+
+    assert all(
+        math.isfinite(float(getattr(point, name)))
+        for name in _FINITE_DIAGNOSTIC_FIELDS
+    )
+    assert type(point.axial_reachable) is bool
+    assert type(point.search_iterations) is int and point.search_iterations >= 0
+    assert _point_expected(point)["axial_requested"] == point.axial_requested
+
+
+def test_legacy_point_cannot_be_used_as_authoritative_finite_trace_evidence():
+    point = PlasticPoint(*_LEGACY_PLASTIC_POINT_VALUES)
+    with pytest.raises(TraceValidationError, match="complete finite solver diagnostics"):
+        _point_expected(point)
 
 
 def fundamentsbjaelke():

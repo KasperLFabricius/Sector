@@ -101,6 +101,58 @@ def _require_close(value: Any, expected: float, label: str) -> float:
     return actual
 
 
+_FINITE_POINT_DIAGNOSTICS = (
+    "axial_requested",
+    "axial_residual",
+    "axial_tolerance",
+    "compression_depth",
+    "neutral_axis_offset",
+    "strain_gradient_x",
+    "strain_gradient_y",
+    "strain_offset",
+    "search_lower_depth",
+    "search_upper_depth",
+    "search_lower_axial",
+    "search_upper_axial",
+    "concrete_force",
+    "concrete_mx",
+    "concrete_my",
+    "bar_force",
+    "bar_mx",
+    "bar_my",
+    "tendon_force",
+    "tendon_mx",
+    "tendon_my",
+    "compression_mx",
+    "compression_my",
+    "tension_force",
+    "tension_mx",
+    "tension_my",
+)
+
+
+def _require_complete_point_diagnostics(point: PlasticPoint) -> None:
+    for field_name in _FINITE_POINT_DIAGNOSTICS:
+        value = getattr(point, field_name)
+        if value is None or isinstance(value, bool):
+            break
+        try:
+            if not math.isfinite(float(value)):
+                break
+        except (TypeError, ValueError):
+            break
+    else:
+        if (
+            type(point.axial_reachable) is bool
+            and type(point.search_iterations) is int
+            and point.search_iterations >= 0
+        ):
+            return
+    raise TraceValidationError(
+        "authoritative plastic point is missing complete finite solver diagnostics"
+    )
+
+
 def _replay(
     inp: Mapping[str, Any],
     blocks: SectionTraceBlocks,
@@ -129,6 +181,7 @@ def _replay(
 def _point_expected(point: PlasticPoint) -> dict[str, float | int | bool]:
     """Translate one authoritative point to the retained output convention."""
 
+    _require_complete_point_diagnostics(point)
     return {
         "Mx": point.Mx,
         "My": point.My,

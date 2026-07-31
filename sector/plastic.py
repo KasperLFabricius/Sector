@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -100,35 +100,39 @@ class PlasticPoint:
     lever_arm: float          # internal lever arm L, m
     dx: float                 # X component of the lever arm, m
     dy: float                 # Y component of the lever arm, m
-    axial_requested: float    # requested solver axial action, compression positive, kN
-    axial_residual: float     # achieved minus requested axial action, kN
-    axial_tolerance: float    # absolute equilibrium tolerance, kN
-    axial_reachable: bool     # requested action lies inside the solver bracket
-    compression_depth: float  # extreme compression fibre to neutral axis, m
-    neutral_axis_offset: float  # s-coordinate of the neutral axis, m
-    strain_gradient_x: float  # d(eps)/dx, 1/m, compression positive
-    strain_gradient_y: float  # d(eps)/dy, 1/m, compression positive
-    strain_offset: float      # eps(x,y) constant term, compression positive
-    search_lower_depth: float
-    search_upper_depth: float
-    search_lower_axial: float
-    search_upper_axial: float
-    search_iterations: int
-    concrete_force: float
-    concrete_mx: float
-    concrete_my: float
-    bar_force: float
-    bar_mx: float
-    bar_my: float
-    tendon_force: float
-    tendon_mx: float
-    tendon_my: float
-    compression_mx: float
-    compression_my: float
-    tension_force: float
-    tension_mx: float
-    tension_my: float
     converged: bool
+
+    # CT-002 diagnostics are solver-owned, optional keyword-only tail state. ``None``
+    # deliberately means that a legacy public construction carries no authoritative
+    # trace evidence; finite trace validation rejects such incomplete state.
+    axial_requested: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    axial_residual: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    axial_tolerance: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    axial_reachable: bool | None = field(default=None, kw_only=True, repr=False, compare=False)
+    compression_depth: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    neutral_axis_offset: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    strain_gradient_x: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    strain_gradient_y: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    strain_offset: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    search_lower_depth: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    search_upper_depth: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    search_lower_axial: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    search_upper_axial: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    search_iterations: int | None = field(default=None, kw_only=True, repr=False, compare=False)
+    concrete_force: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    concrete_mx: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    concrete_my: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    bar_force: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    bar_mx: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    bar_my: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    tendon_force: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    tendon_mx: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    tendon_my: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    compression_mx: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    compression_my: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    tension_force: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    tension_mx: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    tension_my: float | None = field(default=None, kw_only=True, repr=False, compare=False)
 
 
 def _material_sequence(default, specific, count, label):
