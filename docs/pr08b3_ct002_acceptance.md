@@ -1,0 +1,22 @@
+# PR-08B.3 CT-002 acceptance freeze
+
+Base is `18150c6b5860e109c165d3e11c33f39938ad4cde` (tree
+`5aaa13e6c025a2687505c588efe23b02465dc389`). Sector remains 0.91. This
+unpublished slice contains only one solver-owned CT-002 plastic-capacity trace
+family and its exact registry declaration.
+
+| Gate | Frozen acceptance | Required proof |
+| --- | --- | --- |
+| Branch identity | Exactly one calculation uses the frozen CT-002 family/member, context, method, editions, retained cardinality, and branch axes. `finite-selected` has one exact selected index; a solver failure is exactly `failed-selected` or `failed-unselected`, the latter with `selected_member=none`. | Independent registry audits exact calculation/member IDs, axes, source contracts, allowed result state, step order, and dependency graph without reading the candidate calculation. |
+| Selection integrity | Finite `util_gov` is a required non-Boolean in-range integer and is never replaced by an envelope maximum or another member. Retained demand, resistance, utilisation, and index must match the existing authoritative radial selector for the exact arrays and applied ray. | Missing, Boolean, non-integer, out-of-range, alternate-member, coherent resistance/utilisation tamper, and stale selection all fail closed. |
+| Genuine solver failure | Branch to failure from retained convergence before requiring a selected member. A no-selection run is valid only when the retained envelope genuinely did not converge and the authoritative selector also has no index/resistance. Both failed selection modes produce an explicit `failed` result with available solver-owned array, resultant, axial-equilibrium, residual, tolerance, and convergence evidence. | Unreachable axial action yields `failed-unselected`; a retained selected member can yield `failed-selected`; corrupt selection evidence remains an exception. Failed branches contain no resistance, utilisation, or engineering verdict steps. |
+| Retained arrays | `points`, `mx`, and `my` are non-empty, equally sized, finite, angle-unique, and aligned member by member. Envelope convergence equals the conjunction of retained member convergence. | Missing, duplicate, misaligned, non-finite, wrong-member, masking, or stale array evidence fails closed. |
+| Finite solver trace | The exact selected point binds requested/achieved axial action, residual/tolerance/convergence, curvature and neutral-axis values, concrete/bar/tendon force and moment resultants, compression resultant, lever arm, radial demand/resistance/utilisation, and a genuine demand-versus-resistance verdict. | Independent numerical reconstruction checks equilibrium, resultants, geometry, selection, utilisation, and verdict without calling the production builder. |
+| Dependency closure | Every used geometry coordinate/area and action reaches its geometric/action intermediate; every concrete, bar, and tendon law value uses the merged canonical `ROLE_METHOD_VALUE` (`method_value`) provenance and reaches its material resultant; those intermediates reach the appropriate branch final. Input leaves use `ROLE_USER_INPUT` (`user_input`). | A control proves full closure, then one mutation per geometry, action, concrete, bar, and tendon block disconnects a used dependency and must fail the exact registry audit. No guessed role/provenance strings are permitted. |
+| Tamper and freshness | Content hashes, context, method, axes, source kinds/methods/editions, cardinality, selected member, step order, dependencies, retained resultants, residuals, convergence, and final state are fail-closed. | Hostile mutations cover content, edition, method, axes, graph, residual, convergence, stale identity, wrong member, omitted dependency, and an extra trace that cannot mask a missing CT-002 calculation. |
+| Scope | Reuse shared geometry/action/material/provenance/context contracts and the existing radial selector; do not add a second mechanics engine. | Diff contains no CT-003+, elastic/cracking, shear/torsion/SLS/fatigue/bridge, UI/report/manual/publication, persistence/schema/package/workflow, or version work. |
+
+The preferred shape is five to eight readable files. Approximately 1,500 net
+lines is an architecture signal, not a formatting cap; explicit contracts and
+tests must not be compacted or obscured to meet it. Only focused numerical,
+contract, adversarial, compile/import, ASCII, base, and scope guards are run.
