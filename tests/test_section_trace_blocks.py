@@ -60,8 +60,9 @@ def test_blocks_are_immutable_exact_standard_inputs(block_input):
     assert all(item.provenance.source.edition == codes.EC2_2005.label for item in blocks.bars)
     with pytest.raises(dataclasses.FrozenInstanceError):
         blocks.plastic_actions.values = ()
-    with pytest.raises(ValueError, match="actions"):
-        section_trace_blocks({**block_input, "P_pl": True})
+    for malformed in (True, "10"):
+        with pytest.raises(ValueError, match="actions"):
+            section_trace_blocks({**block_input, "P_pl": malformed})
 
 
 def test_explicit_assignments_require_exact_catalog_vectors(block_input):
@@ -89,6 +90,13 @@ def test_explicit_assignments_require_exact_catalog_vectors(block_input):
         section_trace_blocks({**assigned, "bar_materials": [custom, standard]})
     with pytest.raises(ValueError, match="aligned catalog provenance"):
         section_trace_blocks({**block_input, "bar_materials": [standard, custom]})
+    missing_ids = {
+        **assigned,
+        "bar_elements": [{"id": "B1"}, {"id": "B2", "material_id": "M2"}],
+        "capacity_steel_material_id": "M1",
+    }
+    with pytest.raises(ValueError, match="aligned catalog provenance"):
+        section_trace_blocks(missing_ids)
 
 
 def test_edited_named_presets_are_project_laws_without_citations(block_input):
@@ -111,3 +119,36 @@ def test_edited_named_presets_are_project_laws_without_citations(block_input):
     blocks = section_trace_blocks(edited)
     assert blocks.plastic_method_id == "user-defined-material-section-solve"
     assert all(item.provenance.source.citation is None for item in (blocks.concrete, *blocks.bars))
+
+
+def test_builtin_tendon_catalog_ignores_inert_seed_fields():
+    section = Section.from_polygon(
+        [(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        [],
+        tendons_xy_area_mm2=[(0.15, 0.08, 400.0)],
+    )
+    values = material_presets.PRESTRESS_PRESETS["Curve 1 (built-in)"]
+    tendon = material_presets.build_prestress(
+        values["curve"], **{key: value for key, value in values.items() if key != "curve"}
+    )
+    item = _catalog_item("P1", "Curve 1 (built-in)", tendon)
+    item.update({"fytk": 1600.0, "futk": 1860.0, "eut": 35.0, "k": 1.0})
+    blocks = section_trace_blocks(
+        {
+            "section": section,
+            "concrete": codes.EC2_2005.concrete(35.0),
+            "steel": codes.EC2_2005.steel(500.0),
+            "prestress": tendon,
+            "concrete_preset": codes.EC2_2005.label,
+            "mild_preset": codes.EC2_2005.label,
+            "prestress_preset": "Curve 1 (built-in)",
+            "tendon_materials": [tendon],
+            "tendon_elements": [{"id": "T1", "material_id": "P1"}],
+            "prestress_material_catalog": {"items": [item]},
+            "P_pl": 0.0,
+            "Mx_pl": 0.0,
+            "My_pl": 0.0,
+        }
+    )
+    assert len(blocks.tendons) == 1
+    assert dict(blocks.tendons[0].values)["curve"] == 1.0

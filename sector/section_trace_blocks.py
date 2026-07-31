@@ -124,24 +124,41 @@ def _law_values(law: Any) -> tuple[tuple[str, float], ...]:
             raise ValueError(f"{field.name} must be a finite non-Boolean number")
         values.append((field.name, float(raw)))
     return tuple(values)
-def _catalog_matches(law: Any, item: Mapping[str, Any]) -> bool:
-    for name, expected in _law_values(law):
+def _catalog_law_values(kind: str, item: Mapping[str, Any]) -> tuple[tuple[str, float], ...] | None:
+    curve = item.get("curve")
+    if type(curve) is not int:
+        return None
+    fields_by_curve = (
+        material_presets.MILD_FIELDS_BY_CURVE
+        if kind == "bar"
+        else material_presets.PRESTRESS_FIELDS_BY_CURVE
+    )
+    names = fields_by_curve.get(curve)
+    if names is None:
+        return None
+    values = {}
+    for name in names:
         raw = item.get(name)
-        if name == "active_in_compression":
-            if type(raw) is not bool:
-                return False
-            actual = 1.0 if raw else 0.0
-        elif type(raw) not in {int, float} or type(raw) is bool or not math.isfinite(float(raw)):
-            return False
-        else:
-            actual = float(raw)
-            if name in {"IS", "eut", "ey0t", "ey0c"}:
-                actual /= 1000.0
-            elif name == "Es":
-                actual *= 1000.0
-        if not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-12):
-            return False
-    return True
+        if type(raw) not in {int, float} or type(raw) is bool or not math.isfinite(float(raw)):
+            return None
+        values[name] = float(raw)
+    try:
+        law = (
+            material_presets.build_mild(
+                curve,
+                active_in_compression=item.get("active_in_compression"),
+                **values,
+            )
+            if kind == "bar" and type(item.get("active_in_compression")) is bool
+            else material_presets.build_prestress(curve, **values)
+            if kind == "tendon"
+            else None
+        )
+    except (TypeError, ValueError):
+        return None
+    return _law_values(law) if law is not None else None
+def _catalog_matches(kind: str, law: Any, item: Mapping[str, Any]) -> bool:
+    return _catalog_law_values(kind, item) == _law_values(law)
 def _preset_law_values(kind: str, preset: str) -> tuple[tuple[str, float], ...] | None:
     available = (
         material_presets.MILD_PRESETS
@@ -169,7 +186,13 @@ def _standard_law_matches(kind: str, preset: str, law: Any) -> bool:
         and code is not None
         and _law_values(code.steel(law.fytk)) == target
     )
-def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str, str, Mapping[str, Any] | None]:
+def _catalog_preset(
+    inp: Mapping[str, Any],
+    kind: str,
+    index: int,
+    *,
+    explicit: bool,
+) -> tuple[str, str, Mapping[str, Any] | None]:
     element_key = "bar_elements" if kind == "bar" else "tendon_elements"
     catalog_key = "mild_material_catalog" if kind == "bar" else "prestress_material_catalog"
     elements = tuple(inp.get(element_key) or ())
@@ -178,9 +201,9 @@ def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str,
     material_id = str(element.get("material_id") or "")
     catalog = inp.get(catalog_key)
     items = catalog.get("items", ()) if isinstance(catalog, Mapping) else ()
-    selected_id = material_id or (
-        str(inp.get("capacity_steel_material_id") or "") if kind == "bar" else ""
-    )
+    selected_id = material_id
+    if not selected_id and not explicit and kind == "bar":
+        selected_id = str(inp.get("capacity_steel_material_id") or "")
     for item in items:
         if isinstance(item, Mapping) and str(item.get("id") or "") == selected_id:
             return element_id, str(item.get("preset") or ""), item
@@ -199,10 +222,12 @@ def _materials(
         raise ValueError(f"need {count} aligned {kind} material laws")
     blocks = []
     for index, law in enumerate(laws):
-        element_id, preset, catalog_item = _catalog_preset(inp, kind, index)
+        element_id, preset, catalog_item = _catalog_preset(
+            inp, kind, index, explicit=specific is not None
+        )
         if specific is not None and catalog_item is None:
             raise ValueError(f"assigned {kind} laws need aligned catalog provenance")
-        if catalog_item is not None and not _catalog_matches(law, catalog_item):
+        if catalog_item is not None and not _catalog_matches(kind, law, catalog_item):
             raise ValueError(f"{kind} law does not match its catalog provenance")
         if _code(preset) is not None and not _standard_law_matches(kind, preset, law):
             preset = "Custom / imported"
@@ -220,11 +245,17 @@ def _materials(
     return tuple(blocks)
 def section_trace_blocks(inp: Mapping[str, Any]) -> SectionTraceBlocks:
     geometry = GeometryBlock.from_section(inp["section"])
-    action_values = tuple(
-        (key, float(inp.get(key, 0.0))) for key in ("P_pl", "Mx_pl", "My_pl")
+    raw_actions = tuple(
+        (key, inp.get(key, 0.0)) for key in ("P_pl", "Mx_pl", "My_pl")
     )
-    if any(type(inp.get(key, 0.0)) is bool or not math.isfinite(value) for key, value in action_values):
+    if any(
+        type(value) not in {int, float}
+        or type(value) is bool
+        or not math.isfinite(float(value))
+        for _, value in raw_actions
+    ):
         raise ValueError("section actions must be finite non-Boolean numbers")
+    action_values = tuple((key, float(value)) for key, value in raw_actions)
     plastic_actions = ActionBlock(action_values)
     concrete = inp.get("concrete")
     if concrete is None:
