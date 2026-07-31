@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from . import combined
 from .calculation_trace import (
     RESULT_FAILED,
     RESULT_FINITE,
@@ -305,6 +306,33 @@ class _Steps:
             warnings=warnings,
             assumptions=assumptions,
         )
+
+
+class _ContractSteps:
+    """Independent frozen declaration of exact step order and dependencies."""
+
+    def __init__(self) -> None:
+        self.items: list[tuple[str, tuple[str, ...]]] = []
+        self.ids: set[str] = set()
+
+    def add(self, step_id: str, *dependencies: str) -> str:
+        if step_id in self.ids:
+            raise TraceValidationError(
+                f"duplicate registry step contract ID {step_id}"
+            )
+        missing = tuple(
+            dependency
+            for dependency in dependencies
+            if dependency not in self.ids
+        )
+        if missing:
+            raise TraceValidationError(
+                f"{step_id} registry contract has undeclared dependencies "
+                f"{missing!r}"
+            )
+        self.items.append((step_id, tuple(dependencies)))
+        self.ids.add(step_id)
+        return step_id
 
 
 def _finite(value: Any, label: str) -> float:
@@ -674,6 +702,40 @@ def _evidence(
         utilisation,
         demand / resistance,
         "plastic retained demand/resistance utilisation",
+    )
+
+    # Delegate semantic selection validation to the one authoritative radial
+    # selector. The trace publishes only the retained result above; no radial
+    # formula or substitute capacity calculation is implemented here.
+    authoritative = combined.radial_util_result(
+        mx,
+        my,
+        actions["Mx_pl"],
+        actions["My_pl"],
+    )
+    if authoritative.governing_index != selected:
+        raise TraceValidationError(
+            "plastic retained util_gov contradicts the authoritative "
+            "envelope selection"
+        )
+    if authoritative.resistance is None:
+        raise TraceValidationError(
+            "plastic retained selection has no authoritative ray resistance"
+        )
+    _require_close(
+        demand,
+        authoritative.demand,
+        "plastic retained authoritative moment demand",
+    )
+    _require_close(
+        resistance,
+        authoritative.resistance,
+        "plastic retained authoritative governing resistance",
+    )
+    _require_close(
+        utilisation,
+        authoritative.utilisation,
+        "plastic retained authoritative utilisation",
     )
 
     return _Evidence(
@@ -1333,23 +1395,346 @@ def _source_contract(source: TraceSource) -> TraceSourceContract:
     )
 
 
-def _registry(calculation: TraceCalculation) -> TraceRegistryContract:
+def _contract_material_vector(
+    steps: _ContractSteps,
+    block: MaterialBlock,
+    prefix: str,
+) -> str:
+    leaves = tuple(
+        steps.add(f"{prefix}-{name.lower().replace('_', '-')}")
+        for name, _ in block.values
+    )
+    return steps.add(f"{prefix}-vector", *leaves)
+
+
+def _expected_step_contract(
+    evidence: _Evidence,
+) -> tuple[tuple[str, ...], tuple[tuple[str, tuple[str, ...]], ...]]:
+    """Declare CT-002 order/dependencies without inspecting the calculation."""
+
+    blocks = evidence.blocks
+    steps = _ContractSteps()
+    actions = {
+        "P_pl": steps.add("action-p-ed"),
+        "Mx_pl": steps.add("action-mx-ed"),
+        "My_pl": steps.add("action-my-ed"),
+    }
+
+    geometry_leaves: list[str] = []
+    for ring_index, ring in enumerate(blocks.geometry.rings, start=1):
+        for point_index, _ in enumerate(ring, start=1):
+            stem = f"geometry-ring-{ring_index:03d}-point-{point_index:03d}"
+            geometry_leaves.extend(
+                (
+                    steps.add(f"{stem}-x"),
+                    steps.add(f"{stem}-y"),
+                )
+            )
+    for kind, elements in (
+        ("bar", blocks.geometry.bars),
+        ("tendon", blocks.geometry.tendons),
+    ):
+        for index, _ in enumerate(elements, start=1):
+            stem = f"geometry-{kind}-{index:03d}"
+            geometry_leaves.extend(
+                (
+                    steps.add(f"{stem}-x"),
+                    steps.add(f"{stem}-y"),
+                    steps.add(f"{stem}-area"),
+                )
+            )
+    geometry = steps.add("section-geometry-vector", *geometry_leaves)
+
+    concrete_law = _contract_material_vector(
+        steps,
+        blocks.concrete,
+        "concrete-law",
+    )
+    bar_laws = tuple(
+        _contract_material_vector(
+            steps,
+            block,
+            f"bar-{index:03d}-law",
+        )
+        for index, block in enumerate(blocks.bars, start=1)
+    )
+    tendon_laws = tuple(
+        _contract_material_vector(
+            steps,
+            block,
+            f"tendon-{index:03d}-law",
+        )
+        for index, block in enumerate(blocks.tendons, start=1)
+    )
+    law_closure = (concrete_law, *bar_laws, *tendon_laws)
+    solver_closure = (actions["P_pl"], geometry, *law_closure)
+
+    member_steps: list[str] = []
+    member_records: list[_MemberSteps] = []
+    for index in range(len(evidence.points)):
+        stem = f"retained-member-{index:03d}"
+        angle = steps.add(f"{stem}-angle")
+        mx = steps.add(f"{stem}-mx", angle, *solver_closure)
+        my = steps.add(f"{stem}-my", angle, *solver_closure)
+        converged = steps.add(f"{stem}-converged", mx, my)
+        member_steps.extend((angle, mx, my, converged))
+        member_records.append(
+            _MemberSteps(
+                angle=angle,
+                mx=mx,
+                my=my,
+                converged=converged,
+            )
+        )
+
+    arrays = steps.add("retained-capacity-arrays", *member_steps)
+    cardinality = steps.add("retained-cardinality", arrays)
+    selected_index = steps.add(
+        "selected-member-index",
+        arrays,
+        cardinality,
+    )
+    selected_member = member_records[evidence.selected_index]
+
+    curvature = steps.add(
+        "selected-curvature",
+        selected_index,
+        selected_member.angle,
+        geometry,
+        *law_closure,
+    )
+    compression_depth = steps.add(
+        "selected-compression-depth",
+        curvature,
+        geometry,
+    )
+    neutral_axis_depth = steps.add(
+        "selected-neutral-axis-depth",
+        compression_depth,
+        selected_member.angle,
+        geometry,
+    )
+    na_x = steps.add(
+        "selected-na-x",
+        neutral_axis_depth,
+        selected_member.angle,
+    )
+    na_y = steps.add(
+        "selected-na-y",
+        neutral_axis_depth,
+        selected_member.angle,
+    )
+    state_geometry = (
+        curvature,
+        compression_depth,
+        neutral_axis_depth,
+        na_x,
+        na_y,
+        geometry,
+    )
+    strain_steps = tuple(
+        steps.add(
+            step_id,
+            *state_geometry,
+            *law_closure,
+        )
+        for step_id in (
+            "selected-eps-c",
+            "selected-eps-s",
+            "selected-eps-s-comp",
+            "selected-eps-cable",
+        )
+    )
+
+    material_resultants: dict[str, _ResultantSteps] = {}
+    for kind, laws in (
+        ("concrete", (concrete_law,)),
+        ("steel", bar_laws),
+        ("tendon", tendon_laws),
+    ):
+        dependencies = (
+            actions["P_pl"],
+            *state_geometry,
+            *(laws or law_closure),
+        )
+        material_resultants[kind] = _ResultantSteps(
+            force=steps.add(
+                f"{kind}-force-resultant",
+                *dependencies,
+            ),
+            mx=steps.add(
+                f"{kind}-mx-resultant",
+                *dependencies,
+            ),
+            my=steps.add(
+                f"{kind}-my-resultant",
+                *dependencies,
+            ),
+        )
+
+    force_ids = tuple(item.force for item in material_resultants.values())
+    mx_ids = tuple(item.mx for item in material_resultants.values())
+    my_ids = tuple(item.my for item in material_resultants.values())
+    axial = steps.add("selected-solver-axial", *force_ids)
+    achieved_action = steps.add(
+        "selected-achieved-axial-action",
+        axial,
+        actions["P_pl"],
+    )
+    residual = steps.add(
+        "selected-axial-residual",
+        axial,
+        actions["P_pl"],
+    )
+    tolerance = steps.add(
+        "selected-axial-tolerance",
+        actions["P_pl"],
+    )
+    equilibrium = steps.add(
+        "selected-equilibrium-state",
+        residual,
+        tolerance,
+        selected_member.converged,
+    )
+    envelope = steps.add(
+        "envelope-convergence-state",
+        *(member.converged for member in member_records),
+    )
+
+    integrated_mx = steps.add("selected-integrated-mx", *mx_ids)
+    integrated_my = steps.add("selected-integrated-my", *my_ids)
+    moment_consistency = steps.add(
+        "selected-moment-array-consistency",
+        integrated_mx,
+        integrated_my,
+        selected_member.mx,
+        selected_member.my,
+    )
+
+    compression_force = steps.add(
+        "selected-compression-resultant",
+        equilibrium,
+        *force_ids,
+    )
+    compression_mx = steps.add(
+        "selected-compression-mx",
+        compression_force,
+        integrated_mx,
+    )
+    compression_my = steps.add(
+        "selected-compression-my",
+        compression_force,
+        integrated_my,
+    )
+    tension_force = steps.add(
+        "selected-tension-resultant",
+        axial,
+        compression_force,
+    )
+    tension_mx = steps.add(
+        "selected-tension-mx",
+        tension_force,
+        integrated_mx,
+        compression_mx,
+    )
+    tension_my = steps.add(
+        "selected-tension-my",
+        tension_force,
+        integrated_my,
+        compression_my,
+    )
+    lever_dx = steps.add(
+        "selected-lever-dx",
+        compression_force,
+        compression_my,
+        tension_force,
+        tension_my,
+    )
+    lever_dy = steps.add(
+        "selected-lever-dy",
+        compression_force,
+        compression_mx,
+        tension_force,
+        tension_mx,
+    )
+    lever = steps.add("selected-lever-arm", lever_dx, lever_dy)
+
+    demand = steps.add(
+        "requested-moment-resultant",
+        actions["Mx_pl"],
+        actions["My_pl"],
+    )
+    resistance = steps.add(
+        "governing-ray-resistance",
+        demand,
+        arrays,
+        selected_index,
+    )
+    utilisation = steps.add(
+        "retained-utilisation",
+        demand,
+        resistance,
+        arrays,
+        selected_index,
+        moment_consistency,
+    )
+    steps.add(
+        "selected-plastic-capacity-result",
+        achieved_action,
+        residual,
+        tolerance,
+        equilibrium,
+        envelope,
+        integrated_mx,
+        integrated_my,
+        compression_force,
+        lever,
+        *strain_steps,
+        demand,
+        resistance,
+        utilisation,
+    )
+
+    step_ids = tuple(step_id for step_id, _ in steps.items)
+    return step_ids, tuple(steps.items)
+
+
+def _expected_registry(
+    evidence: _Evidence,
+    *,
+    context: Mapping[str, Any],
+) -> TraceRegistryContract:
+    blocks = evidence.blocks
+    step_ids, step_dependencies = _expected_step_contract(evidence)
+    material_sources = (
+        blocks.concrete.provenance.source,
+        *(block.provenance.source for block in blocks.bars),
+        *(block.provenance.source for block in blocks.tendons),
+    )
+    sources = frozenset(
+        _source_contract(source)
+        for source in (
+            _INPUT_SOURCE,
+            _SOLVER_SOURCE,
+            _SELECTION_SOURCE,
+            *material_sources,
+        )
+    )
+    axes = context_axes(
+        context,
+        retained_cardinality=str(len(evidence.points)),
+        selected_member=str(evidence.selected_index),
+    )
     member = TraceMemberContract(
         member_id="selected-plastic-capacity",
-        calculation_id=calculation.calculation_id,
-        coverage_id=calculation.coverage_id,
-        method_id=calculation.method_id,
-        axes=calculation.axes,
-        sources=frozenset(_source_contract(step.source) for step in calculation.steps),
+        calculation_id=f"plastic.{context_id(context)}.selected-capacity",
+        coverage_id="ct-002",
+        method_id=blocks.plastic_method_id,
+        axes=axes,
+        sources=sources,
         result_states=frozenset({RESULT_FINITE, RESULT_FAILED}),
-        step_ids=tuple(step.step_id for step in calculation.steps),
-        step_dependencies=tuple(
-            (
-                step.step_id,
-                tuple(item.step_id for item in step.dependencies),
-            )
-            for step in calculation.steps
-        ),
+        step_ids=step_ids,
+        step_dependencies=step_dependencies,
     )
     return TraceRegistryContract(
         registry_id="sector-ct-002-selected-plastic-capacity-v1",
@@ -1379,7 +1764,7 @@ def build_plastic_capacity_trace_family(
         raise
     except (KeyError, TypeError, ValueError) as exc:
         raise TraceValidationError(f"CT-002 trace construction: {exc}") from exc
-    registry = _registry(calculation)
+    registry = _expected_registry(evidence, context=context)
     probe = create_bundle(
         input_sha256=_PROBE_SHA256,
         result_sha256=_PROBE_SHA256,

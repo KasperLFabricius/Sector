@@ -6,7 +6,12 @@ import math
 
 import pytest
 
-from sector import codes, combined, material_presets
+from sector import (
+    codes,
+    combined,
+    material_presets,
+    plastic_capacity_trace,
+)
 from sector.calculation_trace import (
     RESULT_FAILED,
     RESULT_FINITE,
@@ -305,18 +310,50 @@ def test_util_gov_is_exact_and_never_substituted(representative_case, selection)
         build_plastic_capacity_trace_family(inp, hostile, context={})
 
 
-def test_valid_alternate_member_cannot_mask_registry_identity(representative_case):
+def test_valid_alternate_member_fails_authoritative_selection(
+    representative_case,
+):
     inp, out, _ = representative_case
-    accepted = build_plastic_capacity_trace_family(inp, out, context={"case": "A"})
     hostile = copy.deepcopy(out)
     hostile["plastic"]["util_gov"] = (out["plastic"]["util_gov"] + 1) % 8
-    candidate = build_plastic_capacity_trace_family(
-        inp,
-        hostile,
-        context={"case": "A"},
+    with pytest.raises(TraceValidationError, match="authoritative envelope"):
+        build_plastic_capacity_trace_family(
+            inp,
+            hostile,
+            context={"case": "A"},
+        )
+
+
+def test_coherently_tampered_radial_result_fails_authoritative_selection(
+    representative_case,
+):
+    inp, out, _ = representative_case
+    hostile = copy.deepcopy(out)
+    hostile["plastic"]["resistance"] *= 2.0
+    hostile["plastic"]["util"] = (
+        hostile["plastic"]["demand"] / hostile["plastic"]["resistance"]
     )
-    with pytest.raises(TraceValidationError, match="identity mismatch"):
-        audit_trace_registry(_bundle(candidate), accepted.registry)
+    hostile["plastic"]["util_gov"] = (
+        hostile["plastic"]["util_gov"] + 1
+    ) % len(hostile["plastic"]["points"])
+    with pytest.raises(TraceValidationError, match="authoritative envelope"):
+        build_plastic_capacity_trace_family(inp, hostile, context={})
+
+
+def test_coherently_tampered_resistance_fails_authoritative_value(
+    representative_case,
+):
+    inp, out, _ = representative_case
+    hostile = copy.deepcopy(out)
+    hostile["plastic"]["resistance"] *= 2.0
+    hostile["plastic"]["util"] = (
+        hostile["plastic"]["demand"] / hostile["plastic"]["resistance"]
+    )
+    with pytest.raises(
+        TraceValidationError,
+        match="authoritative governing resistance",
+    ):
+        build_plastic_capacity_trace_family(inp, hostile, context={})
 
 
 def test_duplicate_member_identity_fails_closed(representative_case):
@@ -413,6 +450,80 @@ def test_consistent_nonconvergence_is_an_explicit_failure(representative_case):
         {RESULT_FINITE, RESULT_FAILED}
     )
     assert audit_trace_registry(_bundle(family), family.registry)
+
+
+@pytest.mark.parametrize(
+    ("drift", "message"),
+    [
+        ("method", "identity mismatch"),
+        ("axes", "identity mismatch"),
+        ("source-edition", "identity mismatch"),
+        ("step-order", "step IDs"),
+        ("dependency", "dependency graph"),
+    ],
+)
+def test_builder_self_audits_against_independent_registry(
+    representative_case,
+    monkeypatch,
+    drift,
+    message,
+):
+    inp, out, _ = representative_case
+    original = plastic_capacity_trace._calculation
+
+    def drifting_calculation(evidence, *, context):
+        calculation = original(evidence, context=context)
+        if drift == "method":
+            return dataclasses.replace(
+                calculation,
+                method_id="project-drift",
+            )
+        if drift == "axes":
+            return dataclasses.replace(
+                calculation,
+                axes=calculation.axes[:-1],
+            )
+
+        changed = list(calculation.steps)
+        if drift == "source-edition":
+            standard_index = next(
+                index
+                for index, step in enumerate(changed)
+                if step.source.kind == "standard"
+            )
+            step = changed[standard_index]
+            changed[standard_index] = dataclasses.replace(
+                step,
+                source=dataclasses.replace(
+                    step.source,
+                    edition="wrong-edition",
+                ),
+            )
+        elif drift == "step-order":
+            changed[0], changed[1] = changed[1], changed[0]
+        else:
+            changed = [
+                dataclasses.replace(
+                    step,
+                    dependencies=tuple(
+                        item
+                        for item in step.dependencies
+                        if item.step_id != "section-geometry-vector"
+                    ),
+                )
+                if step.step_id == "retained-member-000-mx"
+                else step
+                for step in changed
+            ]
+        return dataclasses.replace(calculation, steps=tuple(changed))
+
+    monkeypatch.setattr(
+        plastic_capacity_trace,
+        "_calculation",
+        drifting_calculation,
+    )
+    with pytest.raises(TraceValidationError, match=message):
+        build_plastic_capacity_trace_family(inp, out, context={})
 
 
 @pytest.mark.parametrize(
