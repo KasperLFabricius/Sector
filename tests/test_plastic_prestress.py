@@ -90,6 +90,81 @@ def test_solve_plastic_passes_prestress_through_sweep():
     assert pts[1].Mx == pytest.approx(2027.5, abs=1.5)
 
 
+def _axial_endpoints(section, concrete, steel, prestress, angle=90.0):
+    """Read the finite endpoint equilibria returned by deliberate range probes."""
+    tension = plastic_capacity_at_angle(
+        section, concrete, steel, -1.0e12, angle, prestress=prestress
+    ).axial
+    compression = plastic_capacity_at_angle(
+        section, concrete, steel, 1.0e12, angle, prestress=prestress
+    ).axial
+    return tension, compression
+
+
+@pytest.mark.parametrize("endpoint_index,direction", [(0, -1.0), (1, 1.0)],
+                         ids=["below-tension", "above-compression"])
+def test_just_outside_axial_range_is_not_converged_within_residual_tolerance(
+        endpoint_index, direction):
+    section, concrete, steel, prestress = t_beam()
+    endpoints = _axial_endpoints(section, concrete, steel, prestress)
+    endpoint = endpoints[endpoint_index]
+    residual_tolerance = 1.0e-6 * max(1.0, abs(endpoint))
+    requested = endpoint + direction * 0.25 * residual_tolerance
+
+    point = plastic_capacity_at_angle(
+        section, concrete, steel, requested, 90.0, prestress=prestress
+    )
+
+    # This is the dangerous case: the finite clamped response passes the historical
+    # residual-only criterion, but the requested axial action is not reachable.
+    assert math.isfinite(point.axial)
+    assert abs(point.axial - requested) < 1.0e-6 * max(1.0, abs(requested))
+    assert point.converged is False
+
+
+def test_exact_axial_endpoints_and_interior_remain_converged():
+    section, concrete, steel, prestress = t_beam()
+    tension, compression = _axial_endpoints(section, concrete, steel, prestress)
+
+    for requested in (tension, 1976.0, compression):
+        point = plastic_capacity_at_angle(
+            section, concrete, steel, requested, 90.0, prestress=prestress
+        )
+        assert point.converged is True
+        assert point.axial == pytest.approx(
+            requested, abs=1.0e-6 * max(1.0, abs(requested))
+        )
+
+
+@pytest.mark.parametrize("endpoint_index,direction", [(0, -1.0), (1, 1.0)],
+                         ids=["tension-sweep", "compression-sweep"])
+def test_unreachable_axial_sweep_has_no_false_finite_convergence(
+        endpoint_index, direction):
+    section, concrete, steel, prestress = t_beam()
+    endpoint = _axial_endpoints(
+        section, concrete, steel, prestress
+    )[endpoint_index]
+    residual_tolerance = 1.0e-6 * max(1.0, abs(endpoint))
+    requested = endpoint + direction * 0.25 * residual_tolerance
+
+    points = solve_plastic(
+        section, concrete, steel, requested, 0.0, 270.0, 90.0,
+        prestress=prestress,
+    )
+
+    assert all(
+        math.isfinite(value)
+        for point in points
+        for value in (point.axial, point.Mx, point.My)
+    )
+    historical_tolerance = 1.0e-6 * max(1.0, abs(requested))
+    assert any(
+        abs(point.axial - requested) < historical_tolerance
+        for point in points
+    )
+    assert all(point.converged is False for point in points)
+
+
 def test_tendons_omitted_when_no_prestress_material():
     # Without a prestress material the tendons are simply not counted.
     section, concrete, steel, _ = t_beam()
