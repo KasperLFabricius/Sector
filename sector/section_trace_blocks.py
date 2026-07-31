@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .calculation_trace import TraceAxis, trace_identity_token
 from .section import Section
 
 
@@ -44,32 +43,6 @@ class ActionBlock:
 class SectionTraceBlocks:
     geometry: GeometryBlock
     plastic_actions: ActionBlock
-
-
-def _context_items(context: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
-    if any(type(key) is not str for key in context):
-        raise TypeError("context keys must be text")
-    return tuple(sorted((key, str(value)) for key, value in context.items()))
-
-
-def context_id(context: Mapping[str, Any]) -> str:
-    if not context:
-        return "section"
-    return ".".join(
-        f"{trace_identity_token(key)}-{trace_identity_token(value)}"
-        for key, value in _context_items(context)
-    )
-
-
-def context_axes(context: Mapping[str, Any], **extra: str) -> tuple[TraceAxis, ...]:
-    values = dict(_context_items(context))
-    if set(values).intersection(extra):
-        raise ValueError("extra axes must not replace context keys")
-    values.update(extra)
-    return tuple(
-        TraceAxis(trace_identity_token(key), value)
-        for key, value in sorted(values.items())
-    )
 
 
 def section_trace_blocks(inp: Mapping[str, Any]) -> SectionTraceBlocks:

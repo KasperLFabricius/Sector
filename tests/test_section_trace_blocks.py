@@ -5,7 +5,7 @@ import dataclasses
 import pytest
 
 from sector.section import Section
-from sector.section_trace_blocks import context_axes, context_id, section_trace_blocks
+from sector.section_trace_blocks import section_trace_blocks
 
 
 @pytest.fixture
@@ -41,15 +41,3 @@ def test_geometry_and_actions_are_exact_immutable_blocks(block_input):
 def test_actions_reject_non_numeric_boolean_and_nonfinite_values(block_input, malformed):
     with pytest.raises(ValueError, match="actions"):
         section_trace_blocks({**block_input, "P_pl": malformed})
-
-
-def test_context_identity_and_axes_are_exact_and_order_independent():
-    first = {"case": "A/B", "stage": 2}
-    second = {"stage": 2, "case": "A/B"}
-    assert context_id(first) == context_id(second)
-    assert context_axes(first, axis="x") == context_axes(second, axis="x")
-    assert context_axes(first, axis="x") != context_axes(first, axis="y")
-    assert context_id({"case/id": "A"}) != context_id({"case-id": "A"})
-    assert context_axes({"case/id": "A"}) != context_axes({"case-id": "A"})
-    with pytest.raises(ValueError, match="replace"):
-        context_axes({"axis": "x"}, axis="y")
