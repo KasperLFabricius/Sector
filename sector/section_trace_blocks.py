@@ -250,13 +250,16 @@ def _preset_law_values(
     kind: str,
     preset: str,
 ) -> tuple[tuple[str, float], ...] | None:
+    code = _code(preset)
+    if code is None:
+        return None
     available = (
         material_presets.MILD_PRESETS
         if kind == "bar"
         else material_presets.PRESTRESS_PRESETS
     )
-    values = available.get(preset)
-    if _code(preset) is None or values is None:
+    values = available.get(code.label)
+    if values is None:
         return None
     fields = {key: value for key, value in values.items() if key != "curve"}
     law = (

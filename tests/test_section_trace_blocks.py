@@ -269,6 +269,51 @@ def test_common_cross_edition_mixed_and_project_methods_are_exact(block_input):
     assert section_trace_blocks(common_2023).plastic_method_id == "ec2-2023"
 
 
+def test_standard_code_keys_resolve_to_canonical_bar_and_tendon_presets():
+    section = Section.from_polygon(
+        [(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+        [(0.06, 0.05, 500.0)],
+        tendons_xy_area_mm2=[(0.15, 0.08, 400.0)],
+    )
+    bar = _preset_steel(codes.EC2_2023.label)
+    tendon_values = material_presets.PRESTRESS_PRESETS[codes.EC2_2023.label]
+    tendon = material_presets.build_prestress(
+        tendon_values["curve"],
+        **{
+            key: value
+            for key, value in tendon_values.items()
+            if key != "curve"
+        },
+    )
+    blocks = section_trace_blocks(
+        {
+            "section": section,
+            "concrete": codes.EC2_2023.concrete(35.0),
+            "concrete_preset": codes.EC2_2023.key,
+            "bar_materials": [bar],
+            "bar_elements": [{"id": "B1", "material_id": "M1"}],
+            "mild_material_catalog": {
+                "items": [
+                    _catalog_item("M1", codes.EC2_2023.key, bar),
+                ]
+            },
+            "tendon_materials": [tendon],
+            "tendon_elements": [{"id": "T1", "material_id": "P1"}],
+            "prestress_material_catalog": {
+                "items": [
+                    _catalog_item("P1", codes.EC2_2023.key, tendon),
+                ]
+            },
+        }
+    )
+
+    assert blocks.plastic_method_id == "ec2-2023"
+    assert all(
+        item.provenance.source.edition == codes.EC2_2023.label
+        for item in (blocks.concrete, *blocks.bars, *blocks.tendons)
+    )
+
+
 def test_builtin_tendon_catalog_reconstructs_only_curve_specific_fields():
     section = Section.from_polygon(
         [(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
