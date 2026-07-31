@@ -40,6 +40,8 @@ class TraceMemberContract:
     axes: tuple[TraceAxis, ...]
     sources: frozenset[TraceSourceContract]
     result_states: frozenset[str]
+    step_ids: tuple[str, ...] = ()
+    step_dependencies: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +85,82 @@ def _source_contract(source: TraceSource) -> TraceSourceContract:
         method_id=source.method_id,
         edition=source.edition,
     )
+
+
+def _validate_step_contract(member: TraceMemberContract) -> None:
+    label = member.member_id
+    if (
+        type(member.step_ids) is not tuple
+        or type(member.step_dependencies) is not tuple
+    ):
+        raise TraceValidationError(
+            f"{label} step contracts must be immutable tuples"
+        )
+
+    step_ids: list[str] = []
+    for step_id in member.step_ids:
+        _require_id(step_id, f"{label} step ID")
+        if step_id in step_ids:
+            raise TraceValidationError(
+                f"{label} has duplicate step ID {step_id}"
+            )
+        step_ids.append(step_id)
+
+    dependency_rows: list[tuple[str, tuple[str, ...]]] = []
+    dependency_step_ids: set[str] = set()
+    for dependency in member.step_dependencies:
+        if type(dependency) is not tuple or len(dependency) != 2:
+            raise TraceValidationError(
+                f"{label} has malformed dependency contract"
+            )
+        step_id, dependency_ids = dependency
+        _require_id(step_id, f"{label} dependency step ID")
+        if step_id in dependency_step_ids:
+            raise TraceValidationError(
+                f"{label} has duplicate dependency step {step_id}"
+            )
+        dependency_step_ids.add(step_id)
+        if type(dependency_ids) is not tuple:
+            raise TraceValidationError(
+                f"{label} dependency IDs must be a tuple"
+            )
+
+        seen_dependencies: set[str] = set()
+        for dependency_id in dependency_ids:
+            _require_id(dependency_id, f"{label} dependency ID")
+            if dependency_id in seen_dependencies:
+                raise TraceValidationError(
+                    f"{label} step {step_id} has duplicate dependency "
+                    f"{dependency_id}"
+                )
+            seen_dependencies.add(dependency_id)
+        dependency_rows.append((step_id, dependency_ids))
+
+    if not dependency_rows:
+        return
+
+    row_order = tuple(step_id for step_id, _ in dependency_rows)
+    if step_ids and row_order != tuple(step_ids):
+        raise TraceValidationError(
+            f"{label} dependency map must match exact step order"
+        )
+
+    declared_order = tuple(step_ids) if step_ids else row_order
+    positions = {
+        step_id: position for position, step_id in enumerate(declared_order)
+    }
+    for step_id, dependency_ids in dependency_rows:
+        for dependency_id in dependency_ids:
+            if dependency_id not in positions:
+                raise TraceValidationError(
+                    f"{label} step {step_id} has missing dependency "
+                    f"{dependency_id}"
+                )
+            if positions[dependency_id] >= positions[step_id]:
+                raise TraceValidationError(
+                    f"{label} step {step_id} has forward dependency "
+                    f"{dependency_id}"
+                )
 
 
 def _validate_registry(registry: object) -> dict[str, tuple[TraceFamilyContract, TraceMemberContract]]:
@@ -158,6 +236,7 @@ def _validate_registry(registry: object) -> dict[str, tuple[TraceFamilyContract,
                 raise TraceValidationError(
                     f"{member.member_id} declares invalid result states"
                 )
+            _validate_step_contract(member)
             expected[member.calculation_id] = (family, member)
     return expected
 
@@ -211,6 +290,26 @@ def audit_trace_registry(
                 f"result state {final.result.state!r}, expected one of "
                 f"{sorted(member.result_states)!r}"
             )
+        actual_step_ids = tuple(step.step_id for step in calculation.steps)
+        if member.step_ids and actual_step_ids != member.step_ids:
+            mismatches.append(
+                f"step IDs {actual_step_ids!r}, expected {member.step_ids!r}"
+            )
+        if member.step_dependencies:
+            actual_dependencies = tuple(
+                (
+                    step.step_id,
+                    tuple(
+                        dependency.step_id
+                        for dependency in step.dependencies
+                    ),
+                )
+                for step in calculation.steps
+            )
+            if actual_dependencies != member.step_dependencies:
+                mismatches.append(
+                    "dependency graph differs from the selected contract"
+                )
         if mismatches:
             raise TraceValidationError(
                 f"{family.family_id}/{member.member_id} identity mismatch: "

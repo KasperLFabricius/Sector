@@ -177,3 +177,139 @@ def test_registry_requires_exact_members_and_explicit_result_state():
     registry = _with_member(registry, member)
     with pytest.raises(TraceValidationError, match="missing missing.member"):
         audit_trace_registry(_bundle(), registry)
+
+
+STEP_IDS = ("demand", "concrete", "steel", "tendon", "result")
+STEP_DEPENDENCIES = (
+    ("demand", ()),
+    ("concrete", ()),
+    ("steel", ()),
+    ("tendon", ()),
+    ("result", ("demand", "concrete", "steel", "tendon")),
+)
+
+
+def _step_registry(
+    *,
+    step_ids: tuple[str, ...] = (),
+    step_dependencies: tuple[tuple[str, tuple[str, ...]], ...] = (),
+) -> TraceRegistryContract:
+    registry = _registry(RESULT_FINITE)
+    member = dataclasses.replace(
+        registry.families[0].members[0],
+        step_ids=step_ids,
+        step_dependencies=step_dependencies,
+    )
+    return _with_member(registry, member)
+
+
+def test_step_order_and_dependency_contracts_are_independently_optional():
+    bundle = _bundle()
+
+    assert audit_trace_registry(bundle, _registry(RESULT_FINITE)) is bundle
+    assert (
+        audit_trace_registry(
+            bundle,
+            _step_registry(step_ids=STEP_IDS),
+        )
+        is bundle
+    )
+    assert (
+        audit_trace_registry(
+            bundle,
+            _step_registry(step_dependencies=STEP_DEPENDENCIES),
+        )
+        is bundle
+    )
+    assert (
+        audit_trace_registry(
+            bundle,
+            _step_registry(
+                step_ids=STEP_IDS,
+                step_dependencies=STEP_DEPENDENCIES,
+            ),
+        )
+        is bundle
+    )
+
+
+def test_step_contracts_reject_wrong_order_and_graph_drift():
+    wrong_order = ("demand", "steel", "concrete", "tendon", "result")
+    with pytest.raises(TraceValidationError, match="step IDs"):
+        audit_trace_registry(
+            _bundle(),
+            _step_registry(step_ids=wrong_order),
+        )
+
+    missing_edge = (
+        *STEP_DEPENDENCIES[:-1],
+        ("result", ("demand", "concrete", "steel")),
+    )
+    with pytest.raises(TraceValidationError, match="dependency graph"):
+        audit_trace_registry(
+            _bundle(),
+            _step_registry(step_dependencies=missing_edge),
+        )
+
+
+@pytest.mark.parametrize(
+    ("step_ids", "dependencies", "message"),
+    [
+        (
+            ("demand", "demand"),
+            (),
+            "duplicate step ID",
+        ),
+        (
+            (),
+            (("demand", ()), ("demand", ())),
+            "duplicate dependency step",
+        ),
+        (
+            (),
+            (
+                ("demand", ()),
+                ("result", ("missing",)),
+            ),
+            "missing dependency",
+        ),
+        (
+            STEP_IDS,
+            (
+                ("concrete", ()),
+                ("demand", ()),
+                *STEP_DEPENDENCIES[2:],
+            ),
+            "exact step order",
+        ),
+        (
+            (),
+            (
+                ("demand", ("result",)),
+                ("result", ()),
+            ),
+            "forward dependency",
+        ),
+        (
+            (),
+            (
+                ("demand", ()),
+                ("result", ("demand", "demand")),
+            ),
+            "duplicate dependency",
+        ),
+    ],
+)
+def test_malformed_step_contract_declarations_fail_closed(
+    step_ids,
+    dependencies,
+    message,
+):
+    with pytest.raises(TraceValidationError, match=message):
+        audit_trace_registry(
+            _bundle(),
+            _step_registry(
+                step_ids=step_ids,
+                step_dependencies=dependencies,
+            ),
+        )
