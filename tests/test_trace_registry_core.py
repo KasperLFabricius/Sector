@@ -29,6 +29,7 @@ from sector.trace_registry import (
     TraceMemberContract,
     TraceRegistryContract,
     TraceSourceContract,
+    TraceStepMetadataContract,
     audit_trace_registry,
 )
 
@@ -105,6 +106,28 @@ def _bundle(state: str = RESULT_FINITE):
         input_sha256="a" * 64,
         result_sha256="b" * 64,
         calculations=(calculation,),
+    )
+
+
+def _reseal_metadata(
+    replacements: dict[str, tuple[str, TraceSource]],
+):
+    bundle = _bundle()
+    calculation = bundle.calculations[0]
+    steps = tuple(
+        dataclasses.replace(
+            step,
+            quantity_role=replacements[step.step_id][0],
+            source=replacements[step.step_id][1],
+        )
+        if step.step_id in replacements
+        else step
+        for step in calculation.steps
+    )
+    return create_bundle(
+        input_sha256=bundle.input_sha256,
+        result_sha256=bundle.result_sha256,
+        calculations=(dataclasses.replace(calculation, steps=steps),),
     )
 
 
@@ -187,23 +210,32 @@ STEP_DEPENDENCIES = (
     ("tendon", ()),
     ("result", ("demand", "concrete", "steel", "tendon")),
 )
+STEP_METADATA = (
+    TraceStepMetadataContract("demand", ROLE_USER_INPUT, INPUT),
+    TraceStepMetadataContract("concrete", ROLE_METHOD_VALUE, CONCRETE),
+    TraceStepMetadataContract("steel", ROLE_METHOD_VALUE, STEEL),
+    TraceStepMetadataContract("tendon", ROLE_METHOD_VALUE, TENDON),
+    TraceStepMetadataContract("result", ROLE_FINAL, COMBINATION),
+)
 
 
 def _step_registry(
     *,
     step_ids: tuple[str, ...] = (),
     step_dependencies: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    step_metadata: tuple[TraceStepMetadataContract, ...] = (),
 ) -> TraceRegistryContract:
     registry = _registry(RESULT_FINITE)
     member = dataclasses.replace(
         registry.families[0].members[0],
         step_ids=step_ids,
         step_dependencies=step_dependencies,
+        step_metadata=step_metadata,
     )
     return _with_member(registry, member)
 
 
-def test_step_order_and_dependency_contracts_are_independently_optional():
+def test_step_order_dependency_and_metadata_contracts_are_independently_optional():
     bundle = _bundle()
 
     assert audit_trace_registry(bundle, _registry(RESULT_FINITE)) is bundle
@@ -224,9 +256,17 @@ def test_step_order_and_dependency_contracts_are_independently_optional():
     assert (
         audit_trace_registry(
             bundle,
+            _step_registry(step_metadata=STEP_METADATA),
+        )
+        is bundle
+    )
+    assert (
+        audit_trace_registry(
+            bundle,
             _step_registry(
                 step_ids=STEP_IDS,
                 step_dependencies=STEP_DEPENDENCIES,
+                step_metadata=STEP_METADATA,
             ),
         )
         is bundle
@@ -250,6 +290,274 @@ def test_step_contracts_reject_wrong_order_and_graph_drift():
             _bundle(),
             _step_registry(step_dependencies=missing_edge),
         )
+
+
+def test_action_material_swap_passes_legacy_checks_but_fails_step_metadata():
+    hostile = _reseal_metadata(
+        {
+            "demand": (ROLE_METHOD_VALUE, CONCRETE),
+            "concrete": (ROLE_USER_INPUT, INPUT),
+        }
+    )
+
+    legacy_contract = _step_registry(step_dependencies=STEP_DEPENDENCIES)
+    assert audit_trace_registry(hostile, legacy_contract) is hostile
+
+    with pytest.raises(TraceValidationError) as raised:
+        audit_trace_registry(
+            hostile,
+            _step_registry(
+                step_dependencies=STEP_DEPENDENCIES,
+                step_metadata=STEP_METADATA,
+            ),
+        )
+    message = str(raised.value)
+    for expected in (
+        "step demand quantity role",
+        "step demand source",
+        "step concrete quantity role",
+        "step concrete source",
+    ):
+        assert expected in message
+
+
+@pytest.mark.parametrize(
+    ("left_id", "right_id"),
+    [
+        pytest.param("concrete", "steel", id="same-kind-standard-sources"),
+        pytest.param("concrete", "tendon", id="standard-project-sources"),
+    ],
+)
+def test_resealed_material_source_swaps_fail_exact_step_identity(
+    left_id,
+    right_id,
+):
+    steps = {step.step_id: step for step in _bundle().calculations[0].steps}
+    hostile = _reseal_metadata(
+        {
+            left_id: (steps[left_id].quantity_role, steps[right_id].source),
+            right_id: (steps[right_id].quantity_role, steps[left_id].source),
+        }
+    )
+
+    assert (
+        audit_trace_registry(
+            hostile,
+            _step_registry(step_dependencies=STEP_DEPENDENCIES),
+        )
+        is hostile
+    )
+    with pytest.raises(TraceValidationError) as raised:
+        audit_trace_registry(
+            hostile,
+            _step_registry(step_metadata=STEP_METADATA),
+        )
+    message = str(raised.value)
+    assert f"step {left_id} source" in message
+    assert f"step {right_id} source" in message
+
+
+@pytest.mark.parametrize(
+    ("step_id", "source", "legacy_accepts"),
+    [
+        pytest.param(
+            "concrete",
+            dataclasses.replace(CONCRETE, edition="EN 1992-1-1:2005"),
+            False,
+            id="edition",
+        ),
+        pytest.param(
+            "concrete",
+            dataclasses.replace(
+                CONCRETE,
+                citation=dataclasses.replace(
+                    CONCRETE.citation,
+                    document="EN 1992-1-1 Corrigendum",
+                ),
+            ),
+            True,
+            id="citation-document",
+        ),
+        pytest.param(
+            "concrete",
+            dataclasses.replace(
+                CONCRETE,
+                citation=dataclasses.replace(CONCRETE.citation, clause="3.2"),
+            ),
+            True,
+            id="clause",
+        ),
+        pytest.param(
+            "concrete",
+            dataclasses.replace(
+                CONCRETE,
+                citation=dataclasses.replace(
+                    CONCRETE.citation,
+                    locator="Table 3.2",
+                ),
+            ),
+            True,
+            id="table",
+        ),
+        pytest.param(
+            "steel",
+            dataclasses.replace(
+                STEEL,
+                citation=dataclasses.replace(STEEL.citation, locator="Eq. (5.3)"),
+            ),
+            True,
+            id="equation",
+        ),
+    ],
+)
+def test_standard_identity_drift_fails_exact_step_metadata(
+    step_id,
+    source,
+    legacy_accepts,
+):
+    step = next(
+        item for item in _bundle().calculations[0].steps if item.step_id == step_id
+    )
+    hostile = _reseal_metadata({step_id: (step.quantity_role, source)})
+
+    if legacy_accepts:
+        assert audit_trace_registry(hostile, _registry(RESULT_FINITE)) is hostile
+    with pytest.raises(TraceValidationError, match=rf"step {step_id} source"):
+        audit_trace_registry(
+            hostile,
+            _step_registry(step_metadata=STEP_METADATA),
+        )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        pytest.param(STEP_METADATA[:-1], "missing step metadata", id="missing"),
+        pytest.param(
+            (*STEP_METADATA, STEP_METADATA[0]),
+            "duplicate metadata step",
+            id="duplicate",
+        ),
+        pytest.param(
+            (*STEP_METADATA[:-1], dataclasses.replace(STEP_METADATA[-1], step_id="unknown")),
+            "unknown/extra step metadata",
+            id="unknown",
+        ),
+        pytest.param(
+            (*STEP_METADATA, dataclasses.replace(STEP_METADATA[0], step_id="extra")),
+            "unknown/extra step metadata",
+            id="extra",
+        ),
+        pytest.param(
+            (STEP_METADATA[0], STEP_METADATA[2], STEP_METADATA[1], *STEP_METADATA[3:]),
+            "step metadata rows differ",
+            id="reordered",
+        ),
+    ],
+)
+def test_malformed_metadata_declarations_fail_closed(metadata, message):
+    with pytest.raises(TraceValidationError, match=message):
+        audit_trace_registry(
+            _bundle(),
+            _step_registry(step_metadata=metadata),
+        )
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        pytest.param(
+            dataclasses.replace(CONCRETE, edition=None),
+            "source edition",
+            id="missing-edition",
+        ),
+        pytest.param(
+            dataclasses.replace(CONCRETE, citation=None),
+            "exact standards citation",
+            id="missing-citation",
+        ),
+        pytest.param(
+            dataclasses.replace(
+                CONCRETE,
+                citation=dataclasses.replace(CONCRETE.citation, document=""),
+            ),
+            "citation document",
+            id="missing-document",
+        ),
+        pytest.param(
+            dataclasses.replace(
+                CONCRETE,
+                citation=dataclasses.replace(CONCRETE.citation, clause=""),
+            ),
+            "citation clause",
+            id="missing-clause",
+        ),
+        pytest.param(
+            dataclasses.replace(
+                CONCRETE,
+                citation=dataclasses.replace(CONCRETE.citation, locator=""),
+            ),
+            "citation locator",
+            id="missing-locator",
+        ),
+    ],
+)
+def test_incomplete_metadata_source_declarations_fail_closed(source, message):
+    metadata = tuple(
+        dataclasses.replace(item, source=source)
+        if item.step_id == "concrete"
+        else item
+        for item in STEP_METADATA
+    )
+    with pytest.raises(TraceValidationError, match=message):
+        audit_trace_registry(
+            _bundle(),
+            _step_registry(step_metadata=metadata),
+        )
+
+
+def test_simple_context_free_registry_remains_valid_without_metadata_opt_in():
+    value = _step("value", ROLE_USER_INPUT, INPUT, 2.0)
+    result = _step(
+        "result",
+        ROLE_FINAL,
+        COMBINATION,
+        4.0,
+        (TraceDependency("value", UNIT),),
+    )
+    calculation = TraceCalculation(
+        "simple.result",
+        "simple",
+        "Simple context-free result",
+        "mixed-section-solver",
+        (),
+        "result",
+        (value, result),
+    )
+    bundle = create_bundle(
+        input_sha256="c" * 64,
+        result_sha256="d" * 64,
+        calculations=(calculation,),
+    )
+    member = TraceMemberContract(
+        "simple-member",
+        "simple.result",
+        "simple",
+        "mixed-section-solver",
+        (),
+        frozenset(
+            TraceSourceContract(item.kind, item.method_id, item.edition)
+            for item in (INPUT, COMBINATION)
+        ),
+        frozenset({RESULT_FINITE}),
+    )
+    registry = TraceRegistryContract(
+        "simple-registry",
+        (TraceFamilyContract("simple-family", (member,)),),
+    )
+
+    assert member.step_metadata == ()
+    assert audit_trace_registry(bundle, registry) is bundle
 
 
 @pytest.mark.parametrize(
