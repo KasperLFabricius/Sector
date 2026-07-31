@@ -124,7 +124,25 @@ def _law_values(law: Any) -> tuple[tuple[str, float], ...]:
             raise ValueError(f"{field.name} must be a finite non-Boolean number")
         values.append((field.name, float(raw)))
     return tuple(values)
-def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str, str, bool]:
+def _catalog_matches(law: Any, item: Mapping[str, Any]) -> bool:
+    for name, expected in _law_values(law):
+        raw = item.get(name)
+        if name == "active_in_compression":
+            if type(raw) is not bool:
+                return False
+            actual = 1.0 if raw else 0.0
+        elif type(raw) not in {int, float} or type(raw) is bool or not math.isfinite(float(raw)):
+            return False
+        else:
+            actual = float(raw)
+            if name in {"IS", "eut", "ey0t", "ey0c"}:
+                actual /= 1000.0
+            elif name == "Es":
+                actual *= 1000.0
+        if not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-12):
+            return False
+    return True
+def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str, str, Mapping[str, Any] | None]:
     element_key = "bar_elements" if kind == "bar" else "tendon_elements"
     catalog_key = "mild_material_catalog" if kind == "bar" else "prestress_material_catalog"
     elements = tuple(inp.get(element_key) or ())
@@ -138,9 +156,9 @@ def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str,
     )
     for item in items:
         if isinstance(item, Mapping) and str(item.get("id") or "") == selected_id:
-            return element_id, str(item.get("preset") or ""), True
+            return element_id, str(item.get("preset") or ""), item
     fallback = inp.get("mild_preset") if kind == "bar" else inp.get("prestress_preset")
-    return element_id, str(fallback or ""), False
+    return element_id, str(fallback or ""), None
 def _materials(
     inp: Mapping[str, Any],
     *,
@@ -152,12 +170,13 @@ def _materials(
     laws: Sequence[Any] = tuple(specific) if specific is not None else (default,) * count
     if len(laws) != count or any(law is None for law in laws):
         raise ValueError(f"need {count} aligned {kind} material laws")
-    heterogeneous = specific is not None and len({_law_values(law) for law in laws}) > 1
     blocks = []
     for index, law in enumerate(laws):
-        element_id, preset, aligned = _catalog_preset(inp, kind, index)
-        if heterogeneous and not aligned:
-            raise ValueError(f"heterogeneous {kind} laws need aligned catalog provenance")
+        element_id, preset, catalog_item = _catalog_preset(inp, kind, index)
+        if specific is not None and catalog_item is None:
+            raise ValueError(f"assigned {kind} laws need aligned catalog provenance")
+        if catalog_item is not None and not _catalog_matches(law, catalog_item):
+            raise ValueError(f"{kind} law does not match its catalog provenance")
         elements = tuple(inp.get("bar_elements" if kind == "bar" else "tendon_elements") or ())
         element = elements[index] if index < len(elements) and isinstance(elements[index], Mapping) else {}
         blocks.append(

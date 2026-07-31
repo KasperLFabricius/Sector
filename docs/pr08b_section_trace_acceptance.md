@@ -1,9 +1,7 @@
 # PR-08B section-trace acceptance map
-This split map freezes CT-002 through CT-004 on the accepted PR-08A trace core. CT-005 follows separately after repeated review classes; Sector remains 0.91 and these builders remain unpublished until PR-08E.
+This independently audited split freezes CT-002 on the accepted PR-08A trace core. CT-003 through CT-005 follow separately after repeated review classes; Sector remains 0.91 and the builder remains unpublished until PR-08E.
 | Family member | Required identity and cardinality | Required closure and state |
 | --- | --- | --- |
 | CT-002 plastic capacity | Exactly one selected-context member. Method is the one common selected EC2 edition, `mixed-standard-project-material-section-solve` for cross-edition or standard/project mixtures, or `user-defined-material-section-solve` when every law is project-defined. | Exact ordered rings, every bar/tendon coordinate and area, every assigned constitutive law, applied action, selected solver state, curvature, axial equilibrium, compression resultant, lever arm, and both moment components. Final is finite or explicit `failed`. |
-| CT-003 radial utilisation | Exactly one member whenever radial utilisation is retained, independent of CT-002. Method is `sector-radial-envelope-intersection`. | Applied biaxial demand and every ordered envelope vertex. Finite utilisation stays finite; a missed ray is explicit `positive_infinity`; malformed solver output is explicit `undefined` or `failed`. |
-| CT-004 N-M interaction | Exactly two members whenever interaction output is retained: axis `x` and axis `y`, each with the exact CT-002 material-method identity. Neither axis may mask the other. | Exact section/material closure and every ordered axial/moment boundary pair for that axis. Final is finite or explicit `failed`. |
 Registry auditing is exact: calculation IDs, axes, methods, editions, source sets, result states, and member count must match. Missing, duplicate, wrong-axis, wrong-edition, masking, tampered, or stale evidence fails closed.
 Project-defined material and numerical methods carry no invented standard citation.

@@ -1,4 +1,4 @@
-"""Solver-adjacent CT-002 through CT-004 calculation-trace builders."""
+"""Solver-adjacent CT-002 calculation-trace builder."""
 from __future__ import annotations
 import math
 import re
@@ -7,9 +7,6 @@ from typing import Any
 from .calculation_trace import (
     RESULT_FAILED,
     RESULT_FINITE,
-    RESULT_NEGATIVE_INFINITY,
-    RESULT_POSITIVE_INFINITY,
-    RESULT_UNDEFINED,
     ROLE_COMPUTED,
     ROLE_FINAL,
     ROLE_USER_INPUT,
@@ -41,7 +38,6 @@ INPUT = TraceSource(SOURCE_INPUT, "user-input")
 GEOMETRY = TraceSource(SOURCE_PROJECT, "sector-section-geometry")
 ASSIGNMENT = TraceSource(SOURCE_PROJECT, "sector-material-assignment")
 PLASTIC = TraceSource(SOURCE_PROJECT, "sector-plastic-section-equilibrium")
-RADIAL = TraceSource(SOURCE_PROJECT, "sector-radial-envelope-intersection")
 UNITS = {
     "1": TraceUnit("1", "dimensionless"),
     "m": TraceUnit("m", "length"),
@@ -70,20 +66,6 @@ def _value(value: Any, *names: str) -> Any:
         if hasattr(value, name):
             return getattr(value, name)
     return None
-def _result(value: Any, *, invalid_reason: str) -> TraceResult:
-    if type(value) is bool or value is None:
-        return TraceResult(RESULT_FAILED, None, invalid_reason)
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return TraceResult(RESULT_FAILED, None, invalid_reason)
-    if math.isnan(number):
-        return TraceResult(RESULT_UNDEFINED, None, invalid_reason)
-    if number == math.inf:
-        return TraceResult(RESULT_POSITIVE_INFINITY, None, invalid_reason)
-    if number == -math.inf:
-        return TraceResult(RESULT_NEGATIVE_INFINITY, None, invalid_reason)
-    return TraceResult(RESULT_FINITE, number)
 class _Calculation:
     def __init__(
         self,
@@ -387,100 +369,6 @@ def _capacity(
         substitution=f"MRd = sqrt({_fmt(mx_value)}^2 + {_fmt(my_value)}^2) = {_fmt(final_value)} kNm",
     )
     return calc.finish(final)
-def _radial(
-    inp: Mapping[str, Any],
-    result: Mapping[str, Any],
-    context: Mapping[str, Any],
-    blocks: SectionTraceBlocks,
-) -> TraceCalculation:
-    cid = context_id(context)
-    calc = _Calculation(
-        f"plastic.{cid}.radial-utilisation",
-        "ct-003",
-        "Radial demand-to-envelope utilisation",
-        "sector-radial-envelope-intersection",
-        context_axes(context),
-    )
-    base = _plastic_base(calc, inp, blocks)
-    mx, my = list(result.get("mx") or ()), list(result.get("my") or ())
-    envelope: list[str] = []
-    valid = len(mx) == len(my) and len(mx) >= 3
-    for index, (x_value, y_value) in enumerate(zip(mx, my), start=1):
-        x_result = _result(x_value, invalid_reason="non-finite envelope x ordinate")
-        y_result = _result(y_value, invalid_reason="non-finite envelope y ordinate")
-        valid = valid and x_result.state == y_result.state == RESULT_FINITE
-        envelope.extend(
-            (
-                calc.add(f"envelope-{index:03d}-mx", f"Envelope point {index} Mx", "Mx", "kNm", x_result, source=PLASTIC, dependencies=base),
-                calc.add(f"envelope-{index:03d}-my", f"Envelope point {index} My", "My", "kNm", y_result, source=PLASTIC, dependencies=base),
-            )
-        )
-    util = result.get("util")
-    final_result = TraceResult(RESULT_POSITIVE_INFINITY, None, "the applied ray misses the closed capacity envelope") if util == math.inf else _result(util, invalid_reason="radial utilisation is unavailable")
-    if not valid or final_result.state == RESULT_NEGATIVE_INFINITY or (final_result.state == RESULT_FINITE and float(final_result.value) < 0.0):
-        final_result = TraceResult(RESULT_FAILED, None, "radial envelope is invalid or utilisation is negative")
-    reason = final_result.reason
-    final = calc.add(
-        "eta-m", "Radial moment utilisation", "etaM", "1", final_result,
-        source=RADIAL, dependencies=(*base, *envelope), role=ROLE_FINAL,
-        expression="etaM = radial demand / closed-envelope ray intersection",
-        warning=reason,
-        assumption="Sector geometric procedure; no normative equation is assigned.",
-    )
-    return calc.finish(final, warnings=(reason,) if reason else ())
-def _interaction(
-    inp: Mapping[str, Any],
-    result: Mapping[str, Any],
-    context: Mapping[str, Any],
-    blocks: SectionTraceBlocks,
-    axis: str,
-) -> TraceCalculation:
-    cid = context_id(context)
-    calc = _Calculation(
-        f"plastic.{cid}.interaction-{axis}",
-        "ct-004",
-        f"N-M{axis} interaction boundary",
-        blocks.plastic_method_id,
-        context_axes(context, axis=axis),
-    )
-    base = _plastic_base(calc, inp, blocks)
-    interaction = result.get("interaction")
-    branch = interaction.get(axis) if isinstance(interaction, Mapping) else None
-    axial = list(branch.get("N") or ()) if isinstance(branch, Mapping) else []
-    moments = list(branch.get("M") or ()) if isinstance(branch, Mapping) else []
-    valid = bool(axial) and len(axial) == len(moments) and bool(branch.get("converged"))
-    points: list[str] = []
-    moment_values: list[float] = []
-    if valid:
-        try:
-            for index, (n_value, m_value) in enumerate(zip(axial, moments), start=1):
-                n_number, m_number = _number(n_value), _number(m_value)
-                moment_values.append(m_number)
-                points.extend(
-                    (
-                        calc.add(f"boundary-{index:03d}-n", f"Boundary point {index} axial", "NRd", "kN", TraceResult(RESULT_FINITE, n_number), source=PLASTIC, dependencies=base),
-                        calc.add(f"boundary-{index:03d}-m", f"Boundary point {index} moment", f"M{axis}Rd", "kNm", TraceResult(RESULT_FINITE, m_number), source=PLASTIC, dependencies=base),
-                    )
-                )
-        except ValueError:
-            valid = False
-    if not valid:
-        reason = f"interaction axis {axis} is missing, misaligned, non-finite, or unconverged"
-        final = _failed_final(calc, PLASTIC, (*base, *points), reason)
-        return calc.finish(final, warnings=(reason,))
-    count = calc.add(
-        "boundary-cardinality", "Boundary point count", "npoints", "1",
-        TraceResult(RESULT_FINITE, float(len(moment_values))), source=PLASTIC,
-        dependencies=points, expression="npoints = exact ordered boundary cardinality",
-    )
-    governing = max(moment_values, key=abs)
-    final = calc.add(
-        "governing-m-rd", f"Maximum absolute M{axis} boundary state", f"M{axis}Rd", "kNm",
-        TraceResult(RESULT_FINITE, governing), source=PLASTIC,
-        dependencies=(count, *points), role=ROLE_FINAL,
-        expression=f"M{axis}Rd = argmax |M{axis},i|",
-    )
-    return calc.finish(final)
 def plastic_calculations(
     inp: Mapping[str, Any],
     out: Mapping[str, Any],
@@ -491,14 +379,7 @@ def plastic_calculations(
     if not isinstance(result, Mapping):
         return []
     blocks = section_trace_blocks(inp)
-    calculations = [_capacity(inp, result, context, blocks)]
-    if result.get("util") is not None:
-        calculations.append(_radial(inp, result, context, blocks))
-    if result.get("interaction") is not None:
-        calculations.extend(
-            _interaction(inp, result, context, blocks, axis) for axis in ("x", "y")
-        )
-    return calculations
+    return [_capacity(inp, result, context, blocks)]
 def section_calculations(
     inp: Mapping[str, Any],
     out: Mapping[str, Any],
@@ -560,36 +441,6 @@ def section_trace_registry(
                 (_contract("plastic-capacity", calculations[capacity_id], frozenset(plastic_sources), method_id=blocks.plastic_method_id, axes=axes),),
             )
         )
-        if plastic.get("util") is not None:
-            radial_id = f"plastic.{cid}.radial-utilisation"
-            families.append(
-                TraceFamilyContract(
-                    "plastic-radial",
-                    (_contract(
-                        "plastic-radial",
-                        calculations[radial_id],
-                        frozenset({*plastic_sources, _source_contract(RADIAL)}),
-                        method_id="sector-radial-envelope-intersection",
-                        axes=axes,
-                    ),),
-                )
-            )
-        if plastic.get("interaction") is not None:
-            families.append(
-                TraceFamilyContract(
-                    "plastic-interaction",
-                    tuple(
-                        _contract(
-                            f"plastic-interaction-{axis}",
-                            calculations[f"plastic.{cid}.interaction-{axis}"],
-                            frozenset(plastic_sources),
-                            method_id=blocks.plastic_method_id,
-                            axes=context_axes(context, axis=axis),
-                        )
-                        for axis in ("x", "y")
-                    ),
-                )
-            )
     return TraceRegistryContract(f"section-{cid}", tuple(families))
 def create_section_trace_bundle(
     inp: Mapping[str, Any],
