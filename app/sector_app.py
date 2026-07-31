@@ -49,7 +49,8 @@ from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector import sls as sls_core  # noqa: E402
 from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
-from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
+from sector.plastic import (plastic_sweep_plan, solve_interaction,  # noqa: E402
+                            solve_plastic)
 from sector.section import Section  # noqa: E402
 from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
                                    crack_width)
@@ -4905,22 +4906,6 @@ def build_inputs(host=st):
 # Analysis
 # ---------------------------------------------------------------------------
 
-def _sweep(v_min, v_max, v_inc):
-    """Normalise a (min, max, increment) sweep so it lands exactly on both ends.
-
-    The solver steps ``v_min + i*inc`` for a step count, which could overshoot or
-    miss ``v_max`` when the increment does not divide the span. ``v_inc`` is a
-    *maximum* increment: a ceiling interval count keeps the step at or below the
-    requested resolution while landing exactly on ``v_max`` (no angle outside
-    [v_min, v_max]).
-    """
-    span = max(v_max, v_min) - v_min   # >= 0 (guards a reversed range)
-    if span < 1e-9 or v_inc <= 0.0:
-        return v_min, v_min, max(v_inc, 1.0)   # a single angle
-    n = max(1, math.ceil(span / v_inc))
-    return v_min, v_min + span, span / n
-
-
 def _props_dict(p):
     """Flatten SectionProperties to a plain dict for the results payload."""
     return dict(area=p.area, cx=p.cx, cy=p.cy, Ix=p.Ix, Iy=p.Iy, Ixy=p.Ixy)
@@ -5010,19 +4995,17 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         out["plastic"] = reuse_plastic
     elif inp["mode"] in ("Plastic", "Both"):
         _warm_solver()
-        vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
-        # A full 360 deg turn returns to the start, so the last angle (v_max) repeats
-        # the first (v_min) exactly. Sweep only up to the angle before it -- the
-        # envelope closes itself -- so that duplicate point is neither computed nor
-        # reported. The closed-envelope flag still reflects the full turn.
-        closed = (vhi - vlo) >= 360.0 - 1e-6
-        sweep_hi = vhi - vstep if closed else vhi
+        sweep = plastic_sweep_plan(
+            inp["v_min"], inp["v_max"], inp["v_inc"]
+        )
+        closed = sweep.closed
         # Prestress enters the analysis only when the section actually has tendons.
         pre = inp["prestress"] if inp["tendons"] else None
         # The user enters N tension-positive; the solver is compression-positive, so
         # negate at the boundary (the engine and its verification are unchanged).
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            -inp["P_pl"], vlo, sweep_hi, vstep, prestress=pre,
+                            -inp["P_pl"], sweep.solver_min, sweep.solver_max,
+                            sweep.solver_increment, prestress=pre,
                             bar_materials=inp.get("bar_materials"),
                             tendon_materials=inp.get("tendon_materials"))
         mx = [p.Mx for p in pts]
@@ -5032,24 +5015,54 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # run (the applied moments are ignored and locked).
         check_util = inp.get("check_util", True)
         if closed and check_util:
-            util, util_gov = combined.radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
+            radial = combined.radial_util_result(
+                mx, my, inp["Mx_pl"], inp["My_pl"]
+            )
+            util, util_gov = radial.utilisation, radial.governing_index
         else:
+            radial = None
             util, util_gov = None, None
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my), min_mx=min(mx), min_my=min(my),
             util=util, util_gov=util_gov, closed=closed, check_util=check_util,
             applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
+            demand=None if radial is None else radial.demand,
+            resistance=None if radial is None else radial.resistance,
             converged=all(p.converged for p in pts),
             # The solver reports strains compression-positive (its internal
             # convention); negate them so the displayed strains are tension-positive,
             # agreeing with N and the stresses (concrete crushing then reads negative).
-            points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
-                         na_y=p.na_y_intercept, eps_c=-p.eps_concrete,
-                         eps_s=-p.eps_steel, eps_s_comp=-p.eps_steel_comp,
-                         eps_cable=-p.eps_cable, kappa=p.curvature,
-                         comp_force=p.compression_force, lever=p.lever_arm,
-                         dx=p.dx, dy=p.dy) for p in pts],
+            points=[dict(
+                V=p.V, Mx=p.Mx, My=p.My,
+                na_x=p.na_x_intercept, na_y=p.na_y_intercept,
+                eps_c=-p.eps_concrete, eps_s=-p.eps_steel,
+                eps_s_comp=-p.eps_steel_comp, eps_cable=-p.eps_cable,
+                kappa=p.curvature,
+                requested_axial=p.requested_axial,
+                achieved_axial=p.axial,
+                compression_depth=p.compression_depth,
+                neutral_axis_depth=p.neutral_axis_depth,
+                axial_residual=p.axial_residual,
+                axial_tolerance=p.axial_tolerance,
+                concrete_force=p.concrete_force,
+                concrete_mx=p.concrete_mx,
+                concrete_my=p.concrete_my,
+                bar_force=p.bar_force,
+                bar_mx=p.bar_mx,
+                bar_my=p.bar_my,
+                tendon_force=p.tendon_force,
+                tendon_mx=p.tendon_mx,
+                tendon_my=p.tendon_my,
+                comp_force=p.compression_force,
+                comp_mx=p.compression_mx,
+                comp_my=p.compression_my,
+                tension_force=p.tension_force,
+                tension_mx=p.tension_mx,
+                tension_my=p.tension_my,
+                lever=p.lever_arm, dx=p.dx, dy=p.dy,
+                converged=p.converged,
+            ) for p in pts],
         )
         # Opt-in N-M interaction diagrams, one about each bending axis. For each axis
         # trace the +M branch (NA angle stored as V) and the -M branch (V+180) from
