@@ -337,7 +337,7 @@ def test_tamper_stale_fingerprints_and_invented_project_citations_are_rejected()
 
 
 def test_identity_tokens_are_injective_for_colliding_display_slugs():
-    labels = ("A+B", "A B", "Traffic+A", "Traffic A", "å", "a")
+    labels = ("A+B", "A B", "Traffic+A", "Traffic A", "\u00e5", "a")
     tokens = tuple(trace_identity_token(item) for item in labels)
 
     assert len(set(tokens)) == len(labels)
