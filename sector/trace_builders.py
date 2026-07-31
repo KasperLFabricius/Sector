@@ -52,6 +52,8 @@ UNITS = {
     "m4": TraceUnit("m4", "second-moment"),
     "kN": TraceUnit("kN", "force"),
     "kNm": TraceUnit("kNm", "moment"),
+    "kN/m2": TraceUnit("kN/m2", "stress"),
+    "kN/m3": TraceUnit("kN/m3", "stress-gradient"),
     "MPa": TraceUnit("MPa", "stress"),
     "GPa": TraceUnit("GPa", "stress"),
     "1/m": TraceUnit("1/m", "curvature"),
@@ -633,10 +635,10 @@ def _equilibrium(
     plane = result.get("stress_plane")
     valid = valid and isinstance(plane, Sequence) and len(plane) == 3
     if isinstance(plane, Sequence) and len(plane) == 3:
-        for name, unit, value in zip(("eps0", "kx", "ky"), ("1", "1/m", "1/m"), plane):
+        for name, unit, value in zip(("eps0", "kx", "ky"), ("kN/m2", "kN/m3", "kN/m3"), plane):
             item = _result(value, invalid_reason=f"non-finite stress-plane {name}")
             valid = valid and item.state == RESULT_FINITE
-            outputs.append(calc.add(name, f"Solver strain-plane {name}", name, unit, item, source=ELASTIC, dependencies=base))
+            outputs.append(calc.add(name, f"Solver load-consistent stress-plane {name}", name, unit, item, source=ELASTIC, dependencies=base))
     for key in ("long", "rst1", "total", "dif"):
         values = result.get(key)
         valid = valid and isinstance(values, Sequence) and len(values) == count

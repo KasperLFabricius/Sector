@@ -99,6 +99,8 @@ def test_all_selected_chains_are_complete_and_reconstruct_solver_results(section
     }
     interactions = [item for item in bundle.calculations if item.coverage_id == "ct-004"]
     assert {next(axis.value for axis in item.axes if axis.name == "axis") for item in interactions} == {"x", "y"}
+    elastic = next(item for item in bundle.calculations if item.calculation_id.endswith("section-equilibrium"))
+    assert [step.unit.symbol for step in elastic.steps if step.step_id in {"eps0", "kx", "ky"}] == ["kN/m2", "kN/m3", "kN/m3"]
     assert all(item.steps[-1].result.state == RESULT_FINITE for item in bundle.calculations)
 def test_method_and_edition_selection_is_exact_for_standard_mixed_and_project(section_case):
     inp, _ = section_case
