@@ -40,6 +40,42 @@ _MN_TO_KN = 1000.0
 _USE_KERNEL = kernels.HAS_NUMBA
 
 
+@dataclass(frozen=True, slots=True)
+class PlasticAccumulation:
+    """Authoritative material and sign-split resultants at one strain plane."""
+
+    concrete_force: float
+    concrete_mx: float
+    concrete_my: float
+    bar_force: float
+    bar_mx: float
+    bar_my: float
+    tendon_force: float
+    tendon_mx: float
+    tendon_my: float
+    compression_force: float
+    compression_mx: float
+    compression_my: float
+    tension_force: float
+    tension_mx: float
+    tension_my: float
+    min_bar_strain: float
+    max_bar_strain: float
+    min_tendon_strain: float
+
+    @property
+    def axial(self) -> float:
+        return self.compression_force + self.tension_force
+
+    @property
+    def mx(self) -> float:
+        return self.compression_mx + self.tension_mx
+
+    @property
+    def my(self) -> float:
+        return self.compression_my + self.tension_my
+
+
 @dataclass
 class PlasticPoint:
     """Ultimate capacity at one neutral-axis angle."""
@@ -64,6 +100,34 @@ class PlasticPoint:
     lever_arm: float          # internal lever arm L, m
     dx: float                 # X component of the lever arm, m
     dy: float                 # Y component of the lever arm, m
+    axial_requested: float    # requested solver axial action, compression positive, kN
+    axial_residual: float     # achieved minus requested axial action, kN
+    axial_tolerance: float    # absolute equilibrium tolerance, kN
+    axial_reachable: bool     # requested action lies inside the solver bracket
+    compression_depth: float  # extreme compression fibre to neutral axis, m
+    neutral_axis_offset: float  # s-coordinate of the neutral axis, m
+    strain_gradient_x: float  # d(eps)/dx, 1/m, compression positive
+    strain_gradient_y: float  # d(eps)/dy, 1/m, compression positive
+    strain_offset: float      # eps(x,y) constant term, compression positive
+    search_lower_depth: float
+    search_upper_depth: float
+    search_lower_axial: float
+    search_upper_axial: float
+    search_iterations: int
+    concrete_force: float
+    concrete_mx: float
+    concrete_my: float
+    bar_force: float
+    bar_mx: float
+    bar_my: float
+    tendon_force: float
+    tendon_mx: float
+    tendon_my: float
+    compression_mx: float
+    compression_my: float
+    tension_force: float
+    tension_mx: float
+    tension_my: float
     converged: bool
 
 
@@ -159,19 +223,13 @@ def _band_stresses(concrete, kappa, h, n_bands, memo=None):
 def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi,
                 n_bands,
                 rings, bar_data, tendon_data, ring_xy=None, ring_starts=None,
-                buf_a=None, buf_b=None, band_memo=None):
+                buf_a=None, buf_b=None, band_memo=None) -> PlasticAccumulation:
     """Force resultants for a trial compression depth ``c`` (s-units).
 
-    Returns compression and tension force totals and their first moments, in kN
-    and kNm, plus the extreme mild-steel strains (most tensile ``min_eps`` and most
-    compressed ``max_eps``) and the most tensile tendon strain (compression-positive
-    fractions). The neutral axis is at ``s = s_max - c`` and the
-    curvature is ``phi`` (the governing ultimate curvature). ``rings`` are the
-    oriented concrete rings as ``(x, y)`` point lists; ``bar_data`` /
-    ``tendon_data`` are ``(x, y, area, s)`` arrays (``s = x*dx + y*dy`` the depth
-    projection) precomputed once for the whole sweep. Tendons (if any) carry
-    tension only, and their stress is taken at the total strain ``IS + section
-    strain``.
+    Returns the concrete, bar, and tendon force/Mx/My totals as well as the
+    compression/tension split and extreme reinforcement strains. The neutral axis
+    is at ``s = s_max - c`` and the curvature is ``phi``. ``rings`` are oriented
+    concrete rings; ``bar_data`` / ``tendon_data`` are ``(x, y, area, s)`` arrays.
 
     When ``ring_xy`` (the stacked ring vertices) is supplied the concrete
     integration runs in the compiled kernel; otherwise it uses the pure-Python
@@ -180,6 +238,9 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
     s_na = s_max - c
     kappa = phi
 
+    concrete_F = concrete_Fx = concrete_Fy = 0.0
+    bar_F = bar_Fx = bar_Fy = 0.0
+    tendon_F = tendon_Fx = tendon_Fy = 0.0
     comp_F = comp_Fx = comp_Fy = 0.0
     ten_F = ten_Fx = ten_Fy = 0.0
 
@@ -195,20 +256,17 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
                                  memo=band_memo)
         else:
             sig = np.empty(0)
-        cF, cFx, cFy = kernels.concrete_resultants(
+        concrete_F, concrete_Fx, concrete_Fy = kernels.concrete_resultants(
             ring_xy, ring_starts, dx, dy, s_na, s_max, s_peak,
             sig.shape[0], fcd, sig, buf_a, buf_b)
-        comp_F += cF
-        comp_Fx += cFx
-        comp_Fy += cFy
     else:
         # Pure-Python path. Plateau band [s_peak, s_max]: constant strength.
         if s_peak < s_max:
             for ring in rings:
                 m = _poly_moments(_clip_pts(ring, dx, dy, -s_peak))  # d.r >= s_peak
-                comp_F += fcd * m.area * _MN_TO_KN
-                comp_Fx += fcd * m.sx * _MN_TO_KN
-                comp_Fy += fcd * m.sy * _MN_TO_KN
+                concrete_F += fcd * m.area * _MN_TO_KN
+                concrete_Fx += fcd * m.sx * _MN_TO_KN
+                concrete_Fy += fcd * m.sy * _MN_TO_KN
         # Ascending band [s_na, s_top]: midpoint integration.
         if s_top > s_na and n_bands > 0:
             h = (s_top - s_na) / n_bands
@@ -222,9 +280,13 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
                 for ring in rings:
                     band = _clip_pts(_clip_pts(ring, dx, dy, -sa), -dx, -dy, sb)
                     m = _poly_moments(band)
-                    comp_F += sig * m.area * _MN_TO_KN
-                    comp_Fx += sig * m.sx * _MN_TO_KN
-                    comp_Fy += sig * m.sy * _MN_TO_KN
+                    concrete_F += sig * m.area * _MN_TO_KN
+                    concrete_Fx += sig * m.sx * _MN_TO_KN
+                    concrete_Fy += sig * m.sy * _MN_TO_KN
+
+    comp_F += concrete_F
+    comp_Fx += concrete_Fx
+    comp_Fy += concrete_Fy
 
     # -- reinforcement (point areas, both signs) --
     bx, by, ba, s_bars = bar_data
@@ -240,6 +302,9 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
             for e, material in zip(eps_b, bar_materials)
         ])  # comp +, MPa
         fb = sig_b * ba * _MN_TO_KN                          # kN, comp +
+        bar_F = float(fb.sum())
+        bar_Fx = float((fb * bx).sum())
+        bar_Fy = float((fb * by).sum())
         comp = fb >= 0.0
         comp_F += float(fb[comp].sum())
         comp_Fx += float((fb[comp] * bx[comp]).sum())
@@ -263,6 +328,9 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
             for e, material in zip(e_total, tendon_materials)
         ])  # tension +, MPa
         ft = -sig_t * ta * _MN_TO_KN                        # tension -> negative (comp +)
+        tendon_F = float(ft.sum())
+        tendon_Fx = float((ft * tx).sum())
+        tendon_Fy = float((ft * ty).sum())
         comp = ft >= 0.0
         comp_F += float(ft[comp].sum())
         comp_Fx += float((ft[comp] * tx[comp]).sum())
@@ -271,8 +339,26 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
         ten_Fx += float((ft[~comp] * tx[~comp]).sum())
         ten_Fy += float((ft[~comp] * ty[~comp]).sum())
 
-    return (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
-            min_eps, max_eps, min_eps_cable)
+    return PlasticAccumulation(
+        concrete_force=concrete_F,
+        concrete_mx=concrete_Fy,
+        concrete_my=concrete_Fx,
+        bar_force=bar_F,
+        bar_mx=bar_Fy,
+        bar_my=bar_Fx,
+        tendon_force=tendon_F,
+        tendon_mx=tendon_Fy,
+        tendon_my=tendon_Fx,
+        compression_force=comp_F,
+        compression_mx=comp_Fy,
+        compression_my=comp_Fx,
+        tension_force=ten_F,
+        tension_mx=ten_Fy,
+        tension_my=ten_Fx,
+        min_bar_strain=min_eps,
+        max_bar_strain=max_eps,
+        min_tendon_strain=min_eps_cable,
+    )
 
 
 @dataclass
@@ -327,6 +413,61 @@ def _prep_section(section: Section, include_tendons: bool) -> _SectionPrep:
     return _SectionPrep(bx=bx, by=by, ba=ba, tx=tx, ty=ty, ta=ta, verts=verts,
                         rings=rings, ring_xy=ring_xy, ring_starts=ring_starts,
                         buf_a=buf_a, buf_b=buf_b)
+
+
+def _accumulate_at_depth(
+    section: Section,
+    concrete: Concrete,
+    steel: MildSteel,
+    V_deg: float,
+    compression_depth: float,
+    curvature: float,
+    *,
+    prestress: "Prestress | None" = None,
+    bar_materials: "Sequence[MildSteel] | None" = None,
+    tendon_materials: "Sequence[Prestress] | None" = None,
+    n_bands: int = 80,
+    prep: "_SectionPrep | None" = None,
+    band_memo: "dict | None" = None,
+) -> PlasticAccumulation:
+    """Re-accumulate one supplied strain plane through the solver's sole kernel."""
+
+    angle = math.radians(V_deg)
+    direction_x, direction_y = math.cos(angle), math.sin(angle)
+    n_bar = len(section.bar_arrays()[2])
+    n_tendon = len(section.tendon_arrays()[2])
+    bar_laws = _material_sequence(steel, bar_materials, n_bar, "bar")
+    tendon_laws = _material_sequence(
+        prestress, tendon_materials, n_tendon, "tendon"
+    ) if (prestress is not None or tendon_materials is not None) else ()
+    if prep is None:
+        prep = _prep_section(section, bool(tendon_laws))
+    bx, by, ba = prep.bx, prep.by, prep.ba
+    tx, ty, ta = prep.tx, prep.ty, prep.ta
+    bar_data = (bx, by, ba, bx * direction_x + by * direction_y)
+    tendon_data = (tx, ty, ta, tx * direction_x + ty * direction_y)
+    projection = (
+        prep.verts[:, 0] * direction_x + prep.verts[:, 1] * direction_y
+    )
+    return _accumulate(
+        concrete,
+        bar_laws,
+        tendon_laws,
+        direction_x,
+        direction_y,
+        float(projection.max()),
+        compression_depth,
+        curvature,
+        n_bands,
+        prep.rings,
+        bar_data,
+        tendon_data,
+        prep.ring_xy,
+        prep.ring_starts,
+        prep.buf_a,
+        prep.buf_b,
+        {} if band_memo is None else band_memo,
+    )
 
 
 def plastic_capacity_at_angle(
@@ -396,7 +537,7 @@ def plastic_capacity_at_angle(
         acc = _accumulate(concrete, bar_laws, tendon_laws, dx, dy, s_max, c, phi,
                           n_bands, rings, bar_data, tendon_data,
                           ring_xy, ring_starts, buf_a, buf_b, band_memo)
-        return acc[0] + acc[3]  # comp_F + ten_F (kN)
+        return acc.axial
 
     # The governing-curvature formulation never drives a material past its limit,
     # so the net axial force increases monotonically with the compression depth c
@@ -424,6 +565,11 @@ def plastic_capacity_at_angle(
     # state so only an in-range request can converge.  Equality deliberately counts
     # as reachable; the exact tension and compression endpoints are valid roots.
     axial_reachable = n_lo <= P <= n_hi
+    search_lower_depth = lo
+    search_upper_depth = hi
+    search_lower_axial = n_lo
+    search_upper_axial = n_hi
+    search_iterations = 0
 
     if P < n_lo:
         c = lo              # requested axial below the pure-tension state (unreachable)
@@ -431,6 +577,7 @@ def plastic_capacity_at_angle(
         c = hi              # requested axial above the squash load (unreachable)
     else:
         for _ in range(max_iter):
+            search_iterations += 1
             c = 0.5 * (lo + hi)
             if net_axial(c) < P:
                 lo = c
@@ -442,8 +589,7 @@ def plastic_capacity_at_angle(
 
     phi = _governing_curvature(bar_laws, tendon_laws, s_max, c, s_bars,
                                s_tendons, concrete.eps_cu2)
-    (comp_F, comp_Fx, comp_Fy, ten_F, ten_Fx, ten_Fy,
-     min_eps, max_eps, min_eps_cable) = _accumulate(
+    accumulation = _accumulate(
         concrete, bar_laws, tendon_laws, dx, dy, s_max, c, phi, n_bands,
         rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b, band_memo
     )
@@ -451,13 +597,13 @@ def plastic_capacity_at_angle(
     # A valid root must be reachable by the endpoint responses *and* satisfy axial
     # equilibrium.  The residual remains an independent guard for a failed search
     # or an unexpected monotonicity violation inside an otherwise valid bracket.
-    axial_residual_ok = (
-        abs((comp_F + ten_F) - P) <= 1.0e-6 * max(1.0, abs(P))
-    )
+    axial_residual = accumulation.axial - P
+    axial_tolerance = 1.0e-6 * max(1.0, abs(P))
+    axial_residual_ok = abs(axial_residual) <= axial_tolerance
     converged = axial_reachable and axial_residual_ok
 
-    Mx = comp_Fy + ten_Fy
-    My = comp_Fx + ten_Fx
+    Mx = accumulation.mx
+    My = accumulation.my
     kappa = phi
     s_na = s_max - c
     eps_concrete = phi * c  # extreme concrete strain (<= eps_cu2; less if steel governs)
@@ -475,9 +621,11 @@ def plastic_capacity_at_angle(
     y_int = s_na / dy if abs(dy) > 1.0e-12 else math.inf
 
     # Internal lever arm between the compression and tension resultants.
-    if comp_F != 0.0 and ten_F != 0.0:
-        cxc, cyc = comp_Fx / comp_F, comp_Fy / comp_F
-        cxt, cyt = ten_Fx / ten_F, ten_Fy / ten_F
+    if accumulation.compression_force != 0.0 and accumulation.tension_force != 0.0:
+        cxc = accumulation.compression_my / accumulation.compression_force
+        cyc = accumulation.compression_mx / accumulation.compression_force
+        cxt = accumulation.tension_my / accumulation.tension_force
+        cyt = accumulation.tension_mx / accumulation.tension_force
         lever_dx, lever_dy = cxc - cxt, cyc - cyt
         lever = math.hypot(lever_dx, lever_dy)
     else:
@@ -487,20 +635,48 @@ def plastic_capacity_at_angle(
         V=V_deg,
         Mx=Mx,
         My=My,
-        axial=comp_F + ten_F,
+        axial=accumulation.axial,
         U=U,
         R=R,
         na_x_intercept=x_int,
         na_y_intercept=y_int,
         eps_concrete=eps_concrete * 100.0,
-        eps_steel=min_eps * 100.0,
-        eps_steel_comp=max_eps * 100.0,
-        eps_cable=min_eps_cable * 100.0,
+        eps_steel=accumulation.min_bar_strain * 100.0,
+        eps_steel_comp=accumulation.max_bar_strain * 100.0,
+        eps_cable=accumulation.min_tendon_strain * 100.0,
         curvature=kappa,
-        compression_force=comp_F,
+        compression_force=accumulation.compression_force,
         lever_arm=lever,
         dx=lever_dx,
         dy=lever_dy,
+        axial_requested=P,
+        axial_residual=axial_residual,
+        axial_tolerance=axial_tolerance,
+        axial_reachable=axial_reachable,
+        compression_depth=c,
+        neutral_axis_offset=s_na,
+        strain_gradient_x=kappa * dx,
+        strain_gradient_y=kappa * dy,
+        strain_offset=-kappa * s_na,
+        search_lower_depth=search_lower_depth,
+        search_upper_depth=search_upper_depth,
+        search_lower_axial=search_lower_axial,
+        search_upper_axial=search_upper_axial,
+        search_iterations=search_iterations,
+        concrete_force=accumulation.concrete_force,
+        concrete_mx=accumulation.concrete_mx,
+        concrete_my=accumulation.concrete_my,
+        bar_force=accumulation.bar_force,
+        bar_mx=accumulation.bar_mx,
+        bar_my=accumulation.bar_my,
+        tendon_force=accumulation.tendon_force,
+        tendon_mx=accumulation.tendon_mx,
+        tendon_my=accumulation.tendon_my,
+        compression_mx=accumulation.compression_mx,
+        compression_my=accumulation.compression_my,
+        tension_force=accumulation.tension_force,
+        tension_mx=accumulation.tension_mx,
+        tension_my=accumulation.tension_my,
         converged=converged,
     )
 

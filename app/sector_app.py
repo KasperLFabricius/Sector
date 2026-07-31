@@ -5032,13 +5032,21 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         # run (the applied moments are ignored and locked).
         check_util = inp.get("check_util", True)
         if closed and check_util:
-            util, util_gov = combined.radial_util(mx, my, inp["Mx_pl"], inp["My_pl"])
+            radial = combined.radial_util_result(
+                mx, my, inp["Mx_pl"], inp["My_pl"]
+            )
+            util = radial.utilisation
+            util_gov = radial.governing_index
+            util_demand = radial.demand
+            util_resistance = radial.resistance
         else:
             util, util_gov = None, None
+            util_demand, util_resistance = None, None
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my), min_mx=min(mx), min_my=min(my),
             util=util, util_gov=util_gov, closed=closed, check_util=check_util,
+            util_demand=util_demand, util_resistance=util_resistance,
             applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
             converged=all(p.converged for p in pts),
             # The solver reports strains compression-positive (its internal
@@ -5049,7 +5057,33 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                          eps_s=-p.eps_steel, eps_s_comp=-p.eps_steel_comp,
                          eps_cable=-p.eps_cable, kappa=p.curvature,
                          comp_force=p.compression_force, lever=p.lever_arm,
-                         dx=p.dx, dy=p.dy) for p in pts],
+                         dx=p.dx, dy=p.dy, converged=p.converged,
+                         axial_requested=p.axial_requested,
+                         axial_achieved=p.axial,
+                         axial_residual=p.axial_residual,
+                         axial_tolerance=p.axial_tolerance,
+                         axial_reachable=p.axial_reachable,
+                         compression_depth=p.compression_depth,
+                         neutral_axis_offset=p.neutral_axis_offset,
+                         strain_gradient_x=p.strain_gradient_x,
+                         strain_gradient_y=p.strain_gradient_y,
+                         strain_offset=p.strain_offset,
+                         search_lower_depth=p.search_lower_depth,
+                         search_upper_depth=p.search_upper_depth,
+                         search_lower_axial=p.search_lower_axial,
+                         search_upper_axial=p.search_upper_axial,
+                         search_iterations=p.search_iterations,
+                         concrete_force=p.concrete_force,
+                         concrete_mx=p.concrete_mx,
+                         concrete_my=p.concrete_my,
+                         bar_force=p.bar_force, bar_mx=p.bar_mx,
+                         bar_my=p.bar_my, tendon_force=p.tendon_force,
+                         tendon_mx=p.tendon_mx, tendon_my=p.tendon_my,
+                         compression_mx=p.compression_mx,
+                         compression_my=p.compression_my,
+                         tension_force=p.tension_force,
+                         tension_mx=p.tension_mx,
+                         tension_my=p.tension_my) for p in pts],
         )
         # Opt-in N-M interaction diagrams, one about each bending axis. For each axis
         # trace the +M branch (NA angle stored as V) and the -M branch (V+180) from
