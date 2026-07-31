@@ -21,6 +21,7 @@ Two interaction rules are provided:
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -153,8 +154,18 @@ def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> fl
     return r_m + r_v + r_t
 
 
-def radial_util(mx, my, ax, ay):
-    """Utilisation of an applied ``(Mx, My)`` against the plastic M-M envelope.
+@dataclass(frozen=True, slots=True)
+class RadialUtilResult:
+    """Complete authoritative result of one applied-ray envelope selection."""
+
+    demand: float
+    resistance: float | None
+    utilisation: float
+    governing_index: int | None
+
+
+def radial_util_result(mx, my, ax, ay) -> RadialUtilResult:
+    """Select and rate an applied ``(Mx, My)`` against the plastic M-M envelope.
 
     The envelope is the closed polygon through the swept capacity points *in sweep
     order* -- the straight chords the M-M diagram actually draws. Utilisation is the
@@ -163,14 +174,13 @@ def radial_util(mx, my, ax, ay):
     interpolation of the vertex radii, which bulges outside the chords) keeps the
     check on the conservative side and consistent with the plotted envelope.
 
-    Returns ``(utilisation, gov)`` where ``gov`` is the index of the swept point
-    that governs -- the endpoint of the crossed chord nearest the crossing, i.e. the
-    section state in the applied load's direction -- or ``None`` when there is no
-    applied direction (zero moment) or the ray misses the envelope.
+    The result owns radial demand, resistance, utilisation, and the governing swept
+    member. ``governing_index`` is ``None`` when there is no applied direction or
+    the ray misses the envelope.
     """
     a_rad = float(np.hypot(ax, ay))
     if a_rad < 1e-9:
-        return 0.0, None
+        return RadialUtilResult(a_rad, None, 0.0, None)
     ux, uy = ax / a_rad, ay / a_rad                 # applied load ray direction
     px, py = np.asarray(mx, dtype=float), np.asarray(my, dtype=float)
     ex, ey = np.roll(px, -1) - px, np.roll(py, -1) - py   # edge vectors (polygon closed)
@@ -182,7 +192,7 @@ def radial_util(mx, my, ax, ay):
         s = (uy * px - ux * py) / D                 # edge parameter
     hit = (np.abs(D) > 1e-12) & (s >= -1e-9) & (s <= 1.0 + 1e-9) & (t > 1e-9)
     if not hit.any():
-        return math.inf, None                       # ray misses the envelope
+        return RadialUtilResult(a_rad, None, math.inf, None)
     idx = np.nonzero(hit)[0]
     edge = int(idx[np.argmin(t[idx])])              # nearest forward boundary crossing
     cap = float(t[edge])
@@ -194,4 +204,11 @@ def radial_util(mx, my, ax, ay):
     d0 = math.hypot(float(px[edge]) - cx, float(py[edge]) - cy)
     d1 = math.hypot(float(px[nxt]) - cx, float(py[nxt]) - cy)
     gov = edge if d0 <= d1 else nxt
-    return a_rad / cap, gov
+    return RadialUtilResult(a_rad, cap, a_rad / cap, gov)
+
+
+def radial_util(mx, my, ax, ay):
+    """Compatibility tuple ``(utilisation, governing_index)`` for the selector."""
+
+    result = radial_util_result(mx, my, ax, ay)
+    return result.utilisation, result.governing_index
