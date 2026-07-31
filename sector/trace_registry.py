@@ -6,9 +6,11 @@ import re
 from dataclasses import dataclass
 
 from .calculation_trace import (
+    QUANTITY_ROLES,
     RESULT_STATES,
     SOURCE_KINDS,
     SOURCE_STANDARD,
+    SourceCitation,
     TraceAxis,
     TraceBundle,
     TraceSource,
@@ -30,6 +32,15 @@ class TraceSourceContract:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceStepMetadataContract:
+    """Exact canonical role and complete source identity for one step ID."""
+
+    step_id: str
+    quantity_role: str
+    source: TraceSource
+
+
+@dataclass(frozen=True, slots=True)
 class TraceMemberContract:
     """Exact identity and result requirements for one retained calculation."""
 
@@ -42,6 +53,7 @@ class TraceMemberContract:
     result_states: frozenset[str]
     step_ids: tuple[str, ...] = ()
     step_dependencies: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    step_metadata: tuple[TraceStepMetadataContract, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,11 +99,34 @@ def _source_contract(source: TraceSource) -> TraceSourceContract:
     )
 
 
+def _validate_exact_source(source: object, label: str) -> None:
+    if type(source) is not TraceSource:
+        raise TraceValidationError(f"{label} must be a TraceSource")
+    _require_id(source.kind, f"{label} kind")
+    if source.kind not in SOURCE_KINDS:
+        raise TraceValidationError(f"{label} has unknown kind {source.kind!r}")
+    _require_id(source.method_id, f"{label} method_id")
+    if source.kind == SOURCE_STANDARD:
+        _require_text(source.edition, f"{label} edition")
+        if type(source.citation) is not SourceCitation:
+            raise TraceValidationError(f"{label} needs an exact standards citation")
+        _require_text(source.citation.document, f"{label} citation document")
+        _require_text(source.citation.clause, f"{label} citation clause")
+        _require_text(source.citation.locator, f"{label} citation locator")
+    elif source.edition is not None:
+        raise TraceValidationError(f"{label} edition is only valid for a standard")
+    elif source.citation is not None:
+        raise TraceValidationError(
+            f"{label} project/input methods cannot carry a standards citation"
+        )
+
+
 def _validate_step_contract(member: TraceMemberContract) -> None:
     label = member.member_id
     if (
         type(member.step_ids) is not tuple
         or type(member.step_dependencies) is not tuple
+        or type(member.step_metadata) is not tuple
     ):
         raise TraceValidationError(
             f"{label} step contracts must be immutable tuples"
@@ -135,6 +170,30 @@ def _validate_step_contract(member: TraceMemberContract) -> None:
                 )
             seen_dependencies.add(dependency_id)
         dependency_rows.append((step_id, dependency_ids))
+
+    metadata_step_ids: set[str] = set()
+    for metadata in member.step_metadata:
+        if type(metadata) is not TraceStepMetadataContract:
+            raise TraceValidationError(
+                f"{label} step metadata must contain "
+                "TraceStepMetadataContract values"
+            )
+        _require_id(metadata.step_id, f"{label} metadata step ID")
+        if metadata.step_id in metadata_step_ids:
+            raise TraceValidationError(
+                f"{label} has duplicate metadata step {metadata.step_id}"
+            )
+        metadata_step_ids.add(metadata.step_id)
+        _require_id(metadata.quantity_role, f"{label} metadata quantity role")
+        if metadata.quantity_role not in QUANTITY_ROLES:
+            raise TraceValidationError(
+                f"{label} step {metadata.step_id} has unknown quantity role "
+                f"{metadata.quantity_role!r}"
+            )
+        _validate_exact_source(
+            metadata.source,
+            f"{label} step {metadata.step_id} metadata source",
+        )
 
     if not dependency_rows:
         return
@@ -245,7 +304,7 @@ def audit_trace_registry(
     bundle: TraceBundle,
     registry: TraceRegistryContract,
 ) -> TraceBundle:
-    """Validate exact members, axes, local sources, editions, and result states."""
+    """Validate exact family identity and independently selected step contracts."""
 
     model = validate_bundle(bundle)
     expected = _validate_registry(registry)
@@ -310,6 +369,47 @@ def audit_trace_registry(
                 mismatches.append(
                     "dependency graph differs from the selected contract"
                 )
+        if member.step_metadata:
+            actual_metadata_ids = tuple(step.step_id for step in calculation.steps)
+            declared_metadata_ids = tuple(
+                metadata.step_id for metadata in member.step_metadata
+            )
+            missing_metadata = sorted(
+                set(actual_metadata_ids) - set(declared_metadata_ids)
+            )
+            unknown_metadata = sorted(
+                set(declared_metadata_ids) - set(actual_metadata_ids)
+            )
+            if missing_metadata:
+                mismatches.append(
+                    "missing step metadata for " + ", ".join(missing_metadata)
+                )
+            if unknown_metadata:
+                mismatches.append(
+                    "unknown/extra step metadata for "
+                    + ", ".join(unknown_metadata)
+                )
+            if not missing_metadata and not unknown_metadata:
+                if declared_metadata_ids != actual_metadata_ids:
+                    mismatches.append(
+                        "step metadata rows differ from calculation step order"
+                    )
+                declared_metadata = {
+                    metadata.step_id: metadata for metadata in member.step_metadata
+                }
+                for step in calculation.steps:
+                    metadata = declared_metadata[step.step_id]
+                    if step.quantity_role != metadata.quantity_role:
+                        mismatches.append(
+                            f"step {step.step_id} quantity role "
+                            f"{step.quantity_role!r}, expected "
+                            f"{metadata.quantity_role!r}"
+                        )
+                    if step.source != metadata.source:
+                        mismatches.append(
+                            f"step {step.step_id} source {step.source!r}, "
+                            f"expected {metadata.source!r}"
+                        )
         if mismatches:
             raise TraceValidationError(
                 f"{family.family_id}/{member.member_id} identity mismatch: "
