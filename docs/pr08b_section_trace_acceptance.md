@@ -1,7 +1,7 @@
-# PR-08B section-trace acceptance map
-This independently audited split freezes CT-002 on the accepted PR-08A trace core. CT-003 through CT-005 follow separately after repeated review classes; Sector remains 0.91 and the builder remains unpublished until PR-08E.
-| Family member | Required identity and cardinality | Required closure and state |
+# PR-08B section-trace foundation acceptance map
+This split freezes only shared immutable section inputs/provenance and exact registry graph contracts on accepted PR-08A. CT-002 through CT-005 follow as independently reviewed families; Sector remains 0.91 and all builders remain unpublished until PR-08E.
+| Foundation member | Required identity and cardinality | Required closure |
 | --- | --- | --- |
-| CT-002 plastic capacity | Exactly one selected-context member. Method is the one common selected EC2 edition, `mixed-standard-project-material-section-solve` for cross-edition or standard/project mixtures, or `user-defined-material-section-solve` when every law is project-defined. | Exact ordered rings, every bar/tendon coordinate and area, every assigned constitutive law, applied action, selected solver state, curvature, axial equilibrium, compression resultant, lever arm, and both moment components. Final is finite or explicit `failed`. |
-Registry auditing is exact: calculation IDs, axes, methods, editions, source sets, result states, and member count must match. Missing, duplicate, wrong-axis, wrong-edition, masking, tampered, or stale evidence fails closed.
-Project-defined material and numerical methods carry no invented standard citation.
+| Geometry and actions | One immutable block per selected section/context. | Exact ordered rings, every bar/tendon coordinate and area, and finite tension-positive plastic actions. |
+| Material assignments | One immutable law/provenance block per concrete, bar, and tendon assignment. | Explicit element laws require aligned catalog entries and exact parameter-vector agreement. Edited named presets become project laws without standard citations; missing, swapped, or mismatched evidence fails closed. |
+| Registry graph | Optional exact step IDs and dependency tuples remain backward compatible with the PR-08A contract. | Missing, duplicate, wrong-axis, wrong-edition, masking, dependency-tampered, content-tampered, or stale evidence fails closed. |

@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-from . import codes
+from . import codes, material_presets
 from .calculation_trace import (
     SOURCE_PROJECT,
     SOURCE_STANDARD,
@@ -142,6 +142,33 @@ def _catalog_matches(law: Any, item: Mapping[str, Any]) -> bool:
         if not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-12):
             return False
     return True
+def _preset_law_values(kind: str, preset: str) -> tuple[tuple[str, float], ...] | None:
+    available = (
+        material_presets.MILD_PRESETS
+        if kind == "bar"
+        else material_presets.PRESTRESS_PRESETS
+    )
+    values = available.get(preset)
+    if _code(preset) is None or values is None:
+        return None
+    fields = {key: value for key, value in values.items() if key != "curve"}
+    law = (
+        material_presets.build_mild(values["curve"], **fields)
+        if kind == "bar"
+        else material_presets.build_prestress(values["curve"], **fields)
+    )
+    return _law_values(law)
+def _standard_law_matches(kind: str, preset: str, law: Any) -> bool:
+    target = _law_values(law)
+    preset_values = _preset_law_values(kind, preset)
+    if preset_values == target:
+        return True
+    code = _code(preset)
+    return bool(
+        kind == "bar"
+        and code is not None
+        and _law_values(code.steel(law.fytk)) == target
+    )
 def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str, str, Mapping[str, Any] | None]:
     element_key = "bar_elements" if kind == "bar" else "tendon_elements"
     catalog_key = "mild_material_catalog" if kind == "bar" else "prestress_material_catalog"
@@ -177,6 +204,8 @@ def _materials(
             raise ValueError(f"assigned {kind} laws need aligned catalog provenance")
         if catalog_item is not None and not _catalog_matches(law, catalog_item):
             raise ValueError(f"{kind} law does not match its catalog provenance")
+        if _code(preset) is not None and not _standard_law_matches(kind, preset, law):
+            preset = "Custom / imported"
         elements = tuple(inp.get("bar_elements" if kind == "bar" else "tendon_elements") or ())
         element = elements[index] if index < len(elements) and isinstance(elements[index], Mapping) else {}
         blocks.append(
@@ -200,12 +229,19 @@ def section_trace_blocks(inp: Mapping[str, Any]) -> SectionTraceBlocks:
     concrete = inp.get("concrete")
     if concrete is None:
         raise ValueError("concrete material law is required")
+    concrete_preset = inp.get("concrete_preset")
+    concrete_code = _code(concrete_preset)
+    if (
+        concrete_code is not None
+        and _law_values(concrete) != _law_values(concrete_code.concrete(concrete.fck))
+    ):
+        concrete_preset = "Custom / imported"
     concrete_block = MaterialBlock(
         "concrete",
         "concrete",
-        str(inp.get("concrete_preset") or "project-concrete"),
+        str(concrete_preset or "project-concrete"),
         _law_values(concrete),
-        _provenance("concrete", inp.get("concrete_preset")),
+        _provenance("concrete", concrete_preset),
     )
     bars = _materials(
         inp, kind="bar", count=len(geometry.bars), default=inp.get("steel")
