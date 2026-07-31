@@ -1,4 +1,4 @@
-"""Solver-adjacent CT-002 through CT-005 calculation-trace builders."""
+"""Solver-adjacent CT-002 through CT-004 calculation-trace builders."""
 from __future__ import annotations
 import math
 import re
@@ -12,7 +12,6 @@ from .calculation_trace import (
     RESULT_UNDEFINED,
     ROLE_COMPUTED,
     ROLE_FINAL,
-    ROLE_METHOD_VALUE,
     ROLE_USER_INPUT,
     SOURCE_INPUT,
     SOURCE_PROJECT,
@@ -43,19 +42,13 @@ GEOMETRY = TraceSource(SOURCE_PROJECT, "sector-section-geometry")
 ASSIGNMENT = TraceSource(SOURCE_PROJECT, "sector-material-assignment")
 PLASTIC = TraceSource(SOURCE_PROJECT, "sector-plastic-section-equilibrium")
 RADIAL = TraceSource(SOURCE_PROJECT, "sector-radial-envelope-intersection")
-ELASTIC = TraceSource(SOURCE_PROJECT, "sector-transformed-section-equilibrium")
-CRACKING = TraceSource(SOURCE_PROJECT, "sector-first-cracking")
 UNITS = {
     "1": TraceUnit("1", "dimensionless"),
     "m": TraceUnit("m", "length"),
     "m2": TraceUnit("m2", "area"),
-    "m4": TraceUnit("m4", "second-moment"),
     "kN": TraceUnit("kN", "force"),
     "kNm": TraceUnit("kNm", "moment"),
-    "kN/m2": TraceUnit("kN/m2", "stress"),
-    "kN/m3": TraceUnit("kN/m3", "stress-gradient"),
     "MPa": TraceUnit("MPa", "stress"),
-    "GPa": TraceUnit("GPa", "stress"),
     "1/m": TraceUnit("1/m", "curvature"),
     "degrees": TraceUnit("degrees", "angle"),
 }
@@ -67,12 +60,6 @@ def _number(value: Any) -> float:
     return float(value)
 def _fmt(value: float) -> str:
     return f"{value:.9g}"
-def _record(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-    if hasattr(value, "to_dict"):
-        return value.to_dict()
-    return {}
 def _value(value: Any, *names: str) -> Any:
     if isinstance(value, Mapping):
         for name in names:
@@ -313,9 +300,10 @@ def _capacity(
         reason = "plastic envelope point arrays are missing or misaligned"
     else:
         raw_index = result.get("util_gov")
-        index = int(raw_index) if type(raw_index) is int and 0 <= raw_index < len(points) else max(
-            range(len(points)), key=lambda item: math.hypot(float(mx[item]), float(my[item]))
-        )
+        if type(raw_index) is not int or not 0 <= raw_index < len(points):
+            reason = "selected plastic solver index is missing or invalid"
+            return calc.finish(_failed_final(calc, PLASTIC, base, reason), warnings=(reason,))
+        index = raw_index
         point = points[index]
         values = {
             "angle": _value(point, "V"),
@@ -511,282 +499,13 @@ def plastic_calculations(
             _interaction(inp, result, context, blocks, axis) for axis in ("x", "y")
         )
     return calculations
-def _elastic_materials(
-    calc: _Calculation,
-    blocks: SectionTraceBlocks,
-    ns: float,
-    nl: float,
-) -> tuple[str, ...]:
-    assignments: list[str] = []
-    groups: dict[tuple, str] = {}
-    group_counts = {"bar": 0, "tendon": 0}
-    assignment_counts = {"bar": 0, "tendon": 0}
-    for material in (*blocks.bars, *blocks.tendons):
-        values = dict(material.values)
-        es, initial = values["Es"], values.get("IS", 0.0)
-        key = (material.kind, es, initial if material.kind == "tendon" else 0.0)
-        law = groups.get(key)
-        if law is None:
-            group_counts[material.kind] += 1
-            prefix = f"elastic-{material.kind}-{group_counts[material.kind]:03d}"
-            es_step = calc.input(f"{prefix}-es", f"{material.kind} elastic modulus", "E", "MPa", es)
-            multiplier = calc.add(
-                f"{prefix}-modulus-multiplier", "Reference-modulus multiplier", "mE", "1",
-                TraceResult(RESULT_FINITE, es / 200000.0), source=ELASTIC,
-                dependencies=(es_step, "reference-steel-modulus"),
-                expression="mE = E / Es,ref",
-            )
-            deps = [es_step, multiplier]
-            for period, ratio in (("short", ns), ("long", nl)):
-                deps.append(
-                    calc.add(
-                        f"{prefix}-n-ratio-{period}", f"{period} modular ratio", f"n{period}", "1",
-                        TraceResult(RESULT_FINITE, ratio * es / 200000.0), source=ELASTIC,
-                        dependencies=(f"n-ratio-{period}", multiplier),
-                        expression=f"n{period},element = n{period},ref mE",
-                    )
-                )
-            if material.kind == "tendon":
-                initial_step = calc.input(f"{prefix}-initial-strain", "Effective tendon prestrain", "epsp0", "1", initial)
-                deps.extend(
-                    (
-                        initial_step,
-                        calc.add(
-                            f"{prefix}-locked-prestress", "Locked-in tendon prestress", "sigmap0", "MPa",
-                            TraceResult(RESULT_FINITE, es * initial), source=ELASTIC,
-                            dependencies=(es_step, initial_step), expression="sigmap0 = Ep epsp0",
-                        ),
-                    )
-                )
-            law = calc.add(
-                f"{prefix}-law", "Elastic transformed-section material vector", "lawel", "1",
-                TraceResult(RESULT_FINITE, 1.0), source=ELASTIC, dependencies=deps,
-            )
-            groups[key] = law
-        assignment_counts[material.kind] += 1
-        assignments.append(
-            calc.add(
-                f"elastic-{material.kind}-assignment-{assignment_counts[material.kind]:03d}",
-                f"Elastic material assignment for {material.element_id}", "Iel", "1",
-                TraceResult(RESULT_FINITE, 1.0), source=ASSIGNMENT, dependencies=(law,),
-            )
-        )
-    return tuple(assignments)
-def _elastic_base(
-    calc: _Calculation,
-    inp: Mapping[str, Any],
-    blocks: SectionTraceBlocks,
-) -> tuple[str, ...]:
-    values = dict(blocks.elastic_actions.values)
-    actions = tuple(
-        calc.input(step_id, title, symbol, unit, values[key])
-        for step_id, title, symbol, unit, key in (
-            ("n-long", "Long-term axial action", "Nlong", "kN", "P_el_l"),
-            ("mx-long", "Long-term x moment", "Mxlong", "kNm", "Mx_el_l"),
-            ("my-long", "Long-term y moment", "Mylong", "kNm", "My_el_l"),
-            ("n-short", "Short-term axial increment", "Nshort", "kN", "P_el_s"),
-            ("mx-short", "Short-term x-moment increment", "Mxshort", "kNm", "Mx_el_s"),
-            ("my-short", "Short-term y-moment increment", "Myshort", "kNm", "My_el_s"),
-        )
-    )
-    ec = calc.input("concrete-modulus", "Concrete elastic modulus", "Ecm", "GPa", inp["conc_Ec"])
-    phi = calc.input("creep-coefficient", "Creep coefficient", "phi", "1", inp.get("el_phi", 0.0))
-    ns_value, nl_value = _number(inp["ns"]), _number(inp["nl"])
-    ns = calc.input("n-ratio-short", "Short-term reference modular ratio", "nshort", "1", ns_value)
-    nl = calc.input("n-ratio-long", "Long-term reference modular ratio", "nlong", "1", nl_value)
-    reference = calc.add(
-        "reference-steel-modulus", "Solver reference steel modulus", "Esref", "MPa",
-        TraceResult(RESULT_FINITE, 200000.0), source=ELASTIC, role=ROLE_METHOD_VALUE,
-        expression="Sector reference modulus",
-    )
-    creep = calc.add(
-        "creep-multiplier", "Long-term creep multiplier", "1+phi", "1",
-        TraceResult(RESULT_FINITE, 1.0 + _number(inp.get("el_phi", 0.0))), source=ELASTIC,
-        dependencies=(phi,), expression="qphi = 1 + phi",
-    )
-    return (
-        *actions,
-        ec,
-        ns,
-        nl,
-        reference,
-        creep,
-        _geometry(calc, blocks),
-        *_elastic_materials(calc, blocks, ns_value, nl_value),
-    )
-def _equilibrium(
-    inp: Mapping[str, Any],
-    result: Mapping[str, Any],
-    context: Mapping[str, Any],
-    blocks: SectionTraceBlocks,
-) -> TraceCalculation:
-    cid = context_id(context)
-    calc = _Calculation(
-        f"elastic.{cid}.section-equilibrium",
-        "ct-005",
-        "Cracked/uncracked elastic section equilibrium",
-        "sector-transformed-section-equilibrium",
-        context_axes(context),
-    )
-    base = _elastic_base(calc, inp, blocks)
-    count = len(blocks.bars) + len(blocks.tendons)
-    valid = bool(result.get("converged"))
-    outputs: list[str] = []
-    plane = result.get("stress_plane")
-    valid = valid and isinstance(plane, Sequence) and len(plane) == 3
-    if isinstance(plane, Sequence) and len(plane) == 3:
-        for name, unit, value in zip(("eps0", "kx", "ky"), ("kN/m2", "kN/m3", "kN/m3"), plane):
-            item = _result(value, invalid_reason=f"non-finite stress-plane {name}")
-            valid = valid and item.state == RESULT_FINITE
-            outputs.append(calc.add(name, f"Solver load-consistent stress-plane {name}", name, unit, item, source=ELASTIC, dependencies=base))
-    for key in ("long", "rst1", "total", "dif"):
-        values = result.get(key)
-        valid = valid and isinstance(values, Sequence) and len(values) == count
-        if isinstance(values, Sequence):
-            for index, value in enumerate(values, start=1):
-                item = _result(value, invalid_reason=f"non-finite {key} stress")
-                valid = valid and item.state == RESULT_FINITE
-                outputs.append(calc.add(f"{key}-{index:03d}", f"{key} element stress {index}", "sigma", "MPa", item, source=ELASTIC, dependencies=base))
-    maxima = []
-    for key, title in (("max_conc", "Maximum concrete compression"), ("max_steel", "Maximum reinforcement tension")):
-        item = _result(result.get(key), invalid_reason=f"{key} is unavailable")
-        valid = valid and item.state == RESULT_FINITE
-        maxima.append(calc.add(key.replace("_", "-"), title, "sigma", "MPa", item, source=ELASTIC, dependencies=base))
-    for prop_key in ("props_un", "props_cr"):
-        props = result.get(prop_key)
-        if isinstance(props, Mapping):
-            for name, value in sorted(props.items()):
-                if name not in {"area", "cx", "cy", "Ix", "Iy", "Ixy"}:
-                    continue
-                unit = "m2" if name == "area" else "m" if name in {"cx", "cy"} else "m4"
-                item = _result(value, invalid_reason=f"non-finite {prop_key} {name}")
-                valid = valid and item.state == RESULT_FINITE
-                outputs.append(calc.add(f"{prop_key.replace('_', '-')}-{name.lower()}", f"{prop_key} {name}", name, unit, item, source=ELASTIC, dependencies=base))
-    if not valid:
-        reason = "elastic result is incomplete, non-finite, misaligned, or unconverged"
-        final = _failed_final(calc, ELASTIC, (*base, *outputs, *maxima), reason)
-        return calc.finish(final, warnings=(reason,))
-    state = calc.add(
-        "elastic-state", "Complete retained elastic solver state", "state", "1",
-        TraceResult(RESULT_FINITE, 1.0), source=ELASTIC,
-        dependencies=(*outputs, *maxima),
-    )
-    max_conc = float(next(step.result.value for step in calc.steps if step.step_id == "max-conc"))
-    max_steel = float(next(step.result.value for step in calc.steps if step.step_id == "max-steel"))
-    value = max(abs(max_conc), abs(max_steel))
-    final = calc.add(
-        "governing-stress-magnitude", "Governing reported stress magnitude", "sigmamax", "MPa",
-        TraceResult(RESULT_FINITE, value), source=ELASTIC,
-        dependencies=(state, *maxima), role=ROLE_FINAL,
-        expression="sigmamax = max(abs(sigmac), abs(sigmas))",
-    )
-    return calc.finish(final, assumptions=("No SLS acceptance limit is inferred.",))
-def _threshold_record(result: Mapping[str, Any]) -> Mapping[str, Any]:
-    raw = result.get("cracking_threshold", result.get("threshold"))
-    return _record(raw)
-def _cracking_method(result: Mapping[str, Any]) -> str:
-    return (
-        "sector-fixed-prestress-decompression"
-        if _threshold_record(result).get("method") == "fixed-prestress-decompression"
-        else "sector-linear-elastic-scaling"
-    )
-def _first_cracking(
-    inp: Mapping[str, Any],
-    result: Mapping[str, Any],
-    context: Mapping[str, Any],
-    blocks: SectionTraceBlocks,
-) -> TraceCalculation:
-    cid = context_id(context)
-    method = _cracking_method(result)
-    calc = _Calculation(
-        f"elastic.{cid}.cracking-factor",
-        "ct-005",
-        "First-cracking load factor",
-        method,
-        context_axes(context),
-    )
-    base = _elastic_base(calc, inp, blocks)
-    threshold = _threshold_record(result)
-    valid = bool(threshold)
-    fctm_value = threshold.get("fctm_mpa", result.get("fctm", inp.get("sls_fctm")))
-    try:
-        fctm = calc.input("fctm", "Selected mean tensile strength", "fctm", "MPa", fctm_value)
-    except ValueError:
-        fctm = calc.add(
-            "fctm-state", "Invalid tensile-strength input", "fctm", "MPa",
-            TraceResult(RESULT_FAILED, None, "fctm must be finite"), source=CRACKING,
-            dependencies=base,
-        )
-        valid = False
-    deps: list[str] = [*base, fctm]
-    if method == "sector-fixed-prestress-decompression":
-        for key, step_id, title in (
-            ("fixed_prestress_mpa", "sigma-pre", "Fixed prestress stress at governing fibre"),
-            ("external_tension_mpa", "sigma-ext", "External-action tensile stress at governing fibre"),
-            ("available_tension_mpa", "available-tension", "Tension available before cracking"),
-        ):
-            item = _result(threshold.get(key), invalid_reason=f"{key} is unavailable")
-            valid = valid and item.state == RESULT_FINITE
-            deps.append(calc.add(step_id, title, "sigma", "MPa", item, source=CRACKING, dependencies=base))
-    else:
-        sigma_value = threshold.get("sigma_ct_mpa", result.get("sigma_ct"))
-        item = _result(sigma_value, invalid_reason="Stage-I concrete tension is unavailable")
-        valid = valid and item.state == RESULT_FINITE
-        deps.append(calc.add("sigma-ct", "Stage-I extreme concrete tension", "sigmact", "MPa", item, source=CRACKING, dependencies=base))
-    raw_item = _result(threshold.get("raw_factor"), invalid_reason="raw cracking factor is unavailable")
-    valid = valid and raw_item.state in {RESULT_FINITE, RESULT_POSITIVE_INFINITY}
-    raw = calc.add("lambda-cr-raw", "Unclamped first-cracking factor", "lambdaraw", "1", raw_item, source=CRACKING, dependencies=deps)
-    lambda_item = TraceResult(RESULT_POSITIVE_INFINITY, None, "no positive external tensile-stress increment reaches first cracking") if result.get("lambda_cr") == math.inf else _result(result.get("lambda_cr"), invalid_reason="first-cracking factor is unavailable")
-    if lambda_item.state not in {RESULT_FINITE, RESULT_POSITIVE_INFINITY}:
-        valid = False
-    threshold_factor = threshold.get("factor")
-    try:
-        same = (
-            math.isinf(float(threshold_factor)) and lambda_item.state == RESULT_POSITIVE_INFINITY
-            or lambda_item.state == RESULT_FINITE
-            and math.isclose(float(threshold_factor), float(lambda_item.value))
-        )
-    except (TypeError, ValueError):
-        same = False
-    valid = valid and same
-    if not valid:
-        lambda_item = TraceResult(RESULT_FAILED, None, "first-cracking leaves are incomplete or inconsistent")
-    reason = lambda_item.reason
-    final = calc.add(
-        "lambda-cr", "First-cracking load factor", "lambda", "1", lambda_item,
-        source=CRACKING, dependencies=(*deps, raw), role=ROLE_FINAL,
-        expression=(
-            "lambda = (fctm - sigma_pre) / sigma_ext"
-            if method == "sector-fixed-prestress-decompression"
-            else "lambda = fctm / sigmact"
-        ),
-        warning=reason,
-        assumption="This project numerical result is not an SLS acceptance verdict.",
-    )
-    return calc.finish(final, warnings=(reason,) if reason else ())
-def elastic_calculations(
-    inp: Mapping[str, Any],
-    out: Mapping[str, Any],
-    *,
-    context: Mapping[str, Any],
-) -> list[TraceCalculation]:
-    result = out.get("elastic")
-    if not isinstance(result, Mapping):
-        return []
-    blocks = section_trace_blocks(inp)
-    calculations = [_equilibrium(inp, result, context, blocks)]
-    if result.get("lambda_cr") is not None:
-        calculations.append(_first_cracking(inp, result, context, blocks))
-    return calculations
 def section_calculations(
     inp: Mapping[str, Any],
     out: Mapping[str, Any],
     *,
     context: Mapping[str, Any],
 ) -> tuple[TraceCalculation, ...]:
-    return tuple(
-        (*plastic_calculations(inp, out, context=context), *elastic_calculations(inp, out, context=context))
-    )
+    return tuple(plastic_calculations(inp, out, context=context))
 def _source_contract(source: TraceSource) -> TraceSourceContract:
     return TraceSourceContract(source.kind, source.method_id, source.edition)
 def _contract(
@@ -831,13 +550,6 @@ def section_trace_registry(
     }
     if blocks.bars or blocks.tendons:
         plastic_sources.add(_source_contract(ASSIGNMENT))
-    elastic_sources = {
-        _source_contract(INPUT),
-        _source_contract(GEOMETRY),
-        _source_contract(ELASTIC),
-    }
-    if blocks.bars or blocks.tendons:
-        elastic_sources.add(_source_contract(ASSIGNMENT))
     families = []
     plastic = out.get("plastic")
     if isinstance(plastic, Mapping):
@@ -876,35 +588,6 @@ def section_trace_registry(
                         )
                         for axis in ("x", "y")
                     ),
-                )
-            )
-    elastic = out.get("elastic")
-    if isinstance(elastic, Mapping):
-        equilibrium_id = f"elastic.{cid}.section-equilibrium"
-        families.append(
-            TraceFamilyContract(
-                "elastic-equilibrium",
-                (_contract(
-                    "elastic-equilibrium",
-                    calculations[equilibrium_id],
-                    frozenset(elastic_sources),
-                    method_id="sector-transformed-section-equilibrium",
-                    axes=axes,
-                ),),
-            )
-        )
-        if elastic.get("lambda_cr") is not None:
-            cracking_id = f"elastic.{cid}.cracking-factor"
-            families.append(
-                TraceFamilyContract(
-                    "elastic-first-cracking",
-                    (_contract(
-                        "elastic-first-cracking",
-                        calculations[cracking_id],
-                        frozenset({*elastic_sources, _source_contract(CRACKING)}),
-                        method_id=_cracking_method(elastic),
-                        axes=axes,
-                    ),),
                 )
             )
     return TraceRegistryContract(f"section-{cid}", tuple(families))

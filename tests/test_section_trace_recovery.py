@@ -15,29 +15,12 @@ from sector.calculation_trace import (
     validate_bundle,
 )
 from sector.combined import radial_util
-from sector.elastic import solve_elastic_combined
 from sector.materials import Concrete, MildSteel, Prestress
 from sector.plastic import plastic_capacity_at_angle, solve_interaction, solve_plastic
 from sector.section import Section
 from sector.section_trace_blocks import section_trace_blocks
-from sector.serviceability import analyse_cracking
 from sector.trace_builders import create_section_trace_bundle, plastic_calculations, section_trace_registry
 from sector.trace_registry import audit_trace_registry
-def _elastic_output(result, cracking):
-    return {
-        "converged": result.converged,
-        "stress_plane": (result.short_term.eps0, result.short_term.kx, result.short_term.ky),
-        "long": list(result.bar_stress_long / 1000.0),
-        "rst1": list(result.bar_stress_rst1 / 1000.0),
-        "total": list(result.bar_stress_total / 1000.0),
-        "dif": list(result.bar_stress_dif / 1000.0),
-        "max_conc": result.max_concrete_compression / 1000.0,
-        "max_steel": max(result.bar_stress_total / 1000.0),
-        "lambda_cr": cracking.lambda_cr,
-        "fctm": cracking.fctm,
-        "sigma_ct": cracking.sigma_ct,
-        "threshold": cracking.threshold,
-    }
 @pytest.fixture(scope="module")
 def section_case():
     section = Section.from_polygon(
@@ -53,20 +36,14 @@ def section_case():
         interactions[axis] = {
             "N": [-item.axial for item in values], "M": [getattr(item, f"M{axis}") for item in values], "converged": all(item.converged for item in values),
         }
-    ns, nl = 200000.0 / 34000.0, 2.0 * 200000.0 / 34000.0
-    elastic = solve_elastic_combined(section, 100.0, 20.0, 5.0, nl, 10.0, 2.0, 1.0, ns)
-    cracking = analyse_cracking(section, 100.0, 20.0, 5.0, nl, fctm=3.2)
     inp = {
         "section": section, "concrete": concrete, "steel": steel, "concrete_preset": codes.EC2_2005.label, "mild_preset": codes.EC2_2005.label,
-        "P_pl": 0.0, "Mx_pl": 10.0, "My_pl": 20.0, "P_el_l": 100.0, "Mx_el_l": 20.0, "My_el_l": 5.0,
-        "P_el_s": 10.0, "Mx_el_s": 2.0, "My_el_s": 1.0,
-        "conc_Ec": 34.0, "el_phi": 1.0, "ns": ns, "nl": nl,
+        "P_pl": 0.0, "Mx_pl": 10.0, "My_pl": 20.0,
     }
     out = {
         "plastic": {
             "points": points, "mx": mx, "my": my, "util": util, "util_gov": gov, "converged": all(item.converged for item in points), "interaction": interactions,
         },
-        "elastic": _elastic_output(elastic, cracking),
     }
     return inp, out
 def _bundle(inp, out):
@@ -74,7 +51,7 @@ def _bundle(inp, out):
 def test_all_selected_chains_are_complete_and_reconstruct_solver_results(section_case):
     inp, out = section_case
     bundle = _bundle(inp, out)
-    assert [item.coverage_id for item in bundle.calculations] == ["ct-002", "ct-003", "ct-004", "ct-004", "ct-005", "ct-005"]
+    assert [item.coverage_id for item in bundle.calculations] == ["ct-002", "ct-003", "ct-004", "ct-004"]
     for calculation in bundle.calculations:
         seen = set()
         for step in calculation.steps:
@@ -99,8 +76,6 @@ def test_all_selected_chains_are_complete_and_reconstruct_solver_results(section
     }
     interactions = [item for item in bundle.calculations if item.coverage_id == "ct-004"]
     assert {next(axis.value for axis in item.axes if axis.name == "axis") for item in interactions} == {"x", "y"}
-    elastic = next(item for item in bundle.calculations if item.calculation_id.endswith("section-equilibrium"))
-    assert [step.unit.symbol for step in elastic.steps if step.step_id in {"eps0", "kx", "ky"}] == ["kN/m2", "kN/m3", "kN/m3"]
     assert all(item.steps[-1].result.state == RESULT_FINITE for item in bundle.calculations)
 def test_method_and_edition_selection_is_exact_for_standard_mixed_and_project(section_case):
     inp, _ = section_case
@@ -124,6 +99,8 @@ def test_method_and_edition_selection_is_exact_for_standard_mixed_and_project(se
     project_blocks = section_trace_blocks(project)
     assert project_blocks.plastic_method_id == "user-defined-material-section-solve"
     assert all(item.provenance.source.citation is None for item in (project_blocks.concrete, *project_blocks.bars))
+    with pytest.raises(ValueError, match="aligned catalog provenance"):
+        section_trace_blocks({**inp, "bar_materials": [inp["steel"], project["steel"]]})
 def test_heterogeneous_bar_tendon_and_hole_inputs_reach_plastic_final():
     section = Section.from_polygon(
         [(0, 0), (0.3, 0), (0.3, 0.6), (0, 0.6)],
@@ -143,7 +120,7 @@ def test_heterogeneous_bar_tendon_and_hole_inputs_reach_plastic_final():
         "mild_material_catalog": {"items": [{"id": "M1", "preset": codes.EC2_2005.label}, {"id": "M2", "preset": "Custom / imported"}]},
         "P_pl": 0.0, "Mx_pl": point.Mx, "My_pl": point.My,
     }
-    calc = plastic_calculations(inp, {"plastic": {"points": [point], "mx": [point.Mx], "my": [point.My], "converged": point.converged}}, context={"case": "heterogeneous"})[0]
+    calc = plastic_calculations(inp, {"plastic": {"points": [point], "mx": [point.Mx], "my": [point.My], "util_gov": 0, "converged": point.converged}}, context={"case": "heterogeneous"})[0]
     steps = {step.step_id: step for step in calc.steps}
     assert calc.method_id == "mixed-standard-project-material-section-solve"
     assert {"section-geometry", "bar-assignment-001", "bar-assignment-002", "tendon-assignment-001"} <= {dep.step_id for dep in steps["curvature"].dependencies}
@@ -163,6 +140,10 @@ def test_explicit_infinite_undefined_and_failed_members_cannot_be_masked(section
     undefined["plastic"]["util"] = math.nan
     radial = next(item for item in _bundle(inp, undefined).calculations if item.coverage_id == "ct-003")
     assert radial.steps[-1].result.state == RESULT_UNDEFINED
+    unselected = copy.deepcopy(out)
+    unselected["plastic"]["util_gov"] = None
+    capacity = next(item for item in _bundle(inp, unselected).calculations if item.coverage_id == "ct-002")
+    assert capacity.steps[-1].result.state == RESULT_FAILED
     retained = copy.deepcopy(out)
     retained["plastic"]["points"] = [
         {key: getattr(item, key) for key in ("V", "Mx", "My", "curvature", "compression_force", "lever_arm", "converged")}
@@ -170,20 +151,6 @@ def test_explicit_infinite_undefined_and_failed_members_cannot_be_masked(section
     ]
     capacity = next(item for item in _bundle(inp, retained).calculations if item.coverage_id == "ct-002")
     assert capacity.steps[-1].result.state == RESULT_FAILED
-def test_infinite_first_cracking_uses_finite_solver_leaves(section_case):
-    inp, _ = section_case
-    zero_inp = {
-        **inp, "P_el_l": 0.0, "Mx_el_l": 0.0, "My_el_l": 0.0,
-        "P_el_s": 0.0, "Mx_el_s": 0.0, "My_el_s": 0.0,
-        "el_phi": 0.0, "nl": inp["ns"],
-    }
-    elastic = solve_elastic_combined(
-        inp["section"], 0.0, 0.0, 0.0, inp["ns"], 0.0, 0.0, 0.0, inp["ns"]
-    )
-    cracking = analyse_cracking(inp["section"], 0.0, 0.0, 0.0, inp["ns"], fctm=3.2)
-    calculation = _bundle(zero_inp, {"elastic": _elastic_output(elastic, cracking)}).calculations[-1]
-    assert calculation.steps[-1].result.state == RESULT_POSITIVE_INFINITY
-    assert all(step.result.state == RESULT_FINITE for step in calculation.steps if step.step_id not in {"lambda-cr-raw", "lambda-cr"})
 def test_registry_rejects_missing_axis_edition_dependency_tamper_and_stale(section_case):
     inp, out = section_case
     bundle, registry = _bundle(inp, out), section_trace_registry(inp, out, context={"case": "recovery"})

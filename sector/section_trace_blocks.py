@@ -72,7 +72,6 @@ class MaterialBlock:
 class SectionTraceBlocks:
     geometry: GeometryBlock
     plastic_actions: ActionBlock
-    elastic_actions: ActionBlock
     concrete: MaterialBlock
     bars: tuple[MaterialBlock, ...]
     tendons: tuple[MaterialBlock, ...]
@@ -125,7 +124,7 @@ def _law_values(law: Any) -> tuple[tuple[str, float], ...]:
             raise ValueError(f"{field.name} must be a finite non-Boolean number")
         values.append((field.name, float(raw)))
     return tuple(values)
-def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str, str]:
+def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str, str, bool]:
     element_key = "bar_elements" if kind == "bar" else "tendon_elements"
     catalog_key = "mild_material_catalog" if kind == "bar" else "prestress_material_catalog"
     elements = tuple(inp.get(element_key) or ())
@@ -139,9 +138,9 @@ def _catalog_preset(inp: Mapping[str, Any], kind: str, index: int) -> tuple[str,
     )
     for item in items:
         if isinstance(item, Mapping) and str(item.get("id") or "") == selected_id:
-            return element_id, str(item.get("preset") or "")
+            return element_id, str(item.get("preset") or ""), True
     fallback = inp.get("mild_preset") if kind == "bar" else inp.get("prestress_preset")
-    return element_id, str(fallback or "")
+    return element_id, str(fallback or ""), False
 def _materials(
     inp: Mapping[str, Any],
     *,
@@ -153,9 +152,12 @@ def _materials(
     laws: Sequence[Any] = tuple(specific) if specific is not None else (default,) * count
     if len(laws) != count or any(law is None for law in laws):
         raise ValueError(f"need {count} aligned {kind} material laws")
+    heterogeneous = specific is not None and len({_law_values(law) for law in laws}) > 1
     blocks = []
     for index, law in enumerate(laws):
-        element_id, preset = _catalog_preset(inp, kind, index)
+        element_id, preset, aligned = _catalog_preset(inp, kind, index)
+        if heterogeneous and not aligned:
+            raise ValueError(f"heterogeneous {kind} laws need aligned catalog provenance")
         elements = tuple(inp.get("bar_elements" if kind == "bar" else "tendon_elements") or ())
         element = elements[index] if index < len(elements) and isinstance(elements[index], Mapping) else {}
         blocks.append(
@@ -170,16 +172,12 @@ def _materials(
     return tuple(blocks)
 def section_trace_blocks(inp: Mapping[str, Any]) -> SectionTraceBlocks:
     geometry = GeometryBlock.from_section(inp["section"])
-    action_keys = (
-        ("P_pl", "Mx_pl", "My_pl"),
-        ("P_el_l", "Mx_el_l", "My_el_l", "P_el_s", "Mx_el_s", "My_el_s"),
+    action_values = tuple(
+        (key, float(inp.get(key, 0.0))) for key in ("P_pl", "Mx_pl", "My_pl")
     )
-    action_blocks = tuple(
-        ActionBlock(tuple((key, float(inp.get(key, 0.0))) for key in keys))
-        for keys in action_keys
-    )
-    if any(type(inp.get(key, 0.0)) is bool or not math.isfinite(value) for block in action_blocks for key, value in block.values):
+    if any(type(inp.get(key, 0.0)) is bool or not math.isfinite(value) for key, value in action_values):
         raise ValueError("section actions must be finite non-Boolean numbers")
+    plastic_actions = ActionBlock(action_values)
     concrete = inp.get("concrete")
     if concrete is None:
         raise ValueError("concrete material law is required")
@@ -210,4 +208,4 @@ def section_trace_blocks(inp: Mapping[str, Any]) -> SectionTraceBlocks:
         if project_count == len(all_materials)
         else "mixed-standard-project-material-section-solve"
     )
-    return SectionTraceBlocks(geometry, *action_blocks, concrete_block, bars, tendons, method)
+    return SectionTraceBlocks(geometry, plastic_actions, concrete_block, bars, tendons, method)

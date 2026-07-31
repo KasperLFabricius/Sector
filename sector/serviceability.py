@@ -205,34 +205,6 @@ def _governing_crack(
     )
 
 
-@dataclass(frozen=True)
-class CrackingThresholdState:
-    """Finite solver leaves retained for the first-cracking derivation."""
-
-    method: str
-    fctm_mpa: float
-    sigma_ct_mpa: float
-    factor: float
-    raw_factor: float
-    fixed_prestress_mpa: Optional[float] = None
-    external_tension_mpa: Optional[float] = None
-    available_tension_mpa: Optional[float] = None
-    governing_fibre_index: Optional[int] = None
-
-    def to_dict(self) -> dict:
-        return {
-            "method": self.method,
-            "fctm_mpa": self.fctm_mpa,
-            "sigma_ct_mpa": self.sigma_ct_mpa,
-            "factor": self.factor,
-            "raw_factor": self.raw_factor,
-            "fixed_prestress_mpa": self.fixed_prestress_mpa,
-            "external_tension_mpa": self.external_tension_mpa,
-            "available_tension_mpa": self.available_tension_mpa,
-            "governing_fibre_index": self.governing_fibre_index,
-        }
-
-
 @dataclass
 class CrackingResult:
     """Serviceability state of the section under one action combination.
@@ -253,7 +225,6 @@ class CrackingResult:
     eps0_m: float               # mean strain plane (tension-stiffened)
     kx_m: float
     ky_m: float
-    threshold: Optional[CrackingThresholdState] = None
     crack: Optional[CrackWidthResult] = None
     crack_evaluation: Optional[CrackWidthEvaluation] = None
 
@@ -277,47 +248,6 @@ def cracking_factor(sigma_ct_mpa: float, fctm: float) -> float:
     if sigma_ct_mpa <= 0.0:
         return math.inf
     return fctm / sigma_ct_mpa
-
-
-def _cracking_threshold_state(
-    *,
-    fctm: float,
-    sigma_ct: float,
-    fixed_prestress: Optional[np.ndarray] = None,
-    external_tension: Optional[np.ndarray] = None,
-) -> CrackingThresholdState:
-    """Retain exactly the values already used to select first cracking."""
-
-    if fixed_prestress is None or external_tension is None:
-        raw = cracking_factor(sigma_ct, fctm)
-        return CrackingThresholdState(
-            "proportional-external-action",
-            float(fctm),
-            float(sigma_ct),
-            float(raw),
-            float(raw),
-        )
-    sig_pre = np.asarray(fixed_prestress, dtype=float)
-    sig_ext = np.asarray(external_tension, dtype=float)
-    loaded = np.flatnonzero(sig_ext > 1.0e-9)
-    if loaded.size:
-        ratios = (fctm - sig_pre[loaded]) / sig_ext[loaded]
-        index = int(loaded[int(np.argmin(ratios))])
-        raw = float(np.min(ratios))
-    else:
-        index = int(np.argmax(sig_ext))
-        raw = math.inf
-    return CrackingThresholdState(
-        "fixed-prestress-decompression",
-        float(fctm),
-        float(sigma_ct),
-        max(0.0, raw) if math.isfinite(raw) else raw,
-        raw,
-        float(sig_pre[index]),
-        float(sig_ext[index]),
-        float(fctm - sig_pre[index]),
-        index,
-    )
 
 
 def tension_stiffening_zeta(lambda_cr: float, beta: float) -> float:
@@ -1294,7 +1224,7 @@ def analyse_cracking(
                                    prestress_stress=prestress_stress)
     sigma_ct = uncr.max_concrete_tension / _KPA_PER_MPA  # MPa, peak total tension
     if prestress_stress is None:
-        threshold = _cracking_threshold_state(fctm=fctm, sigma_ct=sigma_ct)
+        lam = cracking_factor(sigma_ct, fctm)
     else:
         # The tendon prestress is a fixed (permanent) action; only the external
         # P/M are factored. Decompression: cracking when sigma_pre + lam*sigma_ext
@@ -1308,14 +1238,11 @@ def analyse_cracking(
         sig_ext = (ext.eps0 + ext.kx * verts[:, 0]
                    + ext.ky * verts[:, 1]) / _KPA_PER_MPA
         sig_pre = sig_tot - sig_ext                          # prestress alone
-        threshold = _cracking_threshold_state(
-            fctm=fctm,
-            sigma_ct=sigma_ct,
-            fixed_prestress=sig_pre,
-            external_tension=sig_ext,
-        )
-    lam = threshold.factor
+        loaded = sig_ext > 1.0e-9                            # external puts in tension
+        lam = (float(np.min((fctm - sig_pre[loaded]) / sig_ext[loaded]))
+               if np.any(loaded) else math.inf)
     cracked = lam < 1.0
+    lam = max(0.0, lam) if math.isfinite(lam) else lam       # no negative load factor
 
     crk = solve_elastic(section, P, Mx, My, n, n_mult=n_mult,
                         prestress_stress=prestress_stress)
@@ -1340,13 +1267,12 @@ def analyse_cracking(
     return CrackingResult(
         cracked=cracked, lambda_cr=lam, sigma_ct=sigma_ct, fctm=fctm, zeta=zeta,
         uncracked=uncr, cracked_state=crk, eps0_m=eps0_m, kx_m=kx_m, ky_m=ky_m,
-        threshold=threshold, crack=crack, crack_evaluation=evaluation,
+        crack=crack, crack_evaluation=evaluation,
     )
 
 
 def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
-                      fctm, n_mult=None, prestress_stress=None,
-                      return_threshold=False):
+                      fctm, n_mult=None, prestress_stress=None):
     """Cracking check under the combined creep (peak instantaneous) state.
 
     The peak uncracked concrete tension is the long-term action at the long-term
@@ -1354,9 +1280,9 @@ def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
     ratio ``n_s`` -- the effective-modulus treatment used by
     :func:`sector.elastic.solve_elastic_combined`, so the decision is consistent
     with the reported Total/RST1 stresses (rather than solving the raw summed load
-    at a single ratio). Returns ``(cracked, lambda_cr, sigma_ct)``; with
-    ``return_threshold=True`` the solver-owned derivation leaves are appended
-    without changing the historical three-value API.
+    at a single ratio). Returns ``(cracked, lambda_cr, sigma_ct)``: ``sigma_ct`` is
+    the peak concrete tension (MPa) and ``lambda_cr = f_ctm/sigma_ct`` (or the
+    decompression factor with prestress), mirroring :func:`analyse_cracking`.
     """
     section.require_valid_geometry()
     verts = section.concrete_vertices()
@@ -1370,7 +1296,7 @@ def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
     sig_s = _sig(P_s, Mx_s, My_s, n_s, None)               # short external increment
     sigma_ct = float((sig_l + sig_s).max())                # peak tension, MPa
     if prestress_stress is None:
-        threshold = _cracking_threshold_state(fctm=fctm, sigma_ct=sigma_ct)
+        lam = cracking_factor(sigma_ct, fctm)
     else:
         # Decompression: only the external actions are factored (the prestress is a
         # fixed permanent action). Matches analyse_cracking's prestress branch, with
@@ -1378,16 +1304,11 @@ def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
         sig_l_ext = _sig(P_l, Mx_l, My_l, n_l, None)
         sig_pre = sig_l - sig_l_ext                        # prestress alone
         sig_ext = sig_l_ext + sig_s                        # total external
-        threshold = _cracking_threshold_state(
-            fctm=fctm,
-            sigma_ct=sigma_ct,
-            fixed_prestress=sig_pre,
-            external_tension=sig_ext,
-        )
-    lam = threshold.factor
+        loaded = sig_ext > 1.0e-9
+        lam = (float(np.min((fctm - sig_pre[loaded]) / sig_ext[loaded]))
+               if np.any(loaded) else math.inf)
     cracked = lam < 1.0
-    if return_threshold:
-        return cracked, lam, sigma_ct, threshold
+    lam = max(0.0, lam) if math.isfinite(lam) else lam
     return cracked, lam, sigma_ct
 
 
