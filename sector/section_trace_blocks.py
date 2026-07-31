@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -47,24 +46,30 @@ class SectionTraceBlocks:
     plastic_actions: ActionBlock
 
 
-def _slug(value: Any) -> str:
-    text = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
-    return text or "item"
+def _context_items(context: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    if any(type(key) is not str for key in context):
+        raise TypeError("context keys must be text")
+    return tuple(sorted((key, str(value)) for key, value in context.items()))
 
 
 def context_id(context: Mapping[str, Any]) -> str:
     if not context:
         return "section"
     return ".".join(
-        f"{_slug(key)}-{trace_identity_token(str(value))}"
-        for key, value in sorted(context.items())
+        f"{trace_identity_token(key)}-{trace_identity_token(value)}"
+        for key, value in _context_items(context)
     )
 
 
 def context_axes(context: Mapping[str, Any], **extra: str) -> tuple[TraceAxis, ...]:
-    values = {str(key): str(value) for key, value in context.items()}
+    values = dict(_context_items(context))
+    if set(values).intersection(extra):
+        raise ValueError("extra axes must not replace context keys")
     values.update(extra)
-    return tuple(TraceAxis(_slug(key), value) for key, value in sorted(values.items()))
+    return tuple(
+        TraceAxis(trace_identity_token(key), value)
+        for key, value in sorted(values.items())
+    )
 
 
 def section_trace_blocks(inp: Mapping[str, Any]) -> SectionTraceBlocks:

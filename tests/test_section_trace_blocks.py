@@ -49,3 +49,7 @@ def test_context_identity_and_axes_are_exact_and_order_independent():
     assert context_id(first) == context_id(second)
     assert context_axes(first, axis="x") == context_axes(second, axis="x")
     assert context_axes(first, axis="x") != context_axes(first, axis="y")
+    assert context_id({"case/id": "A"}) != context_id({"case-id": "A"})
+    assert context_axes({"case/id": "A"}) != context_axes({"case-id": "A"})
+    with pytest.raises(ValueError, match="replace"):
+        context_axes({"axis": "x"}, axis="y")
