@@ -17,17 +17,21 @@ from sector import codes, detailing, templates
 from sector.calculation_trace import (
     TraceDependency, TraceUnit, TraceValidationError, seal_bundle,
 )
+from sector import capacity
 from sector.detailing_trace import (
-    _long_branch, _replay_clear, _replay_longitudinal, _replay_transverse,
-    _validate_clear_candidate, _validate_longitudinal_candidate,
+    _INFINITE_REASON, _SCREEN_INFINITE_REASON, _infinite_reason,
+    _long_branch, _replay_clear, _replay_longitudinal, _replay_screen,
+    _replay_transverse, _validate_clear_candidate,
+    _validate_longitudinal_candidate, _validate_screen_member,
     _validate_transverse_candidate, build_detailing_trace_family,
     detailing_trace_applicability, validate_detailing_trace_family,
 )
 from sector.detailing_trace_contract import (
     ADAPTER_SOURCE, DetailingShape, RATIO_SOURCE_2023, RATIO_SOURCE_BASE,
-    RATIO_SOURCE_DK, REQUIRED_LINKS_RES_2023, STATUS_CODES,
-    concrete_leaf_id, expected_registry,
+    RATIO_SOURCE_DK, REQUIRED_LINKS_RES_2023, SCREEN_STATE_CODES,
+    STATUS_CODES, concrete_leaf_id, expected_registry,
 )
+from sector.torsion_trace import torsion_trace_applicability
 from sector.section import Section
 from sector.trace_registry import audit_trace_registry
 
@@ -444,7 +448,8 @@ def test_torsion_rows_close_uk8_versus_minimum_dimension_and_suppression():
         "ct-008-transverse-links-result"].result.value == NA
 
     invalid_tube = _candidate(inp, upstream={"torsion": {
-        "valid": False, "reason": None,
+        "valid": False, "reason": None, "subdivided": False,
+        "min_reinf": {"applicable": False, "reason": "no shear check"},
         "tube": {"valid": False, "reason": "compound outline needs sub-tubes",
                  "tef": 0.0, "uk": 0.0, "minimum_dimension_mm": 0.0},
     }})
@@ -519,6 +524,33 @@ def _mutated(value):
     return 0.0
 
 
+def _refreshed_screen(upstream):
+    """Independent replica of the retained 6.31 screen for crafted upstream."""
+    torsion = upstream["torsion"]
+    shear = upstream.get("shear")
+    if torsion.get("subdivided"):
+        return {"applicable": False, "reason": "subdivided (compound) section"}
+    resistance = (shear or {}).get("res") or {}
+    if not shear or not resistance.get("valid"):
+        return {"applicable": False, "reason": "no shear check"}
+    trd_c = torsion["primary"]["trd_c"]
+    vrd_c = resistance["vrd_c"]
+    if trd_c <= 0.0 or vrd_c <= 0.0:
+        return {"applicable": False, "reason": "zero resistance"}
+    value = torsion["t_ed"] / trd_c + shear["v_ed"] / vrd_c
+    return {"applicable": True, "value": value,
+            "ok": bool(value <= 1.0 + 1e-9), "t_ed": torsion["t_ed"],
+            "trd_c": trd_c, "v_ed": shear["v_ed"], "vrd_c": vrd_c,
+            "solid": True, "model_2023": bool(shear.get("model_2023"))}
+
+
+def _with_screen(upstream):
+    refreshed = copy.deepcopy(upstream)
+    refreshed["torsion"] = dict(refreshed["torsion"],
+                                min_reinf=_refreshed_screen(refreshed))
+    return refreshed
+
+
 def _rich_inputs():
     inp = _input(clear_spacing_on=True, transverse_detailing_on=True,
                  shear_on=True, shear_links=True, torsion_on=True,
@@ -527,12 +559,13 @@ def _rich_inputs():
                            _bar("R2", 45.0, 0.0, 20.0),
                            _bar("R3", 90.0, 40.0, 25.0)]
     inp["tendon_elements"] = [_bar("P1", 200.0, 0.0, 60.0, kind="tendon")]
-    upstream = {
+    upstream = _with_screen({
         "shear": _shear_direction(v_ed=300.0),
-        "torsion": {"valid": True, "tube": {
-            "valid": True, "reason": None, "tef": 100.0, "uk": 1.4,
-            "minimum_dimension_mm": 300.0}},
-    }
+        "torsion": {"valid": True, "subdivided": False, "t_ed": 20.0,
+                    "primary": {"trd_c": 50.0}, "tube": {
+                        "valid": True, "reason": None, "tef": 100.0,
+                        "uk": 1.4, "minimum_dimension_mm": 300.0}},
+    })
     return inp, _candidate(inp, upstream=upstream)
 
 
@@ -588,18 +621,22 @@ def test_every_retained_output_member_is_exact_and_siblings_stay_inert():
                 validator(changed, expected)
 
     baseline = _bundle(inp, out).to_dict()
-    # C.3b-r3 registry composition: minimum_reinforcement is a CT-008 member;
-    # the torsion 6.31 screen remains an excluded sibling until PR-08C.3c.
+    # C.3b registry-composition edit: minimum_reinforcement and the torsion
+    # min_reinf screen are now CT-008 members, no longer inert siblings.
     inert = dict(out)
     inert["directional_interactions"] = object()
     inert["report_rows"] = object()
     inert["shear"] = dict(out["shear"], min_reinf=math.nan,
                           directional_min_reinf_status=math.nan,
                           report_rows=object())
-    inert["torsion"] = dict(out["torsion"], min_reinf=math.nan,
-                            interaction=math.nan,
-                            directional_interactions=object())
+    # directional_interactions is no longer inert: it is a screen-owned
+    # publication surface fenced by the mode-aware closure.
+    inert["torsion"] = dict(out["torsion"], interaction=math.nan)
     assert _bundle(inp, inert).to_dict() == baseline
+    forged = dict(out)
+    forged["torsion"] = dict(out["torsion"], directional_interactions=object())
+    with pytest.raises(TraceValidationError, match="mode-mismatched"):
+        _bundle(inp, forged)
 
 
 def test_applicability_separation_absent_flags_and_masking():
@@ -738,7 +775,9 @@ def test_graph_reachability_edges_sources_units_axes_and_stale_seals():
     bundle = _bundle(inp, out)
     clear_shape = _replay_clear(inp, CONTEXT)[0]
     transverse_shape = _replay_transverse(inp, out, CONTEXT)[0]
-    registry = expected_registry(DetailingShape(clear_shape, transverse_shape))
+    screen_shape = _replay_screen(inp, out, CONTEXT)[0]
+    registry = expected_registry(DetailingShape(
+        clear_shape, transverse_shape, None, screen_shape))
     for calculation in bundle.calculations:
         by_id = {step.step_id: step for step in calculation.steps}
         reached, pending = set(), [calculation.final_step_id]
@@ -829,12 +868,13 @@ def _with(upstream, path, value):
 def test_upstream_evidence_leaves_bind_exactly_and_mutations_are_rejected():
     inp = _input(transverse_detailing_on=True, shear_on=True,
                  shear_links=False, torsion_on=True)
-    upstream = {
+    upstream = _with_screen({
         "shear": _shear_direction(),
-        "torsion": {"valid": True, "tube": {
-            "valid": True, "reason": None, "tef": 100.0, "uk": 1.4,
-            "minimum_dimension_mm": 300.0}},
-    }
+        "torsion": {"valid": True, "subdivided": False, "t_ed": 15.0,
+                    "primary": {"trd_c": 60.0}, "tube": {
+                        "valid": True, "reason": None, "tef": 100.0,
+                        "uk": 1.4, "minimum_dimension_mm": 300.0}},
+    })
     out = _candidate(inp, upstream=upstream)
     bundle = _bundle(inp, out)
     steps = _steps(bundle, "transverse-links")
@@ -865,8 +905,8 @@ def test_upstream_evidence_leaves_bind_exactly_and_mutations_are_rejected():
         ("torsion", "tube", "minimum_dimension_mm"): 250.0,
     }
     for path in mutations:
-        mutated_out = _candidate(inp, upstream=_with(
-            upstream, path, replacements[path]))
+        mutated_out = _candidate(inp, upstream=_with_screen(_with(
+            upstream, path, replacements[path])))
         with pytest.raises(TraceValidationError):
             validate_detailing_trace_family(
                 bundle, inp, mutated_out, input_sha256=INPUT_SHA,
@@ -915,8 +955,8 @@ def test_retained_run_analysis_composition_builds_and_validates():
     # The case-table aggregate path (plastic_cases/elastic_cases) re-enters the
     # same _run_single_analysis gate per case and is covered by the app suite;
     # here the retained single-analysis run_analysis composition is used.
-    # C.3b-r3 registry-composition edit: minimum_reinforcement_on now also
-    # publishes the longitudinal member beside the two merged members.
+    # C.3b registry-composition edit: torsion_on now also publishes the 6.31
+    # screen member, and minimum_reinforcement_on the longitudinal member.
     inp = _input(clear_spacing_on=True, transverse_detailing_on=True,
                  torsion_on=True, torsion_T=20.0, mode="Capacity only",
                  minimum_reinforcement_on=True, sls_fctm=2.9)
@@ -925,10 +965,11 @@ def test_retained_run_analysis_composition_builds_and_validates():
     out = run_analysis(inp)
     assert "clear_spacing" in out and "transverse_reinforcement" in out
     assert "minimum_reinforcement" in out
+    assert out["torsion"]["min_reinf"]["applicable"] is False
     bundle = build_detailing_trace_family(
         inp, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
         context=CONTEXT)
-    assert bundle is not None and len(bundle.calculations) == 3
+    assert bundle is not None and len(bundle.calculations) == 4
     for calculation in bundle.calculations:
         assert calculation.steps[-1].result.state == "finite"
     assert validate_detailing_trace_family(
@@ -986,8 +1027,10 @@ def test_direct_invalid_inputs_publish_and_upstream_junk_stays_inert():
             "valid": True, "reason": None, "tef": math.nan, "uk": math.nan,
             "minimum_dimension_mm": math.nan}},
     }
+    # C.3b registry-composition edit: torsion stays off here so the junk
+    # torsion payload remains pure unread upstream data for this member.
     inp = _input(transverse_detailing_on=True, shear_on=True,
-                 shear_links=True, torsion_on=True, shear_link_s=0.0)
+                 shear_links=True, torsion_on=False, shear_link_s=0.0)
     out = _candidate(inp, upstream=junk)
     assert out["transverse_reinforcement"]["status"] == "INVALID"
     bundle = _bundle(inp, out)
@@ -1044,9 +1087,11 @@ def test_changed_record_id_or_kind_invalidates_a_sealed_clear_bundle():
 
 def test_changed_tube_reason_invalidates_a_sealed_stale_bundle():
     inp = _input(transverse_detailing_on=True, torsion_on=True, torsion_T=20.0)
-    upstream = {"torsion": {"valid": False, "reason": None, "tube": {
-        "valid": False, "reason": "compound outline needs sub-tubes",
-        "tef": 0.0, "uk": 0.0, "minimum_dimension_mm": 0.0}}}
+    upstream = {"torsion": {
+        "valid": False, "reason": None, "subdivided": False,
+        "min_reinf": {"applicable": False, "reason": "no shear check"},
+        "tube": {"valid": False, "reason": "compound outline needs sub-tubes",
+                 "tef": 0.0, "uk": 0.0, "minimum_dimension_mm": 0.0}}}
     out = _candidate(inp, upstream=upstream)
     bundle = _bundle(inp, out)
     steps = _steps(bundle, "transverse-links")
@@ -1298,6 +1343,247 @@ def test_longitudinal_2023_branches_slab_shapes_and_determinism():
     assert _bundle(slab, slab_out) is not None
 
 
+def _screen_upstream(*, trd_c=60.0, t_ed=15.0, v_ed=30.0, vrd_c=200.0,
+                     model=False, res_valid=True):
+    upstream = {
+        "torsion": {"subdivided": False, "t_ed": t_ed,
+                    "primary": {"trd_c": trd_c}},
+        "shear": {"res": {"valid": res_valid, "vrd_c": vrd_c}, "v_ed": v_ed,
+                  "model_2023": model},
+    }
+    upstream["torsion"]["min_reinf"] = _refreshed_screen(upstream)
+    return upstream
+
+
+def test_screen_uniaxial_oracle_branches_and_shared_angle_independence():
+    inp = _input(shear_on=True, torsion_on=True, shear_V=30.0, torsion_T=15.0)
+    out = _candidate(inp)
+    assert detailing_trace_applicability(inp) == ("min-reinf-screen",)
+    bundle = _bundle(inp, out)
+    assert len(bundle.calculations) == 1
+    steps = _steps(bundle, "min-reinf-screen")
+    value = (out["torsion"]["t_ed"] / out["torsion"]["primary"]["trd_c"]
+             + out["shear"]["v_ed"] / out["shear"]["res"]["vrd_c"])
+    assert steps["screen-primary-value"].result.value == pytest.approx(value)
+    assert out["torsion"]["min_reinf"]["value"] == pytest.approx(value)
+    assert steps["screen-primary-solid"].result.value == 1.0
+    assert steps["ct-008-min-reinf-screen-result"].result.value == 1.0
+
+    over = _input(shear_on=True, torsion_on=True, shear_V=200.0,
+                  torsion_T=60.0)
+    over_out = _candidate(over)
+    assert over_out["torsion"]["min_reinf"]["ok"] is False
+    assert _steps(_bundle(over, over_out), "min-reinf-screen")[
+        "ct-008-min-reinf-screen-result"].result.value == 0.0
+
+    alone = _input(torsion_on=True, torsion_T=15.0)
+    alone_out = _candidate(alone)
+    assert alone_out["torsion"]["min_reinf"]["reason"] == "no shear check"
+    steps = _steps(_bundle(alone, alone_out), "min-reinf-screen")
+    assert steps["ct-008-min-reinf-screen-result"].result.value == 4.0
+    assert "screen-primary-value" not in steps
+
+    outer = templates.t_section(1.0, 0.2, 0.3, 0.6)
+    subdivided = _input(torsion_on=True, torsion_T=40.0,
+                        torsion_subdivide=True,
+                        torsion_subrects=[(0.0, -100.0, 300.0, 600.0),
+                                          (0.0, 300.0, 1000.0, 200.0)],
+                        outer=outer, bars=[],
+                        section=Section.from_polygon(outer),
+                        bar_elements=[], bar_materials=None)
+    subdivided_out = _candidate(subdivided)
+    assert subdivided_out["torsion"]["min_reinf"]["reason"] == (
+        "subdivided (compound) section")
+    steps = _steps(_bundle(subdivided, subdivided_out), "min-reinf-screen")
+    assert steps["upstream-screen-primary-subdivided"].result.value == 1.0
+    assert steps["ct-008-min-reinf-screen-result"].result.value == 4.0
+
+    zero = _input(shear_on=True, torsion_on=True)
+    zero_out = _screen_upstream(trd_c=0.0)
+    steps = _steps(_bundle(zero, zero_out), "min-reinf-screen")
+    assert zero_out["torsion"]["min_reinf"]["reason"] == "zero resistance"
+    assert steps["upstream-screen-primary-trd-c"].result.value == 0.0
+    assert steps["ct-008-min-reinf-screen-result"].result.value == 4.0
+
+    # The screen is independent of CT-007 family applicability: with links on
+    # the torsion family publishes nothing, the retained screen still seals.
+    shared = _input(shear_on=True, shear_links=True, torsion_on=True,
+                    shear_V=30.0, torsion_T=15.0)
+    assert torsion_trace_applicability(shared) != "torsion"
+    shared_out = _candidate(shared)
+    assert validate_detailing_trace_family(
+        _bundle(shared, shared_out), shared, shared_out,
+        input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
+        context=CONTEXT) is not None
+
+
+def test_screen_operand_mutations_are_rejected_and_replayed_exactly():
+    inp = _input(shear_on=True, torsion_on=True)
+    out = _screen_upstream()
+    bundle = _bundle(inp, out)
+    steps = _steps(bundle, "min-reinf-screen")
+    assert steps["upstream-screen-primary-t-ed"].result.value == 15.0
+    assert steps["upstream-screen-primary-trd-c"].result.value == 60.0
+    assert steps["upstream-screen-primary-v-ed"].result.value == 30.0
+    assert steps["upstream-screen-primary-vrd-c"].result.value == 200.0
+    assert steps["screen-primary-value"].result.value == pytest.approx(0.4)
+    baseline = bundle.to_dict()
+    for changes in (dict(t_ed=16.0), dict(trd_c=50.0), dict(v_ed=40.0),
+                    dict(vrd_c=150.0), dict(model=True),
+                    dict(res_valid=False)):
+        mutated_out = _screen_upstream(**changes)
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                bundle, inp, mutated_out, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+        rebuilt = _bundle(inp, mutated_out)
+        assert rebuilt.to_dict() != baseline
+
+
+_PRIORITY = {"INVALID": 4, "FAIL": 3, "NOT ASSESSED": 2, "NOT RUN": 2,
+             "PASS": 1, "NOT APPLICABLE": 0}
+
+
+def _face_state(row):
+    torsion = row.get("torsion")
+    if torsion is None:
+        return "NOT RUN", 0.0
+    check = torsion.get("min_reinf") or {}
+    if not check.get("applicable"):
+        return "NOT ASSESSED", 0.0
+    value = check.get("value")
+    if value is None or not math.isfinite(float(value)):
+        return "INVALID", math.inf
+    return ("PASS" if check.get("ok") else "FAIL"), float(value)
+
+
+def _decorate_directional(shear_container):
+    """Stamp the retained per-face summaries and governing domain record."""
+    candidates = shear_container["face_candidates"]
+    states = [_face_state(row) for row in candidates]
+    for row, (status, metric) in zip(candidates, states):
+        row["min_reinf_status"] = status
+        row["min_reinf_metric"] = metric
+    governing = max(range(len(states)),
+                    key=lambda i: (_PRIORITY[states[i][0]], states[i][1]))
+    aggregate = next(status for status in
+                     ("INVALID", "FAIL", "NOT ASSESSED", "NOT RUN", "PASS")
+                     if status in {state for state, _ in states})
+    shear_container["governing_domains"] = {"minimum_reinforcement": {
+        "face": ("negative" if candidates[governing]["tension_low"]
+                 else "positive"),
+        "cot": None, "status": aggregate, "util": states[governing][1],
+    }}
+    return shear_container
+
+
+def test_screen_directional_single_biaxial_and_ordering_oracle():
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    out = _candidate(single)
+    top = out["torsion"]["min_reinf"]
+    assert top["directional_status"] == (
+        out["torsion"]["directional_min_reinf_status"])
+    bundle = _bundle(single, out)
+    steps = _steps(bundle, "min-reinf-screen")
+    faces = out["shear"]["face_candidates"]
+    states = [_face_state(row) for row in faces]
+    governing = max(range(len(states)),
+                    key=lambda i: (_PRIORITY[states[i][0]], states[i][1]))
+    aggregate = next(status for status in
+                     ("INVALID", "FAIL", "NOT ASSESSED", "NOT RUN", "PASS")
+                     if status in {state for state, _ in states})
+    assert steps["screen-primary-governing-face"].result.value == float(
+        governing)
+    assert steps["screen-primary-directional-status"].result.value == (
+        SCREEN_STATE_CODES[aggregate])
+    assert top["governing_face"] == (
+        "negative" if faces[governing]["tension_low"] else "positive")
+
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    assert tuple(biaxial_out["torsion"]["min_reinf"]) == (
+        "applicable", "reason")
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    steps = _steps(biaxial_bundle, "min-reinf-screen")
+    for component in ("vx", "vy"):
+        entry = biaxial_out["torsion"]["directional_interactions"][component]
+        screen = entry["min_reinf"]
+        assert screen["directional_status"] == (
+            entry["directional_min_reinf_status"])
+        # The retained assessment_key prefers NOT ASSESSED faces over PASS;
+        # the published component screen is the conservative governing face.
+        if screen["applicable"]:
+            assert steps[f"screen-{component}-value"].result.value == (
+                pytest.approx(screen["value"]))
+        else:
+            assert steps[f"screen-{component}-status"].result.value == 4.0
+    tampered = copy.deepcopy(biaxial_out)
+    tampered["shear"]["directions"]["vx"]["face_candidates"][0][
+        "torsion"]["min_reinf"]["value"] += 0.1
+    with pytest.raises(TraceValidationError):
+        validate_detailing_trace_family(
+            biaxial_bundle, biaxial, tampered, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # Crafted metric tiebreak: two PASS faces, the larger 6.31 value governs.
+    crafted = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=30.0, shear_Vy=0.0)
+    shear_face = {"res": {"valid": True, "vrd_c": 200.0}, "v_ed": 30.0,
+                  "model_2023": False, "axis": "y", "face_mode": "auto",
+                  "associated_moment": 0.0}
+
+    def _face(tension_low, trd_c, screen=None):
+        torsion = {"subdivided": False, "t_ed": 15.0,
+                   "primary": {"trd_c": trd_c}}
+        torsion["min_reinf"] = screen if screen is not None else (
+            _refreshed_screen({"torsion": torsion, "shear": shear_face}))
+        return {"tension_low": tension_low, "shear": dict(shear_face),
+                "torsion": torsion}
+
+    face_a, face_b = _face(False, 60.0), _face(True, 25.0)
+    top_torsion = dict(face_b["torsion"])
+    top_torsion["min_reinf"] = dict(face_b["torsion"]["min_reinf"],
+                                    directional_status="PASS",
+                                    governing_face="negative")
+    top_torsion["directional_min_reinf_status"] = "PASS"
+    top_torsion["directional_min_reinf_governing_face"] = "negative"
+    # Retained auto + zero-moment face order is (negative, positive).
+    crafted_out = {
+        "shear": _decorate_directional(
+            dict(shear_face, face_candidates=[face_b, face_a])),
+        "torsion": top_torsion,
+    }
+    steps = _steps(_bundle(crafted, crafted_out), "min-reinf-screen")
+    assert steps["screen-primary-governing-face"].result.value == 0.0
+    assert steps["screen-primary-value"].result.value == pytest.approx(0.75)
+
+    # FAIL beats NOT ASSESSED in the retained aggregate ordering. Every
+    # face screen must agree with its own siblings, so the NOT ASSESSED face
+    # carries a genuinely invalid retained shear resistance.
+    face_na = _face(False, 60.0,
+                    screen={"applicable": False, "reason": "no shear check"})
+    face_na["shear"] = {"res": {"valid": False}, "v_ed": 30.0,
+                        "model_2023": False}
+    face_fail = _face(True, 10.0)
+    top_torsion = dict(face_fail["torsion"])
+    top_torsion["min_reinf"] = dict(face_fail["torsion"]["min_reinf"],
+                                    directional_status="FAIL",
+                                    governing_face="negative")
+    top_torsion["directional_min_reinf_status"] = "FAIL"
+    top_torsion["directional_min_reinf_governing_face"] = "negative"
+    mixed_out = {
+        "shear": _decorate_directional(
+            dict(shear_face, face_candidates=[face_fail, face_na])),
+        "torsion": top_torsion,
+    }
+    steps = _steps(_bundle(crafted, mixed_out), "min-reinf-screen")
+    assert steps["screen-primary-directional-status"].result.value == (
+        SCREEN_STATE_CODES["FAIL"])
+    assert steps["ct-008-min-reinf-screen-result"].result.value == 0.0
+
+
 def test_new_member_candidates_walk_exactly():
     long_2005 = _long_input(Mx_pl=100.0)
     long_2023 = _long_input(Mx_pl=100.0,
@@ -1332,21 +1618,76 @@ def test_new_member_candidates_walk_exactly():
                 with pytest.raises(TraceValidationError):
                     _validate_longitudinal_candidate(changed, expected)
 
+    screen_inp = _input(shear_on=True, torsion_on=True)
+    screen_out = _screen_upstream()
+    expected = _replay_screen(screen_inp, screen_out, CONTEXT)[1].expected
+    _validate_screen_member(copy.deepcopy(screen_out), expected)
+    published = screen_out["torsion"]["min_reinf"]
+    for kind, path, detail in list(_walk(published)):
+        if kind == "leaf":
+            changed = copy.deepcopy(screen_out)
+            changed["torsion"]["min_reinf"] = _replaced(
+                copy.deepcopy(published), path, _mutated(detail))
+            with pytest.raises(TraceValidationError):
+                _validate_screen_member(changed, expected)
+        else:
+            for operation in ("add", "reorder"):
+                changed = copy.deepcopy(screen_out)
+                node = changed["torsion"]["min_reinf"]
+                if operation == "add":
+                    node["unexpected-ct008-field"] = 0.0
+                else:
+                    items = [(key, node[key]) for key in reversed(detail)]
+                    node.clear()
+                    node.update(items)
+                with pytest.raises(TraceValidationError):
+                    _validate_screen_member(changed, expected)
+            for key in detail:
+                changed = copy.deepcopy(screen_out)
+                del changed["torsion"]["min_reinf"][key]
+                with pytest.raises(TraceValidationError):
+                    _validate_screen_member(changed, expected)
+
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    single_out = _candidate(single)
+    expected = _replay_screen(single, single_out, CONTEXT)[1].expected
+    tampered = copy.deepcopy(single_out)
+    tampered["torsion"]["directional_min_reinf_status"] = "PASS-tampered"
+    with pytest.raises(TraceValidationError):
+        _validate_screen_member(tampered, expected)
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    expected = _replay_screen(biaxial, biaxial_out, CONTEXT)[1].expected
+    tampered = copy.deepcopy(biaxial_out)
+    entry = tampered["torsion"]["directional_interactions"]["vx"]["min_reinf"]
+    key = next(k for k in entry if k != "applicable")
+    entry[key] = _mutated(entry[key])
+    with pytest.raises(TraceValidationError):
+        _validate_screen_member(tampered, expected)
+
 
 def test_new_member_applicability_scope_selection_and_masking():
-    # The longitudinal member publishes independently of the capacity flags;
-    # the torsion 6.31 screen stays an excluded sibling until PR-08C.3c.
+    # The screen exists whenever torsion_on has a retained section, entirely
+    # independent of the detailing flags; both new members co-publish.
     both = _long_input(Mx_pl=100.0, torsion_on=True, torsion_T=15.0)
     both_out = _candidate(both)
     bundle = _bundle(both, both_out)
-    assert detailing_trace_applicability(both) == ("longitudinal-minimum",)
-    assert len(bundle.calculations) == 1
+    assert detailing_trace_applicability(both) == (
+        "longitudinal-minimum", "min-reinf-screen")
+    assert len(bundle.calculations) == 2
 
-    # Candidates supplied for an absent flag fail closed.
+    # Candidates supplied for absent flags fail closed.
     with pytest.raises(TraceValidationError,
                        match="absent CT-008 longitudinal-minimum"):
         build_detailing_trace_family(
             _input(), {"minimum_reinforcement": {"status": "PASS"}},
+            input_sha256=INPUT_SHA, result_sha256=RESULT_SHA)
+    with pytest.raises(TraceValidationError,
+                       match="absent CT-008 min-reinf-screen"):
+        build_detailing_trace_family(
+            _input(), {"torsion": {"min_reinf": {"applicable": False}}},
             input_sha256=INPUT_SHA, result_sha256=RESULT_SHA)
 
     # Scope-out branches select from validated direct inputs; junk in unread
@@ -1568,6 +1909,456 @@ def test_longitudinal_concrete_identity_same_law_different_id():
         context=CONTEXT) is not None
 
 
+def test_screen_holed_section_publishes_solid_false_end_to_end():
+    outer = templates.rectangle(0.4, 0.6)
+    hole = templates.rectangle(0.2, 0.4)
+    bars = [(-0.15, -0.25, 500.0)]
+    inp = _input(shear_on=True, torsion_on=True, shear_V=30.0,
+                 torsion_T=15.0, outer=outer, holes=[hole], bars=bars,
+                 section=Section.from_polygon(outer, bars, [hole]))
+    out = _candidate(inp)
+    assert out["torsion"]["min_reinf"]["solid"] is False
+    steps = _steps(_bundle(inp, out), "min-reinf-screen")
+    assert steps["input-holes-count"].result.value == 1.0
+    assert steps["screen-primary-solid"].result.value == 0.0
+
+
+def test_screen_face_states_legends_reorder_and_governing_tampers():
+    # SCREEN_STATE_CODES is a distinct literal legend from STATUS_CODES.
+    assert SCREEN_STATE_CODES == {
+        "NOT APPLICABLE": 0.0, "PASS": 1.0, "NOT ASSESSED": 2.0,
+        "NOT RUN": 3.0, "FAIL": 4.0, "INVALID": 5.0,
+    }
+    crafted = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=30.0, shear_Vy=0.0)
+    shear_face = {"res": {"valid": True, "vrd_c": 200.0}, "v_ed": 30.0,
+                  "model_2023": False, "axis": "y", "face_mode": "auto",
+                  "associated_moment": 0.0}
+
+    def _face(tension_low, trd_c):
+        torsion = {"subdivided": False, "t_ed": 15.0,
+                   "primary": {"trd_c": trd_c}}
+        torsion["min_reinf"] = _refreshed_screen(
+            {"torsion": torsion, "shear": shear_face})
+        return {"tension_low": tension_low, "shear": dict(shear_face),
+                "torsion": torsion}
+
+    # NOT RUN face (absent torsion) reaches a built, validated bundle.
+    not_run = {"tension_low": False, "shear": dict(shear_face),
+               "torsion": None}
+    face_fail = _face(True, 10.0)
+    top_torsion = dict(face_fail["torsion"])
+    top_torsion["min_reinf"] = dict(face_fail["torsion"]["min_reinf"],
+                                    directional_status="FAIL",
+                                    governing_face="negative")
+    top_torsion["directional_min_reinf_status"] = "FAIL"
+    top_torsion["directional_min_reinf_governing_face"] = "negative"
+    out = {"shear": _decorate_directional(
+        dict(shear_face, face_candidates=[face_fail, not_run])),
+        "torsion": top_torsion}
+    bundle = _bundle(crafted, out)
+    steps = _steps(bundle, "min-reinf-screen")
+    assert steps["upstream-screen-primary-face-01-run"].result.value == 0.0
+    assert steps["screen-primary-face-01-assessment-status"].result.value == (
+        SCREEN_STATE_CODES["NOT RUN"])
+    # P1-B control: each sealed legend matches the map the step actually uses.
+    face_step = steps["screen-primary-face-00-assessment-status"]
+    assert "NOT RUN=3" in face_step.actual_expression
+    assert "REVIEW" not in face_step.actual_expression
+    directional_step = steps["screen-primary-directional-status"]
+    assert "NOT RUN=3" in directional_step.actual_expression
+    scope_step = steps["screen-primary-status"]
+    assert "REVIEW=2" in scope_step.actual_expression
+    assert "NOT RUN" not in scope_step.actual_expression
+    assert validate_detailing_trace_family(
+        bundle, crafted, out, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT) is not None
+
+    # An INVALID (nonfinite) face always governs, and a published nonfinite
+    # screen is never sealed as finite evidence: the trace fails closed.
+    invalid_face = _face(False, 60.0)
+    invalid_face["torsion"]["min_reinf"] = dict(
+        invalid_face["torsion"]["min_reinf"], value=math.nan)
+    invalid_top = dict(invalid_face["torsion"])
+    invalid_top["min_reinf"] = dict(invalid_top["min_reinf"],
+                                    directional_status="INVALID",
+                                    governing_face="positive")
+    invalid_top["directional_min_reinf_status"] = "INVALID"
+    invalid_top["directional_min_reinf_governing_face"] = "positive"
+    invalid_out = {
+        "shear": _decorate_directional(dict(
+            shear_face, face_candidates=[_face(True, 60.0), invalid_face])),
+        "torsion": invalid_top,
+    }
+    with pytest.raises(TraceValidationError):
+        build_detailing_trace_family(
+            crafted, invalid_out, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # Ordering oracle across all five states against the retained callables.
+    literal = {"INVALID": 4, "FAIL": 3, "NOT ASSESSED": 2, "NOT RUN": 2,
+               "PASS": 1, "NOT APPLICABLE": 0}
+    cases = (("INVALID", math.inf), ("FAIL", 1.4), ("NOT ASSESSED", 0.0),
+             ("NOT RUN", 0.0), ("PASS", 0.9), ("PASS", 1.1))
+    for status, metric in cases:
+        assert capacity.assessment_key(status, metric) == (
+            literal[status], metric)
+    ordered = ("INVALID", "FAIL", "NOT ASSESSED", "NOT RUN", "PASS")
+    for index, status in enumerate(ordered):
+        assert capacity.aggregate_assessment_status(
+            list(ordered[index:])) == status
+
+    # Governing-face tampers on a real single-active dispatch are rejected.
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    single_out = _candidate(single)
+    single_bundle = _bundle(single, single_out)
+    flipped = {"negative": "positive", "positive": "negative"}
+    for tamper in ("top", "sibling"):
+        changed = copy.deepcopy(single_out)
+        if tamper == "top":
+            screen = changed["torsion"]["min_reinf"]
+            screen["governing_face"] = flipped[screen["governing_face"]]
+        else:
+            changed["torsion"]["directional_min_reinf_governing_face"] = (
+                flipped[changed["torsion"][
+                    "directional_min_reinf_governing_face"]])
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                single_bundle, single, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # P2-C control: a reordered directional-interaction container fails.
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    reordered = copy.deepcopy(biaxial_out)
+    interactions = reordered["torsion"]["directional_interactions"]
+    reordered["torsion"]["directional_interactions"] = dict(
+        reversed(list(interactions.items())))
+    with pytest.raises(TraceValidationError, match="keys/order"):
+        validate_detailing_trace_family(
+            biaxial_bundle, biaxial, reordered, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_non_governing_face_screens_are_fully_validated():
+    # P1 control: every face-specific screen is exact-map validated against
+    # its own sibling payloads, so mutating a NON-governing face screen can
+    # never reseal coherently.
+    crafted = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=30.0, shear_Vy=0.0)
+    shear_face = {"res": {"valid": True, "vrd_c": 200.0}, "v_ed": 30.0,
+                  "model_2023": False, "axis": "y", "face_mode": "auto",
+                  "associated_moment": 0.0}
+
+    def _face(tension_low, trd_c):
+        torsion = {"subdivided": False, "t_ed": 15.0,
+                   "primary": {"trd_c": trd_c}}
+        torsion["min_reinf"] = _refreshed_screen(
+            {"torsion": torsion, "shear": shear_face})
+        return {"tension_low": tension_low, "shear": dict(shear_face),
+                "torsion": torsion}
+
+    face_a, face_b = _face(False, 60.0), _face(True, 25.0)
+    top_torsion = dict(face_b["torsion"])
+    top_torsion["min_reinf"] = dict(face_b["torsion"]["min_reinf"],
+                                    directional_status="PASS",
+                                    governing_face="negative")
+    top_torsion["directional_min_reinf_status"] = "PASS"
+    top_torsion["directional_min_reinf_governing_face"] = "negative"
+    out = {"shear": _decorate_directional(
+        dict(shear_face, face_candidates=[face_b, face_a])),
+        "torsion": top_torsion}
+    bundle = _bundle(crafted, out)
+    steps = _steps(bundle, "min-reinf-screen")
+    assert steps["screen-primary-governing-face"].result.value == 0.0
+
+    mutations = (("t_ed", 16.0), ("trd_c", 55.0), ("v_ed", 40.0),
+                 ("vrd_c", 150.0), ("solid", False), ("model_2023", True),
+                 ("value", 0.5), ("ok", False))
+    for key, replacement in mutations:
+        changed = copy.deepcopy(out)
+        changed["shear"]["face_candidates"][1]["torsion"]["min_reinf"][
+            key] = replacement
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                bundle, crafted, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # Full inventory walk over the non-governing face screen.
+    face_screen = out["shear"]["face_candidates"][1]["torsion"]["min_reinf"]
+    for kind, path, detail in list(_walk(face_screen)):
+        if kind == "leaf":
+            variants = [_replaced(copy.deepcopy(face_screen), path,
+                                  _mutated(detail))]
+        else:
+            added = copy.deepcopy(face_screen)
+            added["unexpected-ct008-field"] = 0.0
+            reordered = dict(reversed(list(face_screen.items())))
+            variants = [added, reordered]
+            for key in detail:
+                removed = copy.deepcopy(face_screen)
+                del removed[key]
+                variants.append(removed)
+        for variant in variants:
+            changed = copy.deepcopy(out)
+            changed["shear"]["face_candidates"][1]["torsion"][
+                "min_reinf"] = variant
+            with pytest.raises(TraceValidationError):
+                validate_detailing_trace_family(
+                    bundle, crafted, changed, input_sha256=INPUT_SHA,
+                    result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # Real biaxial dispatch: the applicable face is NON-governing (the
+    # retained ordering prefers the NOT ASSESSED face); it must still be
+    # exact-map validated per component.
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    faces = biaxial_out["shear"]["directions"]["vx"]["face_candidates"]
+    assert len(faces) == 2
+    states = [_face_state(row) for row in faces]
+    governing = max(range(len(states)),
+                    key=lambda i: (_PRIORITY[states[i][0]], states[i][1]))
+    other = 1 - governing
+    target = faces[other]["torsion"]["min_reinf"]
+    assert target["applicable"] is True
+    for key in ("t_ed", "trd_c", "v_ed", "vrd_c", "solid", "model_2023"):
+        changed = copy.deepcopy(biaxial_out)
+        screen = changed["shear"]["directions"]["vx"]["face_candidates"][
+            other]["torsion"]["min_reinf"]
+        screen[key] = _mutated(screen[key])
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                biaxial_bundle, biaxial, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_face_candidate_set_must_match_the_input_contract():
+    # P1 control: the required face set derives from the INPUT specification
+    # (capacity.shear_face_candidates over the retained direction spec), so a
+    # resealed result cannot drop, duplicate, reorder, or relabel faces.
+    crafted = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=30.0, shear_Vy=0.0)
+    shear_face = {"res": {"valid": True, "vrd_c": 200.0}, "v_ed": 30.0,
+                  "model_2023": False, "axis": "y", "face_mode": "auto",
+                  "associated_moment": 0.0}
+
+    def _face(tension_low, trd_c):
+        torsion = {"subdivided": False, "t_ed": 15.0,
+                   "primary": {"trd_c": trd_c}}
+        torsion["min_reinf"] = _refreshed_screen(
+            {"torsion": torsion, "shear": shear_face})
+        return {"tension_low": tension_low, "shear": dict(shear_face),
+                "torsion": torsion}
+
+    def _top(face, status):
+        torsion = dict(face["torsion"])
+        governing = "negative" if face["tension_low"] else "positive"
+        torsion["min_reinf"] = dict(face["torsion"]["min_reinf"],
+                                    directional_status=status,
+                                    governing_face=governing)
+        torsion["directional_min_reinf_status"] = status
+        torsion["directional_min_reinf_governing_face"] = governing
+        return torsion
+
+    face_true, face_false = _face(True, 25.0), _face(False, 10.0)
+    assert face_false["torsion"]["min_reinf"]["ok"] is False
+    valid_out = {
+        "shear": _decorate_directional(
+            dict(shear_face, face_candidates=[face_true, face_false])),
+        "torsion": _top(face_false, "FAIL"),
+    }
+    bundle = _bundle(crafted, valid_out)
+    assert _steps(bundle, "min-reinf-screen")[
+        "ct-008-min-reinf-screen-result"].result.value == 0.0
+
+    # (a) Deleting the failing face and republishing the survivor as a
+    # governing PASS must be rejected against the two-face input contract.
+    deleted = {
+        "shear": dict(shear_face, face_candidates=[face_true]),
+        "torsion": _top(face_true, "PASS"),
+    }
+    with pytest.raises(TraceValidationError, match="face candidates"):
+        build_detailing_trace_family(
+            crafted, deleted, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+    with pytest.raises(TraceValidationError):
+        validate_detailing_trace_family(
+            bundle, crafted, deleted, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # (b) duplicated, (c) reordered, and (d) mislabelled face sets fail too.
+    mislabelled = copy.deepcopy(valid_out)
+    mislabelled["shear"]["face_candidates"][1]["tension_low"] = True
+    for candidates in ([face_true, face_true],
+                       [face_false, face_true],
+                       mislabelled["shear"]["face_candidates"]):
+        broken = dict(valid_out,
+                      shear=dict(shear_face, face_candidates=candidates))
+        with pytest.raises(TraceValidationError, match="face candidates"):
+            build_detailing_trace_family(
+                crafted, broken, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # (e) An explicit selector requires exactly one face.
+    explicit = dict(crafted, shear_face_x="negative")
+    single_face = {
+        "shear": _decorate_directional(
+            dict(shear_face, face_candidates=[face_true])),
+        "torsion": _top(face_true, "PASS"),
+    }
+    single_face_explicit = copy.deepcopy(single_face)
+    single_face_explicit["shear"]["face_mode"] = "negative"
+    assert build_detailing_trace_family(
+        explicit, single_face_explicit, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT) is not None
+    with pytest.raises(TraceValidationError, match="face candidates"):
+        build_detailing_trace_family(
+            explicit, valid_out, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # (f) A nonzero associated moment selects one specific face; the wrong
+    # single face is rejected and the right one builds.
+    moment = dict(crafted, My_pl=50.0)
+    wrong_face = {
+        "shear": dict(shear_face, face_candidates=[face_false]),
+        "torsion": _top(face_false, "FAIL"),
+    }
+    with pytest.raises(TraceValidationError, match="face candidates"):
+        build_detailing_trace_family(
+            moment, wrong_face, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+    single_face_moment = copy.deepcopy(single_face)
+    single_face_moment["shear"]["associated_moment"] = 50.0
+    assert build_detailing_trace_family(
+        moment, single_face_moment, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT) is not None
+
+    # Biaxial component: the same contract applies per component.
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    dropped = copy.deepcopy(biaxial_out)
+    dropped["shear"]["directions"]["vx"]["face_candidates"].pop()
+    flipped = copy.deepcopy(biaxial_out)
+    flipped["shear"]["directions"]["vx"]["face_candidates"][0][
+        "tension_low"] = not flipped["shear"]["directions"]["vx"][
+            "face_candidates"][0]["tension_low"]
+    for tampered in (dropped, flipped):
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                biaxial_bundle, biaxial, tampered, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_published_screen_summaries_are_owned_and_validated():
+    # #234 P1: the face-wrapper min_reinf summaries and the
+    # governing_domains["minimum_reinforcement"] record are CT-006-excluded
+    # surfaces owned by the screen member.
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    out = _candidate(single)
+    bundle = _bundle(single, out)
+    record = out["shear"]["governing_domains"]["minimum_reinforcement"]
+    assert tuple(record) == ("face", "cot", "status", "util")
+    assert record["cot"] is None
+
+    def _rejects(mutator):
+        changed = copy.deepcopy(out)
+        mutator(changed)
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                bundle, single, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    flipped = {"negative": "positive", "positive": "negative"}
+
+    def _record(changed):
+        return changed["shear"]["governing_domains"]["minimum_reinforcement"]
+
+    _rejects(lambda o: o["shear"]["face_candidates"][0].update(
+        min_reinf_status="FAIL"
+        if o["shear"]["face_candidates"][0]["min_reinf_status"] != "FAIL"
+        else "PASS"))
+    _rejects(lambda o: o["shear"]["face_candidates"][0].update(
+        min_reinf_metric=float(
+            o["shear"]["face_candidates"][0]["min_reinf_metric"]) + 0.1))
+    _rejects(lambda o: o["shear"]["face_candidates"][0].pop(
+        "min_reinf_status"))
+    _rejects(lambda o: _record(o).update(face=flipped[_record(o)["face"]]))
+    _rejects(lambda o: _record(o).update(status="INVALID"))
+    _rejects(lambda o: _record(o).update(util=float(_record(o)["util"]) + 0.1))
+    _rejects(lambda o: _record(o).update(cot=1.0))
+    _rejects(lambda o: _record(o).pop("util"))
+    _rejects(lambda o: _record(o).update({"unexpected-ct008-field": 0.0}))
+    _rejects(lambda o: o["shear"]["governing_domains"].update(
+        minimum_reinforcement=dict(reversed(list(_record(o).items())))))
+    _rejects(lambda o: o["shear"]["governing_domains"].pop(
+        "minimum_reinforcement"))
+    _rejects(lambda o: o["shear"].pop("governing_domains"))
+
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    for mutate in (
+        lambda direction: direction["face_candidates"][0].update(
+            min_reinf_metric=float(
+                direction["face_candidates"][0]["min_reinf_metric"]) + 0.1),
+        lambda direction: direction["governing_domains"][
+            "minimum_reinforcement"].update(status="INVALID"),
+        lambda direction: direction["governing_domains"].pop(
+            "minimum_reinforcement"),
+    ):
+        changed = copy.deepcopy(biaxial_out)
+        mutate(changed["shear"]["directions"]["vx"])
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                biaxial_bundle, biaxial, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_inapplicable_screen_rejected_on_every_publication_surface():
+    # #234 P2: with torsion off, screen candidates on ANY retained
+    # publication surface fail closed; all-absent stays a None member.
+    screen = {"applicable": False, "reason": "no shear check"}
+    surfaces = (
+        {"torsion": {"min_reinf": dict(screen)}},
+        {"torsion": {"directional_interactions": {
+            "vx": {"min_reinf": dict(screen)}}}},
+        {"shear": {"face_candidates": [
+            {"torsion": {"min_reinf": dict(screen)}}]}},
+        {"shear": {"directions": {"vx": {"face_candidates": [
+            {"torsion": {"min_reinf": dict(screen)}}]}}}},
+    )
+    for out in surfaces:
+        with pytest.raises(TraceValidationError, match="min-reinf-screen"):
+            build_detailing_trace_family(
+                _input(), out, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA)
+        with pytest.raises(TraceValidationError, match="min-reinf-screen"):
+            build_detailing_trace_family(
+                _input(transverse_detailing_on=True), out,
+                input_sha256=INPUT_SHA, result_sha256=RESULT_SHA)
+        with pytest.raises(TraceValidationError, match="min-reinf-screen"):
+            validate_detailing_trace_family(
+                None, _input(), out, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA)
+    # A retained-coherent torsion-off surface set: wrappers NOT RUN / 0.0
+    # and no face torsion payloads. All screen candidates absent -> None.
+    clean = {"torsion": {"valid": False, "tube": {"valid": False}},
+             "shear": {"face_candidates": [
+                 {"tension_low": True, "min_reinf_status": "NOT RUN",
+                  "min_reinf_metric": 0.0, "torsion": None}]}}
+    assert build_detailing_trace_family(
+        _input(), clean, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA) is None
+
 
 def test_longitudinal_graph_edges_including_fctm_are_load_bearing():
     # The shared dependency-removal battery sweeps the rich clear/transverse
@@ -1578,7 +2369,8 @@ def test_longitudinal_graph_edges_including_fctm_are_load_bearing():
     bundle = _bundle(inp, out)
     shape = _replay_longitudinal(inp, CONTEXT)[0]
     registry = expected_registry(DetailingShape(None, None, shape))
-    calculation = bundle.calculations[0]
+    calculation = next(item for item in bundle.calculations
+                       if item.calculation_id.endswith("longitudinal-minimum"))
     basis = next(step for step in calculation.steps
                  if step.step_id == "assessment-basis")
     assert any(dep.step_id == "input-fctm" for dep in basis.dependencies)
@@ -1593,3 +2385,403 @@ def test_longitudinal_graph_edges_including_fctm_are_load_bearing():
                     bundle, calculations=(dataclasses.replace(
                         calculation, steps=tuple(steps)),)))
                 audit_trace_registry(tampered, registry)
+
+
+# ---------------------------------------------------------------------------
+# C.3c-r2 adversarial-review controls.
+# ---------------------------------------------------------------------------
+
+def _forged_screen_entry():
+    upstream = {"torsion": {"subdivided": False, "t_ed": 15.0,
+                            "primary": {"trd_c": 60.0}},
+                "shear": {"res": {"valid": True, "vrd_c": 200.0},
+                          "v_ed": 30.0, "model_2023": False}}
+    screen = _refreshed_screen(upstream)
+    return {"min_reinf": dict(screen, directional_status="PASS",
+                              governing_face="negative"),
+            "directional_min_reinf_status": "PASS",
+            "directional_min_reinf_governing_face": "negative"}
+
+
+def test_mode_mismatched_screen_surfaces_are_rejected():
+    # Class A1: surfaces the input-derived dispatch mode cannot produce are
+    # rejected even when they carry coherent fabricated screens.
+    uniaxial = _input(shear_on=True, torsion_on=True, shear_V=30.0,
+                      torsion_T=15.0)
+    uniaxial_out = _candidate(uniaxial)
+    uniaxial_bundle = _bundle(uniaxial, uniaxial_out)
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    single_out = _candidate(single)
+    single_bundle = _bundle(single, single_out)
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+
+    fake_row = {"tension_low": True, "min_reinf_status": "PASS",
+                "min_reinf_metric": 0.4,
+                "shear": {"res": {"valid": True, "vrd_c": 200.0},
+                          "v_ed": 30.0, "model_2023": False},
+                "torsion": {"subdivided": False, "t_ed": 15.0,
+                            "primary": {"trd_c": 60.0}}}
+    fake_row["torsion"]["min_reinf"] = _refreshed_screen(fake_row)
+
+    def _forge(out, mutate):
+        changed = copy.deepcopy(out)
+        mutate(changed)
+        return changed
+
+    attacks = (
+        # uniaxial: forged interactions / face candidates / directions.
+        (uniaxial, uniaxial_out, uniaxial_bundle, lambda o: o["torsion"].update(
+            directional_interactions={"vx": _forged_screen_entry()})),
+        (uniaxial, uniaxial_out, uniaxial_bundle, lambda o: o["shear"].update(
+            face_candidates=[copy.deepcopy(fake_row)])),
+        (uniaxial, uniaxial_out, uniaxial_bundle, lambda o: o["shear"].update(
+            directions={"vx": {"face_candidates": [copy.deepcopy(fake_row)]}})),
+        # single-active: forged interactions / directions nesting.
+        (single, single_out, single_bundle, lambda o: o["torsion"].update(
+            directional_interactions={"vx": _forged_screen_entry()})),
+        (single, single_out, single_bundle, lambda o: o["shear"].update(
+            directions={"vx": {"face_candidates": [copy.deepcopy(fake_row)]}})),
+        # biaxial: extra non-active direction key carrying screens.
+        (biaxial, biaxial_out, biaxial_bundle, lambda o: o["shear"][
+            "directions"].update(vz={"face_candidates": [
+                copy.deepcopy(fake_row)]})),
+    )
+    for inp, out, bundle, mutate in attacks:
+        forged = _forge(out, mutate)
+        with pytest.raises(TraceValidationError):
+            build_detailing_trace_family(
+                inp, forged, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
+                context=CONTEXT)
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                bundle, inp, forged, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_absent_member_summary_surfaces_are_owned():
+    # Class A2: with torsion off the retained wrappers are genuine
+    # NOT RUN / 0.0 and are VALIDATED; domain records and siblings are
+    # rejected on every nesting.
+    inp = _input(clear_spacing_on=True, shear_on=True, torsion_on=False,
+                 shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    inp["bar_elements"] = [_bar("R1", 0.0, 0.0, 20.0),
+                           _bar("R2", 60.0, 0.0, 20.0)]
+    out = _candidate(inp)
+    rows = out["shear"]["face_candidates"]
+    assert all(row["min_reinf_status"] == "NOT RUN" for row in rows)
+    assert all(row["min_reinf_metric"] == 0.0 for row in rows)
+    bundle = _bundle(inp, out)
+
+    def _rejects(mutate, match=None):
+        changed = copy.deepcopy(out)
+        mutate(changed)
+        with pytest.raises(TraceValidationError, match=match):
+            build_detailing_trace_family(
+                inp, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                bundle, inp, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    _rejects(lambda o: o["shear"]["face_candidates"][0].update(
+        min_reinf_status="PASS"))
+    _rejects(lambda o: o["shear"]["face_candidates"][0].update(
+        min_reinf_metric=0.42))
+    _rejects(lambda o: o["shear"].setdefault("governing_domains", {}).update(
+        minimum_reinforcement={"face": "negative", "cot": None,
+                               "status": "PASS", "util": 0.4}),
+        match="governing-domain")
+    _rejects(lambda o: o.update(torsion={
+        "directional_min_reinf_status": "PASS"}), match="siblings")
+
+    biaxial = _input(clear_spacing_on=True, shear_on=True, torsion_on=False,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial["bar_elements"] = inp["bar_elements"]
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    changed = copy.deepcopy(biaxial_out)
+    changed["shear"]["directions"]["vx"]["face_candidates"][0][
+        "min_reinf_status"] = "PASS"
+    with pytest.raises(TraceValidationError):
+        validate_detailing_trace_family(
+            biaxial_bundle, biaxial, changed, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_nonfinite_screen_values_fail_closed_and_invalid_flip_rejected():
+    # Class B3: retained non-finite screen values (finite operands whose
+    # ratio overflows) are a fail-closed boundary in every mode, so neither
+    # the genuine INVALID publication nor an INVALID->FAIL reseal can seal.
+    inp = _input(shear_on=True, torsion_on=True)
+    overflow = _screen_upstream(t_ed=1.0e300, trd_c=1.0e-300)
+    assert math.isinf(overflow["torsion"]["min_reinf"]["value"])
+    with pytest.raises(TraceValidationError, match="not finite"):
+        build_detailing_trace_family(
+            inp, overflow, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
+            context=CONTEXT)
+
+    crafted = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=30.0, shear_Vy=0.0)
+    shear_face = {"res": {"valid": True, "vrd_c": 200.0}, "v_ed": 30.0,
+                  "model_2023": False, "axis": "y", "face_mode": "auto",
+                  "associated_moment": 0.0}
+    finite_face = {"tension_low": False, "shear": dict(shear_face),
+                   "torsion": {"subdivided": False, "t_ed": 15.0,
+                               "primary": {"trd_c": 60.0}}}
+    finite_face["torsion"]["min_reinf"] = _refreshed_screen(finite_face)
+    for wrapper_status in ("INVALID", "FAIL"):
+        infinite_face = {"tension_low": True, "shear": dict(shear_face),
+                         "torsion": {"subdivided": False, "t_ed": 1.0e300,
+                                     "primary": {"trd_c": 1.0e-300}}}
+        infinite_face["torsion"]["min_reinf"] = _refreshed_screen(
+            infinite_face)
+        rows = [infinite_face, finite_face]
+        for row, (status, metric) in zip(
+                rows, ((wrapper_status, math.inf), ("PASS", 0.4))):
+            row["min_reinf_status"] = status
+            row["min_reinf_metric"] = metric
+        top = dict(infinite_face["torsion"])
+        top["min_reinf"] = dict(top["min_reinf"],
+                                directional_status=wrapper_status,
+                                governing_face="negative")
+        top["directional_min_reinf_status"] = wrapper_status
+        top["directional_min_reinf_governing_face"] = "negative"
+        forged = {"shear": dict(
+            shear_face, face_candidates=rows,
+            governing_domains={"minimum_reinforcement": {
+                "face": "negative", "cot": None, "status": wrapper_status,
+                "util": math.inf}}), "torsion": top}
+        with pytest.raises(TraceValidationError):
+            build_detailing_trace_family(
+                crafted, forged, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_infinite_reason_selector_is_truthful_per_step_family():
+    # Class B4: every screen step id maps to the screen infinity legend.
+    assert _infinite_reason("screen-primary-value") == (
+        _SCREEN_INFINITE_REASON)
+    assert _infinite_reason("upstream-screen-vx-face-00-value") == (
+        _SCREEN_INFINITE_REASON)
+    assert _infinite_reason("screen-vx-face-01-assessment-metric") == (
+        _SCREEN_INFINITE_REASON)
+    assert _infinite_reason("check-00-utilisation") == _INFINITE_REASON
+    assert _infinite_reason("governing-utilisation") == _INFINITE_REASON
+
+
+def test_directional_screen_graph_battery():
+    # Overflow: the tamper battery previously swept only the uniaxial rich
+    # bundle; sweep the directional screen graphs too.
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    single_out = _candidate(single)
+    single_bundle = _bundle(single, single_out)
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    for inp, out, bundle in ((single, single_out, single_bundle),
+                             (biaxial, biaxial_out, biaxial_bundle)):
+        shape = _replay_screen(inp, out, CONTEXT)[0]
+        registry = expected_registry(DetailingShape(None, None, None, shape))
+        calculation = bundle.calculations[0]
+        for si, step in enumerate(calculation.steps):
+            for di in range(len(step.dependencies)):
+                steps = list(calculation.steps)
+                steps[si] = dataclasses.replace(
+                    step, dependencies=step.dependencies[:di]
+                    + step.dependencies[di + 1:])
+                with pytest.raises(TraceValidationError):
+                    tampered = seal_bundle(dataclasses.replace(
+                        bundle, calculations=(dataclasses.replace(
+                            calculation, steps=tuple(steps)),)))
+                    audit_trace_registry(tampered, registry)
+
+    calculation = single_bundle.calculations[0]
+
+    def _retarget(**changes):
+        return seal_bundle(dataclasses.replace(
+            single_bundle, calculations=(dataclasses.replace(
+                calculation, **changes),)))
+
+    steps = list(calculation.steps)
+    index = next(i for i, s in enumerate(steps)
+                 if s.step_id == "screen-primary-governing-face")
+    steps[index] = dataclasses.replace(steps[index], source=ADAPTER_SOURCE)
+    source_tamper = _retarget(steps=tuple(steps))
+    target, wrong = "screen-primary-value", TraceUnit("kN", "force")
+    unit_steps = tuple(dataclasses.replace(
+        step, unit=wrong if step.step_id == target else step.unit,
+        dependencies=tuple(TraceDependency(
+            dep.step_id, wrong if dep.step_id == target else dep.unit)
+            for dep in step.dependencies)
+    ) for step in calculation.steps)
+    unit_tamper = _retarget(steps=unit_steps)
+    value_steps = list(calculation.steps)
+    value_steps[-1] = dataclasses.replace(
+        value_steps[-1],
+        result=dataclasses.replace(value_steps[-1].result, value=4.0))
+    content_tamper = _retarget(steps=tuple(value_steps))
+    axes_tamper = _retarget(axes=tuple(
+        dataclasses.replace(axis, value="uniaxial")
+        if axis.name == "screen_mode" else axis for axis in calculation.axes))
+    swapped = list(calculation.steps)
+    swapped[0], swapped[1] = swapped[1], swapped[0]
+    reorder_tamper = _retarget(steps=tuple(swapped))
+    for candidate in (source_tamper, unit_tamper, content_tamper, axes_tamper,
+                      reorder_tamper,
+                      dataclasses.replace(single_bundle, input_sha256="c" * 64),
+                      dataclasses.replace(single_bundle,
+                                          result_sha256="c" * 64)):
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                candidate, single, single_out, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_dispatch_and_face_set_inputs_are_bound_leaves():
+    # Overflow: the dispatch classification and required face set derive
+    # from bound input leaves.
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    steps = _steps(_bundle(single), "min-reinf-screen")
+    assert steps["input-vx-demand"].result.value == 40.0
+    assert steps["input-vy-demand"].result.value == 0.0
+    assert steps["input-face-selector-x"].result.value == 0.0
+    # Inactive-axis selectors are never read by the retained dispatch.
+    assert "input-face-selector-y" not in steps
+    assert steps["spec-vx-associated-moment"].result.value == 0.0
+    dispatch = steps["dispatch-mode"]
+    names = {dep.step_id for dep in dispatch.dependencies}
+    assert {"input-vx-demand", "input-vy-demand"} <= names
+    assert steps["screen-primary-required-faces"].result.value == 2.0
+
+    explicit = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                      shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0,
+                      shear_face_x="negative")
+    steps = _steps(_bundle(explicit), "min-reinf-screen")
+    assert steps["input-face-selector-x"].result.value == 1.0
+    assert steps["screen-primary-required-faces"].result.value == 1.0
+
+    uniaxial = _input(shear_on=True, torsion_on=True, shear_V=30.0,
+                      torsion_T=15.0)
+    steps = _steps(_bundle(uniaxial), "min-reinf-screen")
+    assert "input-vx-demand" not in steps
+    assert "screen-primary-required-faces" not in steps
+
+
+def test_domain_record_mode_closure_and_absent_row_coherence():
+    # Item 1: a forged 4-key governing-domain record on containers the mode
+    # cannot produce it on (uniaxial flat, biaxial outer) is rejected.
+    record = {"face": "negative", "cot": None, "status": "PASS", "util": 0.1}
+    uniaxial = _input(shear_on=True, torsion_on=True, shear_V=30.0,
+                      torsion_T=15.0)
+    uniaxial_out = _candidate(uniaxial)
+    uniaxial_bundle = _bundle(uniaxial, uniaxial_out)
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    for inp, out, bundle in ((uniaxial, uniaxial_out, uniaxial_bundle),
+                             (biaxial, biaxial_out, biaxial_bundle)):
+        forged = copy.deepcopy(out)
+        forged["shear"]["governing_domains"] = {
+            "minimum_reinforcement": dict(record)}
+        with pytest.raises(TraceValidationError, match="governing-domain"):
+            build_detailing_trace_family(
+                inp, forged, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
+                context=CONTEXT)
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                bundle, inp, forged, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # Items 2 + 3: absent-state wrapper deletion and incoherent face torsion.
+    off = _input(clear_spacing_on=True, shear_on=True, torsion_on=False,
+                 shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    off["bar_elements"] = [_bar("R1", 0.0, 0.0, 20.0),
+                           _bar("R2", 60.0, 0.0, 20.0)]
+    off_out = _candidate(off)
+    off_bundle = _bundle(off, off_out)
+
+    def _off_rejects(mutate, match=None):
+        changed = copy.deepcopy(off_out)
+        mutate(changed)
+        with pytest.raises(TraceValidationError, match=match):
+            build_detailing_trace_family(
+                off, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                off_bundle, off, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    _off_rejects(lambda o: o["shear"]["face_candidates"][0].pop(
+        "min_reinf_status"), match="status summary")
+    _off_rejects(lambda o: o["shear"]["face_candidates"][0].pop(
+        "min_reinf_metric"), match="metric summary")
+    _off_rejects(lambda o: o["shear"]["face_candidates"][0].update(
+        torsion={"util": 0.1}), match="torsion payload")
+    _off_rejects(lambda o: o["shear"]["face_candidates"].__setitem__(
+        0, "junk-row"))
+
+
+def test_inactive_selector_junk_is_inert_and_identity_is_bound():
+    # Item 4: retained never reads inactive-axis selectors; junk there is a
+    # legitimate input and must build (over-rejection control).
+    weird = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                   shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0,
+                   shear_face_y="Bottom")
+    weird_out = _candidate(weird)
+    weird_bundle = _bundle(weird, weird_out)
+    assert validate_detailing_trace_family(
+        weird_bundle, weird, weird_out, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT) is not None
+    steps = _steps(weird_bundle, "min-reinf-screen")
+    assert "input-face-selector-y" not in steps
+
+    zero = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                  shear_V=0.0, shear_Vx=0.0, shear_Vy=0.0,
+                  shear_face_x="junk", shear_face_y="junk")
+    zero_out = _candidate(zero)
+    zero_bundle = _bundle(zero, zero_out)
+    assert zero_bundle.calculations[0].steps[-1].result.state == "finite"
+
+    # Item 5: the published single direction's identity fields are bound to
+    # the input-derived component; a resealed other-direction result fails.
+    single = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                    shear_V=40.0, shear_Vx=40.0, shear_Vy=0.0)
+    single_out = _candidate(single)
+    single_bundle = _bundle(single, single_out)
+    assert single_out["shear"]["axis"] == "y"
+    for mutate, match in (
+        (lambda s: s.update(axis="x"), "axis identity"),
+        (lambda s: s.update(face_mode="negative"), "face mode"),
+        (lambda s: s.update(associated_moment=10.0), "associated moment"),
+    ):
+        changed = copy.deepcopy(single_out)
+        mutate(changed["shear"])
+        with pytest.raises(TraceValidationError, match=match):
+            build_detailing_trace_family(
+                single, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+        with pytest.raises(TraceValidationError):
+            validate_detailing_trace_family(
+                single_bundle, single, changed, input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT)
+
+    biaxial = _input(shear_on=True, torsion_on=True, torsion_T=15.0,
+                     shear_V=30.0, shear_Vx=20.0, shear_Vy=30.0)
+    biaxial_out = _candidate(biaxial)
+    biaxial_bundle = _bundle(biaxial, biaxial_out)
+    changed = copy.deepcopy(biaxial_out)
+    changed["shear"]["directions"]["vx"]["axis"] = "x"
+    with pytest.raises(TraceValidationError):
+        validate_detailing_trace_family(
+            biaxial_bundle, biaxial, changed, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
