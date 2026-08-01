@@ -14,16 +14,22 @@ from .calculation_trace import (
     create_bundle, validate_bundle,
 )
 from .detailing_trace_contract import (
-    CHECK_ROW_KEYS, CLEAR_INVALID_KEYS, CLEAR_KEYS, CLEAR_MEMBER_ID,
-    COVERAGE_ID, ClearShape, DetailingShape, DirectionShape, DUCTILITY_CLASSES,
-    EDITIONS, METHOD_ID, MINIMUM_RATIO_KEYS, PAIR_KEYS, RecordShape, RowShape,
-    STATUS_CODES, TORSION_LIMIT_KEYS, TRANSVERSE_INVALID_KEYS, TRANSVERSE_KEYS,
-    TRANSVERSE_MEMBER_ID, TransverseShape, TubeShape, concrete_leaf_id,
-    expected_clear_steps, expected_registry, expected_transverse_steps,
-    record_identity_id, tube_reason_id,
+    BarIdentity, CHECK_ROW_KEYS, CLEAR_INVALID_KEYS, CLEAR_KEYS,
+    CLEAR_MEMBER_ID, COVERAGE_ID, ClearShape, DetailingShape, DirectionShape,
+    DUCTILITY_CLASSES, EDITIONS, LONG_2005_KEYS, LONG_2023_BENDING_KEYS,
+    LONG_2023_HIGH_COMPRESSION_KEYS, LONG_2023_SCOPE_KEYS,
+    LONG_ROW_FIELD_CANDIDATES, LONG_SLAB_CUT_KEYS, LONGITUDINAL_MEMBER_ID,
+    LongShape, METHOD_ID, MINIMUM_RATIO_KEYS, PAIR_KEYS, ROW_2005_KEYS,
+    ROW_2023_BENDING_KEYS, ROW_2023_TENSION_KEYS, RecordShape, RowShape,
+    STATUS_CODES, TORSION_LIMIT_KEYS, TRANSVERSE_INVALID_KEYS,
+    TRANSVERSE_KEYS, TRANSVERSE_MEMBER_ID, TransverseShape, TubeShape,
+    bar_leaf_id, concrete_leaf_id, expected_clear_steps,
+    expected_longitudinal_steps, expected_registry, expected_transverse_steps,
+    long_field_step_id, record_identity_id, tube_reason_id,
 )
 from .section_trace_blocks import (
-    _concrete_block as concrete_material_block, context_axes, context_id,
+    GeometryBlock, _concrete_block as concrete_material_block,
+    _materials as bar_material_blocks, context_axes, context_id,
 )
 from .torsion_trace import (
     _boolean, _compare, _mapping, _number, _retained_mapping, _sequence,
@@ -88,11 +94,16 @@ def detailing_trace_applicability(inp: Mapping[str, Any]) -> tuple[str, ...]:
     transverse = _boolean(
         inp.get("transverse_detailing_on", False), "transverse_detailing_on"
     )
+    longitudinal = _boolean(
+        inp.get("minimum_reinforcement_on", False), "minimum_reinforcement_on"
+    )
     has_section = inp.get("section") is not None
     if clear and has_section:
         members.append(CLEAR_MEMBER_ID)
     if transverse and has_section:
         members.append(TRANSVERSE_MEMBER_ID)
+    if longitudinal and has_section:
+        members.append(LONGITUDINAL_MEMBER_ID)
     return tuple(members)
 
 
@@ -707,6 +718,226 @@ def _validate_transverse_candidate(candidate, expected):
 
 
 # ---------------------------------------------------------------------------
+# Longitudinal minimum-reinforcement member.
+# ---------------------------------------------------------------------------
+
+_LONG_ROW_KEYS = {
+    "row-2005": ROW_2005_KEYS,
+    "2023-tension": ROW_2023_TENSION_KEYS,
+    "2023-bending": ROW_2023_BENDING_KEYS,
+}
+
+
+def _compare_numeric_list(actual, expected, label):
+    if expected is None:
+        if actual is not None:
+            raise TraceValidationError(f"{label} must be null")
+        return
+    items = _sequence(actual, label)
+    if len(items) != len(expected):
+        raise TraceValidationError(f"{label} cardinality differs")
+    for index, (item, wanted) in enumerate(zip(items, expected)):
+        _compare_value(item, wanted, f"{label}[{index}]")
+
+
+def _finite_number(value: Any) -> bool:
+    return (type(value) in {int, float} and type(value) is not bool
+            and math.isfinite(float(value)))
+
+
+def _long_state(inp):
+    edition = _edition(inp)
+    member = str(
+        inp.get("detailing_member_type", detailing.MEMBER_BEAM)
+        or detailing.MEMBER_BEAM
+    ).strip().title()
+    if member not in detailing.MEMBER_TYPES:
+        raise TraceValidationError("member_type must be Beam or Slab")
+    cut = str(
+        inp.get("detailing_cut_direction", detailing.CUT_TRANSVERSE)
+        or detailing.CUT_TRANSVERSE
+    ).strip()
+    if cut not in detailing.CUT_DIRECTIONS:
+        raise TraceValidationError("unknown section cut direction")
+    return dict(
+        edition=edition, member=member, cut=cut,
+        fctm=_finite(inp.get("sls_fctm"), "sls_fctm"),
+        axial=_finite(inp.get("P_pl"), "P_pl"),
+        mx=_finite(inp.get("Mx_pl"), "Mx_pl"),
+        my=_finite(inp.get("My_pl"), "My_pl"),
+    )
+
+
+def _long_branch(state, expected):
+    keys = tuple(expected)
+    if state["member"] == detailing.MEMBER_SLAB and (
+            state["cut"] == detailing.CUT_LONGITUDINAL):
+        if keys != LONG_SLAB_CUT_KEYS:
+            raise TraceValidationError(_DRIFT)
+        return "slab-cut"
+    if state["edition"] != detailing.EC2_2023:
+        if keys != LONG_2005_KEYS:
+            raise TraceValidationError(_DRIFT)
+        return "row-2005" if expected["checks"] else "2005-zero"
+    if keys == LONG_2023_HIGH_COMPRESSION_KEYS:
+        return "2023-high-compression"
+    if keys == LONG_2023_BENDING_KEYS:
+        return "2023-bending"
+    if keys == LONG_2023_SCOPE_KEYS:
+        # The 12.2(5) scope-out shape is unique; the retained Slab dispatch
+        # overwrites its clause in place, so the clause text is a replayed
+        # retained value, never a branch selector.
+        return "2023-compression-only"
+    if keys == LONG_2005_KEYS:
+        if expected["checks"]:
+            return "2023-tension"
+        if expected["status"] == "INVALID":
+            return "2023-invalid"
+    raise TraceValidationError(_DRIFT)
+
+
+def _replay_longitudinal(inp, context):
+    _require_section(inp)
+    state = _long_state(inp)
+    concrete = _concrete_identity(inp)
+    section = inp["section"]
+    blocks = bar_material_blocks(
+        inp, kind="bar", count=len(section.bars), default=inp.get("steel")
+    )
+    for block in blocks:
+        source = block.provenance.source
+        if source.citation is not None and "2023" in source.citation.document:
+            raise TraceValidationError(
+                "2023 material provenance is published but not implemented "
+                "for CT-008"
+            )
+    geometry = GeometryBlock.from_section(section)
+    expected = detailing.minimum_reinforcement(
+        section,
+        inp.get("bar_elements") or [],
+        inp.get("bar_materials") or [],
+        inp["concrete"],
+        edition=inp["detailing_edition"],
+        fctm_mpa=inp["sls_fctm"],
+        n_ed_tension_kn=inp["P_pl"],
+        mx_ed_knm=inp["Mx_pl"],
+        my_ed_knm=inp["My_pl"],
+        member_type=inp.get("detailing_member_type", detailing.MEMBER_BEAM),
+        cut_direction=inp.get("detailing_cut_direction",
+                              detailing.CUT_TRANSVERSE),
+    )
+    branch = _long_branch(state, expected)
+    row = None
+    if branch in _LONG_ROW_KEYS:
+        checks = expected["checks"]
+        if len(checks) != 1 or tuple(checks[0]) != _LONG_ROW_KEYS[branch]:
+            raise TraceValidationError(_DRIFT)
+        row = checks[0]
+    elif expected["checks"]:
+        raise TraceValidationError(_DRIFT)
+    row_fields = tuple(
+        field for field in LONG_ROW_FIELD_CANDIDATES.get(branch, ())
+        if row is not None and _finite_number(row.get(field))
+    )
+    shape = LongShape(
+        concrete_values=concrete.values,
+        concrete_source=concrete.provenance.source,
+        concrete_material_id=concrete.material_id,
+        bars=tuple(BarIdentity(block.element_id, block.material_id,
+                               block.values, block.provenance.source)
+                   for block in blocks),
+        ring_points=tuple(len(ring) for ring in geometry.rings),
+        edition=state["edition"], member=state["member"], cut=state["cut"],
+        branch=branch, row_fields=row_fields,
+        has_compression_limit="compression_limit_kn" in expected,
+        calculation_id=f"ct-008-{context_id(context)}-longitudinal-minimum",
+        axes=context_axes(
+            context, cut_direction=state["cut"],
+            detailing_edition=state["edition"], longitudinal_branch=branch,
+            member_type=state["member"],
+        ),
+    )
+    values: dict[str, Any] = {
+        "input-minimum-enabled": 1.0,
+        "input-edition": float(EDITIONS.index(state["edition"])),
+        "input-member-type": float(state["member"] == detailing.MEMBER_SLAB),
+        "input-cut-direction": float(
+            detailing.CUT_DIRECTIONS.index(state["cut"])
+        ),
+        "input-fctm": state["fctm"],
+        "input-axial-action": state["axial"],
+        "input-mx-action": state["mx"],
+        "input-my-action": state["my"],
+        "geometry-vector": 1.0,
+        "material-vector": 1.0,
+        "normalised-longitudinal-inputs": 1.0,
+    }
+    for ring_index, ring in enumerate(geometry.rings):
+        for point_index, point in enumerate(ring):
+            prefix = f"geometry-ring-{ring_index:03d}-point-{point_index:04d}"
+            values[f"{prefix}-x"], values[f"{prefix}-y"] = point
+    for index, bar in enumerate(geometry.bars):
+        prefix = f"geometry-bar-{index:03d}"
+        values.update({f"{prefix}-x": bar.x, f"{prefix}-y": bar.y,
+                       f"{prefix}-area": bar.area})
+    for name, value in concrete.values:
+        values[concrete_leaf_id(concrete.material_id, name)] = value
+    for block in blocks:
+        for name, value in block.values:
+            values[bar_leaf_id(block.element_id, block.material_id,
+                               name)] = value
+    code = STATUS_CODES[expected["status"]]
+    if branch == "slab-cut":
+        values["slab-cut-scope"] = 1.0
+        values["ct-008-longitudinal-minimum-result"] = code
+        return shape, MemberEvidence(values, expected)
+    values["mx-centroid"] = expected["mx_ed_centroid_knm"]
+    values["my-centroid"] = expected["my_ed_centroid_knm"]
+    if shape.has_compression_limit:
+        values["compression-limit"] = expected["compression_limit_kn"]
+    if row is None:
+        values["assessment-scope-state"] = 1.0
+    else:
+        values["assessment-basis"] = 1.0
+        for field in row_fields:
+            values[long_field_step_id(field)] = float(row[field])
+        values["row-status"] = STATUS_CODES[row["status"]]
+        values["longitudinal-status"] = code
+    values["ct-008-longitudinal-minimum-result"] = code
+    return shape, MemberEvidence(values, expected)
+
+
+def _validate_long_row(candidate, expected, label):
+    candidate = _retained_mapping(candidate, tuple(expected), (), label)
+    for key in tuple(expected):
+        if key in {"bar_ids", "material_ids"}:
+            _compare_text_list(candidate[key], expected[key], f"{label}.{key}")
+        elif key in {"tension_direction", "neutral_point_m"}:
+            _compare_numeric_list(candidate[key], expected[key],
+                                  f"{label}.{key}")
+        else:
+            _compare_value(candidate[key], expected[key], f"{label}.{key}")
+
+
+def _validate_longitudinal_candidate(candidate, expected):
+    keys = tuple(expected)
+    candidate = _retained_mapping(candidate, keys, (),
+                                  "candidate minimum reinforcement")
+    for key in keys:
+        label = f"candidate minimum reinforcement.{key}"
+        if key == "checks":
+            items = _sequence(candidate[key], label)
+            if len(items) != len(expected[key]):
+                raise TraceValidationError(f"{label} cardinality differs")
+            for index, (actual, wanted) in enumerate(zip(items, expected[key])):
+                _validate_long_row(actual, wanted, f"{label}[{index}]")
+        elif key == "limitations":
+            _compare_text_list(candidate[key], expected[key], label)
+        else:
+            _compare_value(candidate[key], expected[key], label)
+
+
+# ---------------------------------------------------------------------------
 # Bundle assembly.
 # ---------------------------------------------------------------------------
 
@@ -772,16 +1003,23 @@ _TRANSVERSE_ASSUMPTIONS = (
 
 def _absent_candidates(members, out):
     for member_id, key in ((CLEAR_MEMBER_ID, "clear_spacing"),
-                           (TRANSVERSE_MEMBER_ID, "transverse_reinforcement")):
+                           (TRANSVERSE_MEMBER_ID, "transverse_reinforcement"),
+                           (LONGITUDINAL_MEMBER_ID, "minimum_reinforcement")):
         if member_id not in members and out.get(key) is not None:
             raise TraceValidationError(
                 f"absent CT-008 {member_id} flag cannot carry a candidate"
             )
 
 
+_LONG_ASSUMPTIONS = (
+    "The 2023 nominal-capacity and cracking solves run only inside the "
+    "retained kernel; the trace replays the same authoritative call.",
+)
+
+
 def _expected_bundle(inp, out, members, input_sha256, result_sha256, context):
     calculations = []
-    clear_shape = transverse_shape = None
+    clear_shape = transverse_shape = longitudinal_shape = None
     if CLEAR_MEMBER_ID in members:
         clear_shape, evidence = _replay_clear(inp, context)
         _validate_clear_candidate(out.get("clear_spacing"), evidence.expected)
@@ -800,13 +1038,24 @@ def _expected_bundle(inp, out, members, input_sha256, result_sha256, context):
             transverse_shape.axes, expected_transverse_steps(transverse_shape),
             evidence.values, _TRANSVERSE_ASSUMPTIONS,
         ))
+    if LONGITUDINAL_MEMBER_ID in members:
+        longitudinal_shape, evidence = _replay_longitudinal(inp, context)
+        _validate_longitudinal_candidate(
+            out.get("minimum_reinforcement"), evidence.expected
+        )
+        calculations.append(_calculation(
+            longitudinal_shape.calculation_id,
+            "Longitudinal minimum reinforcement", longitudinal_shape.axes,
+            expected_longitudinal_steps(longitudinal_shape),
+            evidence.values, _LONG_ASSUMPTIONS,
+        ))
     bundle = create_bundle(
         input_sha256=input_sha256, result_sha256=result_sha256,
         calculations=tuple(calculations),
     )
-    audit_trace_registry(
-        bundle, expected_registry(DetailingShape(clear_shape, transverse_shape))
-    )
+    audit_trace_registry(bundle, expected_registry(DetailingShape(
+        clear_shape, transverse_shape, longitudinal_shape
+    )))
     return bundle
 
 
