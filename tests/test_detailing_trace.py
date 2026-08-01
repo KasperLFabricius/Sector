@@ -18,7 +18,8 @@ from sector.calculation_trace import (
     TraceDependency, TraceUnit, TraceValidationError, seal_bundle,
 )
 from sector.detailing_trace import (
-    _replay_clear, _replay_transverse, _validate_clear_candidate,
+    _long_branch, _replay_clear, _replay_longitudinal, _replay_transverse,
+    _validate_clear_candidate, _validate_longitudinal_candidate,
     _validate_transverse_candidate, build_detailing_trace_family,
     detailing_trace_applicability, validate_detailing_trace_family,
 )
@@ -98,6 +99,22 @@ def _candidate(inp, upstream=None):
         out.update(upstream)
     if inp.get("transverse_detailing_on"):
         out["transverse_reinforcement"] = _transverse_detailing_result(inp, out)
+    if inp.get("minimum_reinforcement_on"):
+        out["minimum_reinforcement"] = detailing.minimum_reinforcement(
+            inp["section"],
+            inp.get("bar_elements") or [],
+            inp.get("bar_materials") or [],
+            inp["concrete"],
+            edition=inp["detailing_edition"],
+            fctm_mpa=inp["sls_fctm"],
+            n_ed_tension_kn=inp["P_pl"],
+            mx_ed_knm=inp["Mx_pl"],
+            my_ed_knm=inp["My_pl"],
+            member_type=inp.get("detailing_member_type",
+                                detailing.MEMBER_BEAM),
+            cut_direction=inp.get("detailing_cut_direction",
+                                  detailing.CUT_TRANSVERSE),
+        )
     if inp.get("clear_spacing_on"):
         out["clear_spacing"] = detailing.clear_spacing(
             list(inp.get("bar_elements") or [])
@@ -571,9 +588,11 @@ def test_every_retained_output_member_is_exact_and_siblings_stay_inert():
                 validator(changed, expected)
 
     baseline = _bundle(inp, out).to_dict()
+    # C.3b-r3 registry composition: minimum_reinforcement is a CT-008 member;
+    # the torsion 6.31 screen remains an excluded sibling until PR-08C.3c.
     inert = dict(out)
-    inert["minimum_reinforcement"] = math.nan
     inert["directional_interactions"] = object()
+    inert["report_rows"] = object()
     inert["shear"] = dict(out["shear"], min_reinf=math.nan,
                           directional_min_reinf_status=math.nan,
                           report_rows=object())
@@ -896,16 +915,20 @@ def test_retained_run_analysis_composition_builds_and_validates():
     # The case-table aggregate path (plastic_cases/elastic_cases) re-enters the
     # same _run_single_analysis gate per case and is covered by the app suite;
     # here the retained single-analysis run_analysis composition is used.
+    # C.3b-r3 registry-composition edit: minimum_reinforcement_on now also
+    # publishes the longitudinal member beside the two merged members.
     inp = _input(clear_spacing_on=True, transverse_detailing_on=True,
-                 torsion_on=True, torsion_T=20.0, mode="Capacity only")
-    inp["bar_elements"] = [_bar("R1", 0.0, 0.0, 20.0),
-                           _bar("R2", 45.0, 0.0, 20.0)]
+                 torsion_on=True, torsion_T=20.0, mode="Capacity only",
+                 minimum_reinforcement_on=True, sls_fctm=2.9)
+    inp["bar_elements"] = [dict(_bar("R1", -100.0, -250.0, 25.0),
+                                material_id="M1")]
     out = run_analysis(inp)
     assert "clear_spacing" in out and "transverse_reinforcement" in out
+    assert "minimum_reinforcement" in out
     bundle = build_detailing_trace_family(
         inp, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
         context=CONTEXT)
-    assert bundle is not None and len(bundle.calculations) == 2
+    assert bundle is not None and len(bundle.calculations) == 3
     for calculation in bundle.calculations:
         assert calculation.steps[-1].result.state == "finite"
     assert validate_detailing_trace_family(
@@ -1067,3 +1090,506 @@ def test_changed_concrete_material_id_same_law_invalidates_sealed_bundle():
     assert validate_detailing_trace_family(
         rebuilt, second, second_out, input_sha256=INPUT_SHA,
         result_sha256=RESULT_SHA, context=CONTEXT) is not None
+
+
+# ---------------------------------------------------------------------------
+# PR-08C.3b: longitudinal minimum reinforcement and the 6.31 screen members.
+# ---------------------------------------------------------------------------
+
+def _long_input(*, fyks=(500.0, 500.0, 500.0, 500.0), **changes):
+    method = codes.EC2_2005_DKNA
+    outer = [(-0.15, -0.30), (0.15, -0.30), (0.15, 0.30), (-0.15, 0.30)]
+    bars = [(-0.12, -0.25, 491.0), (0.12, -0.25, 491.0),
+            (-0.12, 0.25, 491.0), (0.12, 0.25, 491.0)]
+    entries, materials, elements = [], [], []
+    for index, ((x, y, _area), fyk) in enumerate(zip(bars, fyks), start=1):
+        entry = material_catalog.default_entry(
+            "mild", material_id=f"L{index}", preset=method.label)
+        entry["fytk"] = fyk
+        entries.append(entry)
+        materials.append(material_catalog.build_material(entry, "mild"))
+        elements.append(dict(_bar(f"R{index}", x * 1000.0, y * 1000.0, 25.0),
+                             material_id=f"L{index}"))
+    inp = _input(
+        minimum_reinforcement_on=True, sls_fctm=2.9, outer=outer, bars=bars,
+        section=Section.from_polygon(outer, bars), bar_elements=elements,
+        bar_materials=materials,
+        mild_material_catalog={"version": 1, "next_id": 9, "items": entries},
+    )
+    inp.update(changes)
+    return inp
+
+
+def test_longitudinal_2005_as_min_oracle_signs_and_two_material_fyk():
+    # Both governing terms of as_min = max(0.26 fctm/fyk, 0.0013) bt d.
+    for fctm, fyk, factor in ((2.9, 500.0, 0.26 * 2.9 / 500.0),
+                              (2.0, 500.0, 0.0013)):
+        inp = _long_input(fyks=(fyk,) * 4, sls_fctm=fctm, Mx_pl=100.0)
+        out = _candidate(inp)
+        steps = _steps(_bundle(inp, out), "longitudinal-minimum")
+        as_min = factor * 300.0 * 550.0
+        assert steps["row-as-min-mm2"].result.value == pytest.approx(as_min)
+        assert steps["row-bt-mm"].result.value == pytest.approx(300.0)
+        assert steps["row-d-mm"].result.value == pytest.approx(550.0)
+        assert steps["row-utilisation"].result.value == pytest.approx(
+            as_min / 982.0)
+        assert steps["row-status"].result.value == (
+            1.0 if as_min <= 982.0 + 1e-9 else 0.0)
+        row = out["minimum_reinforcement"]["checks"][0]
+        assert row["face"] == "bottom" and row["bar_ids"] == ["R1", "R2"]
+        assert row["material_ids"] == ["L1", "L2"]
+
+    # Tension-face fyk is the retained minimum fytk over tension-face bars.
+    mixed = _long_input(fyks=(400.0, 500.0, 500.0, 500.0), Mx_pl=100.0)
+    steps = _steps(_bundle(mixed), "longitudinal-minimum")
+    assert steps["row-fyk-mpa"].result.value == 400.0
+    assert steps["row-as-min-mm2"].result.value == pytest.approx(
+        (0.26 * 2.9 / 400.0) * 300.0 * 550.0)
+
+    # Moment sign flips the retained face; the trace binds the centroid moment.
+    top = _long_input(Mx_pl=-100.0)
+    top_out = _candidate(top)
+    assert top_out["minimum_reinforcement"]["checks"][0]["face"] == "top"
+    assert top_out["minimum_reinforcement"]["checks"][0]["bar_ids"] == (
+        ["R3", "R4"])
+    assert _steps(_bundle(top, top_out), "longitudinal-minimum")[
+        "mx-centroid"].result.value == pytest.approx(-100.0)
+
+    # Tension-positive N moves the centroidal moment: M_C = M_O + N c.
+    outer = [(-0.10, 0.0), (0.10, 0.0), (0.10, 0.60), (-0.10, 0.60)]
+    bars = [(0.0, 0.05, 100.0), (0.0, 0.55, 500.0)]
+    entry = material_catalog.default_entry(
+        "mild", material_id="L1", preset=codes.EC2_2005_DKNA.label)
+    material = material_catalog.build_material(entry, "mild")
+    axial = _input(
+        minimum_reinforcement_on=True, sls_fctm=2.9, P_pl=100.0,
+        outer=outer, bars=bars, section=Section.from_polygon(outer, bars),
+        bar_elements=[dict(_bar(f"R{i}", x * 1000.0, y * 1000.0, 16.0),
+                           material_id="L1")
+                      for i, (x, y, _a) in enumerate(bars, start=1)],
+        bar_materials=[material, material],
+        mild_material_catalog={"version": 1, "next_id": 2, "items": [entry]},
+    )
+    axial_out = _candidate(axial)
+    steps = _steps(_bundle(axial, axial_out), "longitudinal-minimum")
+    assert steps["mx-centroid"].result.value == pytest.approx(30.0)
+    assert axial_out["minimum_reinforcement"]["checks"][0]["status"] == "FAIL"
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 0.0
+
+    # Zero centroidal moment is the retained 2005 NOT ASSESSED scope-out.
+    zero = _long_input()
+    zero_out = _candidate(zero)
+    assert "needs a bending tension face" in (
+        zero_out["minimum_reinforcement"]["reason"])
+    steps = _steps(_bundle(zero, zero_out), "longitudinal-minimum")
+    assert "assessment-scope-state" in steps
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 3.0
+
+
+def test_longitudinal_identity_swaps_and_2023_material_boundary():
+    inp = _long_input(Mx_pl=100.0)
+    bundle = _bundle(inp)
+
+    # Same-law different bar material ID must seal differently.
+    swapped = copy.deepcopy(inp)
+    clone = dict(swapped["mild_material_catalog"]["items"][0], id="L9")
+    swapped["mild_material_catalog"]["items"].append(clone)
+    swapped["bar_elements"][0] = dict(swapped["bar_elements"][0],
+                                      material_id="L9")
+    swapped_out = _candidate(swapped)
+    with pytest.raises(TraceValidationError):
+        validate_detailing_trace_family(
+            bundle, swapped, swapped_out, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+    assert validate_detailing_trace_family(
+        _bundle(swapped, swapped_out), swapped, swapped_out,
+        input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
+        context=CONTEXT) is not None
+
+    # Renaming a compression-face element changes no retained row value,
+    # but the tokenized element identity still changes the seal.
+    renamed = copy.deepcopy(inp)
+    renamed["bar_elements"][2] = dict(renamed["bar_elements"][2], id="RX")
+    renamed_out = _candidate(renamed)
+    assert renamed_out["minimum_reinforcement"]["checks"][0]["bar_ids"] == (
+        ["R1", "R2"])
+    with pytest.raises(TraceValidationError):
+        validate_detailing_trace_family(
+            bundle, renamed, renamed_out, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+    # A used 2023 bar-material assignment can never produce finite evidence.
+    entry_2023 = material_catalog.default_entry(
+        "mild", material_id="L1", preset=codes.EC2_2023.label)
+    future = copy.deepcopy(inp)
+    future["mild_material_catalog"]["items"][0] = entry_2023
+    future["bar_materials"] = [
+        material_catalog.build_material(entry_2023, "mild"),
+        *future["bar_materials"][1:],
+    ]
+    with pytest.raises(TraceValidationError, match="2023 material provenance"):
+        _bundle(future, {"minimum_reinforcement": {}})
+    concrete_2023 = _long_input(
+        Mx_pl=100.0, concrete=codes.EC2_2023.concrete(35.0),
+        concrete_preset=codes.EC2_2023.label)
+    with pytest.raises(TraceValidationError, match="2023 material provenance"):
+        _bundle(concrete_2023, {"minimum_reinforcement": {}})
+    with pytest.raises(TraceValidationError, match="cut direction"):
+        _bundle(_long_input(detailing_cut_direction="Diagonal"),
+                {"minimum_reinforcement": {}})
+
+
+def test_longitudinal_2023_branches_slab_shapes_and_determinism():
+    base = dict(detailing_edition=detailing.EC2_2023)
+    tension = _long_input(P_pl=100.0, **base)
+    tension_out = _candidate(tension)
+    steps = _steps(_bundle(tension, tension_out), "longitudinal-minimum")
+    assert steps["row-demand-kn"].result.value == pytest.approx(
+        0.18 * 2.9 * 1000.0)
+    assert steps["row-resistance-kn"].result.value == pytest.approx(982.0)
+    assert tension_out["minimum_reinforcement"]["clause"] == (
+        "12.2(2)(b), Formula (12.2)")
+
+    compressed = _long_input(P_pl=-1.0e5, Mx_pl=100.0, **base)
+    compressed_out = _candidate(compressed)
+    steps = _steps(_bundle(compressed, compressed_out), "longitudinal-minimum")
+    limit = 0.5 * 0.18 * compressed["concrete"].fcd * 1000.0
+    assert steps["compression-limit"].result.value == pytest.approx(limit)
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 4.0
+
+    idle = _long_input(P_pl=-10.0, **base)
+    idle_out = _candidate(idle)
+    assert idle_out["minimum_reinforcement"]["clause"] == "12.2(5)"
+    steps = _steps(_bundle(idle, idle_out), "longitudinal-minimum")
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 4.0
+    assert "compression-limit" not in steps
+
+    bending = _long_input(Mx_pl=100.0, **base)
+    bending_out = _candidate(bending)
+    first = build_detailing_trace_family(
+        bending, bending_out, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT)
+    second = build_detailing_trace_family(
+        bending, bending_out, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT)
+    # The kernel-internal 2023 nominal-capacity solve must replay
+    # deterministically: repeated builds seal identically.
+    assert first.to_dict() == second.to_dict()
+    steps = {step.step_id: step for step in first.calculations[0].steps}
+    assert steps["row-m-cr-knm"].result.value == pytest.approx(
+        2.9 * 1000.0 * 0.3 * 0.6 ** 2 / 6.0)
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 1.0
+
+    slab_cut = _long_input(detailing_member_type=detailing.MEMBER_SLAB,
+                           detailing_cut_direction=detailing.CUT_LONGITUDINAL,
+                           Mx_pl=100.0)
+    slab_cut_out = _candidate(slab_cut)
+    assert "orthogonal primary reinforcement" in (
+        slab_cut_out["minimum_reinforcement"]["reason"])
+    steps = _steps(_bundle(slab_cut, slab_cut_out), "longitudinal-minimum")
+    assert "slab-cut-scope" in steps
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 3.0
+
+    slab = _long_input(detailing_member_type=detailing.MEMBER_SLAB,
+                       Mx_pl=100.0)
+    slab_out = _candidate(slab)
+    assert slab_out["minimum_reinforcement"]["clause"] == (
+        "9.3.1.1(1); 9.2.1.1(1), Formula (9.1N)")
+    assert _bundle(slab, slab_out) is not None
+
+
+def test_new_member_candidates_walk_exactly():
+    long_2005 = _long_input(Mx_pl=100.0)
+    long_2023 = _long_input(Mx_pl=100.0,
+                            detailing_edition=detailing.EC2_2023)
+    for inp in (long_2005, long_2023):
+        out = _candidate(inp)
+        expected = _replay_longitudinal(inp, CONTEXT)[1].expected
+        candidate = out["minimum_reinforcement"]
+        _validate_longitudinal_candidate(copy.deepcopy(candidate), expected)
+        for kind, path, detail in list(_walk(candidate)):
+            if kind == "leaf":
+                with pytest.raises(TraceValidationError):
+                    _validate_longitudinal_candidate(
+                        _replaced(copy.deepcopy(candidate), path,
+                                  _mutated(detail)), expected)
+                continue
+            changed = copy.deepcopy(candidate)
+            _at(changed, path)["unexpected-ct008-field"] = 0.0
+            with pytest.raises(TraceValidationError):
+                _validate_longitudinal_candidate(changed, expected)
+            for key in detail:
+                changed = copy.deepcopy(candidate)
+                del _at(changed, path)[key]
+                with pytest.raises(TraceValidationError):
+                    _validate_longitudinal_candidate(changed, expected)
+            if len(detail) > 1:
+                changed = copy.deepcopy(candidate)
+                node = _at(changed, path)
+                items = [(key, node[key]) for key in reversed(detail)]
+                node.clear()
+                node.update(items)
+                with pytest.raises(TraceValidationError):
+                    _validate_longitudinal_candidate(changed, expected)
+
+
+def test_new_member_applicability_scope_selection_and_masking():
+    # The longitudinal member publishes independently of the capacity flags;
+    # the torsion 6.31 screen stays an excluded sibling until PR-08C.3c.
+    both = _long_input(Mx_pl=100.0, torsion_on=True, torsion_T=15.0)
+    both_out = _candidate(both)
+    bundle = _bundle(both, both_out)
+    assert detailing_trace_applicability(both) == ("longitudinal-minimum",)
+    assert len(bundle.calculations) == 1
+
+    # Candidates supplied for an absent flag fail closed.
+    with pytest.raises(TraceValidationError,
+                       match="absent CT-008 longitudinal-minimum"):
+        build_detailing_trace_family(
+            _input(), {"minimum_reinforcement": {"status": "PASS"}},
+            input_sha256=INPUT_SHA, result_sha256=RESULT_SHA)
+
+    # Scope-out branches select from validated direct inputs; junk in unread
+    # inputs cannot mask either new member.
+    slab_cut = _long_input(detailing_member_type=detailing.MEMBER_SLAB,
+                           detailing_cut_direction=detailing.CUT_LONGITUDINAL)
+    clean_out = _candidate(slab_cut)
+    masked = dict(slab_cut, shear_V=math.nan, v_min=math.nan,
+                  torsion_T=math.nan, shear_dlower=math.nan,
+                  bridge_standard=object())
+    assert build_detailing_trace_family(
+        masked, clean_out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
+        context=CONTEXT).to_dict() == _bundle(slab_cut, clean_out).to_dict()
+    with pytest.raises(TraceValidationError):
+        _bundle(_long_input(sls_fctm=math.nan), {"minimum_reinforcement": {}})
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review additions for the C.3b members.
+# ---------------------------------------------------------------------------
+
+def _custom_long_input(outer, bars, dia=25.0, **changes):
+    entries, materials, elements = [], [], []
+    for index, (x, y, _area) in enumerate(bars, start=1):
+        entry = material_catalog.default_entry(
+            "mild", material_id=f"L{index}", preset=codes.EC2_2005_DKNA.label)
+        entries.append(entry)
+        materials.append(material_catalog.build_material(entry, "mild"))
+        elements.append(dict(_bar(f"R{index}", x * 1000.0, y * 1000.0, dia),
+                             material_id=f"L{index}"))
+    inp = _input(
+        minimum_reinforcement_on=True, sls_fctm=2.9, outer=outer,
+        bars=list(bars), section=Section.from_polygon(outer, list(bars)),
+        bar_elements=elements, bar_materials=materials,
+        mild_material_catalog={"version": 1, "next_id": 9, "items": entries},
+    )
+    inp.update(changes)
+    return inp
+
+
+def _walk_rejects(candidate, expected, validator):
+    validator(copy.deepcopy(candidate), expected)
+    for kind, path, detail in list(_walk(candidate)):
+        if kind == "leaf":
+            with pytest.raises(TraceValidationError):
+                validator(_replaced(copy.deepcopy(candidate), path,
+                                    _mutated(detail)), expected)
+            continue
+        changed = copy.deepcopy(candidate)
+        _at(changed, path)["unexpected-ct008-field"] = 0.0
+        with pytest.raises(TraceValidationError):
+            validator(changed, expected)
+        for key in detail:
+            changed = copy.deepcopy(candidate)
+            del _at(changed, path)[key]
+            with pytest.raises(TraceValidationError):
+                validator(changed, expected)
+        if len(detail) > 1:
+            changed = copy.deepcopy(candidate)
+            node = _at(changed, path)
+            items = [(key, node[key]) for key in reversed(detail)]
+            node.clear()
+            node.update(items)
+            with pytest.raises(TraceValidationError):
+                validator(changed, expected)
+
+
+def test_slab_2023_scope_cells_and_compression_boundary():
+    # P1-A control: the Slab dispatch overwrites the 12.2(5) clause in place;
+    # the scope-out branch is selected by the unique retained key shape.
+    slab_scope = _long_input(P_pl=-10.0,
+                             detailing_edition=detailing.EC2_2023,
+                             detailing_member_type=detailing.MEMBER_SLAB)
+    slab_out = _candidate(slab_scope)
+    result = slab_out["minimum_reinforcement"]
+    assert result["status"] == "NOT APPLICABLE"
+    assert result["clause"] == "Table 12.2, item 1; 12.2(2)(a), Formula (12.1)"
+    bundle = _bundle(slab_scope, slab_out)
+    steps = _steps(bundle, "longitudinal-minimum")
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 4.0
+    assert validate_detailing_trace_family(
+        bundle, slab_scope, slab_out, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT) is not None
+
+    # High-compression scope-out exactly at the 0.5 Ac fcd boundary.
+    base = _long_input(detailing_edition=detailing.EC2_2023, Mx_pl=100.0)
+    limit = 0.5 * 0.18 * base["concrete"].fcd * 1000.0
+    boundary = dict(base, P_pl=-limit)
+    boundary_out = _candidate(boundary)
+    assert boundary_out["minimum_reinforcement"]["status"] == "NOT APPLICABLE"
+    steps = _steps(_bundle(boundary, boundary_out), "longitudinal-minimum")
+    assert steps["compression-limit"].result.value == pytest.approx(limit)
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 4.0
+
+
+def test_longitudinal_2023_invalid_branch_classification():
+    # Neither retained cracking-INVALID reason is constructible from valid
+    # retained inputs (a moment on positive-area concrete always produces a
+    # tension candidate, and the plain-concrete uncracked solve converges),
+    # so the branch is controlled at the classification/contract level.
+    synthetic = {
+        "status": "INVALID", "edition": detailing.EC2_2023,
+        "clause": "12.2(2)(a), Formula (12.1)", "n_ed_tension_kn": 0.0,
+        "mx_ed_centroid_knm": 50.0, "my_ed_centroid_knm": 0.0, "checks": [],
+        "reason": "uncracked section solve did not converge",
+        "limitations": [], "member_type": detailing.MEMBER_BEAM,
+        "cut_direction": detailing.CUT_TRANSVERSE,
+        "modelled_reinforcement_direction": "longitudinal",
+    }
+    state = dict(member=detailing.MEMBER_BEAM,
+                 cut=detailing.CUT_TRANSVERSE,
+                 edition=detailing.EC2_2023)
+    assert _long_branch(state, synthetic) == "2023-invalid"
+
+
+def test_longitudinal_none_fields_my_axis_and_remaining_shape_walks():
+    outer = [(-0.15, -0.30), (0.15, -0.30), (0.15, 0.30), (-0.15, 0.30)]
+    # 2005 invalid tension zone: bars on the compression face only. The FAIL
+    # row keeps as_min/utilisation/fyk absent-by-state; nothing is fabricated.
+    empty_zone = _custom_long_input(
+        outer, [(-0.12, 0.25, 491.0), (0.12, 0.25, 491.0)], Mx_pl=100.0)
+    empty_out = _candidate(empty_zone)
+    row = empty_out["minimum_reinforcement"]["checks"][0]
+    assert row["status"] == "FAIL"
+    assert row["as_min_mm2"] is None and row["utilisation"] is None
+    assert row["fyk_mpa"] is None
+    assert row["reason"] == "no usable tension reinforcement or geometry"
+    steps = _steps(_bundle(empty_zone, empty_out), "longitudinal-minimum")
+    assert "row-as-min-mm2" not in steps and "row-fyk-mpa" not in steps
+    assert "row-utilisation" not in steps
+    assert steps["row-as-provided-mm2"].result.value == 0.0
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 0.0
+
+    # My-axis sign convention: opposite My signs select opposite faces.
+    left = _long_input(My_pl=100.0)
+    right = _long_input(My_pl=-100.0)
+    left_out, right_out = _candidate(left), _candidate(right)
+    left_row = left_out["minimum_reinforcement"]["checks"][0]
+    right_row = right_out["minimum_reinforcement"]["checks"][0]
+    assert left_row["axis"] == "y" and right_row["axis"] == "y"
+    assert {left_row["face"], right_row["face"]} == {"left", "right"}
+    assert set(left_row["bar_ids"]).isdisjoint(right_row["bar_ids"])
+    assert _steps(_bundle(left, left_out), "longitudinal-minimum")[
+        "my-centroid"].result.value == pytest.approx(100.0)
+
+    # Biaxial resultant tension zone.
+    biaxial = _long_input(Mx_pl=100.0, My_pl=100.0)
+    biaxial_out = _candidate(biaxial)
+    row = biaxial_out["minimum_reinforcement"]["checks"][0]
+    assert row["axis"] == "xy" and row["face"] == "resultant tension zone"
+    assert _bundle(biaxial, biaxial_out) is not None
+
+    # Adversarial walks over the remaining frozen longitudinal shapes.
+    cells = (
+        _long_input(P_pl=-1.0e5, Mx_pl=100.0,
+                    detailing_edition=detailing.EC2_2023),   # high compression
+        _long_input(P_pl=-10.0, detailing_edition=detailing.EC2_2023),
+        _long_input(P_pl=100.0, detailing_edition=detailing.EC2_2023),
+        _long_input(detailing_member_type=detailing.MEMBER_SLAB,
+                    detailing_cut_direction=detailing.CUT_LONGITUDINAL),
+        empty_zone,
+    )
+    for inp in cells:
+        out = _candidate(inp)
+        expected = _replay_longitudinal(inp, CONTEXT)[1].expected
+        _walk_rejects(out["minimum_reinforcement"], expected,
+                      _validate_longitudinal_candidate)
+
+
+def test_longitudinal_2023_tension_fail_zero_resistance_and_finiteness():
+    outer = [(-0.15, -0.30), (0.15, -0.30), (0.15, 0.30), (-0.15, 0.30)]
+    weak = _custom_long_input(outer, [(0.0, -0.25, 50.0)], dia=8.0,
+                              P_pl=100.0,
+                              detailing_edition=detailing.EC2_2023)
+    weak_out = _candidate(weak)
+    row = weak_out["minimum_reinforcement"]["checks"][0]
+    assert row["status"] == "FAIL" and row["utilisation"] > 1.0
+    steps = _steps(_bundle(weak, weak_out), "longitudinal-minimum")
+    resistance_kn = 50.0e-6 * weak["bar_materials"][0].fytk * 1000.0
+    assert steps["row-utilisation"].result.value == pytest.approx(
+        (0.18 * 2.9 * 1000.0) / resistance_kn)
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 0.0
+
+    bare = _custom_long_input(outer, [], P_pl=100.0,
+                              detailing_edition=detailing.EC2_2023)
+    bare_out = _candidate(bare)
+    row = bare_out["minimum_reinforcement"]["checks"][0]
+    assert row["status"] == "FAIL" and row["utilisation"] is None
+    assert row["resistance_kn"] == 0.0
+    steps = _steps(_bundle(bare, bare_out), "longitudinal-minimum")
+    assert "row-utilisation" not in steps
+    assert steps["row-resistance-kn"].result.value == 0.0
+    assert steps["ct-008-longitudinal-minimum-result"].result.value == 0.0
+
+    for key in ("P_pl", "Mx_pl", "My_pl"):
+        for bad in (math.nan, math.inf):
+            with pytest.raises(TraceValidationError):
+                _bundle(_long_input(**{key: bad}),
+                        {"minimum_reinforcement": {}})
+
+
+def test_longitudinal_concrete_identity_same_law_different_id():
+    first = _long_input(Mx_pl=100.0, concrete_material_id="C1")
+    first_out = _candidate(first)
+    bundle = _bundle(first, first_out)
+    assert concrete_leaf_id("C1", "fck") in _steps(bundle,
+                                                   "longitudinal-minimum")
+    second = dict(first, concrete_material_id="C2")
+    second_out = _candidate(second)
+    assert second_out["minimum_reinforcement"] == first_out[
+        "minimum_reinforcement"]
+    with pytest.raises(TraceValidationError):
+        validate_detailing_trace_family(
+            bundle, second, second_out, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+    assert validate_detailing_trace_family(
+        _bundle(second, second_out), second, second_out,
+        input_sha256=INPUT_SHA, result_sha256=RESULT_SHA,
+        context=CONTEXT) is not None
+
+
+
+def test_longitudinal_graph_edges_including_fctm_are_load_bearing():
+    # The shared dependency-removal battery sweeps the rich clear/transverse
+    # bundle, which carries no longitudinal member; this battery sweeps every
+    # longitudinal edge, including the corrected input-fctm basis edge.
+    inp = _long_input(Mx_pl=100.0)
+    out = _candidate(inp)
+    bundle = _bundle(inp, out)
+    shape = _replay_longitudinal(inp, CONTEXT)[0]
+    registry = expected_registry(DetailingShape(None, None, shape))
+    calculation = bundle.calculations[0]
+    basis = next(step for step in calculation.steps
+                 if step.step_id == "assessment-basis")
+    assert any(dep.step_id == "input-fctm" for dep in basis.dependencies)
+    for si, step in enumerate(calculation.steps):
+        for di in range(len(step.dependencies)):
+            steps = list(calculation.steps)
+            steps[si] = dataclasses.replace(
+                step, dependencies=step.dependencies[:di]
+                + step.dependencies[di + 1:])
+            with pytest.raises(TraceValidationError):
+                tampered = seal_bundle(dataclasses.replace(
+                    bundle, calculations=(dataclasses.replace(
+                        calculation, steps=tuple(steps)),)))
+                audit_trace_registry(tampered, registry)
