@@ -7,23 +7,32 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from . import detailing
+from . import capacity, detailing
 from .calculation_trace import (
     RESULT_FINITE, RESULT_POSITIVE_INFINITY, TraceBundle, TraceCalculation,
     TraceDependency, TraceResult, TraceStep, TraceValidationError,
     create_bundle, validate_bundle,
 )
 from .detailing_trace_contract import (
-    CHECK_ROW_KEYS, CLEAR_INVALID_KEYS, CLEAR_KEYS, CLEAR_MEMBER_ID,
-    COVERAGE_ID, ClearShape, DetailingShape, DirectionShape, DUCTILITY_CLASSES,
-    EDITIONS, METHOD_ID, MINIMUM_RATIO_KEYS, PAIR_KEYS, RecordShape, RowShape,
-    STATUS_CODES, TORSION_LIMIT_KEYS, TRANSVERSE_INVALID_KEYS, TRANSVERSE_KEYS,
-    TRANSVERSE_MEMBER_ID, TransverseShape, TubeShape, concrete_leaf_id,
-    expected_clear_steps, expected_registry, expected_transverse_steps,
-    record_identity_id, tube_reason_id,
+    BarIdentity, CHECK_ROW_KEYS, CLEAR_INVALID_KEYS, CLEAR_KEYS,
+    CLEAR_MEMBER_ID, COVERAGE_ID, ClearShape, DetailingShape, DirectionShape,
+    DUCTILITY_CLASSES, EDITIONS, FaceShape, LONG_2005_KEYS,
+    LONG_2023_BENDING_KEYS, LONG_2023_HIGH_COMPRESSION_KEYS,
+    LONG_2023_SCOPE_KEYS, LONG_ROW_FIELD_CANDIDATES, LONG_SLAB_CUT_KEYS,
+    LONGITUDINAL_MEMBER_ID,
+    LongShape, METHOD_ID, MINIMUM_RATIO_KEYS, PAIR_KEYS, ROW_2005_KEYS,
+    ROW_2023_BENDING_KEYS, ROW_2023_TENSION_KEYS, RecordShape, RowShape,
+    SCREEN_EXTENSION_KEYS, SCREEN_KEYS, SCREEN_MEMBER_ID, SCREEN_NA_KEYS,
+    SCREEN_REASONS, SCREEN_STATE_CODES, STATUS_CODES, ScopeShape, ScreenShape,
+    TORSION_LIMIT_KEYS, TRANSVERSE_INVALID_KEYS, TRANSVERSE_KEYS,
+    TRANSVERSE_MEMBER_ID, TransverseShape, TubeShape, bar_leaf_id,
+    concrete_leaf_id, expected_clear_steps, expected_longitudinal_steps,
+    expected_registry, expected_screen_steps, expected_transverse_steps,
+    long_field_step_id, record_identity_id, tube_reason_id,
 )
 from .section_trace_blocks import (
-    _concrete_block as concrete_material_block, context_axes, context_id,
+    GeometryBlock, _concrete_block as concrete_material_block,
+    _materials as bar_material_blocks, context_axes, context_id,
 )
 from .torsion_trace import (
     _boolean, _compare, _mapping, _number, _retained_mapping, _sequence,
@@ -37,6 +46,10 @@ _SCREEN = "gross-web upper-bound screen"
 _INFINITE_REASON = (
     "Retained utilisation is unbounded because no effective transverse "
     "reinforcement is provided where it is required."
+)
+_SCREEN_INFINITE_REASON = (
+    "Retained face ordering metric is unbounded because the retained "
+    "screen value is not finite."
 )
 
 
@@ -88,11 +101,19 @@ def detailing_trace_applicability(inp: Mapping[str, Any]) -> tuple[str, ...]:
     transverse = _boolean(
         inp.get("transverse_detailing_on", False), "transverse_detailing_on"
     )
+    longitudinal = _boolean(
+        inp.get("minimum_reinforcement_on", False), "minimum_reinforcement_on"
+    )
+    screen = _boolean(inp.get("torsion_on", False), "torsion_on")
     has_section = inp.get("section") is not None
     if clear and has_section:
         members.append(CLEAR_MEMBER_ID)
     if transverse and has_section:
         members.append(TRANSVERSE_MEMBER_ID)
+    if longitudinal and has_section:
+        members.append(LONGITUDINAL_MEMBER_ID)
+    if screen and has_section:
+        members.append(SCREEN_MEMBER_ID)
     return tuple(members)
 
 
@@ -707,6 +728,512 @@ def _validate_transverse_candidate(candidate, expected):
 
 
 # ---------------------------------------------------------------------------
+# Longitudinal minimum-reinforcement member.
+# ---------------------------------------------------------------------------
+
+_LONG_ROW_KEYS = {
+    "row-2005": ROW_2005_KEYS,
+    "2023-tension": ROW_2023_TENSION_KEYS,
+    "2023-bending": ROW_2023_BENDING_KEYS,
+}
+
+
+def _compare_numeric_list(actual, expected, label):
+    if expected is None:
+        if actual is not None:
+            raise TraceValidationError(f"{label} must be null")
+        return
+    items = _sequence(actual, label)
+    if len(items) != len(expected):
+        raise TraceValidationError(f"{label} cardinality differs")
+    for index, (item, wanted) in enumerate(zip(items, expected)):
+        _compare_value(item, wanted, f"{label}[{index}]")
+
+
+def _finite_number(value: Any) -> bool:
+    return (type(value) in {int, float} and type(value) is not bool
+            and math.isfinite(float(value)))
+
+
+def _long_state(inp):
+    edition = _edition(inp)
+    member = str(
+        inp.get("detailing_member_type", detailing.MEMBER_BEAM)
+        or detailing.MEMBER_BEAM
+    ).strip().title()
+    if member not in detailing.MEMBER_TYPES:
+        raise TraceValidationError("member_type must be Beam or Slab")
+    cut = str(
+        inp.get("detailing_cut_direction", detailing.CUT_TRANSVERSE)
+        or detailing.CUT_TRANSVERSE
+    ).strip()
+    if cut not in detailing.CUT_DIRECTIONS:
+        raise TraceValidationError("unknown section cut direction")
+    return dict(
+        edition=edition, member=member, cut=cut,
+        fctm=_finite(inp.get("sls_fctm"), "sls_fctm"),
+        axial=_finite(inp.get("P_pl"), "P_pl"),
+        mx=_finite(inp.get("Mx_pl"), "Mx_pl"),
+        my=_finite(inp.get("My_pl"), "My_pl"),
+    )
+
+
+def _long_branch(state, expected):
+    keys = tuple(expected)
+    if state["member"] == detailing.MEMBER_SLAB and (
+            state["cut"] == detailing.CUT_LONGITUDINAL):
+        if keys != LONG_SLAB_CUT_KEYS:
+            raise TraceValidationError(_DRIFT)
+        return "slab-cut"
+    if state["edition"] != detailing.EC2_2023:
+        if keys != LONG_2005_KEYS:
+            raise TraceValidationError(_DRIFT)
+        return "row-2005" if expected["checks"] else "2005-zero"
+    if keys == LONG_2023_HIGH_COMPRESSION_KEYS:
+        return "2023-high-compression"
+    if keys == LONG_2023_BENDING_KEYS:
+        return "2023-bending"
+    if keys == LONG_2023_SCOPE_KEYS:
+        # The 12.2(5) scope-out shape is unique; the retained Slab dispatch
+        # overwrites its clause in place, so the clause text is a replayed
+        # retained value, never a branch selector.
+        return "2023-compression-only"
+    if keys == LONG_2005_KEYS:
+        if expected["checks"]:
+            return "2023-tension"
+        if expected["status"] == "INVALID":
+            return "2023-invalid"
+    raise TraceValidationError(_DRIFT)
+
+
+def _replay_longitudinal(inp, context):
+    _require_section(inp)
+    state = _long_state(inp)
+    concrete = _concrete_identity(inp)
+    section = inp["section"]
+    blocks = bar_material_blocks(
+        inp, kind="bar", count=len(section.bars), default=inp.get("steel")
+    )
+    for block in blocks:
+        source = block.provenance.source
+        if source.citation is not None and "2023" in source.citation.document:
+            raise TraceValidationError(
+                "2023 material provenance is published but not implemented "
+                "for CT-008"
+            )
+    geometry = GeometryBlock.from_section(section)
+    expected = detailing.minimum_reinforcement(
+        section,
+        inp.get("bar_elements") or [],
+        inp.get("bar_materials") or [],
+        inp["concrete"],
+        edition=inp["detailing_edition"],
+        fctm_mpa=inp["sls_fctm"],
+        n_ed_tension_kn=inp["P_pl"],
+        mx_ed_knm=inp["Mx_pl"],
+        my_ed_knm=inp["My_pl"],
+        member_type=inp.get("detailing_member_type", detailing.MEMBER_BEAM),
+        cut_direction=inp.get("detailing_cut_direction",
+                              detailing.CUT_TRANSVERSE),
+    )
+    branch = _long_branch(state, expected)
+    row = None
+    if branch in _LONG_ROW_KEYS:
+        checks = expected["checks"]
+        if len(checks) != 1 or tuple(checks[0]) != _LONG_ROW_KEYS[branch]:
+            raise TraceValidationError(_DRIFT)
+        row = checks[0]
+    elif expected["checks"]:
+        raise TraceValidationError(_DRIFT)
+    row_fields = tuple(
+        field for field in LONG_ROW_FIELD_CANDIDATES.get(branch, ())
+        if row is not None and _finite_number(row.get(field))
+    )
+    shape = LongShape(
+        concrete_values=concrete.values,
+        concrete_source=concrete.provenance.source,
+        concrete_material_id=concrete.material_id,
+        bars=tuple(BarIdentity(block.element_id, block.material_id,
+                               block.values, block.provenance.source)
+                   for block in blocks),
+        ring_points=tuple(len(ring) for ring in geometry.rings),
+        edition=state["edition"], member=state["member"], cut=state["cut"],
+        branch=branch, row_fields=row_fields,
+        has_compression_limit="compression_limit_kn" in expected,
+        calculation_id=f"ct-008-{context_id(context)}-longitudinal-minimum",
+        axes=context_axes(
+            context, cut_direction=state["cut"],
+            detailing_edition=state["edition"], longitudinal_branch=branch,
+            member_type=state["member"],
+        ),
+    )
+    values: dict[str, Any] = {
+        "input-minimum-enabled": 1.0,
+        "input-edition": float(EDITIONS.index(state["edition"])),
+        "input-member-type": float(state["member"] == detailing.MEMBER_SLAB),
+        "input-cut-direction": float(
+            detailing.CUT_DIRECTIONS.index(state["cut"])
+        ),
+        "input-fctm": state["fctm"],
+        "input-axial-action": state["axial"],
+        "input-mx-action": state["mx"],
+        "input-my-action": state["my"],
+        "geometry-vector": 1.0,
+        "material-vector": 1.0,
+        "normalised-longitudinal-inputs": 1.0,
+    }
+    for ring_index, ring in enumerate(geometry.rings):
+        for point_index, point in enumerate(ring):
+            prefix = f"geometry-ring-{ring_index:03d}-point-{point_index:04d}"
+            values[f"{prefix}-x"], values[f"{prefix}-y"] = point
+    for index, bar in enumerate(geometry.bars):
+        prefix = f"geometry-bar-{index:03d}"
+        values.update({f"{prefix}-x": bar.x, f"{prefix}-y": bar.y,
+                       f"{prefix}-area": bar.area})
+    for name, value in concrete.values:
+        values[concrete_leaf_id(concrete.material_id, name)] = value
+    for block in blocks:
+        for name, value in block.values:
+            values[bar_leaf_id(block.element_id, block.material_id,
+                               name)] = value
+    code = STATUS_CODES[expected["status"]]
+    if branch == "slab-cut":
+        values["slab-cut-scope"] = 1.0
+        values["ct-008-longitudinal-minimum-result"] = code
+        return shape, MemberEvidence(values, expected)
+    values["mx-centroid"] = expected["mx_ed_centroid_knm"]
+    values["my-centroid"] = expected["my_ed_centroid_knm"]
+    if shape.has_compression_limit:
+        values["compression-limit"] = expected["compression_limit_kn"]
+    if row is None:
+        values["assessment-scope-state"] = 1.0
+    else:
+        values["assessment-basis"] = 1.0
+        for field in row_fields:
+            values[long_field_step_id(field)] = float(row[field])
+        values["row-status"] = STATUS_CODES[row["status"]]
+        values["longitudinal-status"] = code
+    values["ct-008-longitudinal-minimum-result"] = code
+    return shape, MemberEvidence(values, expected)
+
+
+def _validate_long_row(candidate, expected, label):
+    candidate = _retained_mapping(candidate, tuple(expected), (), label)
+    for key in tuple(expected):
+        if key in {"bar_ids", "material_ids"}:
+            _compare_text_list(candidate[key], expected[key], f"{label}.{key}")
+        elif key in {"tension_direction", "neutral_point_m"}:
+            _compare_numeric_list(candidate[key], expected[key],
+                                  f"{label}.{key}")
+        else:
+            _compare_value(candidate[key], expected[key], f"{label}.{key}")
+
+
+def _validate_longitudinal_candidate(candidate, expected):
+    keys = tuple(expected)
+    candidate = _retained_mapping(candidate, keys, (),
+                                  "candidate minimum reinforcement")
+    for key in keys:
+        label = f"candidate minimum reinforcement.{key}"
+        if key == "checks":
+            items = _sequence(candidate[key], label)
+            if len(items) != len(expected[key]):
+                raise TraceValidationError(f"{label} cardinality differs")
+            for index, (actual, wanted) in enumerate(zip(items, expected[key])):
+                _validate_long_row(actual, wanted, f"{label}[{index}]")
+        elif key == "limitations":
+            _compare_text_list(candidate[key], expected[key], label)
+        else:
+            _compare_value(candidate[key], expected[key], label)
+
+
+# ---------------------------------------------------------------------------
+# Formula (6.31) minimum-reinforcement screen member.
+# ---------------------------------------------------------------------------
+
+def _scope_replay(token, torsion_payload, shear_payload, holes, values):
+    """Replay one retained screen instance from its companion payloads."""
+
+    branch, expected, operands = _screen_expected(
+        torsion_payload, shear_payload, holes, f"screen {token}")
+    p = f"screen-{token}"
+    values[f"upstream-{p}-subdivided"] = float(operands["subdivided"])
+    has_shear = bool(shear_payload)
+    if "res_valid" in operands:
+        values[f"upstream-{p}-res-valid"] = float(operands["res_valid"])
+    if "trd_c" in operands:
+        values[f"upstream-{p}-trd-c"] = operands["trd_c"]
+        values[f"upstream-{p}-vrd-c"] = operands["vrd_c"]
+    if branch == "applicable":
+        values.update({
+            f"upstream-{p}-t-ed": operands["t_ed"],
+            f"upstream-{p}-v-ed": operands["v_ed"],
+            f"upstream-{p}-model-2023": float(operands["model"]),
+        })
+    values[f"{p}-evidence"] = 1.0
+    if branch == "applicable":
+        values[f"{p}-value"] = expected["value"]
+        values[f"{p}-ok"] = float(expected["ok"])
+        values[f"{p}-solid"] = float(expected["solid"])
+        status = "PASS" if expected["ok"] else "FAIL"
+    else:
+        status = "NOT APPLICABLE"
+    values[f"{p}-status"] = STATUS_CODES[status]
+    return ScopeShape(token, branch, has_shear), expected, status
+
+
+def _screen_expected(torsion_payload, shear_payload, holes, label):
+    """Replay one retained 6.31 screen exactly from its companion payloads."""
+
+    torsion_payload = _mapping(torsion_payload, f"{label} torsion")
+    subdivided = bool(torsion_payload.get("subdivided"))
+    operands = {"subdivided": subdivided}
+    if subdivided:
+        branch = "subdivided"
+    elif not shear_payload:
+        branch = "no-shear"
+    else:
+        shear_payload = _mapping(shear_payload, f"{label} shear")
+        resistance = _mapping(shear_payload.get("res"), f"{label} shear res")
+        operands["res_valid"] = bool(resistance.get("valid"))
+        if not operands["res_valid"]:
+            branch = "no-shear"
+        else:
+            primary = _mapping(torsion_payload.get("primary"),
+                               f"{label} torsion primary")
+            operands["trd_c"] = _number(primary.get("trd_c"),
+                                        f"{label} trd_c")
+            operands["vrd_c"] = _number(resistance.get("vrd_c"),
+                                        f"{label} vrd_c")
+            if operands["trd_c"] <= 0.0 or operands["vrd_c"] <= 0.0:
+                branch = "zero-resistance"
+            else:
+                operands["t_ed"] = _number(torsion_payload.get("t_ed"),
+                                           f"{label} t_ed")
+                operands["v_ed"] = _number(shear_payload.get("v_ed"),
+                                           f"{label} v_ed")
+                operands["model"] = bool(shear_payload.get("model_2023"))
+                branch = "applicable"
+    if branch == "applicable":
+        value = (operands["t_ed"] / operands["trd_c"]
+                 + operands["v_ed"] / operands["vrd_c"])
+        expected = dict(
+            applicable=True, value=value, ok=bool(value <= 1.0 + 1.0e-9),
+            t_ed=operands["t_ed"], trd_c=operands["trd_c"],
+            v_ed=operands["v_ed"], vrd_c=operands["vrd_c"],
+            solid=bool(not holes), model_2023=operands["model"],
+        )
+        if tuple(expected) != SCREEN_KEYS:
+            raise TraceValidationError(_DRIFT)
+    else:
+        expected = {"applicable": False, "reason": SCREEN_REASONS[branch]}
+    return branch, expected, operands
+
+
+def _face_assessments(token, candidates, holes, values):
+    """Validate every face-specific retained screen, then replay the ordering.
+
+    Each face screen is exact-map validated against its own torsion/shear
+    sibling payloads before any assessment is derived, so a mutated
+    non-governing face screen can never reseal coherently.
+    """
+
+    shapes, assessments = [], []
+    for index, row in enumerate(candidates):
+        row = _mapping(row, f"screen {token} face {index}")
+        face_torsion = row.get("torsion")
+        run = face_torsion is not None
+        f = f"screen-{token}-face-{index:02d}"
+        values[f"upstream-{f}-run"] = float(run)
+        applicable, value_state = False, "absent"
+        if not run:
+            status, metric = "NOT RUN", 0.0
+        else:
+            face_torsion = _mapping(face_torsion, f"{f} torsion")
+            _branch, face_expected, _operands = _screen_expected(
+                face_torsion, row.get("shear"), holes,
+                f"screen {token} face {index}")
+            _validate_screen_payload(
+                face_torsion.get("min_reinf"), face_expected,
+                f"candidate {token} face {index} screen")
+            applicable = bool(face_expected["applicable"])
+            values[f"upstream-{f}-applicable"] = float(applicable)
+            if applicable:
+                value_state = "finite"
+                values[f"upstream-{f}-value"] = float(face_expected["value"])
+                status = "PASS" if face_expected["ok"] else "FAIL"
+                metric = float(face_expected["value"])
+            else:
+                status, metric = "NOT ASSESSED", 0.0
+        values[f"{f}-assessment-status"] = SCREEN_STATE_CODES[status]
+        values[f"{f}-assessment-metric"] = metric
+        shapes.append(FaceShape(run, applicable, value_state))
+        assessments.append((status, metric))
+    governing = max(range(len(assessments)),
+                    key=lambda i: capacity.assessment_key(*assessments[i]))
+    aggregate = capacity.aggregate_assessment_status(
+        status for status, _ in assessments)
+    values[f"screen-{token}-governing-face"] = float(governing)
+    values[f"screen-{token}-directional-status"] = SCREEN_STATE_CODES[aggregate]
+    return tuple(shapes), governing, aggregate
+
+
+def _required_faces(spec):
+    """Input-required tension-face set for one retained directional check."""
+
+    return tuple(bool(face) for face in capacity.shear_face_candidates(
+        spec["face"], spec["moment"]))
+
+
+def _directional_scope(token, candidates, holes, values, required):
+    # The retained face_candidates sequence must match the input-derived
+    # requirement exactly (cardinality, order, tension_low identity) before
+    # any per-face screen is validated or assessed.
+    labels = tuple(
+        bool(_mapping(row, f"screen {token} face {index}").get("tension_low"))
+        for index, row in enumerate(candidates)
+    )
+    if labels != required:
+        raise TraceValidationError(
+            "retained face candidates differ from the input-required face set"
+        )
+    faces, governing, aggregate = _face_assessments(token, candidates, holes,
+                                                    values)
+    row = _mapping(candidates[governing], f"screen {token} governing face")
+    face_torsion = row.get("torsion")
+    if face_torsion is None or (face_torsion or {}).get("min_reinf") is None:
+        raise TraceValidationError(_DRIFT)
+    scope, base, _ = _scope_replay(token, face_torsion, row.get("shear"),
+                                   holes, values)
+    face = "negative" if row.get("tension_low") else "positive"
+    published = dict(base, directional_status=aggregate, governing_face=face)
+    scope = ScopeShape(scope.token, scope.branch, scope.has_shear,
+                       faces=faces, extended=True)
+    return scope, published, (aggregate, face)
+
+
+def _replay_screen(inp, out, context):
+    _require_section(inp)
+    shear_on = _boolean(inp.get("shear_on"), "shear_on")
+    holes = _sequence(inp.get("holes"), "holes") if inp.get("holes") is not None \
+        else ()
+    if "holes" not in inp:
+        raise TraceValidationError("CT-008 screen needs the retained holes input")
+    torsion_out = _mapping(out.get("torsion"), "retained torsion result")
+    directional = any(key in inp
+                      for key in ("shear_Vx", "shear_Vy", "shear_components"))
+    active = []
+    if directional and shear_on:
+        specs = capacity.shear_direction_specs(inp)
+        active = [component for component in ("vx", "vy")
+                  if specs[component]["v_ed"] > 0.0]
+    mode = ("uniaxial" if not active
+            else ("single" if len(active) == 1 else "biaxial"))
+    values: dict[str, Any] = {
+        "input-screen-torsion-enabled": 1.0,
+        "input-screen-shear-enabled": float(shear_on),
+        "input-holes-count": float(len(holes)),
+        "input-directional-contract": float(directional),
+        "dispatch-mode": float(("uniaxial", "single", "biaxial").index(mode)),
+        "normalised-screen-inputs": 1.0,
+    }
+    expected = {"siblings": None, "components": {},
+                "component_order": tuple(active) if len(active) > 1 else ()}
+    components = []
+    if mode == "uniaxial":
+        shear_payload = out.get("shear") if (shear_on and not directional) else None
+        top_scope, top_expected, top_status = _scope_replay(
+            "primary", torsion_out, shear_payload, holes, values)
+    elif mode == "single":
+        shear_dir = _mapping(out.get("shear"), "retained shear result")
+        candidates = _sequence(shear_dir.get("face_candidates"),
+                               "shear face_candidates")
+        top_scope, top_expected, expected["siblings"] = _directional_scope(
+            "primary", candidates, holes, values,
+            _required_faces(specs[active[0]]))
+        top_status = ("NOT APPLICABLE" if not top_expected["applicable"]
+                      else ("PASS" if top_expected["ok"] else "FAIL"))
+    else:
+        top_scope, top_expected, top_status = _scope_replay(
+            "primary", torsion_out, None, holes, values)
+        interactions = _mapping(torsion_out.get("directional_interactions"),
+                                "directional_interactions")
+        if tuple(interactions) != tuple(active):
+            raise TraceValidationError(
+                "directional interaction container keys/order differ"
+            )
+        shear_dirs = _mapping(
+            _mapping(out.get("shear"), "retained shear result").get("directions"),
+            "shear directions")
+        for component in active:
+            direction = _mapping(shear_dirs.get(component),
+                                 f"shear direction {component}")
+            candidates = _sequence(direction.get("face_candidates"),
+                                   f"{component} face_candidates")
+            scope, published, siblings = _directional_scope(
+                component, candidates, holes, values,
+                _required_faces(specs[component]))
+            components.append(scope)
+            expected["components"][component] = {
+                "screen": published, "siblings": siblings,
+            }
+    expected["top"] = top_expected
+    values["ct-008-min-reinf-screen-result"] = STATUS_CODES[top_status]
+    shape = ScreenShape(
+        mode, top_scope, tuple(components),
+        f"ct-008-{context_id(context)}-min-reinf-screen",
+        context_axes(
+            context, component_count=str(len(components)),
+            screen_branch=top_scope.branch, screen_mode=mode,
+        ),
+    )
+    return shape, MemberEvidence(values, expected)
+
+
+def _validate_screen_payload(candidate, expected, label):
+    keys = tuple(expected)
+    base = SCREEN_KEYS if expected["applicable"] else SCREEN_NA_KEYS
+    if keys not in {base, (*base, *SCREEN_EXTENSION_KEYS)}:
+        raise TraceValidationError(_DRIFT)
+    candidate = _retained_mapping(candidate, keys, (), label)
+    for key in keys:
+        _compare_value(candidate[key], expected[key], f"{label}.{key}")
+
+
+def _validate_screen_member(out, expected):
+    torsion_out = _mapping(out.get("torsion"), "retained torsion result")
+    _validate_screen_payload(torsion_out.get("min_reinf"), expected["top"],
+                             "candidate 6.31 screen")
+    siblings = expected["siblings"]
+    for name, position in (("directional_min_reinf_status", 0),
+                           ("directional_min_reinf_governing_face", 1)):
+        if siblings is None:
+            if name in torsion_out:
+                raise TraceValidationError(
+                    f"candidate 6.31 screen sibling {name} must be absent"
+                )
+        else:
+            _compare(torsion_out.get(name), siblings[position],
+                     f"candidate 6.31 screen.{name}")
+    if expected["component_order"]:
+        interactions = _mapping(torsion_out.get("directional_interactions"),
+                                "candidate directional interactions")
+    for component in expected["component_order"]:
+        item = expected["components"][component]
+        entry = _mapping(interactions.get(component),
+                         f"candidate directional interaction {component}")
+        _validate_screen_payload(
+            entry.get("min_reinf"), item["screen"],
+            f"candidate {component} 6.31 screen")
+        _compare(entry.get("directional_min_reinf_status"),
+                 item["siblings"][0],
+                 f"candidate {component} screen status sibling")
+        _compare(entry.get("directional_min_reinf_governing_face"),
+                 item["siblings"][1],
+                 f"candidate {component} screen face sibling")
+
+
+# ---------------------------------------------------------------------------
 # Bundle assembly.
 # ---------------------------------------------------------------------------
 
@@ -726,6 +1253,10 @@ def _expression(step_id: str, title: str) -> str:
     for suffix, expression in expressions.items():
         if step_id.endswith(suffix) or step_id == suffix:
             return expression
+    if step_id.endswith("-assessment-status") or (
+            step_id.endswith("-directional-status")):
+        return ("retained ordering state: NOT APPLICABLE=0, PASS=1, "
+                "NOT ASSESSED=2, NOT RUN=3, FAIL=4, INVALID=5")
     if step_id.endswith("-status") or step_id.endswith("-result") or (
             step_id.endswith("-verdict")):
         return ("retained status code: PASS=1, FAIL=0, REVIEW=2, "
@@ -740,8 +1271,10 @@ def _calculation(calculation_id, title, axes, specs, values, assumptions):
         value = values[spec.step_id]
         numeric = float(value)
         if math.isinf(numeric):
-            result = TraceResult(RESULT_POSITIVE_INFINITY, None,
-                                 _INFINITE_REASON)
+            reason = (_SCREEN_INFINITE_REASON
+                      if spec.step_id.endswith("-assessment-metric")
+                      else _INFINITE_REASON)
+            result = TraceResult(RESULT_POSITIVE_INFINITY, None, reason)
             substituted = f"{spec.step_id} = positive_infinity"
         else:
             result = TraceResult(RESULT_FINITE, numeric)
@@ -772,16 +1305,34 @@ _TRANSVERSE_ASSUMPTIONS = (
 
 def _absent_candidates(members, out):
     for member_id, key in ((CLEAR_MEMBER_ID, "clear_spacing"),
-                           (TRANSVERSE_MEMBER_ID, "transverse_reinforcement")):
+                           (TRANSVERSE_MEMBER_ID, "transverse_reinforcement"),
+                           (LONGITUDINAL_MEMBER_ID, "minimum_reinforcement")):
         if member_id not in members and out.get(key) is not None:
             raise TraceValidationError(
                 f"absent CT-008 {member_id} flag cannot carry a candidate"
             )
+    if SCREEN_MEMBER_ID not in members:
+        torsion = out.get("torsion")
+        if isinstance(torsion, Mapping) and torsion.get("min_reinf") is not None:
+            raise TraceValidationError(
+                "absent CT-008 min-reinf-screen flag cannot carry a candidate"
+            )
+
+
+_LONG_ASSUMPTIONS = (
+    "The 2023 nominal-capacity and cracking solves run only inside the "
+    "retained kernel; the trace replays the same authoritative call.",
+)
+_SCREEN_ASSUMPTIONS = (
+    "Screen operands are upstream evidence from the retained shear/torsion "
+    "payloads validated by the accepted CT-006/CT-007 families where those "
+    "families apply.",
+)
 
 
 def _expected_bundle(inp, out, members, input_sha256, result_sha256, context):
     calculations = []
-    clear_shape = transverse_shape = None
+    clear_shape = transverse_shape = longitudinal_shape = screen_shape = None
     if CLEAR_MEMBER_ID in members:
         clear_shape, evidence = _replay_clear(inp, context)
         _validate_clear_candidate(out.get("clear_spacing"), evidence.expected)
@@ -800,13 +1351,33 @@ def _expected_bundle(inp, out, members, input_sha256, result_sha256, context):
             transverse_shape.axes, expected_transverse_steps(transverse_shape),
             evidence.values, _TRANSVERSE_ASSUMPTIONS,
         ))
+    if LONGITUDINAL_MEMBER_ID in members:
+        longitudinal_shape, evidence = _replay_longitudinal(inp, context)
+        _validate_longitudinal_candidate(
+            out.get("minimum_reinforcement"), evidence.expected
+        )
+        calculations.append(_calculation(
+            longitudinal_shape.calculation_id,
+            "Longitudinal minimum reinforcement", longitudinal_shape.axes,
+            expected_longitudinal_steps(longitudinal_shape),
+            evidence.values, _LONG_ASSUMPTIONS,
+        ))
+    if SCREEN_MEMBER_ID in members:
+        screen_shape, evidence = _replay_screen(inp, out, context)
+        _validate_screen_member(out, evidence.expected)
+        calculations.append(_calculation(
+            screen_shape.calculation_id,
+            "Formula (6.31) minimum-reinforcement screen", screen_shape.axes,
+            expected_screen_steps(screen_shape), evidence.values,
+            _SCREEN_ASSUMPTIONS,
+        ))
     bundle = create_bundle(
         input_sha256=input_sha256, result_sha256=result_sha256,
         calculations=tuple(calculations),
     )
-    audit_trace_registry(
-        bundle, expected_registry(DetailingShape(clear_shape, transverse_shape))
-    )
+    audit_trace_registry(bundle, expected_registry(DetailingShape(
+        clear_shape, transverse_shape, longitudinal_shape, screen_shape
+    )))
     return bundle
 
 
