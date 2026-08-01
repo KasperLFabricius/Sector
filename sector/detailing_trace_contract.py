@@ -21,6 +21,8 @@ REGISTRY_ID = "sector-ct-008-detailing-v1"
 METHOD_ID = "sector-retained-detailing-replay"
 CLEAR_MEMBER_ID = "clear-spacing"
 TRANSVERSE_MEMBER_ID = "transverse-links"
+LONGITUDINAL_MEMBER_ID = "longitudinal-minimum"
+SCREEN_MEMBER_ID = "min-reinf-screen"
 
 EDITION_2005 = "EN 1992-1-1:2005"
 EDITION_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
@@ -37,6 +39,11 @@ STATUS_CODES = {
     "NOT APPLICABLE": 4.0, "INVALID": 5.0,
 }
 DUCTILITY_CLASSES = ("A", "B", "C")
+# Ordering states of the retained directional 6.31 screen assessments.
+SCREEN_STATE_CODES = {
+    "NOT APPLICABLE": 0.0, "PASS": 1.0, "NOT ASSESSED": 2.0, "NOT RUN": 3.0,
+    "FAIL": 4.0, "INVALID": 5.0,
+}
 
 # Frozen retained output inventories (exact key order).
 CLEAR_INVALID_KEYS = (
@@ -63,6 +70,67 @@ MINIMUM_RATIO_KEYS = (
     "ductility_reduction_applied", "clause",
 )
 TORSION_LIMIT_KEYS = ("u_k/8", "minimum section dimension")
+
+# Frozen longitudinal minimum-reinforcement inventories (exact key order).
+_LONG_HEAD = ("status", "edition", "clause", "n_ed_tension_kn",
+              "mx_ed_centroid_knm", "my_ed_centroid_knm")
+_LONG_TAIL = ("member_type", "cut_direction", "modelled_reinforcement_direction")
+LONG_2005_KEYS = (*_LONG_HEAD, "checks", "reason", "limitations", *_LONG_TAIL)
+LONG_2023_PLAIN_KEYS = LONG_2005_KEYS
+LONG_2023_HIGH_COMPRESSION_KEYS = (
+    *_LONG_HEAD, "compression_limit_kn", "reason", "checks", "limitations",
+    *_LONG_TAIL,
+)
+LONG_2023_SCOPE_KEYS = (
+    *_LONG_HEAD, "reason", "checks", "limitations", *_LONG_TAIL,
+)
+LONG_2023_BENDING_KEYS = (
+    *_LONG_HEAD, "compression_limit_kn", "checks", "reason", "limitations",
+    *_LONG_TAIL,
+)
+LONG_SLAB_CUT_KEYS = (
+    "status", "edition", *_LONG_TAIL[:2], "modelled_reinforcement_direction",
+    "clause", "n_ed_tension_kn", "mx_ed_centroid_knm", "my_ed_centroid_knm",
+    "checks", "reason", "limitations",
+)
+ROW_2005_KEYS = (
+    "type", "status", "axis", "face", "tension_low", "moment_centroid_knm",
+    "mx_centroid_knm", "my_centroid_knm", "as_provided_mm2", "as_min_mm2",
+    "utilisation", "bt_mm", "tension_zone_depth_mm", "d_mm", "fctm_mpa",
+    "fyk_mpa", "bar_ids", "material_ids", "tension_direction", "neutral_c_m",
+    "neutral_point_m", "model", "reason",
+)
+ROW_2023_TENSION_KEYS = (
+    "type", "status", "demand_kn", "resistance_kn", "utilisation",
+    "as_provided_mm2", "bar_ids",
+)
+ROW_2023_BENDING_KEYS = (
+    "type", "status", "utilisation", "m_cr_knm", "mx_cr_knm", "my_cr_knm",
+    "mr_nom_knm", "cracking_factor", "axial_peak_tension_mpa", "model",
+    "axial_feasible", "nominal_axial_resistance_kn", "reason",
+    "as_provided_mm2", "bar_ids",
+)
+LONG_ROW_FIELD_CANDIDATES = {
+    "row-2005": ("moment_centroid_knm", "as_provided_mm2", "as_min_mm2",
+                 "utilisation", "bt_mm", "tension_zone_depth_mm", "d_mm",
+                 "fctm_mpa", "fyk_mpa"),
+    "2023-tension": ("demand_kn", "resistance_kn", "utilisation",
+                     "as_provided_mm2"),
+    "2023-bending": ("utilisation", "m_cr_knm", "mx_cr_knm", "my_cr_knm",
+                     "mr_nom_knm", "cracking_factor", "axial_peak_tension_mpa",
+                     "nominal_axial_resistance_kn", "as_provided_mm2"),
+}
+
+# Frozen 6.31 screen inventories (exact key order).
+SCREEN_NA_KEYS = ("applicable", "reason")
+SCREEN_KEYS = ("applicable", "value", "ok", "t_ed", "trd_c", "v_ed", "vrd_c",
+               "solid", "model_2023")
+SCREEN_EXTENSION_KEYS = ("directional_status", "governing_face")
+SCREEN_REASONS = {
+    "subdivided": "subdivided (compound) section",
+    "no-shear": "no shear check",
+    "zero-resistance": "zero resistance",
+}
 
 _RATIO_BASE = (
     "kind", "scope", "status", "provided", "limit", "utilisation",
@@ -171,11 +239,45 @@ LINK_APPLICABILITY_2023 = TraceSource(
     SOURCE_STANDARD, "en-1992-1-1-2023-minimum-link-applicability", EDITION_2023,
     SourceCitation(DOC_2023, "8.2.1(2), 12.2(4)", "minimum-link applicability"),
 )
+LONG_SOURCE_2005 = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2005-minimum-longitudinal", EDITION_2005,
+    SourceCitation(DOC_2005, "9.2.1.1(1)", "Formula (9.1N)"),
+)
+LONG_SOURCE_2023 = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2023-minimum-longitudinal", EDITION_2023,
+    SourceCitation(DOC_2023, "12.2(2)", "Formulae (12.1)-(12.2)"),
+)
+SLAB_CUT_SOURCE_BASE = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2005-slab-secondary-scope", EDITION_2005,
+    SourceCitation(DOC_2005, "9.3.1.1(2)", "secondary reinforcement scope"),
+)
+SLAB_CUT_SOURCE_2023 = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2023-slab-secondary-scope", EDITION_2023,
+    SourceCitation(DOC_2023, "Table 12.2, item 3", "secondary reinforcement scope"),
+)
+SCREEN_SOURCE = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2005-minimum-reinforcement-screen",
+    EDITION_2005, SourceCitation(DOC_2005, "6.3.2(5)", "Formula (6.31)"),
+)
 
 ONE = TraceUnit("1", "scalar")
 LENGTH_MM = TraceUnit("mm", "length")
 AREA_MM2 = TraceUnit("mm2", "area")
 STRESS = TraceUnit("MPa", "stress")
+FORCE_KN = TraceUnit("kN", "force")
+MOMENT_KNM = TraceUnit("kNm", "moment")
+LENGTH_M = TraceUnit("m", "length")
+AREA_M2 = TraceUnit("m2", "area")
+
+LONG_FIELD_UNITS = {
+    "moment_centroid_knm": MOMENT_KNM, "m_cr_knm": MOMENT_KNM,
+    "mx_cr_knm": MOMENT_KNM, "my_cr_knm": MOMENT_KNM, "mr_nom_knm": MOMENT_KNM,
+    "as_provided_mm2": AREA_MM2, "as_min_mm2": AREA_MM2,
+    "bt_mm": LENGTH_MM, "tension_zone_depth_mm": LENGTH_MM, "d_mm": LENGTH_MM,
+    "fctm_mpa": STRESS, "fyk_mpa": STRESS, "axial_peak_tension_mpa": STRESS,
+    "demand_kn": FORCE_KN, "resistance_kn": FORCE_KN,
+    "nominal_axial_resistance_kn": FORCE_KN,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,9 +351,61 @@ class TransverseShape:
 
 
 @dataclass(frozen=True, slots=True)
+class BarIdentity:
+    element_id: str
+    material_id: str
+    values: tuple[tuple[str, float], ...]
+    source: TraceSource
+
+
+@dataclass(frozen=True, slots=True)
+class LongShape:
+    concrete_values: tuple[tuple[str, float], ...]
+    concrete_source: TraceSource
+    concrete_material_id: str
+    bars: tuple[BarIdentity, ...]
+    ring_points: tuple[int, ...]
+    edition: str
+    member: str
+    cut: str
+    branch: str
+    row_fields: tuple[str, ...]
+    has_compression_limit: bool
+    calculation_id: str
+    axes: tuple[TraceAxis, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FaceShape:
+    run: bool
+    applicable: bool
+    value_state: str  # "finite", "nonfinite", or "absent"
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeShape:
+    token: str
+    branch: str  # "subdivided", "no-shear", "zero-resistance", "applicable"
+    has_shear: bool
+    faces: tuple[FaceShape, ...] = ()
+    extended: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenShape:
+    mode: str  # "uniaxial", "single", or "biaxial"
+    top: ScopeShape
+    components: tuple[ScopeShape, ...]
+    calculation_id: str
+    axes: tuple[TraceAxis, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class DetailingShape:
     clear: ClearShape | None
     transverse: TransverseShape | None
+    longitudinal: LongShape | None = None
+    screen: ScreenShape | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -714,6 +868,249 @@ def expected_transverse_steps(shape: TransverseShape) -> tuple[StepSpec, ...]:
     return tuple(rows.rows)
 
 
+def bar_leaf_id(element_id: str, material_id: str, name: str) -> str:
+    """Tokenize the bar element and its selected material into each leaf id."""
+
+    return (f"material-bar-{trace_identity_token(element_id)}-"
+            f"{trace_identity_token(material_id)}-{trace_identity_token(name)}")
+
+
+def long_source(edition: str) -> TraceSource:
+    return LONG_SOURCE_2023 if edition == EDITION_2023 else LONG_SOURCE_2005
+
+
+def long_field_step_id(field: str) -> str:
+    return "row-" + field.replace("_", "-")
+
+
+_LONG_SCOPE_BRANCHES = frozenset({
+    "2005-zero", "2023-high-compression", "2023-compression-only",
+    "2023-invalid",
+})
+
+
+def expected_longitudinal_steps(shape: LongShape) -> tuple[StepSpec, ...]:
+    rows = _Rows()
+    scalars = [
+        rows.add("input-minimum-enabled", "Minimum reinforcement enabled",
+                 ONE, ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-edition", "Selected detailing edition", ONE,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-member-type", "Selected member type", ONE,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-cut-direction", "Selected section cut direction", ONE,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-fctm", "Entered SLS mean tensile strength", STRESS,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-axial-action", "Original axial action", FORCE_KN,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-mx-action", "Original Mx action", MOMENT_KNM,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-my-action", "Original My action", MOMENT_KNM,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+    ]
+    geometry_leaves = []
+    for ring_index, count in enumerate(shape.ring_points):
+        for point_index in range(count):
+            prefix = f"geometry-ring-{ring_index:03d}-point-{point_index:04d}"
+            geometry_leaves.extend((
+                rows.add(f"{prefix}-x", "Concrete vertex x", LENGTH_M,
+                         ROLE_USER_INPUT, INPUT_SOURCE),
+                rows.add(f"{prefix}-y", "Concrete vertex y", LENGTH_M,
+                         ROLE_USER_INPUT, INPUT_SOURCE),
+            ))
+    for index in range(len(shape.bars)):
+        prefix = f"geometry-bar-{index:03d}"
+        geometry_leaves.extend((
+            rows.add(f"{prefix}-x", "Bar x", LENGTH_M, ROLE_USER_INPUT,
+                     INPUT_SOURCE),
+            rows.add(f"{prefix}-y", "Bar y", LENGTH_M, ROLE_USER_INPUT,
+                     INPUT_SOURCE),
+            rows.add(f"{prefix}-area", "Bar area", AREA_M2, ROLE_USER_INPUT,
+                     INPUT_SOURCE),
+        ))
+    geometry = rows.add("geometry-vector", "Immutable longitudinal geometry",
+                        ONE, ROLE_COMPUTED, GEOMETRY_SOURCE, *geometry_leaves)
+    material_leaves = [
+        rows.add(concrete_leaf_id(shape.concrete_material_id, name),
+                 f"Assigned concrete {name}",
+                 STRESS if name.startswith("f") else ONE,
+                 ROLE_METHOD_VALUE, shape.concrete_source)
+        for name, _ in shape.concrete_values
+    ]
+    for bar in shape.bars:
+        for name, _ in bar.values:
+            material_leaves.append(rows.add(
+                bar_leaf_id(bar.element_id, bar.material_id, name),
+                f"Assigned bar {name}",
+                STRESS if name.startswith("f") or name == "Es" else ONE,
+                ROLE_METHOD_VALUE, bar.source,
+            ))
+    material_vector = rows.add(
+        "material-vector", "Immutable longitudinal material assignments", ONE,
+        ROLE_COMPUTED, GEOMETRY_SOURCE, *material_leaves,
+    )
+    normalised = rows.add(
+        "normalised-longitudinal-inputs", "Complete longitudinal input identity",
+        ONE, ROLE_COMPUTED, ADAPTER_SOURCE, *scalars, geometry, material_vector,
+    )
+    source = long_source(shape.edition)
+    if shape.branch == "slab-cut":
+        scope = rows.add(
+            "slab-cut-scope", "Retained slab longitudinal-cut scope-out", ONE,
+            ROLE_COMPUTED,
+            SLAB_CUT_SOURCE_2023 if shape.edition == EDITION_2023
+            else SLAB_CUT_SOURCE_BASE,
+            normalised, "input-member-type", "input-cut-direction",
+        )
+        rows.add("ct-008-longitudinal-minimum-result",
+                 "CT-008 longitudinal minimum status", ONE, ROLE_FINAL,
+                 VERDICT_SOURCE, normalised, scope)
+        return tuple(rows.rows)
+    mx = rows.add("mx-centroid", "Centroidal Mx action", MOMENT_KNM,
+                  ROLE_COMPUTED, GEOMETRY_SOURCE, "input-mx-action",
+                  "input-axial-action", geometry)
+    my = rows.add("my-centroid", "Centroidal My action", MOMENT_KNM,
+                  ROLE_COMPUTED, GEOMETRY_SOURCE, "input-my-action",
+                  "input-axial-action", geometry)
+    limit = None
+    if shape.has_compression_limit:
+        limit = rows.add("compression-limit", "0.5 Ac fcd compression limit",
+                         FORCE_KN, ROLE_COMPUTED, LONG_SOURCE_2023, geometry,
+                         material_vector, "input-axial-action")
+    if shape.branch in _LONG_SCOPE_BRANCHES:
+        scope = rows.add(
+            "assessment-scope-state", "Retained scope-out or invalid state",
+            ONE, ROLE_COMPUTED, source, mx, my,
+            *((limit,) if limit else ()),
+        )
+        rows.add("ct-008-longitudinal-minimum-result",
+                 "CT-008 longitudinal minimum status", ONE, ROLE_FINAL,
+                 VERDICT_SOURCE, normalised, scope)
+        return tuple(rows.rows)
+    basis = rows.add("assessment-basis", "Retained case assessment basis", ONE,
+                     ROLE_COMPUTED, ADAPTER_SOURCE, mx, my, material_vector)
+    fields = [rows.add(long_field_step_id(field), f"Retained row {field}",
+                       LONG_FIELD_UNITS.get(field, ONE), ROLE_COMPUTED,
+                       source, basis)
+              for field in shape.row_fields]
+    row_status = rows.add("row-status", "Retained check-row status", ONE,
+                          ROLE_COMPUTED, source, *(fields if fields else (basis,)))
+    status = rows.add("longitudinal-status", "Retained member status", ONE,
+                      ROLE_COMPUTED, VERDICT_SOURCE, row_status)
+    rows.add("ct-008-longitudinal-minimum-result",
+             "CT-008 longitudinal minimum status", ONE, ROLE_FINAL,
+             VERDICT_SOURCE, normalised, *((limit,) if limit else ()), status)
+    return tuple(rows.rows)
+
+
+def _scope_steps(rows: _Rows, scope: ScopeShape) -> list[str]:
+    p = f"screen-{scope.token}"
+    finals = []
+    leaves = [rows.add(f"upstream-{p}-subdivided", "Retained subdivision flag",
+                       ONE, ROLE_METHOD_VALUE, TORSION_EVIDENCE_SOURCE)]
+    if scope.branch != "subdivided" and scope.has_shear:
+        leaves.append(rows.add(f"upstream-{p}-res-valid",
+                               "Retained no-link resistance validity", ONE,
+                               ROLE_METHOD_VALUE, SHEAR_EVIDENCE_SOURCE))
+    if scope.branch in {"zero-resistance", "applicable"}:
+        leaves.append(rows.add(f"upstream-{p}-trd-c",
+                               "Retained torsion cracking resistance",
+                               MOMENT_KNM, ROLE_METHOD_VALUE,
+                               TORSION_EVIDENCE_SOURCE))
+        leaves.append(rows.add(f"upstream-{p}-vrd-c",
+                               "Retained no-link shear resistance", FORCE_KN,
+                               ROLE_METHOD_VALUE, SHEAR_EVIDENCE_SOURCE))
+    if scope.branch == "applicable":
+        leaves.append(rows.add(f"upstream-{p}-t-ed", "Retained torsion demand",
+                               MOMENT_KNM, ROLE_METHOD_VALUE,
+                               TORSION_EVIDENCE_SOURCE))
+        leaves.append(rows.add(f"upstream-{p}-v-ed", "Retained shear demand",
+                               FORCE_KN, ROLE_METHOD_VALUE,
+                               SHEAR_EVIDENCE_SOURCE))
+        leaves.append(rows.add(f"upstream-{p}-model-2023",
+                               "Retained 2023 shear-model flag", ONE,
+                               ROLE_METHOD_VALUE, SHEAR_EVIDENCE_SOURCE))
+    evidence = rows.add(f"{p}-evidence", "Complete retained screen evidence",
+                        ONE, ROLE_COMPUTED, ADAPTER_SOURCE, *leaves)
+    if scope.branch == "applicable":
+        value = rows.add(f"{p}-value", "Formula (6.31) interaction value", ONE,
+                         ROLE_COMPUTED, SCREEN_SOURCE, f"upstream-{p}-t-ed",
+                         f"upstream-{p}-trd-c", f"upstream-{p}-v-ed",
+                         f"upstream-{p}-vrd-c")
+        ok = rows.add(f"{p}-ok", "Formula (6.31) screen verdict", ONE,
+                      ROLE_COMPUTED, SCREEN_SOURCE, value)
+        solid = rows.add(f"{p}-solid", "Approximately solid section flag", ONE,
+                         ROLE_COMPUTED, GEOMETRY_SOURCE, "input-holes-count")
+        finals.append(rows.add(f"{p}-status", "Retained screen status", ONE,
+                               ROLE_COMPUTED, SCREEN_SOURCE, evidence, ok,
+                               solid))
+    else:
+        finals.append(rows.add(f"{p}-status", "Retained screen status", ONE,
+                               ROLE_COMPUTED, SCREEN_SOURCE, evidence))
+    if scope.faces:
+        assessments, operands = [], []
+        for index, face in enumerate(scope.faces):
+            f = f"{p}-face-{index:02d}"
+            face_leaves = [rows.add(f"upstream-{f}-run",
+                                    "Retained face torsion presence", ONE,
+                                    ROLE_METHOD_VALUE,
+                                    TORSION_EVIDENCE_SOURCE)]
+            if face.run:
+                face_leaves.append(rows.add(
+                    f"upstream-{f}-applicable", "Retained face screen flag",
+                    ONE, ROLE_METHOD_VALUE, TORSION_EVIDENCE_SOURCE))
+            if face.value_state == "finite":
+                face_leaves.append(rows.add(
+                    f"upstream-{f}-value", "Retained face screen value", ONE,
+                    ROLE_METHOD_VALUE, TORSION_EVIDENCE_SOURCE))
+            status = rows.add(f"{f}-assessment-status",
+                              "Face screen ordering state", ONE, ROLE_COMPUTED,
+                              ADAPTER_SOURCE, *face_leaves)
+            metric = rows.add(f"{f}-assessment-metric",
+                              "Face screen ordering metric", ONE, ROLE_COMPUTED,
+                              ADAPTER_SOURCE, *face_leaves)
+            assessments.append(status)
+            operands.extend((status, metric))
+        finals.append(rows.add(f"{p}-governing-face", "Governing screen face",
+                               ONE, ROLE_COMPUTED, VERDICT_SOURCE, *operands))
+        finals.append(rows.add(f"{p}-directional-status",
+                               "Aggregate screen status", ONE, ROLE_COMPUTED,
+                               VERDICT_SOURCE, *assessments))
+    return finals
+
+
+def expected_screen_steps(shape: ScreenShape) -> tuple[StepSpec, ...]:
+    rows = _Rows()
+    scalars = (
+        rows.add("input-screen-torsion-enabled", "Retained torsion check enabled",
+                 ONE, ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-screen-shear-enabled", "Retained shear check enabled",
+                 ONE, ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-holes-count", "Entered void count", ONE,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-directional-contract",
+                 "Directional input contract present", ONE,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+    )
+    dispatch = rows.add(
+        "dispatch-mode", "Retained dispatch classification", ONE,
+        ROLE_COMPUTED, ADAPTER_SOURCE, "input-screen-shear-enabled",
+        "input-directional-contract",
+    )
+    normalised = rows.add(
+        "normalised-screen-inputs", "Complete screen input identity", ONE,
+        ROLE_COMPUTED, ADAPTER_SOURCE, *scalars, dispatch,
+    )
+    finals = [normalised]
+    finals.extend(_scope_steps(rows, shape.top))
+    for scope in shape.components:
+        finals.extend(_scope_steps(rows, scope))
+    rows.add("ct-008-min-reinf-screen-result", "CT-008 6.31 screen status",
+             ONE, ROLE_FINAL, VERDICT_SOURCE, *finals)
+    return tuple(rows.rows)
+
+
 def _member(member_id, calculation_id, axes, specs):
     return TraceMemberContract(
         member_id=member_id, calculation_id=calculation_id,
@@ -740,6 +1137,17 @@ def expected_registry(shape: DetailingShape) -> TraceRegistryContract:
         members.append(_member(
             TRANSVERSE_MEMBER_ID, shape.transverse.calculation_id,
             shape.transverse.axes, expected_transverse_steps(shape.transverse),
+        ))
+    if shape.longitudinal is not None:
+        members.append(_member(
+            LONGITUDINAL_MEMBER_ID, shape.longitudinal.calculation_id,
+            shape.longitudinal.axes,
+            expected_longitudinal_steps(shape.longitudinal),
+        ))
+    if shape.screen is not None:
+        members.append(_member(
+            SCREEN_MEMBER_ID, shape.screen.calculation_id, shape.screen.axes,
+            expected_screen_steps(shape.screen),
         ))
     if not members:
         raise ValueError("CT-008 registry needs at least one applicable member")
