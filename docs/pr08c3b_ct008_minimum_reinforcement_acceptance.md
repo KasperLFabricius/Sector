@@ -19,16 +19,14 @@ verbatim below as an exclusion so that slice inherits them unchanged.
 
 ## Named next-slice exclusion - PR-08C.3c: the Formula (6.31) screen member
 
-The following rows are frozen for the PR-08C.3c screen member and are
-inherited by that slice verbatim; they are an exclusion for PR-08C.3b.
+The Formula (6.31) screen member was an exclusion for PR-08C.3b. Its frozen
+rows (screen applicability, screen replay, screen directional closure) were
+inherited verbatim by `docs/pr08c3c_ct008_screen_acceptance.md`, which is the
+owning matrix for that member and extends the rows with the published-summary
+ownership, the input-derived face-set contract, the per-face full validation,
+and the all-surface inapplicable rejection.
 
-| Family or invariant | Frozen acceptance |
-| --- | --- |
-| Screen applicability | The screen member exists exactly when the retained capacity path publishes the `min_reinf` sibling: `torsion_on` with a retained section (uniaxial and directional dispatches alike). It is independent of the detailing flags and of CT-007 family applicability (the retained app publishes the screen even in shared-angle branches where CT-007 publishes no family). The three retained not-applicable branches (`subdivided (compound) section`, `no shear check`, `zero resistance`) are legitimate finite evidence states with the exact retained 2-key shape and reasons, selected before any candidate numerics are parsed. |
-| Screen replay | The applicable branch replays the exact retained arithmetic from bound operands: `value = t_ed/trd_c + v_ed/vrd_c`, `ok = value <= 1 + 1e-9`, `solid = not holes`, with the frozen 9-key shape (`applicable`, `value`, `ok`, `t_ed`, `trd_c`, `v_ed`, `vrd_c`, `solid`, `model_2023`). Operand values (`t_ed`, `trd_c`, `v_ed`, `vrd_c`, `model_2023`) are named upstream-evidence leaves from the retained torsion/shear payloads (validated by the accepted CT-006/CT-007 families over the same result set where those families apply; publication activates CT-008 only alongside them); `solid` binds the retained holes input directly. |
-| Screen directional closure | In the directional dispatch the top-level screen is the governing candidate's screen extended in place with `directional_status` and `governing_face`, beside the `directional_min_reinf_status` and `directional_min_reinf_governing_face` siblings, and each `directional_interactions[component]` carries its own per-component screen. The trace replays the retained governing selection exactly: per-face `(status, metric)` via the retained `_minimum_reinf_assessment` states (NOT RUN / NOT ASSESSED / INVALID / PASS / FAIL), `capacity.assessment_key` ordering, and `capacity.aggregate_assessment_status` across candidates, from bound per-face upstream screens. Unknown, missing, duplicate or reordered retained keys fail closed at every layer. |
-
-Hard exclusions: PR-08C.3c (the Formula (6.31) screen member, rows above),
+Hard exclusions: PR-08C.3c (the Formula (6.31) screen member, owned above),
 any change to the merged clear-spacing/transverse members beyond registry
 composition, CT-002 through CT-007 mechanics, solver/formula changes (the
 2023 nominal-capacity solve is invoked only through the retained kernel),
