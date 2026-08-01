@@ -22,6 +22,7 @@ METHOD_ID = "sector-retained-detailing-replay"
 CLEAR_MEMBER_ID = "clear-spacing"
 TRANSVERSE_MEMBER_ID = "transverse-links"
 LONGITUDINAL_MEMBER_ID = "longitudinal-minimum"
+SCREEN_MEMBER_ID = "min-reinf-screen"
 
 EDITION_2005 = "EN 1992-1-1:2005"
 EDITION_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
@@ -38,6 +39,11 @@ STATUS_CODES = {
     "NOT APPLICABLE": 4.0, "INVALID": 5.0,
 }
 DUCTILITY_CLASSES = ("A", "B", "C")
+# Ordering states of the retained directional 6.31 screen assessments.
+SCREEN_STATE_CODES = {
+    "NOT APPLICABLE": 0.0, "PASS": 1.0, "NOT ASSESSED": 2.0, "NOT RUN": 3.0,
+    "FAIL": 4.0, "INVALID": 5.0,
+}
 
 # Frozen retained output inventories (exact key order).
 CLEAR_INVALID_KEYS = (
@@ -113,6 +119,17 @@ LONG_ROW_FIELD_CANDIDATES = {
     "2023-bending": ("utilisation", "m_cr_knm", "mx_cr_knm", "my_cr_knm",
                      "mr_nom_knm", "cracking_factor", "axial_peak_tension_mpa",
                      "nominal_axial_resistance_kn", "as_provided_mm2"),
+}
+
+# Frozen 6.31 screen inventories (exact key order).
+SCREEN_NA_KEYS = ("applicable", "reason")
+SCREEN_KEYS = ("applicable", "value", "ok", "t_ed", "trd_c", "v_ed", "vrd_c",
+               "solid", "model_2023")
+SCREEN_EXTENSION_KEYS = ("directional_status", "governing_face")
+SCREEN_REASONS = {
+    "subdivided": "subdivided (compound) section",
+    "no-shear": "no shear check",
+    "zero-resistance": "zero resistance",
 }
 
 _RATIO_BASE = (
@@ -238,6 +255,11 @@ SLAB_CUT_SOURCE_2023 = TraceSource(
     SOURCE_STANDARD, "en-1992-1-1-2023-slab-secondary-scope", EDITION_2023,
     SourceCitation(DOC_2023, "Table 12.2, item 3", "secondary reinforcement scope"),
 )
+SCREEN_SOURCE = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2005-minimum-reinforcement-screen",
+    EDITION_2005, SourceCitation(DOC_2005, "6.3.2(5)", "Formula (6.31)"),
+)
+
 ONE = TraceUnit("1", "scalar")
 LENGTH_MM = TraceUnit("mm", "length")
 AREA_MM2 = TraceUnit("mm2", "area")
@@ -354,10 +376,39 @@ class LongShape:
 
 
 @dataclass(frozen=True, slots=True)
+class FaceShape:
+    run: bool
+    applicable: bool
+    value_state: str  # "finite", "nonfinite", or "absent"
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeShape:
+    token: str
+    branch: str  # "subdivided", "no-shear", "zero-resistance", "applicable"
+    has_shear: bool
+    faces: tuple[FaceShape, ...] = ()
+    extended: bool = False
+    component: str = ""  # retained component behind a directional scope
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenShape:
+    mode: str  # "uniaxial", "single", or "biaxial"
+    top: ScopeShape
+    components: tuple[ScopeShape, ...]
+    calculation_id: str
+    axes: tuple[TraceAxis, ...]
+    has_specs: bool = False  # retained direction specs were consumed
+    active: tuple[str, ...] = ()  # input-derived active components
+
+
+@dataclass(frozen=True, slots=True)
 class DetailingShape:
     clear: ClearShape | None
     transverse: TransverseShape | None
     longitudinal: LongShape | None = None
+    screen: ScreenShape | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -965,6 +1016,139 @@ def expected_longitudinal_steps(shape: LongShape) -> tuple[StepSpec, ...]:
     return tuple(rows.rows)
 
 
+def _scope_steps(rows: _Rows, scope: ScopeShape) -> list[str]:
+    p = f"screen-{scope.token}"
+    finals = []
+    leaves = [rows.add(f"upstream-{p}-subdivided", "Retained subdivision flag",
+                       ONE, ROLE_METHOD_VALUE, TORSION_EVIDENCE_SOURCE)]
+    if scope.branch != "subdivided" and scope.has_shear:
+        leaves.append(rows.add(f"upstream-{p}-res-valid",
+                               "Retained no-link resistance validity", ONE,
+                               ROLE_METHOD_VALUE, SHEAR_EVIDENCE_SOURCE))
+    if scope.branch in {"zero-resistance", "applicable"}:
+        leaves.append(rows.add(f"upstream-{p}-trd-c",
+                               "Retained torsion cracking resistance",
+                               MOMENT_KNM, ROLE_METHOD_VALUE,
+                               TORSION_EVIDENCE_SOURCE))
+        leaves.append(rows.add(f"upstream-{p}-vrd-c",
+                               "Retained no-link shear resistance", FORCE_KN,
+                               ROLE_METHOD_VALUE, SHEAR_EVIDENCE_SOURCE))
+    if scope.branch == "applicable":
+        leaves.append(rows.add(f"upstream-{p}-t-ed", "Retained torsion demand",
+                               MOMENT_KNM, ROLE_METHOD_VALUE,
+                               TORSION_EVIDENCE_SOURCE))
+        leaves.append(rows.add(f"upstream-{p}-v-ed", "Retained shear demand",
+                               FORCE_KN, ROLE_METHOD_VALUE,
+                               SHEAR_EVIDENCE_SOURCE))
+        leaves.append(rows.add(f"upstream-{p}-model-2023",
+                               "Retained 2023 shear-model flag", ONE,
+                               ROLE_METHOD_VALUE, SHEAR_EVIDENCE_SOURCE))
+    evidence = rows.add(f"{p}-evidence", "Complete retained screen evidence",
+                        ONE, ROLE_COMPUTED, ADAPTER_SOURCE, *leaves)
+    if scope.branch == "applicable":
+        value = rows.add(f"{p}-value", "Formula (6.31) interaction value", ONE,
+                         ROLE_COMPUTED, SCREEN_SOURCE, f"upstream-{p}-t-ed",
+                         f"upstream-{p}-trd-c", f"upstream-{p}-v-ed",
+                         f"upstream-{p}-vrd-c")
+        ok = rows.add(f"{p}-ok", "Formula (6.31) screen verdict", ONE,
+                      ROLE_COMPUTED, SCREEN_SOURCE, value)
+        solid = rows.add(f"{p}-solid", "Approximately solid section flag", ONE,
+                         ROLE_COMPUTED, GEOMETRY_SOURCE, "input-holes-count")
+        finals.append(rows.add(f"{p}-status", "Retained screen status", ONE,
+                               ROLE_COMPUTED, SCREEN_SOURCE, evidence, ok,
+                               solid))
+    else:
+        finals.append(rows.add(f"{p}-status", "Retained screen status", ONE,
+                               ROLE_COMPUTED, SCREEN_SOURCE, evidence))
+    if scope.faces:
+        assessments, operands = [], []
+        for index, face in enumerate(scope.faces):
+            f = f"{p}-face-{index:02d}"
+            face_leaves = [rows.add(f"upstream-{f}-run",
+                                    "Retained face torsion presence", ONE,
+                                    ROLE_METHOD_VALUE,
+                                    TORSION_EVIDENCE_SOURCE)]
+            if face.run:
+                face_leaves.append(rows.add(
+                    f"upstream-{f}-applicable", "Retained face screen flag",
+                    ONE, ROLE_METHOD_VALUE, TORSION_EVIDENCE_SOURCE))
+            if face.value_state == "finite":
+                face_leaves.append(rows.add(
+                    f"upstream-{f}-value", "Retained face screen value", ONE,
+                    ROLE_METHOD_VALUE, TORSION_EVIDENCE_SOURCE))
+            status = rows.add(f"{f}-assessment-status",
+                              "Face screen ordering state", ONE, ROLE_COMPUTED,
+                              ADAPTER_SOURCE, *face_leaves)
+            metric = rows.add(f"{f}-assessment-metric",
+                              "Face screen ordering metric", ONE, ROLE_COMPUTED,
+                              ADAPTER_SOURCE, *face_leaves)
+            assessments.append(status)
+            operands.extend((status, metric))
+        finals.append(rows.add(f"{p}-governing-face", "Governing screen face",
+                               ONE, ROLE_COMPUTED, VERDICT_SOURCE, *operands))
+        finals.append(rows.add(f"{p}-directional-status",
+                               "Aggregate screen status", ONE, ROLE_COMPUTED,
+                               VERDICT_SOURCE, *assessments))
+        axis = "x" if scope.component == "vx" else "y"
+        finals.append(rows.add(
+            f"{p}-required-faces", "Input-required face-set size", ONE,
+            ROLE_COMPUTED, ADAPTER_SOURCE, f"input-face-selector-{axis}",
+            f"spec-{scope.component}-associated-moment", "dispatch-mode",
+        ))
+    return finals
+
+
+def expected_screen_steps(shape: ScreenShape) -> tuple[StepSpec, ...]:
+    rows = _Rows()
+    scalars = (
+        rows.add("input-screen-torsion-enabled", "Retained torsion check enabled",
+                 ONE, ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-screen-shear-enabled", "Retained shear check enabled",
+                 ONE, ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-holes-count", "Entered void count", ONE,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("input-directional-contract",
+                 "Directional input contract present", ONE,
+                 ROLE_USER_INPUT, INPUT_SOURCE),
+    )
+    scalars = list(scalars)
+    if shape.has_specs:
+        for component in ("vx", "vy"):
+            scalars.append(rows.add(
+                f"input-{component}-demand",
+                f"Retained {component} demand magnitude", FORCE_KN,
+                ROLE_USER_INPUT, INPUT_SOURCE))
+        # The retained dispatch reads face selectors and associated moments
+        # only for ACTIVE components; inactive-axis selectors stay inert.
+        for component in shape.active:
+            axis = "x" if component == "vx" else "y"
+            scalars.append(rows.add(
+                f"input-face-selector-{axis}",
+                f"Entered shear face selector about {axis}", ONE,
+                ROLE_USER_INPUT, INPUT_SOURCE))
+            scalars.append(rows.add(
+                f"spec-{component}-associated-moment",
+                f"Retained {component} associated centroidal moment",
+                MOMENT_KNM, ROLE_METHOD_VALUE, ADAPTER_SOURCE))
+    dispatch = rows.add(
+        "dispatch-mode", "Retained dispatch classification", ONE,
+        ROLE_COMPUTED, ADAPTER_SOURCE, "input-screen-shear-enabled",
+        "input-directional-contract",
+        *(("input-vx-demand", "input-vy-demand") if shape.has_specs else ()),
+    )
+    normalised = rows.add(
+        "normalised-screen-inputs", "Complete screen input identity", ONE,
+        ROLE_COMPUTED, ADAPTER_SOURCE, *scalars, dispatch,
+    )
+    finals = [normalised]
+    finals.extend(_scope_steps(rows, shape.top))
+    for scope in shape.components:
+        finals.extend(_scope_steps(rows, scope))
+    rows.add("ct-008-min-reinf-screen-result", "CT-008 6.31 screen status",
+             ONE, ROLE_FINAL, VERDICT_SOURCE, *finals)
+    return tuple(rows.rows)
+
+
 def _member(member_id, calculation_id, axes, specs):
     return TraceMemberContract(
         member_id=member_id, calculation_id=calculation_id,
@@ -997,6 +1181,11 @@ def expected_registry(shape: DetailingShape) -> TraceRegistryContract:
             LONGITUDINAL_MEMBER_ID, shape.longitudinal.calculation_id,
             shape.longitudinal.axes,
             expected_longitudinal_steps(shape.longitudinal),
+        ))
+    if shape.screen is not None:
+        members.append(_member(
+            SCREEN_MEMBER_ID, shape.screen.calculation_id, shape.screen.axes,
+            expected_screen_steps(shape.screen),
         ))
     if not members:
         raise ValueError("CT-008 registry needs at least one applicable member")
