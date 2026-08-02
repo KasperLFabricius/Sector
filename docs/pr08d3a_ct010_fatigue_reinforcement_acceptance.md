@@ -1,0 +1,27 @@
+# PR-08D.3a CT-010a acceptance (reinforcement fatigue)
+
+This matrix freezes the reinforcement half of the retained grouped fatigue
+engine. Sector remains `0.91`. Registry
+`sector-ct-010a-reinforcement-fatigue-v1`, family
+`ct-010-reinforcement-fatigue`, contains one independently mandatory
+assessment for every retained spectrum/solver-element pair plus the
+`reinforcement-output` aggregate. A retained invalid application payload is a
+separate `invalid` member. Concrete fatigue values remain PR-08D.3b scope.
+
+| Family or invariant | Frozen acceptance |
+| --- | --- |
+| Applicability | A successful CT-010a family exists exactly when fatigue and the reinforcement check are enabled and the retained application result is successful. Disabled fatigue and successful concrete-only fatigue produce no CT-010a family. A payload carrying the frozen invalid-result inventory selects the `invalid` branch before success-only Boolean/numerical parsing, including malformed switches and factors. An active successful reinforcement input needs a candidate; disabled input cannot carry one. |
+| Authoritative replay | Successful candidates are replayed through `fatigue_analysis.run_analysis`, including its exact preparation, material/detail assignment, grouped-spectrum ordering, Elastic solves, bond correction and `assess_reinforcement_spectrum` result. Candidate numerics are exact, with NaN-to-NaN allowed and no tolerance window. Every bin independently proves stress ranges, the design reference range, two-slope S-N branch/life, log-domain damage, proof-stress limit and yield utilisation from the declared operands. Element damage, yield maximum, convergence, utilisation and PASS/FAIL are re-derived; the aggregate is worst-first over all reinforcement assessments. |
+| Complete input identity | `normalised-fatigue-inputs` consumes exact typed presence/value identities for all frozen scalar controls, including `gamma_c` even when concrete is disabled; the complete `analysis_signature`; section-ring vertices; bar/tendon coordinates, areas and order; element records and material IDs; concrete identity; full mild/prestress/fatigue-detail catalogues; basis; and the full grouped spectrum table including spectrum/bin names and descriptions. Same-law concrete/material ID changes and description-only changes therefore change the sealed bundle even when retained mechanics are identical. Every identity leaf reaches each member final. |
+| Output inventory | The successful 19-key application inventory and invalid 20-key inventory are exact and ordered. Spectrum, bin, reinforcement-property, element, detail and warning ordering/cardinality are retained. Reinforcement properties, bin states and reinforcement assessments are value-closed. Missing, extra, reordered or type-changed retained data fail closed. |
+| Concrete exclusion fence | Concrete-method, concrete-parameter, concrete-fibre/search/strength/governing values and concrete-influenced overall summaries remain outside CT-010a value ownership when the concrete check is enabled. Their presence, position, exact container/dataclass/scalar types, mapping key order, array shapes and sequence cardinalities are nevertheless pinned recursively; incompatible list/mapping/null replacements fail closed. The reinforcement stress-bearing Elastic state remains bound. With concrete disabled, the overall summaries are reinforcement-owned and replay exactly. |
+| Invalid result | The invalid member replays `fatigue_analysis.invalid_result(inp, errors=retained_errors)`. The caller-supplied retained error sequence is never replaced by a new `validation_errors(inp)` call: empty sequences and externally caught failures are supported, while their exact cardinality, order and text are sealed. The complete invalid output and raw input identities feed a genuine failed final with no fabricated numerical result. |
+| Factors and non-finite states | The trace publishes the raw entered `gamma_s`, `gamma_Ff` and `gamma_c`; genuinely absent/null factors are undefined rather than invented. Damage uses the retained logarithmic calculation, avoiding overflow from reconstructing finite life first. Final quantities explicitly distinguish finite, failed, positive-infinity, negative-infinity and undefined states. Non-converged assessment finals are failed. |
+| Sources and verdicts | S-N and proof-stress steps cite the selected DS/EN 1992-1-1:2005+A1:2014 or DS/EN 1992-1-1:2023 clauses/tables. Boundary preparation, Elastic replay, bond handling and aggregation are uncited project sources. Damage and yield each implement a genuine demand-versus-resistance criterion, so their retained PASS/FAIL is permitted; no global project or code-completeness verdict is added. |
+| Seal and registry closure | Exact coverage/method/family/member IDs, axes, sources, roles, units, step order and dependency graph are audited against a dynamically reconstructed registry. Every declared step lies in its member-final dependency closure. Stale input/result fingerprints, content tampering, dependency/source/unit/axis reseals and candidate changes fail. |
+
+Hard exclusions: concrete fatigue equations, governing-fibre search and its
+bound/gap evidence (PR-08D.3b); crack width (PR-08D.1/2); the
+chord/off-util/biaxial and CT-002 sweep join (PR-08D.5); UI/report/manual/
+publication activation (PR-08E); solver/formula changes; schema, persistence,
+package, workflow or version changes; F-020; rejected-head work.
