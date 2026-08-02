@@ -1,0 +1,745 @@
+"""Build and validate closed reinforcement-fatigue calculation traces."""
+
+from __future__ import annotations
+
+import dataclasses
+import math
+import pathlib
+import sys
+from collections.abc import Mapping
+
+import numpy as np
+
+from .calculation_trace import (
+    RESULT_FAILED, RESULT_FINITE, RESULT_NEGATIVE_INFINITY,
+    RESULT_POSITIVE_INFINITY, RESULT_UNDEFINED, TraceCalculation,
+    TraceDependency, TraceResult, TraceStep, TraceValidationError,
+    create_bundle, validate_bundle,
+)
+from .fatigue_trace_contract import (
+    BOND_2005_SOURCE, BOND_2023_SOURCE, COVERAGE_ID, CUSTOM_SN_SOURCE,
+    METHOD_ID, PERFECT_BOND_SOURCE, SN_2005_SOURCE, SN_2023_SOURCE,
+    IdentityLeaf, assessment_prefix, assessment_steps, bin_prefix,
+    expected_registry, invalid_plan, invalid_steps, joint_steps, success_plan,
+)
+from .trace_registry import audit_trace_registry
+
+
+SUCCESS_ORDER = (
+    "edition", "checks", "concrete_method", "basis", "method_reference",
+    "calculation_references", "warnings", "partial_factors",
+    "concrete_parameters", "reinforcement_properties",
+    "fatigue_detail_basis", "t0_days", "elements", "spectra",
+    "governing_spectrum", "utilisation", "converged", "passed",
+)
+INVALID_ORDER = (
+    "valid", "converged", "passed", "errors", "warnings", "edition",
+    "checks", "basis", "method_reference", "calculation_references",
+    "partial_factors", "concrete_parameters", "fatigue_detail_basis",
+    "t0_days", "elements", "spectra", "governing_spectrum", "utilisation",
+)
+_MAX_EXPONENT = math.log10(sys.float_info.max)
+_MIN_EXPONENT = math.log10(float.fromhex("0x0.0000000000001p-1022"))
+
+
+def _app_modules():
+    app_path = str(pathlib.Path(__file__).resolve().parent.parent / "app")
+    if app_path not in sys.path:
+        sys.path.insert(0, app_path)
+    import fatigue_analysis  # type: ignore
+    import fatigue_inputs  # type: ignore
+    import material_catalog  # type: ignore
+    return fatigue_analysis, fatigue_inputs, material_catalog
+
+
+def _mapping(value, label):
+    if not isinstance(value, Mapping):
+        raise TraceValidationError(f"{label} must be a mapping")
+    if any(type(key) is not str for key in value):
+        raise TraceValidationError(f"{label} keys must be exact strings")
+    return value
+
+
+def _compare_exact(actual, expected, label):
+    if type(actual) is not type(expected):
+        raise TraceValidationError(f"{label} retained type changed")
+    if dataclasses.is_dataclass(expected):
+        for field in dataclasses.fields(expected):
+            _compare_exact(
+                getattr(actual, field.name), getattr(expected, field.name),
+                f"{label}.{field.name}",
+            )
+    elif isinstance(expected, np.ndarray):
+        if (actual.dtype != expected.dtype or actual.shape != expected.shape
+                or not np.array_equal(actual, expected, equal_nan=True)):
+            raise TraceValidationError(f"{label} retained array changed")
+    elif isinstance(expected, Mapping):
+        if tuple(actual) != tuple(expected):
+            raise TraceValidationError(f"{label} inventory/order changed")
+        for key in expected:
+            _compare_exact(actual[key], expected[key], f"{label}.{key}")
+    elif isinstance(expected, (tuple, list)):
+        if len(actual) != len(expected):
+            raise TraceValidationError(f"{label} cardinality changed")
+        for position, (left, right) in enumerate(zip(actual, expected)):
+            _compare_exact(left, right, f"{label}[{position}]")
+    elif isinstance(expected, float):
+        if actual != expected and not (math.isnan(actual) and math.isnan(expected)):
+            raise TraceValidationError(f"{label} value changed")
+    elif actual != expected:
+        raise TraceValidationError(f"{label} value changed")
+
+
+def _compare_shape(actual, expected, label):
+    if type(actual) is not type(expected):
+        raise TraceValidationError(f"{label} retained type changed")
+    if dataclasses.is_dataclass(expected):
+        for field in dataclasses.fields(expected):
+            _compare_shape(
+                getattr(actual, field.name), getattr(expected, field.name),
+                f"{label}.{field.name}",
+            )
+    elif isinstance(expected, np.ndarray):
+        if actual.dtype != expected.dtype or actual.shape != expected.shape:
+            raise TraceValidationError(f"{label} retained array shape changed")
+    elif isinstance(expected, Mapping):
+        if tuple(actual) != tuple(expected):
+            raise TraceValidationError(f"{label} key positions changed")
+        for key in expected:
+            _compare_shape(actual[key], expected[key], f"{label}.{key}")
+    elif isinstance(expected, (tuple, list)):
+        if len(actual) != len(expected):
+            raise TraceValidationError(f"{label} cardinality changed")
+        for position, (left, right) in enumerate(zip(actual, expected)):
+            _compare_shape(left, right, f"{label}[{position}]")
+
+
+def _compare_bin_state(actual, expected, label):
+    reinforcement_fields = (
+        "name", "description", "cycles", "converged",
+        "bar_stress_long_mpa", "bar_stress_total_mpa", "elastic_result",
+        "bar_stress_fatigue_total_mpa", "bond_method",
+        "design_action_factor", "design_elastic_result",
+        "bar_stress_design_total_mpa", "bar_stress_fatigue_design_total_mpa",
+    )
+    if type(actual) is not type(expected):
+        raise TraceValidationError(f"{label} retained type changed")
+    for field in reinforcement_fields:
+        _compare_exact(
+            getattr(actual, field), getattr(expected, field),
+            f"{label}.{field}",
+        )
+    for field in (
+        "concrete_compression_long_mpa", "concrete_compression_total_mpa",
+        "concrete_compression_design_total_mpa",
+    ):
+        _compare_shape(
+            getattr(actual, field), getattr(expected, field),
+            f"{label}.{field}",
+        )
+
+
+def _compare_success_output(actual, replay):
+    if tuple(actual) != SUCCESS_ORDER or tuple(replay) != SUCCESS_ORDER:
+        raise TraceValidationError("fatigue output inventory changed")
+    concrete_enabled = replay["checks"]["concrete"] is True
+    for key in SUCCESS_ORDER:
+        if key in {"concrete_method", "concrete_parameters", "t0_days"}:
+            _compare_shape(actual[key], replay[key], f"output.{key}")
+        elif key != "spectra":
+            if concrete_enabled and key in {
+                "governing_spectrum", "utilisation", "converged", "passed",
+            }:
+                _compare_shape(actual[key], replay[key], f"output.{key}")
+            else:
+                _compare_exact(actual[key], replay[key], f"output.{key}")
+        else:
+            if type(actual[key]) is not tuple or len(actual[key]) != len(replay[key]):
+                raise TraceValidationError("fatigue spectra shape changed")
+            for spectrum_position, (left, right) in enumerate(zip(
+                actual[key], replay[key]
+            )):
+                if type(left) is not type(right):
+                    raise TraceValidationError("fatigue spectrum type changed")
+                _compare_exact(left.spectrum_name, right.spectrum_name,
+                               f"spectra[{spectrum_position}].name")
+                if len(left.bins) != len(right.bins):
+                    raise TraceValidationError("fatigue bin cardinality changed")
+                for bin_position, (left_bin, right_bin) in enumerate(zip(
+                    left.bins, right.bins
+                )):
+                    _compare_bin_state(
+                        left_bin, right_bin,
+                        f"spectra[{spectrum_position}].bins[{bin_position}]",
+                    )
+                _compare_exact(left.reinforcement, right.reinforcement,
+                               f"spectra[{spectrum_position}].reinforcement")
+                _compare_exact(
+                    left.governing_reinforcement_id,
+                    right.governing_reinforcement_id,
+                    f"spectra[{spectrum_position}].governing_reinforcement",
+                )
+                for field in (
+                    "concrete", "concrete_search", "fcd_fat_mpa",
+                    "governing_concrete_fibre", "concrete_method",
+                ):
+                    _compare_shape(
+                        getattr(left, field), getattr(right, field),
+                        f"spectra[{spectrum_position}].{field}",
+                    )
+                for field in ("utilisation", "converged", "passed"):
+                    compare = _compare_shape if concrete_enabled else _compare_exact
+                    compare(getattr(left, field), getattr(right, field),
+                            f"spectra[{spectrum_position}].{field}")
+
+
+def _validate_success_input_types(inp):
+    for key in ("fatigue_on", "fatigue_check_steel", "fatigue_check_concrete"):
+        if key not in inp or type(inp[key]) is not bool:
+            raise TraceValidationError(f"{key} must be a present exact Boolean")
+    if not inp["fatigue_on"] or not inp["fatigue_check_steel"]:
+        raise TraceValidationError("CT-010a reinforcement fatigue is disabled")
+    for key in (
+        "fatigue_gamma_c", "fatigue_gamma_s", "fatigue_gamma_ff",
+        "fatigue_beta_cc_t0", "fatigue_t0_days", "fatigue_concrete_k1",
+        "fatigue_concrete_c", "nl", "ns",
+    ):
+        value = inp.get(key)
+        if value is not None and (
+            type(value) not in {int, float} or type(value) is bool
+            or not math.isfinite(float(value))
+        ):
+            raise TraceValidationError(f"{key} must be a finite non-Boolean number")
+    for key in ("bar_elements", "tendon_elements", "bar_materials", "tendon_materials"):
+        if type(inp.get(key)) is not list:
+            raise TraceValidationError(f"{key} must be a retained list")
+
+
+def _law_signature(value):
+    type_identity = type(value).__module__, type(value).__qualname__
+    if dataclasses.is_dataclass(value):
+        fields = tuple(
+            (field.name, getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        )
+    elif hasattr(value, "__dict__"):
+        fields = tuple(sorted(vars(value).items()))
+    else:
+        raise TraceValidationError("runtime material law is not inspectable")
+    return type_identity, fields
+
+
+def _runtime_law_vector(inp):
+    """Retain optional concrete presence plus every live material-law field."""
+
+    if "concrete" in inp:
+        concrete = ("present", _law_signature(inp["concrete"]))
+    else:
+        concrete = ("absent",)
+    mild = tuple(
+        (position, _law_signature(material))
+        for position, material in enumerate(inp.get("bar_materials") or ())
+    )
+    prestress = tuple(
+        (position, _law_signature(material))
+        for position, material in enumerate(inp.get("tendon_materials") or ())
+    )
+    return concrete, mild, prestress
+
+
+def _catalog_vector(inp):
+    _analysis, fatigue_inputs, material_catalog = _app_modules()
+    catalogs = []
+    detail_key = fatigue_inputs.DETAIL_CATALOG_KEY
+    if detail_key in inp:
+        raw = _mapping(inp[detail_key], "fatigue detail catalog")
+        normal = fatigue_inputs.normalise_catalog(raw)
+        if tuple(raw) != ("version", "next_id", "items"):
+            raise TraceValidationError("fatigue detail catalog inventory changed")
+        if type(raw["items"]) is not list or len(raw["items"]) != len(normal["items"]):
+            raise TraceValidationError("fatigue detail catalog shape changed")
+        for position, (left, right) in enumerate(zip(raw["items"], normal["items"])):
+            if not isinstance(left, Mapping) or set(left) != set(right):
+                raise TraceValidationError(f"fatigue detail {position} inventory changed")
+            for field in right:
+                _compare_exact(left[field], right[field],
+                               f"fatigue detail {position}.{field}")
+        catalogs.append((detail_key, normal))
+    for kind in ("mild", "prestress"):
+        key = material_catalog.catalog_key(kind)
+        if key in inp:
+            raw = _mapping(inp[key], f"{kind} material catalog")
+            normal = material_catalog.normalise_catalog(raw, kind)
+            _compare_exact(dict(raw), normal, f"{kind} material catalog")
+            catalogs.append((key, normal))
+    return tuple(catalogs)
+
+
+def _flatten(value, path, leaves):
+    if isinstance(value, np.generic):
+        value = value.item()
+    if type(value) in {tuple, list}:
+        kind = "tuple" if type(value) is tuple else "list"
+        leaves.append(IdentityLeaf(
+            f"{path}-type-{kind}", path, float(len(value))
+        ))
+        for position, item in enumerate(value):
+            _flatten(item, f"{path}-i{position:04d}", leaves)
+    elif isinstance(value, Mapping):
+        leaves.append(IdentityLeaf(
+            f"{path}-type-mapping", path, float(len(value))
+        ))
+        for position, (key, item) in enumerate(value.items()):
+            if type(key) is not str:
+                raise TraceValidationError("retained identity keys must be text")
+            token = key.encode("utf-8").hex()
+            _flatten(item, f"{path}-k{position:04d}-u{token}", leaves)
+    elif type(value) is str:
+        leaves.append(IdentityLeaf(
+            f"{path}-text-u{value.encode('utf-8').hex()}", path, 1.0
+        ))
+    elif type(value) is bool:
+        leaves.append(IdentityLeaf(
+            f"{path}-bool-{'true' if value else 'false'}", path,
+            1.0 if value else 0.0,
+        ))
+    elif value is None:
+        leaves.append(IdentityLeaf(f"{path}-none", path, None, True))
+    elif type(value) in {int, float}:
+        number = float(value)
+        if not math.isfinite(number):
+            raise TraceValidationError(f"{path} identity must be finite")
+        leaves.append(IdentityLeaf(
+            f"{path}-number-{'int' if type(value) is int else 'float'}",
+            path, number,
+        ))
+    else:
+        raise TraceValidationError(f"unsupported retained identity at {path}")
+
+
+def _success_identity(inp, prepared):
+    analysis, _fatigue_inputs, _material_catalog = _app_modules()
+    concrete_identity = (
+        ("present", inp.get("concrete_material_id",
+                            inp.get("concrete_preset", "project-concrete")))
+        if "concrete" in inp else ("absent",)
+    )
+    material_ids = tuple(
+        (record["id"], record["material_id"])
+        for record in prepared.element_records
+    )
+    identity = (
+        analysis.analysis_signature(inp), concrete_identity, material_ids,
+        _runtime_law_vector(inp), _catalog_vector(inp),
+    )
+    leaves = []
+    _flatten(identity, "fatigue-input", leaves)
+    if len({leaf.step_id for leaf in leaves}) != len(leaves):
+        raise TraceValidationError("fatigue input leaves are not injective")
+    return tuple(leaves)
+
+
+def _invalid_identity(inp, out):
+    raw = (
+        tuple(out), tuple(out["errors"]),
+        tuple((key, type(inp.get(key)).__name__, repr(inp.get(key))) for key in (
+            "fatigue_on", "fatigue_check_steel", "fatigue_check_concrete",
+            "fatigue_edition", "fatigue_gamma_c", "fatigue_gamma_s",
+            "fatigue_gamma_ff", "fatigue_concrete_method",
+        )),
+    )
+    leaves = []
+    _flatten(raw, "invalid-fatigue-input", leaves)
+    return tuple(leaves)
+
+
+def _assigned_material_id(record):
+    if not isinstance(record, Mapping):
+        raise TraceValidationError("element record must be a mapping")
+    value = record.get("material_id")
+    if type(value) is not str or not value.strip():
+        raise TraceValidationError("element material identity is missing")
+    return value.strip()
+
+
+def _sources(prepared, detail_id):
+    detail = next(row for row in prepared.detail_records if row["id"] == detail_id)
+    sn = CUSTOM_SN_SOURCE if detail["custom"] else (
+        SN_2023_SOURCE if "2023" in prepared.edition else SN_2005_SOURCE
+    )
+    if prepared.section.bars and prepared.section.tendons:
+        bond = BOND_2023_SOURCE if "2023" in prepared.edition else BOND_2005_SOURCE
+    else:
+        bond = PERFECT_BOND_SOURCE
+    return sn, bond
+
+
+def _read(inp, out, context):
+    inp = _mapping(inp, "fatigue input")
+    out = _mapping(out, "fatigue output")
+    context = {} if context is None else _mapping(context, "trace context")
+    analysis, _fatigue_inputs, _material_catalog = _app_modules()
+    for key in ("fatigue_on", "fatigue_check_steel", "fatigue_check_concrete"):
+        if key not in inp or type(inp[key]) is not bool:
+            raise TraceValidationError(f"{key} must be a present exact Boolean")
+    if out.get("valid") is False:
+        if tuple(out) != INVALID_ORDER:
+            raise TraceValidationError("invalid fatigue output inventory changed")
+        expected = analysis.invalid_result(inp)
+        _compare_exact(dict(out), expected, "invalid fatigue output")
+        return (
+            invalid_plan(
+                leaves=_invalid_identity(inp, out), errors=tuple(out["errors"]),
+                context=context, edition=str(out["edition"]),
+                concrete_parameters_type=type(out["concrete_parameters"]).__name__,
+            ),
+            None,
+            out,
+        )
+    _validate_success_input_types(inp)
+    try:
+        prepared = analysis.prepare(inp)
+        replay = analysis.run_analysis(inp)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise TraceValidationError(f"invalid CT-010a input: {exc}") from exc
+    _compare_success_output(out, replay)
+    rows = []
+    for spectrum_position, spectrum in enumerate(out["spectra"]):
+        for element_position, (record, properties) in enumerate(zip(
+            prepared.element_records, prepared.reinforcement
+        )):
+            matches = tuple(row for row in spectrum.reinforcement
+                            if row.element_id == properties.element_id)
+            if len(matches) != 1:
+                raise TraceValidationError("element-spectrum identity changed")
+            result = matches[0]
+            if len(result.bins) != len(spectrum.bins):
+                raise TraceValidationError("element-spectrum bin shape changed")
+            sn, bond = _sources(prepared, properties.detail_id)
+            rows.append((
+                element_position, spectrum_position, properties.element_id,
+                str(properties.kind).strip().lower(),
+                _assigned_material_id(record), properties.detail_id,
+                spectrum.spectrum_name,
+                tuple((position, row.bin_name, row.bond_method)
+                      for position, row in enumerate(result.bins)),
+                sn, bond,
+            ))
+    return (
+        success_plan(
+            leaves=_success_identity(inp, prepared), rows=rows,
+            context=context, edition=prepared.edition,
+            concrete_method_type=type(out["concrete_method"]).__name__,
+            concrete_parameters_type=type(out["concrete_parameters"]).__name__,
+        ),
+        prepared,
+        out,
+    )
+
+
+def _pow10(exponent):
+    if exponent == math.inf or exponent > _MAX_EXPONENT:
+        return math.inf
+    if exponent == -math.inf or exponent < _MIN_EXPONENT:
+        return 0.0
+    return 10.0 ** exponent
+
+
+def _sn_life(properties, stress_range, gamma_s):
+    if stress_range == 0.0:
+        return math.inf, math.inf, 0.0
+    exponent = properties.k1 if stress_range >= properties.delta_sigma_rsk_mpa / gamma_s else properties.k2
+    logarithm = math.log10(properties.n_star) + exponent * math.log10(
+        properties.delta_sigma_rsk_mpa / (gamma_s * stress_range)
+    )
+    return _pow10(logarithm), logarithm, float(exponent)
+
+
+def _damage_from_log(cycles, loglife):
+    if cycles == 0.0 or loglife == math.inf:
+        return 0.0
+    return _pow10(math.log10(cycles) - loglife)
+
+
+def _yield_proof(stress, properties, gamma_s):
+    strength = properties.fytk_mpa if stress >= 0.0 else (
+        properties.fyck_mpa if properties.fyck_mpa is not None
+        else properties.fytk_mpa
+    )
+    limit = float(strength) / gamma_s
+    return limit, abs(stress) / limit
+
+
+def _assert_near(actual, expected, label):
+    if math.isnan(expected):
+        valid = math.isnan(actual)
+    elif math.isinf(expected):
+        valid = actual == expected
+    else:
+        valid = math.isclose(actual, expected, rel_tol=2e-12, abs_tol=2e-12)
+    if not valid:
+        raise TraceValidationError(f"{label} contradicts independent proof")
+
+
+def _root_values(plan, prepared):
+    values = {}
+    for leaf in plan.leaves:
+        values[leaf.step_id] = (
+            TraceResult(RESULT_UNDEFINED, None, "Optional input is absent")
+            if leaf.absent else float(leaf.value)
+        )
+    values["fatigue-input-vector"] = 1.0
+    if prepared is None:
+        absent = TraceResult(RESULT_UNDEFINED, None,
+                             "Invalid input has no usable partial factor")
+        values.update({"input-gamma-s": absent, "input-gamma-ff": absent,
+                       "input-gamma-c": absent})
+    else:
+        values["input-gamma-s"] = float(prepared.gamma_s)
+        values["input-gamma-ff"] = float(prepared.gamma_ff)
+        values["input-gamma-c"] = (
+            TraceResult(RESULT_UNDEFINED, None, "Concrete sibling is disabled")
+            if prepared.gamma_c is None else float(prepared.gamma_c)
+        )
+    values["normalised-fatigue-inputs"] = 1.0
+    return values
+
+
+def _assessment_values(family, plan, prepared, out):
+    values = _root_values(family, prepared)
+    properties = prepared.reinforcement[plan.element_position]
+    spectrum = out["spectra"][plan.spectrum_position]
+    result = next(row for row in spectrum.reinforcement
+                  if row.element_id == plan.element_id)
+    prefix = assessment_prefix(plan)
+    values.update({
+        f"{prefix}-nstar": float(properties.n_star),
+        f"{prefix}-k1": float(properties.k1),
+        f"{prefix}-k2": float(properties.k2),
+        f"{prefix}-reference": float(properties.delta_sigma_rsk_mpa),
+        f"{prefix}-tension-proof": float(properties.fytk_mpa),
+        f"{prefix}-compression-proof": float(
+            properties.fyck_mpa if properties.fyck_mpa is not None
+            else properties.fytk_mpa
+        ),
+    })
+    damages, yields, convergences = [], [], []
+    for bin_plan, state, row in zip(plan.bins, spectrum.bins, result.bins):
+        bp = bin_prefix(bin_plan)
+        long = float(state.bar_stress_long_mpa[plan.element_position])
+        elastic = float(state.bar_stress_total_mpa[plan.element_position])
+        fatigue_vector = state.bar_stress_fatigue_total_mpa or state.bar_stress_total_mpa
+        design_vector = state.bar_stress_fatigue_design_total_mpa or fatigue_vector
+        fatigue = float(fatigue_vector[plan.element_position])
+        design = float(design_vector[plan.element_position])
+        erange, frange, drange = (
+            abs(elastic - long), abs(fatigue - long), abs(design - long)
+        )
+        bond = frange / erange if erange > 0.0 else (math.inf if frange > 0.0 else 1.0)
+        life, loglife, exponent = _sn_life(
+            properties, drange, float(prepared.gamma_s)
+        )
+        damage = _damage_from_log(float(state.cycles), loglife)
+        long_limit, long_util = _yield_proof(long, properties, float(prepared.gamma_s))
+        design_limit, design_util = _yield_proof(design, properties,
+                                                 float(prepared.gamma_s))
+        if design_util >= long_util:
+            governing, limit, yutil = design, design_limit, design_util
+        else:
+            governing, limit, yutil = long, long_limit, long_util
+        expected = {
+            "cycles": float(state.cycles), "stress_long_mpa": long,
+            "stress_total_elastic_mpa": elastic,
+            "stress_total_mpa": fatigue, "stress_total_design_mpa": design,
+            "stress_range_elastic_mpa": erange,
+            "stress_range_mpa": frange, "design_stress_range_mpa": drange,
+            "bond_adjustment": bond, "sn_exponent": exponent,
+            "cycles_to_failure": life, "log10_cycles_to_failure": loglife,
+            "damage": damage, "governing_stress_mpa": governing,
+            "yield_limit_mpa": limit, "yield_utilisation": yutil,
+            "delta_sigma_rsk_mpa": float(properties.delta_sigma_rsk_mpa),
+            "delta_sigma_rd_mpa": float(properties.delta_sigma_rsk_mpa) / float(prepared.gamma_s),
+        }
+        for field, expected_value in expected.items():
+            _assert_near(float(getattr(row, field)), expected_value,
+                         f"{bp}.{field}")
+        if type(row.converged) is not bool or row.converged is not state.converged:
+            raise TraceValidationError(f"{bp} combined convergence changed")
+        values.update({
+            f"{bp}-cycles": float(state.cycles),
+            f"{bp}-converged": 1.0 if state.converged else 0.0,
+            f"{bp}-long": long, f"{bp}-elastic": elastic,
+            f"{bp}-fatigue": fatigue, f"{bp}-design": design,
+            f"{bp}-elastic-range": erange, f"{bp}-fatigue-range": frange,
+            f"{bp}-design-range": drange, f"{bp}-bond-factor": bond,
+            f"{bp}-exponent": exponent, f"{bp}-loglife": loglife,
+            f"{bp}-life": life, f"{bp}-damage": damage,
+            f"{bp}-governing-stress": governing, f"{bp}-yield-limit": limit,
+            f"{bp}-yield-utilisation": yutil, f"{bp}-proof": 1.0,
+        })
+        damages.append(damage); yields.append(yutil); convergences.append(state.converged)
+    damage, yutil, converged = sum(damages), max(yields), all(convergences)
+    utilisation = max(damage, yutil)
+    passed = bool(converged and damage <= 1.0 and yutil <= 1.0)
+    damage_index = max(range(len(damages)), key=damages.__getitem__)
+    yield_index = max(range(len(yields)), key=yields.__getitem__)
+    for field, expected_value in {
+        "damage": damage, "damage_utilisation": damage,
+        "yield_utilisation": yutil, "utilisation": utilisation,
+    }.items():
+        _assert_near(float(getattr(result, field)), expected_value,
+                     f"{prefix}.{field}")
+    if result.governing_damage_bin != result.bins[damage_index].bin_name:
+        raise TraceValidationError("governing damage-bin identity changed")
+    if result.governing_yield_bin != result.bins[yield_index].bin_name:
+        raise TraceValidationError("governing yield-bin identity changed")
+    if type(result.converged) is not bool or result.converged is not converged:
+        raise TraceValidationError("assessment convergence changed")
+    if type(result.passed) is not bool or result.passed is not passed:
+        raise TraceValidationError("assessment verdict changed")
+    values.update({
+        f"{prefix}-damage": damage, f"{prefix}-damage-bin": float(damage_index),
+        f"{prefix}-yield-utilisation": yutil,
+        f"{prefix}-yield-bin": float(yield_index),
+        f"{prefix}-converged": 1.0 if converged else 0.0,
+        f"{prefix}-utilisation": utilisation,
+        f"{prefix}-passed": 1.0 if passed else 0.0,
+        f"ct-010a-{prefix}-result": utilisation,
+    })
+    return values, converged
+
+
+def _joint_values(family, prepared, out):
+    values = _root_values(family, prepared)
+    results = []
+    for plan in family.assessments:
+        result = next(row for row in out["spectra"][plan.spectrum_position].reinforcement
+                      if row.element_id == plan.element_id)
+        prefix = f"published-{assessment_prefix(plan)}"
+        values.update({
+            f"{prefix}-damage": float(result.damage),
+            f"{prefix}-yield-utilisation": float(result.yield_utilisation),
+            f"{prefix}-converged": 1.0 if result.converged else 0.0,
+            f"{prefix}-utilisation": float(result.utilisation),
+            f"{prefix}-passed": 1.0 if result.passed else 0.0,
+        })
+        results.append(result)
+    converged = all(row.converged for row in results)
+    utilisation = max((float(row.utilisation) for row in results), default=0.0)
+    passed = all(row.passed for row in results)
+    values.update({
+        "reinforcement-output-converged": 1.0 if converged else 0.0,
+        "reinforcement-output-utilisation": utilisation,
+        "reinforcement-output-passed": 1.0 if passed else 0.0,
+        "ct-010a-reinforcement-output-result": utilisation,
+    })
+    return values, converged
+
+
+def _trace_result(value):
+    if isinstance(value, TraceResult):
+        return value
+    number = float(value)
+    if math.isnan(number):
+        return TraceResult(RESULT_UNDEFINED, None, "Retained result is undefined")
+    if number == math.inf:
+        return TraceResult(RESULT_POSITIVE_INFINITY, None, "Retained result overflowed")
+    if number == -math.inf:
+        return TraceResult(RESULT_NEGATIVE_INFINITY, None,
+                           "Retained result is negative infinity")
+    return TraceResult(RESULT_FINITE, number)
+
+
+def _calculation(calculation_id, title, axes, contracts, values, converged,
+                 failed_reason=None):
+    units = {contract.step_id: contract.unit for contract in contracts}
+    final_id = contracts[-1].step_id
+    steps = []
+    for contract in contracts:
+        if contract.step_id not in values:
+            raise TraceValidationError(f"internal value omitted {contract.step_id}")
+        result = _trace_result(values[contract.step_id])
+        if contract.step_id == final_id and (failed_reason is not None or not converged):
+            result = TraceResult(
+                RESULT_FAILED, None,
+                failed_reason or "An original or equivalent-area solve failed",
+            )
+        steps.append(TraceStep(
+            contract.step_id, contract.title,
+            tuple(TraceDependency(dependency, units[dependency])
+                  for dependency in contract.dependencies),
+            contract.role, contract.source, contract.step_id, contract.unit,
+            f"Bind {contract.title.lower()}",
+            (f"{contract.step_id} = {result.value:.17g} {contract.unit.symbol}"
+             if result.state == RESULT_FINITE
+             else f"{contract.step_id} = {result.state}"),
+            result,
+        ))
+    return TraceCalculation(
+        calculation_id, COVERAGE_ID, title, METHOD_ID, axes, final_id,
+        tuple(steps),
+        assumptions=(
+            "Spectrum groups are independent.",
+            "Combined convergence retains the equivalent-area solve outcome.",
+            "Concrete values are excluded while their complete shape is pinned.",
+        ),
+    )
+
+
+def _calculations(family, prepared, out):
+    if family.branch == "invalid":
+        contracts = invalid_steps(family)
+        values = _root_values(family, None)
+        for contract in contracts:
+            values.setdefault(contract.step_id, 1.0)
+        return (_calculation(
+            f"fatigue.{family.context_token}.invalid", "Invalid fatigue boundary",
+            family.invalid_axes, contracts, values, False,
+            "; ".join(family.errors) or "Retained fatigue payload is invalid",
+        ),)
+    calculations = []
+    for plan in family.assessments:
+        values, converged = _assessment_values(family, plan, prepared, out)
+        calculations.append(_calculation(
+            plan.calculation_id, f"Reinforcement fatigue: {plan.element_id}",
+            plan.axes, assessment_steps(family, plan), values, converged,
+        ))
+    values, converged = _joint_values(family, prepared, out)
+    calculations.append(_calculation(
+        f"fatigue.{family.context_token}.reinforcement-output",
+        "Reinforcement fatigue output", family.joint_axes,
+        joint_steps(family), values, converged,
+    ))
+    return tuple(calculations)
+
+
+def _expected_bundle(inp, out, input_sha256, result_sha256, context):
+    family, prepared, retained = _read(inp, out, context)
+    bundle = create_bundle(
+        input_sha256=input_sha256, result_sha256=result_sha256,
+        calculations=_calculations(family, prepared, retained),
+    )
+    audit_trace_registry(bundle, expected_registry(family))
+    return bundle
+
+
+def build_fatigue_trace_family(inp, out, *, input_sha256, result_sha256,
+                               context=None):
+    try:
+        return _expected_bundle(inp, out, input_sha256, result_sha256, context)
+    except TraceValidationError:
+        raise
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise TraceValidationError(f"invalid CT-010a evidence: {exc}") from exc
+
+
+def validate_fatigue_trace_family(bundle, inp, out, *, input_sha256,
+                                  result_sha256, context=None):
+    candidate = validate_bundle(
+        bundle, expected_input_sha256=input_sha256,
+        expected_result_sha256=result_sha256,
+    )
+    expected = _expected_bundle(inp, out, input_sha256, result_sha256, context)
+    if candidate.to_dict() != expected.to_dict():
+        raise TraceValidationError("CT-010a trace differs from independent replay")
+    return candidate
