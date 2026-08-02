@@ -17,9 +17,9 @@ sys.path.insert(0, str(ROOT / "app"))
 import fatigue_analysis
 import fatigue_inputs
 from sector.calculation_trace import (
-    RESULT_POSITIVE_INFINITY, SOURCE_PROJECT, SOURCE_STANDARD, TraceResult,
-    TraceValidationError, bundle_from_json, bundle_to_json, create_bundle,
-    seal_bundle,
+    RESULT_FAILED, RESULT_POSITIVE_INFINITY, SOURCE_INPUT, SOURCE_PROJECT,
+    SOURCE_STANDARD, TraceResult, TraceValidationError, bundle_from_json,
+    bundle_to_json, create_bundle, seal_bundle,
 )
 from sector.fatigue_trace import (
     build_fatigue_trace_family, validate_fatigue_trace_family,
@@ -151,16 +151,96 @@ def test_truncated_invalid_payload_and_forged_invalid_are_rejected(case):
         _build(inp, forged)
 
 
-def test_genuine_invalid_payload_is_exactly_fenced_and_deferred(case):
+def test_genuine_invalid_payload_builds_one_minimal_failed_member(case):
     inp, _output, _out, _bundle = case
     invalid = dict(inp)
     invalid["ns"] = -1.0
     payload = fatigue_analysis.invalid_result(invalid)
-    assert _build(invalid, payload) is None
+    bundle = _build(invalid, payload)
+    assert len(bundle.calculations) == 1
+    calculation = bundle.calculations[0]
+    assert calculation.final_step_id == "reinforcement-fatigue-invalid-result"
+    assert calculation.steps[-1].result.state == RESULT_FAILED
+    assert calculation.steps[-1].result.value is None
+    assert "Long-term modular ratio" not in calculation.steps[-1].result.reason
+    assert "Short-term modular ratio" in calculation.steps[-1].result.reason
+    assert all(
+        item.source.kind in {SOURCE_INPUT, SOURCE_PROJECT}
+        for item in calculation.steps)
+    assert {item.step_id for item in calculation.steps[:-1]} == {
+        item.step_id for item in calculation.steps[-1].dependencies}
+    assert validate_fatigue_trace_family(
+        bundle, invalid, {"fatigue": payload}, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT) == bundle
     tampered = copy.deepcopy(payload)
     tampered["warnings"] = (*tampered["warnings"], "fabricated")
     with pytest.raises(TraceValidationError, match="fatigue.invalid"):
         _build(invalid, tampered)
+
+
+def test_invalid_branch_does_not_traverse_failure_only_geometry(case):
+    inp, _output, _out, _bundle = case
+    left = dict(inp)
+    right = dict(inp)
+    left["section"] = None
+    right["section"] = object()
+    left_payload = fatigue_analysis.invalid_result(left)
+    right_payload = fatigue_analysis.invalid_result(right)
+    assert left_payload == right_payload
+    left_bundle = _build(left, left_payload)
+    right_bundle = _build(right, right_payload)
+    assert left_bundle == right_bundle
+
+
+def test_invalid_error_order_and_coherent_reseal_are_fenced(case):
+    inp, _output, _out, _bundle = case
+    invalid = dict(inp)
+    invalid["section"] = None
+    invalid["ns"] = -1.0
+    payload = fatigue_analysis.invalid_result(invalid)
+    assert len(payload["errors"]) >= 2
+    reordered = dict(payload)
+    reordered["errors"] = tuple(reversed(payload["errors"]))
+    with pytest.raises(TraceValidationError, match="fatigue.invalid"):
+        _build(invalid, reordered)
+
+    bundle = _build(invalid, payload)
+    first = bundle.calculations[0]
+    step = first.steps[0]
+    changed_step = dataclasses.replace(
+        step, result=TraceResult(step.result.state, step.result.value + 1.0))
+    changed_calculation = dataclasses.replace(
+        first, steps=(changed_step, *first.steps[1:]))
+    changed = seal_bundle(dataclasses.replace(
+        bundle, calculations=(changed_calculation,), content_sha256=""))
+    with pytest.raises(TraceValidationError, match="authoritative input replay"):
+        validate_fatigue_trace_family(
+            changed, invalid, {"fatigue": payload}, input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT)
+
+
+def test_invalid_branch_ignores_unrelated_output_families(case):
+    inp, _output, _out, _bundle = case
+    invalid = dict(inp)
+    invalid["ns"] = -1.0
+    payload = fatigue_analysis.invalid_result(invalid)
+    out = {"fatigue": payload, "unrelated": object()}
+    assert build_fatigue_trace_family(
+        invalid, out, input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT) is not None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [None, float("nan"), False, ["malformed"], 1 + 2j, object()],
+)
+def test_invalid_branch_accepts_retained_non_numeric_failure_fields(case, raw):
+    inp, _output, _out, _bundle = case
+    invalid = dict(inp)
+    invalid["fatigue_gamma_s"] = raw
+    payload = fatigue_analysis.invalid_result(invalid)
+    bundle = _build(invalid, payload)
+    assert bundle.calculations[0].steps[-1].result.state == RESULT_FAILED
 
 
 def test_disabled_missing_and_concrete_only_states_publish_no_ct010a(case):
@@ -180,6 +260,9 @@ def test_disabled_missing_and_concrete_only_states_publish_no_ct010a(case):
         fatigue_check_steel=False, fatigue_check_concrete=True)
     concrete_output = fatigue_analysis.run_analysis(concrete)
     assert _build(concrete, concrete_output) is None
+    concrete["ns"] = -1.0
+    concrete_invalid = fatigue_analysis.invalid_result(concrete)
+    assert _build(concrete, concrete_invalid) is None
 
 
 def test_output_inventory_order_mapping_type_and_excluded_sibling_types(case):

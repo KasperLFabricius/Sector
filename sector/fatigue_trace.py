@@ -12,15 +12,16 @@ from typing import Any
 import numpy as np
 
 from .calculation_trace import (
-    RESULT_FINITE, RESULT_NEGATIVE_INFINITY, RESULT_POSITIVE_INFINITY,
-    RESULT_UNDEFINED, ROLE_COMPUTED, ROLE_FINAL, ROLE_METHOD_VALUE,
-    ROLE_USER_INPUT, TraceBundle, TraceCalculation, TraceDependency,
-    TraceResult, TraceStep, TraceUnit, TraceValidationError, create_bundle,
-    trace_identity_token, validate_bundle,
+    RESULT_FAILED, RESULT_FINITE, RESULT_NEGATIVE_INFINITY,
+    RESULT_POSITIVE_INFINITY, RESULT_UNDEFINED, ROLE_COMPUTED, ROLE_FINAL,
+    ROLE_METHOD_VALUE, ROLE_USER_INPUT, TraceBundle, TraceCalculation,
+    TraceDependency, TraceResult, TraceStep, TraceUnit, TraceValidationError,
+    create_bundle, trace_identity_token, validate_bundle,
 )
 from .fatigue_trace_contract import (
     BOUNDARY, COVERAGE_ID, CYCLES, ELASTIC, FAMILY_ID, INPUT, METHOD_ID, MPA,
-    ONE, VERDICT, MemberShape, StepShape, registry_for, selected_sources,
+    ONE, VERDICT, MemberShape, StepShape, invalid_registry, registry_for,
+    selected_sources,
 )
 from .fatigue_trace_replay import (
     AssessmentReplay, BinReplay, SuccessfulReplay, classify,
@@ -232,6 +233,141 @@ def _identity_steps(payloads: tuple[tuple[str, Any], ...]) -> list[TraceStep]:
                 expression="SHA-256 word over exact typed retained identity",
             ))
     return steps
+
+
+def _shape(member_id: str, calculation: TraceCalculation) -> MemberShape:
+    return MemberShape(
+        member_id, calculation.calculation_id, calculation.axes,
+        tuple(StepShape(
+            item.step_id, item.title, item.unit, item.quantity_role,
+            item.source, tuple(dep.step_id for dep in item.dependencies))
+              for item in calculation.steps),
+    )
+
+
+def _type_identity(value: Any) -> tuple[str, str]:
+    return type(value).__module__, type(value).__qualname__
+
+
+def _invalid_identity_payload(candidate: Mapping[str, Any]) -> Any:
+    """Project invalid evidence without reading arbitrary failure-only values."""
+
+    safe_keys = tuple(
+        key for key in candidate
+        if key not in {"partial_factors", "t0_days", "elements"}
+    )
+    factors = candidate["partial_factors"]
+    element_shapes = tuple(
+        (
+            _type_identity(record),
+            tuple(
+                (
+                    ("text", key) if type(key) is str
+                    else ("typed-key", *_type_identity(key)),
+                    _type_identity(value),
+                )
+                for key, value in record.items()
+            ) if type(record) is dict else (),
+        )
+        for record in candidate["elements"]
+    )
+    return {
+        "safe_values": tuple((key, candidate[key]) for key in safe_keys),
+        "partial_factor_shape": tuple(
+            (key, _type_identity(factors[key])) for key in factors),
+        "t0_days_type": _type_identity(candidate["t0_days"]),
+        "element_shapes": element_shapes,
+    }
+
+
+def _invalid_member(
+    candidate: Mapping[str, Any], context: Mapping[str, Any],
+) -> tuple[MemberShape, TraceCalculation]:
+    """Build minimal failed evidence without traversing success-only input."""
+
+    steps = []
+    identity = _invalid_identity_payload(candidate)
+    for position, value in enumerate(_digest_parts(identity), start=1):
+        steps.append(_step(
+            f"invalid-payload-sha256-{position}",
+            f"Exact retained invalid-payload identity word {position}",
+            value, ONE, ROLE_METHOD_VALUE, BOUNDARY,
+            expression=(
+                "SHA-256 word over safe invalid values plus failure-only "
+                "inventory/type structure")))
+    controls = (
+        ("fatigue-enabled", "Fatigue enabled", 1.0),
+        ("reinforcement-requested", "Reinforcement fatigue requested", 1.0),
+        ("concrete-requested", "Concrete fatigue requested",
+         float(candidate["checks"]["concrete"])),
+    )
+    for step_id, title, value in controls:
+        steps.append(_step(
+            step_id, title, value, ONE, ROLE_USER_INPUT, INPUT))
+    control_steps = tuple(steps[-3:])
+    error_count = _step(
+        "invalid-error-count", "Retained validation error count",
+        float(len(candidate["errors"])), ONE, ROLE_COMPUTED, BOUNDARY,
+        control_steps, expression="Count ordered fresh validation errors")
+    warning_count = _step(
+        "invalid-warning-count", "Retained validation warning count",
+        float(len(candidate["warnings"])), ONE, ROLE_COMPUTED, BOUNDARY,
+        control_steps, expression="Count ordered fresh validation warnings")
+    steps.extend((error_count, warning_count))
+    for kind, items, count_step in (
+        ("error", candidate["errors"], error_count),
+        ("warning", candidate["warnings"], warning_count),
+    ):
+        for position, message in enumerate(items, start=1):
+            token = trace_identity_token(message)
+            steps.append(_step(
+                f"invalid-{kind}-{position}-{token}",
+                f"Retained {kind} {position} identity",
+                _digest_parts((position, message))[0], ONE, ROLE_COMPUTED,
+                BOUNDARY, (count_step,),
+                expression=f"Bind ordered retained {kind} text"))
+    final_id = "reinforcement-fatigue-invalid-result"
+    reason = "Retained fatigue input failure: " + " | ".join(
+        candidate["errors"])
+    final = TraceStep(
+        step_id=final_id,
+        title="Reinforcement fatigue invalid state",
+        dependencies=tuple(
+            TraceDependency(item.step_id, item.unit) for item in steps),
+        quantity_role=ROLE_FINAL,
+        source=VERDICT,
+        symbol=final_id,
+        unit=ONE,
+        actual_expression=(
+            "Publish calculation-free failed state from genuine retained "
+            "validation errors"),
+        substituted_expression=(
+            f"{final_id} = failed ({len(candidate['errors'])} errors)"),
+        result=TraceResult(RESULT_FAILED, None, reason),
+    )
+    steps.append(final)
+    axes = context_axes(
+        context,
+        fatigue_branch="invalid",
+        edition=trace_identity_token(candidate["edition"]),
+    )
+    calculation_id = f"ct-010-{context_id(context)}-reinforcement-invalid"
+    calculation = TraceCalculation(
+        calculation_id=calculation_id,
+        coverage_id=COVERAGE_ID,
+        title="Retained reinforcement fatigue input failure",
+        method_id=METHOD_ID,
+        axes=axes,
+        final_step_id=final_id,
+        steps=tuple(steps),
+        warnings=tuple(candidate["warnings"]),
+        assumptions=(
+            "This is calculation-free retained adapter failure evidence; no resistance, utilisation or engineering verdict is implied.",
+            "Success-only geometry, material and solver fields are not traversed on this branch.",
+        ),
+    )
+    shape = _shape("reinforcement-fatigue-invalid", calculation)
+    return shape, calculation
 
 
 def _property_steps(
@@ -589,12 +725,21 @@ def _expected_bundle(
     result_sha256: str, context: Mapping[str, Any] | None,
 ) -> TraceBundle | None:
     state, candidate = classify(inp, out)
-    if state != "success":
+    if state == "none":
         return None
+    trace_context = {} if context is None else context
+    if state == "invalid":
+        shape, calculation = _invalid_member(candidate, trace_context)
+        bundle = create_bundle(
+            input_sha256=input_sha256,
+            result_sha256=result_sha256,
+            calculations=(calculation,),
+        )
+        audit_trace_registry(bundle, invalid_registry(shape))
+        return bundle
     replay = successful_replay(inp, candidate)
     if not replay.prepared.check_reinforcement:
         return None
-    trace_context = {} if context is None else context
     members = [
         _member(inp, replay, assessment, trace_context)
         for spectrum in replay.spectra for assessment in spectrum.assessments]
@@ -646,16 +791,16 @@ def validate_fatigue_trace_family(
         bundle, expected_input_sha256=input_sha256,
         expected_result_sha256=result_sha256)
     expected_shapes = tuple(
-        MemberShape(
-            f"expected-member-{position}", calculation.calculation_id,
-            calculation.axes,
-            tuple(StepShape(
-                item.step_id, item.title, item.unit, item.quantity_role,
-                item.source, tuple(dep.step_id for dep in item.dependencies))
-                  for item in calculation.steps))
+        _shape(f"expected-member-{position}", calculation)
         for position, calculation in enumerate(expected.calculations, 1)
     )
-    audit_trace_registry(candidate, registry_for(expected_shapes))
+    final_states = tuple(
+        calculation.steps[-1].result.state
+        for calculation in expected.calculations)
+    if final_states == (RESULT_FAILED,):
+        audit_trace_registry(candidate, invalid_registry(expected_shapes[0]))
+    else:
+        audit_trace_registry(candidate, registry_for(expected_shapes))
     if candidate.to_dict() != expected.to_dict():
         raise TraceValidationError(
             "CT-010a trace differs from authoritative input replay")
