@@ -1,0 +1,29 @@
+# PR-08D.1 CT-009 acceptance (crack width, 2004 + DK NA branch)
+
+This matrix freezes the second PR-08D slice from retained main mechanics.
+Sector remains `0.91`. One registry `sector-ct-009-crack-width-v1`, family
+`ct-009-crack-width`, covering the retained 2004-family crack-width evidence
+published on the elastic result: the long-term and short-term crack cases,
+the DK NA coarse variants, and the retained crack-case output selection. The
+2023 refined and direct-tension crack methods are the named next slice
+(PR-08D.2) and are hard exclusions here; the elastic response and
+first-cracking mechanics remain CT-005's scope and are bound as upstream
+evidence, not re-derived.
+
+| Family or invariant | Frozen acceptance |
+| --- | --- |
+| Applicability | The family exists exactly when the retained crack-width gate publishes crack evidence: `sls_cw` true and the retained governing cracking state is cracked, on an elastic-mode run with a retained section. The retained `show_cw`/uncracked state (crack keys published as None with the crack table absent) and the retained non-convergence invalidation are legitimate absence/failure states selected from validated original inputs before candidate numerics. The DK NA coarse variants (`crack_coarse`, `crack_short_coarse`) exist exactly when the retained DK NA edition is selected; the 2-case versus 4-case retained crack table follows. Crack output selection (`crack_output`) replays the retained governing-case rule exactly. |
+| Upstream evidence boundary | The elastic strain planes, cracked states, bar stresses and prestress decomposition consumed by the crack kernels are CT-005-validated retained evidence over the same result set; the trace binds them as named upstream-evidence leaves (long case: the retained long cracked state at n_l with kt 0.4 and beta 0.5; short case: the retained short-term plane with the prestress-removed bar stresses at n_s with kt 0.6 and beta 1.0) and does not re-derive the elastic solve. Everything downstream - `analyse_cracking` crack-side selection, `_crack_width` and every candidate - is exact replay through the authoritative retained kernels. |
+| Replay | Exact replay of `serviceability.analyse_cracking`/`evaluate_crack_width`/`crack_width` for the 2004 branch with the retained argument mapping (fctm = `sls_fctm`, Es 200000, cover/diameter/k1/k3-dependence per the retained `sls_*` inputs, `include_hx_term`, `coarse`, edition "2004"). Frozen mechanics: EC2 (7.9) mean strain with the `0.6 sigma_s/Es` floor; (7.11) spacing and the (7.14) `1.3(h-x)` wide-spacing rule per candidate; DK NA 7.3.4(3) `k3 (25/c)^(2/3)`; DK NA 7.3.2(3) `(h-x)/3` term drop; DK NA 7.3.4(1) Figur 7.100 NA coarse system with the `wk/2` halving; the retained governing-candidate selection (maximum wk) and candidate cardinality equal to the retained tension-bar set. The retained `CrackWidthEvaluation` statuses (CALCULATED / NOT ASSESSED / NOT APPLICABLE with exact retained reasons) are legitimate finite evidence states. |
+| Inventories | Frozen output shapes in exact key order: the retained crack dict as flattened by the app (`_crack_dict`: the `CrackWidthResult` fields in dataclass order plus `element_type`, `element_no`, `element_id`, the one-based `gov_bar`, and the candidates list), the per-candidate `CrackWidthCandidate` field order, the 2-case and 4-case crack tables with their exact retained case labels, and the `crack_output` mapping (`value, case, governing, unit, calculation_state`). Unknown, missing, duplicate or reordered retained keys fail closed at every layer. |
+| Identity and typing | The five standing principles from the first line: input-derived candidate sets (tension-bar membership from the validated upstream plane and retained geometry, never candidate cardinality); total surface closure over every crack publication surface in both states (crack, crack_short, coarse variants, crack_output, crack_code/edition/member) including rejection of surfaces the selected edition cannot produce; total operand binding for every candidate (not only governing); exact types across the whole reader surface; every computed value (wk, sr_max, esm_ecm, sigma_s, rho_p_eff, ac_eff, hc_ef, governing selection) genuinely derived from declared dependencies. Bar/tendon element and material identities tokenized into sealed step ids; a used 2023 material assignment can never produce finite evidence; the retained crack edition/member/bond/xi selections are bound identity. |
+| Sources | Per value: base EC2 2004 sources for unchanged rules ((7.8)-(7.14), Table 3.1 fctm route); DK NA:2024 sources exactly on the DK-changed values (k3 cover dependence, the (h-x)/3 drop, Figur 7.100 NA coarse halving); tension-stiffening (7.18) zeta where consumed; adapter constructions and case selection are uncited project sources; upstream leaves carry the CT-005 upstream-evidence source. |
+| Verdicts | Crack widths are output-only quantities: values without PASS/FAIL, per Product Identity. Finals are genuine calculation-state aggregations (the retained CALCULATED/INVALID/NOT APPLICABLE states with the literal encoding), never fabricated verdicts. No fabricated numerics on uncracked, not-assessed or invalidated branches. |
+| Dependency closure | Every leaf reaches its member final through exact operand-level dependencies; stale seal, resealed value/source/unit/axes/order and dependency-edge removal fail; the graph/tamper battery covers the 2-case and 4-case shapes. |
+
+Hard exclusions: the 2023 refined and direct-tension crack methods
+(PR-08D.2), elastic response/first-cracking mechanics (CT-005), SLS stress
+limits or any crack-width limit/compliance verdict (Product Identity),
+fatigue, bridges, the chord join, CT-002 through CT-008 and CT-011
+mechanics, solver/formula changes, UI/report/manual/publication/persistence/
+package/schema/workflow/version changes, F-020, rejected-head work.
