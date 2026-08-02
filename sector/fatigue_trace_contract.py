@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .calculation_trace import (
-    RESULT_FINITE, RESULT_POSITIVE_INFINITY, SOURCE_INPUT, SOURCE_PROJECT,
-    SOURCE_STANDARD,
+    RESULT_FAILED, RESULT_FINITE, RESULT_POSITIVE_INFINITY, SOURCE_INPUT,
+    SOURCE_PROJECT, SOURCE_STANDARD,
     SourceCitation, TraceAxis, TraceSource, TraceUnit,
 )
 from .trace_registry import (
@@ -19,6 +19,7 @@ COVERAGE_ID = "ct-010"
 FAMILY_ID = "ct-010-reinforcement-fatigue"
 METHOD_ID = "sector-retained-reinforcement-fatigue-replay"
 REGISTRY_ID = "sector-ct-010a-reinforcement-fatigue-success-v1"
+INVALID_REGISTRY_ID = "sector-ct-010a-reinforcement-fatigue-invalid-v1"
 
 SUCCESS_KEYS = (
     "edition", "checks", "concrete_method", "basis", "method_reference",
@@ -136,4 +137,32 @@ def registry_for(members: tuple[MemberShape, ...]) -> TraceRegistryContract:
     return TraceRegistryContract(
         REGISTRY_ID,
         (TraceFamilyContract(FAMILY_ID, tuple(rows)),),
+    )
+
+
+def invalid_registry(member: MemberShape) -> TraceRegistryContract:
+    """Declare the one retained calculation-free CT-010a failure member."""
+
+    contract = TraceMemberContract(
+        member_id=member.member_id,
+        calculation_id=member.calculation_id,
+        coverage_id=COVERAGE_ID,
+        method_id=METHOD_ID,
+        axes=member.axes,
+        sources=frozenset(
+            TraceSourceContract(
+                step.source.kind, step.source.method_id, step.source.edition)
+            for step in member.steps),
+        result_states=frozenset({RESULT_FAILED}),
+        step_ids=tuple(step.step_id for step in member.steps),
+        step_dependencies=tuple(
+            (step.step_id, step.dependencies) for step in member.steps),
+        step_metadata=tuple(
+            TraceStepMetadataContract(
+                step.step_id, step.role, step.source)
+            for step in member.steps),
+    )
+    return TraceRegistryContract(
+        INVALID_REGISTRY_ID,
+        (TraceFamilyContract(FAMILY_ID, (contract,)),),
     )
