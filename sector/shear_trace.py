@@ -1,14 +1,15 @@
-"""Solver-owned unpublished CT-006 capacity-only directional shear trace."""
+"""Solver-owned unpublished CT-006 directional shear and chord trace."""
 
 from __future__ import annotations
 
+import functools
 import math
 import numbers
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from . import capacity, codes, combined
+from . import capacity, codes, combined, shear
 from .calculation_trace import (
     RESULT_FAILED, RESULT_FINITE, TraceBundle, TraceCalculation, TraceDependency,
     TraceResult, TraceStep, TraceValidationError,
@@ -18,12 +19,20 @@ from .section_trace_blocks import (
     _materials as selected_material_blocks,
     context_axes, context_id, section_trace_blocks,
 )
+from .plastic_capacity_trace import (
+    PlasticCapacityEvidence, replay_plastic_capacity_evidence,
+)
+from .plastic_capacity_trace_contract import (
+    BRANCH_FINITE_SELECTED, SweepPlan, expected_sweep,
+)
 from .shear_trace_contract import (
-    AGGREGATE_EXCLUDED, AGGREGATE_KEYS, ANGLE_LIMIT_KEYS, COMPONENT_KEYS,
-    CONCRETE_RESULT_KEYS, CORE_INPUT_KEYS, COVERAGE_ID, DIRECTION_SUFFIX_KEYS,
+    AGGREGATE_EXCLUDED, AGGREGATE_KEYS, ANGLE_LIMIT_KEYS, CHORD_OFF_KEYS,
+    CHORD_SHEAR_KEYS, COMPONENT_KEYS, CONCRETE_RESULT_KEYS, CORE_INPUT_KEYS,
+    COVERAGE_ID, DIRECTION_SUFFIX_KEYS,
     DIRECTIONS, FACE_WRAPPER_EXCLUDED, FACE_WRAPPER_KEYS, GOVERNING_DOMAIN_EXCLUDED,
     GOVERNING_SHEAR_KEYS, LINK_EXCLUDED, LINK_INPUT_KEYS, LINK_KEYS, LINK_RESULT_KEYS,
-    METHOD_ID, PHYSICAL_AXES, SHEAR_EXCLUDED, SHEAR_KEYS, DirectionShape,
+    METHOD_ID, PHYSICAL_AXES, PLASTIC_JOIN_INPUT_KEYS, SHEAR_EXCLUDED, SHEAR_KEYS,
+    DirectionShape,
     expected_registry, expected_step_contract, material_leaf_id,
 )
 from .trace_registry import audit_trace_registry
@@ -48,6 +57,15 @@ class FaceEvidence:
     metric: float
     status: str
     values: dict[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class PlasticJoin:
+    plan: SweepPlan
+    requested: bool
+    present: bool
+    available: bool
+    evidence: PlasticCapacityEvidence | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +94,12 @@ def _number(value: Any, label: str, *, positive=False, nonnegative=False) -> flo
     return result
 
 
+def _exact_bool(value: Any, label: str) -> bool:
+    if type(value) is not bool:
+        raise TraceValidationError(f"{label} must be exact Boolean")
+    return value
+
+
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise TraceValidationError(f"{label} must be a mapping")
@@ -88,6 +112,12 @@ def _sequence(value: Any, label: str) -> tuple[Any, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise TraceValidationError(f"{label} must be an ordered sequence")
     return tuple(value)
+
+
+def _retained_list(value: Any, label: str) -> list[Any]:
+    if type(value) is not list:
+        raise TraceValidationError(f"{label} must retain list type")
+    return value
 
 
 def _retained_mapping(value, keys, excluded, label) -> Mapping[str, Any]:
@@ -181,8 +211,81 @@ def shear_core_applicability(inp: Mapping[str, Any]) -> str:
     return "directional" if count == 2 else f"not-applicable-{count}-active"
 
 
+def _plastic_join(
+    inp: Mapping[str, Any],
+    plastic_out: Mapping[str, Any] | None,
+    context: Mapping[str, Any],
+    *,
+    validate_evidence: bool = True,
+) -> PlasticJoin:
+    """Freeze the CT-002 sweep and its exact capacity-availability branch."""
+
+    for key in ("v_min", "v_max", "v_inc", "mode", "check_util"):
+        if key not in inp:
+            raise TraceValidationError(
+                f"CT-006 chord input inventory missing {key!r}"
+            )
+    plan = expected_sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
+    mode = inp["mode"]
+    if type(mode) is not str or mode not in {"Plastic", "Elastic", "Both"}:
+        raise TraceValidationError("mode must retain Plastic, Elastic, or Both")
+    check_util = inp["check_util"]
+    if type(check_util) is not bool:
+        raise TraceValidationError("check_util must be exact Boolean")
+    requested = mode in {"Plastic", "Both"}
+    expected_available = bool(requested and plan.closed and check_util)
+    if (plastic_out is not None) is not requested:
+        raise TraceValidationError(
+            "plastic output presence contradicts the selected analysis mode"
+        )
+    if plastic_out is None:
+        return PlasticJoin(plan, requested, False, False, None)
+    retained = _mapping(plastic_out, "plastic capacity join")
+    if "util" not in retained:
+        raise TraceValidationError(
+            "plastic capacity join requires the retained util discriminator"
+        )
+    available = retained["util"] is not None
+    if available != expected_available:
+        raise TraceValidationError(
+            "plastic capacity availability contradicts original sweep inputs"
+        )
+    if not available:
+        if retained.get("closed") is not plan.closed:
+            raise TraceValidationError(
+                "unavailable plastic capacity closed state differs from sweep"
+            )
+        if retained.get("check_util") is not check_util:
+            raise TraceValidationError(
+                "unavailable plastic capacity check state differs from input"
+            )
+        return PlasticJoin(plan, requested, True, False, None)
+    if not validate_evidence:
+        return PlasticJoin(plan, requested, True, True, None)
+    evidence = replay_plastic_capacity_evidence(
+        inp, {"plastic": retained}, context=context,
+    )
+    if evidence.shape.branch != BRANCH_FINITE_SELECTED:
+        raise TraceValidationError(
+            "CT-006 chord join requires finite-selected CT-002 evidence"
+        )
+    extrema = {
+        "max_mx": max(point.Mx for point in evidence.replay),
+        "min_mx": min(point.Mx for point in evidence.replay),
+        "max_my": max(point.My for point in evidence.replay),
+        "min_my": min(point.My for point in evidence.replay),
+    }
+    for key, expected in extrema.items():
+        _compare(retained.get(key), expected, f"plastic capacity join.{key}")
+    return PlasticJoin(plan, requested, True, True, evidence)
+
+
 def _require_input_inventory(inp: Mapping[str, Any], links: bool) -> None:
-    required = (*CORE_INPUT_KEYS, *(LINK_INPUT_KEYS if links else ()))
+    required = (
+        *CORE_INPUT_KEYS,
+        *(LINK_INPUT_KEYS if links else ()),
+        *(PLASTIC_JOIN_INPUT_KEYS if links else ()),
+    )
     missing = tuple(key for key in required if key not in inp)
     if missing:
         raise TraceValidationError(f"CT-006 input inventory missing {missing!r}")
@@ -257,7 +360,7 @@ def _geometry_values(inp, blocks) -> dict[str, float]:
     return values
 
 
-def _common_values(inp, blocks, demands, direction, links):
+def _common_values(inp, blocks, demands, direction, links, plastic):
     values = {}
     for name in ("P_pl", "Mx_pl", "My_pl"):
         values[f"input-action-u{name.encode().hex()}"] = _number(inp.get(name), name)
@@ -275,6 +378,47 @@ def _common_values(inp, blocks, demands, direction, links):
     values["input-shear-enabled"] = 1.0
     values["input-method-code"] = 1.0 if inp["shear_method"] == codes.EC2_2005_DKNA.label else 0.0
     values["input-links-enabled"] = 1.0 if links else 0.0
+    values.update({"aggregate-biaxial": 1.0, "aggregate-note-identity": 1.0})
+    if plastic is not None:
+        mode_codes = {"Elastic": 0.0, "Plastic": 1.0, "Both": 2.0}
+        values.update({
+            "input-analysis-mode-code": mode_codes[inp["mode"]],
+            "input-check-util": float(inp["check_util"]),
+            "input-sweep-min": plastic.plan.requested_min,
+            "input-sweep-max": plastic.plan.requested_max,
+            "input-sweep-increment": plastic.plan.requested_increment,
+            "sweep-solver-min": plastic.plan.solver_min,
+            "sweep-solver-max": plastic.plan.solver_max,
+            "sweep-solver-increment": plastic.plan.solver_increment,
+            "sweep-member-count": float(len(plastic.plan.angles)),
+            "sweep-closed": float(plastic.plan.closed),
+            "plastic-capacity-requested": float(plastic.requested),
+            "plastic-output-present": float(plastic.present),
+            "plastic-capacity-available": float(plastic.available),
+            "input-shear-dlower": _number(
+                inp["shear_dlower"], "shear_dlower", nonnegative=True,
+            ),
+            "input-torsion-enabled": float(
+                _exact_bool(inp["torsion_on"], "torsion_on")
+            ),
+            "input-combined-enabled": float(
+                _exact_bool(inp["combined_on"], "combined_on")
+            ),
+            "input-combined-mv-independent": float(
+                _exact_bool(
+                    inp["combined_mv_independent"], "combined_mv_independent",
+                )
+            ),
+        })
+        values.update(_torsion_input_values(inp))
+    if plastic is not None and plastic.evidence is not None:
+        extrema = _plastic_extrema(plastic)
+        values.update({
+            "plastic-max-mx": extrema["max_mx"],
+            "plastic-min-mx": extrema["min_mx"],
+            "plastic-max-my": extrema["max_my"],
+            "plastic-min-my": extrema["min_my"],
+        })
     width_key = "shear_vx_bw" if direction == "vx" else "shear_vy_bw"
     values["input-width-override"] = _number(inp.get(width_key), width_key, nonnegative=True)
     values.update(_geometry_values(inp, blocks))
@@ -300,6 +444,48 @@ def _common_values(inp, blocks, demands, direction, links):
     return values
 
 
+def _torsion_input_values(inp: Mapping[str, Any]) -> dict[str, float]:
+    method = inp["torsion_method"]
+    if type(method) is not str or method not in {
+        codes.EC2_2005.label, codes.EC2_2005_DKNA.label,
+    }:
+        raise TraceValidationError(
+            "torsion_method must retain an implemented 2004-family method"
+        )
+    values = {
+        "input-torsion-method-code": (
+            1.0 if method == codes.EC2_2005_DKNA.label else 0.0
+        ),
+        "input-torsion-tef": _number(
+            inp["torsion_tef"], "torsion_tef", nonnegative=True,
+        ),
+        "input-torsion-nu-v": float(
+            _exact_bool(inp["torsion_nu_v"], "torsion_nu_v")
+        ),
+        "input-torsion-gamma-ct": _number(
+            inp["torsion_gamma_ct"], "torsion_gamma_ct", positive=True,
+        ),
+        "input-torsion-demand": _number(
+            inp["torsion_T"], "torsion_T", nonnegative=True,
+        ),
+        "input-torsion-subdivide": float(
+            _exact_bool(inp["torsion_subdivide"], "torsion_subdivide")
+        ),
+    }
+    rectangles = _sequence(inp["torsion_subrects"], "torsion_subrects")
+    for index, rectangle in enumerate(rectangles):
+        rectangle = _sequence(rectangle, f"torsion_subrects[{index}]")
+        if len(rectangle) != 4:
+            raise TraceValidationError("torsion subrectangles need x, y, b, h")
+        for suffix, value in zip(("x", "y", "b", "h"), rectangle):
+            values[f"input-torsion-subrect-{index:03d}-{suffix}"] = _number(
+                value, f"torsion_subrects[{index}].{suffix}",
+                positive=suffix in {"b", "h"},
+            )
+    values["input-torsion-subrect-vector"] = 1.0
+    return values
+
+
 def _finite_numbers(value: Mapping[str, Any], names: Sequence[str]) -> bool:
     try:
         return all(type(value[name]) in {int, float} and not isinstance(value[name], bool)
@@ -308,7 +494,36 @@ def _finite_numbers(value: Mapping[str, Any], names: Sequence[str]) -> bool:
         return False
 
 
-def _links_replay(payload, ctx) -> Mapping[str, Any] | None:
+def _direction_input(inp, tension_low, payload, ctx):
+    translated = dict(inp)
+    translated.update(
+        shear_axis=payload["axis"],
+        shear_tension=bool(tension_low),
+        shear_V=payload["v_ed"],
+        shear_bw=payload["bw_user"],
+        shear_link_legs=ctx["link_legs"],
+    )
+    return translated
+
+
+def _plastic_extrema(join: PlasticJoin) -> dict[str, float]:
+    if join.evidence is None:
+        raise TraceValidationError("plastic extrema require available CT-002 evidence")
+    replay = join.evidence.replay
+    return {
+        "max_mx": max(point.Mx for point in replay),
+        "min_mx": min(point.Mx for point in replay),
+        "max_my": max(point.My for point in replay),
+        "min_my": min(point.My for point in replay),
+    }
+
+
+def _links_replay(
+    inp: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    ctx: Mapping[str, Any] | None,
+    plastic: PlasticJoin,
+) -> Mapping[str, Any] | None:
     if ctx is None:
         return None
     probe = ctx["build"](ctx["cot_min"], ctx["cot_min"])
@@ -316,19 +531,276 @@ def _links_replay(payload, ctx) -> Mapping[str, Any] | None:
             and probe.get("vrd_max", 0.0) > 0.0):
         return None
     v_ed = float(payload["v_ed"])
-    utilities = (
-        lambda cot: combined.ratio(v_ed, ctx["build"](cot, cot)["vrd_s"]),
-        lambda cot: combined.ratio(v_ed, ctx["build"](cot, cot)["vrd_max"]),
+    translated = _direction_input(
+        inp, payload["tension_low"], payload, ctx,
     )
-    cot, _ = combined.governing_strut_cot(
-        utilities, ctx["cot_min"], ctx["cot_max"], n=1501
+    n_comp = float(payload["n_ed_comp"])
+    torsion = capacity.build_torsion_context(translated, n_comp)
+    torsion_valid = bool(
+        torsion is not None
+        and all(tube["valid"] for tube in torsion["subtubes"])
     )
-    result = ctx["build"](cot, cot)
+    shear_live = v_ed > 0.0
+    torsion_live = bool(
+        torsion_valid and float(torsion["t_ed"]) > 0.0
+    )
+
+    chord_faces = []
+    off_faces = []
+    extrema = _plastic_extrema(plastic) if plastic.available else None
+    if extrema is not None:
+        axis = payload["axis"]
+        tension_low = bool(payload["tension_low"])
+        m_signed = translated["Mx_pl"] if axis == "x" else translated["My_pl"]
+        off_signed = translated["My_pl"] if axis == "x" else translated["Mx_pl"]
+        off_max = extrema["max_my"] if axis == "x" else extrema["max_mx"]
+        off_min = extrema["min_my"] if axis == "x" else extrema["min_mx"]
+        off_cap = off_max if off_signed >= 0.0 else abs(off_min)
+        off_util = (
+            abs(off_signed) / off_cap
+            if off_cap > 0.0 else (math.inf if off_signed else 0.0)
+        )
+        _, centroid_x, centroid_y = capacity.gross_area_centroid(
+            translated["outer"], translated["holes"]
+        )
+        centroid = centroid_y if axis == "x" else centroid_x
+        shear_faces = [(tension_low, True)]
+        if torsion_live:
+            shear_faces.append((not tension_low, False))
+        for face_low, gets_shift in shear_faces:
+            m_ed = combined.chord_applied_moment(m_signed, face_low)
+            m_rd, conditional = capacity.shear_face_mrd(
+                translated, axis, face_low, m_off=off_signed,
+            )
+            if gets_shift:
+                if not conditional and m_rd <= 0.0:
+                    maximum = extrema["max_mx"] if axis == "x" else extrema["max_my"]
+                    minimum = extrema["min_mx"] if axis == "x" else extrema["min_my"]
+                    m_rd = maximum if face_low else abs(minimum)
+                if not (m_rd > 0.0 or conditional):
+                    continue
+                z_mm, z_source = ctx["z_mm"], ctx["z_src"]
+            else:
+                if not conditional:
+                    continue
+                _, steel_centroid = shear.tension_reinforcement(
+                    translated["bars"], axis, face_low, centroid,
+                )
+                depth = shear.effective_depth(
+                    translated["outer"], axis, face_low, steel_centroid,
+                )
+                z_mm, z_source = capacity.shear_lever_arm(
+                    translated, axis, face_low, depth,
+                )
+                if z_mm <= 0.0:
+                    continue
+            chord_faces.append({
+                "m_ed": m_ed,
+                "m_rd": m_rd,
+                "z_m": z_mm / 1000.0,
+                "z_src": z_source,
+                "axis": axis,
+                "tension_low": face_low,
+                "off_util": off_util,
+                "m_off": off_signed,
+                "conditional": conditional,
+                "gets_shift": gets_shift,
+            })
+        if chord_faces and torsion_live and not torsion["subdivide"]:
+            off_axis = "y" if axis == "x" else "x"
+            off_centroid = centroid_y if off_axis == "x" else centroid_x
+            for face_low in (True, False):
+                m_ed = combined.chord_applied_moment(off_signed, face_low)
+                m_rd, conditional = capacity.shear_face_mrd(
+                    translated, off_axis, face_low, m_off=m_signed,
+                )
+                if not conditional:
+                    continue
+                _, steel_centroid = shear.tension_reinforcement(
+                    translated["bars"], off_axis, face_low, off_centroid,
+                )
+                depth = shear.effective_depth(
+                    translated["outer"], off_axis, face_low, steel_centroid,
+                )
+                z_mm, z_source = capacity.shear_lever_arm(
+                    translated, off_axis, face_low, depth,
+                )
+                if z_mm <= 0.0:
+                    continue
+                off_faces.append({
+                    "m_ed": m_ed,
+                    "m_rd": m_rd,
+                    "z_m": z_mm / 1000.0,
+                    "z_src": z_source,
+                    "axis": off_axis,
+                    "tension_low": face_low,
+                    "m_off": m_signed,
+                    "conditional": True,
+                })
+
+    @functools.lru_cache(maxsize=4096)
+    def snapshot(cot):
+        result = {"links": ctx["build"](cot, cot)}
+        if torsion is not None:
+            kwargs = dict(torsion["_tk"], cot_min=cot, cot_max=cot)
+            result["torsion"] = tuple(
+                capacity.tube_torsion(tube, demand, **kwargs)
+                for tube, demand in zip(
+                    torsion["subtubes"], torsion["ted_parts"]
+                )
+            )
+        return result
+
+    def torsion_force(cot):
+        if not torsion_live:
+            return 0.0
+        web = snapshot(cot)["torsion"][0]
+        return web["asl_req"] * torsion["fyd_long"] / 1000.0
+
+    def shear_force(cot):
+        return 0.5 * v_ed * cot
+
+    utilities = []
+    if shear_live:
+        utilities.extend((
+            lambda cot: combined.ratio(
+                v_ed, snapshot(cot)["links"]["vrd_s"]),
+            lambda cot: combined.ratio(
+                v_ed, snapshot(cot)["links"]["vrd_max"]),
+        ))
+    if torsion_live:
+        for position in range(len(torsion["subtubes"])):
+            utilities.append(
+                lambda cot, position=position:
+                snapshot(cot)["torsion"][position]["util"]
+            )
+    if (
+        torsion_live
+        and torsion["asw_over_s_t"] > 0.0
+    ):
+        utilities.append(lambda cot: (
+            (0.0 if v_ed <= ctx["vrd_c"] else combined.ratio(
+                v_ed, snapshot(cot)["links"]["vrd_s"]))
+            + combined.ratio(
+                snapshot(cot)["torsion"][0]["t_ed"],
+                snapshot(cot)["torsion"][0]["trd_s"],
+            )
+        ))
+        utilities.append(lambda cot: combined.crushing_interaction(
+            snapshot(cot)["torsion"][0]["t_ed"],
+            snapshot(cot)["torsion"][0]["trd_max"],
+            v_ed,
+            snapshot(cot)["links"]["vrd_max"],
+        ))
+    for face in chord_faces:
+        if face["m_rd"] > 0.0 and (shear_live or torsion_live):
+            utilities.append(lambda cot, face=face: combined.longitudinal_check(
+                face["m_ed"], face["m_rd"],
+                shear_force(cot) if face["gets_shift"] else 0.0,
+                torsion_force(cot), face["z_m"],
+                cap_shear_force=True,
+            )["util"])
+    for face in off_faces:
+        if face["m_rd"] > 0.0 and torsion_live:
+            utilities.append(lambda cot, face=face: combined.longitudinal_check(
+                face["m_ed"], face["m_rd"], 0.0,
+                torsion_force(cot), face["z_m"],
+            )["util"])
+    if (
+        inp.get("combined_on")
+        and plastic.evidence is not None
+        and math.isfinite(plastic.evidence.radial.utilisation)
+        and torsion_valid
+        and (shear_live or torsion_live)
+    ):
+        independent = inp.get("combined_mv_independent")
+        if type(independent) is not bool:
+            raise TraceValidationError(
+                "combined_mv_independent must be exact Boolean"
+            )
+        utilities.append(lambda cot: combined.dkna_sum(
+            plastic.evidence.radial.utilisation,
+            combined.ratio(v_ed, snapshot(cot)["links"]["vrd"]),
+            max(item["util"] for item in snapshot(cot)["torsion"]),
+            m_v_independent=independent,
+        ))
+    band = (ctx["cot_min"], ctx["cot_max"]) if shear_live else None
+    cot = None
+    if band is not None and utilities:
+        cot, _ = combined.governing_strut_cot(
+            utilities, band[0], band[1], n=1501,
+        )
+    result = (
+        ctx["build"](cot, cot)
+        if cot is not None
+        else ctx["build"](ctx["cot_min"], ctx["cot_max"])
+    )
     if not result.get("valid") or not _finite_numbers(result, (
         "vrd_s", "vrd_max", "vrd", "cot", "theta_deg", "z", "fywd", "nu1",
         "alpha_cw", "sigma_cp", "fcd", "gamma_s", "asw_over_s",
     )) or result["vrd"] <= 0.0:
         return None
+    theta_mode = "utilisation" if cot is not None else "resistance"
+    longitudinal_force = 0.5 * v_ed * result["cot"]
+    torsion_at_result = (
+        snapshot(result["cot"])["torsion"] if torsion_live else ()
+    )
+    torsion_longitudinal = (
+        torsion_at_result[0]["asl_req"] * torsion["fyd_long"] / 1000.0
+        if torsion_at_result else 0.0
+    )
+    off_not_evaluated = None
+    if chord_faces:
+        if torsion_live and torsion["subdivide"]:
+            off_not_evaluated = "subdivided"
+        elif torsion_live and len(chord_faces) + len(off_faces) < 4:
+            off_not_evaluated = "not_solved"
+    chord_candidates = []
+    for face in chord_faces:
+        check = combined.longitudinal_check(
+            face["m_ed"], face["m_rd"],
+            longitudinal_force if face["gets_shift"] else 0.0,
+            torsion_longitudinal, face["z_m"], cap_shear_force=True,
+        )
+        check.update(
+            valid=True,
+            role="shear_axis",
+            axis=face["axis"],
+            tension_low=face["tension_low"],
+            off_util=face["off_util"],
+            biaxial=bool(face["off_util"] > 0.05),
+            m_off=face["m_off"],
+            conditional=face["conditional"],
+            has_torsion=torsion_live,
+            gets_shift=face["gets_shift"],
+            off_not_evaluated=off_not_evaluated,
+            theta_mode=theta_mode,
+        )
+        chord_candidates.append(check)
+    for face in off_faces:
+        check = combined.longitudinal_check(
+            face["m_ed"], face["m_rd"], 0.0,
+            torsion_longitudinal, face["z_m"],
+        )
+        check.update(
+            valid=True,
+            role="off_axis",
+            axis=face["axis"],
+            tension_low=face["tension_low"],
+            m_off=face["m_off"],
+            conditional=face["conditional"],
+            z_src=face["z_src"],
+            theta_mode=theta_mode,
+        )
+        chord_candidates.append(check)
+    shear_candidates = [
+        item for item in chord_candidates if item["role"] == "shear_axis"
+    ]
+    off_candidates = [
+        item for item in chord_candidates if item["role"] == "off_axis"
+    ]
+    chord = max(shear_candidates, key=lambda item: item["util"], default=None)
+    chord_off = max(off_candidates, key=lambda item: item["util"], default=None)
     limits = ctx["angle_limits"]
     return {
         "res": result,
@@ -341,6 +813,10 @@ def _links_replay(payload, ctx) -> Mapping[str, Any] | None:
         "fywk": None,
         "cot_min": ctx["cot_min"],
         "cot_max": ctx["cot_max"],
+        "delta_ftd": longitudinal_force,
+        "longitudinal_shear_force": longitudinal_force,
+        "longitudinal_shear_symbol": "delta_Ftd",
+        "longitudinal_shear_clause": "6.2.3(7), Formula (6.18)",
         "cot_limit_lo": limits["minimum"],
         "cot_limit_hi": limits["maximum"],
         "angle_limits": limits,
@@ -351,8 +827,86 @@ def _links_replay(payload, ctx) -> Mapping[str, Any] | None:
             or ctx["cot_max"] > limits["maximum"] + _TOL
         ),
         "required": bool(v_ed > ctx["vrd_c"]),
-        "theta_mode": "utilisation",
+        "chord": chord,
+        "chord_off": chord_off,
+        "chord_candidates": chord_candidates,
+        "theta_mode": theta_mode,
     }
+
+
+def _identity_code(value: str, options: tuple[str, ...], label: str) -> float:
+    if type(value) is not str or value not in options:
+        raise TraceValidationError(f"{label} has unsupported retained identity")
+    return float(options.index(value))
+
+
+def _chord_values(prefix: str, item: Mapping[str, Any]) -> dict[str, float]:
+    values = {
+        f"{prefix}-m-ed": _number(item["m_ed"], f"{prefix}.m_ed"),
+        f"{prefix}-m-rd": _number(item["m_rd"], f"{prefix}.m_rd", nonnegative=True),
+        f"{prefix}-ftd-v": _number(item["ftd_v"], f"{prefix}.ftd_v", nonnegative=True),
+        f"{prefix}-ftd-t": _number(item["ftd_t"], f"{prefix}.ftd_t", nonnegative=True),
+        f"{prefix}-z": _number(item["z"], f"{prefix}.z", positive=True),
+        f"{prefix}-mv": _number(item["mv"], f"{prefix}.mv", nonnegative=True),
+        f"{prefix}-mt": _number(item["mt"], f"{prefix}.mt", nonnegative=True),
+        f"{prefix}-m-total": _number(item["m_total"], f"{prefix}.m_total", nonnegative=True),
+        f"{prefix}-utilisation": _number(item["util"], f"{prefix}.util", nonnegative=True),
+        f"{prefix}-verdict": float(_exact_bool(item["ok"], f"{prefix}.ok")),
+        f"{prefix}-capped": float(_exact_bool(item["capped"], f"{prefix}.capped")),
+        f"{prefix}-cap-shear-force": float(_exact_bool(
+            item["cap_shear_force"], f"{prefix}.cap_shear_force",
+        )),
+        f"{prefix}-valid": float(_exact_bool(item["valid"], f"{prefix}.valid")),
+        f"{prefix}-role": _identity_code(
+            item["role"], ("shear_axis", "off_axis"), f"{prefix}.role",
+        ),
+        f"{prefix}-axis": _identity_code(
+            item["axis"], ("x", "y"), f"{prefix}.axis",
+        ),
+        f"{prefix}-tension-low": float(_exact_bool(
+            item["tension_low"], f"{prefix}.tension_low",
+        )),
+        f"{prefix}-theta-mode": _identity_code(
+            item["theta_mode"], ("resistance", "utilisation"),
+            f"{prefix}.theta_mode",
+        ),
+    }
+    if item["role"] == "shear_axis":
+        reason_codes = {None: 0.0, "subdivided": 1.0, "not_solved": 2.0}
+        reason = item["off_not_evaluated"]
+        if reason not in reason_codes:
+            raise TraceValidationError(f"{prefix}.off_not_evaluated differs")
+        values.update({
+            f"{prefix}-off-utilisation": _number(
+                item["off_util"], f"{prefix}.off_util", nonnegative=True,
+            ),
+            f"{prefix}-biaxial": float(_exact_bool(item["biaxial"], f"{prefix}.biaxial")),
+            f"{prefix}-m-off": _number(item["m_off"], f"{prefix}.m_off"),
+            f"{prefix}-conditional": float(_exact_bool(
+                item["conditional"], f"{prefix}.conditional",
+            )),
+            f"{prefix}-has-torsion": float(_exact_bool(
+                item["has_torsion"], f"{prefix}.has_torsion",
+            )),
+            f"{prefix}-gets-shift": float(_exact_bool(
+                item["gets_shift"], f"{prefix}.gets_shift",
+            )),
+            f"{prefix}-off-not-evaluated": reason_codes[reason],
+        })
+    else:
+        values.update({
+            f"{prefix}-m-off": _number(item["m_off"], f"{prefix}.m_off"),
+            f"{prefix}-conditional": float(_exact_bool(
+                item["conditional"], f"{prefix}.conditional",
+            )),
+            f"{prefix}-z-source": _identity_code(
+                item["z_src"],
+                ("0.9 d (fallback)", "plastic internal lever arm"),
+                f"{prefix}.z_src",
+            ),
+        })
+    values[f"{prefix}-evidence"] = 1.0
+    return values
 
 
 def _face_values(common, payload, links, index):
@@ -395,15 +949,44 @@ def _face_values(common, payload, links, index):
             f"{p}-links-utilisation": links["util"],
             f"{p}-links-verdict": 1.0 if links["util"] <= 1.0 + _TOL else 0.0,
             f"{p}-links-required": 1.0 if links["required"] else 0.0,
-            f"{p}-links-evidence": 1.0,
+            f"{p}-longitudinal-shear-force": links["longitudinal_shear_force"],
+            f"{p}-longitudinal-shear-identity": 1.0,
         })
+        for chord_index, chord in enumerate(links["chord_candidates"]):
+            values.update(_chord_values(
+                f"{p}-chord-{chord_index:02d}", chord,
+            ))
+        shear_indices = [
+            position for position, item in enumerate(links["chord_candidates"])
+            if item["role"] == "shear_axis"
+        ]
+        off_indices = [
+            position for position, item in enumerate(links["chord_candidates"])
+            if item["role"] == "off_axis"
+        ]
+        values[f"{p}-chord-selected-index"] = (
+            -1.0 if links["chord"] is None else float(max(
+                shear_indices,
+                key=lambda position: links["chord_candidates"][position]["util"],
+            ))
+        )
+        values[f"{p}-chord-off-selected-index"] = (
+            -1.0 if links["chord_off"] is None else float(max(
+                off_indices,
+                key=lambda position: links["chord_candidates"][position]["util"],
+            ))
+        )
+        values[f"{p}-links-evidence"] = 1.0
         overall = links["util"]
     values[f"{p}-complete-evidence"] = 1.0
     return values, overall
 
 
-def _shape(blocks, direction, demands, faces, links, failed, variant,
-           link_steel_material_id, link_steel_source, context):
+def _shape(
+    blocks, direction, demands, faces, links, failed, variant,
+    link_steel_material_id, link_steel_source, plastic, chord_roles,
+    torsion_subrect_count, context,
+):
     face_order = ",".join("negative" if item else "positive" for item in faces)
     axis_values = dict(
         direction=direction,
@@ -414,15 +997,23 @@ def _shape(blocks, direction, demands, faces, links, failed, variant,
     )
     if links:
         axis_values["capacity_steel_material_id"] = link_steel_material_id
+        axis_values.update(
+            plastic_capacity=("available" if plastic.available else "unavailable"),
+            plastic_requested=str(plastic.requested).lower(),
+        )
     axes = context_axes(context, **axis_values)
     return DirectionShape(
         blocks, direction, demands[direction]["face"], faces, links, failed,
         variant, link_steel_material_id, link_steel_source,
+        False if plastic is None else plastic.requested,
+        False if plastic is None else plastic.available,
+        chord_roles,
+        torsion_subrect_count,
         f"ct-006-{context_id(context)}-{direction}", axes,
     )
 
 
-def _replay(inp, shear_out, context):
+def _replay(inp, shear_out, context, plastic_out=None):
     demands = _validated_demands(inp)
     active = tuple(name for name in DIRECTIONS if demands[name]["active"])
     if len(active) != 2:
@@ -436,6 +1027,13 @@ def _replay(inp, shear_out, context):
     if type(links) is not bool:
         raise TraceValidationError("shear_links must be Boolean")
     _require_input_inventory(inp, links)
+    plastic_identity = (
+        _plastic_join(
+            inp, plastic_out, context, validate_evidence=False,
+        )
+        if links else None
+    )
+    plastic_evidence = None
     blocks = section_trace_blocks(inp)
     link_steel = _link_steel_block(inp) if links else None
     _reject_2023_sources(
@@ -464,18 +1062,51 @@ def _replay(inp, shear_out, context):
                  f"authoritative {direction} axis")
         _compare(spec["face"], demands[direction]["face"],
                  f"authoritative {direction} face mode")
-        common = _common_values(inp, blocks, demands, direction, links)
-        faces = []
-        failed = False
-        warnings = []
-        for index, (payload, link_ctx) in enumerate(raw_faces):
+        base_validity = []
+        for payload, link_ctx in raw_faces:
             result = payload.get("res") or {}
             concrete_valid = bool(
                 result.get("valid") and result.get("vrd_c", 0.0) > 0.0
                 and _finite_numbers(result, CONCRETE_RESULT_KEYS[:-1])
                 and math.isfinite(float(payload.get("util", math.inf)))
             )
-            linked = _links_replay(payload, link_ctx) if links and concrete_valid else None
+            link_valid = True
+            if links:
+                if link_ctx is None:
+                    link_valid = False
+                else:
+                    probe = link_ctx["build"](
+                        link_ctx["cot_min"], link_ctx["cot_min"],
+                    )
+                    link_valid = bool(
+                        probe.get("valid")
+                        and probe.get("vrd_s", 0.0) > 0.0
+                        and probe.get("vrd_max", 0.0) > 0.0
+                    )
+            base_validity.append(concrete_valid and link_valid)
+        base_failed = not all(base_validity)
+        plastic = plastic_identity
+        if links and not base_failed and plastic_identity.available:
+            if plastic_evidence is None:
+                plastic_evidence = _plastic_join(inp, plastic_out, context)
+            plastic = plastic_evidence
+        common = _common_values(inp, blocks, demands, direction, links, plastic)
+        faces = []
+        failed = base_failed
+        warnings = []
+        for index, (payload, link_ctx) in enumerate(raw_faces):
+            if base_failed:
+                continue
+            result = payload.get("res") or {}
+            concrete_valid = bool(
+                result.get("valid") and result.get("vrd_c", 0.0) > 0.0
+                and _finite_numbers(result, CONCRETE_RESULT_KEYS[:-1])
+                and math.isfinite(float(payload.get("util", math.inf)))
+            )
+            linked = (
+                _links_replay(inp, payload, link_ctx, plastic)
+                if links and concrete_valid else None
+            )
             finite = concrete_valid and (not links or linked is not None)
             if not finite:
                 failed = True
@@ -496,10 +1127,18 @@ def _replay(inp, shear_out, context):
             ))
         if failed or len(faces) != len(raw_faces):
             faces = []
-        shape = _shape(blocks, direction, demands, face_order, links, bool(failed),
-                       variant, "" if link_steel is None else link_steel.material_id,
-                       None if link_steel is None else link_steel.provenance.source,
-                       context)
+        chord_roles = (
+            tuple(tuple(item["role"] for item in face.links["chord_candidates"])
+                  for face in faces)
+            if not failed and links else ()
+        )
+        shape = _shape(
+            blocks, direction, demands, face_order, links, bool(failed), variant,
+            "" if link_steel is None else link_steel.material_id,
+            None if link_steel is None else link_steel.provenance.source,
+            plastic, chord_roles,
+            len(inp["torsion_subrects"]) if links else 0, context,
+        )
         values = dict(common)
         governing = None
         status = None
@@ -530,12 +1169,27 @@ def _validate_result(candidate, expected, label):
              {key: expected[key] for key in CONCRETE_RESULT_KEYS}, label)
 
 
+def _validate_chord(candidate, expected, label):
+    if expected is None:
+        if candidate is not None:
+            raise TraceValidationError(f"{label} must be absent for this branch")
+        return
+    expected = _mapping(expected, f"{label} authoritative replay")
+    role = expected.get("role")
+    keys = CHORD_SHEAR_KEYS if role == "shear_axis" else CHORD_OFF_KEYS
+    candidate = _retained_mapping(candidate, keys, (), label)
+    _compare({key: candidate[key] for key in keys},
+             {key: expected[key] for key in keys}, label)
+
+
 def _validate_links(candidate, expected, label):
     candidate = _retained_mapping(candidate, LINK_KEYS, LINK_EXCLUDED, label)
     _compare(candidate["util"], expected["util"], f"{label}.util")
     for key in ("asw", "asw_over_s", "legs", "dia", "s", "fywk", "cot_min",
-                "cot_max", "cot_limit_lo", "cot_limit_hi", "model_2023",
-                "z_source", "out_of_limits", "required", "theta_mode"):
+                "cot_max", "delta_ftd", "longitudinal_shear_force",
+                "longitudinal_shear_symbol", "longitudinal_shear_clause",
+                "cot_limit_lo", "cot_limit_hi", "model_2023", "z_source",
+                "out_of_limits", "required", "theta_mode"):
         _compare(candidate[key], expected[key], f"{label}.{key}")
     angle = _retained_mapping(candidate["angle_limits"], ANGLE_LIMIT_KEYS, (),
                               f"{label}.angle_limits")
@@ -545,6 +1199,18 @@ def _validate_links(candidate, expected, label):
     result = _retained_mapping(candidate["res"], LINK_RESULT_KEYS, (), f"{label}.res")
     _compare({key: result[key] for key in LINK_RESULT_KEYS},
              {key: expected["res"][key] for key in LINK_RESULT_KEYS}, f"{label}.res")
+    candidates = _retained_list(
+        candidate["chord_candidates"], f"{label}.chord_candidates",
+    )
+    expected_candidates = _sequence(expected["chord_candidates"],
+                                    f"{label} authoritative chord candidates")
+    if len(candidates) != len(expected_candidates):
+        raise TraceValidationError(f"{label} chord candidate cardinality differs")
+    for index, (item, wanted) in enumerate(zip(candidates, expected_candidates)):
+        _validate_chord(item, wanted, f"{label}.chord_candidates[{index}]")
+    _validate_chord(candidate["chord"], expected["chord"], f"{label}.chord")
+    _validate_chord(candidate["chord_off"], expected["chord_off"],
+                    f"{label}.chord_off")
 
 
 def _validate_shear(candidate, face, label, *, direction=False, selected_face=False):
@@ -570,6 +1236,13 @@ def _validate_candidate(shear_out, directions):
     active = aggregate["active_directions"]
     if type(active) is not list or tuple(active) != DIRECTIONS:
         raise TraceValidationError("candidate active_directions must be exactly vx then vy")
+    _compare(aggregate["biaxial"], True, "candidate shear aggregate.biaxial")
+    _compare(
+        aggregate["note"],
+        "Vx and Vy are calculated independently. Generic cross-direction "
+        "interaction is not calculated.",
+        "candidate shear aggregate.note",
+    )
     for evidence in directions:
         if evidence.shape.failed:
             continue
@@ -603,8 +1276,10 @@ def _validate_candidate(shear_out, directions):
         }
         _compare({key: shear_domain[key] for key in GOVERNING_SHEAR_KEYS},
                  expected_domain, f"candidate {direction}.governing_domains.shear")
-        wrappers = _sequence(candidate["face_candidates"],
-                             f"candidate {direction}.face_candidates")
+        wrappers = _retained_list(
+            candidate["face_candidates"],
+            f"candidate {direction}.face_candidates",
+        )
         if len(wrappers) != len(evidence.faces):
             raise TraceValidationError(f"candidate {direction} face cardinality differs")
         for index, (wrapper, face) in enumerate(zip(wrappers, evidence.faces)):
@@ -667,12 +1342,15 @@ def _calculation(evidence: DirectionEvidence) -> TraceCalculation:
         evidence.shape.axes, "ct-006-direction-result", tuple(steps),
         evidence.warnings,
         ("Vx and Vy are independent resistance checks; no cross-direction interaction is inferred.",
-         "Chord, off-axis utilisation, biaxial bending and plastic sweep state are outside CT-006."),
+         "Chord candidates reuse the accepted CT-002 sweep and retained low-level mechanics.",
+         "Torsion affects the shared selector and chord force only; CT-007 remains separate."),
     )
 
 
-def _expected_bundle(inp, shear_out, input_sha256, result_sha256, context):
-    evidence = _replay(inp, shear_out, context)
+def _expected_bundle(
+    inp, shear_out, input_sha256, result_sha256, context, plastic_out=None,
+):
+    evidence = _replay(inp, shear_out, context, plastic_out)
     bundle = create_bundle(
         input_sha256=input_sha256,
         result_sha256=result_sha256,
@@ -689,6 +1367,7 @@ def build_shear_trace_family(
     input_sha256: str,
     result_sha256: str,
     context: Mapping[str, Any] | None = None,
+    plastic_out: Mapping[str, Any] | None = None,
 ) -> TraceBundle | None:
     """Build and seal the applicable two-active CT-006 core family."""
 
@@ -697,7 +1376,7 @@ def build_shear_trace_family(
             return None
         return _expected_bundle(
             inp, shear_out, input_sha256, result_sha256,
-            {} if context is None else context,
+            {} if context is None else context, plastic_out,
         )
     except TraceValidationError:
         raise
@@ -713,6 +1392,7 @@ def validate_shear_trace_family(
     input_sha256: str,
     result_sha256: str,
     context: Mapping[str, Any] | None = None,
+    plastic_out: Mapping[str, Any] | None = None,
 ) -> TraceBundle | None:
     """Reject coherently resealed value, graph, source, and verdict tampering."""
 
@@ -727,7 +1407,7 @@ def validate_shear_trace_family(
     )
     expected = _expected_bundle(
         inp, shear_out, input_sha256, result_sha256,
-        {} if context is None else context,
+        {} if context is None else context, plastic_out,
     )
     if candidate.to_dict() != expected.to_dict():
         raise TraceValidationError("CT-006 trace differs from authoritative input replay")

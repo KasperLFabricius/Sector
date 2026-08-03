@@ -33,7 +33,6 @@ from .plastic_capacity_trace_contract import (
     BRANCH_FINITE_SELECTED,
     POINT_FIELDS,
     SWEEP_KEYS,
-    StepSpec,
     SweepPlan,
     TraceShape,
     action_step_id,
@@ -56,7 +55,7 @@ _FAILURE_REASON = (
 
 
 @dataclass(frozen=True, slots=True)
-class _Evidence:
+class PlasticCapacityEvidence:
     blocks: SectionTraceBlocks
     plan: SweepPlan
     shape: TraceShape
@@ -351,7 +350,7 @@ def _evidence(
     inp: Mapping[str, Any],
     out: Mapping[str, Any],
     context: Mapping[str, Any],
-) -> _Evidence:
+) -> PlasticCapacityEvidence:
     blocks = section_trace_blocks(inp)
     plan = expected_sweep(*(inp[key] for key in SWEEP_KEYS))
     if not plan.closed or inp.get("check_util", True) is not True:
@@ -422,7 +421,7 @@ def _evidence(
         )
     shape = trace_shape(blocks, context, plan, branch, retained_selected)
 
-    evidence = _Evidence(
+    evidence = PlasticCapacityEvidence(
         blocks,
         plan,
         shape,
@@ -438,7 +437,7 @@ def _evidence(
 
 
 def _validate_finite_evidence(
-    inp: Mapping[str, Any], evidence: _Evidence
+    inp: Mapping[str, Any], evidence: PlasticCapacityEvidence
 ) -> None:
     result = evidence.result
     if result.get("closed") is not True or result.get("check_util") is not True:
@@ -484,7 +483,9 @@ def _validate_finite_evidence(
         _require_close(retained["My"], float(my[index]), f"point {index} My alignment")
 
 
-def _leaf_values(evidence: _Evidence) -> dict[str, float | int | None]:
+def _leaf_values(
+    evidence: PlasticCapacityEvidence,
+) -> dict[str, float | int | None]:
     values: dict[str, float | int | None] = {}
     actions = dict(evidence.blocks.plastic_actions.values)
     if evidence.shape.branch == BRANCH_FINITE_SELECTED:
@@ -541,7 +542,9 @@ def _leaf_values(evidence: _Evidence) -> dict[str, float | int | None]:
     return values
 
 
-def _trace_values(evidence: _Evidence) -> dict[str, float | int | None]:
+def _trace_values(
+    evidence: PlasticCapacityEvidence,
+) -> dict[str, float | int | None]:
     values = _leaf_values(evidence)
     for index, (angle, converged) in enumerate(
         zip(evidence.plan.angles, evidence.convergence)
@@ -587,7 +590,7 @@ def _result(step_id: str, value: float | int | None, *, failed: bool) -> TraceRe
     return TraceResult(RESULT_FINITE, value)
 
 
-def _calculation(evidence: _Evidence) -> TraceCalculation:
+def _calculation(evidence: PlasticCapacityEvidence) -> TraceCalculation:
     specs = expected_step_contract(evidence.shape)
     values = _trace_values(evidence)
     units = {spec.step_id: spec.unit for spec in specs}
@@ -655,6 +658,29 @@ def _calculation(evidence: _Evidence) -> TraceCalculation:
     )
 
 
+def replay_plastic_capacity_evidence(
+    inp: Mapping[str, Any],
+    out: Mapping[str, Any],
+    *,
+    context: Mapping[str, Any] | None = None,
+) -> PlasticCapacityEvidence:
+    """Return the accepted CT-002 reconstruction for bounded trace joins."""
+
+    try:
+        trace_context = (
+            {} if context is None else _mapping(context, "CT-002 context")
+        )
+        return _evidence(
+            _mapping(inp, "CT-002 input"),
+            _mapping(out, "analysis result"),
+            trace_context,
+        )
+    except TraceValidationError:
+        raise
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise TraceValidationError(f"invalid CT-002 evidence: {exc}") from exc
+
+
 def build_plastic_capacity_trace_family(
     inp: Mapping[str, Any],
     out: Mapping[str, Any],
@@ -666,11 +692,8 @@ def build_plastic_capacity_trace_family(
     """Build, seal, and independently registry-audit one exact CT-002 member."""
 
     try:
-        trace_context = {} if context is None else _mapping(context, "CT-002 context")
-        evidence = _evidence(
-            _mapping(inp, "CT-002 input"),
-            _mapping(out, "analysis result"),
-            trace_context,
+        evidence = replay_plastic_capacity_evidence(
+            inp, out, context=context,
         )
         calculation = _calculation(evidence)
         bundle = create_bundle(
