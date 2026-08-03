@@ -10,6 +10,7 @@ from collections.abc import Mapping
 import pytest
 
 from app.sector_app import _run_bridge_or_invalid, run_analysis
+import calculation_trace_publication
 from sector import bridge
 from sector.bridge_trace import (
     _box_evidence, _brittle_evidence, _crack_evidence, _replay,
@@ -246,7 +247,11 @@ def test_inactive_family_and_composition_masking():
                     bridge_minimum_crack_base=[_crack_row()],
                     geometry_error=None)
     out = run_analysis(active)
-    assert set(out) == {"bridge"}
+    assert set(out) == {"bridge", calculation_trace_publication.PUBLICATION_KEY}
+    assert {
+        item.calculation.coverage_id
+        for item in calculation_trace_publication.published_calculations(out, active)
+    } == {"ct-011"}
     bundle = _bundle(active, out)
     assert len(bundle.calculations) == 3
     with pytest.raises(TraceValidationError, match="inactive"):

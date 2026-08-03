@@ -711,3 +711,33 @@ def build_plastic_capacity_trace_family(
         raise
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise TraceValidationError(f"invalid CT-002 evidence: {exc}") from exc
+
+
+def validate_plastic_capacity_trace_family(
+    bundle: TraceBundle | dict[str, Any],
+    inp: Mapping[str, Any],
+    out: Mapping[str, Any],
+    *,
+    input_sha256: str,
+    result_sha256: str,
+    context: Mapping[str, Any] | None = None,
+) -> TraceBundle:
+    """Reject stale or coherently resealed CT-002 publication tampering."""
+
+    candidate = validate_bundle(
+        bundle,
+        expected_input_sha256=input_sha256,
+        expected_result_sha256=result_sha256,
+    )
+    expected = build_plastic_capacity_trace_family(
+        inp,
+        out,
+        input_sha256=input_sha256,
+        result_sha256=result_sha256,
+        context=context,
+    )
+    if candidate.to_dict() != expected.to_dict():
+        raise TraceValidationError(
+            "CT-002 trace differs from authoritative input replay"
+        )
+    return candidate

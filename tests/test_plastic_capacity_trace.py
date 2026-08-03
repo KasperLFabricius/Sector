@@ -32,7 +32,10 @@ from sector.plastic import (
     plastic_capacity_at_angle,
     solve_plastic,
 )
-from sector.plastic_capacity_trace import build_plastic_capacity_trace_family
+from sector.plastic_capacity_trace import (
+    build_plastic_capacity_trace_family,
+    validate_plastic_capacity_trace_family,
+)
 from sector.plastic_capacity_trace_contract import (
     BRANCH_FAILED_SELECTED,
     BRANCH_FAILED_UNSELECTED,
@@ -173,6 +176,34 @@ def _build(inp, out=None, *, context=CONTEXT):
         result_sha256=RESULT_SHA,
         context=context,
     )
+
+
+def test_public_validator_replays_and_rejects_resealed_title_tampering(mixed_input):
+    out = _retained_output(mixed_input)
+    bundle = _build(mixed_input, out)
+    assert validate_plastic_capacity_trace_family(
+        bundle,
+        mixed_input,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context=CONTEXT,
+    ) is bundle
+    changed = dataclasses.replace(
+        bundle.calculations[0], title="Resealed CT-002 title tampering"
+    )
+    tampered = seal_bundle(dataclasses.replace(
+        bundle, calculations=(changed,), content_sha256=""
+    ))
+    with pytest.raises(TraceValidationError, match="authoritative input replay"):
+        validate_plastic_capacity_trace_family(
+            tampered,
+            mixed_input,
+            out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=CONTEXT,
+        )
 
 
 def _independent_angles(v_min, v_max, v_inc):

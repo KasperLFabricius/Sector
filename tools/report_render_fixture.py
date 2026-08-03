@@ -31,8 +31,11 @@ if str(ROOT) not in sys.path:
 import sector_report  # noqa: E402
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
+import calculation_trace_publication  # noqa: E402
+import case_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
+import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
 from sector import bridge, capacity, codes, combined, detailing, shear, torsion  # noqa: E402
@@ -810,10 +813,10 @@ def _results(inp: dict | None = None) -> dict:
         }],
     )
     inputs = _inputs()
-    plastic_rows = inputs["plastic_cases"]
-    elastic_rows = inputs["elastic_cases"]
+    plastic_rows = case_analysis.case_records(inputs, "plastic")
+    elastic_rows = case_analysis.case_records(inputs, "elastic")
     fatigue = fatigue_analysis.run_analysis(inputs)
-    return {
+    out = {
         "plastic": plastic,
         "elastic": elastic,
         "fatigue": fatigue,
@@ -825,6 +828,8 @@ def _results(inp: dict | None = None) -> dict:
         "clear_spacing": spacing,
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
+             "signature": case_analysis.case_signature(
+                 plastic_rows[0], load_cases.PLASTIC_TABLE_KEY),
              "results": {
                  "plastic": plastic, "shear": shear_payload,
                  "torsion": torsion_payload,
@@ -833,15 +838,36 @@ def _results(inp: dict | None = None) -> dict:
                  "transverse_reinforcement": transverse_detailing,
              }},
             {"name": "PL-QA-2", "actions": plastic_rows[1], "evaluated": True,
+             "signature": case_analysis.case_signature(
+                 plastic_rows[1], load_cases.PLASTIC_TABLE_KEY),
              "results": {"plastic": plastic_2}},
         ],
         "elastic_cases": [
             {"name": "EL-QA-1", "actions": elastic_rows[0], "evaluated": True,
+             "signature": case_analysis.case_signature(
+                 elastic_rows[0], load_cases.ELASTIC_TABLE_KEY),
              "results": {"elastic": elastic}},
             {"name": "EL-QA-2", "actions": elastic_rows[1], "evaluated": True,
+             "signature": case_analysis.case_signature(
+                 elastic_rows[1], load_cases.ELASTIC_TABLE_KEY),
              "results": {"elastic": elastic_2}},
         ],
     }
+    calculation_trace_publication.attach_calculation_traces(
+        inp,
+        out,
+        input_sha256="f" * 64,
+    )
+    # The legacy visual fixture hand-authors its plastic/elastic display payloads;
+    # they are not authoritative solver candidates for CT replay.  Retain the real
+    # CT-011 bridge publication as the representative cross-renderer trace and let
+    # the full exact-head app regression own all live solver families.
+    for family in ("plastic", "elastic"):
+        for entry in out.get(f"{family}_cases") or ():
+            entry["results"].pop(
+                calculation_trace_publication.PUBLICATION_KEY, None
+            )
+    return out
 
 
 def validate_fixture_engineering(inp: dict, out: dict) -> None:
@@ -852,6 +878,15 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             raise AssertionError(
                 f"inconsistent fixture {label}: {actual!r} != {expected!r}"
             )
+
+    trace_errors = calculation_trace_publication.published_errors(out)
+    if trace_errors:
+        details = "; ".join(
+            f"{item.coverage_id}: {item.message}" for item in trace_errors
+        )
+        raise AssertionError(f"fixture trace publication failed: {details}")
+    if not calculation_trace_publication.published_calculations(out, inp):
+        raise AssertionError("fixture did not publish calculation traces")
 
     case = next(
         row for row in inp["plastic_cases"] if row["name"] == "PL-QA-1"
@@ -1123,9 +1158,11 @@ def validate_pdf_content(pdf: bytes) -> str:
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     if "figure unavailable" in text.lower():
         raise AssertionError("the report contains an unavailable-figure placeholder")
+    # Plain ``sqrt(...)`` and ``sum(...)`` are now intentional solver-owned
+    # symbolic trace expressions.  Continue rejecting actual LaTeX/layout leaks.
     for token in (
-        "sqrt", "Cfrac", "Big", "sincos", "delta eps",
-        "varepsilon", "qquadk", "quadf", "sum(", "kN.m",
+        "Cfrac", "Big", "sincos", "delta eps",
+        "varepsilon", "qquadk", "quadf", "kN.m",
     ):
         if token.casefold() in text.casefold():
             raise AssertionError(
@@ -1258,6 +1295,10 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Optional brittle Method B",
         "Box-wall shear and torsion",
         "Web/flange minimum crack reinforcement",
+        "Calculation trace",
+        "CT-011",
+        "result SHA-256",
+        "clause 6.1(109)-(110)",
         "generic bridge-code coverage and generic cross-method interaction are not calculated",
         "Torsion and shear fatigue are not assessed",
         "Physical resistance components",

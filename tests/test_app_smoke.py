@@ -7,6 +7,7 @@ for each analysis mode, and assert it produces results without error.
 from __future__ import annotations
 
 import dataclasses
+import copy
 import json
 import math
 import pathlib
@@ -499,6 +500,26 @@ def test_calculate_plastic_produces_an_envelope():
     # exceeds the max.
     pl = res["plastic"]
     assert pl["min_mx"] <= pl["max_mx"] and pl["min_my"] <= pl["max_my"]
+
+
+def test_calculation_trace_view_renders_published_case_evidence_and_hashes():
+    at = _fresh()
+    at.run()
+    _set_and_click(at, "calculate", ("number_input", "pl_Mx", 50.0))
+    assert not at.exception
+    results = at.session_state["results"]
+    entry = results["plastic_cases"][0]
+    assert "calculation_traces" in entry["results"]
+    assert len(at.session_state["calculation_record"]["result_sha256"]) == 64
+
+    _select_view(at, "Calculation Trace")
+    assert not at.exception
+    assert at.selectbox(key="calculation_trace_selection")
+    assert at.dataframe
+    text = " | ".join(item.value for item in at.caption)
+    assert "Input SHA-256" in text
+    assert "Result SHA-256" in text
+    assert "Trace seal" in text
 
 
 def test_plastic_view_tolerates_legacy_results_without_min_fields():
@@ -3530,6 +3551,24 @@ def test_interrupted_inputs_recovery_replays_the_genuine_engineering_event():
     assert at.session_state["_durable_input_scalars"]["conc_fck"] == 60.0
     assert "_pending_input_events" not in at.session_state
     assert not at.exception
+
+
+def test_live_data_editor_event_is_not_reassigned_before_widget_mount():
+    at = _fresh()
+    at.run()
+
+    # A browser data-editor edit is installed in widget state before its callback
+    # journals the same payload.  Reassigning that live payload through Session
+    # State before data_editor(data=...) mounts is rejected by Streamlit.
+    editor_key = "plastic_cases_editor"
+    at.session_state["_pending_input_events"] = {
+        editor_key: copy.deepcopy(at.session_state[editor_key]),
+    }
+    at.run()
+
+    assert not at.exception
+    assert editor_key in at.session_state
+    assert "_pending_input_events" not in at.session_state
 
 
 def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
