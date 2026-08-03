@@ -56,6 +56,9 @@ METHOD_2023_BENDING = "sector-en-1992-1-1-2023-refined-bending-replay"
 METHOD_2023_NOT_APPLICABLE = (
     "sector-en-1992-1-1-2023-crack-width-not-applicable"
 )
+METHOD_2023_NOT_ASSESSED = (
+    "sector-en-1992-1-1-2023-crack-width-not-assessed"
+)
 METHOD_2023_AGGREGATE = "sector-en-1992-1-1-2023-crack-width-aggregate"
 METHOD_2023_FAILED = "sector-en-1992-1-1-2023-crack-width-failure"
 REGISTRY_2023 = "sector-ct-009-crack-width-2023-calculated-bending-v1"
