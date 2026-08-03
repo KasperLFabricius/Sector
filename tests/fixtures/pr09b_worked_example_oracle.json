@@ -1,0 +1,136 @@
+{
+  "sector_version": "0.91",
+  "project_schema": 23,
+  "scalar_count": 166,
+  "table_keys": [
+    "corners_base",
+    "hole_base",
+    "bars_base",
+    "tendons_base",
+    "plastic_cases_base",
+    "elastic_cases_base",
+    "fatigue_spectrum_base",
+    "bridge_brittle_base",
+    "bridge_box_walls_base",
+    "bridge_minimum_crack_base"
+  ],
+  "expected": {
+    "clear_spacing": {
+      "status": "PASS",
+      "first_id": "R1",
+      "second_id": "R2",
+      "clear_mm": 40.0,
+      "required_mm": 21.0
+    },
+    "plastic": {
+      "converged": true,
+      "max_mx_knm": 441.41060408252827,
+      "max_my_knm": 190.28509810796606,
+      "utilisation": 0.22168893734073017
+    },
+    "minimum_reinforcement": {
+      "status": "PASS",
+      "as_required_mm2": 289.20898395721923,
+      "as_provided_mm2": 1884.9555921538758,
+      "utilisation": 0.15343013127792032
+    },
+    "transverse_reinforcement": {
+      "status": "PASS",
+      "governing_kind": "transverse_leg_spacing",
+      "governing_utilisation": 0.8743169398907104
+    },
+    "shear": {
+      "status": "PASS",
+      "component": "vx",
+      "vrd_c_kn": 118.64682000042407,
+      "vrd_s_kn": 240.25896225691775,
+      "vrd_max_kn": 577.4771573492333,
+      "vrd_kn": 240.25896225691775,
+      "links_utilisation": 0.33297405120085827,
+      "cot_theta": 2.5
+    },
+    "torsion": {
+      "valid": true,
+      "trd_c_knm": 42.63434350795596,
+      "trd_s_knm": 146.6076571675237,
+      "trd_max_knm": 98.66653983353152,
+      "trd_knm": 98.66653983353152,
+      "utilisation": 0.20270296327147638,
+      "cot_theta": 2.5
+    },
+    "combined": {
+      "valid": true,
+      "dkna_ok": true,
+      "r_m": 0.22168893734073017,
+      "r_v": 0.33297405120085827,
+      "r_t": 0.20270296327147638,
+      "dkna_sum": 0.7573659518130649,
+      "governing_cot": 2.5
+    },
+    "elastic": {
+      "converged": true,
+      "cracked": true,
+      "lambda_cr": 0.7759636907614162,
+      "sigma_ct_mpa": 4.1367914996772335,
+      "max_concrete_compression_mpa": 7.232636006216452,
+      "max_steel_mpa": 140.80047128144372
+    },
+    "crack": {
+      "element_id": "R1",
+      "edition": "2004",
+      "sr_max_mm": 210.2985683043877,
+      "wk_mm": 0.04768998164377517
+    },
+    "fatigue": {
+      "converged": true,
+      "passed": true,
+      "governing_spectrum": "S1",
+      "governing_reinforcement_id": "R1",
+      "utilisation": 0.14921587083663004,
+      "steel_stress_long_mpa": 33.366731418272764,
+      "steel_stress_total_mpa": 53.95499633112732,
+      "steel_stress_range_mpa": 20.588264912854555,
+      "steel_delta_sigma_rd_mpa": 123.1060606060606,
+      "steel_cycles_to_failure": 9770958689882.035,
+      "steel_damage": 1.0234410273738176e-08,
+      "steel_yield_utilisation": 0.12949199119470559,
+      "fixed_fibre_x_m": -0.2,
+      "fixed_fibre_y_m": 0.3,
+      "fixed_fibre_long_compression_mpa": 1.0692006786005126,
+      "fixed_fibre_total_compression_mpa": 2.3935348309436866,
+      "fixed_fibre_stress_utilisation": 0.14921587083663004,
+      "fixed_fibre_damage": 9.708562315437029e-12,
+      "fcd_fat_mpa": 16.04075235109718,
+      "search_x_m": -0.15000000000000002,
+      "search_y_m": 0.07499999999999998,
+      "search_damage": 1.105632868755511e-09,
+      "search_upper_damage": 9.598384282112247e-09,
+      "search_divisions": 4,
+      "search_boxes": 16,
+      "search_points": 84,
+      "search_absolute_gap": 8.492751413356736e-09
+    },
+    "bridge_brittle": {
+      "status": "PASS",
+      "as_required_mm2": 2500.0,
+      "utilisation": 0.9615384615384616
+    },
+    "bridge_box_wall": {
+      "status": "PASS",
+      "utilisation": 0.30000000000000004
+    },
+    "bridge_minimum_crack": {
+      "status": "PASS",
+      "as_required_mm2": 231.99999999999997,
+      "utilisation": 0.46399999999999997
+    }
+  },
+  "formulae": {
+    "plastic_residual": "sum(F) - N",
+    "elastic_residual": "[Nint-N, Mxint-Mx, Myint-My]",
+    "combined": "rM + rV + rT",
+    "bridge_brittle": "As,min = Mrep / (zs fyk)",
+    "bridge_box_wall": "VEd/VRd,max + TEd,wall/TRd,max,wall <= 1.0",
+    "bridge_minimum_crack": "As,min = kc k fct,eff Act / sigma_s"
+  }
+}

@@ -34,6 +34,7 @@ import bridge_analysis
 import bridge_inputs
 import calculation_trace_publication
 import project_io
+import worked_example
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
@@ -1730,7 +1731,73 @@ def manual_blocks() -> list:
          "A capacity-only run with no live shear or torsion uses the resistance-"
          "optimising angle within that same range.")
 
-    h1("Equilibrium check")
+    h1("Numerical methods and reproducible example")
+    md("The project and hand-calculation downloads at the top of the in-app manual "
+       "form one current-schema end-to-end example. Load the JSON, press *Calculate* "
+       "and generate the default report plus QA appendix. The companion hand pack "
+       "records unrounded headline values, states and governing expressions for "
+       "clear spacing, Plastic, longitudinal and transverse detailing, shear, "
+       "torsion, combined M-V-T, Elastic, cracking, grouped fatigue and all three "
+       "independent bridge calculations. The pack is reproducibility evidence for "
+       "its declared inputs, not a compliance certificate or a second solver.")
+    h2("Plastic equilibrium search")
+    md("For each neutral-axis angle, Sector takes the smallest material-limit "
+       "curvature and solves the monotone axial equilibrium in compression depth "
+       "by bisection. The initial lower depth is $10^{-9}c_{full}$; the upper "
+       "depth starts at $c_{full}$ and can double at most 80 times to bracket an "
+       "axial compression root. Bisection runs for at most 100 iterations and "
+       "stops when the depth bracket is narrower than $10^{-12}c_{full}$. The "
+       "retained residual and tolerance are:\n\n"
+       "$$r_N=\\sum F-N,\\qquad "
+       "|r_N|\\le10^{-6}\\max(1,|N|).$$\n\n"
+       "A point converges only when the requested axial action is inside the two "
+       "endpoint responses **and** the residual passes. An endpoint clamp outside "
+       "that range is explicitly unreachable and cannot become a valid capacity "
+       "point merely because its numerical residual is small.")
+    h2("Elastic, creep and cracking solves")
+    md("The uncracked Stage-I state is one $3\\times3$ linear solve. The cracked "
+       "Stage-II solver begins from that linear strain plane, clips the concrete "
+       "compression zone, solves a Newton correction and repeats for at most 100 "
+       "iterations. With $\\mathbf r=[N_{int}-N,M_{x,int}-M_x,M_{y,int}-M_y]$ "
+       "and $S=\\max(1,|N|,|M_x|,|M_y|)$, convergence requires:\n\n"
+       "$$\\|\\mathbf r\\|_{\\infty}\\le10^{-9}S.$$\n\n"
+       "A singular stiffness or a residual still outside tolerance is not "
+       "converged. The combined-creep route performs the same accepted solve for "
+       "LONG and for the neutralised instantaneous RST1 state, then reconstructs "
+       "TOTAL and DIF; both sub-solves must converge. Cracking first uses the "
+       "Stage-I load factor (or the fixed-prestress decompression factor), then "
+       "routes to Stage I or II and interpolates the mean strain plane with $\\zeta$. "
+       "An uncracked section makes crack width **NOT APPLICABLE**; an invalid "
+       "elastic state publishes no crack width.")
+    h2("Shared strut-angle selection")
+    md("When live shear/torsion checks share a member strut, Sector evaluates 1501 "
+       "uniformly spaced $\\cot\\theta$ candidates across the entered band. It "
+       "minimises the largest dependent utilisation. Exact ties minimise the sum "
+       "of utilisations and then choose the lower $\\cot\\theta$. This is a finite "
+       "resolution scan, not an iterative equilibrium solve; the reported angle "
+       "and every dependent resistance use the same selected candidate.")
+    h2("Concrete-fatigue fibre certificate")
+    md("The concrete search is a priority branch-and-bound calculation over the "
+       "section. It starts with a $4\\times4$ box grid, retains the highest sampled "
+       "same-fibre damage and a conservative upper bound for every unresolved box, "
+       "and splits the box whose stress interval can govern. The limits are depth "
+       "26 and 200000 evaluated boxes. It converges only when the global bound gap "
+       "satisfies:\n\n"
+       "$$D_{upper}-D_{best}\\le10^{-8}"
+       "+10^{-3}\\max(|D_{best}|,10^{-12}).$$\n\n"
+       "A repeated equal sample is not a certificate. An exhausted depth/box limit "
+       "with a larger unresolved gap is non-converged and cannot pass concrete "
+       "fatigue.")
+    h2("Failure and result states")
+    md("Direct resistance, detailing and bridge formulas are algebraic and claim "
+       "no iteration. Input type, finiteness, sign, range, material assignment and "
+       "geometry are validated before a numerical result is rated. A genuine "
+       "demand/resistance comparison reports **PASS** or **FAIL**; an applicable "
+       "but incomplete calculation is **NOT ASSESSED**; an inapplicable calculation "
+       "is **NOT APPLICABLE**; and invalid inputs or failed required solvers are "
+       "**INVALID**. Failure/unsupported paths do not publish fabricated "
+       "resistance, utilisation or engineering verdicts.")
+    h2("Equilibrium evidence")
     md("Every numerical solve carries a convergence flag. The plastic solve balances the "
        "axial force **at each swept angle** to a tight residual, "
        "$|\\sum F - N|\\le 10^{-6}\\max(1,|N|)$; an angle whose axial force cannot "
@@ -1878,6 +1945,7 @@ _LATEX_CMD = {
     r"\varphi": "&#966;", r"\alpha": "&#945;", r"\rho": "&#961;",
     r"\kappa": "&#954;",
     r"\lambda": "&#955;", r"\phi": "&#966;", r"\eta": "&#951;",
+    r"\zeta": "&#950;", r"\infty": "&#8734;",
     r"\beta": "&#946;", r"\theta": "&#952;", r"\nu": "&#957;",
     r"\tau": "&#964;", r"\xi": "&#958;", r"\pi": "&#960;",
     r"\Delta": "&#916;", r"\le": "&#8804;", r"\ge": "&#8805;",
@@ -1889,7 +1957,7 @@ _LATEX_CMD = {
 
 _LATEX_LAYOUT_COMMANDS = (
     r"\left", r"\right", r"\Big", r"\big", r"\Bigg", r"\bigg",
-    r"\!", r"\,", r"\;",
+    r"\!", r"\,", r"\;", r"\mathbf",
 )
 _LATEX_WORD_OPERATORS = ("min", "max", "ln", "log", "sin", "cos", "tan", "cot")
 
@@ -2278,6 +2346,22 @@ def render_manual_streamlit():
                 file_name="Sector_User_Manual.pdf", mime="application/pdf",
                 key="manual_dl_pdf", icon=":material/download:",
             )
+        st.download_button(
+            "Example project",
+            worked_example.project_json(),
+            file_name=worked_example.PROJECT_FILENAME,
+            mime="application/json",
+            key="manual_dl_example_project",
+            icon=":material/data_object:",
+        )
+        st.download_button(
+            "Hand pack",
+            worked_example.hand_pack_markdown(),
+            file_name=worked_example.HAND_PACK_FILENAME,
+            mime="text/markdown",
+            key="manual_dl_example_hand_pack",
+            icon=":material/calculate:",
+        )
         if st.button("Close", key="manual_close", icon=":material/close:"):
             st.session_state["_manual_open"] = False
             st.rerun(scope="app")

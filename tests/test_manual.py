@@ -488,6 +488,8 @@ def test_latex_to_rl_converts_the_subset():
     cot_squared = manual._latex_to_rl(r"\cot^2\theta")
     assert "cot<super>2</super>&nbsp;&#952;" in cot_squared
     assert "cot&nbsp;<super>" not in cot_squared
+    infinity_norm = manual._latex_to_rl(r"\|\mathbf{r}\|_{\infty}")
+    assert infinity_norm == "|r|<sub>&#8734;</sub>"
     assert "&#964;" in shear
 
 
@@ -590,6 +592,11 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     assert not at.exception
     assert at.session_state["_manual_open"] is True
     assert at.session_state["_main_page"] == "Inputs"
+    download_keys = {item.key for item in at.get("download_button")}
+    assert {
+        "manual_dl_example_project",
+        "manual_dl_example_hand_pack",
+    } <= download_keys
     assert any(element.type == "dialog" for element in at._tree)
     selector = next(item for item in at.selectbox if item.key == "manual_part")
     assert selector.value == "Part A - Get started"
