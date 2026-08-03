@@ -202,6 +202,31 @@ def test_manual_distinguishes_user_curve2_from_eurocode_curve3_identity():
         assert example["steel"].gamma_E == pytest.approx(1.0)
 
 
+def test_manual_publishes_exact_numerical_rules_and_reference_downloads():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "Numerical methods & reference project",
+        "at most **80 times**",
+        "at most **100 times**",
+        "bisection cap is not a separate failure flag",
+        "10^{-12}c_{full}",
+        "within **100 iterations**",
+        "straight chords",
+        "**4 x 4** grid",
+        "at most **200000** evaluated boxes",
+        "retained **unrounded**",
+        "genuine build revision",
+    ):
+        assert expected in text
+
+    import inspect
+    source = inspect.getsource(manual.render_manual_streamlit)
+    assert "reference_project.project_download()" in source
+    assert "reference_project.calculation_pack()" in source
+    assert "manual_reference_project" in source
+    assert "manual_reference_pack" in source
+
+
 def test_manual_has_the_expected_parts_in_order():
     parts = [b[1] for b in manual.manual_blocks() if b[0] == "part"]
     assert parts == ["Part A - Get started", "Part B - Features & options",

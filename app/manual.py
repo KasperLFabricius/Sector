@@ -34,6 +34,7 @@ import bridge_analysis
 import bridge_inputs
 import calculation_trace_publication
 import project_io
+import reference_project
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
@@ -1743,6 +1744,69 @@ def manual_blocks() -> list:
        "and action-factored Elastic state in every bin converge; a non-converged "
        "state cannot pass.")
 
+    h1("Numerical methods & reference project")
+    md("The manual dialog publishes a **reference project JSON** and its compact "
+       "**independent-checking pack**. Load the JSON through *Project files and "
+       "autosave*, press *Calculate*, generate the default report, and compare the "
+       "unrounded values and states with the pack. The saved-input SHA-256 binds "
+       "the two downloads. The project source revision is Sector's genuine build "
+       "revision; `SECTOR-REF-091` is ordinary project metadata and never replaces "
+       "source provenance.")
+    call("limit", "The reference beam enables Plastic, Elastic and crack-width "
+         "analysis. Its generated report therefore covers conventions, section "
+         "and materials, basis, named actions, plastic capacity/utilisation, "
+         "elastic response/cracking and provenance. Optional fatigue, shear, "
+         "torsion, combined M-V-T, detailing and independent bridge families are "
+         "deliberately disabled; the example makes no completeness claim for a "
+         "report section it does not emit.")
+    h2("Plastic depth solve")
+    md("At each neutral-axis angle, Sector starts at "
+       "$c_{lo}=10^{-9}c_{full}$ and $c_{hi}=c_{full}$. The upper depth may double "
+       "at most **80 times** to reach compression states. A reachable bracket is "
+       "bisected at most **100 times**, stopping when "
+       "$c_{hi}-c_{lo}<10^{-12}c_{full}$. Convergence requires both an in-range "
+       "axial demand and $|\\sum F-N|\\leq10^{-6}\\max(1,|N|)$. A demand outside "
+       "the endpoint range or a residual outside the band is retained as **not "
+       "converged**, never promoted by a close endpoint alone. Reaching the "
+       "bisection cap is not a separate failure flag: the final midpoint is judged "
+       "by the same reachability and residual tests.")
+    h2("Cracked-elastic Newton solve")
+    md("The strain plane starts from the uncracked linear solution. Each iteration "
+       "reclips the compression zone and solves the current $3\\times3$ tangent "
+       "system. With $r=(N,M_x,M_y)_{internal}-(N,M_x,M_y)_{target}$, convergence "
+       "requires $\\max|r_i|\\leq10^{-9}\\max(1,\\max|target_i|)$ within **100 "
+       "iterations**. A singular initial system starts from zero; a singular "
+       "iteration tangent or an exhausted cap leaves the solve not converged.")
+    h2("Applied-direction envelope selection")
+    md("Plastic utilisation intersects the applied moment ray with the straight "
+       "chords of the closed $M_x$-$M_y$ polygon in sweep order; it does not "
+       "interpolate vertex radii. Demand below $10^{-9}$ is zero. A chord is "
+       "parallel when the ray-edge cross product has magnitude at most "
+       "$10^{-12}$; accepted intersections use "
+       "$-10^{-9}\\leq s\\leq1+10^{-9}$ and forward distance $t>10^{-9}$. The "
+       "nearest forward crossing is the resistance. If none exists, resistance "
+       "and governing member are absent and utilisation is infinite.")
+    h2("Adaptive concrete-fatigue search")
+    md("The same-fibre branch-and-bound search starts with a **4 x 4** grid, "
+       "allows depth **26** and at most **200000** evaluated boxes. It is certified "
+       "when $D_{upper}-D_{best}\\leq10^{-8}+10^{-3}\\max(|D_{best}|,10^{-12})$. "
+       "If a depth or box limit controls before that bound closes, the search is "
+       "not converged. Equal sampled values alone never certify the search.")
+    h2("Report precision")
+    md("Calculations, dependency checks and verdicts use the retained **unrounded** "
+       "numbers. Fixed-decimal report cells use the decimal count declared by "
+       "their table (normally three); small diagnostic quantities use six "
+       "significant digits so nonzero evidence is not displayed as zero. Display "
+       "rounding never feeds a solver or verdict. The checking pack records the "
+       "unrounded oracle values.")
+    table(["Reference result", "Frozen unrounded value", "State"], [
+        ["Plastic applied-ray utilisation", "0.5519771788266579", "Converged"],
+        ["Plastic ray resistance", "330.5985879649080 kNm", "Finite"],
+        ["Maximum concrete compression", "9.056070470526570 MPa", "Converged"],
+        ["Peak cracking factor", "0.7095506619292463", "Cracked"],
+        ["Short-term fine crack width", "0.1142440041397812 mm", "Calculated"],
+    ])
+
     # =====================================================================
     # PART D - REFERENCE
     # =====================================================================
@@ -2284,6 +2348,29 @@ def render_manual_streamlit():
 
     st.caption("What Sector computes, the theory it applies, its features, and how "
                "to use it.")
+
+    with st.expander("Reproducible reference project", expanded=False):
+        st.caption(
+            "Current-schema inputs and a compact independent-checking pack for "
+            "the complete reference-beam report."
+        )
+        reference_json = reference_project.project_download()
+        st.download_button(
+            "Download reference project",
+            reference_json,
+            file_name=reference_project.PROJECT_FILE_NAME,
+            mime="application/json",
+            key="manual_reference_project",
+            icon=":material/download:",
+        )
+        st.download_button(
+            "Download checking pack",
+            reference_project.calculation_pack(),
+            file_name=reference_project.PACK_FILE_NAME,
+            mime="text/markdown",
+            key="manual_reference_pack",
+            icon=":material/download:",
+        )
 
     parts = manual_parts()
     selected_part = st.selectbox(
