@@ -33,6 +33,7 @@ import streamlit as st
 import bridge_analysis
 import bridge_inputs
 import calculation_trace_publication
+import publication_notation
 import project_io
 import reproducible_example
 from sector import __author__ as APP_AUTHOR
@@ -1653,7 +1654,9 @@ def manual_blocks() -> list:
        "$$T_{Rd,s} = \\frac{A_{sw}}{s}\\,2A_k\\,f_{ywd}\\,\\cot\\theta, \\qquad "
        "T_{Rd,max} = 2\\,\\nu\\,\\alpha_{cw}\\,f_{cd}\\,A_k\\,t_{ef}\\,"
        "\\sin\\theta\\cos\\theta \\quad(6.30),$$\n\n"
-       "with $T_{Rd} = \\min(T_{Rd,s}, T_{Rd,max})$. The torsion also needs "
+       "where the transverse expression is derived from the torsional wall force "
+       "in (6.27) together with transverse equilibrium in (6.8). With "
+       "$T_{Rd} = \\min(T_{Rd,s}, T_{Rd,max})$, the torsion also needs "
        "longitudinal steel $\\sum A_{sl} = T_{Ed}\\,u_k\\,\\cot\\theta/(2A_k\\,"
        "f_{yd})$ (6.28), **in addition** to the bending reinforcement on the "
        "tension side, and the cracking torque is $T_{Rd,c} = 2A_k\\,t_{ef}\\,"
@@ -1977,7 +1980,7 @@ def _inline_md_to_rl(text: str) -> str:
     text = re.sub(r"\$([^$]+)\$", lambda m: _latex_to_rl(m.group(1)), text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
-    return text
+    return publication_notation.publication_markup(text)
 
 
 def _render_md_pdf(text, flow, styles, Paragraph):
@@ -2088,7 +2091,7 @@ def build_manual_pdf(buffer, figures=True):
     _add("MTitle", fontSize=20, spaceAfter=6, fontName=font_b)
     _add("MPart", fontSize=17, spaceBefore=18, spaceAfter=8, fontName=font_b,
          textColor=colors.HexColor("#0d2440"), keepWithNext=1)
-    _add("MH1", fontSize=15, spaceBefore=14, spaceAfter=6, fontName=font_b,
+    _add("MH1", fontSize=15, spaceBefore=14, spaceAfter=8, fontName=font_b,
          textColor=colors.HexColor("#1f3b66"), keepWithNext=1)
     _add("MH2", fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName=font_b,
          keepWithNext=1)
@@ -2097,7 +2100,7 @@ def build_manual_pdf(buffer, figures=True):
     _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
     _add("MMath", fontSize=11, leading=15, alignment=TA_CENTER, spaceBefore=6,
          spaceAfter=6, fontName=font)
-    _add("MSmall", fontSize=8, leading=10, textColor=colors.grey, fontName=font)
+    _add("MSmall", fontSize=8, leading=11, textColor=colors.grey, fontName=font)
     toc_style = ParagraphStyle(
         "MTOCPart", parent=styles["MBody"], fontSize=9.5, leading=12,
         leftIndent=0, firstLineIndent=0, spaceBefore=5, spaceAfter=3,
@@ -2234,21 +2237,24 @@ def build_manual_pdf(buffer, figures=True):
         elif kind == "table":
             headers, rows = block[1], block[2]
             ncol = len(headers)
-            data = [[Paragraph(f"<b>{_inline_md_to_rl(h)}</b>", styles["MSmall"])
+            data = [[Paragraph(publication_notation.protect_numeric_tokens(
+                         f"<b>{_inline_md_to_rl(h)}</b>"), styles["MSmall"])
                      for h in headers]]
-            data += [[Paragraph(_inline_md_to_rl(str(c)), styles["MSmall"]) for c in row]
+            data += [[Paragraph(publication_notation.protect_numeric_tokens(
+                         _inline_md_to_rl(str(c))), styles["MSmall"]) for c in row]
                      for row in rows]
             t = Table(
                 data,
                 colWidths=[page_w / ncol] * ncol,
                 repeatRows=1,
+                spaceBefore=2,
             )
             t.setStyle(TableStyle([
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
             flow.append(t)
             flow.append(Spacer(1, 0.2 * cm))
 

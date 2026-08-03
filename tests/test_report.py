@@ -1064,9 +1064,12 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "Results overview - FAIL" not in flat
     assert all(case in flat for case in ("PL-01", "PL-02", "EL-01", "EL-02"))
     assert "Governing combination" in flat and "Frequent response" in flat
-    assert flat.count(". Plastic section capacity") == 2
-    assert flat.count(". Elastic section response and stresses") == 2
+    # Long-table continuation rows deliberately repeat the current chapter and
+    # case context.  Pin the two unique calculation identities instead of counting
+    # every visible occurrence of the repeated title.
+    assert "Plastic section capacity - PL-01" in flat
     assert "Plastic section capacity - PL-02" in flat
+    assert "Elastic section response and stresses - EL-01" in flat
     assert "Elastic section response and stresses - EL-02" in flat
     assert "Cracking threshold - EL-02" in flat
     assert "Crack width was not requested for this run." in flat
@@ -1144,8 +1147,9 @@ def test_report_does_not_round_small_nonzero_product_inertia_to_zero():
     out["elastic"]["props_un"]["Ixy"] = 1.234567e-8
     out["elastic"]["props_cr"]["Ixy"] = -2.345678e-9
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "1.23457e-08" in txt
-    assert "-2.34568e-09" in txt
+    multiply = chr(0x00D7)
+    assert f"1.23457 {multiply} 10-8" in txt
+    assert f"-2.34568 {multiply} 10-9" in txt
 
 
 def test_crack_candidate_table_stays_inside_a4_content_width():

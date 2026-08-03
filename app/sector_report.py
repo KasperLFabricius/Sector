@@ -42,6 +42,7 @@ import calculation_trace_publication
 import fatigue_inputs
 import fatigue_presentation
 import material_catalog
+import publication_notation
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
@@ -342,6 +343,27 @@ class _ReportDocTemplate(SimpleDocTemplate):
             )
 
 
+class _BalancedTable(Table):
+    """A splittable table that does not strand a one-row continuation fragment."""
+
+    _MIN_FRAGMENT_DATA_ROWS = 3
+
+    def _splitRows(self, availHeight, doInRowSplit=0):
+        repeat = self.repeatRows
+        repeat_count = repeat if isinstance(repeat, int) else max(repeat) + 1
+        data_rows = len(self._cellvalues) - repeat_count
+        original = self._rowSplitRange
+        if original is None and data_rows > 2 * self._MIN_FRAGMENT_DATA_ROWS:
+            self._rowSplitRange = (
+                repeat_count + 1,
+                -self._MIN_FRAGMENT_DATA_ROWS,
+            )
+        try:
+            return super()._splitRows(availHeight, doInRowSplit=doInRowSplit)
+        finally:
+            self._rowSplitRange = original
+
+
 def _styles():
     ss = getSampleStyleSheet()
     out = {}
@@ -360,11 +382,11 @@ def _styles():
     out["small"] = ParagraphStyle("s", parent=ss["Normal"], fontSize=8.5,
                                  fontName=_FONT, leading=11, textColor=_GREY)
     out["formula"] = ParagraphStyle("f", parent=ss["Normal"], fontSize=9.5,
-                                    leading=13, leftIndent=10, spaceAfter=2,
+                                    leading=14.5, leftIndent=10, spaceAfter=3,
                                     fontName=_FONT)
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
-                               fontName=_FONT, leading=10, leftIndent=10,
-                               textColor=_GREY, spaceAfter=4)
+                                fontName=_FONT, leading=11.5, leftIndent=10,
+                                textColor=_GREY, spaceAfter=5)
     return out
 
 
@@ -410,11 +432,7 @@ def _fmt(v, nd=3):
 
 def _fmt_sig(v, sig=6):
     """Format small engineering values without rounding nonzero evidence to zero."""
-    if v is None:
-        return "-"
-    if isinstance(v, float) and not math.isfinite(v):
-        return "-inf" if math.isinf(v) and v < 0.0 else "inf"
-    return f"{v:.{sig}g}"
+    return publication_notation.scientific_markup(v, sig)
 
 
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
@@ -465,6 +483,9 @@ class ReportBuilder:
         self.s = _styles()
         self.flow = []
         self._chapter = 0
+        self._current_h1 = ""
+        self._current_h2 = ""
+        self._current_status = ""
         self._export_hung = False   # set once a kaleido export hits the join timeout
 
     def _case_contexts(self, family):
@@ -526,6 +547,9 @@ class ReportBuilder:
     def _h1(self, text):
         self._chapter += 1
         numbered = f"{self._chapter}. {text}"
+        self._current_h1 = numbered
+        self._current_h2 = ""
+        self._current_status = ""
         heading = Paragraph(_greek(numbered), self.s["h1"])
         heading._sector_bookmark = f"sector-section-{self._chapter}"
         # The outline API does not parse Paragraph markup or numeric entities.
@@ -535,16 +559,20 @@ class ReportBuilder:
         self.flow.append(heading)
 
     def _h2(self, text):
+        self._current_h2 = text
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
 
     def _p(self, text):
-        self.flow.append(Paragraph(_greek(text), self.s["body"]))
+        rendered = publication_notation.publication_markup(_greek(text))
+        self.flow.append(Paragraph(rendered, self.s["body"]))
 
     def _small(self, text):
-        self.flow.append(Paragraph(_greek(text), self.s["small"]))
+        rendered = publication_notation.publication_markup(_greek(text))
+        self.flow.append(Paragraph(rendered, self.s["small"]))
 
     def _status_block(self, text, status):
         """Add a prominent, print-readable assessment banner."""
+        self._current_status = status
         palette = {
             "PASS": ("#E8F5E9", "#1B5E20"),
             "OK": ("#E8F5E9", "#1B5E20"),
@@ -560,8 +588,13 @@ class ReportBuilder:
             "status", parent=self.s["body"], fontName=_FONT_BOLD,
             textColor=colors.HexColor(fg), leading=13,
         )
-        table = Table([[Paragraph(_greek(text), style)]],
-                      colWidths=[160 * mm], hAlign="LEFT")
+        rendered = publication_notation.publication_markup(_greek(text))
+        table = Table(
+            [[Paragraph(rendered, style)]],
+            colWidths=[160 * mm],
+            hAlign="LEFT",
+            spaceBefore=4,
+        )
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
             ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor(fg)),
@@ -720,17 +753,23 @@ class ReportBuilder:
         self.flow[start:] = [KeepTogether(block)]
 
     def _formula(self, expr, ref=None, subst=None, result=None):
-        self.flow.append(Paragraph(_greek(expr), self.s["formula"]))
+        def rendered(value):
+            return publication_notation.publication_markup(
+                _greek(value), protect_numbers=True
+            )
+
+        self.flow.append(Paragraph(rendered(expr), self.s["formula"]))
         if subst:
-            self.flow.append(Paragraph(_greek(subst), self.s["formula"]))
+            self.flow.append(Paragraph(rendered(subst), self.s["formula"]))
         if result:
-            self.flow.append(Paragraph(_greek(f"<b>{result}</b>"), self.s["formula"]))
+            self.flow.append(Paragraph(rendered(f"<b>{result}</b>"), self.s["formula"]))
         if ref:
-            self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
+            self.flow.append(Paragraph(rendered(ref), self.s["ref"]))
 
     def _table(self, data, widths, header=True, font=8.5, keep=True):
+        font = publication_notation.clamp_table_font(font)
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
-                              fontName=_FONT, leading=font + 2)
+                              fontName=_FONT, leading=font + 3.2)
         head = ParagraphStyle("ch", parent=body, fontName=_FONT_BOLD)
         rows = []
         for r, row in enumerate(data):
@@ -739,26 +778,54 @@ class ReportBuilder:
                 st = head if (header and r == 0) else body
                 st = ParagraphStyle("x", parent=st,
                                     alignment=TA_LEFT if ci == 0 else TA_CENTER)
-                cells.append(Paragraph(_greek(str(cell)), st))
+                rendered = publication_notation.publication_markup(
+                    _greek(str(cell)), protect_numbers=True
+                )
+                cells.append(Paragraph(rendered, st))
             rows.append(cells)
+        context_rows = 0
+        if not keep and rows:
+            context = " | ".join(
+                part for part in (
+                    self._current_h1,
+                    self._current_h2,
+                    f"Status: {self._current_status}" if self._current_status else "",
+                ) if part
+            ) or "Sector calculation context"
+            context_style = ParagraphStyle(
+                "continuation-context", parent=body, fontName=_FONT_BOLD,
+                alignment=TA_LEFT, textColor=_GREY,
+            )
+            rows.insert(0, [Paragraph(_greek(context), context_style)] +
+                        [""] * (len(rows[0]) - 1))
+            context_rows = 1
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
         # Any table can outgrow one page when it contains user-pasted geometry or
         # reinforcement. Repeat the labelled header regardless of whether the normal
         # short-table path first tries to keep the table together.
-        t = Table(
+        t = _BalancedTable(
             rows,
             colWidths=widths,
             hAlign="LEFT",
-            repeatRows=1 if header else 0,
+            repeatRows=context_rows + (1 if header else 0),
+            spaceBefore=4,
         )
-        t.setStyle(TableStyle([
+        table_style = [
             ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
-            ("BACKGROUND", (0, 0), (-1, 0), _HEAD_BG if header else colors.white),
+            ("BACKGROUND", (0, context_rows), (-1, context_rows),
+             _HEAD_BG if header else colors.white),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ]))
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]
+        if context_rows:
+            table_style.extend([
+                ("SPAN", (0, 0), (-1, 0)),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3F5F8")),
+                ("BOX", (0, 0), (-1, 0), 0.4, _LINE),
+            ])
+        t.setStyle(TableStyle(table_style))
         self.flow.append(KeepTogether(t) if keep else t)
         self._gap(4)
 
@@ -1036,13 +1103,15 @@ class ReportBuilder:
             self._h2("Prestressing steel")
             self._prestress_block()
             self._keep_from(start)
-        # Loads & settings.
+        # Loads and settings are independent blocks.  Keeping both together made
+        # the whole group jump to a fresh page and left the preceding page sparse.
         start = len(self.flow)
         self._h2("Loads")
         self._loads_block()
-        self._h2("Analysis settings")
-        self._settings_block()
         self._keep_from(start)
+        start = len(self.flow)
+        self._h2("Analysis settings")
+        self._settings_block(keep=False)
 
     def _geometry_tables(self):
         inp = self.inp
@@ -1483,7 +1552,7 @@ class ReportBuilder:
                          _fmt(inp.get("Mx_el_s"), 3), _fmt(inp.get("My_el_s"), 3)])
         self._table(rows, [55 * mm, 35 * mm, 38 * mm, 38 * mm])
 
-    def _settings_block(self):
+    def _settings_block(self, keep=True):
         # Every input that influences the reported results is documented here so the
         # report is self-contained and QA-able.
         inp = self.inp
@@ -1764,7 +1833,7 @@ class ReportBuilder:
                         ))
                     ),
                 ])
-        self._table(rows, [110 * mm, 55 * mm])
+        self._table(rows, [110 * mm, 55 * mm], keep=keep)
         if fatigue_rows:
             self.flow.append(PageBreak())
             self._h2("Grouped fatigue settings")
@@ -3752,7 +3821,8 @@ class ReportBuilder:
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
             "cot theta",
-            ref="from EN 1992-1-1 (6.28)",
+            ref=("derived from EN 1992-1-1 6.3.2(1), Formula (6.27), "
+                 "with transverse equilibrium in 6.2.3(3), Formula (6.8)"),
             subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
                   f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
             result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m")

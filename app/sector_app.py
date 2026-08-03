@@ -9445,7 +9445,8 @@ def torsion_view(inp, results):
                        f"{t['asl_req']:.0f} mm2"]},
             hide_index=True, width="stretch")
         st.caption(
-            r"$T_{Rd,s} = (A_{sw}/s)\,2 A_k f_{ywd}\cot\theta$ (6.28); "
+            r"$T_{Rd,s} = (A_{sw}/s)\,2 A_k f_{ywd}\cot\theta$ "
+            r"(derived from 6.27 with transverse equilibrium in 6.8); "
             r"$T_{Rd,max} = 2\,\nu\,\alpha_{cw} f_{cd} A_k t_{ef}\sin\theta\cos\theta$ "
             r"(6.30); $T_{Rd,c} = 2 A_k t_{ef} f_{ctd}$. The required longitudinal "
             r"steel $\sum A_{sl} = T_{Ed}\,u_k\cot\theta / (2 A_k f_{yd})$ (6.28) is "

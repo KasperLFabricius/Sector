@@ -55,7 +55,11 @@ DISTRIBUTION_SOURCE = TraceSource(
 )
 TRANSVERSE_SOURCE = TraceSource(
     SOURCE_STANDARD, "en-1992-1-1-2004-transverse-torsion", BASE_EDITION,
-    SourceCitation(DOC_BASE, "6.3.2(3)", "Formula (6.28)"),
+    SourceCitation(
+        DOC_BASE,
+        "6.3.2(1) and 6.2.3(3)",
+        "Formulae (6.27) and (6.8)",
+    ),
 )
 CRUSHING_SOURCE = TraceSource(
     SOURCE_STANDARD, "en-1992-1-1-2004-torsion-crushing", BASE_EDITION,
