@@ -19,6 +19,7 @@ from sector.calculation_trace import (
     TraceValidationError,
     bundle_to_json,
     create_bundle,
+    seal_bundle,
     validate_bundle,
 )
 from sector.combined import RadialUtilResult, radial_util_result
@@ -34,6 +35,7 @@ from sector.plastic_capacity_trace_contract import expected_sweep
 import sector.plastic_interaction_trace as trace_module
 from sector.plastic_interaction_trace import (
     build_plastic_interaction_trace_families,
+    validate_plastic_interaction_trace_families,
 )
 from sector.plastic_interaction_trace_contract import (
     INTERACTION_CARDINALITY,
@@ -332,6 +334,35 @@ def _build(inp, out):
         result_sha256=RESULT_SHA,
         context=CONTEXT,
     )
+
+
+def test_public_validator_replays_and_rejects_resealed_title_tampering(case):
+    bundle = case.bundle
+    assert validate_plastic_interaction_trace_families(
+        bundle,
+        case.inp,
+        case.out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context=CONTEXT,
+    ) is bundle
+    changed = dataclasses.replace(
+        bundle.calculations[0], title="Resealed CT-003 title tampering"
+    )
+    tampered = seal_bundle(dataclasses.replace(
+        bundle,
+        calculations=(changed, *bundle.calculations[1:]),
+        content_sha256="",
+    ))
+    with pytest.raises(TraceValidationError, match="authoritative input replay"):
+        validate_plastic_interaction_trace_families(
+            tampered,
+            case.inp,
+            case.out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=CONTEXT,
+        )
 
 
 def _registry(case):

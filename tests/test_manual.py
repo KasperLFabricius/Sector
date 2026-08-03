@@ -85,6 +85,23 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
+def test_manual_includes_complete_live_standard_trace_example():
+    rows = manual._worked_standard_trace_rows()
+    assert len(rows) == 12
+    assert rows[-1]["role"] == "final_result"
+    assert rows[-1]["state"] == "finite"
+    assert any(
+        "DS/EN 1992-2:2005 + AC:2008" in row["source"]
+        and "clause 6.1(109)-(110)" in row["source"]
+        for row in rows
+    )
+    blocks = manual.manual_blocks()
+    assert any(
+        block[:2] == ("h1", "Structured standards calculation trace")
+        for block in blocks
+    )
+
+
 def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():
     # Adjacent Python string literals previously produced ``\quadf`` and
     # ``\qquadk``. KaTeX renders those invalid commands as red source text.

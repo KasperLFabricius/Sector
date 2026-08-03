@@ -9,11 +9,13 @@ schema and carries no legacy compliance or cover-calculator migration.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import dataclasses
 from datetime import datetime, timezone
 import hashlib
 import json
 import math
 
+import numpy as np
 import pandas as pd
 
 import bridge_inputs
@@ -28,6 +30,7 @@ from sector.build_info import source_revision
 
 FORMAT = "sector-project"
 VERSION = 23
+CALCULATION_TRACE_KEY = "calculation_traces"
 
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
 REINFORCEMENT_TABLE_KEYS = {"bars_base": "bar", "tendons_base": "tendon"}
@@ -364,6 +367,141 @@ def input_sha256(tables: Mapping, scalars: Mapping) -> str:
     return _input_digest(_canonical_inputs(tables, scalars))
 
 
+def _fingerprint_value(value):
+    """Return strict type-tagged data for an exact in-memory payload.
+
+    Calculation results contain immutable dataclasses, NumPy values and pandas
+    tables that are intentionally richer than project JSON.  A trace seal must
+    distinguish retained type as well as numerical value: ``True``, ``1``,
+    ``1.0``, a list and a tuple therefore have different encodings.  The
+    publication key is excluded recursively so a result can carry the hash that
+    seals the result it describes without a self-reference.
+    """
+
+    if value is None:
+        return ["none"]
+    if value is pd.NA:
+        return ["pandas-na"]
+    if value is pd.NaT:
+        return ["pandas-nat"]
+    if type(value) is bool:
+        return ["bool", value]
+    if type(value) is int:
+        return ["int", str(value)]
+    if type(value) is float:
+        if math.isnan(value):
+            encoded = "nan"
+        elif math.isinf(value):
+            encoded = "+inf" if value > 0.0 else "-inf"
+        else:
+            encoded = value.hex()
+        return ["float", encoded]
+    if type(value) is str:
+        return ["str", value]
+    if type(value) is bytes:
+        return ["bytes", value.hex()]
+    if isinstance(value, np.generic):
+        return ["numpy-scalar", str(value.dtype), _fingerprint_value(value.item())]
+    if isinstance(value, np.ndarray):
+        return [
+            "numpy-array",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            str(value.dtype),
+            list(value.shape),
+            _fingerprint_value(value.tolist()),
+        ]
+    if isinstance(value, pd.DataFrame):
+        return [
+            "pandas-dataframe",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            _fingerprint_value(value.columns),
+            _fingerprint_value(value.index),
+            [str(dtype) for dtype in value.dtypes],
+            _fingerprint_value(value.to_numpy(dtype=object).tolist()),
+        ]
+    if isinstance(value, pd.Series):
+        return [
+            "pandas-series",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            _fingerprint_value(value.name),
+            str(value.dtype),
+            _fingerprint_value(list(value.index)),
+            _fingerprint_value(value.tolist()),
+        ]
+    if isinstance(value, pd.Index):
+        return [
+            "pandas-index",
+            f"{type(value).__module__}.{type(value).__qualname__}",
+            str(value.dtype),
+            _fingerprint_value(value.name),
+            _fingerprint_value(value.tolist()),
+        ]
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        identity = f"{type(value).__module__}.{type(value).__qualname__}"
+        fields = [
+            [field.name, _fingerprint_value(getattr(value, field.name))]
+            for field in dataclasses.fields(value)
+        ]
+        return ["dataclass", identity, fields]
+    if isinstance(value, Mapping):
+        items = []
+        for key, item in value.items():
+            if type(key) is str and key == CALCULATION_TRACE_KEY:
+                continue
+            encoded_key = _fingerprint_value(key)
+            encoded_item = _fingerprint_value(item)
+            sort_key = json.dumps(
+                encoded_key,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            items.append((sort_key, encoded_key, encoded_item))
+        items.sort(key=lambda item: item[0])
+        identity = f"{type(value).__module__}.{type(value).__qualname__}"
+        return ["mapping", identity, [[key, item] for _, key, item in items]]
+    if type(value) is list:
+        return ["list", [_fingerprint_value(item) for item in value]]
+    if type(value) is tuple:
+        return ["tuple", [_fingerprint_value(item) for item in value]]
+    if type(value) in {set, frozenset}:
+        encoded = [_fingerprint_value(item) for item in value]
+        encoded.sort(key=lambda item: json.dumps(
+            item,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ))
+        return ["set" if type(value) is set else "frozenset", encoded]
+    if isinstance(value, datetime):
+        return ["datetime", value.isoformat()]
+    raise TypeError(
+        "unsupported calculation fingerprint value: "
+        f"{type(value).__module__}.{type(value).__qualname__}"
+    )
+
+
+def result_sha256(result) -> str:
+    """Hash an exact retained result/payload with concrete types preserved."""
+
+    canonical = json.dumps(
+        _fingerprint_value(result),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def _valid_sha256(value) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and value == value.lower()
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def dump_project(
     tables: Mapping,
     scalars: Mapping,
@@ -399,12 +537,19 @@ def dump_project(
                 "sector_version",
                 "source_revision",
                 "input_sha256",
+                "result_sha256",
             )
             if calculation.get(key) not in (None, "")
         }
         record["matches_saved_inputs"] = (
             record.get("input_sha256") == digest
         )
+        if "result_sha256" in record and not _valid_sha256(
+            record["result_sha256"]
+        ):
+            raise ValueError(
+                "calculation result_sha256 must be a lowercase SHA-256"
+            )
         payload["calculation"] = record
     return json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False)
 

@@ -122,6 +122,10 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Governing",
         "PDF report",
         "Every computed case",
+        "Structured standards calculation trace",
+        "Complete worked reference - bridge brittle Method B",
+        "clause 6.1(109)-(110)",
+        "Project-defined / uncited",
         "Part D - Reference",
     ):
         if expected not in text:

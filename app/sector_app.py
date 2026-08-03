@@ -30,6 +30,7 @@ import streamlit as st  # noqa: E402
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
 import case_analysis  # noqa: E402
+import calculation_trace_publication  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import fatigue_presentation  # noqa: E402
@@ -1726,6 +1727,11 @@ _BRIDGE_EDITOR_KEYS = {
     key: f"{key}_editor"
     for key in bridge_inputs.TABLE_KEYS
 }
+_NON_REPLAYABLE_INPUT_EVENT_KEYS = frozenset({
+    *_CASE_EDITOR_KEYS.values(),
+    _FATIGUE_EDITOR_KEY,
+    *_BRIDGE_EDITOR_KEYS.values(),
+})
 
 
 def _fatigue_spectrum_column_config():
@@ -2143,6 +2149,7 @@ def _restore_input_state(*, replace: bool = False) -> None:
     that partial run may still exist, so ``setdefault`` alone cannot recover the
     last complete values.
     """
+    restored = set()
     for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items():
         # A tab event is written before its callback/rerun. Keep that event while
         # replacing engineering values from the last complete Inputs render;
@@ -2154,11 +2161,20 @@ def _restore_input_state(*, replace: bool = False) -> None:
         )
         if not preserve_navigation and (replace or key not in st.session_state):
             st.session_state[key] = value
+            restored.add(key)
     # Replay every genuine edit that has not yet reached a complete Inputs commit.
     # Multiple rapid events accumulate here, so a later interruption does not
-    # discard an earlier edit from the same burst.
+    # discard an earlier edit from the same burst.  A normal Streamlit rerun has
+    # already installed the triggering widget value before its callback.  Writing
+    # that live value through Session State again is redundant for scalar widgets
+    # and forbidden for widgets such as ``data_editor`` that also receive an
+    # initial data argument.  Only restore a missing value, or replay a durable
+    # scalar that the interrupted-build recovery above deliberately replaced.
     for key, value in st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}).items():
-        st.session_state[key] = copy.deepcopy(value)
+        if key in _NON_REPLAYABLE_INPUT_EVENT_KEYS:
+            continue
+        if key not in st.session_state or key in restored:
+            st.session_state[key] = copy.deepcopy(value)
 
 
 def _open_analysis_content(flag: str) -> None:
@@ -2253,6 +2269,19 @@ def _project_state():
 def _project_input_hash() -> str:
     tables, scalars = _project_state()
     return project_io.input_sha256(tables, scalars)
+
+
+def _calculation_input_hash(inp) -> str:
+    """Use the persisted-input identity, or a typed fallback if it is unsavable."""
+
+    try:
+        return _project_input_hash()
+    except ValueError:
+        # Independent bridge kernels may legitimately run while the section is
+        # invalid and therefore cannot be canonicalised as a project.  Their trace
+        # still needs an exact deterministic input identity; the same typed payload
+        # fingerprint is the documented headless-run fallback.
+        return project_io.result_sha256(inp)
 
 
 def _gather_project() -> str:
@@ -2791,7 +2820,7 @@ def _generate_report(inp):
         report_content = st.session_state.get(
             "rep_report_content", _REPORT_DEFAULT
         )
-        out = run_analysis(inp)
+        out = run_analysis(inp, input_sha256=_calculation_input_hash(inp))
         pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
                                          figures=figs, progress=_on_progress,
                                          qa_appendix=(
@@ -5445,6 +5474,7 @@ def run_analysis(
     reuse_plastic_bending_cases=None,
     reuse_elastic_cases=None,
     reuse_fatigue=None,
+    input_sha256=None,
 ):
     """Run every current named action and optional independent calculation."""
     bridge_result = _run_bridge_or_invalid(inp)
@@ -5454,7 +5484,10 @@ def run_analysis(
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
-        return {"bridge": bridge_result} if bridge_active else {}
+        result = {"bridge": bridge_result} if bridge_active else {}
+        return calculation_trace_publication.attach_calculation_traces(
+            inp, result, input_sha256=input_sha256,
+        )
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
         result = _run_single_analysis(
             inp,
@@ -5477,7 +5510,9 @@ def run_analysis(
             )
         if bridge_active:
             result["bridge"] = bridge_result
-        return result
+        return calculation_trace_publication.attach_calculation_traces(
+            inp, result, input_sha256=input_sha256,
+        )
 
     def _runner(case_inp, *, reuse_plastic=None):
         return _run_single_analysis(case_inp, reuse_plastic=reuse_plastic)
@@ -5505,7 +5540,9 @@ def run_analysis(
         )
     if bridge_active:
         result["bridge"] = bridge_result
-    return result
+    return calculation_trace_publication.attach_calculation_traces(
+        inp, result, input_sha256=input_sha256,
+    )
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -6525,6 +6562,7 @@ VIEWS = [
     "Plastic Results",
     "N-M Interaction",
     "Elastic Results",
+    "Calculation Trace",
     "Fatigue Results",
     "Bridge Calculations",
     "Detailing",
@@ -6533,6 +6571,76 @@ VIEWS = [
     "M-V-T Combined",
 ]
 _RESULT_VIEWS = tuple(VIEWS)
+
+
+def calculation_trace_view(inp, results):
+    """Render only validated solver-owned trace publication data."""
+
+    st.subheader("Calculation trace")
+    st.caption(
+        "Ordered solver-owned derivations. Each row retains its role, exact "
+        "expression and substitution, result state, unit, dependencies and source."
+    )
+    try:
+        calculations = calculation_trace_publication.published_calculations(
+            results, inp
+        )
+        errors = calculation_trace_publication.published_errors(results)
+    except calculation_trace_publication.TraceValidationError as exc:
+        st.error(f"Stored calculation trace is invalid: {exc}")
+        return
+    for error in errors:
+        st.warning(
+            f"{calculation_trace_publication.context_label(error.context)} / "
+            f"{error.coverage_id.upper()}: trace not published - {error.message}"
+        )
+    if not calculations:
+        st.info("No applicable calculation trace was published for this result.")
+        return
+    selected = st.selectbox(
+        "Calculation",
+        range(len(calculations)),
+        format_func=lambda index: calculation_trace_publication.calculation_label(
+            calculations[index]
+        ),
+        key="calculation_trace_selection",
+        help="Each option is one exact calculation member and retained context.",
+    )
+    record = calculations[selected]
+    calculation = record.calculation
+    st.caption(
+        f"Input SHA-256: {record.input_sha256} | "
+        f"Result SHA-256: {record.result_sha256} | "
+        f"Trace seal: {record.content_sha256}"
+    )
+    rows = pd.DataFrame(
+        calculation_trace_publication.format_trace_rows(calculation)
+    ).rename(columns={
+        "sequence": "No.",
+        "step": "Step",
+        "step_id": "Step ID",
+        "role": "Role",
+        "symbol": "Symbol",
+        "expression": "Symbolic expression",
+        "substitution": "Numerical substitution",
+        "state": "State",
+        "result": "Result",
+        "unit": "Unit",
+        "source": "Source / citation",
+        "dependencies": "Dependencies",
+        "warnings": "Warnings",
+        "assumptions": "Assumptions",
+    })
+    st.dataframe(
+        rows,
+        hide_index=True,
+        width="stretch",
+        height=min(800, 86 + 35 * len(rows)),
+    )
+    if calculation.warnings:
+        st.warning(" | ".join(calculation.warnings))
+    if calculation.assumptions:
+        st.caption("Assumptions: " + " | ".join(calculation.assumptions))
 
 
 def _memo_fig(name, sig, build):
@@ -9932,6 +10040,7 @@ def _analysis_workspace(inp):
             if st.session_state.get("result_fatigue_sig") == inp["fatigue_sig"]
             else None
         )
+        calculation_input_sha256 = _calculation_input_hash(inp)
         st.session_state["results"] = run_analysis(
             inp,
             reuse_plastic=reuse_plastic,
@@ -9940,6 +10049,7 @@ def _analysis_workspace(inp):
             reuse_plastic_bending_cases=reuse_plastic_bending_cases,
             reuse_elastic_cases=reuse_elastic_cases,
             reuse_fatigue=reuse_fatigue,
+            input_sha256=calculation_input_sha256,
         )
         st.session_state["result_sig"] = inp["signature"]
         st.session_state["result_plastic_sig"] = inp["plastic_sig"]
@@ -9966,7 +10076,10 @@ def _analysis_workspace(inp):
                 ),
                 "sector_version": APP_VERSION,
                 "source_revision": source_revision(),
-                "input_sha256": _project_input_hash(),
+                "input_sha256": calculation_input_sha256,
+                "result_sha256": project_io.result_sha256(
+                    st.session_state["results"]
+                ),
             }
         else:
             st.session_state.pop("result_input_snapshot", None)
@@ -10059,6 +10172,8 @@ def _analysis_workspace(inp):
 
     if view == "Results Overview":
         results_overview_view(result_inp, results, stale=stale)
+    elif view == "Calculation Trace":
+        calculation_trace_view(result_inp, results)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":

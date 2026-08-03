@@ -155,12 +155,21 @@ def test_calculation_record_is_correlated_but_results_are_not_persisted():
             "sector_version": "0.91",
             "source_revision": "abc123",
             "input_sha256": digest,
+            "result_sha256": "f" * 64,
         },
     )
     provenance = project_io.project_provenance(text)
 
     assert provenance["results_included"] is False
     assert provenance["calculation"]["matches_saved_inputs"] is True
+    assert provenance["calculation"]["result_sha256"] == "f" * 64
+
+    with pytest.raises(ValueError, match="result_sha256"):
+        project_io.dump_project(
+            tables,
+            scalars,
+            calculation={"input_sha256": digest, "result_sha256": "not-a-hash"},
+        )
 
 
 def test_nonpositive_factor_is_rejected_but_positive_custom_values_are_not():

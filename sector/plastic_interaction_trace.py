@@ -778,3 +778,33 @@ def build_plastic_interaction_trace_families(
         raise TraceValidationError(
             f"invalid CT-003/CT-004 evidence: {exc}"
         ) from exc
+
+
+def validate_plastic_interaction_trace_families(
+    bundle: TraceBundle | dict[str, Any],
+    inp: Mapping[str, Any],
+    out: Mapping[str, Any],
+    *,
+    input_sha256: str,
+    result_sha256: str,
+    context: Mapping[str, Any] | None = None,
+) -> TraceBundle:
+    """Reject stale or coherently resealed CT-003/CT-004 tampering."""
+
+    candidate = validate_bundle(
+        bundle,
+        expected_input_sha256=input_sha256,
+        expected_result_sha256=result_sha256,
+    )
+    expected = build_plastic_interaction_trace_families(
+        inp,
+        out,
+        input_sha256=input_sha256,
+        result_sha256=result_sha256,
+        context=context,
+    )
+    if candidate.to_dict() != expected.to_dict():
+        raise TraceValidationError(
+            "CT-003/CT-004 trace differs from authoritative input replay"
+        )
+    return candidate

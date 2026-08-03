@@ -38,6 +38,7 @@ from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import case_analysis
+import calculation_trace_publication
 import fatigue_inputs
 import fatigue_presentation
 import viz
@@ -849,6 +850,8 @@ class ReportBuilder:
             self._tick(0.9, "Independent bridge calculations...")
             self.flow.append(PageBreak())
             self._bridge()
+        self._tick(0.91, "Calculation trace...")
+        self._calculation_trace()
         if self.qa_appendix:
             self._appendix()
         self._tick(0.92, "Writing PDF...")
@@ -4352,6 +4355,117 @@ class ReportBuilder:
                  18 * mm, 18 * mm],
                 font=6.7,
             )
+
+    def _calculation_trace(self):
+        """Render the validated solver-owned PI-019 derivation rows."""
+
+        calculations = calculation_trace_publication.published_calculations(
+            self._base_out, self._base_inp
+        )
+        errors = calculation_trace_publication.published_errors(self._base_out)
+        if not calculations and not errors:
+            return
+        self.flow.append(PageBreak())
+        self._h1("Calculation trace")
+        self._small(
+            "This chapter is rendered directly from the solver-owned structured "
+            "trace. It does not recalculate formulas or select a governing state. "
+            "Project-defined methods remain explicitly uncited."
+        )
+        for error in errors:
+            self._small(
+                "<b>Trace publication failure:</b> "
+                + _html_escape(
+                    f"{calculation_trace_publication.context_label(error.context)} "
+                    f"/ {error.coverage_id.upper()}: {error.message}"
+                )
+            )
+        for record in calculations:
+            calculation = record.calculation
+            self._h2(_html_escape(
+                calculation_trace_publication.calculation_label(record)
+            ))
+            self._small(_html_escape(
+                f"Input SHA-256 {record.input_sha256}; result SHA-256 "
+                f"{record.result_sha256}; trace seal {record.content_sha256}."
+            ))
+            data = [[
+                "Step", "Role", "Derivation", "Result", "Provenance / graph",
+            ]]
+            long_dependencies = []
+            rows = calculation_trace_publication.format_trace_rows(calculation)
+            for row, step in zip(rows, calculation.steps):
+                dependencies = row["dependencies"]
+                if len(dependencies) > 400:
+                    dependency_text = (
+                        f"{len(step.dependencies)} ordered dependencies; "
+                        "complete list follows the compact trace table"
+                    )
+                    long_dependencies.append((
+                        f"{row['sequence']}. {row['step']} ({row['step_id']})",
+                        dependencies,
+                    ))
+                else:
+                    dependency_text = dependencies
+                notes = [
+                    f"Source: {row['source']}",
+                    f"Dependencies: {dependency_text}",
+                ]
+                if row["warnings"] != "-":
+                    notes.append(f"Warnings: {row['warnings']}")
+                if row["assumptions"] != "-":
+                    notes.append(f"Assumptions: {row['assumptions']}")
+                data.append([
+                    _html_escape(
+                        f"{row['sequence']}. {row['step']} ({row['step_id']})"
+                    ),
+                    _html_escape(f"{row['role']} / {row['symbol']}"),
+                    _html_escape(
+                        f"Symbolic: {row['expression']}; "
+                        f"Substitution: {row['substitution']}"
+                    ),
+                    _html_escape(
+                        f"{row['state']}: {row['result']} {row['unit']}"
+                    ),
+                    _html_escape("; ".join(notes)),
+                ])
+            self._table(
+                data,
+                [25 * mm, 22 * mm, 56 * mm, 24 * mm, 43 * mm],
+                font=5.4,
+                keep=False,
+            )
+            if long_dependencies:
+                self._small("<b>Complete long dependency lists</b>")
+                dependency_rows = [["Step", "Ordered dependencies"]]
+                for label, dependencies in long_dependencies:
+                    items = dependencies.split(", ")
+                    chunks = []
+                    current = ""
+                    for item in items:
+                        candidate = f"{current}, {item}" if current else item
+                        if current and len(candidate) > 900:
+                            chunks.append(current)
+                            current = item
+                        else:
+                            current = candidate
+                    if current:
+                        chunks.append(current)
+                    for index, chunk in enumerate(chunks, start=1):
+                        suffix = (
+                            f" (part {index}/{len(chunks)})"
+                            if len(chunks) > 1 else ""
+                        )
+                        dependency_rows.append([
+                            _html_escape(label + suffix),
+                            _html_escape(chunk),
+                        ])
+                self._table(
+                    dependency_rows,
+                    [42 * mm, 128 * mm],
+                    font=5.4,
+                    keep=False,
+                )
 
     def _fatigue(self):
         payload = self._base_out["fatigue"]
