@@ -11,10 +11,14 @@ for a hollow section. The centre-line is the outer outline offset inward by
 
 Resistances (variable strut angle ``theta``, shared with the shear check):
 
-* Closed stirrups   ``TRd,s   = (Asw/s) * 2*Ak * fywd * cot(theta)``      (from 6.28)
+* Closed stirrups   ``TRd,s   = (Asw/s) * 2*Ak * fywd * cot(theta)``      (6.27 + 6.8)
 * Concrete struts   ``TRd,max = 2*nu*alpha_cw*fcd*Ak*tef*sin*cos``        (6.30)
 * Cracking          ``TRd,c   = 2*Ak*tef*fctd``                           (tau = fctd)
 * Longitudinal steel required ``sum Asl = TEd*uk*cot(theta)/(2*Ak*fyd)``  (6.28)
+
+The closed-stirrup expression follows the torsional wall shear flow in 6.27 and
+the transverse-reinforcement equilibrium in 6.8. Formula 6.28 separately defines
+the longitudinal torsion reinforcement.
 
 The strut factor ``nu`` is the code's torsion effectiveness factor (recommended
 ``nu = 0.6(1 - fck/250)``; the DK NA:2024 ``nu_t = 0.7*(0.7 - fck/200)``, 5.104 NA).
