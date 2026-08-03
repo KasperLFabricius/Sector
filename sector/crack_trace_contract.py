@@ -53,6 +53,7 @@ EDITION_2023 = "2023"
 DOCUMENT_2023 = "DS/EN 1992-1-1:2023"
 FAMILY_2023 = "ct-009-crack-width-2023-calculated-bending"
 METHOD_2023_BENDING = "sector-en-1992-1-1-2023-refined-bending-replay"
+METHOD_2023_DIRECT = "sector-en-1992-1-1-2023-uniform-direct-tension-replay"
 METHOD_2023_NOT_APPLICABLE = (
     "sector-en-1992-1-1-2023-crack-width-not-applicable"
 )
@@ -88,12 +89,14 @@ def _dk_standard(method: str, clause: str, locator: str) -> TraceSource:
     )
 
 
-def _standard_2023(method: str, locator: str) -> TraceSource:
+def _standard_2023(
+    method: str, locator: str, *, clause: str = "9.2.3",
+) -> TraceSource:
     return TraceSource(
         SOURCE_STANDARD,
         method,
         DOCUMENT_2023,
-        SourceCitation(DOCUMENT_2023, "9.2.3", locator),
+        SourceCitation(DOCUMENT_2023, clause, locator),
     )
 
 
@@ -176,6 +179,14 @@ FLEXURAL_2023 = _standard_2023(
 )
 BOND_2023 = _standard_2023(
     "en-1992-1-1-2023-bond-factor", "Formula (9.18)"
+)
+TENDON_BOND_2023 = _standard_2023(
+    "en-1992-1-1-2023-adjusted-prestress-bond-ratio",
+    "Formula (9.6)",
+    clause="9.2.2(3)",
+)
+PURE_TENSION_2023 = _standard_2023(
+    "en-1992-1-1-2023-pure-tension-flexural-coefficient", "Formula (9.20)"
 )
 CRACK_WIDTH_2023 = _standard_2023(
     "en-1992-1-1-2023-calculated-crack-width", "Formula (9.8)"
