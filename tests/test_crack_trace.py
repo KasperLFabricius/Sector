@@ -277,6 +277,8 @@ def _change_leaf(value):
         return value + 1
     if type(value) is float:
         return float(np.nextafter(value, math.inf))
+    if isinstance(value, np.floating):
+        return np.nextafter(value, math.inf)
     if type(value) is str:
         return value + "-tampered"
     raise AssertionError(f"unhandled hostile leaf type {type(value)!r}")
@@ -1802,23 +1804,304 @@ def test_2023_formula_9_15_reconstructs_uncapped_cap_and_selection(
     assert _reachable(calculation) == set(by_id)
 
 
-def test_2023_direct_and_tendon_subfamilies_fail_closed():
-    direct = _2023_direct_input()
-    with pytest.raises(TraceValidationError, match="direct-tension trace is deferred"):
+def test_2023_uniform_direct_tension_round_trip_and_formula_oracle():
+    inp = _2023_direct_input()
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-direct-tension"},
+    )
+    assert validate_crack_trace_family(
+        bundle,
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-direct-tension"},
+    ) == bundle
+    expected_warning = (
+        "Validated uniform direct-tension branch for a solid rectangular section "
+        "with reinforcement assigned to opposed faces."
+    )
+    for calculation in bundle.calculations[:2]:
+        axes = {axis.name: axis.value for axis in calculation.axes}
+        assert calculation.method_id == (
+            "sector-en-1992-1-1-2023-uniform-direct-tension-replay"
+        )
+        assert axes["crack_branch"] == "calculated"
+        assert axes["crack_scope"] == "uniform-direct-tension"
+        assert axes["crack_direction"] == "uniform-direct-tension"
+        assert calculation.warnings == (expected_warning,)
+        assert _reachable(calculation) == {
+            step.step_id for step in calculation.steps
+        }
+
+    calculation = bundle.calculations[0]
+    by_id = {step.step_id: step for step in calculation.steps}
+    prefix = "candidate-0001"
+    phi = math.sqrt(4.0 * 500.0 / math.pi)
+    cover = 50.0 - phi / 2.0
+    rho = (4.0 * 500.0e-6) / 0.18
+    spacing = 1.5 * cover + 0.9 / 7.2 * phi / rho
+    sigma = by_id[f"{prefix}-sigma-s"].result.value
+    expected_strain = max(
+        (sigma - 0.4 * 3.2 / rho * (1.0 + inp["nl"] * rho)) / 200_000.0,
+        0.6 * sigma / 200_000.0,
+    )
+    assert by_id[f"{prefix}-bc-eff"].result.value == pytest.approx(0.15)
+    assert by_id[f"{prefix}-hc-eff"].result.value == pytest.approx(0.175)
+    assert by_id[f"{prefix}-ac-eff"].result.value == pytest.approx(0.18)
+    assert by_id[f"{prefix}-rho-p-eff"].result.value == pytest.approx(rho)
+    assert by_id[f"{prefix}-k1-r"].result.value == pytest.approx(1.0)
+    assert by_id[f"{prefix}-kfl"].result.value == pytest.approx(1.0)
+    assert by_id[f"{prefix}-kfl"].source.citation.locator == "Formula (9.20)"
+    assert by_id[f"{prefix}-sr-max"].result.value == pytest.approx(spacing)
+    assert by_id[f"{prefix}-esm-ecm"].result.value == pytest.approx(expected_strain)
+    assert by_id[f"{prefix}-wk"].result.value == pytest.approx(
+        1.7 * spacing * expected_strain
+    )
+
+
+def test_2023_asymmetric_direct_face_bands_recompose_union_area():
+    inp = _2023_direct_input()
+    top_area = 500.0 * 0.25 / 0.24
+    bars = [
+        (-0.08, -0.25, 500.0),
+        (0.08, -0.25, 500.0),
+        (-0.08, 0.24, top_area),
+        (0.08, 0.24, top_area),
+    ]
+    inp.update(
+        bars=bars,
+        section=Section.from_polygon(inp["outer"], bars),
+        bar_materials=[inp["steel"]] * len(bars),
+        bar_elements=[
+            _record(f"B{position}", x, y, area)
+            for position, (x, y, area) in enumerate(bars, start=1)
+        ],
+    )
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-asymmetric-direct-bands"},
+    )
+    assert validate_crack_trace_family(
+        bundle,
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-asymmetric-direct-bands"},
+    ) == bundle
+    calculation = bundle.calculations[0]
+    by_id = {step.step_id: step for step in calculation.steps}
+    prefix = "candidate-0001"
+    left = by_id[f"{prefix}-band-left"].result.value
+    right = by_id[f"{prefix}-band-right"].result.value
+    bottom = by_id[f"{prefix}-band-bottom"].result.value
+    top = by_id[f"{prefix}-band-top"].result.value
+    width = by_id[f"{prefix}-rectangle-width"].result.value
+    height = by_id[f"{prefix}-rectangle-height"].result.value
+    inner_width = by_id[f"{prefix}-inner-width"].result.value
+    inner_height = by_id[f"{prefix}-inner-height"].result.value
+    area = by_id[f"{prefix}-ac-eff"]
+    assert bottom != pytest.approx(top)
+    assert inner_width == pytest.approx(max(width - left - right, 0.0))
+    assert inner_height == pytest.approx(max(height - bottom - top, 0.0))
+    assert area.result.value == pytest.approx(
+        width * height - inner_width * inner_height
+    )
+    assert {dependency.step_id for dependency in area.dependencies} == {
+        f"{prefix}-rectangle-width",
+        f"{prefix}-rectangle-height",
+        f"{prefix}-band-left",
+        f"{prefix}-band-right",
+        f"{prefix}-band-bottom",
+        f"{prefix}-band-top",
+        f"{prefix}-inner-width",
+        f"{prefix}-inner-height",
+    }
+    assert _reachable(calculation) == {step.step_id for step in calculation.steps}
+
+
+def test_2023_bonded_tendon_xi1_weighting_round_trip_and_provenance():
+    inp = _2023_input(with_tendon=True, sls_tendon_xi=0.7)
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-bonded-tendon"},
+    )
+    assert validate_crack_trace_family(
+        bundle,
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-bonded-tendon"},
+    ) == bundle
+    calculation = bundle.calculations[0]
+    by_id = {step.step_id: step for step in calculation.steps}
+    prefix = "candidate-0001"
+    assert out["elastic"]["crack"]["element_type"] == "Tendon"
+    assert calculation.method_id == (
+        "sector-en-1992-1-1-2023-refined-bending-replay"
+    )
+    assert by_id[f"{prefix}-kb"].result.value == pytest.approx(1.2)
+    mild_phi = math.sqrt(4.0 * 500.0 / math.pi)
+    tendon_phi = math.sqrt(4.0 * 780.0 / math.pi)
+    expected_xi1 = math.sqrt(0.7 * mild_phi / tendon_phi)
+    xi1 = by_id[f"{prefix}-xi1"]
+    assert xi1.result.value == pytest.approx(expected_xi1)
+    assert xi1.source.citation.document == "DS/EN 1992-1-1:2023"
+    assert xi1.source.citation.clause == "9.2.2(3)"
+    assert xi1.source.citation.locator == "Formula (9.6)"
+    weighted = by_id[f"{prefix}-ap-eff-weighted"]
+    assert weighted.result.value == pytest.approx(780.0e-6 * expected_xi1)
+    assert weighted.source.citation.locator == "Formula (9.6)"
+    assert by_id[f"{prefix}-rho-p-eff"].result.value == pytest.approx(
+        (
+            by_id[f"{prefix}-as-eff"].result.value
+            + weighted.result.value
+        ) / by_id[f"{prefix}-ac-eff"].result.value
+    )
+    assert _reachable(calculation) == {step.step_id for step in calculation.steps}
+
+
+def test_2023_tendon_bond_value_is_active_only_with_selected_tendons():
+    first_input = _2023_input(with_tendon=True, sls_tendon_xi=0.6)
+    second_input = _2023_input(with_tendon=True, sls_tendon_xi=0.8)
+    first = build_crack_trace_family(
+        first_input,
+        _output(first_input),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-tendon-xi"},
+    )
+    second = build_crack_trace_family(
+        second_input,
+        _output(second_input),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-tendon-xi"},
+    )
+    assert first.content_sha256 != second.content_sha256
+
+    without_tendon_a = _2023_input(sls_tendon_xi=0.2)
+    without_tendon_b = _2023_input(sls_tendon_xi=0.9)
+    inert_a = build_crack_trace_family(
+        without_tendon_a,
+        _output(without_tendon_a),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    inert_b = build_crack_trace_family(
+        without_tendon_b,
+        _output(without_tendon_b),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    assert inert_a == inert_b
+
+
+@pytest.mark.parametrize(
+    "bond_ratio,reason",
+    [
+        (0.0, "bond ratio xi is required"),
+        (1.2, "must be finite and in the interval 0 < xi <= 1"),
+    ],
+)
+def test_2023_tendon_bond_scope_failures_are_explicit_not_assessed(
+    bond_ratio, reason,
+):
+    inp = _2023_input(with_tendon=True, sls_tendon_xi=bond_ratio)
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": f"2023-tendon-xi-{bond_ratio}"},
+    )
+    assert out["elastic"]["crack"] is None
+    assert out["elastic"]["crack_short"] is None
+    assert all(
+        {axis.name: axis.value for axis in calculation.axes}["crack_branch"]
+        == "not-assessed"
+        for calculation in bundle.calculations
+    )
+    assert reason in bundle.calculations[0].steps[-1].result.reason
+    assert reason in bundle.calculations[-1].steps[-1].result.reason
+
+
+@pytest.mark.parametrize("bond_ratio", [0.0, 1.2])
+def test_2023_invalid_tendon_interval_cannot_hide_outside_effective_area(
+    bond_ratio,
+):
+    inp = _2023_input(with_tendon=True, sls_tendon_xi=bond_ratio)
+    tendons = [(0.15, 0.55, 780.0)]
+    inp["tendons"] = tendons
+    inp["section"] = Section.from_polygon(
+        inp["outer"], inp["bars"], tendons_xy_area_mm2=tendons
+    )
+    inp["tendon_elements"][0]["y"] = 0.55
+    inp["tendon_elements"][0]["y_mm"] = 550.0
+    out = _output(inp)
+    assert out["elastic"]["crack"] is not None
+    with pytest.raises(TraceValidationError, match="outside 0 < xi <= 1"):
         build_crack_trace_family(
-            direct,
-            _output(direct),
+            inp,
+            out,
             input_sha256=INPUT_SHA,
             result_sha256=RESULT_SHA,
         )
-    tendon = _2023_input(with_tendon=True, sls_tendon_xi=0.7)
-    with pytest.raises(TraceValidationError, match="tendon bond trace is deferred"):
+
+
+@pytest.mark.parametrize("bond_ratio", [-0.1, float("nan"), float("inf")])
+def test_2023_selected_tendon_bond_input_sign_and_finiteness_fail_first(bond_ratio):
+    inp = _2023_input(with_tendon=True, sls_tendon_xi=bond_ratio)
+    with pytest.raises(TraceValidationError, match="sls_tendon_xi"):
         build_crack_trace_family(
-            tendon,
-            _output(tendon),
+            inp,
+            {},
             input_sha256=INPUT_SHA,
             result_sha256=RESULT_SHA,
         )
+
+
+@pytest.mark.parametrize("fixture", ["direct", "tendon"])
+def test_2023_direct_and_tendon_owned_output_leaves_are_reconstructed(fixture):
+    inp = (
+        _2023_direct_input()
+        if fixture == "direct"
+        else _2023_input(with_tendon=True, sls_tendon_xi=0.7)
+    )
+    out = _output(inp)
+    owned = {
+        key: value
+        for key, value in out["elastic"].items()
+        if key == "converged"
+        or key.startswith("crack")
+        or key.startswith(("lambda_cr", "sigma_ct", "fctm", "show_cw", "props_"))
+    }
+    for path in tuple(_leaf_paths(owned)):
+        changed = copy.deepcopy(out)
+        _mutate_path(changed["elastic"], path)
+        with pytest.raises(TraceValidationError):
+            build_crack_trace_family(
+                inp,
+                changed,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
 
 
 def _2023_mixed_not_assessed_bundle(monkeypatch):
@@ -1974,7 +2257,7 @@ def test_2023_not_assessed_metadata_and_reasons_reject_resealed_tampering(
         )
 
 
-def test_2023_direct_tension_fence_does_not_depend_on_candidate_presence():
+def test_2023_unsupported_direct_geometry_remains_not_assessed():
     inp = _2023_direct_input()
     outer = [
         (-0.30, 0.0),
@@ -2003,17 +2286,34 @@ def test_2023_direct_tension_fence_does_not_depend_on_candidate_presence():
     out = _output(inp)
     assert out["elastic"]["crack"] is None
     assert out["elastic"]["crack_short"] is None
-    with pytest.raises(TraceValidationError, match="direct-tension trace is deferred"):
-        build_crack_trace_family(
-            inp,
-            out,
-            input_sha256=INPUT_SHA,
-            result_sha256=RESULT_SHA,
-        )
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-unsupported-direct-geometry"},
+    )
+    reason = (
+        "Uniform direct tension is validated only for a solid rectangular "
+        "section; this geometry is outside that scope."
+    )
+    assert [
+        {axis.name: axis.value for axis in calculation.axes}["crack_branch"]
+        for calculation in bundle.calculations
+    ] == ["not-assessed", "not-assessed", "not-assessed"]
+    assert [
+        calculation.steps[-1].result.reason
+        for calculation in bundle.calculations
+    ] == [
+        reason,
+        reason,
+        "The retained 2023 crack-width aggregate is not assessed: " + reason,
+    ]
 
 
-def test_2023_pr08d2a1_calculated_and_uncracked_bundle_bytes_remain_frozen():
+def test_accepted_2023_calculated_applicability_and_uncracked_bytes_remain_frozen():
     calculated = _2023_input()
+    not_assessed = _2023_direct_input(Mx_el_l=10.0)
     uncracked = _2023_input(
         P_el_l=0.0,
         Mx_el_l=0.0,
@@ -2027,6 +2327,11 @@ def test_2023_pr08d2a1_calculated_and_uncracked_bundle_bytes_remain_frozen():
             calculated,
             {"route": "2023-calculated-bending"},
             "e40416438c1894795e040c820e16d2b04904d196f86fceccba13785278085390",
+        ),
+        (
+            not_assessed,
+            {"route": "2023-combined-tension-bending"},
+            "49b28b502350a4047339f891aabff7da31befce5e681b9c6407a7f40cf3e77d1",
         ),
         (
             uncracked,
