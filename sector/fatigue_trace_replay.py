@@ -1,8 +1,9 @@
-"""Failure-first boundary replay and independent CT-010a mechanics."""
+"""Failure-first boundary replay and independent CT-010 mechanics."""
 
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import math
 import pathlib
 import sys
@@ -13,6 +14,16 @@ from typing import Any
 import numpy as np
 
 from .calculation_trace import TraceValidationError
+from .fatigue import (
+    CONCRETE_EQUIVALENT,
+    CONCRETE_MINER_METHODS,
+    FatigueLife,
+    _concrete_compression_mpa,
+    concrete_equivalent_utilisation,
+    concrete_fatigue_life,
+    concrete_fatigue_strength,
+    locate_governing_concrete_fibre,
+)
 from .fatigue_trace_contract import INVALID_KEYS, SUCCESS_KEYS
 
 
@@ -124,14 +135,23 @@ def same_structure(actual: Any, expected: Any, label: str) -> None:
             same_structure(left, right, f"{label}[{position}]")
 
 
-def _candidate_state(actual: Any, expected: Any, label: str) -> None:
+def _candidate_state(
+    actual: Any,
+    expected: Any,
+    label: str,
+    concrete_enabled: bool,
+) -> None:
     if type(actual) is not type(expected) or not dataclasses.is_dataclass(expected):
         fail(f"{label} fatigue state type differs")
     fields = tuple(field.name for field in dataclasses.fields(expected))
     if tuple(field.name for field in dataclasses.fields(actual)) != fields:
         fail(f"{label} fatigue state inventory differs")
     for field in fields:
-        comparator = same_structure if field in _STATE_CONCRETE else exact
+        comparator = (
+            exact
+            if concrete_enabled or field not in _STATE_CONCRETE
+            else same_structure
+        )
         comparator(
             getattr(actual, field), getattr(expected, field),
             f"{label}.{field}")
@@ -152,11 +172,11 @@ def _candidate_spectrum(
                 fail(f"{label}.bins position/type differs")
             for position, (state, retained) in enumerate(zip(left, right)):
                 _candidate_state(
-                    state, retained, f"{label}.bins[{position}]")
+                    state, retained, f"{label}.bins[{position}]",
+                    concrete_enabled)
         elif field in _SPECTRUM_CONCRETE:
-            same_structure(left, right, f"{label}.{field}")
-        elif concrete_enabled and field in _SPECTRUM_MIXED:
-            same_structure(left, right, f"{label}.{field}")
+            comparator = exact if concrete_enabled else same_structure
+            comparator(left, right, f"{label}.{field}")
         else:
             exact(left, right, f"{label}.{field}")
 
@@ -179,8 +199,9 @@ def compare_candidate(candidate: Any, replay: Any) -> None:
         elif key == "partial_factors":
             if type(actual) is not dict or tuple(actual) != tuple(expected):
                 fail("fatigue partial-factor inventory differs")
-            same_structure(actual["gamma_c"], expected["gamma_c"],
-                           "fatigue.partial_factors.gamma_c")
+            comparator = exact if concrete_enabled else same_structure
+            comparator(actual["gamma_c"], expected["gamma_c"],
+                       "fatigue.partial_factors.gamma_c")
             exact(actual["gamma_s"], expected["gamma_s"],
                   "fatigue.partial_factors.gamma_s")
             exact(actual["gamma_ff"], expected["gamma_ff"],
@@ -189,13 +210,16 @@ def compare_candidate(candidate: Any, replay: Any) -> None:
             if type(actual) is not dict or tuple(actual) != tuple(expected):
                 fail("fatigue calculation-reference inventory differs")
             for family in expected:
-                comparator = same_structure if family == "concrete" else exact
+                comparator = (
+                    exact
+                    if family != "concrete" or concrete_enabled
+                    else same_structure
+                )
                 comparator(actual[family], expected[family],
                            f"fatigue.calculation_references.{family}")
         elif key in _TOP_CONCRETE:
-            same_structure(actual, expected, f"fatigue.{key}")
-        elif concrete_enabled and key in _TOP_MIXED:
-            same_structure(actual, expected, f"fatigue.{key}")
+            comparator = exact if concrete_enabled else same_structure
+            comparator(actual, expected, f"fatigue.{key}")
         else:
             exact(actual, expected, f"fatigue.{key}")
 
@@ -227,7 +251,7 @@ def _deferred_invalid(inp: Mapping[str, Any], candidate: dict) -> None:
 
 
 def classify(inp: Mapping[str, Any], out: Mapping[str, Any]) -> tuple[str, Any]:
-    enabled, steel, _concrete = _controls(inp)
+    enabled, steel, concrete = _controls(inp)
     if not isinstance(out, Mapping):
         fail("analysis output must be a mapping")
     candidate = out.get("fatigue")
@@ -241,7 +265,7 @@ def classify(inp: Mapping[str, Any], out: Mapping[str, Any]) -> tuple[str, Any]:
         fail("fatigue payload must be an exact built-in dict")
     if tuple(candidate) == INVALID_KEYS:
         _deferred_invalid(inp, candidate)
-        return ("invalid" if steel else "none"), candidate
+        return ("invalid" if steel or concrete else "none"), candidate
     if "valid" in candidate:
         fail("malformed fatigue valid discriminator/inventory")
     return "success", candidate
@@ -318,11 +342,50 @@ class AssessmentReplay:
 
 
 @dataclass(frozen=True, slots=True)
+class ConcreteBinReplay:
+    input_bin: Any
+    state: Any
+    reported: Any
+    values: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class ConcreteAssessmentReplay:
+    spectrum_name: str
+    spectrum_position: int
+    fibre_position: int
+    properties: Any
+    reported: Any
+    bins: tuple[ConcreteBinReplay, ...]
+    damage: float
+    governing_damage_bin: str
+    stress_utilisation: float
+    governing_stress_bin: str
+    equivalent_utilisation: float | None
+    governing_equivalent_bin: str | None
+    utilisation: float
+    converged: bool
+    passed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ConcreteSearchReplay:
+    reported: Any
+    replayed: Any
+    parameters: Mapping[str, float]
+
+
+@dataclass(frozen=True, slots=True)
 class SpectrumReplay:
     name: str
     position: int
     reported: Any
     assessments: tuple[AssessmentReplay, ...]
+    concrete: tuple[ConcreteAssessmentReplay, ...] = ()
+    concrete_search: ConcreteSearchReplay | None = None
+    utilisation: float = 0.0
+    converged: bool = True
+    passed: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,7 +432,8 @@ def _boundary_fields(boundary: Any, prepared: Any, replay: Mapping[str, Any]) ->
             expected_references["reinforcement"],
             "fatigue.calculation_references.reinforcement")
     if "concrete" in expected_references:
-        same_structure(
+        comparator = exact if prepared.check_concrete else same_structure
+        comparator(
             replay["calculation_references"]["concrete"],
             expected_references["concrete"],
             "fatigue.calculation_references.concrete")
@@ -378,8 +442,9 @@ def _boundary_fields(boundary: Any, prepared: Any, replay: Mapping[str, Any]) ->
     if type(factors) is not dict or tuple(factors) != (
         "gamma_c", "gamma_s", "gamma_ff"):
         fail("fatigue partial-factor boundary inventory differs")
-    same_structure(factors["gamma_c"], prepared.gamma_c,
-                   "fatigue.partial_factors.gamma_c")
+    comparator = exact if prepared.check_concrete else same_structure
+    comparator(factors["gamma_c"], prepared.gamma_c,
+               "fatigue.partial_factors.gamma_c")
     exact(factors["gamma_s"], prepared.gamma_s,
           "fatigue.partial_factors.gamma_s")
     exact(factors["gamma_ff"], prepared.gamma_ff,
@@ -389,6 +454,21 @@ def _boundary_fields(boundary: Any, prepared: Any, replay: Mapping[str, Any]) ->
     exact(replay["fatigue_detail_basis"], prepared.detail_records,
           "fatigue.fatigue_detail_basis")
     exact(replay["elements"], prepared.element_records, "fatigue.elements")
+    if prepared.check_concrete:
+        concrete = prepared.concrete
+        if concrete is None:
+            fail("prepared concrete fatigue properties are unavailable")
+        exact(replay["concrete_method"], prepared.concrete_method,
+              "fatigue.concrete_method")
+        exact(replay["concrete_parameters"], {
+            "fck_mpa": concrete.fck_mpa,
+            "beta_cc_t0": concrete.beta_cc_t0,
+            "alpha_cc": concrete.alpha_cc,
+            "k1": concrete.k1,
+            "c": concrete.c,
+            "method": concrete.method,
+        }, "fatigue.concrete_parameters")
+        exact(replay["t0_days"], prepared.t0_days, "fatigue.t0_days")
 
 
 def _bin_replay(
@@ -524,6 +604,287 @@ def _assessment_replay(
         utilisation, converged, passed)
 
 
+def _point_compression(result: Any, point: np.ndarray) -> float:
+    return _concrete_compression_mpa(
+        result,
+        np.asarray((point,), dtype=float),
+    )[0]
+
+
+def _concrete_bin_replay(
+    input_bin: Any,
+    state: Any,
+    reported: Any,
+    properties: Any,
+    point: np.ndarray,
+    fibre_position: int,
+    gamma_ff: float,
+) -> ConcreteBinReplay:
+    exact(state.name, input_bin.name, "concrete state/input bin name")
+    exact(state.description, input_bin.description,
+          "concrete state/input bin description")
+    close(state.cycles, input_bin.cycles, "concrete state/input cycles")
+    exact(reported.bin_name, state.name, "concrete reported/state bin name")
+    close(reported.cycles, input_bin.cycles, "concrete reported cycles")
+    if type(state.converged) is not bool or type(reported.converged) is not bool:
+        fail("concrete bin convergence must be exact Boolean")
+    if reported.converged != state.converged:
+        fail("concrete reported convergence differs from solver state")
+    raw = state.elastic_result
+    if raw is None:
+        fail("concrete fatigue replay requires retained Elastic results")
+    design = state.design_elastic_result
+    if design is None:
+        if not math.isclose(gamma_ff, 1.0, rel_tol=0.0, abs_tol=1.0e-12):
+            fail("non-unit gamma_Ff requires a retained design Elastic result")
+        design = raw
+    close(state.design_action_factor, gamma_ff,
+          "concrete state design action factor")
+    for label, values in (
+        ("long", state.concrete_compression_long_mpa),
+        ("total", state.concrete_compression_total_mpa),
+        ("design total", state.concrete_compression_design_total_mpa),
+    ):
+        if type(values) is not tuple or fibre_position >= len(values):
+            fail(f"concrete state {label} stress position is unavailable")
+    sigma_long = _point_compression(raw.long, point)
+    sigma_total = _point_compression(raw.short_term, point)
+    sigma_design = _point_compression(design.short_term, point)
+    close(state.concrete_compression_long_mpa[fibre_position], sigma_long,
+          "concrete state long compression")
+    close(state.concrete_compression_total_mpa[fibre_position], sigma_total,
+          "concrete state total compression")
+    close(state.concrete_compression_design_total_mpa[fibre_position],
+          sigma_design, "concrete state design compression")
+    sigma_min = min(sigma_long, sigma_design)
+    sigma_max = max(sigma_long, sigma_design)
+    strength = concrete_fatigue_strength(properties)
+    ratio = sigma_min / sigma_max if sigma_max > 0.0 else 0.0
+    e_min = sigma_min / strength
+    e_max = sigma_max / strength
+    equivalent = None
+    if properties.method in CONCRETE_MINER_METHODS:
+        life = concrete_fatigue_life(
+            sigma_max,
+            sigma_min,
+            fcd_fat_mpa=strength,
+            c=properties.c,
+        )
+        damage = _damage(state.cycles, life.log10_cycles)
+    else:
+        life = FatigueLife(math.inf, math.inf, 0.0)
+        damage = 0.0
+        equivalent = concrete_equivalent_utilisation(
+            sigma_max,
+            sigma_min,
+            fcd_fat_mpa=strength,
+        )
+    comparisons = (
+        (reported.compression_long_mpa, sigma_long, "long compression"),
+        (reported.compression_total_mpa, sigma_total, "raw total compression"),
+        (reported.compression_min_design_mpa, sigma_min,
+         "minimum design compression"),
+        (reported.compression_max_design_mpa, sigma_max,
+         "maximum design compression"),
+        (reported.stress_ratio, ratio, "concrete stress ratio"),
+        (reported.e_cd_min, e_min, "minimum concrete stress level"),
+        (reported.e_cd_max, e_max, "maximum concrete stress level"),
+        (reported.cycles_to_failure, life.cycles, "concrete fatigue life"),
+        (reported.log10_cycles_to_failure, life.log10_cycles,
+         "concrete logarithmic fatigue life"),
+        (reported.damage, damage, "concrete bin damage"),
+        (reported.stress_utilisation, e_max,
+         "concrete stress utilisation"),
+    )
+    for actual, expected, label in comparisons:
+        close(actual, expected, label)
+    if equivalent is None:
+        exact(reported.equivalent_utilisation, None,
+              "inert equivalent utilisation")
+    else:
+        close(reported.equivalent_utilisation, equivalent,
+              "equivalent utilisation")
+    return ConcreteBinReplay(
+        input_bin,
+        state,
+        reported,
+        {
+            "cycles": state.cycles,
+            "converged": float(state.converged),
+            "x": float(point[0]),
+            "y": float(point[1]),
+            "long": sigma_long,
+            "total": sigma_total,
+            "design_total": sigma_design,
+            "minimum": sigma_min,
+            "maximum": sigma_max,
+            "ratio": ratio,
+            "e_min": e_min,
+            "e_max": e_max,
+            "life": life.cycles,
+            "log_life": life.log10_cycles,
+            "damage": damage,
+            "stress_utilisation": e_max,
+            "equivalent_utilisation": (
+                0.0 if equivalent is None else equivalent
+            ),
+        },
+    )
+
+
+def _concrete_assessment_replay(
+    input_bins: tuple[Any, ...],
+    spectrum: Any,
+    properties: Any,
+    reported: Any,
+    point: np.ndarray,
+    spectrum_position: int,
+    fibre_position: int,
+    gamma_ff: float,
+) -> ConcreteAssessmentReplay:
+    exact(reported.fibre_index, fibre_position, "concrete fibre position")
+    close(reported.x_m, point[0], "concrete fibre x")
+    close(reported.y_m, point[1], "concrete fibre y")
+    if type(reported.bins) is not tuple or len(reported.bins) != len(input_bins):
+        fail("concrete assessment bin position/type differs")
+    bins = tuple(
+        _concrete_bin_replay(
+            input_bin,
+            state,
+            result,
+            properties,
+            point,
+            fibre_position,
+            gamma_ff,
+        )
+        for input_bin, state, result in zip(
+            input_bins, spectrum.bins, reported.bins)
+    )
+    strength = concrete_fatigue_strength(properties)
+    damage = sum(item.values["damage"] for item in bins)
+    damage_governing = max(bins, key=lambda item: item.values["damage"])
+    stress_governing = max(
+        bins, key=lambda item: item.values["stress_utilisation"])
+    equivalent_governing = (
+        max(bins, key=lambda item: item.values["equivalent_utilisation"])
+        if properties.method == CONCRETE_EQUIVALENT else None
+    )
+    equivalent = (
+        equivalent_governing.values["equivalent_utilisation"]
+        if equivalent_governing is not None else None
+    )
+    converged = all(item.state.converged for item in bins)
+    utilisation = max(
+        damage,
+        stress_governing.values["stress_utilisation"],
+        equivalent or 0.0,
+    )
+    passed = bool(converged and damage <= 1.0
+                  and stress_governing.values["stress_utilisation"] <= 1.0
+                  and (equivalent is None or equivalent <= 1.0))
+    for actual, expected, label in (
+        (reported.fcd_fat_mpa, strength, "concrete fatigue strength"),
+        (reported.damage, damage, "concrete fibre damage"),
+        (reported.damage_utilisation, damage,
+         "concrete fibre damage utilisation"),
+        (reported.stress_utilisation,
+         stress_governing.values["stress_utilisation"],
+         "concrete fibre stress utilisation"),
+        (reported.utilisation, utilisation, "concrete fibre utilisation"),
+    ):
+        close(actual, expected, label)
+    exact(reported.governing_damage_bin, damage_governing.state.name,
+          "concrete governing damage bin")
+    exact(reported.governing_stress_bin, stress_governing.state.name,
+          "concrete governing stress bin")
+    exact(reported.method, properties.method, "concrete assessment method")
+    if equivalent is None:
+        exact(reported.equivalent_utilisation, None,
+              "inert concrete equivalent aggregate")
+        exact(reported.governing_equivalent_bin, None,
+              "inert concrete equivalent governor")
+    else:
+        close(reported.equivalent_utilisation, equivalent,
+              "concrete equivalent aggregate")
+        exact(reported.governing_equivalent_bin,
+              equivalent_governing.state.name,
+              "concrete governing equivalent bin")
+    if type(reported.converged) is not bool or reported.converged != converged:
+        fail("concrete assessment convergence differs")
+    if type(reported.passed) is not bool or reported.passed != passed:
+        fail("concrete assessment verdict differs")
+    return ConcreteAssessmentReplay(
+        spectrum.spectrum_name,
+        spectrum_position,
+        fibre_position,
+        properties,
+        reported,
+        bins,
+        damage,
+        damage_governing.state.name,
+        stress_governing.values["stress_utilisation"],
+        stress_governing.state.name,
+        equivalent,
+        equivalent_governing.state.name if equivalent_governing else None,
+        utilisation,
+        converged,
+        passed,
+    )
+
+
+def _concrete_search_replay(
+    prepared: Any,
+    spectrum: Any,
+) -> ConcreteSearchReplay:
+    if spectrum.concrete_search is None or prepared.concrete is None:
+        fail("concrete fatigue search evidence is unavailable")
+    replayed = locate_governing_concrete_fibre(
+        prepared.section,
+        spectrum.bins,
+        prepared.concrete,
+        gamma_ff=prepared.gamma_ff,
+    )
+    reported = spectrum.concrete_search
+    for field in (
+        "x_m", "y_m", "damage", "upper_damage",
+        "absolute_gap", "relative_gap",
+    ):
+        close(getattr(reported, field), getattr(replayed, field),
+              f"concrete search {field}")
+    for field in (
+        "divisions", "boxes_evaluated", "points_evaluated",
+        "converged", "method",
+    ):
+        exact(getattr(reported, field), getattr(replayed, field),
+              f"concrete search {field}")
+    signature = inspect.signature(locate_governing_concrete_fibre)
+    parameters = {
+        name: float(signature.parameters[name].default)
+        for name in (
+            "initial_divisions", "max_depth", "max_boxes",
+            "relative_tolerance", "absolute_tolerance",
+        )
+    }
+    return ConcreteSearchReplay(reported, replayed, parameters)
+
+
+def _concrete_points(prepared: Any, search: ConcreteSearchReplay) -> np.ndarray:
+    points = prepared.section.concrete_vertices()
+    search_point = np.asarray(
+        (search.replayed.x_m, search.replayed.y_m),
+        dtype=float,
+    )
+    extent = max(
+        float(np.ptp(points[:, 0])),
+        float(np.ptp(points[:, 1])),
+        1.0,
+    )
+    duplicate = np.any(
+        np.linalg.norm(points - search_point, axis=1) <= 1.0e-10 * extent
+    )
+    return points if duplicate else np.vstack((points, search_point))
+
+
 def successful_replay(
     inp: Mapping[str, Any], candidate: dict,
 ) -> SuccessfulReplay:
@@ -565,28 +926,110 @@ def successful_replay(
                 spectrum_position, element_position, prepared.gamma_s)
             assessments.append(replay)
             all_assessments.append(replay)
-        if not prepared.check_reinforcement:
-            spectra.append(SpectrumReplay(
-                prepared_name, spectrum_position, reported_spectrum, ()))
-            continue
-        governing = max(assessments, key=lambda item: item.utilisation)
-        exact(reported_spectrum.governing_reinforcement_id,
-              governing.properties.element_id,
-              "spectrum governing reinforcement identity")
-        if not prepared.check_concrete:
+        if prepared.check_reinforcement:
+            governing = max(assessments, key=lambda item: item.utilisation)
+            exact(reported_spectrum.governing_reinforcement_id,
+                  governing.properties.element_id,
+                  "spectrum governing reinforcement identity")
+        else:
+            exact(reported_spectrum.governing_reinforcement_id, None,
+                  "inactive reinforcement governor")
+
+        concrete_assessments = ()
+        concrete_search = None
+        if prepared.check_concrete:
+            if prepared.concrete is None:
+                fail("prepared concrete fatigue properties are unavailable")
+            concrete_search = _concrete_search_replay(
+                prepared, reported_spectrum)
+            points = _concrete_points(prepared, concrete_search)
+            if (
+                type(reported_spectrum.concrete) is not tuple
+                or len(reported_spectrum.concrete) != len(points)
+            ):
+                fail("concrete fibre output position/type differs")
+            for state in reported_spectrum.bins:
+                for label, values in (
+                    ("long", state.concrete_compression_long_mpa),
+                    ("total", state.concrete_compression_total_mpa),
+                    ("design", state.concrete_compression_design_total_mpa),
+                ):
+                    if type(values) is not tuple or len(values) != len(points):
+                        fail(
+                            f"concrete state {label} stress cardinality differs"
+                        )
+            concrete_assessments = tuple(
+                _concrete_assessment_replay(
+                    input_bins,
+                    reported_spectrum,
+                    prepared.concrete,
+                    result,
+                    point,
+                    spectrum_position,
+                    fibre_position,
+                    prepared.gamma_ff,
+                )
+                for fibre_position, (point, result) in enumerate(
+                    zip(points, reported_spectrum.concrete)
+                )
+            )
+            strength = concrete_fatigue_strength(prepared.concrete)
+            close(reported_spectrum.fcd_fat_mpa, strength,
+                  "spectrum concrete fatigue strength")
+            exact(reported_spectrum.concrete_method,
+                  prepared.concrete.method,
+                  "spectrum concrete method")
+            governing_concrete = max(
+                concrete_assessments,
+                key=lambda item: item.utilisation,
+            )
+            exact(reported_spectrum.governing_concrete_fibre,
+                  governing_concrete.fibre_position,
+                  "spectrum governing concrete fibre")
+            utilisations = [
+                item.utilisation
+                for item in (*assessments, *concrete_assessments)
+            ]
+            utilisations.append(concrete_search.replayed.upper_damage)
+            utilisation = max(utilisations, default=0.0)
+            converged = bool(
+                all(state.converged for state in reported_spectrum.bins)
+                and concrete_search.replayed.converged
+            )
+            passed = bool(
+                converged
+                and all(item.passed for item in assessments)
+                and all(item.passed for item in concrete_assessments)
+                and concrete_search.replayed.upper_damage <= 1.0
+            )
+            close(reported_spectrum.utilisation, utilisation,
+                  "combined spectrum utilisation")
+            if (
+                type(reported_spectrum.converged) is not bool
+                or reported_spectrum.converged != converged
+                or type(reported_spectrum.passed) is not bool
+                or reported_spectrum.passed != passed
+            ):
+                fail("combined spectrum aggregate state differs")
+        else:
+            governing = max(assessments, key=lambda item: item.utilisation)
+            utilisation = governing.utilisation
+            converged = all(item.converged for item in assessments)
+            passed = all(item.passed for item in assessments)
             close(reported_spectrum.utilisation, governing.utilisation,
                   "reinforcement-only spectrum utilisation")
             if (
                 type(reported_spectrum.converged) is not bool
                 or reported_spectrum.converged
-                != all(item.converged for item in assessments)
+                != converged
                 or type(reported_spectrum.passed) is not bool
-                or reported_spectrum.passed != all(item.passed for item in assessments)
+                or reported_spectrum.passed != passed
             ):
                 fail("reinforcement-only spectrum aggregate state differs")
         spectra.append(SpectrumReplay(
             prepared_name, spectrum_position, reported_spectrum,
-            tuple(assessments)))
+            tuple(assessments), concrete_assessments, concrete_search,
+            utilisation, converged, passed))
     if not prepared.check_concrete:
         governing = max(all_assessments, key=lambda item: item.utilisation)
         close(authoritative["utilisation"], governing.utilisation,
@@ -601,6 +1044,21 @@ def successful_replay(
             or authoritative["passed"] != all(item.passed for item in all_assessments)
         ):
             fail("reinforcement-only global aggregate state differs")
+    else:
+        governing_spectrum = max(spectra, key=lambda item: item.utilisation)
+        close(authoritative["utilisation"], governing_spectrum.utilisation,
+              "combined global utilisation")
+        exact(authoritative["governing_spectrum"], governing_spectrum.name,
+              "combined governing spectrum")
+        global_converged = all(item.converged for item in spectra)
+        global_passed = all(item.passed for item in spectra)
+        if (
+            type(authoritative["converged"]) is not bool
+            or authoritative["converged"] != global_converged
+            or type(authoritative["passed"]) is not bool
+            or authoritative["passed"] != global_passed
+        ):
+            fail("combined global aggregate state differs")
     return SuccessfulReplay(
         prepared, boundary.analysis_signature(inp), authoritative,
         tuple(spectra))

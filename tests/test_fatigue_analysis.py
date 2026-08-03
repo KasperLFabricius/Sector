@@ -463,6 +463,32 @@ def test_equivalent_concrete_method_is_mapped_and_referenced_explicitly():
     assert "Formula (E.2)" in references["concrete"]
 
 
+def test_project_concrete_miner_is_uncited_and_validates_its_c_value():
+    inp = _base(
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_PROJECT_MINER,
+    )
+    prepared = fatigue_analysis.prepare(inp)
+    references = fatigue_analysis.calculation_references(
+        prepared.edition,
+        prepared.concrete_method,
+    )
+    assert references["concrete"] == (
+        "Project-defined concrete Miner S-N relation (uncited)"
+    )
+    assert any(
+        "Project-defined concrete Miner S-N relation is used (uncited)"
+        == warning
+        for warning in fatigue_analysis.validation_warnings(inp)
+    )
+
+    invalid = dict(inp)
+    invalid["fatigue_concrete_c"] = -1.0
+    assert "Concrete fatigue C must be a finite number greater than zero" in (
+        fatigue_analysis.validation_errors(invalid)
+    )
+
+
 def test_adapter_runs_the_real_engine_for_a_mild_reinforced_section():
     inp = _base(fatigue_check_concrete=False)
     inp["section"] = Section.from_polygon(

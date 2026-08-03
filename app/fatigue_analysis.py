@@ -22,8 +22,10 @@ import load_cases
 import material_catalog as mat_catalog
 from sector.fatigue import (
     CONCRETE_EQUIVALENT,
+    CONCRETE_MINER_METHODS,
     CONCRETE_METHODS,
     CONCRETE_MINER,
+    CONCRETE_PROJECT_MINER,
     ConcreteFatigueProperties,
     FatigueSpectrumResult,
     ReinforcementFatigueProperties,
@@ -113,16 +115,37 @@ def calculation_references(
 
     selected = _edition(edition)
     equivalent = concrete_method == CONCRETE_EQUIVALENT
+    project_miner = concrete_method == CONCRETE_PROJECT_MINER
+    if project_miner:
+        concrete_reference = (
+            "Project-defined concrete Miner S-N relation (uncited)"
+        )
+    elif "2023" in selected:
+        concrete_reference = (
+            "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
+            if equivalent
+            else "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)"
+        )
+    else:
+        national = (
+            " with DK NA:2024 explicit input factors"
+            if selected == fatigue_inputs.EC2_2005_DKNA
+            else ""
+        )
+        concrete_reference = (
+            (
+                "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.7, "
+                "Formula (6.72)"
+            )
+            if equivalent
+            else "DS/EN 1992-2:2005/AC:2008, corrected clause 6.106"
+        ) + national
     if "2023" in selected:
         return {
             "reinforcement": (
                 "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2"
             ),
-            "concrete": (
-                "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
-                if equivalent
-                else "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)"
-            ),
+            "concrete": concrete_reference,
         }
     national = (
         " with DK NA:2024 explicit input factors"
@@ -134,14 +157,7 @@ def calculation_references(
             "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.4 and "
             f"Tables 6.3N/6.4N{national}"
         ),
-        "concrete": (
-            (
-                "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.7, "
-                "Formula (6.72)"
-            )
-            if equivalent
-            else "DS/EN 1992-2:2005/AC:2008, corrected clause 6.106"
-        ) + national,
+        "concrete": concrete_reference,
     }
 
 
@@ -402,7 +418,7 @@ def validation_errors(inp: Mapping) -> list[str]:
         _positive(inp.get("fatigue_gamma_c"), "gamma_c,fat", errors)
         _positive(inp.get("fatigue_beta_cc_t0"), "beta_cc(t0)", errors)
         _positive(inp.get("fatigue_t0_days"), "Concrete age t0", errors)
-        if concrete_method == CONCRETE_MINER:
+        if concrete_method in CONCRETE_MINER_METHODS:
             _positive(
                 inp.get("fatigue_concrete_c"),
                 "Concrete fatigue C",
@@ -598,6 +614,13 @@ def validation_warnings(inp: Mapping) -> list[str]:
     if not bool(inp.get("fatigue_on")):
         return []
     warnings = []
+    if (
+        bool(inp.get("fatigue_check_concrete"))
+        and inp.get("fatigue_concrete_method") == CONCRETE_PROJECT_MINER
+    ):
+        warnings.append(
+            "Project-defined concrete Miner S-N relation is used (uncited)"
+        )
     try:
         warnings.extend(
             fatigue_inputs.basis_warnings(
