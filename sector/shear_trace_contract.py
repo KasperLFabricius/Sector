@@ -17,9 +17,9 @@ from .trace_registry import (
 
 
 COVERAGE_ID = "ct-006"
-FAMILY_ID = "ct-006-directional-shear-core"
-REGISTRY_ID = "sector-ct-006-directional-shear-core-v1"
-METHOD_ID = "sector-directional-shear-core-replay"
+FAMILY_ID = "ct-006-directional-shear-chord"
+REGISTRY_ID = "sector-ct-006-directional-shear-chord-v2"
+METHOD_ID = "sector-directional-shear-chord-replay"
 DIRECTIONS = ("vx", "vy")
 PHYSICAL_AXES = {"vx": "y", "vy": "x"}
 CORE_INPUT_KEYS = (
@@ -31,6 +31,11 @@ CORE_INPUT_KEYS = (
 LINK_INPUT_KEYS = (
     "shear_vx_link_legs", "shear_vy_link_legs", "shear_link_dia", "shear_link_s",
     "shear_fywk", "strut_cot_min", "strut_cot_max", "capacity_steel_material_id")
+PLASTIC_JOIN_INPUT_KEYS = (
+    "mode", "v_min", "v_max", "v_inc", "check_util", "shear_dlower",
+    "torsion_on", "torsion_method", "torsion_tef", "torsion_nu_v",
+    "torsion_gamma_ct", "torsion_T", "torsion_subdivide", "torsion_subrects",
+    "combined_on", "combined_mv_independent")
 
 DOC_BASE = "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010"
 DOC_DK = "DS/EN 1992-1-1 DK NA:2024"
@@ -40,6 +45,7 @@ DK_EDITION = f"{DOC_BASE} with {DOC_DK}"
 INPUT_SOURCE = TraceSource(SOURCE_INPUT, "sector-section-input")
 GEOMETRY_SOURCE = TraceSource(SOURCE_PROJECT, "sector-shear-geometry")
 SELECTOR_SOURCE = TraceSource(SOURCE_PROJECT, "sector-shear-minimax-selector")
+CHORD_SOURCE = TraceSource(SOURCE_PROJECT, "sector-longitudinal-chord-replay")
 VERDICT_SOURCE = TraceSource(SOURCE_PROJECT, "sector-demand-resistance-verdict")
 BASE_CONCRETE_SOURCE = TraceSource(
     SOURCE_STANDARD, "en-1992-1-1-2004-shear-without-links", BASE_EDITION,
@@ -56,6 +62,12 @@ BASE_NU_SOURCE = TraceSource(
 BASE_ALPHA_SOURCE = TraceSource(
     SOURCE_STANDARD, "en-1992-1-1-2004-shear-alpha-cw", BASE_EDITION,
     SourceCitation(DOC_BASE, "6.2.3(3)", "Formula (6.11N)"))
+BASE_SHEAR_LONGITUDINAL_SOURCE = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2004-shear-longitudinal-force", BASE_EDITION,
+    SourceCitation(DOC_BASE, "6.2.3(7)", "Formula (6.18)"))
+BASE_TORSION_LONGITUDINAL_SOURCE = TraceSource(
+    SOURCE_STANDARD, "en-1992-1-1-2004-torsion-longitudinal-force", BASE_EDITION,
+    SourceCitation(DOC_BASE, "6.3.2(3)", "Formula (6.28)"))
 DK_VMIN_SOURCE = TraceSource(
     SOURCE_STANDARD, "dk-na-2024-shear-vmin", DK_EDITION,
     SourceCitation(DOC_DK, "6.2.2(1)", "national v_min value"))
@@ -77,8 +89,8 @@ ANGLE = TraceUnit("degrees", "angle")
 # Ordered raw-input and candidate-output inventories. Excluded keys may be absent
 # or carry arbitrary values; they are removed before the retained-order check.
 COMPONENT_KEYS = ("signed_v_ed", "v_ed", "axis", "face", "active")
-AGGREGATE_KEYS = ("directions", "active_directions")
-AGGREGATE_EXCLUDED = frozenset(("biaxial", "note"))
+AGGREGATE_KEYS = ("directions", "active_directions", "biaxial", "note")
+AGGREGATE_EXCLUDED = frozenset()
 SHEAR_KEYS = (
     "res", "v_ed", "util", "component", "axis", "tension_low", "face_mode",
     "bw", "bw_auto", "bw_user", "d", "asl", "asl_bar_ids", "asl_cg", "ac",
@@ -94,11 +106,20 @@ CONCRETE_RESULT_KEYS = (
     "crd_c", "vmin", "k1", "gamma_c", "valid")
 LINK_KEYS = (
     "res", "util", "asw", "asw_over_s", "legs", "dia", "s", "fywk",
-    "cot_min", "cot_max", "cot_limit_lo", "cot_limit_hi", "angle_limits",
-    "model_2023", "z_source", "out_of_limits", "required", "theta_mode")
-LINK_EXCLUDED = frozenset((
-    "delta_ftd", "longitudinal_shear_force", "longitudinal_shear_symbol",
-    "longitudinal_shear_clause", "chord", "chord_off", "chord_candidates"))
+    "cot_min", "cot_max", "delta_ftd", "longitudinal_shear_force",
+    "longitudinal_shear_symbol", "longitudinal_shear_clause", "cot_limit_lo",
+    "cot_limit_hi", "angle_limits", "model_2023", "z_source", "out_of_limits",
+    "required", "chord", "chord_off", "chord_candidates", "theta_mode")
+LINK_EXCLUDED = frozenset()
+CHORD_BASE_KEYS = (
+    "m_ed", "m_rd", "ftd_v", "ftd_t", "z", "mv", "mt", "m_total",
+    "util", "ok", "capped", "cap_shear_force", "valid", "role", "axis",
+    "tension_low")
+CHORD_SHEAR_KEYS = (
+    *CHORD_BASE_KEYS, "off_util", "biaxial", "m_off", "conditional",
+    "has_torsion", "gets_shift", "off_not_evaluated", "theta_mode")
+CHORD_OFF_KEYS = (
+    *CHORD_BASE_KEYS, "m_off", "conditional", "z_src", "theta_mode")
 LINK_RESULT_KEYS = (
     "vrd_s", "vrd_max", "vrd", "cot", "theta_deg", "z", "fywd", "nu1",
     "alpha_cw", "sigma_cp", "fcd", "gamma_s", "asw_over_s", "governs",
@@ -125,6 +146,10 @@ class DirectionShape:
     method_variant: str
     link_steel_material_id: str
     link_steel_source: TraceSource | None
+    plastic_requested: bool
+    plastic_available: bool
+    chord_roles: tuple[tuple[str, ...], ...]
+    torsion_subrect_count: int
     calculation_id: str
     axes: tuple[TraceAxis, ...]
 
@@ -178,6 +203,12 @@ def _shared_inputs(rows: _Rows, shape: DirectionShape) -> str:
                  ROLE_USER_INPUT, INPUT_SOURCE),
         rows.add("input-links-enabled", "Shear links enabled", ONE,
                  ROLE_USER_INPUT, INPUT_SOURCE),
+        rows.add("aggregate-biaxial", "Directional aggregate identity", ONE,
+                 ROLE_COMPUTED, SELECTOR_SOURCE,
+                 "input-vx-active", "input-vy-active"),
+        rows.add("aggregate-note-identity", "Independent-directions note identity", ONE,
+                 ROLE_COMPUTED, SELECTOR_SOURCE,
+                 "input-vx-axis-code", "input-vy-axis-code"),
         rows.add("input-width-override", "Entered directional web-width override",
                  LENGTH_MM, ROLE_USER_INPUT, INPUT_SOURCE),
     ))
@@ -230,12 +261,158 @@ def _shared_inputs(rows: _Rows, shape: DirectionShape) -> str:
             ("input-cot-max", "Entered maximum cotangent", ONE),
         ):
             leaves.append(rows.add(step_id, title, unit, ROLE_USER_INPUT, INPUT_SOURCE))
+        mode = rows.add("input-analysis-mode-code", "Selected analysis mode", ONE,
+                        ROLE_USER_INPUT, INPUT_SOURCE)
+        check = rows.add("input-check-util", "Plastic utilisation requested", ONE,
+                         ROLE_USER_INPUT, INPUT_SOURCE)
+        sweep_min = rows.add("input-sweep-min", "Requested sweep start", ANGLE,
+                             ROLE_USER_INPUT, INPUT_SOURCE)
+        sweep_max = rows.add("input-sweep-max", "Requested sweep end", ANGLE,
+                             ROLE_USER_INPUT, INPUT_SOURCE)
+        sweep_inc = rows.add("input-sweep-increment", "Requested sweep increment", ANGLE,
+                             ROLE_USER_INPUT, INPUT_SOURCE)
+        solver_min = rows.add("sweep-solver-min", "Normalised solver sweep start", ANGLE,
+                              ROLE_COMPUTED, SELECTOR_SOURCE, sweep_min, sweep_max, sweep_inc)
+        solver_max = rows.add("sweep-solver-max", "Normalised solver sweep end", ANGLE,
+                              ROLE_COMPUTED, SELECTOR_SOURCE, sweep_min, sweep_max, sweep_inc)
+        solver_inc = rows.add("sweep-solver-increment", "Normalised solver increment", ANGLE,
+                              ROLE_COMPUTED, SELECTOR_SOURCE, sweep_min, sweep_max, sweep_inc)
+        member_count = rows.add("sweep-member-count", "Exact sweep member count", ONE,
+                                ROLE_COMPUTED, SELECTOR_SOURCE,
+                                solver_min, solver_max, solver_inc)
+        closed = rows.add("sweep-closed", "Closed sweep state", ONE,
+                          ROLE_COMPUTED, SELECTOR_SOURCE,
+                          solver_min, solver_max, solver_inc)
+        requested = rows.add("plastic-capacity-requested", "Plastic capacity requested", ONE,
+                             ROLE_COMPUTED, SELECTOR_SOURCE, mode)
+        present = rows.add("plastic-output-present", "Plastic output branch present", ONE,
+                           ROLE_COMPUTED, SELECTOR_SOURCE, requested)
+        available = rows.add("plastic-capacity-available", "Plastic capacity available", ONE,
+                             ROLE_COMPUTED, SELECTOR_SOURCE,
+                             requested, present, closed, check, member_count)
+        leaves.extend((mode, check, sweep_min, sweep_max, sweep_inc, solver_min,
+                       solver_max, solver_inc, member_count, closed, requested, present,
+                       available))
+        if shape.plastic_available and not shape.failed:
+            for step_id, title in (
+                ("plastic-max-mx", "Replayed maximum Mx"),
+                ("plastic-min-mx", "Replayed minimum Mx"),
+                ("plastic-max-my", "Replayed maximum My"),
+                ("plastic-min-my", "Replayed minimum My"),
+            ):
+                leaves.append(rows.add(
+                    step_id, title, MOMENT, ROLE_COMPUTED, CHORD_SOURCE,
+                    available, "input-action-u505f706c", geometry, materials,
+                ))
+        torsion_fields = (
+            ("input-shear-dlower", "Entered lower shear reinforcement diameter", LENGTH_MM),
+            ("input-torsion-enabled", "Torsion enabled", ONE),
+            ("input-torsion-method-code", "Selected torsion method", ONE),
+            ("input-torsion-tef", "Entered effective wall thickness", LENGTH_MM),
+            ("input-torsion-nu-v", "Closed-detailing torsion strength flag", ONE),
+            ("input-torsion-gamma-ct", "Concrete tension partial factor", ONE),
+            ("input-torsion-demand", "Applied torsion", MOMENT),
+            ("input-torsion-subdivide", "Torsion subdivision requested", ONE),
+            ("input-combined-enabled", "Combined check enabled", ONE),
+            ("input-combined-mv-independent", "Independent M-V option", ONE),
+        )
+        for step_id, title, unit in torsion_fields:
+            leaves.append(rows.add(
+                step_id, title, unit, ROLE_USER_INPUT, INPUT_SOURCE,
+            ))
+        rectangle_leaves = []
+        for index in range(shape.torsion_subrect_count):
+            for suffix in ("x", "y", "b", "h"):
+                rectangle_leaves.append(rows.add(
+                    f"input-torsion-subrect-{index:03d}-{suffix}",
+                    f"Torsion subrectangle {index} {suffix}", LENGTH_MM,
+                    ROLE_USER_INPUT, INPUT_SOURCE,
+                ))
+        rectangle_vector = rows.add(
+            "input-torsion-subrect-vector", "Ordered torsion subrectangle identity",
+            ONE, ROLE_COMPUTED, GEOMETRY_SOURCE,
+            "input-torsion-subdivide", *rectangle_leaves,
+        )
+        leaves.extend((*rectangle_leaves, rectangle_vector))
     return rows.add(
         "normalised-shear-inputs", "Complete CT-006 core input identity", ONE,
         ROLE_COMPUTED, SELECTOR_SOURCE, *leaves, geometry, materials,
     )
 
-def _face_contract(rows: _Rows, shape: DirectionShape, index: int) -> str:
+def _chord_contract(
+    rows: _Rows, prefix: str, role: str, normal: str, face: str,
+    cot: str, longitudinal_force: str,
+) -> str:
+    fields: list[str] = []
+    m_ed = rows.add(f"{prefix}-m-ed", "Chord applied bending moment", MOMENT,
+                    ROLE_COMPUTED, CHORD_SOURCE, normal, face)
+    m_rd = rows.add(f"{prefix}-m-rd", "Conditional chord resistance", MOMENT,
+                    ROLE_COMPUTED, CHORD_SOURCE, normal, face)
+    ftd_v = rows.add(f"{prefix}-ftd-v", "Shear longitudinal force", FORCE,
+                     ROLE_COMPUTED, BASE_SHEAR_LONGITUDINAL_SOURCE,
+                     longitudinal_force, face)
+    ftd_t = rows.add(f"{prefix}-ftd-t", "Torsion longitudinal force", FORCE,
+                     ROLE_COMPUTED, BASE_TORSION_LONGITUDINAL_SOURCE,
+                     normal, cot, face)
+    z = rows.add(f"{prefix}-z", "Chord lever arm", LENGTH,
+                 ROLE_COMPUTED, GEOMETRY_SOURCE, normal, face)
+    mv = rows.add(f"{prefix}-mv", "Shear force moment shift", MOMENT,
+                  ROLE_COMPUTED, BASE_SHEAR_LONGITUDINAL_SOURCE, ftd_v, z)
+    mt = rows.add(f"{prefix}-mt", "Torsion force moment shift", MOMENT,
+                  ROLE_COMPUTED, BASE_TORSION_LONGITUDINAL_SOURCE, ftd_t, z)
+    total = rows.add(f"{prefix}-m-total", "Total chord design moment", MOMENT,
+                     ROLE_COMPUTED, CHORD_SOURCE, m_ed, mv, mt)
+    util = rows.add(f"{prefix}-utilisation", "Chord utilisation", ONE,
+                    ROLE_COMPUTED, VERDICT_SOURCE, total, m_rd)
+    verdict = rows.add(f"{prefix}-verdict", "Chord PASS or FAIL", ONE,
+                       ROLE_COMPUTED, VERDICT_SOURCE, util)
+    for suffix, title in (
+        ("capped", "Shear-force cap state"),
+        ("cap-shear-force", "Shear-force cap method identity"),
+        ("valid", "Chord reconstruction validity"),
+        ("role", "Chord candidate role"),
+        ("axis", "Chord candidate axis"),
+        ("tension-low", "Chord candidate face"),
+        ("theta-mode", "Chord selector mode"),
+    ):
+        fields.append(rows.add(
+            f"{prefix}-{suffix}", title, ONE, ROLE_COMPUTED,
+            CHORD_SOURCE, normal, face, cot,
+        ))
+    if role == "shear_axis":
+        for suffix, title, unit in (
+            ("off-utilisation", "Off-axis moment utilisation", ONE),
+            ("biaxial", "Biaxial chord branch", ONE),
+            ("m-off", "Coexisting off-axis moment", MOMENT),
+            ("conditional", "Conditional resistance solve state", ONE),
+            ("has-torsion", "Live torsion state", ONE),
+            ("gets-shift", "Shear-shift face state", ONE),
+            ("off-not-evaluated", "Off-axis exclusion reason", ONE),
+        ):
+            fields.append(rows.add(
+                f"{prefix}-{suffix}", title, unit, ROLE_COMPUTED,
+                CHORD_SOURCE, normal, face,
+            ))
+    else:
+        for suffix, title, unit in (
+            ("m-off", "Coexisting shear-axis moment", MOMENT),
+            ("conditional", "Conditional resistance solve state", ONE),
+            ("z-source", "Off-axis lever-arm source", ONE),
+        ):
+            fields.append(rows.add(
+                f"{prefix}-{suffix}", title, unit, ROLE_COMPUTED,
+                CHORD_SOURCE, normal, face,
+            ))
+    return rows.add(
+        f"{prefix}-evidence", "Complete chord candidate evidence", ONE,
+        ROLE_COMPUTED, VERDICT_SOURCE,
+        m_ed, m_rd, ftd_v, ftd_t, z, mv, mt, total, util, verdict, *fields,
+    )
+
+
+def _face_contract(
+    rows: _Rows, shape: DirectionShape, index: int, normal: str,
+) -> str:
     p = f"face-{index:02d}"
     axis_step = f"input-{shape.direction}-axis-code"
     area = rows.add(f"{p}-area", "Gross concrete area", AREA, ROLE_COMPUTED,
@@ -322,8 +499,9 @@ def _face_contract(rows: _Rows, shape: DirectionShape, index: int) -> str:
         alpha = rows.add(f"{p}-alpha-cw", "Compression-chord coefficient", ONE,
                          ROLE_COMPUTED, BASE_ALPHA_SOURCE, link_sigma, fcd)
         selector_operands = rows.add(
-            f"{p}-selector-operands", "Complete shear-only selector operands", ONE,
+            f"{p}-selector-operands", "Complete shared selector operands", ONE,
             ROLE_COMPUTED, SELECTOR_SOURCE,
+            normal,
             f"input-{shape.direction}-component-absolute",
             asw_s, z, fywd, nu, alpha, bw,
             fcd, "input-cot-min", "input-cot-max",
@@ -346,10 +524,39 @@ def _face_contract(rows: _Rows, shape: DirectionShape, index: int) -> str:
         required = rows.add(f"{p}-links-required", "Links required by concrete screen", ONE,
                             ROLE_COMPUTED, VERDICT_SOURCE,
                             f"input-{shape.direction}-component-absolute", vrdc)
-        overall = rows.add(f"{p}-links-evidence", "Complete linked shear evidence", ONE,
-                           ROLE_COMPUTED, VERDICT_SOURCE, asw, asw_s, z, fywd, nu,
-                           link_sigma, alpha, cot, theta, vrds, vrdmax, vrd, util,
-                           verdict, required, concrete_evidence)
+        longitudinal = rows.add(
+            f"{p}-longitudinal-shear-force", "Longitudinal shear force", FORCE,
+            ROLE_COMPUTED, BASE_SHEAR_LONGITUDINAL_SOURCE,
+            f"input-{shape.direction}-component-absolute", cot,
+        )
+        longitudinal_identity = rows.add(
+            f"{p}-longitudinal-shear-identity",
+            "Longitudinal shear symbol and clause identity", ONE,
+            ROLE_METHOD_VALUE, BASE_SHEAR_LONGITUDINAL_SOURCE,
+        )
+        chord_evidence = tuple(
+            _chord_contract(
+                rows, f"{p}-chord-{chord_index:02d}", role,
+                normal, face, cot, longitudinal,
+            )
+            for chord_index, role in enumerate(shape.chord_roles[index])
+        )
+        chord_selected = rows.add(
+            f"{p}-chord-selected-index", "Governing shear-axis chord candidate", ONE,
+            ROLE_COMPUTED, SELECTOR_SOURCE, normal, *chord_evidence,
+        )
+        chord_off_selected = rows.add(
+            f"{p}-chord-off-selected-index", "Governing off-axis chord candidate", ONE,
+            ROLE_COMPUTED, SELECTOR_SOURCE, normal, *chord_evidence,
+        )
+        overall = rows.add(
+            f"{p}-links-evidence", "Complete linked shear and chord evidence", ONE,
+            ROLE_COMPUTED, VERDICT_SOURCE, asw, asw_s, z, fywd, nu,
+            link_sigma, alpha, cot, theta, vrds, vrdmax, vrd, util,
+            verdict, required, longitudinal, longitudinal_identity,
+            *chord_evidence, chord_selected, chord_off_selected,
+            concrete_evidence,
+        )
     evidence = (overall,) if overall == concrete_evidence else (overall, concrete_evidence)
     return rows.add(f"{p}-complete-evidence", "Complete face evidence", ONE,
                     ROLE_COMPUTED, VERDICT_SOURCE, face, cx, cy, *evidence)
@@ -363,7 +570,10 @@ def expected_step_contract(shape: DirectionShape) -> tuple[StepSpec, ...]:
         rows.add("ct-006-direction-result", "CT-006 failed direction result", ONE,
                  ROLE_FINAL, VERDICT_SOURCE, normal, failure)
         return tuple(rows.rows)
-    faces = tuple(_face_contract(rows, shape, index) for index in range(len(shape.faces)))
+    faces = tuple(
+        _face_contract(rows, shape, index, normal)
+        for index in range(len(shape.faces))
+    )
     governing = rows.add("direction-governing-face", "Independently governing face", ONE,
                          ROLE_COMPUTED, VERDICT_SOURCE, *faces)
     util = rows.add("direction-utilisation", "Governing directional utilisation", ONE,

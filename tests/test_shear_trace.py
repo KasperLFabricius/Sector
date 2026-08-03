@@ -10,8 +10,9 @@ from collections.abc import Mapping
 import pytest
 
 from app import material_catalog
-from app.sector_app import _run_capacity_checks
-from sector import capacity, codes
+import app.sector_app as sector_app
+from app.sector_app import _run_capacity_checks, _run_single_analysis
+from sector import capacity, codes, plastic_capacity_trace, templates
 from sector.calculation_trace import (
     SOURCE_PROJECT, SOURCE_STANDARD, SourceCitation, TraceDependency, TraceSource,
     TraceUnit, TraceValidationError, seal_bundle,
@@ -23,9 +24,10 @@ from sector.shear_trace import (
 )
 from sector.shear_trace_contract import (
     AGGREGATE_EXCLUDED, BASE_NU_SOURCE, BASE_VMIN_SOURCE, CORE_INPUT_KEYS,
+    BASE_SHEAR_LONGITUDINAL_SOURCE, BASE_TORSION_LONGITUDINAL_SOURCE,
     DK_NU_SOURCE, DK_VMIN_SOURCE, DIRECTIONS, DOC_BASE, FACE_WRAPPER_EXCLUDED,
     GOVERNING_DOMAIN_EXCLUDED, LINK_EXCLUDED, LINK_INPUT_KEYS, SHEAR_EXCLUDED,
-    expected_registry,
+    PLASTIC_JOIN_INPUT_KEYS, expected_registry,
 )
 from sector.trace_registry import audit_trace_registry
 
@@ -70,19 +72,37 @@ def _input(*, method=codes.EC2_2005_DKNA, links=True, vx=130.0,
         shear_links=links, strut_cot_min=1.0, strut_cot_max=2.5,
         shear_link_dia=10.0, shear_link_s=150.0, shear_fywk=500.0,
         shear_dlower=16.0, torsion_on=False, combined_on=False,
+        mode="Elastic", v_min=0.0, v_max=360.0, v_inc=90.0,
+        check_util=True,
+        torsion_method=method.label, torsion_tef=0.0, torsion_nu_v=False,
+        torsion_gamma_ct=method.gamma_ct, torsion_T=0.0,
+        torsion_subdivide=False, torsion_subrects=[],
+        combined_mv_independent=False,
+        combined_method="DS/EN 1992-1-1 + DK NA",
     )
     inp.update(changes)
     return inp
 
-def _candidate(inp):
+def _result(inp):
+    if inp["mode"] in {"Plastic", "Both"}:
+        return _run_single_analysis(inp)
     out = {}
     _run_capacity_checks(inp, out)
-    return out.get("shear", {})
+    return out
+
+def _candidate(inp):
+    return _result(inp).get("shear", {})
 
 def _bundle(inp, out=None):
+    complete = (
+        _result(inp)
+        if out is None or inp.get("mode") in {"Plastic", "Both"}
+        else {}
+    )
     result = build_shear_trace_family(
-        inp, _candidate(inp) if out is None else out,
+        inp, complete.get("shear", {}) if out is None else out,
         input_sha256=INPUT_SHA, result_sha256=RESULT_SHA, context=CONTEXT,
+        plastic_out=complete.get("plastic"),
     )
     assert result is not None
     return result
@@ -117,7 +137,7 @@ def test_two_active_is_the_only_family_and_all_demands_precede_filtering():
         _bundle(inp, {})
     reversed_band = _bundle(_input(strut_cot_min=2.5, strut_cot_max=1.0))
     assert _steps(reversed_band)["input-cot-min"].result.value == 2.5
-    for key in (*CORE_INPUT_KEYS, *LINK_INPUT_KEYS):
+    for key in (*CORE_INPUT_KEYS, *LINK_INPUT_KEYS, *PLASTIC_JOIN_INPUT_KEYS):
         inp = _input(); del inp[key]
         with pytest.raises(TraceValidationError):
             _bundle(inp, {})
@@ -351,6 +371,222 @@ def test_coherent_alternate_cot_and_recomputed_link_verdict_is_rejected():
     with pytest.raises(TraceValidationError):
         _validate_candidate(changed, evidence)
 
+
+def test_plastic_join_branches_and_independent_longitudinal_oracle():
+    elastic = _bundle(_input())
+    elastic_steps = _steps(elastic)
+    assert elastic_steps["plastic-capacity-requested"].result.value == 0.0
+    assert elastic_steps["plastic-output-present"].result.value == 0.0
+    assert elastic_steps["plastic-capacity-available"].result.value == 0.0
+    assert not any("-chord-00-" in step.step_id
+                   for step in elastic.calculations[0].steps)
+
+    inp = _input(mode="Plastic", Mx_pl=35.0, My_pl=22.0)
+    complete = _result(inp)
+    bundle = build_shear_trace_family(
+        inp, complete["shear"], input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT,
+        plastic_out=complete["plastic"],
+    )
+    steps = _steps(bundle)
+    chord = complete["shear"]["directions"]["vx"]["links"]["chord"]
+    cot = complete["shear"]["directions"]["vx"]["links"]["res"]["cot"]
+    delta = 0.5 * abs(inp["shear_Vx"]) * cot
+    mv = min(delta * chord["z"], max(chord["m_rd"] - chord["m_ed"], 0.0))
+    total = chord["m_ed"] + mv
+    assert chord["ftd_v"] == pytest.approx(delta)
+    assert chord["ftd_t"] == 0.0
+    assert chord["mv"] == pytest.approx(mv)
+    assert chord["m_total"] == pytest.approx(total)
+    assert chord["util"] == pytest.approx(total / chord["m_rd"])
+    assert steps["plastic-capacity-available"].result.value == 1.0
+    assert steps["face-00-chord-00-utilisation"].result.value == pytest.approx(
+        chord["util"]
+    )
+    assert steps["face-00-chord-00-ftd-v"].source == BASE_SHEAR_LONGITUDINAL_SOURCE
+    assert steps["face-00-chord-00-ftd-t"].source == BASE_TORSION_LONGITUDINAL_SOURCE
+
+    for changes in (
+        {"v_max": 180.0},
+        {"check_util": False},
+    ):
+        partial_inp = _input(mode="Plastic", **changes)
+        partial = _result(partial_inp)
+        partial_bundle = build_shear_trace_family(
+            partial_inp, partial["shear"], input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA, context=CONTEXT,
+            plastic_out=partial["plastic"],
+        )
+        partial_steps = _steps(partial_bundle)
+        assert partial_steps["plastic-output-present"].result.value == 1.0
+        assert partial_steps["plastic-capacity-available"].result.value == 0.0
+        assert partial["shear"]["directions"]["vx"]["links"]["chord"] is None
+        with pytest.raises(TraceValidationError, match="presence"):
+            build_shear_trace_family(
+                partial_inp, partial["shear"], input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT,
+            )
+
+
+def test_complete_chord_inventory_order_selection_and_ct002_tampering_fail():
+    inp = _input(
+        mode="Plastic", Mx_pl=35.0, My_pl=22.0,
+        torsion_on=True, torsion_T=15.0,
+    )
+    complete = _result(inp)
+    evidence = _replay(
+        inp, complete["shear"], CONTEXT, complete["plastic"],
+    )
+    for direction in DIRECTIONS:
+        link = complete["shear"]["directions"][direction]["links"]
+        assert [item["role"] for item in link["chord_candidates"]] == [
+            "shear_axis", "shear_axis", "off_axis", "off_axis",
+        ]
+        assert link["chord"] is max(
+            link["chord_candidates"][:2], key=lambda item: item["util"],
+        )
+        assert link["chord_off"] is max(
+            link["chord_candidates"][2:], key=lambda item: item["util"],
+        )
+
+    for path in (
+        ("longitudinal_shear_force",),
+        ("longitudinal_shear_symbol",),
+        ("longitudinal_shear_clause",),
+        ("chord_candidates", 0, "m_rd"),
+        ("chord_candidates", 0, "off_util"),
+        ("chord_candidates", 0, "off_not_evaluated"),
+        ("chord_candidates", 2, "z_src"),
+        ("chord", "util"),
+        ("chord_off", "ok"),
+    ):
+        changed = copy.deepcopy(complete["shear"])
+        target = changed["directions"]["vx"]["links"]
+        old = _at(target, path)
+        replacement = _mutate_leaf(old)
+        target = _replaced(target, path, replacement)
+        changed["directions"]["vx"]["links"] = target
+        with pytest.raises(TraceValidationError):
+            _validate_candidate(changed, evidence)
+
+    for operation in ("reverse", "duplicate"):
+        changed = copy.deepcopy(complete["shear"])
+        items = changed["directions"]["vx"]["links"]["chord_candidates"]
+        if operation == "reverse":
+            items.reverse()
+        else:
+            items.append(copy.deepcopy(items[-1]))
+        with pytest.raises(TraceValidationError):
+            _validate_candidate(changed, evidence)
+    for path in (
+        ("directions", "vx", "face_candidates"),
+        ("directions", "vx", "links", "chord_candidates"),
+    ):
+        changed = copy.deepcopy(complete["shear"])
+        changed = _replaced(changed, path, tuple(_at(changed, path)))
+        with pytest.raises(TraceValidationError, match="list type"):
+            _validate_candidate(changed, evidence)
+
+    for mutation in ("max_mx", "util", "points"):
+        plastic = copy.deepcopy(complete["plastic"])
+        if mutation == "points":
+            plastic[mutation] = plastic[mutation][:-1]
+        else:
+            plastic[mutation] = _mutate_leaf(plastic[mutation])
+        with pytest.raises(TraceValidationError):
+            build_shear_trace_family(
+                inp, complete["shear"], input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA, context=CONTEXT,
+                plastic_out=plastic,
+            )
+
+
+def test_unconverged_selected_ct002_evidence_cannot_join_chords(monkeypatch):
+    inp = _input(mode="Plastic", Mx_pl=35.0, My_pl=22.0)
+    complete = _result(inp)
+    retained = copy.deepcopy(complete["plastic"])
+    retained["points"][0]["converged"] = False
+    retained["points"][0]["Mx"] += 1.0
+    retained["converged"] = False
+    assert retained["util"] is not None
+
+    original = plastic_capacity_trace.solve_plastic
+
+    def unconverged_replay(*args, **kwargs):
+        points = list(original(*args, **kwargs))
+        points[0] = dataclasses.replace(points[0], converged=False)
+        return points
+
+    monkeypatch.setattr(
+        plastic_capacity_trace, "solve_plastic", unconverged_replay,
+    )
+    with pytest.raises(TraceValidationError, match="finite-selected CT-002"):
+        build_shear_trace_family(
+            inp,
+            complete["shear"],
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=CONTEXT,
+            plastic_out=retained,
+        )
+
+
+def test_subdivided_and_unsolved_off_axis_disclosures(monkeypatch):
+    outer = templates.t_section(1.0, 0.2, 0.3, 0.6)
+    bars = [(-0.10, -0.25, 500.0), (0.10, -0.25, 500.0),
+            (-0.35, 0.35, 500.0), (0.35, 0.35, 500.0)]
+    subdivided = _input(
+        mode="Plastic", Mx_pl=20.0, My_pl=15.0,
+        outer=outer, bars=bars, section=Section.from_polygon(outer, bars),
+        bar_elements=[{"id": f"B{i + 1}", "material_id": "M1"}
+                      for i in range(len(bars))],
+        torsion_on=True, torsion_T=15.0, torsion_subdivide=True,
+        torsion_subrects=[(0.0, -100.0, 300.0, 600.0),
+                          (0.0, 300.0, 1000.0, 200.0)],
+    )
+    subdivided["bar_materials"] = [subdivided["steel"]] * len(bars)
+    sub_out = _result(subdivided)
+    build_shear_trace_family(
+        subdivided, sub_out["shear"], input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT,
+        plastic_out=sub_out["plastic"],
+    )
+    for direction in DIRECTIONS:
+        candidates = sub_out["shear"]["directions"][direction]["links"][
+            "chord_candidates"
+        ]
+        assert candidates
+        assert all(item["role"] == "shear_axis" for item in candidates)
+        assert all(item["off_not_evaluated"] == "subdivided"
+                   for item in candidates)
+
+    original = capacity.shear_face_mrd
+    def selective_failure(inp, axis, tension_low, m_off=0.0):
+        if axis == "x" and tension_low is False:
+            return 0.0, False
+        return original(inp, axis, tension_low, m_off=m_off)
+    monkeypatch.setattr(capacity, "shear_face_mrd", selective_failure)
+    monkeypatch.setattr(sector_app, "_shear_face_mrd", selective_failure)
+    unsolved = _input(
+        mode="Plastic", Mx_pl=35.0, My_pl=22.0,
+        torsion_on=True, torsion_T=15.0,
+    )
+    unsolved_out = _result(unsolved)
+    build_shear_trace_family(
+        unsolved, unsolved_out["shear"], input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT,
+        plastic_out=unsolved_out["plastic"],
+    )
+    reasons = [
+        item["off_not_evaluated"]
+        for direction in DIRECTIONS
+        for item in unsolved_out["shear"]["directions"][direction]["links"][
+            "chord_candidates"
+        ]
+        if item["role"] == "shear_axis"
+    ]
+    assert "not_solved" in reasons
+
 def test_failure_fields_are_inert_and_unrelated_inputs_cannot_mask_core():
     failed_inp = _input(links=False, bars=[])
     out = _candidate(failed_inp)
@@ -362,9 +598,21 @@ def test_failure_fields_are_inert_and_unrelated_inputs_cannot_mask_core():
     assert all(calc.steps[-1].result.state == "failed" for calc in first.calculations)
     inp = _input()
     baseline = _bundle(inp)
-    masked = dict(inp, v_min=math.nan, v_max=math.inf, v_inc=-math.inf,
-                  torsion_T=math.nan, shear_dlower=math.nan)
+    masked = dict(inp, sls_fctm=math.nan, crack_on=math.inf,
+                  transverse_detailing_on=math.nan)
     assert _bundle(masked, _candidate(inp)).to_dict() == baseline.to_dict()
+
+    linked_failure = _input(mode="Plastic", bars=[])
+    linked_out = _result(linked_failure)
+    corrupt_plastic = copy.deepcopy(linked_out["plastic"])
+    corrupt_plastic["points"] = []
+    failed_bundle = build_shear_trace_family(
+        linked_failure, linked_out["shear"], input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA, context=CONTEXT,
+        plastic_out=corrupt_plastic,
+    )
+    assert all(calculation.steps[-1].result.state == "failed"
+               for calculation in failed_bundle.calculations)
 
 def test_registry_edges_reach_final_and_resealed_graph_source_unit_seals_fail():
     inp, out = _input(), None; out = _candidate(inp)
