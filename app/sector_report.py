@@ -3752,7 +3752,7 @@ class ReportBuilder:
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
             "cot theta",
-            ref="from EN 1992-1-1 (6.28)",
+            ref="EN 1992-1-1 wall shear flow (6.27) and transverse equilibrium (6.8)",
             subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
                   f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
             result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m")
