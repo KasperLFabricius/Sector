@@ -48,6 +48,20 @@ BRIDGE_DK_DOCUMENT = BRIDGE_DK_CODE
 BRIDGE_DK_FAMILY_ID = "ct-009-crack-width-2004-bridge-dk"
 BRIDGE_DK_METHOD_ID = "sector-dk-na-2015-bridge-crack-width-route-replay"
 BRIDGE_DK_REGISTRY_ID = "sector-ct-009-crack-width-2004-bridge-dk-v1"
+CODE_2023 = "EN 1992-1-1:2023"
+EDITION_2023 = "2023"
+DOCUMENT_2023 = "DS/EN 1992-1-1:2023"
+FAMILY_2023 = "ct-009-crack-width-2023"
+METHOD_2023_APPLICABILITY = (
+    "sector-en-1992-1-1-2023-crack-width-applicability-replay"
+)
+METHOD_2023_BENDING = "sector-en-1992-1-1-2023-refined-bending-replay"
+METHOD_2023_DIRECT = (
+    "sector-en-1992-1-1-2023-uniform-direct-tension-replay"
+)
+METHOD_2023_AGGREGATE = "sector-en-1992-1-1-2023-crack-width-aggregate"
+METHOD_2023_FAILED = "sector-en-1992-1-1-2023-crack-width-failure"
+REGISTRY_2023 = "sector-ct-009-crack-width-2023-v1"
 
 INPUT = TraceSource(SOURCE_INPUT, "sector-crack-width-input")
 BOUNDARY = TraceSource(SOURCE_PROJECT, "sector-crack-width-boundary-replay")
@@ -71,6 +85,15 @@ def _dk_standard(method: str, clause: str, locator: str) -> TraceSource:
         method,
         DK_SOURCE_EDITION,
         SourceCitation(DK_DOCUMENT, clause, locator),
+    )
+
+
+def _standard_2023(method: str, clause: str, locator: str) -> TraceSource:
+    return TraceSource(
+        SOURCE_STANDARD,
+        method,
+        DOCUMENT_2023,
+        SourceCitation(DOCUMENT_2023, clause, locator),
     )
 
 
@@ -129,6 +152,61 @@ BRIDGE_DK_ROUTE = TraceSource(
         "no national choice",
     ),
 )
+ROUTE_2023 = _standard_2023(
+    "en-1992-1-1-2023-crack-width-route",
+    "9.2.3",
+    "refined calculation of crack width",
+)
+EFFECTIVE_AREA_2023 = _standard_2023(
+    "en-1992-1-1-2023-effective-tension-area",
+    "9.2.3",
+    "Figure 9.3",
+)
+EFFECTIVE_RATIO_2023 = _standard_2023(
+    "en-1992-1-1-2023-effective-reinforcement-ratio",
+    "9.2.3",
+    "Formula (9.12)",
+)
+BOND_RATIO_2023 = _standard_2023(
+    "en-1992-1-1-2023-prestress-bond-ratio",
+    "9.2.2(3)",
+    "Formula (9.6)",
+)
+MEAN_STRAIN_2023 = _standard_2023(
+    "en-1992-1-1-2023-mean-strain-difference",
+    "9.2.3",
+    "Formula (9.11)",
+)
+SPACING_2023 = _standard_2023(
+    "en-1992-1-1-2023-mean-crack-spacing",
+    "9.2.3",
+    "Formula (9.15)",
+)
+CURVATURE_2023 = _standard_2023(
+    "en-1992-1-1-2023-curvature-factor",
+    "9.2.3",
+    "Formula (9.9)",
+)
+FLEXURAL_2023 = _standard_2023(
+    "en-1992-1-1-2023-flexural-coefficient",
+    "9.2.3",
+    "Formula (9.17)",
+)
+DIRECT_FLEXURAL_2023 = _standard_2023(
+    "en-1992-1-1-2023-direct-tension-coefficient",
+    "9.2.3",
+    "Formula (9.20)",
+)
+BOND_2023 = _standard_2023(
+    "en-1992-1-1-2023-bond-factor",
+    "9.2.3",
+    "Formula (9.18)",
+)
+CRACK_WIDTH_2023 = _standard_2023(
+    "en-1992-1-1-2023-calculated-crack-width",
+    "9.2.3",
+    "Formula (9.8)",
+)
 DK_EFFECTIVE_AREA_FINE = _dk_standard(
     "dk-na-2024-effective-tension-area-fine",
     "7.3.2(3)",
@@ -170,6 +248,7 @@ class MemberShape:
     axes: tuple[TraceAxis, ...]
     steps: tuple[tuple[str, str, TraceSource, tuple[str, ...]], ...]
     states: frozenset[str]
+    method_id: str | None = None
 
 
 def registry_for(
@@ -195,17 +274,26 @@ def registry_for(
             BRIDGE_DK_FAMILY_ID,
             BRIDGE_DK_REGISTRY_ID,
         ),
+        (False, "building-2023"): (
+            None,
+            FAMILY_2023,
+            REGISTRY_2023,
+        ),
     }
     try:
         method_id, family_id, registry_id = identities[(dk_na, route)]
     except KeyError as exc:
         raise ValueError("unsupported CT-009 registry route") from exc
-    contracts = tuple(
-        TraceMemberContract(
+    contracts = []
+    for item in members:
+        selected_method = method_id if method_id is not None else item.method_id
+        if selected_method is None:
+            raise ValueError("CT-009 2023 member requires an exact method identity")
+        contracts.append(TraceMemberContract(
             member_id=item.member_id,
             calculation_id=item.calculation_id,
             coverage_id=COVERAGE_ID,
-            method_id=method_id,
+            method_id=selected_method,
             axes=item.axes,
             sources=frozenset(
                 TraceSourceContract(source.kind, source.method_id, source.edition)
@@ -221,12 +309,10 @@ def registry_for(
                 TraceStepMetadataContract(step, role, source)
                 for step, role, source, _dependencies in item.steps
             ),
-        )
-        for item in members
-    )
+        ))
     return TraceRegistryContract(
         registry_id,
-        (TraceFamilyContract(family_id, contracts),),
+        (TraceFamilyContract(family_id, tuple(contracts)),),
     )
 
 

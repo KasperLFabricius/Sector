@@ -16,7 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_app
-from sector import codes
+from sector import codes, material_presets
 from sector.calculation_trace import (
     RESULT_FAILED,
     RESULT_FINITE,
@@ -49,6 +49,7 @@ CONTEXT = {"case": "ct009-base", "stage": 1}
 DK_CODE = "DS/EN 1992-1-1 + DK NA"
 BRIDGE_BASE_CODE = "DS/EN 1992-2:2005 + AC:2008"
 BRIDGE_DK_CODE = "DS/EN 1992-2 DK NA:2015"
+CODE_2023 = "EN 1992-1-1:2023"
 
 
 @pytest.fixture(autouse=True)
@@ -205,6 +206,41 @@ def _bridge_input(*, dk_na: bool = False, **changes):
     return _input(**values)
 
 
+def _2023_input(**changes):
+    values = dict(sls_code=CODE_2023, sls_edition="2023", sls_dk_na=False)
+    values.update(changes)
+    return _input(**values)
+
+
+def _direct_2023_input(**changes):
+    outer = [(-0.15, -0.30), (0.15, -0.30), (0.15, 0.30), (-0.15, 0.30)]
+    bars = [
+        (-0.10, -0.25, 500.0),
+        (0.10, -0.25, 500.0),
+        (-0.10, 0.25, 500.0),
+        (0.10, 0.25, 500.0),
+    ]
+    base = _input()
+    values = dict(
+        outer=outer,
+        bars=bars,
+        section=Section.from_polygon(outer, bars),
+        bar_materials=[base["steel"]] * len(bars),
+        bar_elements=[
+            _record(f"B{position}", x, y, area)
+            for position, (x, y, area) in enumerate(bars, start=1)
+        ],
+        P_el_l=5000.0,
+        Mx_el_l=0.0,
+        My_el_l=0.0,
+        P_el_s=0.0,
+        Mx_el_s=0.0,
+        My_el_s=0.0,
+    )
+    values.update(changes)
+    return _2023_input(**values)
+
+
 def _reachable(calculation):
     by_id = {step.step_id: step for step in calculation.steps}
     seen = set()
@@ -240,6 +276,8 @@ def _change_leaf(value):
         return value + 1
     if type(value) is float:
         return float(np.nextafter(value, math.inf))
+    if isinstance(value, np.floating):
+        return type(value)(np.nextafter(value, math.inf))
     if type(value) is str:
         return value + "-tampered"
     raise AssertionError(f"unhandled hostile leaf type {type(value)!r}")
@@ -371,7 +409,7 @@ def test_type_valid_mismatched_base_selectors_are_inactive(edition, dk_na):
 @pytest.mark.parametrize(
     "code,edition,dk_na",
     [
-        ("EN 1992-1-1:2023", "2023", False),
+        ("EN 1992-1-1:2023", "2004", False),
         ("DS/EN 1992-1-1 + DK NA", "2004", False),
         (BRIDGE_BASE_CODE, "2004", True),
         (BRIDGE_DK_CODE, "2004", False),
@@ -1624,3 +1662,509 @@ def test_context_axis_collision_and_missing_active_output_are_rejected():
             input_sha256=INPUT_SHA,
             result_sha256=RESULT_SHA,
         )
+
+
+def test_2023_bending_round_trip_exact_values_methods_axes_and_registry():
+    inp = _2023_input()
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "building-2023"},
+    )
+    assert bundle is not None
+    assert bundle_from_json(bundle_to_json(bundle)) == bundle
+    assert validate_crack_trace_family(
+        bundle,
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "building-2023"},
+    ) == bundle
+    assert [
+        dict((axis.name, axis.value) for axis in calculation.axes)["crack_case"]
+        for calculation in bundle.calculations
+    ] == ["long-term", "short-term", "aggregate"]
+    assert [calculation.method_id for calculation in bundle.calculations] == [
+        "sector-en-1992-1-1-2023-refined-bending-replay",
+        "sector-en-1992-1-1-2023-refined-bending-replay",
+        "sector-en-1992-1-1-2023-crack-width-aggregate",
+    ]
+    long_term = out["elastic"]["crack"]
+    short_term = out["elastic"]["crack_short"]
+    assert long_term["wk"] == pytest.approx(0.7398000579056716)
+    assert long_term["sr_max"] == pytest.approx(169.48056326929603)
+    assert long_term["esm_ecm"] == pytest.approx(0.0022449179685008554)
+    assert long_term["rho_p_eff"] == pytest.approx(0.01904761904761901)
+    assert long_term["ac_eff"] == pytest.approx(0.0525000000000001)
+    assert long_term["hc_ef"] == pytest.approx(0.1750000000000005)
+    assert (long_term["kw"], long_term["k1_r"], long_term["kfl"]) == pytest.approx(
+        (1.7, 1.143786759399941, 0.6848874598070733)
+    )
+    assert short_term["wk"] == pytest.approx(0.9917623023584697)
+    assert short_term["sr_max"] == pytest.approx(172.0546638760417)
+    assert short_term["esm_ecm"] == pytest.approx(0.0029937796418173595)
+    assert out["elastic"]["crack_output"] == {
+        "value": 0.9917623023584697,
+        "case": "Short-term",
+        "governing": "B1",
+        "unit": "mm",
+        "calculation_state": "CALCULATED",
+    }
+    for calculation in bundle.calculations:
+        axes = {axis.name: axis.value for axis in calculation.axes}
+        assert axes["crack_code"] == trace_identity_token(CODE_2023)
+        assert axes["crack_edition"] == "2023"
+        assert axes["crack_route"] == "building-2023"
+        assert _reachable(calculation) == {
+            step.step_id for step in calculation.steps
+        }
+    assert bundle.calculations[0].axes[-2].value == "refined-bending"
+
+
+def test_2023_direct_tension_round_trip_and_scope_are_exact():
+    inp = _direct_2023_input()
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    assert bundle is not None
+    assert [calculation.method_id for calculation in bundle.calculations] == [
+        "sector-en-1992-1-1-2023-uniform-direct-tension-replay",
+        "sector-en-1992-1-1-2023-uniform-direct-tension-replay",
+        "sector-en-1992-1-1-2023-crack-width-aggregate",
+    ]
+    long_term = out["elastic"]["crack"]
+    short_term = out["elastic"]["crack_short"]
+    assert long_term["wk"] == pytest.approx(6.8253646947295294)
+    assert long_term["sr_max"] == pytest.approx(339.92891481211683)
+    assert long_term["rho_p_eff"] == pytest.approx(0.011111111111111112)
+    assert type(long_term["ac_eff"]) is np.float64
+    assert type(long_term["hc_ef"]) is np.float64
+    assert long_term["ac_eff"] == pytest.approx(0.18)
+    assert long_term["hc_ef"] == pytest.approx(0.17499999999999996)
+    assert (long_term["kw"], long_term["k1_r"], long_term["kfl"]) == (1.7, 1.0, 1.0)
+    assert short_term["wk"] == pytest.approx(6.691568673859481)
+    assert out["elastic"]["crack_output"]["value"] == pytest.approx(
+        6.8253646947295294
+    )
+    assert out["elastic"]["crack_output"]["case"] == "Long-term"
+    assert out["elastic"]["crack_output"]["governing"] == "B1"
+    for calculation in bundle.calculations[:2]:
+        axes = {axis.name: axis.value for axis in calculation.axes}
+        assert axes["crack_direction"] == "uniform-direct-tension"
+        assert axes["crack_scope"] == "uniform-direct-tension"
+        assert calculation.warnings == (
+            "Validated uniform direct-tension branch for a solid rectangular "
+            "section with reinforcement assigned to opposed faces.",
+        )
+        assert not any("dominant strain-gradient" in item for item in calculation.warnings)
+        assert any(step.step_id.endswith("-bc-eff") for step in calculation.steps)
+        assert any(
+            step.source.method_id
+            == "en-1992-1-1-2023-direct-tension-coefficient"
+            and step.source.citation is not None
+            and step.source.citation.locator == "Formula (9.20)"
+            for step in calculation.steps
+        )
+        assert _reachable(calculation) == {
+            step.step_id for step in calculation.steps
+        }
+
+
+def test_2023_formula_sources_and_candidate_dependencies_are_complete():
+    inp = _2023_input()
+    calculation = build_crack_trace_family(
+        inp,
+        _output(inp),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    ).calculations[0]
+    expected = {
+        "en-1992-1-1-2023-crack-width-route": ("9.2.3", "refined calculation of crack width"),
+        "en-1992-1-1-2023-effective-tension-area": ("9.2.3", "Figure 9.3"),
+        "en-1992-1-1-2023-effective-reinforcement-ratio": ("9.2.3", "Formula (9.12)"),
+        "en-1992-1-1-2023-mean-strain-difference": ("9.2.3", "Formula (9.11)"),
+        "en-1992-1-1-2023-mean-crack-spacing": ("9.2.3", "Formula (9.15)"),
+        "en-1992-1-1-2023-curvature-factor": ("9.2.3", "Formula (9.9)"),
+        "en-1992-1-1-2023-flexural-coefficient": ("9.2.3", "Formula (9.17)"),
+        "en-1992-1-1-2023-bond-factor": ("9.2.3", "Formula (9.18)"),
+        "en-1992-1-1-2023-calculated-crack-width": ("9.2.3", "Formula (9.8)"),
+    }
+    found = {}
+    for step in calculation.steps:
+        if step.source.method_id in expected:
+            assert step.source.kind == SOURCE_STANDARD
+            assert step.source.edition == "DS/EN 1992-1-1:2023"
+            assert step.source.citation is not None
+            assert step.source.citation.document == "DS/EN 1992-1-1:2023"
+            found[step.source.method_id] = (
+                step.source.citation.clause,
+                step.source.citation.locator,
+            )
+    assert found == expected
+    by_id = {step.step_id: step for step in calculation.steps}
+    candidate = "candidate-0001"
+    rho_dependencies = {
+        item.step_id for item in by_id[f"{candidate}-rho-p-eff"].dependencies
+    }
+    assert {
+        f"{candidate}-ac-eff",
+        f"{candidate}-as-eff",
+        f"{candidate}-ap-eff-weighted",
+    }.issubset(rho_dependencies)
+    spacing_dependencies = {
+        item.step_id for item in by_id[f"{candidate}-sr-max"].dependencies
+    }
+    assert {
+        f"{candidate}-cover",
+        f"{candidate}-phi",
+        f"{candidate}-rho-p-eff",
+        f"{candidate}-kfl",
+        f"{candidate}-kb",
+    }.issubset(spacing_dependencies)
+    width_dependencies = {
+        item.step_id for item in by_id[f"{candidate}-wk"].dependencies
+    }
+    assert {
+        f"{candidate}-kw",
+        f"{candidate}-k1-r",
+        f"{candidate}-sr-max",
+        f"{candidate}-esm-ecm",
+    }.issubset(width_dependencies)
+
+
+def test_2023_tendon_xi_is_active_only_with_tendons_and_strictly_bounded():
+    low = _2023_input(with_tendon=True, sls_tendon_xi=0.25)
+    high = _2023_input(with_tendon=True, sls_tendon_xi=0.75)
+    low_bundle = build_crack_trace_family(
+        low, _output(low), input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    high_bundle = build_crack_trace_family(
+        high, _output(high), input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    assert low_bundle != high_bundle
+    low_rho = _output(low)["elastic"]["crack"]["rho_p_eff"]
+    high_rho = _output(high)["elastic"]["crack"]["rho_p_eff"]
+    assert low_rho < high_rho
+    assert any(
+        step.step_id.endswith("-xi1")
+        and step.source.method_id == "en-1992-1-1-2023-prestress-bond-ratio"
+        and step.source.citation is not None
+        and step.source.citation.clause == "9.2.2(3)"
+        and step.source.citation.locator == "Formula (9.6)"
+        for step in low_bundle.calculations[0].steps
+    )
+    bond_range = {
+        step.step_id: step.result.value
+        for step in low_bundle.calculations[0].steps
+        if step.step_id.startswith("effective-xi1-")
+    }
+    assert set(bond_range) == {
+        "effective-xi1-minimum",
+        "effective-xi1-maximum",
+    }
+    assert bond_range["effective-xi1-minimum"] == pytest.approx(
+        bond_range["effective-xi1-maximum"]
+    )
+    for invalid in (0.0, -0.1, 1.1, float("nan"), float("inf")):
+        inp = _2023_input(with_tendon=True, sls_tendon_xi=invalid)
+        with pytest.raises(TraceValidationError, match="sls_tendon_xi"):
+            build_crack_trace_family(
+                inp, {}, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+            )
+
+    no_tendon = _2023_input(sls_tendon_xi=0.25)
+    changed = _2023_input(sls_tendon_xi=99.0)
+    out = _output(no_tendon)
+    assert build_crack_trace_family(
+        no_tendon, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    ) == build_crack_trace_family(
+        changed, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+
+
+def test_2023_member_is_value_inert_but_member_and_xi_types_are_pinned():
+    inp = _2023_input()
+    out = _output(inp)
+    beam = build_crack_trace_family(
+        inp, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    changed = copy.deepcopy(inp)
+    changed["sls_member"] = "Any retained text"
+    assert build_crack_trace_family(
+        changed, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    ) == beam
+    for key, wrong in (("sls_member", []), ("sls_tendon_xi", [])):
+        invalid = copy.deepcopy(inp)
+        invalid[key] = wrong
+        with pytest.raises(TraceValidationError, match="retain"):
+            build_crack_trace_family(
+                invalid, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+            )
+
+
+@pytest.mark.parametrize("kind", ["concrete", "bar", "tendon"])
+def test_2023_published_material_provenance_is_fenced(kind):
+    inp = _2023_input(with_tendon=kind == "tendon", sls_tendon_xi=0.7)
+    if kind == "concrete":
+        inp["concrete_preset"] = codes.EC2_2023.label
+        inp["concrete"] = codes.EC2_2023.concrete(35.0)
+    elif kind == "bar":
+        law = codes.EC2_2023.steel(500.0)
+        inp["mild_preset"] = codes.EC2_2023.label
+        inp["steel"] = law
+        inp["bar_materials"] = [law] * len(inp["bars"])
+        item = _catalog_item("M1", codes.EC2_2023.label, law)
+        item.update(name="B500B", description="Ribbed reinforcement")
+        inp["mild_material_catalog"]["items"] = [item]
+    else:
+        values = material_presets.PRESTRESS_PRESETS[codes.EC2_2023.label]
+        law = material_presets.build_prestress(
+            values["curve"],
+            **{key: value for key, value in values.items() if key != "curve"},
+        )
+        inp["prestress"] = law
+        inp["tendon_materials"] = [law] * len(inp["tendons"])
+        inp["prestress_preset"] = codes.EC2_2023.label
+        item = _catalog_item("P1", codes.EC2_2023.label, law)
+        item.update(name="Y1860", description="Bonded tendon")
+        inp["prestress_material_catalog"]["items"] = [item]
+    with pytest.raises(
+        TraceValidationError,
+        match="2023 material provenance is published but not implemented",
+    ):
+        build_crack_trace_family(
+            inp, {}, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+        )
+
+
+def test_2023_not_assessed_and_not_applicable_states_are_explicit(monkeypatch):
+    from sector.serviceability import CrackWidthEvaluation
+    import sector.crack_trace as crack_trace
+
+    inp = _2023_input()
+    out = _output(inp)
+    out["elastic"]["crack"] = None
+    out["elastic"]["crack_short"] = None
+    out["elastic"]["crack_output"] = {
+        "value": None,
+        "case": None,
+        "governing": None,
+        "unit": "mm",
+        "calculation_state": "NOT APPLICABLE",
+    }
+    reason = "The validated 2023 geometry branch does not cover this section."
+    monkeypatch.setattr(
+        crack_trace,
+        "evaluate_crack_width",
+        lambda *args, **kwargs: CrackWidthEvaluation("NOT ASSESSED", reason),
+    )
+    bundle = build_crack_trace_family(
+        inp, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    for calculation in bundle.calculations[:2]:
+        axes = {axis.name: axis.value for axis in calculation.axes}
+        assert axes["crack_branch"] == "not-assessed"
+        assert axes["crack_scope"] == "not-assessed"
+        assert calculation.method_id.endswith("applicability-replay")
+        assert calculation.steps[-1].result == TraceResult(
+            RESULT_UNDEFINED, None, reason
+        )
+
+    uncracked = _2023_input(
+        P_el_l=0.0,
+        Mx_el_l=0.0,
+        My_el_l=0.0,
+        P_el_s=0.0,
+        Mx_el_s=0.0,
+        My_el_s=0.0,
+    )
+    uncracked_out = _output(uncracked)
+    uncracked_bundle = build_crack_trace_family(
+        uncracked,
+        uncracked_out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    assert all(
+        dict((axis.name, axis.value) for axis in calculation.axes)["crack_branch"]
+        == "not-applicable"
+        for calculation in uncracked_bundle.calculations
+    )
+
+
+def test_2023_failure_keeps_exact_route_metadata_and_ignores_candidate_numerics(
+    monkeypatch,
+):
+    inp = _2023_input()
+    out = _output(inp)
+    original = sector_app.solve_elastic_combined
+
+    def failed(*args, **kwargs):
+        return dataclasses.replace(original(*args, **kwargs), converged=False)
+
+    import sector.crack_trace as crack_trace
+
+    monkeypatch.setattr(crack_trace, "solve_elastic_combined", failed)
+    out["elastic"]["converged"] = False
+    out["elastic"]["props_un"]["Ix"] = float("nan")
+    out["elastic"]["crack"]["wk"] = object()
+    out["elastic"]["crack_output"] = {
+        "value": None,
+        "case": None,
+        "governing": None,
+        "unit": "mm",
+        "calculation_state": "INVALID",
+    }
+    bundle = build_crack_trace_family(
+        inp, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    calculation = bundle.calculations[0]
+    axes = {axis.name: axis.value for axis in calculation.axes}
+    assert calculation.method_id == "sector-en-1992-1-1-2023-crack-width-failure"
+    assert axes["crack_branch"] == "failed"
+    assert axes["crack_edition"] == "2023"
+    assert axes["crack_scope"] == "failed"
+    assert calculation.steps[-1].result.state == RESULT_FAILED
+    assert calculation.steps[-1].result.value is None
+    assert _reachable(calculation) == {
+        step.step_id for step in calculation.steps
+    }
+    for key, stale in (
+        ("crack_code", "wrong"),
+        ("crack_edition", "2004"),
+        ("crack_member", "Beam"),
+    ):
+        changed = copy.deepcopy(out)
+        changed["elastic"][key] = stale
+        with pytest.raises(TraceValidationError, match=f"failed elastic.{key}"):
+            build_crack_trace_family(
+                inp, changed, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+            )
+
+
+def test_2023_every_owned_output_leaf_and_inventory_are_reconstructed():
+    inp = _2023_input()
+    out = _output(inp)
+    owned = {
+        key: value
+        for key, value in out["elastic"].items()
+        if key == "converged"
+        or key.startswith("crack")
+        or key.startswith(("lambda_cr", "sigma_ct", "fctm", "show_cw", "props_"))
+    }
+    for path in tuple(_leaf_paths(owned)):
+        changed = copy.deepcopy(out)
+        _mutate_path(changed["elastic"], path)
+        with pytest.raises(TraceValidationError):
+            build_crack_trace_family(
+                inp, changed, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+            )
+    for mutation in ("missing", "unknown", "reordered"):
+        changed = copy.deepcopy(out)
+        if mutation == "missing":
+            del changed["elastic"]["crack"]
+        elif mutation == "unknown":
+            changed["elastic"]["crack_future"] = None
+        else:
+            elastic = changed["elastic"]
+            changed["elastic"] = {
+                key: elastic[key] for key in reversed(tuple(elastic))
+            }
+        with pytest.raises(TraceValidationError, match="inventory|sibling"):
+            build_crack_trace_family(
+                inp, changed, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+            )
+
+
+def test_accepted_2004_bridge_bundle_bytes_remain_exact(monkeypatch):
+    success = (
+        (
+            _bridge_input(),
+            {"route": "bridge-base"},
+            "e84b27051d5237f609b6daf4da1542642b50a41116a49acd09fe689177b9e55c",
+        ),
+        (
+            _bridge_input(dk_na=True),
+            {"route": "bridge-dk"},
+            "c1d521adf0e26bc6e865800b297a49bc35e5fa10590bf95923ec76964b1b1705",
+        ),
+    )
+    outputs = []
+    for inp, context, expected in success:
+        out = _output(inp)
+        outputs.append(out)
+        bundle = build_crack_trace_family(
+            inp,
+            out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=context,
+        )
+        assert hashlib.sha256(bundle_to_json(bundle).encode("ascii")).hexdigest() == expected
+
+    original = sector_app.solve_elastic_combined
+
+    def failed(*args, **kwargs):
+        return dataclasses.replace(original(*args, **kwargs), converged=False)
+
+    import sector.crack_trace as crack_trace
+
+    monkeypatch.setattr(crack_trace, "solve_elastic_combined", failed)
+    failures = (
+        (success[0][0], outputs[0], {"route": "failed-bridge"}, "edd9ecbe5592aa2c3f5adb38c2743ba7ff015a1b6b8946c06831c5e6e1a36492"),
+        (success[1][0], outputs[1], {"route": "failed-bridge"}, "f1cc0df6bfe767c5bd9d71465620c4acd3ee235b440439db10ba1ab340890811"),
+    )
+    for inp, out, context, expected in failures:
+        out["elastic"]["converged"] = False
+        out["elastic"]["props_un"]["Ix"] = float("nan")
+        out["elastic"]["crack"]["wk"] = object()
+        if inp["sls_dk_na"]:
+            out["elastic"]["crack_coarse"]["wk"] = object()
+        out["elastic"]["crack_output"] = {
+            "value": None,
+            "case": None,
+            "governing": None,
+            "unit": "mm",
+            "calculation_state": "INVALID",
+        }
+        bundle = build_crack_trace_family(
+            inp,
+            out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=context,
+        )
+        assert hashlib.sha256(bundle_to_json(bundle).encode("ascii")).hexdigest() == expected
+
+
+def test_2023_trace_never_publishes_limit_utilisation_resistance_or_verdict():
+    for inp in (_2023_input(), _direct_2023_input()):
+        bundle = build_crack_trace_family(
+            inp,
+            _output(inp),
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+        )
+        advertised = []
+        for calculation in bundle.calculations:
+            advertised.extend(
+                (
+                    calculation.calculation_id,
+                    calculation.method_id,
+                    calculation.final_step_id,
+                    *(axis.name for axis in calculation.axes),
+                )
+            )
+            advertised.extend(
+                value
+                for step in calculation.steps
+                for value in (step.step_id, step.title, step.symbol)
+            )
+        text = " ".join(advertised).lower()
+        for excluded in ("utilisation", "resistance", "verdict", "crack limit"):
+            assert excluded not in text
