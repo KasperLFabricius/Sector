@@ -24,7 +24,6 @@ import math
 import os
 import re
 import threading
-from html import escape as _stdlib_html_escape
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -42,6 +41,7 @@ import calculation_trace_publication
 import fatigue_inputs
 import fatigue_presentation
 import material_catalog
+from publication_notation import normalize_trusted_markup, shield_literal_markup
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
@@ -131,9 +131,7 @@ def _html_escape(value, quote=True):
     from a user-controlled identifier, while remaining safe ReportLab markup.
     """
 
-    escaped = _stdlib_html_escape(str(value), quote=quote)
-    # A literal user comparison must not be converted by _greek either.
-    escaped = escaped.replace("&lt;=", "&#60;=").replace("&gt;=", "&#62;=")
+    escaped = shield_literal_markup(value, quote=quote)
     return _GREEK_RE.sub(
         lambda match: "".join(
             f"&#{ord(character)};" for character in match.group(1)
@@ -145,7 +143,8 @@ def _html_escape(value, quote=True):
 def _greek(s):
     """Replace the ASCII engineering tokens in display text with Greek glyphs."""
     s = _GREEK_RE.sub(lambda m: _GREEK[m.group(1)], s)
-    return s.replace("&lt;=", "&#8804;").replace("&gt;=", "&#8805;")
+    s = s.replace("&lt;=", "&#8804;").replace("&gt;=", "&#8805;")
+    return normalize_trusted_markup(s)
 
 
 def _kaleido_server_api():
@@ -909,12 +908,12 @@ class ReportBuilder:
         self._gap(8)
         date = m.get("date") or datetime.date.today().isoformat()
         rows = [["Field", "Value"],
-                ["Project no.", m.get("proj_no", "")],
-                ["Project name", m.get("proj_name", "")],
-                ["Section", m.get("section", "")],
-                ["Revision", m.get("rev", "")],
-                ["Prepared by", m.get("author", "")],
-                ["Date", date],
+                ["Project no.", _html_escape(m.get("proj_no", ""))],
+                ["Project name", _html_escape(m.get("proj_name", ""))],
+                ["Section", _html_escape(m.get("section", ""))],
+                ["Revision", _html_escape(m.get("rev", ""))],
+                ["Prepared by", _html_escape(m.get("author", ""))],
+                ["Date", _html_escape(date)],
                 ["Tool version", self.version or "-"],
                 ["Source revision", short_revision(m.get("source_revision"))],
                 [

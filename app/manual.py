@@ -34,6 +34,7 @@ import bridge_analysis
 import bridge_inputs
 import calculation_trace_publication
 import project_io
+from publication_notation import normalize_trusted_markup
 import reproducible_example
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
@@ -1968,7 +1969,8 @@ def _latex_to_rl(s: str) -> str:
         s,
     )
     s = s.removeprefix("&nbsp;")
-    return s.replace("{", "").replace("}", "").replace("\\", "")
+    converted = s.replace("{", "").replace("}", "").replace("\\", "")
+    return normalize_trusted_markup(converted)
 
 
 def _inline_md_to_rl(text: str) -> str:
@@ -1979,7 +1981,7 @@ def _inline_md_to_rl(text: str) -> str:
     text = re.sub(r"\$([^$]+)\$", lambda m: _latex_to_rl(m.group(1)), text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
-    return text
+    return normalize_trusted_markup(text)
 
 
 def _render_md_pdf(text, flow, styles, Paragraph):
