@@ -928,7 +928,11 @@ def test_report_describes_built_in_prestress_without_false_zero_strengths():
 
 @pytest.mark.parametrize(
     "preset",
-    ["Custom / imported", "Curve 1 (bilinear hardening)"],
+    [
+        "Custom / imported",
+        "Curve 1 (bilinear hardening)",
+        "Curve 2 (elastic-perfectly-plastic)",
+    ],
 )
 def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(preset):
     entry = material_catalog.default_entry("mild", preset=preset)
@@ -955,6 +959,10 @@ def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(prese
 
     assert "no normative curve source assigned" in flat
     assert "3.2.7" not in flat
+    assert "uncited" in flat
+    if preset == "Curve 2 (elastic-perfectly-plastic)":
+        assert "User-defined / project-defined Curve 2 preset" in flat
+        assert "General Curve 3 law" in flat
 
 
 def test_report_footer_identifies_the_organisational_licensee():
@@ -1501,6 +1509,7 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert f"{0.85 * eta:.6f}" in txt
     assert f"{inp['concrete'].fcd:.3f}" in txt
     assert chr(0x3B7) in txt  # eta_cc uses the Greek symbol
+    assert "Curve 3 Eurocode design preset" in " ".join(txt.split())
     assert "3.15" not in txt
 
 

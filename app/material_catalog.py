@@ -13,7 +13,7 @@ import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 
-from sector import material_presets as mp
+from sector import codes, material_presets as mp
 
 
 VERSION = 1
@@ -28,6 +28,45 @@ DEFAULT_PRESTRESS_PRESET = "EN 1992-1-1:2005"
 
 MILD_FIELDS = tuple(mp.MILD_FIELD_META)
 PRESTRESS_FIELDS = tuple(mp.PRESTRESS_FIELD_META)
+
+
+def mild_preset_classification(preset: str) -> str:
+    """Return the user-facing identity of a mild-steel preset selection.
+
+    Identity follows the concrete selected preset, never numerical similarity.
+    Every current preset happens to use the general Curve-3 kernel, but the named
+    generic shapes remain project-defined while edition names retain their own
+    Eurocode provenance.
+    """
+
+    selected = str(preset).strip()
+    if selected in codes.CODES:
+        return "Curve 3 Eurocode design preset"
+    if selected == "Curve 2 (elastic-perfectly-plastic)":
+        return "User-defined / project-defined Curve 2 preset; uncited"
+    if selected in mp.MILD_PRESETS:
+        return "User-defined / project-defined named-curve preset; uncited"
+    return "Custom / imported user law; uncited"
+
+
+def mild_preset_display_label(preset: str) -> str:
+    """Decorate a mild preset for display without changing its stored value."""
+
+    selected = str(preset).strip()
+    return f"{selected} [{mild_preset_classification(selected)}]"
+
+
+def mild_preset_kernel_note(preset: str) -> str:
+    """Describe the common kernel without claiming that editable values are fixed."""
+
+    selected = str(preset).strip()
+    if selected in codes.CODES:
+        return ("General Curve 3 law; the edition preset supplies Eurocode "
+                "design-diagram starting values")
+    if selected in mp.MILD_PRESETS:
+        return ("General Curve 3 law; the named project-defined preset supplies "
+                "starting values")
+    return "Stored material-law inputs; no standard identity inferred"
 
 
 def _kind(kind: str) -> str:

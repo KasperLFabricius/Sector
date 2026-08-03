@@ -2676,6 +2676,29 @@ def test_material_preset_switch_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_mild_preset_selector_exposes_concrete_identity_without_rewriting_value():
+    at = _fresh().run()
+    selector = at.selectbox(key="mild_preset")
+    assert any(
+        "Curve 2 (elastic-perfectly-plastic)" in option
+        and "User-defined / project-defined Curve 2 preset; uncited" in option
+        for option in selector.options
+    )
+    assert any(
+        "DS/EN 1992-1-1:2005 + DK NA:2024" in option
+        and "Curve 3 Eurocode design preset" in option
+        for option in selector.options
+    )
+
+    selector.set_value("Curve 2 (elastic-perfectly-plastic)").run()
+    assert at.session_state["mild_preset"] == (
+        "Curve 2 (elastic-perfectly-plastic)"
+    )
+    captions = "\n".join(str(item.value) for item in at.caption)
+    assert "Preset identity: User-defined / project-defined Curve 2 preset" in captions
+    assert "Every material field remains a direct calculation input" in captions
+
+
 def test_material_catalogue_add_duplicate_delete_and_assignment_guard():
     at = _fresh().run()
     _goto_material_tab(at, "Mild steel")
