@@ -9,6 +9,7 @@ figure or worked number can never reference a section the solver cannot handle.
 from __future__ import annotations
 
 import io
+import inspect
 import pathlib
 import re
 import sys
@@ -100,6 +101,41 @@ def test_manual_includes_complete_live_standard_trace_example():
         block[:2] == ("h1", "Structured standards calculation trace")
         for block in blocks
     )
+
+
+def test_manual_publishes_the_complete_numerical_method_contract():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "Numerical methods & reproducible project",
+        "80 times",
+        "100 times",
+        "bisection cap is not an independent failure flag",
+        "singular initial matrix instead starts from zero",
+        "singular tangent exits the iteration",
+        "nearest forward crossing",
+        "exact distance tie selects the first endpoint",
+        "fully dominated unresolved heap is converged",
+        "best sampled damage is positive infinity",
+        "absolute and relative gaps remain infinite",
+        "six-significant-digit diagnostic format",
+        "182.4828759089466",
+        "0.1142440041397812",
+    ):
+        assert expected in text
+
+
+def test_manual_exposes_stable_nonrerunning_reference_downloads():
+    source = inspect.getsource(manual.render_manual_streamlit)
+    for expected in (
+        "reproducible_example.project_json()",
+        "reproducible_example.checking_pack()",
+        "reproducible_example.PROJECT_NAME",
+        "reproducible_example.CHECK_NAME",
+        'key="manual_reference_project"',
+        'key="manual_reference_check"',
+    ):
+        assert expected in source
+    assert source.count('on_click="ignore"') == 2
 
 
 def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():

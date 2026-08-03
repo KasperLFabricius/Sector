@@ -34,6 +34,7 @@ import bridge_analysis
 import bridge_inputs
 import calculation_trace_publication
 import project_io
+import reproducible_example
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
@@ -1743,6 +1744,78 @@ def manual_blocks() -> list:
        "and action-factored Elastic state in every bin converge; a non-converged "
        "state cannot pass.")
 
+    h1("Numerical methods & reproducible project")
+    md("Sector retains the numerical decisions below as part of its calculation "
+       "contract. They govern the unrounded solver state; report formatting is a "
+       "presentation operation only. The manual dialog provides a current-schema "
+       "reference project and a compact checking pack with the exact original "
+       "inputs and frozen unrounded results.")
+
+    h2("Plastic axial equilibrium")
+    md("At every swept angle the axial search starts with "
+       "$c_{lo}=10^{-9}c_{full}$ and $c_{hi}=c_{full}$. While the upper response "
+       "is below the requested axial action, $c_{hi}$ is doubled at most 80 times. "
+       "Reachability is the inclusive test $N(c_{lo})\\leq N\\leq N(c_{hi})$, so an "
+       "exact endpoint is a valid root; an out-of-range request is clamped to the "
+       "corresponding endpoint but cannot converge. An in-range bracket is bisected "
+       "at most 100 times and may stop when "
+       "$c_{hi}-c_{lo}<10^{-12}c_{full}$; the final midpoint is evaluated. "
+       "Convergence requires both reachability and "
+       "$|\\sum F-N|\\leq10^{-6}\\max(1,|N|)$. Reaching the bisection cap is not an "
+       "independent failure flag.")
+
+    h2("Cracked Elastic iteration")
+    md("The active-set iteration starts from the uncracked linear strain plane; a "
+       "singular initial matrix instead starts from zero. The concrete compression "
+       "zone is clipped again on every Newton iteration. The exact convergence test "
+       "is the residual infinity norm "
+       "$\\max|R|\\leq10^{-9}\\max(1,\\max|target|)$. A singular tangent exits the "
+       "iteration, and failure to pass that test within the 100-step cap leaves the "
+       "result not converged.")
+
+    h2("Applied ray against the plastic envelope")
+    md("An applied moment radius below $10^{-9}$ returns zero utilisation with no "
+       "resistance or governing member. For every closed-envelope chord, the ray "
+       "intersection treats $|D|\\leq10^{-12}$ as parallel, accepts the chord "
+       "parameter in $[-10^{-9},1+10^{-9}]$, and requires a forward ray parameter "
+       "$t>10^{-9}$. The nearest forward crossing governs. If no chord is crossed, "
+       "utilisation is positive infinity and neither resistance nor member is "
+       "invented. The published governing member is the chord endpoint closest to "
+       "the crossing; an exact distance tie selects the first endpoint in sweep "
+       "order.")
+
+    h2("Concrete-fatigue adaptive search")
+    md("The retained defaults start with a $4\\times4$ subdivision, maximum depth "
+       "26, maximum 200000 evaluated boxes, relative tolerance $10^{-3}$ and "
+       "absolute tolerance $10^{-8}$. An empty or fully dominated unresolved heap "
+       "is converged. For finite damage, the certificate is "
+       "$upper-best\\leq10^{-8}+10^{-3}\\max(|best|,10^{-12})$; reaching the depth "
+       "or box limit first leaves convergence false. There is one explicit "
+       "exception: when the best sampled damage is positive infinity, Sector "
+       "publishes positive-infinite $upper=best$ and **converged = True**, while "
+       "the recorded "
+       "absolute and relative gaps remain infinite.")
+
+    h2("Report precision and reference outputs")
+    md("Calculation dependencies, governing selections and PASS/FAIL decisions use "
+       "the retained unrounded values. Fixed decimal counts and the six-significant-"
+       "digit diagnostic format affect text only and never feed a calculation or "
+       "verdict. The downloadable reference deliberately disables fatigue, shear, "
+       "torsion, combined M-V-T, detailing and bridge families so its enabled "
+       "Plastic and Elastic paths are bounded and reproducible.")
+    table(
+        ["Reference result", "Frozen unrounded value"],
+        [
+            ["Plastic applied radius [kNm]", "182.4828759089466"],
+            ["Plastic chord resistance [kNm]", "330.5985879649080"],
+            ["Plastic utilisation", "0.5519771788266579"],
+            ["Maximum concrete compression [MPa]", "9.056070470526570"],
+            ["Long-action cracking factor", "1.180243298120012"],
+            ["Peak cracking factor", "0.7095506619292463"],
+            ["Short-term fine crack width [mm]", "0.1142440041397812"],
+        ],
+    )
+
     # =====================================================================
     # PART D - REFERENCE
     # =====================================================================
@@ -2284,6 +2357,35 @@ def render_manual_streamlit():
 
     st.caption("What Sector computes, the theory it applies, its features, and how "
                "to use it.")
+
+    with st.expander(
+        "Reproducible reference project",
+        icon=":material/science:",
+    ):
+        project_text = reproducible_example.project_json()
+        st.caption(
+            "Current-schema input and checking pack for the complete numerical-"
+            f"method example. Input SHA-256: {reproducible_example.input_sha256()}"
+        )
+        with st.container(horizontal=True):
+            st.download_button(
+                "Download reference project",
+                project_text,
+                file_name=reproducible_example.PROJECT_NAME,
+                mime="application/json",
+                key="manual_reference_project",
+                on_click="ignore",
+                icon=":material/download:",
+            )
+            st.download_button(
+                "Download checking pack",
+                reproducible_example.checking_pack(),
+                file_name=reproducible_example.CHECK_NAME,
+                mime="text/markdown",
+                key="manual_reference_check",
+                on_click="ignore",
+                icon=":material/download:",
+            )
 
     parts = manual_parts()
     selected_part = st.selectbox(
