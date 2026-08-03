@@ -41,6 +41,7 @@ import case_analysis
 import calculation_trace_publication
 import fatigue_inputs
 import fatigue_presentation
+import material_catalog
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
@@ -1184,6 +1185,7 @@ class ReportBuilder:
         summary = [["ID", "Name", "Preset / source", "Use"]]
         for item in records:
             material_id = item.get("id", "-")
+            preset = item.get("preset", "-")
             uses = []
             count = sum(element.get("material_id") == material_id
                         for element in self.inp.get("bar_elements", []))
@@ -1193,7 +1195,8 @@ class ReportBuilder:
                 uses.append("member-check reference")
             summary.append([
                 material_id, _html_escape(item.get("name", "")),
-                _html_escape(item.get("preset", "-")), ", ".join(uses) or "-",
+                _html_escape(material_catalog.mild_preset_display_label(preset)),
+                ", ".join(uses) or "-",
             ])
         self._table(summary, [18 * mm, 42 * mm, 66 * mm, 40 * mm],
                     font=7.0, keep=False)
@@ -1214,6 +1217,16 @@ class ReportBuilder:
                 self._small(_html_escape(item["description"]))
             fyd = st.fytk / st.gamma_y if st.gamma_y else st.fytk
             rows = [["Parameter", "Symbol", "Value"],
+                    ["Preset identity", "-", _html_escape(
+                        material_catalog.mild_preset_classification(
+                            item.get("preset", "")
+                        )
+                    )],
+                    ["Implemented law", "-", _html_escape(
+                        material_catalog.mild_preset_kernel_note(
+                            item.get("preset", "")
+                        )
+                    )],
                     ["Yield strength", "f<sub>ytk</sub>", f"{_fmt(st.fytk, 3)} MPa"],
                     ["Compression yield", "f<sub>yck</sub>", f"{_fmt(st.fyck, 3)} MPa"],
                     ["Ultimate strength", "f<sub>utk</sub>", f"{_fmt(st.futk, 3)} MPa"],

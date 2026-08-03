@@ -157,6 +157,51 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     assert "No shear, torsion" not in text
 
 
+def test_manual_matches_the_merged_geometry_topology_contract():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "at least three distinct points",
+        "non-adjacent crossing, touch or overlap",
+        "Forward collinear points",
+        "Clockwise and counter-clockwise winding",
+        "strictly inside the outer ring",
+        "8 ULP of the coordinate magnitude",
+        "never snapped or rewritten",
+        "valid section whose numerical solver later fails to converge",
+    ):
+        assert expected in text
+
+
+def test_manual_pins_the_tendon_projection_sign_and_per_element_extreme():
+    text = "\n".join(
+        item for block in manual.manual_blocks() for item in block
+        if isinstance(item, str)
+    )
+    for expected in (
+        "s=x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}",
+        "s_{na}=s_{max}-c",
+        "s_{p,j}",
+        "\\varepsilon_{p,IS,j}",
+        "s_{p,min}=\\min_j s_{p,j}",
+        "inventories every $j$",
+    ):
+        assert expected in text
+    assert "s_{cab,min}" not in text
+
+
+def test_manual_distinguishes_user_curve2_from_eurocode_curve3_identity():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert "Curve 3 Eurocode design preset" in text
+    assert "Curve 2 (elastic-perfectly-plastic)" in text
+    assert "user-defined/project-defined and uncited preset" in text
+    assert "numerical similarity never assigns them a standard identity" in text
+
+    for example in (manual.example_beam(), manual.example_circular()):
+        assert example["mild_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
+        assert example["steel"].curve == 3
+        assert example["steel"].gamma_E == pytest.approx(1.0)
+
+
 def test_manual_has_the_expected_parts_in_order():
     parts = [b[1] for b in manual.manual_blocks() if b[0] == "part"]
     assert parts == ["Part A - Get started", "Part B - Features & options",
@@ -196,16 +241,19 @@ def test_part_c_worked_numbers_match_the_engine():
     c, s = ex["concrete"], ex["steel"]
     assert c.fck / c.gamma_c * c.alpha_cc == pytest.approx(27.6, abs=0.1)   # fcd
     assert s.fytk / s.gamma_y == pytest.approx(458.0, abs=1.0)              # fyd
-    # Curve 2 scales the elastic slope to Es/gamma_y, so the yield strain is
-    # fytk/Es (not fyd/Es): 2.75 per mille for B550, as the manual now states.
-    assert s.fytk / s.Es == pytest.approx(2.75e-3, abs=1e-5)
+    # The selected DK edition preset uses the general Curve-3 law with an
+    # unfactored modulus, so yield is fyd/Es = 2.29 per mille for B550.
+    assert s.curve == 3 and s.gamma_E == pytest.approx(1.0)
+    yield_strain = (s.fytk / s.gamma_y) / s.elastic_slope(design=True)
+    assert yield_strain == pytest.approx(2.2916667e-3, abs=1e-8)
     sec = manual._section_of(ex)
     r = plastic_capacity_at_angle(sec, c, s, 0.0, 90.0)
     assert r.Mx == pytest.approx(346.0, abs=2.0)                            # capacity
-    # eps_steel is a percentage: -1.89% = 18.9 per mille, past yield (2.75) but
+    # eps_steel is a percentage: about -1.95% = 19.5 per mille, past yield but
     # below rupture (50) -- the worked point is tension-controlled, as stated.
     eps_frac = abs(r.eps_steel) / 100.0
-    assert s.fytk / s.Es < eps_frac < s.eut
+    assert eps_frac == pytest.approx(0.0195, abs=0.0001)
+    assert yield_strain < eps_frac < s.eut
     fc = fctm(c.fck)
     editions = {
         "2005": (dict(), 0.188, 236.0),

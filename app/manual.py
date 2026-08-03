@@ -37,11 +37,11 @@ import project_io
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
-from sector import bridge, templates
+from sector import bridge, material_presets, templates
 from sector.bridge_trace import build_bridge_trace_family
 from sector.codes import fctm
 from sector.fatigue import steel_fatigue_life
-from sector.materials import Concrete, MildSteel, Prestress
+from sector.materials import Concrete, Prestress
 from sector.plastic import solve_plastic
 from sector.section import Section
 from sector.serviceability import analyse_cracking
@@ -108,12 +108,15 @@ def example_beam() -> dict:
     bars = [(-0.10, -0.25, a25), (0.0, -0.25, a25), (0.10, -0.25, a25),
             (-0.10, 0.25, a16), (0.10, 0.25, a16)]
     concrete = Concrete(fck=40.0, gamma_c=1.45, curve=2)
-    steel = MildSteel(fytk=550.0, fyck=550.0, futk=550.0, eut=0.05,
-                      gamma_y=1.20, gamma_u=1.20, gamma_E=1.20, curve=2)
+    mild_preset = "DS/EN 1992-1-1:2005 + DK NA:2024"
+    steel = material_presets.build_mild(
+        **material_presets.MILD_PRESETS[mild_preset]
+    )
     return {
         "name": "Rectangular beam (mild steel)",
         "outer": outer, "holes": [], "bars": bars, "tendons": [],
         "concrete": concrete, "steel": steel, "prestress": None,
+        "mild_preset": mild_preset,
         "P": 0.0, "Mx": 300.0, "My": 0.0,
         "note": "300 x 600 mm, C40/50, B550; 3 x 25 mm bottom, 2 x 16 mm top.",
     }
@@ -135,14 +138,17 @@ def example_circular() -> dict:
     r_tnd = 0.5 * (d_void / 2.0 + r_bar)              # tendons between void and bars
     tendons = templates.point_ring(0.0, 0.0, r_tnd, 8, 150.0)
     concrete = Concrete(fck=40.0, gamma_c=1.45, curve=2)
-    steel = MildSteel(fytk=550.0, fyck=550.0, futk=550.0, eut=0.05,
-                      gamma_y=1.20, gamma_u=1.20, gamma_E=1.20, curve=2)
+    mild_preset = "DS/EN 1992-1-1:2005 + DK NA:2024"
+    steel = material_presets.build_mild(
+        **material_presets.MILD_PRESETS[mild_preset]
+    )
     prestress = Prestress(curve=6, IS=0.005, fytk=1600.0, futk=1860.0, eut=0.035,
                           gamma_y=1.15, gamma_u=1.15, gamma_E=1.15, Es=195000.0)
     return {
         "name": "Circular hollow section (mild + prestress)",
         "outer": outer, "holes": [hole], "bars": bars, "tendons": tendons,
         "concrete": concrete, "steel": steel, "prestress": prestress,
+        "mild_preset": mild_preset,
         "P": 1500.0, "Mx": 600.0, "My": 0.0,
         "note": "800/400 mm annulus, C40/50; 12 x 20 mm mild ring + 8 tendons.",
     }
@@ -653,9 +659,24 @@ def manual_blocks() -> list:
            ["Box girder", "A hollow box (one rectangular void)"],
            ["Circular", "A circular section, optionally with a bar ring"]])
     h2("Validity checks")
-    md("The section is rejected, with a message, when the geometry is not "
-       "analysable: a void that would disconnect the concrete, or a bar or tendon "
-       "that falls outside the concrete or inside a void.")
+    md("Geometry is validated before any solver runs. Every outer or hole ring "
+       "must contain finite numeric coordinates, at least three distinct points "
+       "and an area above the resolved tolerance. A ring is rejected for a "
+       "repeated or tolerance-coincident vertex, a non-adjacent crossing, touch or "
+       "overlap, or an adjacent edge that reverses along the same line. Forward "
+       "collinear points and one exact final point equal to the first are accepted. "
+       "Clockwise and counter-clockwise winding are both valid; Sector retains the "
+       "entered order and uses oriented copies only for integration.")
+    md("Every hole must be strictly inside the outer ring. It cannot touch or cross "
+       "the outer boundary, touch/cross/overlap another hole, or contain another "
+       "hole. The concrete net area must remain connected, and every bar and tendon "
+       "must lie in concrete rather than outside it or inside a void. The first "
+       "causal defect is reported with its ring, point or edge location.")
+    call("concept", "The length tolerance is the greatest of **1e-12 m**, "
+         "**1e-9 times the section span** and **8 ULP of the coordinate magnitude**. "
+         "Coordinates are classified but never snapped or rewritten. A geometry "
+         "validation failure is distinct from a valid section whose numerical "
+         "solver later fails to converge.")
     call("limit", "A void must leave the concrete in one connected piece. A slot "
          "that splits the section in two is rejected rather than analysed, because "
          "the plane-section assumption no longer holds across a break.")
@@ -689,17 +710,24 @@ def manual_blocks() -> list:
     fig(fig_beam_concrete_law, "The concrete-law preview for the rectangular "
         "example (C40/50).")
     h2("Mild steel")
-    md("Each mild-steel definition is bilinear (optionally with hardening). The "
-       "selected definition's plot is shown beside its inputs. The inputs are the "
-       "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
-       "$\\varepsilon_{uk}$, the partial factors and the modulus $E_s$. The "
+    md("Each mild-steel definition uses the general **Curve 3** law, with every "
+       "parameter visible and live. The generic **Curve 1**, **Curve 2** and "
+       "**Curve 3** selections are user-defined/project-defined starting-value "
+       "presets and are explicitly uncited. An edition-named selection is labelled "
+       "a **Curve 3 Eurocode design preset** and retains that edition's source. "
+       "The preset never locks the law: edited numerical values are the actual "
+       "calculation inputs. The selected definition's plot is shown beside its "
+       "inputs. These include yield and ultimate strengths, ultimate strain, the "
+       "partial factors, yield offsets, first-yield ratio and modulus $E_s$. The "
        "**Active in compression** toggle decides whether the bars carry "
        "compression in the **plastic** law: with it off the steel is "
        "tension-only there. The cracked-elastic analysis is linear and "
        "always treats the bars in both directions, regardless of this toggle.")
     fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.")
-    call("standard", "The concrete and steel laws follow DS/EN 1992-1-1 3.1.7 and "
-         "3.2.7; the ultimate strains follow Table 3.1. Part C derives them in full.")
+    call("standard", "Edition-named concrete and steel presets carry their selected "
+         "Eurocode source (including 3.1.7 / 3.2.7 for the 2005 family). Generic "
+         "named curves and custom/imported laws are project-defined and uncited; "
+         "numerical similarity never assigns them a standard identity.")
     h2("Prestressing steel")
     md("Each prestress definition adds the tendon law and, crucially, the initial strain "
        "$\\varepsilon_{p,IS}$ locked into the tendons. The inputs mirror the mild "
@@ -1064,10 +1092,12 @@ def manual_blocks() -> list:
        "$N$ is positive in **tension** (compression negative, kN), so its sign agrees "
        "with the stresses and strains -- a crushing concrete strain reads negative; "
        "the moments $M_x$ and $M_y$ act "
-       "about the $x$ and $y$ axes (kNm). Along any straining direction a **depth "
-       "coordinate** $s$ is the projection of a point onto the strain gradient; the "
-       "neutral axis is a line $s = s_{na}$, and in the plastic sweep its "
-       "orientation is $\\varphi_{NA}$, measured from the $y$ axis.")
+       "about the $x$ and $y$ axes (kNm). At sweep angle $\\varphi_{NA}$, a point "
+       "has the **depth coordinate** "
+       "$s=x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$. The neutral axis is "
+       "$s=s_{na}$, where $s_{na}=s_{max}-c$; larger $s$ is the compression side. "
+       "The neutral-axis line is oriented at $\\varphi_{NA}$ counter-clockwise "
+       "from the positive $y$ axis.")
     fig(fig_sign_convention, "Axes and the positive senses of the axial force, the "
         "moments and the neutral-axis angle.")
     call("concept", "The reported axial force $N$, the stresses and the strains are "
@@ -1140,37 +1170,45 @@ def manual_blocks() -> list:
     fig(fig_beam_concrete_law, "The C40/50 parabola-rectangle law of the beam "
         "example.")
     h2("Mild steel")
-    md("The mild steel is linear to yield and then a plateau or a mild hardening "
-       "branch:\n\n"
+    md("The mild-steel editor uses one general Curve 3 law. It is linear to a "
+       "first yield, can pass through a second yield defined by the plastic offsets, "
+       "and then reaches the entered ultimate point. Setting $k=1$ and both offsets "
+       "to zero collapses the two yields into one; setting the factored ultimate "
+       "stress equal to the factored yield gives a flat post-yield branch. On the "
+       "initial elastic branch:\n\n"
        "$$\\sigma_s = E_{s,d}\\,\\varepsilon_s\\ \\ (|\\varepsilon_s|\\le"
        "\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, \\qquad "
        "\\varepsilon_{yd}=f_{yd}/E_{s,d}.$$\n\n"
-       "The design elastic modulus $E_{s,d}$ depends on the curve.\n\n"
-       "The selectable Eurocode presets (Curve 3) keep it unfactored, "
-       "$E_{s,d}=E_s$, so B550 yields at "
-       "$\\varepsilon_{yd}=f_{yd}/E_s=458/200000\\approx 2.29$ per mille.\n\n"
-       "The elastic-perfectly-plastic law used in this worked example (Curve 2) "
-       "factors it, $E_{s,d}=E_s/\\gamma_s$, so the whole curve scales by "
-       "$1/\\gamma_s$ and yield moves to $\\varepsilon_{yd}=f_{yk}/E_s=550/200000="
-       "2.75$ per mille.\n\n"
-       "In both, $f_{yd}=550/1.20=458$ MPa.")
+       "For the general law, $E_{s,d}=E_s/\\gamma_E$. The edition-named Curve 3 "
+       "design presets set $\\gamma_E=1$, so the B550 DK preset used by both "
+       "examples yields at $\\varepsilon_{yd}=f_{yd}/E_s="
+       "(550/1.20)/200000\\approx2.29$ per mille.\n\n"
+       "The generic **Curve 2 (elastic-perfectly-plastic)** selection is a "
+       "user-defined/project-defined and uncited preset. It also uses the general "
+       "Curve 3 kernel with $k=1$, zero offsets and a flat branch; its stored "
+       "starting value is $\\gamma_E=1$. Changing any field changes the law but "
+       "does not change or promote the selected preset identity.")
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.")
     h2("Prestressing steel")
     md("A tendon is evaluated at its **total** strain -- the locked-in initial "
        "strain $\\varepsilon_{p,IS}$ (from prestressing, after losses, given as an "
-       "input) plus the section strain at the tendon location:\n\n"
-       "$$\\varepsilon_p = \\varepsilon_{p,IS} + \\varepsilon_c(\\text{tendon}), "
+       "input) plus its tension-positive section strain. For tendon $j$ at depth "
+       "$s_{p,j}$ this is:\n\n"
+       "$$\\varepsilon_{p,j}=\\varepsilon_{p,IS,j}"
+       "-\\kappa(s_{p,j}-s_{na}), "
        "\\qquad \\sigma_p = f(\\varepsilon_p),\\quad f_{pd}=f_{p0.1k}/\\gamma_s.$$\n\n"
        "**Worked (circular):** $\\varepsilon_{p,IS}=5.0$ per mille and "
        "$f_{pd}=1600/1.15=1391$ MPa.")
     fig(fig_circular_prestress_law, "The tendon law of the circular example.")
-    call("standard", "The concrete, mild-steel and tendon laws follow DS/EN "
-         "1992-1-1 3.1.7, 3.2.7 and 3.3.6; the strain limits follow Table 3.1.")
+    call("standard", "The beam and circular examples select the edition-named "
+         "DS/EN 1992-1-1:2005 + DK NA:2024 Curve 3 design preset for mild steel. "
+         "Edition-named concrete, mild-steel and tendon presets retain their own "
+         "sources; generic named curves remain project-defined / uncited.")
 
     h1("Plastic capacity analysis")
     h2("The strain plane at capacity")
     md("Plane sections remain plane, so the strain is linear across the depth: "
-       "$\\varepsilon(s) = \\varphi\\,(s - s_{na})$, where $\\varphi$ is the "
+       "$\\varepsilon_{sec}(s) = \\kappa\\,(s - s_{na})$, where $\\kappa$ is the "
        "curvature and $s_{na}$ the neutral-axis depth. At capacity the extreme "
        "compression fibre reaches the concrete crushing strain "
        "$\\varepsilon_{cu2}$; the compression depth is $c = s_{max}-s_{na}$.")
@@ -1183,18 +1221,25 @@ def manual_blocks() -> list:
     md("The curvature is scaled until the **first** element reaches its assigned "
        "material limit, so "
        "none is driven past its limit:\n\n"
-       "$$\\varphi = \\min\\!\\left(\\frac{\\varepsilon_{cu2}}{c},\\; "
-       "\\frac{\\varepsilon_{ud}}{s_{na}-s_{bar,min}},\\; "
-       "\\frac{\\varepsilon_{ud}}{s_{bar,max}-s_{na}},\\; "
-       "\\frac{\\varepsilon_{pud}-\\varepsilon_{p,IS}}{s_{na}-s_{cab,min}}\\right),$$\n\n"
-       "the four terms being concrete crushing, rupture of the most tensile mild "
-       "bar, rupture of the most **compressed** mild bar (only when the bars are "
-       "active in compression and their ultimate strain is below the concrete "
-       "crushing strain -- otherwise the concrete crushes first) and rupture of the "
-       "most tensile tendon (measured from its locked-in strain). Whichever is "
-       "smallest governs. With several definitions, these candidate limits are "
-       "evaluated for every bar and tendon using its own ultimate strain, initial "
-       "strain and compression setting.")
+       "$$\\kappa = \\min\\!\\left(\\frac{\\varepsilon_{cu2}}{c},\\; "
+       "\\min_{i:\\,\\text{tension-side bar}}"
+       "\\frac{\\varepsilon_{u,i}}{s_{na}-s_{b,i}},\\; "
+       "\\min_{i:\\,\\text{compression-side active bar}}"
+       "\\frac{\\varepsilon_{u,i}}{s_{b,i}-s_{na}},\\; "
+       "\\min_{j:\\,\\text{tension-side tendon}}"
+       "\\frac{\\varepsilon_{pu,j}-\\varepsilon_{p,IS,j}}"
+       "{s_{na}-s_{p,j}}\\right).$$\n\n"
+       "The terms are concrete crushing, tensile mild-bar rupture, compressive "
+       "mild-bar rupture (only for a bar active in compression), and tensile tendon "
+       "rupture measured from that tendon's locked-in strain. A candidate is used "
+       "only when its denominator and remaining tendon strain margin are positive. "
+       "Every bar and tendon is evaluated with its own assigned law; the smallest "
+       "candidate governs.")
+    call("concept", "$s_{p,j}$ is tendon $j$'s projection on the local strain "
+         "gradient. If all tendons share the same limit and initial strain, "
+         "$s_{p,min}=\\min_j s_{p,j}$ is a useful shorthand for the most tensile "
+         "location. The solver still inventories every $j$; no undefined global "
+         "cable coordinate replaces the element-specific candidates.")
     call("tip", "The reported mild-steel strain is split into its two governing "
          "extremes: the most **tensile** bar strain $\\varepsilon_{s,t}$ and, when "
          "the bars are active in compression, the most **compressed** bar strain "
@@ -1216,7 +1261,7 @@ def manual_blocks() -> list:
        "diagram. **Worked (beam, $N=0$, $\\varphi_{NA}=90^\\circ$):** the concrete "
        "reaches its "
        "crushing strain ($3.5$ per mille) while the most tensile bars are well past "
-       "yield ($18.9$ per mille, against the $2.75$ per mille yield), so this "
+       "yield ($19.5$ per mille, against the $2.29$ per mille yield), so this "
        "tension-controlled point gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
        "kNm is then a utilisation of $300/346 = 0.87$.")
     fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
@@ -1763,6 +1808,10 @@ def manual_blocks() -> list:
           [["$N$ or $P$", "Axial force; tension positive; kN"],
            ["$M_x$, $M_y$", "Bending moments about the x and y axes; kNm"],
            ["$\\varphi_{NA}$", "Neutral-axis sweep angle from +y; degrees"],
+           ["$s$", "Local depth projection $x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$; larger $s$ is the compression side"],
+           ["$s_{na}$", "Neutral-axis depth coordinate, $s_{max}-c$"],
+           ["$s_{p,j}$", "Projected depth coordinate of tendon $j$"],
+           ["$\\kappa$", "Compression-positive internal section curvature; 1/m"],
            ["$V_{Ed}$", "Applied design shear action; kN"],
            ["$\\Delta\\sigma_{Ed}$", "Action-factored fatigue stress range; MPa"],
            ["$\\Delta\\sigma_{Rsk}$", "Characteristic S-N reference range; MPa"],
@@ -1827,6 +1876,7 @@ def manual_parts() -> dict[str, list]:
 _LATEX_CMD = {
     r"\varepsilon": "&#949;", r"\gamma": "&#947;", r"\sigma": "&#963;",
     r"\varphi": "&#966;", r"\alpha": "&#945;", r"\rho": "&#961;",
+    r"\kappa": "&#954;",
     r"\lambda": "&#955;", r"\phi": "&#966;", r"\eta": "&#951;",
     r"\beta": "&#946;", r"\theta": "&#952;", r"\nu": "&#957;",
     r"\tau": "&#964;", r"\xi": "&#958;", r"\pi": "&#960;",

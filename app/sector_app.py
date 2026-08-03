@@ -548,8 +548,17 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     labels = list(presets)
     if entry["preset"] not in labels:
         labels.append(entry["preset"])
-    preset = _seeded_selectbox(box, "Preset", labels, entry["preset"],
-                               f"{prefix}_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(
+        box, "Preset", labels, entry["preset"], f"{prefix}_preset",
+        help=_PRESET_HELP,
+        format_func=mat_catalog.mild_preset_display_label,
+    )
+    box.caption(
+        "Preset identity: "
+        f"{mat_catalog.mild_preset_classification(preset)}. "
+        f"{mat_catalog.mild_preset_kernel_note(preset)}. "
+        "Every material field remains a direct calculation input."
+    )
     # Selecting a preset whose compression yield is active (fyck > 0) turns the
     # "Active in compression" toggle on, so the preset's compression is not
     # silently dropped. (Checked before _prefill, which updates the change marker.)
