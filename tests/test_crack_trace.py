@@ -1,4 +1,4 @@
-"""CT-009 base oracle, exact contract, and adversarial closure tests."""
+"""CT-009 2004 base/building-DK oracles and adversarial closure tests."""
 
 from __future__ import annotations
 
@@ -43,6 +43,7 @@ from tests.test_section_trace_blocks import _catalog_item
 INPUT_SHA = "3" * 64
 RESULT_SHA = "4" * 64
 CONTEXT = {"case": "ct009-base", "stage": 1}
+DK_CODE = "DS/EN 1992-1-1 + DK NA"
 
 
 @pytest.fixture(autouse=True)
@@ -184,17 +185,57 @@ def _bundle(inp=None, out=None, context=None):
     return inp, out, bundle
 
 
+def _dk_input(**changes):
+    values = dict(sls_code=DK_CODE, sls_dk_na=True)
+    values.update(changes)
+    return _input(**values)
+
+
 def _reachable(calculation):
     by_id = {step.step_id: step for step in calculation.steps}
     seen = set()
-    stack = [calculation.final_step_id]
-    while stack:
-        step_id = stack.pop()
+    pending = [calculation.final_step_id]
+    while pending:
+        step_id = pending.pop()
         if step_id in seen:
             continue
         seen.add(step_id)
-        stack.extend(item.step_id for item in by_id[step_id].dependencies)
+        pending.extend(
+            dependency.step_id for dependency in by_id[step_id].dependencies
+        )
     return seen
+
+
+def _leaf_paths(value, prefix=()):
+    if type(value) is dict:
+        for key, item in value.items():
+            yield from _leaf_paths(item, (*prefix, key))
+    elif type(value) in {list, tuple}:
+        for index, item in enumerate(value):
+            yield from _leaf_paths(item, (*prefix, index))
+    else:
+        yield prefix
+
+
+def _change_leaf(value):
+    if value is None:
+        return "tampered-none"
+    if type(value) is bool:
+        return not value
+    if type(value) is int:
+        return value + 1
+    if type(value) is float:
+        return float(np.nextafter(value, math.inf))
+    if type(value) is str:
+        return value + "-tampered"
+    raise AssertionError(f"unhandled hostile leaf type {type(value)!r}")
+
+
+def _mutate_path(value, path):
+    target = value
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = _change_leaf(target[path[-1]])
 
 
 def test_application_oracle_round_trip_graph_sources_units_and_formula():
@@ -316,9 +357,9 @@ def test_type_valid_mismatched_base_selectors_are_inactive(edition, dk_na):
 @pytest.mark.parametrize(
     "code,edition,dk_na",
     [
-        ("DS/EN 1992-1-1 + DK NA", "2004", True),
         ("EN 1992-1-1:2023", "2023", False),
         ("DS/EN 1992-2:2005 + AC:2008", "2004", False),
+        ("DS/EN 1992-1-1 + DK NA", "2004", False),
     ],
 )
 def test_other_current_code_branches_are_inactive(code, edition, dk_na):
@@ -329,6 +370,287 @@ def test_other_current_code_branches_are_inactive(code, edition, dk_na):
         input_sha256=INPUT_SHA,
         result_sha256=RESULT_SHA,
     ) is None
+
+
+def test_building_dk_round_trip_order_registry_and_exact_output():
+    inp = _dk_input()
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "building-dk"},
+    )
+    assert bundle is not None
+    assert len(bundle.calculations) == 5
+    assert [
+        dict((axis.name, axis.value) for axis in item.axes)["crack_case"]
+        for item in bundle.calculations
+    ] == [
+        "long-term-fine",
+        "short-term-fine",
+        "long-term-coarse",
+        "short-term-coarse",
+        "aggregate",
+    ]
+    assert tuple(
+        key for key in out["elastic"] if key.startswith("crack")
+    ) == (
+        "cracked",
+        "crack",
+        "crack_short",
+        "crack_code",
+        "crack_edition",
+        "crack_member",
+        "crack_coarse",
+        "crack_short_coarse",
+        "crack_output",
+    )
+    assert validate_crack_trace_family(
+        bundle,
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "building-dk"},
+    ) == bundle
+
+
+def test_building_dk_routes_and_member_rule_bind_selecting_identities():
+    inp = _dk_input()
+    bundle = build_crack_trace_family(
+        inp,
+        _output(inp),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    for calculation in bundle.calculations:
+        reachable = _reachable(calculation)
+        input_ids = {
+            step.step_id
+            for step in calculation.steps
+            if step.step_id.startswith("input-") and "-sha256-" in step.step_id
+        }
+        route_steps = tuple(
+            step
+            for step in calculation.steps
+            if step.step_id.startswith("route-building-dk-")
+        )
+        assert input_ids and len(route_steps) == 2
+        assert all(
+            step.step_id in reachable
+            and step.quantity_role == "computed_intermediate"
+            and {dependency.step_id for dependency in step.dependencies}
+            == input_ids
+            for step in route_steps
+        )
+        assert {step.source.method_id for step in route_steps} == {
+            "en-1992-1-1-2004-crack-width-route",
+            "dk-na-2024-crack-width-route",
+        }
+        rules = tuple(
+            step
+            for step in calculation.steps
+            if step.step_id == "case-fine-effective-height-rule"
+        )
+        if rules:
+            assert len(rules) == 1
+            assert rules[0].quantity_role == "computed_intermediate"
+            assert {
+                dependency.step_id for dependency in rules[0].dependencies
+            } == input_ids
+
+
+def test_building_dk_fine_coarse_formulas_and_sources_are_exact():
+    inp = _dk_input()
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp, out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    for fine_key, coarse_key in (
+        ("crack", "crack_coarse"),
+        ("crack_short", "crack_short_coarse"),
+    ):
+        fine = out["elastic"][fine_key]
+        coarse = out["elastic"][coarse_key]
+        assert fine["wk"] == pytest.approx(fine["sr_max"] * fine["esm_ecm"])
+        assert coarse["wk"] == pytest.approx(
+            0.5 * coarse["sr_max"] * coarse["esm_ecm"]
+        )
+        assert fine["coarse"] is False
+        assert coarse["coarse"] is True
+    assert any(
+        step.source.method_id == "dk-na-2024-effective-tension-area-fine"
+        for step in bundle.calculations[0].steps
+    )
+    assert any(
+        step.source.method_id == "dk-na-2024-effective-tension-area-coarse"
+        for step in bundle.calculations[2].steps
+    )
+    assert any(
+        step.source.method_id == "dk-na-2024-coarse-crack-width"
+        for step in bundle.calculations[2].steps
+    )
+    coefficient = next(
+        step
+        for step in bundle.calculations[0].steps
+        if step.step_id.endswith("cover-coefficient")
+    )
+    cover = out["elastic"]["crack"]["candidates"][0]["cover"]
+    assert coefficient.result.value == pytest.approx(
+        3.4 * (25.0 / cover) ** (2.0 / 3.0)
+    )
+    assert len(coefficient.dependencies) == 1
+    assert coefficient.dependencies[0].step_id.endswith("-cover")
+    spacing = next(
+        step
+        for step in bundle.calculations[0].steps
+        if step.step_id.endswith("-sr-max")
+    )
+    assert coefficient.step_id in {
+        dependency.step_id for dependency in spacing.dependencies
+    }
+
+
+def test_building_dk_member_and_tendon_rules_are_active_but_xi_is_inert():
+    beam = _dk_input(sls_member="Beam")
+    slab = _dk_input(sls_member="Slab")
+    beam_bundle = build_crack_trace_family(
+        beam, _output(beam), input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    slab_bundle = build_crack_trace_family(
+        slab, _output(slab), input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    assert beam_bundle != slab_bundle
+    beam_rule = next(
+        step for step in beam_bundle.calculations[0].steps
+        if step.step_id == "case-fine-effective-height-rule"
+    )
+    slab_rule = next(
+        step for step in slab_bundle.calculations[0].steps
+        if step.step_id == "case-fine-effective-height-rule"
+    )
+    assert beam_rule.result.value == 0.0
+    assert slab_rule.result.value == 1.0
+
+    tendon = _dk_input(with_tendon=True, sls_member="Beam")
+    tendon_changed = copy.deepcopy(tendon)
+    tendon_changed["sls_tendon_xi"] = 0.75
+    first_out = _output(tendon)
+    second_out = _output(tendon_changed)
+    first = build_crack_trace_family(
+        tendon, first_out, input_sha256=INPUT_SHA, result_sha256=RESULT_SHA
+    )
+    second = build_crack_trace_family(
+        tendon_changed,
+        second_out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    tendon_rule = next(
+        step for step in first.calculations[0].steps
+        if step.step_id == "case-fine-effective-height-rule"
+    )
+    assert tendon_rule.result.value == 1.0
+    assert first == second
+
+    invalid = _dk_input(sls_member="Column")
+    with pytest.raises(TraceValidationError, match="Beam or Slab"):
+        build_crack_trace_family(
+            invalid,
+            {},
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+        )
+
+    wrong_xi = _dk_input(sls_tendon_xi=[])
+    with pytest.raises(TraceValidationError, match="retain built-in numeric"):
+        build_crack_trace_family(
+            wrong_xi,
+            {},
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+        )
+    missing_xi = _dk_input()
+    del missing_xi["sls_tendon_xi"]
+    with pytest.raises(TraceValidationError, match="requires sls_tendon_xi"):
+        build_crack_trace_family(
+            missing_xi,
+            {},
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+        )
+
+
+def test_unreinforced_building_dk_has_four_undefined_cases_and_aggregate():
+    inp = _dk_input(empty=True, Mx_el_l=0.0, Mx_el_s=0.0)
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    assert [item.steps[-1].result.state for item in bundle.calculations] == [
+        RESULT_UNDEFINED,
+        RESULT_UNDEFINED,
+        RESULT_UNDEFINED,
+        RESULT_UNDEFINED,
+        RESULT_UNDEFINED,
+    ]
+
+
+def test_every_building_dk_owned_leaf_is_independently_reconstructed():
+    inp = _dk_input()
+    out = _output(inp)
+    owned = {
+        key: value
+        for key, value in out["elastic"].items()
+        if key == "converged"
+        or key.startswith("crack")
+        or key.startswith(
+            ("lambda_cr", "sigma_ct", "fctm", "show_cw", "props_")
+        )
+    }
+    paths = tuple(_leaf_paths(owned))
+    assert paths
+    for path in paths:
+        changed = copy.deepcopy(out)
+        _mutate_path(changed["elastic"], path)
+        with pytest.raises(TraceValidationError):
+            build_crack_trace_family(
+                inp,
+                changed,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
+
+
+def test_building_dk_output_inventory_missing_unknown_and_reordered_is_rejected():
+    inp = _dk_input()
+    out = _output(inp)
+    mutations = []
+    missing = copy.deepcopy(out)
+    del missing["elastic"]["crack_coarse"]
+    mutations.append(missing)
+    unknown = copy.deepcopy(out)
+    unknown["elastic"]["crack_future"] = None
+    mutations.append(unknown)
+    reordered = copy.deepcopy(out)
+    elastic = reordered["elastic"]
+    reordered["elastic"] = {
+        key: elastic[key] for key in reversed(tuple(elastic))
+    }
+    mutations.append(reordered)
+    for changed in mutations:
+        with pytest.raises(TraceValidationError, match="inventory|sibling"):
+            build_crack_trace_family(
+                inp,
+                changed,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
 
 
 def test_fresh_unknown_reordered_and_missing_element_schema_is_rejected():
@@ -647,6 +969,78 @@ def test_nonconvergence_builds_minimal_failure_without_failure_numerics(monkeypa
             input_sha256=INPUT_SHA,
             result_sha256=RESULT_SHA,
         )
+
+
+def test_building_dk_failure_reconstructs_metadata_and_ignores_only_numerics(
+    monkeypatch,
+):
+    inp = _dk_input(sls_member="Slab")
+    out = _output(inp)
+    original = sector_app.solve_elastic_combined
+
+    def failed(*args, **kwargs):
+        return dataclasses.replace(original(*args, **kwargs), converged=False)
+
+    import sector.crack_trace as crack_trace
+
+    monkeypatch.setattr(crack_trace, "solve_elastic_combined", failed)
+    out["elastic"]["converged"] = False
+    out["elastic"]["props_un"]["Ix"] = float("nan")
+    out["elastic"]["crack"]["wk"] = object()
+    out["elastic"]["crack_coarse"]["wk"] = object()
+    out["elastic"]["crack_output"] = {
+        "value": None,
+        "case": None,
+        "governing": None,
+        "unit": "mm",
+        "calculation_state": "INVALID",
+    }
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    assert len(bundle.calculations) == 1
+    calculation = bundle.calculations[0]
+    assert calculation.steps[-1].result.state == RESULT_FAILED
+    input_ids = {
+        step.step_id
+        for step in calculation.steps
+        if step.step_id.startswith("input-") and "-sha256-" in step.step_id
+    }
+    route_steps = tuple(
+        step for step in calculation.steps
+        if step.step_id.startswith("route-building-dk-")
+    )
+    assert len(route_steps) == 2
+    assert all(
+        {dependency.step_id for dependency in step.dependencies} == input_ids
+        for step in route_steps
+    )
+    metadata_steps = tuple(
+        step
+        for step in calculation.steps
+        if step.title.startswith("Sealed crack_")
+    )
+    assert len(metadata_steps) == 24
+    reachable = _reachable(calculation)
+    assert all(step.step_id in reachable for step in metadata_steps)
+
+    for key, stale in (
+        ("crack_code", "EN 1992-1-1:2005"),
+        ("crack_edition", "stale-edition"),
+        ("crack_member", "Beam"),
+    ):
+        changed = copy.deepcopy(out)
+        changed["elastic"][key] = stale
+        with pytest.raises(TraceValidationError, match=f"failed elastic.{key}"):
+            build_crack_trace_family(
+                inp,
+                changed,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
 
 
 def test_removed_limit_and_new_limit_utilisation_verdict_surfaces_are_rejected():
