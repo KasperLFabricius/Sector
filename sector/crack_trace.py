@@ -35,6 +35,12 @@ from .calculation_trace import (
 from .crack_trace_contract import (
     BASE_ROUTE,
     BOUNDARY,
+    BRIDGE_BASE_CODE,
+    BRIDGE_BASE_METHOD_ID,
+    BRIDGE_BASE_ROUTE,
+    BRIDGE_DK_CODE,
+    BRIDGE_DK_METHOD_ID,
+    BRIDGE_DK_ROUTE,
     CODE,
     COVERAGE_ID,
     CRACK_WIDTH,
@@ -153,8 +159,57 @@ class _CaseReplay:
 
 
 @dataclass(frozen=True, slots=True)
+class _RouteIdentity:
+    code: str
+    method_id: str
+    axis: str | None
+    slug: str
+    title: str
+
+
+_ROUTE_IDENTITIES = {
+    (False, None): _RouteIdentity(
+        CODE,
+        METHOD_ID,
+        None,
+        "base",
+        "EN 1992-1-1:2004",
+    ),
+    (True, None): _RouteIdentity(
+        DK_CODE,
+        DK_METHOD_ID,
+        "building-dk",
+        "building-dk",
+        "DS/EN 1992-1-1:2004 with DK NA:2024",
+    ),
+    (False, "bridge-base"): _RouteIdentity(
+        BRIDGE_BASE_CODE,
+        BRIDGE_BASE_METHOD_ID,
+        "bridge-base",
+        "bridge-base",
+        BRIDGE_BASE_CODE,
+    ),
+    (True, "bridge-dk"): _RouteIdentity(
+        BRIDGE_DK_CODE,
+        BRIDGE_DK_METHOD_ID,
+        "bridge-dk",
+        "bridge-dk",
+        BRIDGE_DK_CODE,
+    ),
+}
+
+
+def _route_identity(dk_na: bool, route: str | None) -> _RouteIdentity:
+    try:
+        return _ROUTE_IDENTITIES[(dk_na, route)]
+    except KeyError as exc:
+        raise TraceValidationError("unsupported CT-009 route identity") from exc
+
+
+@dataclass(frozen=True, slots=True)
 class _SuccessfulReplay:
     dk_na: bool
+    route: str | None
     inputs: tuple[tuple[str, Any], ...]
     sibling_shape: Any
     retained: Mapping[str, Any]
@@ -170,6 +225,7 @@ class _SuccessfulReplay:
 @dataclass(frozen=True, slots=True)
 class _FailedReplay:
     dk_na: bool
+    route: str | None
     inputs: tuple[tuple[str, Any], ...]
     output_shape: Any
     metadata: tuple[tuple[str, Any], ...]
@@ -354,7 +410,7 @@ def _digest(value: Any) -> tuple[float, ...]:
     )
 
 
-def _active_route(inp: Mapping[str, Any]) -> bool | None:
+def _active_route(inp: Mapping[str, Any]) -> tuple[bool, str | None] | None:
     mode = _required(inp, "mode")
     enabled = _required(inp, "sls_cw")
     if type(mode) is not str:
@@ -373,12 +429,16 @@ def _active_route(inp: Mapping[str, Any]) -> bool | None:
         raise TraceValidationError("sls_dk_na must retain Boolean type")
     if edition != EDITION:
         return None
-    if (code, dk_na) == (CODE, False):
-        selected_dk = False
-    elif (code, dk_na) == (DK_CODE, True):
-        selected_dk = True
-    else:
+    routes = {
+        (CODE, False): (False, None),
+        (DK_CODE, True): (True, None),
+        (BRIDGE_BASE_CODE, False): (False, "bridge-base"),
+        (BRIDGE_DK_CODE, True): (True, "bridge-dk"),
+    }
+    selected = routes.get((code, dk_na))
+    if selected is None:
         return None
+    selected_dk, _route = selected
 
     if "sls_crack_limit" in inp:
         raise TraceValidationError("removed sls_crack_limit cannot enter CT-009")
@@ -390,7 +450,7 @@ def _active_route(inp: Mapping[str, Any]) -> bool | None:
     tendon_xi = _required(inp, "sls_tendon_xi")
     if type(tendon_xi) not in {int, float} or type(tendon_xi) is bool:
         raise TraceValidationError("sls_tendon_xi must retain built-in numeric type")
-    return selected_dk
+    return selected
 
 
 def _validate_rings(inp: Mapping[str, Any], blocks: SectionTraceBlocks) -> None:
@@ -773,6 +833,7 @@ def _validate_failure(
     *,
     cracked: bool,
     dk_na: bool,
+    route: str | None,
     member: str,
 ) -> tuple[Any, tuple[tuple[str, Any], ...]]:
     owned = tuple(key for key in candidate if _is_owned(key))
@@ -806,8 +867,9 @@ def _validate_failure(
         raise TraceValidationError("failed CT-009 output requires converged is False")
     metadata: dict[str, Any] = {}
     if cracked:
+        identity = _route_identity(dk_na, route)
         metadata = {
-            "crack_code": DK_CODE if dk_na else CODE,
+            "crack_code": identity.code,
             "crack_edition": EDITION,
             "crack_member": member if dk_na else None,
         }
@@ -826,12 +888,13 @@ def _validate_failure(
     )
     return (
         _type_tree(out),
-        tuple(metadata.items()) if dk_na else (),
+        tuple(metadata.items()) if dk_na or route is not None else (),
     )
 
 
 def _reconstruct(
-    inp: Mapping[str, Any], out: Mapping[str, Any], *, dk_na: bool
+    inp: Mapping[str, Any], out: Mapping[str, Any], *, dk_na: bool,
+    route: str | None,
 ) -> _SuccessfulReplay | _FailedReplay:
     values = _numeric_inputs(inp)
     try:
@@ -951,10 +1014,12 @@ def _reconstruct(
             candidate,
             cracked=cracked,
             dk_na=dk_na,
+            route=route,
             member=member,
         )
         return _FailedReplay(
             dk_na,
+            route,
             identity,
             output_shape,
             failure_metadata,
@@ -1056,8 +1121,9 @@ def _reconstruct(
         "crack_short": cases[1].output,
     }
     if cracked:
+        route_identity = _route_identity(dk_na, route)
         expected.update(
-            crack_code=DK_CODE if dk_na else CODE,
+            crack_code=route_identity.code,
             crack_edition=EDITION,
             crack_member=member if dk_na else None,
         )
@@ -1084,6 +1150,7 @@ def _reconstruct(
     _validate_success(candidate, expected)
     return _SuccessfulReplay(
         dk_na=dk_na,
+        route=route,
         inputs=identity,
         sibling_shape=sibling_shape,
         retained=expected,
@@ -1172,22 +1239,34 @@ def _identity_steps(
 def _route_steps(
     *,
     dk_na: bool,
+    route: str | None,
     dependencies: Sequence[TraceStep],
 ) -> list[TraceStep]:
-    if not dk_na:
+    if route == "bridge-base":
+        prefix = "route-bridge-base"
+        sources = (BRIDGE_BASE_ROUTE,)
+    elif route == "bridge-dk":
+        prefix = "route-bridge-dk"
+        sources = (BRIDGE_BASE_ROUTE, BRIDGE_DK_ROUTE, DK_ROUTE)
+    elif dk_na:
+        prefix = "route-building-dk"
+        sources = (BASE_ROUTE, DK_ROUTE)
+    else:
         return []
+    selected = _route_identity(dk_na, route)
+    title_route = "building-DK" if dk_na and route is None else selected.slug
     return [
         _step(
-            f"route-building-dk-{position}",
-            f"Selected building-DK standards route {position}",
+            f"{prefix}-{position}",
+            f"Selected {title_route} standards route {position}",
             1.0,
             ONE,
             ROLE_COMPUTED,
             source,
             dependencies,
-            expression=f"Selected by exact {DK_CODE} controls identity",
+            expression=f"Selected by exact {selected.code} controls identity",
         )
-        for position, source in enumerate((BASE_ROUTE, DK_ROUTE), start=1)
+        for position, source in enumerate(sources, start=1)
     ]
 
 
@@ -1343,6 +1422,7 @@ def _case_member(
     case: _CaseReplay,
     context: Mapping[str, Any],
 ) -> tuple[MemberShape, TraceCalculation]:
+    route_identity = _route_identity(replay.dk_na, replay.route)
     steps = _identity_steps(
         replay.inputs,
         source=INPUT,
@@ -1352,6 +1432,7 @@ def _case_member(
     input_roots = tuple(steps)
     route_steps = _route_steps(
         dk_na=replay.dk_na,
+        route=replay.route,
         dependencies=input_roots,
     )
     steps.extend(route_steps)
@@ -1533,28 +1614,23 @@ def _case_member(
     axis_values = dict(
         crack_branch=branch,
         crack_case=case.name,
-        crack_code=trace_identity_token(DK_CODE if replay.dk_na else CODE),
+        crack_code=trace_identity_token(route_identity.code),
         crack_direction="dominant-strain-gradient",
         crack_edition=EDITION,
         crack_system="coarse" if case.coarse else "fine",
     )
-    if replay.dk_na:
-        axis_values["crack_route"] = "building-dk"
+    if route_identity.axis is not None:
+        axis_values["crack_route"] = route_identity.axis
     axes = context_axes(context, **axis_values)
     calculation_id = (
-        f"ct-009-{context_id(context)}-{case.name}-building-dk-crack-width"
-        if replay.dk_na
-        else f"ct-009-{context_id(context)}-{case.name}-base-crack-width"
+        f"ct-009-{context_id(context)}-{case.name}-"
+        f"{route_identity.slug}-crack-width"
     )
     calculation = TraceCalculation(
         calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
-        title=(
-            f"DS/EN 1992-1-1:2004 with DK NA:2024 {case.name} crack width"
-            if replay.dk_na
-            else f"EN 1992-1-1:2004 {case.name} crack width"
-        ),
-        method_id=DK_METHOD_ID if replay.dk_na else METHOD_ID,
+        title=f"{route_identity.title} {case.name} crack width",
+        method_id=route_identity.method_id,
         axes=axes,
         final_step_id=final.step_id,
         steps=tuple(steps),
@@ -1562,7 +1638,7 @@ def _case_member(
         assumptions=(
             (
                 "No crack limit, utilisation, resistance, or verdict is inferred."
-                if replay.dk_na
+                if replay.dk_na or replay.route is not None
                 else "No crack limit, utilisation, verdict, DK rule, or bridge rule is inferred."
             ),
         ),
@@ -1575,6 +1651,7 @@ def _aggregate_member(
     cases: tuple[TraceCalculation, ...],
     context: Mapping[str, Any],
 ) -> tuple[MemberShape, TraceCalculation]:
+    route_identity = _route_identity(replay.dk_na, replay.route)
     steps = _identity_steps(
         replay.inputs,
         source=INPUT,
@@ -1584,6 +1661,7 @@ def _aggregate_member(
     inputs = tuple(steps)
     route_steps = _route_steps(
         dk_na=replay.dk_na,
+        route=replay.route,
         dependencies=inputs,
     )
     steps.extend(route_steps)
@@ -1720,27 +1798,22 @@ def _aggregate_member(
     axis_values = dict(
         crack_branch=branch,
         crack_case="aggregate",
-        crack_code=trace_identity_token(DK_CODE if replay.dk_na else CODE),
+        crack_code=trace_identity_token(route_identity.code),
         crack_edition=EDITION,
         crack_member_cardinality=str(len(cases)),
     )
-    if replay.dk_na:
-        axis_values["crack_route"] = "building-dk"
+    if route_identity.axis is not None:
+        axis_values["crack_route"] = route_identity.axis
     axes = context_axes(context, **axis_values)
     calculation_id = (
-        f"ct-009-{context_id(context)}-building-dk-crack-width-aggregate"
-        if replay.dk_na
-        else f"ct-009-{context_id(context)}-base-crack-width-aggregate"
+        f"ct-009-{context_id(context)}-{route_identity.slug}-"
+        "crack-width-aggregate"
     )
     calculation = TraceCalculation(
         calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
-        title=(
-            "DS/EN 1992-1-1:2004 with DK NA:2024 crack-width aggregate"
-            if replay.dk_na
-            else "EN 1992-1-1:2004 crack-width aggregate"
-        ),
-        method_id=DK_METHOD_ID if replay.dk_na else METHOD_ID,
+        title=f"{route_identity.title} crack-width aggregate",
+        method_id=route_identity.method_id,
         axes=axes,
         final_step_id=final.step_id,
         steps=tuple(steps),
@@ -1760,6 +1833,7 @@ def _failed_member(
     replay: _FailedReplay,
     context: Mapping[str, Any],
 ) -> tuple[MemberShape, TraceCalculation]:
+    route_identity = _route_identity(replay.dk_na, replay.route)
     steps = _identity_steps(
         replay.inputs,
         source=INPUT,
@@ -1769,6 +1843,7 @@ def _failed_member(
     inputs = tuple(steps)
     route_steps = _route_steps(
         dk_na=replay.dk_na,
+        route=replay.route,
         dependencies=inputs,
     )
     steps.extend(route_steps)
@@ -1804,27 +1879,22 @@ def _failed_member(
     )
     steps.append(final)
     calculation_id = (
-        f"ct-009-{context_id(context)}-building-dk-crack-width-failed"
-        if replay.dk_na
-        else f"ct-009-{context_id(context)}-base-crack-width-failed"
+        f"ct-009-{context_id(context)}-{route_identity.slug}-"
+        "crack-width-failed"
     )
     failed_axes = dict(
         crack_branch="failed",
         crack_case="aggregate",
-        crack_code=trace_identity_token(DK_CODE if replay.dk_na else CODE),
+        crack_code=trace_identity_token(route_identity.code),
         crack_edition=EDITION,
     )
-    if replay.dk_na:
-        failed_axes["crack_route"] = "building-dk"
+    if route_identity.axis is not None:
+        failed_axes["crack_route"] = route_identity.axis
     calculation = TraceCalculation(
         calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
-        title=(
-            "DS/EN 1992-1-1:2004 with DK NA:2024 crack-width failure"
-            if replay.dk_na
-            else "EN 1992-1-1:2004 crack-width failure"
-        ),
-        method_id=DK_METHOD_ID if replay.dk_na else METHOD_ID,
+        title=f"{route_identity.title} crack-width failure",
+        method_id=route_identity.method_id,
         axes=context_axes(context, **failed_axes),
         final_step_id=final.step_id,
         steps=tuple(steps),
@@ -1845,14 +1915,20 @@ def _expected_bundle(
 ) -> TraceBundle | None:
     input_mapping = _mapping(inp, "CT-009 input")
     trace_context = {} if context is None else _mapping(context, "CT-009 context")
-    dk_na = _active_route(input_mapping)
-    if dk_na is None:
+    active_route = _active_route(input_mapping)
+    if active_route is None:
         return None
+    dk_na, route = active_route
     if _required(input_mapping, "section") is None:
         return None
     output_mapping = _mapping(out, "analysis output", exact=True)
 
-    replay = _reconstruct(input_mapping, output_mapping, dk_na=dk_na)
+    replay = _reconstruct(
+        input_mapping,
+        output_mapping,
+        dk_na=dk_na,
+        route=route,
+    )
     if isinstance(replay, _FailedReplay):
         shape, calculation = _failed_member(replay, trace_context)
         bundle = create_bundle(
@@ -1862,7 +1938,11 @@ def _expected_bundle(
         )
         return audit_trace_registry(
             bundle,
-            registry_for((shape,), dk_na=replay.dk_na),
+            registry_for(
+                (shape,),
+                dk_na=replay.dk_na,
+                route=replay.route,
+            ),
         )
 
     pairs = tuple(
@@ -1884,6 +1964,7 @@ def _expected_bundle(
         registry_for(
             (*case_shapes, aggregate_shape),
             dk_na=replay.dk_na,
+            route=replay.route,
         ),
     )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import math
 import pathlib
 import sys
@@ -30,11 +31,13 @@ from sector.calculation_trace import (
     bundle_from_json,
     bundle_to_json,
     seal_bundle,
+    trace_identity_token,
 )
 from sector.crack_trace import (
     build_crack_trace_family,
     validate_crack_trace_family,
 )
+from sector.crack_trace_contract import MemberShape, registry_for
 from sector.materials import Prestress
 from sector.section import Section
 from tests.test_section_trace_blocks import _catalog_item
@@ -44,6 +47,8 @@ INPUT_SHA = "3" * 64
 RESULT_SHA = "4" * 64
 CONTEXT = {"case": "ct009-base", "stage": 1}
 DK_CODE = "DS/EN 1992-1-1 + DK NA"
+BRIDGE_BASE_CODE = "DS/EN 1992-2:2005 + AC:2008"
+BRIDGE_DK_CODE = "DS/EN 1992-2 DK NA:2015"
 
 
 @pytest.fixture(autouse=True)
@@ -187,6 +192,15 @@ def _bundle(inp=None, out=None, context=None):
 
 def _dk_input(**changes):
     values = dict(sls_code=DK_CODE, sls_dk_na=True)
+    values.update(changes)
+    return _input(**values)
+
+
+def _bridge_input(*, dk_na: bool = False, **changes):
+    values = dict(
+        sls_code=BRIDGE_DK_CODE if dk_na else BRIDGE_BASE_CODE,
+        sls_dk_na=dk_na,
+    )
     values.update(changes)
     return _input(**values)
 
@@ -358,8 +372,10 @@ def test_type_valid_mismatched_base_selectors_are_inactive(edition, dk_na):
     "code,edition,dk_na",
     [
         ("EN 1992-1-1:2023", "2023", False),
-        ("DS/EN 1992-2:2005 + AC:2008", "2004", False),
         ("DS/EN 1992-1-1 + DK NA", "2004", False),
+        (BRIDGE_BASE_CODE, "2004", True),
+        (BRIDGE_DK_CODE, "2004", False),
+        (BRIDGE_DK_CODE, "2023", True),
     ],
 )
 def test_other_current_code_branches_are_inactive(code, edition, dk_na):
@@ -370,6 +386,302 @@ def test_other_current_code_branches_are_inactive(code, edition, dk_na):
         input_sha256=INPUT_SHA,
         result_sha256=RESULT_SHA,
     ) is None
+
+
+@pytest.mark.parametrize(
+    "dk_na,code,cases,route,method_id",
+    [
+        (
+            False,
+            BRIDGE_BASE_CODE,
+            ("long-term", "short-term", "aggregate"),
+            "bridge-base",
+            "sector-en-1992-2-2005-crack-width-route-replay",
+        ),
+        (
+            True,
+            BRIDGE_DK_CODE,
+            (
+                "long-term-fine",
+                "short-term-fine",
+                "long-term-coarse",
+                "short-term-coarse",
+                "aggregate",
+            ),
+            "bridge-dk",
+            "sector-dk-na-2015-bridge-crack-width-route-replay",
+        ),
+    ],
+)
+def test_bridge_routes_round_trip_order_axes_and_retained_mechanics(
+    dk_na, code, cases, route, method_id,
+):
+    inp = _bridge_input(dk_na=dk_na)
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": route},
+    )
+    assert bundle is not None
+    assert bundle_from_json(bundle_to_json(bundle)) == bundle
+    assert [
+        dict((axis.name, axis.value) for axis in item.axes)["crack_case"]
+        for item in bundle.calculations
+    ] == list(cases)
+    for calculation in bundle.calculations:
+        axes = {axis.name: axis.value for axis in calculation.axes}
+        assert axes["crack_route"] == route
+        assert axes["crack_code"] == trace_identity_token(code)
+        assert calculation.method_id == method_id
+        assert _reachable(calculation) == {
+            step.step_id for step in calculation.steps
+        }
+    assert out["elastic"]["crack_code"] == code
+    assert out["elastic"]["crack_edition"] == "2004"
+    assert out["elastic"]["crack_member"] == ("Beam" if dk_na else None)
+    assert validate_crack_trace_family(
+        bundle,
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": route},
+    ) == bundle
+
+    reference_input = _dk_input() if dk_na else _input()
+    reference = _output(reference_input)["elastic"]
+    keys = (
+        "crack",
+        "crack_short",
+        *(("crack_coarse", "crack_short_coarse") if dk_na else ()),
+        "crack_output",
+    )
+    assert all(out["elastic"][key] == reference[key] for key in keys)
+
+
+@pytest.mark.parametrize(
+    "dk_na,prefix,methods,editions,documents,clauses,locators",
+    [
+        (
+            False,
+            "route-bridge-base-",
+            ("en-1992-2-2005-crack-width-route",),
+            (BRIDGE_BASE_CODE,),
+            (BRIDGE_BASE_CODE,),
+            ("7.3.4(101)",),
+            ("recommended method: EN 1992-1-1 7.3.4",),
+        ),
+        (
+            True,
+            "route-bridge-dk-",
+            (
+                "en-1992-2-2005-crack-width-route",
+                "dk-na-2015-bridge-crack-width-route",
+                "dk-na-2024-crack-width-route",
+            ),
+            (
+                BRIDGE_BASE_CODE,
+                BRIDGE_DK_CODE,
+                "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 with "
+                "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01",
+            ),
+            (
+                BRIDGE_BASE_CODE,
+                BRIDGE_DK_CODE,
+                "DS/EN 1992-1-1 DK NA:2024 rev. 2024-02-01",
+            ),
+            ("7.3.4(101)", "7.3.4(101)", "7.3.2(3), 7.3.4(1), 7.3.4(3)"),
+            (
+                "recommended method: EN 1992-1-1 7.3.4",
+                "no national choice",
+                "fine/coarse systems, member rule and cover-dependent k3",
+            ),
+        ),
+    ],
+)
+def test_bridge_route_sources_and_selector_dependencies_are_exact(
+    dk_na, prefix, methods, editions, documents, clauses, locators,
+):
+    inp = _bridge_input(dk_na=dk_na)
+    bundle = build_crack_trace_family(
+        inp,
+        _output(inp),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    for calculation in bundle.calculations:
+        reachable = _reachable(calculation)
+        input_ids = {
+            step.step_id
+            for step in calculation.steps
+            if step.step_id.startswith("input-") and "-sha256-" in step.step_id
+        }
+        assert len(input_ids) == 32
+        routes = tuple(
+            step for step in calculation.steps if step.step_id.startswith(prefix)
+        )
+        assert input_ids and len(routes) == len(methods)
+        assert tuple(step.source.method_id for step in routes) == methods
+        assert tuple(step.source.edition for step in routes) == editions
+        assert tuple(step.source.citation.document for step in routes) == documents
+        assert tuple(step.source.citation.clause for step in routes) == clauses
+        assert tuple(step.source.citation.locator for step in routes) == locators
+        assert all(
+            step.step_id in reachable
+            and step.quantity_role == "computed_intermediate"
+            and {dependency.step_id for dependency in step.dependencies} == input_ids
+            for step in routes
+        )
+        rules = tuple(
+            step
+            for step in calculation.steps
+            if step.step_id == "case-fine-effective-height-rule"
+        )
+        if rules:
+            assert dk_na and len(rules) == 1
+            assert {
+                dependency.step_id for dependency in rules[0].dependencies
+            } == input_ids
+
+
+@pytest.mark.parametrize(
+    "dk_na,route,registry_id,family_id,method_id",
+    [
+        (
+            False,
+            "bridge-base",
+            "sector-ct-009-crack-width-2004-bridge-base-v1",
+            "ct-009-crack-width-2004-bridge-base",
+            "sector-en-1992-2-2005-crack-width-route-replay",
+        ),
+        (
+            True,
+            "bridge-dk",
+            "sector-ct-009-crack-width-2004-bridge-dk-v1",
+            "ct-009-crack-width-2004-bridge-dk",
+            "sector-dk-na-2015-bridge-crack-width-route-replay",
+        ),
+    ],
+)
+def test_bridge_registry_family_and_method_identities_are_distinct(
+    dk_na, route, registry_id, family_id, method_id,
+):
+    inp = _bridge_input(dk_na=dk_na)
+    calculation = build_crack_trace_family(
+        inp,
+        _output(inp),
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    ).calculations[0]
+    final = next(
+        step for step in calculation.steps
+        if step.step_id == calculation.final_step_id
+    )
+    shape = MemberShape(
+        member_id="registry-probe",
+        calculation_id=calculation.calculation_id,
+        axes=calculation.axes,
+        steps=tuple(
+            (
+                step.step_id,
+                step.quantity_role,
+                step.source,
+                tuple(item.step_id for item in step.dependencies),
+            )
+            for step in calculation.steps
+        ),
+        states=frozenset({final.result.state}),
+    )
+    registry = registry_for((shape,), dk_na=dk_na, route=route)
+    assert registry.registry_id == registry_id
+    assert registry.families[0].family_id == family_id
+    assert registry.families[0].members[0].method_id == method_id
+
+
+@pytest.mark.parametrize("dk_na", [False, True])
+def test_bridge_geometry_material_catalogue_and_selector_identity_is_sealed(dk_na):
+    inp = _bridge_input(dk_na=dk_na)
+    out = _output(inp)
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+    )
+    mutations = []
+    catalogue = copy.deepcopy(inp)
+    catalogue["mild_material_catalog"]["items"][0]["description"] += " changed"
+    mutations.append(catalogue)
+    concrete = copy.deepcopy(inp)
+    concrete["concrete_material_id"] += "-same-law"
+    mutations.append(concrete)
+    selector = copy.deepcopy(inp)
+    opposite_code = (
+        BRIDGE_BASE_CODE if dk_na else BRIDGE_DK_CODE
+    )
+    selector["sls_code"] = opposite_code
+    selector["sls_dk_na"] = not dk_na
+    assert opposite_code != inp["sls_code"]
+    mutations.append(selector)
+    for changed in mutations:
+        with pytest.raises(TraceValidationError):
+            validate_crack_trace_family(
+                bundle,
+                changed,
+                out,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
+
+
+@pytest.mark.parametrize("dk_na", [False, True])
+def test_every_bridge_owned_leaf_and_inventory_are_reconstructed(dk_na):
+    inp = _bridge_input(dk_na=dk_na)
+    out = _output(inp)
+    owned = {
+        key: value
+        for key, value in out["elastic"].items()
+        if key == "converged"
+        or key.startswith("crack")
+        or key.startswith(
+            ("lambda_cr", "sigma_ct", "fctm", "show_cw", "props_")
+        )
+    }
+    for path in tuple(_leaf_paths(owned)):
+        changed = copy.deepcopy(out)
+        _mutate_path(changed["elastic"], path)
+        with pytest.raises(TraceValidationError):
+            build_crack_trace_family(
+                inp,
+                changed,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
+
+    mutations = []
+    missing = copy.deepcopy(out)
+    del missing["elastic"]["crack"]
+    mutations.append(missing)
+    unknown = copy.deepcopy(out)
+    unknown["elastic"]["crack_future"] = None
+    mutations.append(unknown)
+    reordered = copy.deepcopy(out)
+    elastic = reordered["elastic"]
+    reordered["elastic"] = {
+        key: elastic[key] for key in reversed(tuple(elastic))
+    }
+    mutations.append(reordered)
+    for changed in mutations:
+        with pytest.raises(TraceValidationError, match="inventory|sibling"):
+            build_crack_trace_family(
+                inp,
+                changed,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
 
 
 def test_building_dk_round_trip_order_registry_and_exact_output():
@@ -1041,6 +1353,162 @@ def test_building_dk_failure_reconstructs_metadata_and_ignores_only_numerics(
                 input_sha256=INPUT_SHA,
                 result_sha256=RESULT_SHA,
             )
+
+
+@pytest.mark.parametrize(
+    "dk_na,prefix,code,member",
+    [
+        (False, "route-bridge-base-", BRIDGE_BASE_CODE, None),
+        (True, "route-bridge-dk-", BRIDGE_DK_CODE, "Beam"),
+    ],
+)
+def test_bridge_failure_seals_exact_route_metadata_and_ignores_only_numerics(
+    monkeypatch, dk_na, prefix, code, member,
+):
+    inp = _bridge_input(dk_na=dk_na)
+    out = _output(inp)
+    original = sector_app.solve_elastic_combined
+
+    def failed(*args, **kwargs):
+        return dataclasses.replace(original(*args, **kwargs), converged=False)
+
+    import sector.crack_trace as crack_trace
+
+    monkeypatch.setattr(crack_trace, "solve_elastic_combined", failed)
+    out["elastic"]["converged"] = False
+    out["elastic"]["props_un"]["Ix"] = float("nan")
+    out["elastic"]["crack"]["wk"] = object()
+    if dk_na:
+        out["elastic"]["crack_coarse"]["wk"] = object()
+    out["elastic"]["crack_output"] = {
+        "value": None,
+        "case": None,
+        "governing": None,
+        "unit": "mm",
+        "calculation_state": "INVALID",
+    }
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "failed-bridge"},
+    )
+    calculation = bundle.calculations[0]
+    assert calculation.steps[-1].result.state == RESULT_FAILED
+    assert calculation.steps[-1].result.value is None
+    input_ids = {
+        step.step_id
+        for step in calculation.steps
+        if step.step_id.startswith("input-") and "-sha256-" in step.step_id
+    }
+    route_steps = tuple(
+        step for step in calculation.steps if step.step_id.startswith(prefix)
+    )
+    assert len(route_steps) == (3 if dk_na else 1)
+    assert all(
+        {dependency.step_id for dependency in step.dependencies} == input_ids
+        for step in route_steps
+    )
+    metadata_steps = tuple(
+        step
+        for step in calculation.steps
+        if step.title.startswith("Sealed crack_")
+    )
+    assert len(metadata_steps) == 24
+    reachable = _reachable(calculation)
+    assert all(step.step_id in reachable for step in metadata_steps)
+
+    stale_values = {
+        "crack_code": "wrong-route",
+        "crack_edition": "stale-edition",
+        "crack_member": "Slab" if member == "Beam" else "Beam",
+    }
+    assert out["elastic"]["crack_code"] == code
+    assert out["elastic"]["crack_member"] == member
+    for key, stale in stale_values.items():
+        changed = copy.deepcopy(out)
+        changed["elastic"][key] = stale
+        with pytest.raises(TraceValidationError, match=f"failed elastic.{key}"):
+            build_crack_trace_family(
+                inp,
+                changed,
+                input_sha256=INPUT_SHA,
+                result_sha256=RESULT_SHA,
+            )
+
+
+def test_accepted_base_and_building_dk_bundle_bytes_remain_exact(monkeypatch):
+    success_cases = (
+        (
+            _input(),
+            CONTEXT,
+            "d9b9d1fb20038b64f8446d148e9038095b95df13114814abc8b66f514e9c39d9",
+        ),
+        (
+            _dk_input(),
+            {"route": "building-dk"},
+            "8ec5e3a96b1dbc82e15299966a5181f123ce6077eece3803fdea77fa692ff0bc",
+        ),
+    )
+    outputs = []
+    for inp, context, expected in success_cases:
+        out = _output(inp)
+        outputs.append(out)
+        bundle = build_crack_trace_family(
+            inp,
+            out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=context,
+        )
+        assert hashlib.sha256(bundle_to_json(bundle).encode("ascii")).hexdigest() == expected
+
+    original = sector_app.solve_elastic_combined
+
+    def failed(*args, **kwargs):
+        return dataclasses.replace(original(*args, **kwargs), converged=False)
+
+    import sector.crack_trace as crack_trace
+
+    monkeypatch.setattr(crack_trace, "solve_elastic_combined", failed)
+    dk_failed_input = _dk_input(sls_member="Slab")
+    dk_failed_output = _output(dk_failed_input)
+    failure_cases = (
+        (
+            success_cases[0][0],
+            outputs[0],
+            CONTEXT,
+            "b143f168ec448579cd3e31d9a3dec4a381e42618899d558be7c84af02e38890a",
+        ),
+        (
+            dk_failed_input,
+            dk_failed_output,
+            {"route": "building-dk-failed"},
+            "84ab06ca477fc9d283114b1bc992f01474e3ccf39176af7ebb18f166a4044492",
+        ),
+    )
+    for inp, out, context, expected in failure_cases:
+        out["elastic"]["converged"] = False
+        out["elastic"]["props_un"]["Ix"] = float("nan")
+        out["elastic"]["crack"]["wk"] = object()
+        if inp["sls_dk_na"]:
+            out["elastic"]["crack_coarse"]["wk"] = object()
+        out["elastic"]["crack_output"] = {
+            "value": None,
+            "case": None,
+            "governing": None,
+            "unit": "mm",
+            "calculation_state": "INVALID",
+        }
+        bundle = build_crack_trace_family(
+            inp,
+            out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=context,
+        )
+        assert hashlib.sha256(bundle_to_json(bundle).encode("ascii")).hexdigest() == expected
 
 
 def test_removed_limit_and_new_limit_utilisation_verdict_surfaces_are_rejected():
