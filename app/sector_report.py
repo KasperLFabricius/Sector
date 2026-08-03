@@ -24,7 +24,6 @@ import math
 import os
 import re
 import threading
-from html import escape as _stdlib_html_escape
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -42,6 +41,7 @@ import calculation_trace_publication
 import fatigue_inputs
 import fatigue_presentation
 import material_catalog
+import publication_notation
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
@@ -131,14 +131,10 @@ def _html_escape(value, quote=True):
     from a user-controlled identifier, while remaining safe ReportLab markup.
     """
 
-    escaped = _stdlib_html_escape(str(value), quote=quote)
-    # A literal user comparison must not be converted by _greek either.
-    escaped = escaped.replace("&lt;=", "&#60;=").replace("&gt;=", "&#62;=")
-    return _GREEK_RE.sub(
-        lambda match: "".join(
-            f"&#{ord(character)};" for character in match.group(1)
-        ),
-        escaped,
+    del quote  # retained for compatibility with html.escape-style call sites
+    return "".join(
+        character if character.isspace() else f"&#{ord(character)};"
+        for character in str(value)
     )
 
 
@@ -410,11 +406,7 @@ def _fmt(v, nd=3):
 
 def _fmt_sig(v, sig=6):
     """Format small engineering values without rounding nonzero evidence to zero."""
-    if v is None:
-        return "-"
-    if isinstance(v, float) and not math.isfinite(v):
-        return "-inf" if math.isinf(v) and v < 0.0 else "inf"
-    return f"{v:.{sig}g}"
+    return publication_notation.scientific_markup(v, sig)
 
 
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
@@ -538,10 +530,16 @@ class ReportBuilder:
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
 
     def _p(self, text):
-        self.flow.append(Paragraph(_greek(text), self.s["body"]))
+        rendered = publication_notation.publication_markup(
+            _greek(text), protect_numbers=True
+        )
+        self.flow.append(Paragraph(rendered, self.s["body"]))
 
     def _small(self, text):
-        self.flow.append(Paragraph(_greek(text), self.s["small"]))
+        rendered = publication_notation.publication_markup(
+            _greek(text), protect_numbers=True
+        )
+        self.flow.append(Paragraph(rendered, self.s["small"]))
 
     def _status_block(self, text, status):
         """Add a prominent, print-readable assessment banner."""
@@ -560,7 +558,10 @@ class ReportBuilder:
             "status", parent=self.s["body"], fontName=_FONT_BOLD,
             textColor=colors.HexColor(fg), leading=13,
         )
-        table = Table([[Paragraph(_greek(text), style)]],
+        rendered = publication_notation.publication_markup(
+            _greek(text), protect_numbers=True
+        )
+        table = Table([[Paragraph(rendered, style)]],
                       colWidths=[160 * mm], hAlign="LEFT")
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
@@ -720,13 +721,19 @@ class ReportBuilder:
         self.flow[start:] = [KeepTogether(block)]
 
     def _formula(self, expr, ref=None, subst=None, result=None):
-        self.flow.append(Paragraph(_greek(expr), self.s["formula"]))
+        def rendered(value):
+            return publication_notation.publication_markup(
+                _greek(value), trusted_units=True, protect_numbers=True,
+                typographic_science=True,
+            )
+
+        self.flow.append(Paragraph(rendered(expr), self.s["formula"]))
         if subst:
-            self.flow.append(Paragraph(_greek(subst), self.s["formula"]))
+            self.flow.append(Paragraph(rendered(subst), self.s["formula"]))
         if result:
-            self.flow.append(Paragraph(_greek(f"<b>{result}</b>"), self.s["formula"]))
+            self.flow.append(Paragraph(rendered(f"<b>{result}</b>"), self.s["formula"]))
         if ref:
-            self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
+            self.flow.append(Paragraph(rendered(ref), self.s["ref"]))
 
     def _table(self, data, widths, header=True, font=8.5, keep=True):
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
@@ -739,7 +746,12 @@ class ReportBuilder:
                 st = head if (header and r == 0) else body
                 st = ParagraphStyle("x", parent=st,
                                     alignment=TA_LEFT if ci == 0 else TA_CENTER)
-                cells.append(Paragraph(_greek(str(cell)), st))
+                rendered = publication_notation.publication_markup(
+                    _greek(str(cell)),
+                    trusted_units=bool(header and r == 0),
+                    protect_numbers=True,
+                )
+                cells.append(Paragraph(rendered, st))
             rows.append(cells)
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
@@ -3752,7 +3764,8 @@ class ReportBuilder:
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
             "cot theta",
-            ref="from EN 1992-1-1 (6.28)",
+            ref=("derived from EN 1992-1-1 Formula (6.27), torsional wall "
+                 "shear flow, and Formula (6.8), transverse equilibrium"),
             subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
                   f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
             result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m")

@@ -35,6 +35,7 @@ import bridge_inputs
 import calculation_trace_publication
 import project_io
 import reproducible_example
+import publication_notation
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
@@ -1653,7 +1654,10 @@ def manual_blocks() -> list:
        "$$T_{Rd,s} = \\frac{A_{sw}}{s}\\,2A_k\\,f_{ywd}\\,\\cot\\theta, \\qquad "
        "T_{Rd,max} = 2\\,\\nu\\,\\alpha_{cw}\\,f_{cd}\\,A_k\\,t_{ef}\\,"
        "\\sin\\theta\\cos\\theta \\quad(6.30),$$\n\n"
-       "with $T_{Rd} = \\min(T_{Rd,s}, T_{Rd,max})$. The torsion also needs "
+       "The transverse-link expression follows the torsional wall shear flow in "
+       "Formula (6.27) combined with the transverse-equilibrium relation in "
+       "Formula (6.8). Formula (6.28) is the separate longitudinal-steel rule. "
+       "With $T_{Rd} = \\min(T_{Rd,s}, T_{Rd,max})$, the torsion also needs "
        "longitudinal steel $\\sum A_{sl} = T_{Ed}\\,u_k\\,\\cot\\theta/(2A_k\\,"
        "f_{yd})$ (6.28), **in addition** to the bending reinforcement on the "
        "tension side, and the cracking torque is $T_{Rd,c} = 2A_k\\,t_{ef}\\,"
@@ -1977,7 +1981,10 @@ def _inline_md_to_rl(text: str) -> str:
     text = re.sub(r"\$([^$]+)\$", lambda m: _latex_to_rl(m.group(1)), text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
-    return text
+    return publication_notation.publication_markup(
+        text, trusted_units=True, protect_numbers=True,
+        typographic_science=True,
+    )
 
 
 def _render_md_pdf(text, flow, styles, Paragraph):
@@ -2002,6 +2009,10 @@ def _render_md_pdf(text, flow, styles, Paragraph):
         if m_disp:
             flush()
             body = _latex_to_rl(m_disp.group(1).strip()) + m_disp.group(2)
+            body = publication_notation.publication_markup(
+                body, trusted_units=True, protect_numbers=True,
+                typographic_science=True,
+            )
             flow.append(Paragraph(body, styles["MMath"]))
             continue
         mb = re.match(r"^[-*]\s+(.*)", s)

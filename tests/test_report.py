@@ -539,6 +539,11 @@ def test_report_preserves_literal_engineering_token_identifiers():
     assert literal_name in text
     protected = sector_report._greek(sector_report._html_escape(literal_name))
     assert "&#951;" not in protected  # no beta -> b + Greek eta suffix collision
+    unit_identity = sector_report._html_escape("Bridge 100 m2")
+    rendered = sector_report.publication_notation.publication_markup(
+        sector_report._greek(unit_identity), trusted_units=True
+    )
+    assert "<super>" not in rendered
 
 
 def test_report_outline_decodes_literal_engineering_token_case_id():
@@ -1144,8 +1149,9 @@ def test_report_does_not_round_small_nonzero_product_inertia_to_zero():
     out["elastic"]["props_un"]["Ixy"] = 1.234567e-8
     out["elastic"]["props_cr"]["Ixy"] = -2.345678e-9
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "1.23457e-08" in txt
-    assert "-2.34568e-09" in txt
+    multiplication = chr(0x00D7)
+    assert f"1.23457 {multiplication} 10-8" in txt
+    assert f"-2.34568 {multiplication} 10-9" in txt
 
 
 def test_crack_candidate_table_stays_inside_a4_content_width():
@@ -1460,6 +1466,34 @@ def _pdf_text(pdf):
     import pypdf
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     return "\n".join(page.extract_text() for page in reader.pages)
+
+
+def test_report_notation_fences_literal_audit_identities(monkeypatch):
+    inp = _inp()
+    inp["plastic_case"] = {
+        "id": "cm3",
+        "type": "mm4",
+        "source": "Bridge 100 m2",
+    }
+    calls = []
+    original = sector_report.publication_notation.normalise_unit_exponents
+
+    def capture(text, *, trusted=False):
+        calls.append((str(text), trusted))
+        return original(text, trusted=trusted)
+
+    monkeypatch.setattr(
+        sector_report.publication_notation, "normalise_unit_exponents", capture
+    )
+    text = _pdf_text(sector_report.build_report(
+        {"proj_no": "m2"}, inp, _out(), figures=False
+    ))
+    for identity in ("m2", "cm3", "mm4", "Bridge 100 m2"):
+        assert identity in text
+        protected = sector_report._html_escape(identity)
+        assert any(
+            protected in value for value, _trusted in calls
+        )
 
 
 def test_report_omits_unused_material_sections():
