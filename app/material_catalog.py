@@ -210,6 +210,25 @@ def entry_label(entry: Mapping) -> str:
     return f"{entry.get('id', '')} - {entry.get('name', '')}".strip()
 
 
+def preset_display_label(preset, kind: str) -> str:
+    """Human label for a stored preset identity, without changing that identity.
+
+    The three generic reinforcing-steel shapes are user-defined laws.  Edition
+    names are Eurocode design presets implemented as specialisations of the
+    general Curve-3 law.  An imported numerical law stays uncited even if its
+    numbers happen to equal an edition preset.
+    """
+
+    stored = str(preset or "Custom / imported").strip() or "Custom / imported"
+    if _kind(kind) != "mild":
+        return stored
+    if stored in mp.MILD_PRESETS and stored.startswith("Curve "):
+        return f"{stored} - user-defined law"
+    if stored in mp.MILD_PRESETS:
+        return f"{stored} - Eurocode design preset (Curve 3)"
+    return f"{stored} - user-defined/imported law (uncited)"
+
+
 def material_ids(catalog, kind: str) -> list[str]:
     return [item["id"] for item in entries(catalog, kind)]
 

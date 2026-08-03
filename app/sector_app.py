@@ -40,6 +40,7 @@ import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
 import result_presentation as presentation  # noqa: E402
 import viz  # noqa: E402
+import worked_example  # noqa: E402
 from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
@@ -548,8 +549,15 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     labels = list(presets)
     if entry["preset"] not in labels:
         labels.append(entry["preset"])
-    preset = _seeded_selectbox(box, "Preset", labels, entry["preset"],
-                               f"{prefix}_preset", help=_PRESET_HELP)
+    preset = _seeded_selectbox(
+        box,
+        "Preset",
+        labels,
+        entry["preset"],
+        f"{prefix}_preset",
+        help=_PRESET_HELP,
+        format_func=lambda value: mat_catalog.preset_display_label(value, "mild"),
+    )
     # Selecting a preset whose compression yield is active (fyck > 0) turns the
     # "Active in compression" toggle on, so the preset's compression is not
     # silently dropped. (Checked before _prefill, which updates the change marker.)
@@ -2616,6 +2624,30 @@ def _save_load_panel() -> None:
         box.error(f"Project download blocked: {project_error}.")
     box.caption(f"Saved with Sector {APP_VERSION}, source "
                 f"{short_revision()}; results are recalculated on load.")
+    box.divider()
+    box.markdown("**Complete worked example**")
+    box.caption(
+        "Download one current-schema project and its compact independent "
+        "hand-calculation pack. The project contains inputs only; load it and "
+        "press Calculate to reconstruct every result chapter."
+    )
+    example_project, example_pack = box.columns(2)
+    example_project.download_button(
+        "Worked project (JSON)",
+        data=worked_example.project_text(),
+        file_name=worked_example.PROJECT_FILENAME,
+        mime="application/json",
+        key="download_complete_worked_project",
+        width="stretch",
+    )
+    example_pack.download_button(
+        "Hand pack (Markdown)",
+        data=worked_example.hand_calculation_pack(),
+        file_name=worked_example.HAND_PACK_FILENAME,
+        mime="text/markdown",
+        key="download_complete_worked_hand_pack",
+        width="stretch",
+    )
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
         if loaded.get("sector_version"):
@@ -4813,6 +4845,7 @@ def build_inputs(host=st):
                 fatigue_assignment_error=fatigue_assignment_error,
                 concrete=concrete, steel=reference_steel,
                 concrete_preset=concrete_preset,
+                concrete_material_id=concrete_preset,
                 concrete_k_tc=concrete_k_tc,
                 concrete_eta_cc=concrete_eta_cc,
                 mild_preset=mild_preset,

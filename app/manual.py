@@ -108,8 +108,11 @@ def example_beam() -> dict:
     bars = [(-0.10, -0.25, a25), (0.0, -0.25, a25), (0.10, -0.25, a25),
             (-0.10, 0.25, a16), (0.10, 0.25, a16)]
     concrete = Concrete(fck=40.0, gamma_c=1.45, curve=2)
+    # DS/EN 1992-1-1:2005 + DK NA:2024 preset: horizontal design branch through
+    # the general Curve-3 implementation, with the elastic modulus unfactored.
     steel = MildSteel(fytk=550.0, fyck=550.0, futk=550.0, eut=0.05,
-                      gamma_y=1.20, gamma_u=1.20, gamma_E=1.20, curve=2)
+                      gamma_y=1.20, gamma_u=1.20, gamma_E=1.0,
+                      k=1.0, ey0t=0.0, ey0c=0.0, curve=3)
     return {
         "name": "Rectangular beam (mild steel)",
         "outer": outer, "holes": [], "bars": bars, "tendons": [],
@@ -610,6 +613,11 @@ def manual_blocks() -> list:
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
        "an issued deliverable.")
+    md("The same panel provides a **Complete worked example** as a current-schema "
+       "project JSON and a compact Markdown hand-calculation pack. The project "
+       "contains inputs only. Load it, press *Calculate*, then generate the QA "
+       "report to reproduce every current main calculation chapter and its "
+       "structured trace from original inputs.")
 
     h1("Defining the section")
     md("A section is a set of explicit points in millimetres -- the concrete "
@@ -653,9 +661,23 @@ def manual_blocks() -> list:
            ["Box girder", "A hollow box (one rectangular void)"],
            ["Circular", "A circular section, optionally with a bar ring"]])
     h2("Validity checks")
-    md("The section is rejected, with a message, when the geometry is not "
-       "analysable: a void that would disconnect the concrete, or a bar or tendon "
-       "that falls outside the concrete or inside a void.")
+    md("Sector rejects invalid geometry **before calculation**. Every ring must be "
+       "a finite numeric coordinate sequence with at least three distinct points "
+       "and area above the scale-aware tolerance. A ring is rejected if it "
+       "self-crosses, self-touches, overlaps, backtracks, repeats a vertex within "
+       "tolerance or brings non-adjacent boundaries into contact. A hole must lie "
+       "strictly inside the outer ring and must not touch or cross it, touch or "
+       "cross another hole, or sit inside another hole. Sector also rejects a void "
+       "that disconnects the concrete and any bar or tendon outside the concrete "
+       "or inside a void.")
+    md("Ring winding is not a validity condition. Clockwise and counter-clockwise "
+       "rings, intentional forward collinear points and one final point exactly "
+       "equal to the first are accepted. The resolved linear tolerance is the "
+       "largest of $10^{-12}$ m, $10^{-9}$ times the section span and an eight-ULP "
+       "floating-point envelope; coordinates are never snapped. A valid input can "
+       "still produce a separate solver **nonconverged** result. That numerical "
+       "state is not an input-validation error and is never turned into a finite "
+       "resistance or verdict.")
     call("limit", "A void must leave the concrete in one connected piece. A slot "
          "that splits the section in two is rejected rather than analysed, because "
          "the plane-section assumption no longer holds across a break.")
@@ -689,7 +711,7 @@ def manual_blocks() -> list:
     fig(fig_beam_concrete_law, "The concrete-law preview for the rectangular "
         "example (C40/50).")
     h2("Mild steel")
-    md("Each mild-steel definition is bilinear (optionally with hardening). The "
+    md("Each mild-steel definition uses the general two-yield implementation. The "
        "selected definition's plot is shown beside its inputs. The inputs are the "
        "yield and ultimate strengths $f_{yk}$ / $f_{tk}$, the ultimate strain "
        "$\\varepsilon_{uk}$, the partial factors and the modulus $E_s$. The "
@@ -697,6 +719,13 @@ def manual_blocks() -> list:
        "compression in the **plastic** law: with it off the steel is "
        "tension-only there. The cracked-elastic analysis is linear and "
        "always treats the bars in both directions, regardless of this toggle.")
+    table(["Displayed choice", "Identity and source"],
+          [["Curve 1 / Curve 2 / Curve 3 - user-defined law",
+            "Generic constitutive shape; project-defined and uncited"],
+           ["Edition name - Eurocode design preset (Curve 3)",
+            "Recognised edition preset; horizontal design branch with $E_{s,d}=E_s$"],
+           ["Custom / imported - user-defined/imported law (uncited)",
+            "Retains its entered numerical identity; never promoted by numerical equality"]])
     fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.")
     call("standard", "The concrete and steel laws follow DS/EN 1992-1-1 3.1.7 and "
          "3.2.7; the ultimate strains follow Table 3.1. Part C derives them in full.")
@@ -1146,14 +1175,20 @@ def manual_blocks() -> list:
        "\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, \\qquad "
        "\\varepsilon_{yd}=f_{yd}/E_{s,d}.$$\n\n"
        "The design elastic modulus $E_{s,d}$ depends on the curve.\n\n"
-       "The selectable Eurocode presets (Curve 3) keep it unfactored, "
+       "The edition-named **Eurocode design presets (Curve 3)** implement the "
+       "horizontal design branch permitted by DS/EN 1992-1-1 3.2.7 and keep the "
+       "modulus unfactored, "
        "$E_{s,d}=E_s$, so B550 yields at "
        "$\\varepsilon_{yd}=f_{yd}/E_s=458/200000\\approx 2.29$ per mille.\n\n"
-       "The elastic-perfectly-plastic law used in this worked example (Curve 2) "
-       "factors it, $E_{s,d}=E_s/\\gamma_s$, so the whole curve scales by "
+       "The generic **Curve 2 - user-defined law** is the retained legacy "
+       "elastic-perfectly-plastic shape. It factors the modulus, "
+       "$E_{s,d}=E_s/\\gamma_s$, so the whole curve scales by "
        "$1/\\gamma_s$ and yield moves to $\\varepsilon_{yd}=f_{yk}/E_s=550/200000="
        "2.75$ per mille.\n\n"
-       "In both, $f_{yd}=550/1.20=458$ MPa.")
+       "In both, $f_{yd}=550/1.20=458$ MPa. The rectangular worked example uses "
+       "the edition preset, not the generic Curve-2 law. A custom or generic law "
+       "has no assigned normative source even when its numbers coincide with a "
+       "recognised preset.")
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.")
     h2("Prestressing steel")
     md("A tendon is evaluated at its **total** strain -- the locked-in initial "
@@ -1183,10 +1218,13 @@ def manual_blocks() -> list:
     md("The curvature is scaled until the **first** element reaches its assigned "
        "material limit, so "
        "none is driven past its limit:\n\n"
+       "$$s=x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA},\\qquad "
+       "s_{na}=s_{max}-c,$$\n\n"
        "$$\\varphi = \\min\\!\\left(\\frac{\\varepsilon_{cu2}}{c},\\; "
-       "\\frac{\\varepsilon_{ud}}{s_{na}-s_{bar,min}},\\; "
-       "\\frac{\\varepsilon_{ud}}{s_{bar,max}-s_{na}},\\; "
-       "\\frac{\\varepsilon_{pud}-\\varepsilon_{p,IS}}{s_{na}-s_{cab,min}}\\right),$$\n\n"
+       "\\min_{i:s_i\\lt s_{na}}\\frac{\\varepsilon_{ut,i}}{s_{na}-s_i},\\; "
+       "\\min_{i:s_i\\gt s_{na}}\\frac{\\varepsilon_{ut,i}}{s_i-s_{na}},\\; "
+       "\\min_{j:s_{p,j}\\lt s_{na}}\\frac{\\varepsilon_{pud,j}-"
+       "\\varepsilon_{p,IS,j}}{s_{na}-s_{p,j}}\\right),$$\n\n"
        "the four terms being concrete crushing, rupture of the most tensile mild "
        "bar, rupture of the most **compressed** mild bar (only when the bars are "
        "active in compression and their ultimate strain is below the concrete "
@@ -1194,7 +1232,12 @@ def manual_blocks() -> list:
        "most tensile tendon (measured from its locked-in strain). Whichever is "
        "smallest governs. With several definitions, these candidate limits are "
        "evaluated for every bar and tendon using its own ultimate strain, initial "
-       "strain and compression setting.")
+       "strain and compression setting. The third minimum includes only bars "
+       "active in compression; the tendon minimum includes only a positive "
+       "remaining rupture margin. Internally "
+       "$\\varepsilon_{sec}=\\varphi(s-s_{na})$ is compression-positive, so "
+       "smaller $s$ is the tension side. Published strains negate that sign. "
+       "$s_{p,min}$ is the most tensile tendon coordinate.")
     call("tip", "The reported mild-steel strain is split into its two governing "
          "extremes: the most **tensile** bar strain $\\varepsilon_{s,t}$ and, when "
          "the bars are active in compression, the most **compressed** bar strain "
@@ -1216,7 +1259,7 @@ def manual_blocks() -> list:
        "diagram. **Worked (beam, $N=0$, $\\varphi_{NA}=90^\\circ$):** the concrete "
        "reaches its "
        "crushing strain ($3.5$ per mille) while the most tensile bars are well past "
-       "yield ($18.9$ per mille, against the $2.75$ per mille yield), so this "
+       "yield ($19.5$ per mille, against the edition-preset $2.29$ per mille yield), so this "
        "tension-controlled point gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
        "kNm is then a utilisation of $300/346 = 0.87$.")
     fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
@@ -1685,6 +1728,64 @@ def manual_blocks() -> list:
          "A capacity-only run with no live shear or torsion uses the resistance-"
          "optimising angle within that same range.")
 
+    h1("Numerical algorithms, tolerances & failure states")
+    h2("Plastic capacity and interaction searches")
+    md("At each neutral-axis angle Sector integrates concrete with **80 bands** by "
+       "default. The compression-depth bracket begins at $10^{-9}c_{full}$ and "
+       "starts its upper endpoint at $c_{full}$; that endpoint can grow through "
+       "at most 80 doublings to reach compression states. A maximum of 100 "
+       "bisection iterations is used and the depth search stops when the bracket "
+       "is narrower than $10^{-12}c_{full}$. Convergence requires both that the "
+       "requested axial force lies between the two endpoint resultants and that "
+       "$|N_{int}-N_{Ed}|\\le 10^{-6}\\max(1,|N_{Ed}|)$. A close endpoint residual "
+       "never hides an out-of-range axial request.")
+    md("The $M_x$-$M_y$ envelope uses the entered angle range. Sector treats the "
+       "entered increment as a maximum, chooses an integer interval count and "
+       "lands exactly on both endpoints. A conditional longitudinal-chord "
+       "capacity first scans the complete circle in 36 intervals. Every detected "
+       "companion-moment crossing is bisected to 0.005 degrees; possible tangent "
+       "touches use a golden-section extremum search capped at 60 iterations. An "
+       "internal nonconverged capacity solve returns an **inexact fallback** state "
+       "to the caller. When the complete correct-face branch genuinely contains "
+       "no remaining capacity, an exact zero is retained instead.")
+
+    h2("Elastic and cracking equilibrium")
+    md("The cracked transformed-section solve starts from the uncracked linear "
+       "solution, clips the active concrete compression zone and applies Newton "
+       "updates. It runs at most 100 iterations. With the three resultant "
+       "residuals in $r=(N,M_x,M_y)$, convergence requires "
+       "$\\max|r_i|\\le 10^{-9}\\max(1,\\max|R_{Ed,i}|)$. A singular Jacobian or "
+       "an exhausted iteration limit is an explicit nonconverged state. The "
+       "Stage-I uncracked state is one linear solve; a singular matrix is likewise "
+       "nonconverged. Sector publishes stresses/properties only through their "
+       "actual calculation state and does not turn nonconvergence into a limit or "
+       "verdict.")
+
+    h2("Concrete-fatigue fibre search")
+    md("The same-fibre concrete damage search is priority branch-and-bound. It "
+       "starts with a $4\\times4$ box grid, allows depth 26 and at most 200,000 "
+       "evaluated boxes. Every unresolved box retains a conservative upper damage "
+       "bound. The search converges only when\n\n"
+       "$$D_{upper}-D_{best}\\le 10^{-8}+10^{-3}"
+       "\\max(|D_{best}|,10^{-12}).$$\n\n"
+       "Repeated equal samples alone never certify a pass. Reaching the depth or "
+       "box cap with a larger remaining gap is nonconverged and the spectrum "
+       "cannot pass.")
+
+    h2("Failure publication and report precision")
+    table(["State", "Published meaning"],
+          [["Finite and converged", "Actual value and any genuine demand/resistance verdict"],
+           ["Unsupported", "Method/applicability boundary; no fabricated resistance or verdict"],
+           ["Invalid", "Original input or retained mechanics invalid; no substitute value"],
+           ["Nonconverged", "Numerical certificate not achieved; never PASS"]])
+    md("Ordinary report fields use their declared fixed decimal precision. Very "
+       "small nonzero engineering evidence uses six significant digits so it "
+       "cannot appear as zero. An unavailable value is shown as a dash; positive "
+       "and negative infinity remain explicit. The downloadable worked project "
+       "and hand pack pin representative **unrounded** outputs, while the "
+       "structured calculation trace provides the complete replayable dependency "
+       "chain.")
+
     h1("Equilibrium check")
     md("Every numerical solve carries a convergence flag. The plastic solve balances the "
        "axial force **at each swept angle** to a tight residual, "
@@ -1830,7 +1931,8 @@ _LATEX_CMD = {
     r"\lambda": "&#955;", r"\phi": "&#966;", r"\eta": "&#951;",
     r"\beta": "&#946;", r"\theta": "&#952;", r"\nu": "&#957;",
     r"\tau": "&#964;", r"\xi": "&#958;", r"\pi": "&#960;",
-    r"\Delta": "&#916;", r"\le": "&#8804;", r"\ge": "&#8805;",
+    r"\Delta": "&#916;", r"\lt": "&lt;", r"\gt": "&gt;",
+    r"\le": "&#8804;", r"\ge": "&#8805;",
     r"\leq": "&#8804;", r"\geq": "&#8805;",
     r"\neq": "&#8800;", r"\times": "&#215;", r"\cdot": "&#183;",
     r"\approx": "&#8776;", r"\pm": "&#177;", r"\sum": "&#8721;",

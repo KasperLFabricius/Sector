@@ -2307,6 +2307,104 @@ def test_fresh_session_project_captures_default_section():
     assert len(tables["corners_base"]) >= 3   # default rectangle, not blank
 
 
+def test_pr09_complete_worked_project_closes_unrounded_oracle_end_to_end():
+    import calculation_trace_publication
+    import project_io
+    import worked_example
+
+    tables, _ = project_io.parse_project(worked_example.project_text())
+    at = _fresh()
+    at.session_state["_pending_project"] = worked_example.project_text()
+    at.run()
+    assert not at.exception
+
+    _calculate(at)
+    assert not at.exception
+    out = at.session_state["results"]
+    assert set(worked_example.ORACLE["families"]) <= set(out)
+    assert not calculation_trace_publication.published_errors(out)
+
+    case = out["plastic_cases"][0]["results"]
+    assert {
+        "plastic", "shear", "torsion", "combined",
+        "minimum_reinforcement", "transverse_reinforcement",
+        calculation_trace_publication.PUBLICATION_KEY,
+    } <= set(case)
+    plastic_result = case["plastic"]
+    max_point = max(plastic_result["points"], key=lambda item: item["Mx"])
+    elastic_result = out["elastic_cases"][0]["results"]["elastic"]
+    fatigue_result = out["fatigue"]
+    bridge_rows = out["bridge"]["calculations"]["brittle_method_b"]["rows"]
+    oracle = worked_example.ORACLE
+    values = oracle["values"]
+
+    assert plastic_result["util"] == pytest.approx(
+        values["plastic.utilisation"], rel=1e-12, abs=1e-12
+    )
+    assert plastic_result["max_mx"] == pytest.approx(
+        values["plastic.max_mx_knm"], rel=1e-12, abs=1e-12
+    )
+    assert max_point["axial_residual"] == pytest.approx(
+        values["plastic.axial_residual_kn"], rel=1e-12, abs=1e-15
+    )
+    assert elastic_result["max_conc"] == pytest.approx(
+        values["elastic.max_concrete_compression_mpa"], rel=1e-12
+    )
+    assert elastic_result["crack_short"]["wk"] == pytest.approx(
+        values["elastic.short_crack_width_mm"], rel=1e-12
+    )
+    assert fatigue_result["utilisation"] == pytest.approx(
+        values["fatigue.utilisation"], rel=1e-12
+    )
+    assert case["shear"]["links"]["util"] == pytest.approx(
+        values["shear.utilisation"], rel=1e-12
+    )
+    assert case["torsion"]["util"] == pytest.approx(
+        values["torsion.utilisation"], rel=1e-12
+    )
+    assert case["combined"]["dkna_sum"] == pytest.approx(
+        values["combined.utilisation"], rel=1e-12
+    )
+    assert bridge_rows[0]["as_required_mm2"] == pytest.approx(
+        values["bridge.brittle_required_area_mm2"], rel=1e-12
+    )
+
+    assert plastic_result["converged"] is oracle["states"]["plastic.converged"]
+    assert elastic_result["converged"] is oracle["states"]["elastic.converged"]
+    assert fatigue_result["converged"] is oracle["states"]["fatigue.converged"]
+    assert out["clear_spacing"]["status"] == oracle["states"][
+        "clear_spacing.status"
+    ]
+
+    # Independent representative formulae from original inputs, not snapshots.
+    corners = tables["corners_base"]
+    width = (corners["x (mm)"].max() - corners["x (mm)"].min()) / 1000.0
+    height = (corners["y (mm)"].max() - corners["y (mm)"].min()) / 1000.0
+    assert width * height == pytest.approx(oracle["section"]["gross_area_m2"])
+    assert tables["bars_base"].iloc[0]["area (mm2)"] == pytest.approx(
+        math.pi * 25.0 ** 2 / 4.0
+    )
+    brittle = bridge_rows[0]
+    assert brittle["as_required_mm2"] == pytest.approx(
+        brittle["m_rep_knm"] * 1000.0
+        / (brittle["z_s_m"] * brittle["f_yk_mpa"])
+    )
+    assert plastic_result["util"] == pytest.approx(
+        300.0 / plastic_result["max_mx"]
+    )
+    links = case["shear"]["links"]
+    assert links["util"] == pytest.approx(
+        case["shear"]["v_ed"] / links["res"]["vrd"]
+    )
+    assert case["torsion"]["util"] == pytest.approx(
+        case["torsion"]["t_ed"] / case["torsion"]["trd"]
+    )
+    combined = case["combined"]
+    assert combined["dkna_sum"] == pytest.approx(
+        combined["r_m"] + combined["r_v"] + combined["r_t"]
+    )
+
+
 def test_autosave_defaults_on_with_five_minutes(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()

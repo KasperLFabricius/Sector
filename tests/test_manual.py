@@ -9,6 +9,8 @@ figure or worked number can never reference a section the solver cannot handle.
 from __future__ import annotations
 
 import io
+import inspect
+import json
 import pathlib
 import re
 import sys
@@ -20,7 +22,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import manual  # noqa: E402
+import material_catalog  # noqa: E402
+import project_io  # noqa: E402
+import sector_report  # noqa: E402
 import viz  # noqa: E402
+import worked_example  # noqa: E402
+from sector import elastic, fatigue, plastic  # noqa: E402
 from sector.codes import fctm  # noqa: E402
 from sector.plastic import plastic_capacity_at_angle  # noqa: E402
 from sector.section import Section  # noqa: E402
@@ -196,16 +203,16 @@ def test_part_c_worked_numbers_match_the_engine():
     c, s = ex["concrete"], ex["steel"]
     assert c.fck / c.gamma_c * c.alpha_cc == pytest.approx(27.6, abs=0.1)   # fcd
     assert s.fytk / s.gamma_y == pytest.approx(458.0, abs=1.0)              # fyd
-    # Curve 2 scales the elastic slope to Es/gamma_y, so the yield strain is
-    # fytk/Es (not fyd/Es): 2.75 per mille for B550, as the manual now states.
-    assert s.fytk / s.Es == pytest.approx(2.75e-3, abs=1e-5)
+    # The edition preset uses the horizontal Curve-3 branch with unfactored Es:
+    # yield is fyd/Es = 2.29 per mille, not the generic Curve-2 value 2.75.
+    assert (s.fytk / s.gamma_y) / s.Es == pytest.approx(2.2917e-3, abs=1e-5)
     sec = manual._section_of(ex)
     r = plastic_capacity_at_angle(sec, c, s, 0.0, 90.0)
     assert r.Mx == pytest.approx(346.0, abs=2.0)                            # capacity
-    # eps_steel is a percentage: -1.89% = 18.9 per mille, past yield (2.75) but
+    # eps_steel is a percentage: about -1.95% = 19.5 per mille, past yield but
     # below rupture (50) -- the worked point is tension-controlled, as stated.
     eps_frac = abs(r.eps_steel) / 100.0
-    assert s.fytk / s.Es < eps_frac < s.eut
+    assert (s.fytk / s.gamma_y) / s.Es < eps_frac < s.eut
     fc = fctm(c.fck)
     editions = {
         "2005": (dict(), 0.188, 236.0),
@@ -219,6 +226,82 @@ def test_part_c_worked_numbers_match_the_engine():
         assert cr.lambda_cr == pytest.approx(0.49, abs=0.02)
         assert cr.crack.wk == pytest.approx(wk, abs=0.005)
         assert cr.crack.sr_max == pytest.approx(sr, abs=1.5)
+
+
+def test_pr09_manual_closes_geometry_coordinate_and_numerical_contracts():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for token in (
+        "self-crosses",
+        "eight-ULP",
+        "solver **nonconverged**",
+        "s_{p,j}",
+        "s_{p,min}",
+        "80 bands",
+        "36 intervals",
+        "200,000",
+        "six significant digits",
+    ):
+        assert token in text
+    assert "s_{cab,min}" not in text
+    assert "user-defined/imported law (uncited)" in text
+    assert "Eurocode design presets (Curve 3)" in text
+
+
+def test_pr09_retained_numerical_defaults_match_published_manual():
+    plastic_sig = inspect.signature(plastic.plastic_capacity_at_angle)
+    assert plastic_sig.parameters["n_bands"].default == 80
+    assert plastic_sig.parameters["max_iter"].default == 100
+    conditional = inspect.signature(plastic.conditional_capacity)
+    assert conditional.parameters["n_scan"].default == 36
+    assert conditional.parameters["tol_deg"].default == pytest.approx(0.005)
+    elastic_sig = inspect.signature(elastic.solve_elastic)
+    assert elastic_sig.parameters["max_iter"].default == 100
+    assert elastic_sig.parameters["tol"].default == pytest.approx(1.0e-9)
+    assert fatigue._DEFAULT_FIBRE_SEARCH_DIVISIONS == 4
+    assert fatigue._DEFAULT_FIBRE_SEARCH_MAX_DEPTH == 26
+    assert fatigue._DEFAULT_FIBRE_SEARCH_MAX_BOXES == 200_000
+    assert fatigue._DEFAULT_FIBRE_SEARCH_REL_TOL == pytest.approx(1.0e-3)
+    assert fatigue._DEFAULT_FIBRE_SEARCH_ABS_TOL == pytest.approx(1.0e-8)
+    source = inspect.getsource(plastic)
+    assert "grow < 80" in source
+    assert "1.0e-12 * c_full" in source
+    assert "1.0e-6 * max(1.0, abs(P))" in source
+    assert sector_report._fmt_sig(1.0e-10, 6) != "0.000000"
+
+
+def test_mild_preset_display_identity_is_explicit_but_storage_is_unchanged():
+    generic = "Curve 2 (elastic-perfectly-plastic)"
+    standard = "DS/EN 1992-1-1:2005 + DK NA:2024"
+    assert material_catalog.preset_display_label(generic, "mild") == (
+        generic + " - user-defined law"
+    )
+    assert material_catalog.preset_display_label(standard, "mild") == (
+        standard + " - Eurocode design preset (Curve 3)"
+    )
+    assert "uncited" in material_catalog.preset_display_label(
+        "Custom / imported", "mild"
+    )
+    entry = material_catalog.default_entry("mild", preset=standard)
+    assert entry["preset"] == standard
+
+
+def test_complete_worked_download_is_current_schema_inputs_only():
+    text = worked_example.project_text()
+    tables, scalars = project_io.parse_project(text)
+    provenance = project_io.project_provenance(text)
+    payload = json.loads(text)
+    assert provenance["input_hash_valid"] is True
+    assert provenance["results_included"] is False
+    assert "calculation" not in payload
+    assert len(tables["bars_base"]) == 5
+    assert scalars["mild_material_catalog"]["items"][0]["preset"] == (
+        worked_example.METHOD
+    )
+    assert scalars["sls_bond"] == "Ribbed / high bond (k1 = 0.8)"
+    assert all(value is not None for value in worked_example.ORACLE["values"].values())
+    pack = worked_example.hand_calculation_pack()
+    assert "None" not in pack
+    assert "2500.0 mm2" in pack
 
 
 def test_part_b_documents_the_panels_and_options():
