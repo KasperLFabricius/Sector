@@ -4822,6 +4822,7 @@ def build_inputs(host=st):
                 fatigue_assignment_error=fatigue_assignment_error,
                 concrete=concrete, steel=reference_steel,
                 concrete_preset=concrete_preset,
+                concrete_material_id=concrete_preset,
                 concrete_k_tc=concrete_k_tc,
                 concrete_eta_cc=concrete_eta_cc,
                 mild_preset=mild_preset,

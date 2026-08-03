@@ -371,14 +371,20 @@ def _validated_publications(result: Mapping[str, Any]):
         ):
             raise TraceValidationError("trace publication content seal is invalid")
         scope = publication["result_scope"]
+        # The publication is transport metadata attached after the sealed result
+        # view was hashed and traced.  Never feed it back into a family replay as
+        # a newly discovered result sibling.
+        owner_view = {
+            key: value for key, value in owner.items() if key != PUBLICATION_KEY
+        }
         if scope == _RESULT_SCOPE:
-            result_view = owner
+            result_view = owner_view
         elif scope == _CASE_SHARED_SCOPE:
             if "clear_spacing" not in root:
                 raise TraceValidationError(
                     "case trace publication lost its shared clear-spacing result"
                 )
-            result_view = dict(owner)
+            result_view = dict(owner_view)
             result_view["clear_spacing"] = root["clear_spacing"]
         else:
             raise TraceValidationError(f"unknown trace result scope {scope!r}")

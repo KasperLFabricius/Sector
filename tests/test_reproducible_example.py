@@ -1,0 +1,317 @@
+"""F-036 complete downloadable example and independent-oracle acceptance."""
+
+from __future__ import annotations
+
+import io
+import pathlib
+import sys
+
+from pypdf import PdfReader
+import pytest
+from streamlit.testing.v1 import AppTest
+
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "app"))
+sys.path.insert(0, str(ROOT / "tests"))
+
+import manual  # noqa: E402
+import project_io  # noqa: E402
+import reproducible_example  # noqa: E402
+import reference_example_oracle as oracle  # noqa: E402
+import sector_report  # noqa: E402
+
+
+APP = str(ROOT / "app" / "sector_app.py")
+EXPECTED_INPUT_SHA256 = (
+    "6c37b3894bf5fce41aabc1dc6b4176e1e3269113ffe1b01af4806cb6e8a01c01"
+)
+
+
+@pytest.fixture(scope="module")
+def calculated_example():
+    at = AppTest.from_file(APP, default_timeout=180)
+    at.session_state["_pending_project"] = reproducible_example.project_json()
+    at.run()
+    assert not at.exception
+    assert not at.error
+    at.session_state["_main_page"] = "Analysis"
+    at.run()
+    at.button(key="calculate").click().run(timeout=300)
+    assert not at.exception
+    assert not at.error
+    assert not at.warning
+    return at
+
+
+def test_reference_download_is_current_schema_complete_and_identity_stable():
+    text = reproducible_example.project_json()
+    tables, scalars = project_io.parse_project(text)
+    assert set(tables) == set(project_io.PROJECT_TABLE_KEYS)
+    assert reproducible_example.input_sha256() == EXPECTED_INPUT_SHA256
+    assert project_io.input_sha256(tables, scalars) == EXPECTED_INPUT_SHA256
+    assert scalars["autosave_on"] is True
+    assert scalars["capacity_steel_material_id"] == "M1"
+    assert all(scalars[key] for key in (
+        "fatigue_on", "minimum_reinforcement_on", "transverse_detailing_on",
+        "clear_spacing_on", "shear_on", "torsion_on", "combined_on",
+    ))
+    assert len(tables["plastic_cases_base"]) == 1
+    assert len(tables["elastic_cases_base"]) == 1
+    assert len(tables["fatigue_spectrum_base"]) == 2
+    assert sum(len(tables[key]) for key in (
+        "bridge_brittle_base", "bridge_box_walls_base",
+        "bridge_minimum_crack_base",
+    )) == 3
+
+
+def test_complete_example_publishes_every_trace_with_the_saved_input_identity(
+    calculated_example,
+):
+    state = calculated_example.session_state.filtered_state
+    results = state["results"]
+    assert state["calculation_record"]["input_sha256"] == EXPECTED_INPUT_SHA256
+    assert set(results) == {
+        "plastic_cases", "plastic", "shear", "torsion", "combined",
+        "minimum_reinforcement", "transverse_reinforcement", "elastic_cases",
+        "elastic", "clear_spacing", "fatigue", "bridge", "calculation_traces",
+    }
+    publications = [
+        results["plastic_cases"][0]["results"]["calculation_traces"],
+        results["elastic_cases"][0]["results"]["calculation_traces"],
+        results["calculation_traces"],
+    ]
+    assert all(publication["errors"] == [] for publication in publications)
+    assert all(
+        bundle["input_sha256"] == EXPECTED_INPUT_SHA256
+        for publication in publications
+        for bundle in publication["bundles"]
+    )
+    coverage = {
+        calculation["coverage_id"]
+        for publication in publications
+        for bundle in publication["bundles"]
+        for calculation in bundle["calculations"]
+    }
+    assert coverage == {
+        "ct-002", "ct-003", "ct-004", "ct-005",
+        "ct-008", "ct-009", "ct-010", "ct-011",
+    }
+
+
+def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
+    calculated_example,
+):
+    results = calculated_example.session_state.filtered_state["results"]
+    plastic = results["plastic"]
+    pure_mx = next(point for point in plastic["points"] if point["V"] == 90.0)
+    expected_plastic = oracle.plastic_pure_mx()
+    assert pure_mx["compression_depth"] == pytest.approx(
+        expected_plastic["compression_depth_m"], rel=5.0e-6
+    )
+    assert pure_mx["Mx"] == pytest.approx(expected_plastic["mx_knm"], rel=1.0e-6)
+    assert pure_mx["concrete_force"] == pytest.approx(
+        expected_plastic["concrete_force_kn"], rel=1.0e-5
+    )
+    assert pure_mx["bar_force"] == pytest.approx(
+        expected_plastic["steel_force_kn"], rel=1.0e-5
+    )
+    demand = (80.0**2 + 10.0**2) ** 0.5
+    expected_ray = oracle.applied_ray(
+        tuple((point["Mx"], point["My"]) for point in plastic["points"]),
+        mx_knm=80.0,
+        my_knm=10.0,
+    )
+    assert plastic["util_demand"] == pytest.approx(demand)
+    assert plastic["util_resistance"] == pytest.approx(
+        expected_ray["resistance_knm"]
+    )
+    assert plastic["util"] == pytest.approx(expected_ray["utilisation"])
+    assert plastic["util_gov"] == expected_ray["segment"]
+
+    elastic = results["elastic"]
+    expected_elastic = oracle.cracked_elastic_and_crack_width()
+    assert elastic["props_cr"]["cy"] == pytest.approx(
+        expected_elastic["neutral_axis_y_m"], abs=5.0e-13
+    )
+    assert elastic["props_cr"]["Ix"] == pytest.approx(
+        expected_elastic["second_moment_m4"], rel=2.0e-12
+    )
+    assert elastic["max_conc"] == pytest.approx(
+        expected_elastic["concrete_compression_mpa"], rel=5.0e-12
+    )
+    assert elastic["max_steel"] == pytest.approx(
+        expected_elastic["steel_stress_mpa"][0], rel=5.0e-12
+    )
+    assert elastic["crack_output"] == {
+        "value": pytest.approx(expected_elastic["crack_width_mm"], rel=5.0e-12),
+        "case": "Short-term (fine)",
+        "governing": "R1",
+        "unit": "mm",
+        "calculation_state": "CALCULATED",
+    }
+
+
+def test_member_and_detailing_outputs_match_independent_equations(
+    calculated_example,
+):
+    results = calculated_example.session_state.filtered_state["results"]
+    shear = results["shear"]
+    expected_ray = oracle.applied_ray(
+        tuple((point["Mx"], point["My"]) for point in results["plastic"]["points"]),
+        mx_knm=80.0,
+        my_knm=10.0,
+    )
+    expected = oracle.member_checks(
+        lever_arm_mm=shear["links"]["res"]["z"],
+        bending_utilisation=float(expected_ray["utilisation"]),
+    )
+    assert shear["res"]["k"] == pytest.approx(expected["k"])
+    assert shear["res"]["rho_l"] == pytest.approx(expected["rho_l"])
+    assert shear["res"]["vrd_c"] == pytest.approx(expected["vrd_c_kn"])
+    assert shear["links"]["res"]["cot"] == pytest.approx(expected["cot_theta"])
+    assert shear["links"]["res"]["vrd_s"] == pytest.approx(expected["vrd_s_kn"])
+    assert shear["links"]["res"]["vrd_max"] == pytest.approx(expected["vrd_max_kn"])
+    assert shear["links"]["util"] == pytest.approx(
+        expected["shear_links_utilisation"]
+    )
+
+    torsion = results["torsion"]
+    assert torsion["trd_s"] == pytest.approx(expected["trd_s_knm"])
+    assert torsion["trd_max"] == pytest.approx(expected["trd_max_knm"])
+    assert torsion["trd_c"] == pytest.approx(expected["trd_c_knm"])
+    assert torsion["util"] == pytest.approx(expected["torsion_utilisation"])
+    assert results["combined"]["dkna_sum"] == pytest.approx(
+        expected["combined_sum"]
+    )
+
+    spacing = results["clear_spacing"]["governing"]
+    assert spacing["clear_mm"] == pytest.approx(expected["clear_spacing_mm"])
+    assert spacing["required_mm"] == pytest.approx(
+        expected["required_spacing_mm"]
+    )
+    assert spacing["status"] == "PASS"
+    transverse = results["transverse_reinforcement"]
+    ratio = transverse["checks"][0]
+    assert ratio["provided"] == pytest.approx(expected["provided_link_ratio"])
+    assert ratio["limit"] == pytest.approx(expected["minimum_link_ratio"])
+    assert transverse["governing"]["limit"] == pytest.approx(
+        expected["torsion_spacing_limit_mm"]
+    )
+    assert transverse["governing_utilisation"] == pytest.approx(
+        expected["torsion_spacing_utilisation"]
+    )
+    assert transverse["status"] == "FAIL"
+    minimum = results["minimum_reinforcement"]["checks"][0]
+    expected_area = oracle.minimum_longitudinal_area(
+        bt_mm=minimum["bt_mm"], d_mm=minimum["d_mm"]
+    )
+    assert minimum["as_min_mm2"] == pytest.approx(expected_area)
+    assert results["minimum_reinforcement"]["status"] == "PASS"
+
+
+def test_fatigue_and_bridge_outputs_match_independent_equations(
+    calculated_example,
+):
+    results = calculated_example.session_state.filtered_state["results"]
+    expected_fatigue = oracle.fatigue()
+    spectrum = results["fatigue"]["spectra"][0]
+    reinforcement = spectrum.reinforcement[0]
+    concrete = spectrum.concrete[2]
+    assert reinforcement.bins[0].stress_range_mpa == pytest.approx(
+        expected_fatigue["steel_high_range_mpa"]
+    )
+    assert reinforcement.bins[1].stress_range_mpa == pytest.approx(
+        expected_fatigue["steel_low_range_mpa"]
+    )
+    assert reinforcement.damage == pytest.approx(expected_fatigue["steel_damage"])
+    assert reinforcement.yield_utilisation == pytest.approx(
+        expected_fatigue["steel_yield_utilisation"]
+    )
+    assert concrete.fcd_fat_mpa == pytest.approx(expected_fatigue["fcd_fat_mpa"])
+    assert concrete.damage == pytest.approx(expected_fatigue["concrete_damage"])
+    assert concrete.stress_utilisation == pytest.approx(
+        expected_fatigue["concrete_stress_utilisation"]
+    )
+    assert spectrum.concrete_search.converged is False
+    assert results["fatigue"]["passed"] is False
+
+    expected_bridge = oracle.bridge()
+    calculations = results["bridge"]["calculations"]
+    brittle = calculations["brittle_method_b"]["rows"][0]
+    wall = calculations["box_walls"]["rows"][0]
+    crack = calculations["minimum_crack_reinforcement"]["rows"][0]
+    assert brittle["as_required_mm2"] == pytest.approx(
+        expected_bridge["brittle_required_mm2"]
+    )
+    assert brittle["utilisation"] == pytest.approx(
+        expected_bridge["brittle_utilisation"]
+    )
+    assert wall["utilisation"] == pytest.approx(
+        expected_bridge["box_wall_utilisation"]
+    )
+    assert crack["as_required_mm2"] == pytest.approx(
+        expected_bridge["crack_required_mm2"]
+    )
+    assert crack["utilisation"] == pytest.approx(
+        expected_bridge["crack_utilisation"]
+    )
+
+
+def test_checking_pack_is_separate_and_covers_every_main_family():
+    pack = reproducible_example.checking_pack()
+    assert EXPECTED_INPUT_SHA256 in pack
+    for text in (
+        "Plastic capacity and applied ray", "Cracked elastic and crack width",
+        "Detailing and member resistance", "Fatigue",
+        "Independent bridge kernels", "Report and trace completeness",
+        "CT-002 through CT-005", "CT-008 through CT-011",
+    ):
+        assert text in pack
+    manual_text = "\n".join(
+        block[1] for block in manual.manual_blocks()
+        if block[0] in {"h1", "h2", "md"}
+    )
+    assert "Complete reproducible reference" in manual_text
+    assert "independent checking pack" in manual_text
+
+
+def test_manual_exposes_both_reference_downloads_with_stable_keys():
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    at.session_state["_input_tab"] = "Project & report"
+    at.run()
+    at.button(key="open_manual").click().run()
+    assert not at.exception
+    elements = list(at._tree)
+    keys = {
+        getattr(element, "key", None)
+        for element in elements
+        if element.type == "download_button"
+    }
+    assert {
+        "manual_dl_complete_reference_project",
+        "manual_dl_complete_reference_check",
+    } <= keys
+
+
+def test_tables_only_report_contains_every_main_calculation_chapter(
+    calculated_example,
+):
+    state = calculated_example.session_state.filtered_state
+    pdf = sector_report.build_report(
+        {}, state["result_input_snapshot"], state["results"], figures=False
+    )
+    text = " ".join(
+        page.extract_text() or ""
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+    for heading in (
+        "Section and materials", "Basis of analysis", "Plastic section capacity",
+        "Elastic section response and stresses", "Cracking and crack width",
+        "Grouped fatigue", "Shear resistance", "Torsion (thin-walled tube)",
+        "Combined bending + shear + torsion (M-V-T)", "minimum reinforcement",
+        "Shear/torsion link detailing", "Reinforcement clear spacing",
+        "Independent bridge calculations", "Calculation trace",
+    ):
+        assert heading in text
