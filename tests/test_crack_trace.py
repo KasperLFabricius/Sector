@@ -40,6 +40,7 @@ from sector.crack_trace import (
 from sector.crack_trace_contract import MemberShape, registry_for
 from sector.materials import Prestress
 from sector.section import Section
+from sector.sls import crack_outputs
 from tests.test_section_trace_blocks import _catalog_item
 
 
@@ -1801,29 +1802,7 @@ def test_2023_formula_9_15_reconstructs_uncapped_cap_and_selection(
     assert _reachable(calculation) == set(by_id)
 
 
-def test_2023_noncalculated_direct_and_tendon_subfamilies_fail_closed(monkeypatch):
-    from sector.serviceability import CrackWidthEvaluation
-    import sector.crack_trace as crack_trace
-
-    unsupported = _2023_input()
-    unsupported_out = _output(unsupported)
-    original_evaluate = crack_trace.evaluate_crack_width
-    monkeypatch.setattr(
-        crack_trace,
-        "evaluate_crack_width",
-        lambda *args, **kwargs: CrackWidthEvaluation(
-            "NOT ASSESSED", "Deferred unsupported geometry."
-        ),
-    )
-    with pytest.raises(TraceValidationError, match="unsupported applicability is deferred"):
-        build_crack_trace_family(
-            unsupported,
-            unsupported_out,
-            input_sha256=INPUT_SHA,
-            result_sha256=RESULT_SHA,
-        )
-
-    monkeypatch.setattr(crack_trace, "evaluate_crack_width", original_evaluate)
+def test_2023_direct_and_tendon_subfamilies_fail_closed():
     direct = _2023_direct_input()
     with pytest.raises(TraceValidationError, match="direct-tension trace is deferred"):
         build_crack_trace_family(
@@ -1840,6 +1819,230 @@ def test_2023_noncalculated_direct_and_tendon_subfamilies_fail_closed(monkeypatc
             input_sha256=INPUT_SHA,
             result_sha256=RESULT_SHA,
         )
+
+
+def _2023_mixed_not_assessed_bundle(monkeypatch):
+    from sector.serviceability import CrackWidthEvaluation
+    import sector.crack_trace as crack_trace
+
+    inp = _2023_input()
+    out = _output(inp)
+    original_evaluate = crack_trace.evaluate_crack_width
+
+    def mixed_evaluation(*args, **kwargs):
+        if kwargs["kt"] == 0.6:
+            return CrackWidthEvaluation(
+                "NOT ASSESSED",
+                "The short-term strain gradient is outside the validated scope.",
+            )
+        return original_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(crack_trace, "evaluate_crack_width", mixed_evaluation)
+    out["elastic"]["crack_short"] = None
+    out["elastic"]["crack_output"] = crack_outputs(
+        {"Long-term": out["elastic"]["crack"], "Short-term": None},
+        valid=True,
+    )
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-mixed-applicability"},
+    )
+    return inp, out, bundle
+
+
+def test_2023_not_assessed_case_blocks_finite_sibling_and_preserves_reason(monkeypatch):
+    inp, out, bundle = _2023_mixed_not_assessed_bundle(monkeypatch)
+    assert validate_crack_trace_family(
+        bundle,
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-mixed-applicability"},
+    ) == bundle
+
+    axes = [
+        {axis.name: axis.value for axis in calculation.axes}
+        for calculation in bundle.calculations
+    ]
+    assert [item["crack_branch"] for item in axes] == [
+        "calculated",
+        "not-assessed",
+        "not-assessed",
+    ]
+    assert [item["crack_scope"] for item in axes] == [
+        "refined-bending",
+        "not-assessed",
+        "not-assessed",
+    ]
+    assert [calculation.method_id for calculation in bundle.calculations] == [
+        "sector-en-1992-1-1-2023-refined-bending-replay",
+        "sector-en-1992-1-1-2023-crack-width-not-assessed",
+        "sector-en-1992-1-1-2023-crack-width-aggregate",
+    ]
+    case_final = bundle.calculations[1].steps[-1].result
+    aggregate_final = bundle.calculations[2].steps[-1].result
+    reason = "The short-term strain gradient is outside the validated scope."
+    assert case_final == TraceResult(RESULT_UNDEFINED, None, reason)
+    assert aggregate_final == TraceResult(
+        RESULT_UNDEFINED,
+        None,
+        "The retained 2023 crack-width aggregate is not assessed: " + reason,
+    )
+    assert all(
+        _reachable(calculation) == {step.step_id for step in calculation.steps}
+        for calculation in bundle.calculations
+    )
+
+
+def test_2023_actual_combined_tension_and_bending_is_not_assessed():
+    inp = _2023_direct_input(Mx_el_l=10.0)
+    out = _output(inp)
+    assert out["elastic"]["crack"] is None
+    assert out["elastic"]["crack_short"] is None
+    bundle = build_crack_trace_family(
+        inp,
+        out,
+        input_sha256=INPUT_SHA,
+        result_sha256=RESULT_SHA,
+        context={"route": "2023-combined-tension-bending"},
+    )
+    reason = (
+        "The entire section is in tension but the strain gradient is not uniform. "
+        "The validated direct-tension branch does not cover this combined "
+        "tension-and-bending state."
+    )
+    assert [
+        {axis.name: axis.value for axis in calculation.axes}["crack_branch"]
+        for calculation in bundle.calculations
+    ] == ["not-assessed", "not-assessed", "not-assessed"]
+    assert [
+        calculation.steps[-1].result.reason
+        for calculation in bundle.calculations
+    ] == [
+        reason,
+        reason,
+        "The retained 2023 crack-width aggregate is not assessed: " + reason,
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["method", "scope", "case-reason", "aggregate-reason"])
+def test_2023_not_assessed_metadata_and_reasons_reject_resealed_tampering(
+    monkeypatch, mutation,
+):
+    inp, out, bundle = _2023_mixed_not_assessed_bundle(monkeypatch)
+    calculations = list(bundle.calculations)
+    position = 2 if mutation == "aggregate-reason" else 1
+    calculation = calculations[position]
+    if mutation == "method":
+        calculation = dataclasses.replace(calculation, method_id="forged-method")
+    elif mutation == "scope":
+        changed_axes = tuple(
+            dataclasses.replace(axis, value="not-applicable")
+            if axis.name == "crack_scope" else axis
+            for axis in calculation.axes
+        )
+        calculation = dataclasses.replace(calculation, axes=changed_axes)
+    else:
+        final = dataclasses.replace(
+            calculation.steps[-1],
+            result=dataclasses.replace(
+                calculation.steps[-1].result,
+                reason="Forged applicability reason.",
+            ),
+        )
+        calculation = dataclasses.replace(
+            calculation, steps=(*calculation.steps[:-1], final)
+        )
+    calculations[position] = calculation
+    changed = seal_bundle(dataclasses.replace(
+        bundle,
+        calculations=tuple(calculations),
+        content_sha256="",
+    ))
+    with pytest.raises(TraceValidationError):
+        validate_crack_trace_family(
+            changed,
+            inp,
+            out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context={"route": "2023-mixed-applicability"},
+        )
+
+
+def test_2023_direct_tension_fence_does_not_depend_on_candidate_presence():
+    inp = _2023_direct_input()
+    outer = [
+        (-0.30, 0.0),
+        (-0.15, -0.26),
+        (0.15, -0.26),
+        (0.30, 0.0),
+        (0.15, 0.26),
+        (-0.15, 0.26),
+    ]
+    bars = [
+        (-0.15, 0.0, 500.0),
+        (0.15, 0.0, 500.0),
+        (0.0, -0.15, 500.0),
+        (0.0, 0.15, 500.0),
+    ]
+    inp.update(
+        outer=outer,
+        bars=bars,
+        section=Section.from_polygon(outer, bars),
+        bar_materials=[inp["steel"]] * len(bars),
+        bar_elements=[
+            _record(f"B{position}", x, y, area)
+            for position, (x, y, area) in enumerate(bars, start=1)
+        ],
+    )
+    out = _output(inp)
+    assert out["elastic"]["crack"] is None
+    assert out["elastic"]["crack_short"] is None
+    with pytest.raises(TraceValidationError, match="direct-tension trace is deferred"):
+        build_crack_trace_family(
+            inp,
+            out,
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+        )
+
+
+def test_2023_pr08d2a1_calculated_and_uncracked_bundle_bytes_remain_frozen():
+    calculated = _2023_input()
+    uncracked = _2023_input(
+        P_el_l=0.0,
+        Mx_el_l=0.0,
+        My_el_l=0.0,
+        P_el_s=0.0,
+        Mx_el_s=0.0,
+        My_el_s=0.0,
+    )
+    fixtures = (
+        (
+            calculated,
+            {"route": "2023-calculated-bending"},
+            "e40416438c1894795e040c820e16d2b04904d196f86fceccba13785278085390",
+        ),
+        (
+            uncracked,
+            {"route": "2023-uncracked"},
+            "65d17e6ae2eb6a8a9e0a054d7b229c43e15495e2c407568e3a8b46c3e3b4acfb",
+        ),
+    )
+    for inp, context, expected in fixtures:
+        bundle = build_crack_trace_family(
+            inp,
+            _output(inp),
+            input_sha256=INPUT_SHA,
+            result_sha256=RESULT_SHA,
+            context=context,
+        )
+        assert hashlib.sha256(bundle_to_json(bundle).encode("ascii")).hexdigest() == expected
 
 
 def test_2023_uncracked_family_is_explicitly_not_applicable():

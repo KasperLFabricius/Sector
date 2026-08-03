@@ -78,6 +78,7 @@ from .crack_trace_contract import (
     METHOD_2023_BENDING,
     METHOD_2023_FAILED,
     METHOD_2023_NOT_APPLICABLE,
+    METHOD_2023_NOT_ASSESSED,
     METRE,
     MILLIMETRE,
     ONE,
@@ -109,6 +110,7 @@ from .serviceability import (
     analyse_cracking,
     combined_cracking,
     evaluate_crack_width,
+    _uniform_tension_regime,
 )
 from .sls import crack_outputs
 from .trace_registry import audit_trace_registry
@@ -1106,6 +1108,15 @@ def _reconstruct(
             + ["prestress"] * len(blocks.tendons)
         )
         case_specs = _DK_CASES if dk_na else _BASE_CASES
+        if is_2023 and any(
+            all_tension and near_uniform
+            for all_tension, near_uniform in (
+                _uniform_tension_regime(section, state) for state in states
+            )
+        ):
+            raise TraceValidationError(
+                "CT-009 2023 direct-tension trace is deferred to its bounded extension"
+            )
         evaluations = tuple(
             evaluate_crack_width(
                 section,
@@ -1127,13 +1138,10 @@ def _reconstruct(
             for name, _key, kt, coarse in case_specs
         )
         if is_2023:
-            if any(evaluation.result is None for evaluation in evaluations):
-                raise TraceValidationError(
-                    "CT-009 2023 unsupported applicability is deferred to its bounded extension"
-                )
             if any(
                 candidate.scope == CRACK_SCOPE_DIRECT_TENSION
                 for evaluation in evaluations
+                if evaluation.result is not None
                 for candidate in evaluation.result.candidates
             ):
                 raise TraceValidationError(
@@ -1865,6 +1873,10 @@ def _case_member(
 
     mechanics_roots = (*roots, *planes, *stresses)
     if case.evaluation.result is None:
+        if case.evaluation.status not in {"NOT APPLICABLE", "NOT ASSESSED"}:
+            raise TraceValidationError(
+                "undefined crack-width case has an invalid applicability state"
+            )
         final = _step(
             "crack-width-result",
             "Characteristic crack width",
@@ -1881,9 +1893,17 @@ def _case_member(
             ),
         )
         states = UNDEFINED_STATES
-        branch = "not-applicable"
+        branch = (
+            "not-assessed"
+            if is_2023 and case.evaluation.status == "NOT ASSESSED"
+            else "not-applicable"
+        )
         method_id = (
-            METHOD_2023_NOT_APPLICABLE if is_2023 else route_identity.method_id
+            METHOD_2023_NOT_ASSESSED
+            if branch == "not-assessed"
+            else METHOD_2023_NOT_APPLICABLE
+            if is_2023
+            else route_identity.method_id
         )
         warnings: tuple[str, ...] = () if is_2023 else (CRACK_DIRECTIONAL_LIMITATION,)
     else:
@@ -1932,7 +1952,7 @@ def _case_member(
     )
     if is_2023:
         axis_values["crack_scope"] = (
-            "refined-bending" if branch == "calculated" else "not-applicable"
+            "refined-bending" if branch == "calculated" else branch
         )
     if route_identity.axis is not None:
         axis_values["crack_route"] = route_identity.axis
@@ -2080,7 +2100,30 @@ def _aggregate_member(
         for item in case_steps
         if item.result.state == RESULT_FINITE and item.result.value is not None
     ]
-    if finite_values:
+    not_assessed_reasons = tuple(dict.fromkeys(
+        case.evaluation.reason
+        for case in replay.cases
+        if case.evaluation.status == "NOT ASSESSED"
+    )) if is_2023 else ()
+    if not_assessed_reasons:
+        final = _step(
+            "crack-width-aggregate-result",
+            "Governing retained crack width",
+            0.0,
+            MILLIMETRE,
+            ROLE_FINAL,
+            SELECTION,
+            tuple(steps),
+            result=TraceResult(
+                RESULT_UNDEFINED,
+                None,
+                "The retained 2023 crack-width aggregate is not assessed: "
+                + "; ".join(not_assessed_reasons),
+            ),
+        )
+        states = UNDEFINED_STATES
+        branch = "not-assessed"
+    elif finite_values:
         final = _step(
             "crack-width-aggregate-result",
             "Governing retained crack width",
@@ -2120,7 +2163,7 @@ def _aggregate_member(
     )
     if is_2023:
         axis_values["crack_scope"] = (
-            "aggregate" if branch == "calculated" else "not-applicable"
+            "aggregate" if branch == "calculated" else branch
         )
     if route_identity.axis is not None:
         axis_values["crack_route"] = route_identity.axis
