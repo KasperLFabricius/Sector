@@ -90,6 +90,22 @@ class EffectiveReinforcement2023:
 
 
 @dataclass(frozen=True)
+class _DirectTensionArea2023:
+    """Single-source Figure 9.3 rectangle bands and their union area."""
+
+    in_area: np.ndarray
+    ac_eff: float
+    hc_eff: float
+    bc_eff: float
+    width: float
+    height: float
+    left: float
+    right: float
+    bottom: float
+    top: float
+
+
+@dataclass(frozen=True)
 class CrackWidthEvaluation:
     """Numerical result plus its calculation-scope state."""
 
@@ -504,11 +520,11 @@ def _uniform_tension_regime(
     return all_tension, near_uniform
 
 
-def _direct_tension_effective_area_2023(
+def _direct_tension_area_2023(
     section: Section,
     phi_arr: np.ndarray,
-) -> tuple[np.ndarray, float, float, float] | str:
-    """Figure 9.3 direct-tension effective perimeter area for a rectangle."""
+) -> _DirectTensionArea2023 | str:
+    """Return the complete Figure 9.3 rectangle-band construction."""
 
     frame = _rectangle_frame(section)
     if frame is None:
@@ -588,7 +604,30 @@ def _direct_tension_effective_area_2023(
             "At least one reinforcement element lies outside the validated "
             "direct-tension effective perimeter area."
         )
-    return in_area, ac_eff, max(bottom, top), max(left, right)
+    return _DirectTensionArea2023(
+        in_area=in_area,
+        ac_eff=ac_eff,
+        hc_eff=max(bottom, top),
+        bc_eff=max(left, right),
+        width=width,
+        height=height,
+        left=left,
+        right=right,
+        bottom=bottom,
+        top=top,
+    )
+
+
+def _direct_tension_effective_area_2023(
+    section: Section,
+    phi_arr: np.ndarray,
+) -> tuple[np.ndarray, float, float, float] | str:
+    """Preserve the retained Figure 9.3 kernel's public internal shape."""
+
+    area = _direct_tension_area_2023(section, phi_arr)
+    if isinstance(area, str):
+        return area
+    return area.in_area, area.ac_eff, area.hc_eff, area.bc_eff
 
 
 def _crack_width(
