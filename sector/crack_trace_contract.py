@@ -38,6 +38,16 @@ DK_SOURCE_EDITION = f"{DOCUMENT} with {DK_DOCUMENT}"
 DK_FAMILY_ID = "ct-009-crack-width-2004-building-dk"
 DK_METHOD_ID = "sector-dk-na-2024-crack-width-replay"
 DK_REGISTRY_ID = "sector-ct-009-crack-width-2004-building-dk-v1"
+BRIDGE_BASE_CODE = "DS/EN 1992-2:2005 + AC:2008"
+BRIDGE_BASE_DOCUMENT = BRIDGE_BASE_CODE
+BRIDGE_BASE_FAMILY_ID = "ct-009-crack-width-2004-bridge-base"
+BRIDGE_BASE_METHOD_ID = "sector-en-1992-2-2005-crack-width-route-replay"
+BRIDGE_BASE_REGISTRY_ID = "sector-ct-009-crack-width-2004-bridge-base-v1"
+BRIDGE_DK_CODE = "DS/EN 1992-2 DK NA:2015"
+BRIDGE_DK_DOCUMENT = BRIDGE_DK_CODE
+BRIDGE_DK_FAMILY_ID = "ct-009-crack-width-2004-bridge-dk"
+BRIDGE_DK_METHOD_ID = "sector-dk-na-2015-bridge-crack-width-route-replay"
+BRIDGE_DK_REGISTRY_ID = "sector-ct-009-crack-width-2004-bridge-dk-v1"
 
 INPUT = TraceSource(SOURCE_INPUT, "sector-crack-width-input")
 BOUNDARY = TraceSource(SOURCE_PROJECT, "sector-crack-width-boundary-replay")
@@ -99,6 +109,26 @@ DK_ROUTE = _dk_standard(
     "7.3.2(3), 7.3.4(1), 7.3.4(3)",
     "fine/coarse systems, member rule and cover-dependent k3",
 )
+BRIDGE_BASE_ROUTE = TraceSource(
+    SOURCE_STANDARD,
+    "en-1992-2-2005-crack-width-route",
+    BRIDGE_BASE_DOCUMENT,
+    SourceCitation(
+        BRIDGE_BASE_DOCUMENT,
+        "7.3.4(101)",
+        "recommended method: EN 1992-1-1 7.3.4",
+    ),
+)
+BRIDGE_DK_ROUTE = TraceSource(
+    SOURCE_STANDARD,
+    "dk-na-2015-bridge-crack-width-route",
+    BRIDGE_DK_DOCUMENT,
+    SourceCitation(
+        BRIDGE_DK_DOCUMENT,
+        "7.3.4(101)",
+        "no national choice",
+    ),
+)
 DK_EFFECTIVE_AREA_FINE = _dk_standard(
     "dk-na-2024-effective-tension-area-fine",
     "7.3.2(3)",
@@ -146,14 +176,30 @@ def registry_for(
     members: tuple[MemberShape, ...],
     *,
     dk_na: bool = False,
+    route: str | None = None,
 ) -> TraceRegistryContract:
     """Create the exact registry for the reconstructed result branch."""
 
     if not members:
         raise ValueError("CT-009 registry requires at least one member")
-    method_id = DK_METHOD_ID if dk_na else METHOD_ID
-    family_id = DK_FAMILY_ID if dk_na else FAMILY_ID
-    registry_id = DK_REGISTRY_ID if dk_na else REGISTRY_ID
+    identities = {
+        (False, None): (METHOD_ID, FAMILY_ID, REGISTRY_ID),
+        (True, None): (DK_METHOD_ID, DK_FAMILY_ID, DK_REGISTRY_ID),
+        (False, "bridge-base"): (
+            BRIDGE_BASE_METHOD_ID,
+            BRIDGE_BASE_FAMILY_ID,
+            BRIDGE_BASE_REGISTRY_ID,
+        ),
+        (True, "bridge-dk"): (
+            BRIDGE_DK_METHOD_ID,
+            BRIDGE_DK_FAMILY_ID,
+            BRIDGE_DK_REGISTRY_ID,
+        ),
+    }
+    try:
+        method_id, family_id, registry_id = identities[(dk_na, route)]
+    except KeyError as exc:
+        raise ValueError("unsupported CT-009 registry route") from exc
     contracts = tuple(
         TraceMemberContract(
             member_id=item.member_id,
