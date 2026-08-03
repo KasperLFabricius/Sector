@@ -41,9 +41,13 @@ from .crack_trace_contract import (
     BRIDGE_DK_CODE,
     BRIDGE_DK_METHOD_ID,
     BRIDGE_DK_ROUTE,
+    BOND_2023,
     CODE,
+    CODE_2023,
     COVERAGE_ID,
     CRACK_WIDTH,
+    CRACK_WIDTH_2023,
+    CURVATURE_2023,
     DK_CODE,
     DK_CRACK_WIDTH_COARSE,
     DK_EFFECTIVE_AREA_COARSE,
@@ -52,7 +56,10 @@ from .crack_trace_contract import (
     DK_ROUTE,
     DK_SPACING_CLOSE,
     EDITION,
+    EDITION_2023,
     EFFECTIVE_AREA,
+    EFFECTIVE_AREA_2023,
+    EFFECTIVE_RATIO_2023,
     ELASTIC,
     FAILED_STATES,
     FINITE_STATES,
@@ -64,17 +71,25 @@ from .crack_trace_contract import (
     KILONEWTON_PER_CUBIC_METRE,
     KILONEWTON_PER_SQUARE_METRE,
     MEAN_STRAIN,
+    MEAN_STRAIN_2023,
     MEGAPASCAL,
     METHOD_ID,
+    METHOD_2023_AGGREGATE,
+    METHOD_2023_BENDING,
+    METHOD_2023_FAILED,
+    METHOD_2023_NOT_APPLICABLE,
     METRE,
     MILLIMETRE,
     ONE,
     SELECTION,
     SPACING_CLOSE,
+    SPACING_2023,
     SPACING_WIDE,
     SQUARE_METRE,
     SQUARE_MILLIMETRE,
     UNDEFINED_STATES,
+    FLEXURAL_2023,
+    ROUTE_2023,
     MemberShape,
     registry_for,
 )
@@ -88,6 +103,7 @@ from .section_trace_blocks import (
     section_trace_blocks,
 )
 from .serviceability import (
+    CRACK_SCOPE_DIRECT_TENSION,
     CRACK_DIRECTIONAL_LIMITATION,
     CrackWidthEvaluation,
     analyse_cracking,
@@ -161,6 +177,7 @@ class _CaseReplay:
 @dataclass(frozen=True, slots=True)
 class _RouteIdentity:
     code: str
+    edition: str
     method_id: str
     axis: str | None
     slug: str
@@ -170,6 +187,7 @@ class _RouteIdentity:
 _ROUTE_IDENTITIES = {
     (False, None): _RouteIdentity(
         CODE,
+        EDITION,
         METHOD_ID,
         None,
         "base",
@@ -177,6 +195,7 @@ _ROUTE_IDENTITIES = {
     ),
     (True, None): _RouteIdentity(
         DK_CODE,
+        EDITION,
         DK_METHOD_ID,
         "building-dk",
         "building-dk",
@@ -184,6 +203,7 @@ _ROUTE_IDENTITIES = {
     ),
     (False, "bridge-base"): _RouteIdentity(
         BRIDGE_BASE_CODE,
+        EDITION,
         BRIDGE_BASE_METHOD_ID,
         "bridge-base",
         "bridge-base",
@@ -191,10 +211,19 @@ _ROUTE_IDENTITIES = {
     ),
     (True, "bridge-dk"): _RouteIdentity(
         BRIDGE_DK_CODE,
+        EDITION,
         BRIDGE_DK_METHOD_ID,
         "bridge-dk",
         "bridge-dk",
         BRIDGE_DK_CODE,
+    ),
+    (False, "building-2023-calculated-bending"): _RouteIdentity(
+        CODE_2023,
+        EDITION_2023,
+        METHOD_2023_NOT_APPLICABLE,
+        "building-2023",
+        "building-2023",
+        CODE_2023,
     ),
 }
 
@@ -427,15 +456,17 @@ def _active_route(inp: Mapping[str, Any]) -> tuple[bool, str | None] | None:
         raise TraceValidationError("sls_code and sls_edition must retain text type")
     if type(dk_na) is not bool:
         raise TraceValidationError("sls_dk_na must retain Boolean type")
-    if edition != EDITION:
-        return None
     routes = {
-        (CODE, False): (False, None),
-        (DK_CODE, True): (True, None),
-        (BRIDGE_BASE_CODE, False): (False, "bridge-base"),
-        (BRIDGE_DK_CODE, True): (True, "bridge-dk"),
+        (CODE, EDITION, False): (False, None),
+        (DK_CODE, EDITION, True): (True, None),
+        (BRIDGE_BASE_CODE, EDITION, False): (False, "bridge-base"),
+        (BRIDGE_DK_CODE, EDITION, True): (True, "bridge-dk"),
+        (CODE_2023, EDITION_2023, False): (
+            False,
+            "building-2023-calculated-bending",
+        ),
     }
-    selected = routes.get((code, dk_na))
+    selected = routes.get((code, edition, dk_na))
     if selected is None:
         return None
     selected_dk, _route = selected
@@ -573,7 +604,8 @@ def _assignment_identity(inp: Mapping[str, Any], key: str) -> Any:
 
 
 def _input_identity(
-    inp: Mapping[str, Any], blocks: SectionTraceBlocks, *, dk_na: bool
+    inp: Mapping[str, Any], blocks: SectionTraceBlocks, *, dk_na: bool,
+    route: str | None,
 ) -> tuple[tuple[str, Any], ...]:
     geometry = tuple(
         (key, _required(inp, key))
@@ -870,7 +902,7 @@ def _validate_failure(
         identity = _route_identity(dk_na, route)
         metadata = {
             "crack_code": identity.code,
-            "crack_edition": EDITION,
+            "crack_edition": identity.edition,
             "crack_member": member if dk_na else None,
         }
         for key, value in metadata.items():
@@ -907,7 +939,24 @@ def _reconstruct(
     except (KeyError, TypeError, ValueError) as exc:
         raise TraceValidationError(f"invalid CT-009 section identity: {exc}") from exc
 
-    identity = _input_identity(inp, blocks, dk_na=dk_na)
+    route_identity = _route_identity(dk_na, route)
+    is_2023 = route == "building-2023-calculated-bending"
+    if is_2023:
+        for material in (blocks.concrete, *blocks.bars, *blocks.tendons):
+            source = material.provenance.source
+            documents = (
+                source.edition,
+                None if source.citation is None else source.citation.document,
+            )
+            if any(item is not None and "2023" in item for item in documents):
+                raise TraceValidationError(
+                    "2023 material provenance is published but not implemented for CT-009"
+                )
+        if blocks.tendons:
+            raise TraceValidationError(
+                "CT-009 2023 tendon bond trace is deferred to its bounded extension"
+            )
+    identity = _input_identity(inp, blocks, dk_na=dk_na, route=route)
     materials = (*blocks.bars, *blocks.tendons)
     moduli = np.asarray(
         [_material_value(item, "Es", positive=True) for item in materials],
@@ -973,9 +1022,11 @@ def _reconstruct(
         k1=k1,
         k3_cover_dependent=dk_na,
         include_hx_term=include_hx,
-        edition=EDITION,
+        edition=route_identity.edition,
         n_mult=multipliers,
         prestress_stress=locked_stress,
+        reinforcement_types=["mild"] * len(blocks.bars),
+        bond_ratio_xi=None,
     )
     peak_cracked, peak_factor, peak_tension = combined_cracking(
         section,
@@ -1068,13 +1119,26 @@ def _reconstruct(
                 k3_cover_dependent=dk_na,
                 include_hx_term=include_hx,
                 coarse=coarse,
-                edition=EDITION,
+                edition=route_identity.edition,
                 n_mult=multipliers,
                 reinforcement_types=reinforcement_types,
                 bond_ratio_xi=None,
             )
             for name, _key, kt, coarse in case_specs
         )
+        if is_2023:
+            if any(evaluation.result is None for evaluation in evaluations):
+                raise TraceValidationError(
+                    "CT-009 2023 unsupported applicability is deferred to its bounded extension"
+                )
+            if any(
+                candidate.scope == CRACK_SCOPE_DIRECT_TENSION
+                for evaluation in evaluations
+                for candidate in evaluation.result.candidates
+            ):
+                raise TraceValidationError(
+                    "CT-009 2023 direct-tension trace is deferred to its bounded extension"
+                )
     else:
         case_specs = _DK_CASES if dk_na else _BASE_CASES
         evaluations = tuple(
@@ -1121,10 +1185,9 @@ def _reconstruct(
         "crack_short": cases[1].output,
     }
     if cracked:
-        route_identity = _route_identity(dk_na, route)
         expected.update(
             crack_code=route_identity.code,
-            crack_edition=EDITION,
+            crack_edition=route_identity.edition,
             crack_member=member if dk_na else None,
         )
         if dk_na:
@@ -1248,6 +1311,9 @@ def _route_steps(
     elif route == "bridge-dk":
         prefix = "route-bridge-dk"
         sources = (BRIDGE_BASE_ROUTE, BRIDGE_DK_ROUTE, DK_ROUTE)
+    elif route == "building-2023-calculated-bending":
+        prefix = "route-building-2023"
+        sources = (ROUTE_2023,)
     elif dk_na:
         prefix = "route-building-dk"
         sources = (BASE_ROUTE, DK_ROUTE)
@@ -1289,6 +1355,7 @@ def _shape(
             for item in calculation.steps
         ),
         states=states,
+        method_id=calculation.method_id,
     )
 
 
@@ -1417,12 +1484,240 @@ def _candidate_steps(
     return steps, width
 
 
+def _bending_spacing_terms_2023(
+    candidate: Any,
+    state: Any,
+    blocks: SectionTraceBlocks,
+    *,
+    selected_k1: float,
+) -> tuple[float, float, float, float]:
+    """Independently reconstruct both Formula (9.15) spacing alternatives."""
+
+    magnitude = math.hypot(float(state.kx), float(state.ky))
+    if magnitude < 1.0e-12:
+        raise TraceValidationError("2023 calculated bending needs a strain gradient")
+    gx = float(state.kx) / magnitude
+    gy = float(state.ky) / magnitude
+    tension_face = max(
+        x * gx + y * gy
+        for ring in blocks.geometry.rings
+        for x, y in ring
+    )
+    neutral_axis = -float(state.eps0) / magnitude
+    tension_depth = tension_face - neutral_axis
+    if tension_depth <= 0.0:
+        raise TraceValidationError("2023 calculated bending needs positive h-x")
+    expected_direction = math.degrees(math.atan2(gy, gx)) % 180.0
+    if candidate.direction_deg is None or not math.isclose(
+        float(candidate.direction_deg),
+        expected_direction,
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-12,
+    ):
+        raise TraceValidationError("2023 bending direction is stale")
+    bond_factor = 0.9 if selected_k1 <= 1.0 else 1.2
+    uncapped = (
+        1.5 * float(candidate.cover)
+        + float(candidate.kfl)
+        * bond_factor
+        / 7.2
+        * float(candidate.phi)
+        / float(candidate.rho_p_eff)
+    )
+    cap = 1.3 / float(candidate.kw) * tension_depth * 1000.0
+    selected = min(uncapped, cap)
+    if not math.isclose(
+        float(candidate.sr_max), selected, rel_tol=1.0e-12, abs_tol=1.0e-12
+    ):
+        raise TraceValidationError("2023 Formula (9.15) spacing is stale")
+    return tension_depth, uncapped, cap, selected
+
+
+def _bending_candidate_steps_2023(
+    candidate: Any,
+    position: int,
+    dependencies: Sequence[TraceStep],
+    *,
+    state: Any,
+    blocks: SectionTraceBlocks,
+    selected_k1: float,
+) -> tuple[list[TraceStep], TraceStep]:
+    prefix = f"candidate-{position:04d}"
+
+    def value_step(
+        name: str,
+        title: str,
+        value: Any,
+        unit: TraceUnit,
+        source: Any,
+        parents: Sequence[TraceStep],
+        expression: str,
+    ) -> TraceStep:
+        return _step(
+            f"{prefix}-{name}", title, float(value), unit, ROLE_COMPUTED,
+            source, parents, expression=expression,
+        )
+
+    position_step = value_step(
+        "position", "Selected reinforcement position", candidate.bar_index + 1,
+        ONE, SELECTION, dependencies, "One-based retained element position",
+    )
+    x_step = value_step(
+        "x", "Selected reinforcement x", candidate.x, METRE, GEOMETRY,
+        dependencies, "Resolved reinforcement coordinate",
+    )
+    y_step = value_step(
+        "y", "Selected reinforcement y", candidate.y, METRE, GEOMETRY,
+        dependencies, "Resolved reinforcement coordinate",
+    )
+    area_step = value_step(
+        "area", "Selected reinforcement area", candidate.area,
+        SQUARE_MILLIMETRE, GEOMETRY, dependencies,
+        "Resolved reinforcement area",
+    )
+    hc_step = value_step(
+        "hc-eff", "Effective tension height", candidate.hc_ef, METRE,
+        EFFECTIVE_AREA_2023, (*dependencies, x_step, y_step),
+        "Figure 9.3 bending effective height",
+    )
+    ac_step = value_step(
+        "ac-eff", "Effective tension area", candidate.ac_eff, SQUARE_METRE,
+        EFFECTIVE_AREA_2023, (*dependencies, hc_step),
+        "Figure 9.3 bending effective area",
+    )
+    as_step = value_step(
+        "as-eff", "Effective mild reinforcement area", candidate.as_eff,
+        SQUARE_METRE, EFFECTIVE_RATIO_2023, (*dependencies, ac_step, area_step),
+        "Mild reinforcement in the effective tension area",
+    )
+    ap_step = value_step(
+        "ap-eff", "Effective prestressing reinforcement area", candidate.ap_eff,
+        SQUARE_METRE, EFFECTIVE_RATIO_2023, (*dependencies, ac_step),
+        "Prestressing reinforcement in the effective tension area",
+    )
+    weighted_step = value_step(
+        "ap-eff-weighted", "Bond-weighted prestressing area",
+        candidate.ap_eff_weighted, SQUARE_METRE, EFFECTIVE_RATIO_2023,
+        (*dependencies, ap_step), "Bond-weighted Ap contribution",
+    )
+    rho_step = value_step(
+        "rho-p-eff", "Effective reinforcement ratio", candidate.rho_p_eff,
+        ONE, EFFECTIVE_RATIO_2023,
+        (*dependencies, ac_step, as_step, weighted_step),
+        "rho_p,eff = (As + weighted Ap) / Ac,eff",
+    )
+    sigma_step = value_step(
+        "sigma-s", "Stage II reinforcement stress", candidate.sigma_s,
+        MEGAPASCAL, ELASTIC, (*dependencies, position_step),
+        "Stress from the independently reconstructed cracked state",
+    )
+    phi_step = value_step(
+        "phi", "Equivalent reinforcement diameter", candidate.phi,
+        MILLIMETRE, GEOMETRY, (*dependencies, position_step, area_step),
+        "Selected or area-equivalent diameter",
+    )
+    cover_step = value_step(
+        "cover", "Clear cover", candidate.cover, MILLIMETRE, GEOMETRY,
+        (*dependencies, x_step, y_step, phi_step),
+        "Distance to concrete boundary minus reinforcement radius",
+    )
+    kw_step = value_step(
+        "kw", "Calculated-width factor", candidate.kw, ONE, CRACK_WIDTH_2023,
+        dependencies, "Formula (9.8) NOTE 1: kw = 1.7",
+    )
+    curvature_step = value_step(
+        "k1-r", "Curvature factor", candidate.k1_r, ONE, CURVATURE_2023,
+        (*dependencies, hc_step, x_step, y_step), "Formula (9.9)",
+    )
+    flexural_step = value_step(
+        "kfl", "Flexural coefficient", candidate.kfl, ONE, FLEXURAL_2023,
+        (*dependencies, hc_step), "Formula (9.17)",
+    )
+    bond_factor = 0.9 if selected_k1 <= 1.0 else 1.2
+    bond_step = value_step(
+        "kb", "Bond factor", bond_factor, ONE, BOND_2023, dependencies,
+        "Formula (9.18), selected from the retained k1 bond class",
+    )
+    strain_step = value_step(
+        "esm-ecm", "Mean strain difference", candidate.esm_ecm, ONE,
+        MEAN_STRAIN_2023, (*dependencies, rho_step, sigma_step),
+        "Formula (9.11)",
+    )
+    tension_depth, uncapped, cap, spacing = _bending_spacing_terms_2023(
+        candidate, state, blocks, selected_k1=selected_k1
+    )
+    depth_step = value_step(
+        "h-minus-x", "Cracked tension-zone depth", tension_depth, METRE,
+        SPACING_2023, (*dependencies, x_step, y_step),
+        "h-x reconstructed from the cracked strain plane",
+    )
+    uncapped_step = value_step(
+        "spacing-uncapped", "Uncapped calculated mean crack spacing", uncapped,
+        MILLIMETRE, SPACING_2023,
+        (cover_step, phi_step, rho_step, flexural_step, bond_step),
+        "1.5c + (kfl*kb/7.2)*(phi/rho_p,eff)",
+    )
+    cap_step = value_step(
+        "spacing-cap", "Geometric calculated-spacing cap", cap, MILLIMETRE,
+        SPACING_2023, (depth_step, kw_step),
+        "(1.3/kw)*(h-x)",
+    )
+    spacing_step = value_step(
+        "sr-max", "Selected calculated mean crack spacing", spacing,
+        MILLIMETRE, SPACING_2023, (uncapped_step, cap_step),
+        "min(uncapped spacing, (1.3/kw)*(h-x))",
+    )
+    steps = [
+        position_step, x_step, y_step, area_step, hc_step, ac_step, as_step,
+        ap_step, weighted_step, rho_step, sigma_step, phi_step, cover_step,
+        kw_step, curvature_step, flexural_step, bond_step, strain_step,
+        depth_step, uncapped_step, cap_step, spacing_step,
+    ]
+    identity_steps = _identity_steps(
+        ((
+            f"{prefix}-bending-identity",
+            (
+                candidate.reinforcement_type,
+                candidate.scope,
+                candidate.direction_deg,
+                candidate.edition,
+                candidate.coarse,
+                candidate.sr_max_geometric,
+            ),
+        ),),
+        source=ROUTE_2023,
+        role=ROLE_COMPUTED,
+        dependencies=(*dependencies, *steps),
+        prefix=prefix,
+    )
+    steps.extend(identity_steps)
+    calculated_width = (
+        float(candidate.kw)
+        * float(candidate.k1_r)
+        * spacing
+        * float(candidate.esm_ecm)
+    )
+    if not math.isclose(
+        float(candidate.wk), calculated_width, rel_tol=1.0e-12, abs_tol=1.0e-12
+    ):
+        raise TraceValidationError("2023 Formula (9.8) crack width is stale")
+    width = value_step(
+        "wk", "Candidate calculated crack width", calculated_width,
+        MILLIMETRE, CRACK_WIDTH_2023,
+        (kw_step, curvature_step, spacing_step, strain_step, *identity_steps),
+        "w_k,cal = kw * k1/r * sr,m,cal * (epsilon_sm - epsilon_cm)",
+    )
+    steps.append(width)
+    return steps, width
+
+
 def _case_member(
     replay: _SuccessfulReplay,
     case: _CaseReplay,
     context: Mapping[str, Any],
 ) -> tuple[MemberShape, TraceCalculation]:
     route_identity = _route_identity(replay.dk_na, replay.route)
+    is_2023 = replay.route == "building-2023-calculated-bending"
     steps = _identity_steps(
         replay.inputs,
         source=INPUT,
@@ -1479,7 +1774,7 @@ def _case_member(
             case.kt,
             ONE,
             ROLE_METHOD_VALUE,
-            MEAN_STRAIN,
+            MEAN_STRAIN_2023 if is_2023 else MEAN_STRAIN,
         ),
     ]
     if replay.dk_na:
@@ -1587,15 +1882,29 @@ def _case_member(
         )
         states = UNDEFINED_STATES
         branch = "not-applicable"
+        method_id = (
+            METHOD_2023_NOT_APPLICABLE if is_2023 else route_identity.method_id
+        )
+        warnings: tuple[str, ...] = () if is_2023 else (CRACK_DIRECTIONAL_LIMITATION,)
     else:
         candidate_finals = []
         for position, candidate in enumerate(case.evaluation.result.candidates, start=1):
-            created, candidate_final = _candidate_steps(
-                candidate,
-                position,
-                mechanics_roots,
-                dk_na=replay.dk_na,
-            )
+            if is_2023:
+                created, candidate_final = _bending_candidate_steps_2023(
+                    candidate,
+                    position,
+                    mechanics_roots,
+                    state=case.state,
+                    blocks=replay.blocks,
+                    selected_k1=float(controls["sls_k1"]),
+                )
+            else:
+                created, candidate_final = _candidate_steps(
+                    candidate,
+                    position,
+                    mechanics_roots,
+                    dk_na=replay.dk_na,
+                )
             steps.extend(created)
             candidate_finals.append(candidate_final)
         final = _step(
@@ -1610,15 +1919,21 @@ def _case_member(
         )
         states = FINITE_STATES
         branch = "calculated"
+        method_id = METHOD_2023_BENDING if is_2023 else route_identity.method_id
+        warnings = (CRACK_DIRECTIONAL_LIMITATION,)
     steps.append(final)
     axis_values = dict(
         crack_branch=branch,
         crack_case=case.name,
         crack_code=trace_identity_token(route_identity.code),
         crack_direction="dominant-strain-gradient",
-        crack_edition=EDITION,
+        crack_edition=route_identity.edition,
         crack_system="coarse" if case.coarse else "fine",
     )
+    if is_2023:
+        axis_values["crack_scope"] = (
+            "refined-bending" if branch == "calculated" else "not-applicable"
+        )
     if route_identity.axis is not None:
         axis_values["crack_route"] = route_identity.axis
     axes = context_axes(context, **axis_values)
@@ -1630,11 +1945,11 @@ def _case_member(
         calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
         title=f"{route_identity.title} {case.name} crack width",
-        method_id=route_identity.method_id,
+        method_id=method_id,
         axes=axes,
         final_step_id=final.step_id,
         steps=tuple(steps),
-        warnings=(CRACK_DIRECTIONAL_LIMITATION,),
+        warnings=warnings,
         assumptions=(
             (
                 "No crack limit, utilisation, resistance, or verdict is inferred."
@@ -1652,6 +1967,7 @@ def _aggregate_member(
     context: Mapping[str, Any],
 ) -> tuple[MemberShape, TraceCalculation]:
     route_identity = _route_identity(replay.dk_na, replay.route)
+    is_2023 = replay.route == "building-2023-calculated-bending"
     steps = _identity_steps(
         replay.inputs,
         source=INPUT,
@@ -1799,9 +2115,13 @@ def _aggregate_member(
         crack_branch=branch,
         crack_case="aggregate",
         crack_code=trace_identity_token(route_identity.code),
-        crack_edition=EDITION,
+        crack_edition=route_identity.edition,
         crack_member_cardinality=str(len(cases)),
     )
+    if is_2023:
+        axis_values["crack_scope"] = (
+            "aggregate" if branch == "calculated" else "not-applicable"
+        )
     if route_identity.axis is not None:
         axis_values["crack_route"] = route_identity.axis
     axes = context_axes(context, **axis_values)
@@ -1813,11 +2133,17 @@ def _aggregate_member(
         calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
         title=f"{route_identity.title} crack-width aggregate",
-        method_id=route_identity.method_id,
+        method_id=(METHOD_2023_AGGREGATE if is_2023 else route_identity.method_id),
         axes=axes,
         final_step_id=final.step_id,
         steps=tuple(steps),
-        warnings=(CRACK_DIRECTIONAL_LIMITATION,),
+        warnings=(
+            tuple(dict.fromkeys(
+                warning for case in cases for warning in case.warnings
+            ))
+            if is_2023
+            else (CRACK_DIRECTIONAL_LIMITATION,)
+        ),
         assumptions=(
             (
                 "Case order is long/short fine then long/short coarse; no verdict is implied."
@@ -1886,15 +2212,21 @@ def _failed_member(
         crack_branch="failed",
         crack_case="aggregate",
         crack_code=trace_identity_token(route_identity.code),
-        crack_edition=EDITION,
+        crack_edition=route_identity.edition,
     )
+    if replay.route == "building-2023-calculated-bending":
+        failed_axes["crack_scope"] = "failed"
     if route_identity.axis is not None:
         failed_axes["crack_route"] = route_identity.axis
     calculation = TraceCalculation(
         calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
         title=f"{route_identity.title} crack-width failure",
-        method_id=route_identity.method_id,
+        method_id=(
+            METHOD_2023_FAILED
+            if replay.route == "building-2023-calculated-bending"
+            else route_identity.method_id
+        ),
         axes=context_axes(context, **failed_axes),
         final_step_id=final.step_id,
         steps=tuple(steps),
@@ -1953,11 +2285,20 @@ def _expected_bundle(
     aggregate_shape, aggregate = _aggregate_member(
         replay, case_calculations, trace_context
     )
+    bundle_warnings = (
+        tuple(dict.fromkeys(
+            warning
+            for calculation in (*case_calculations, aggregate)
+            for warning in calculation.warnings
+        ))
+        if replay.route == "building-2023-calculated-bending"
+        else (CRACK_DIRECTIONAL_LIMITATION,)
+    )
     bundle = create_bundle(
         input_sha256=input_sha256,
         result_sha256=result_sha256,
         calculations=(*case_calculations, aggregate),
-        warnings=(CRACK_DIRECTIONAL_LIMITATION,),
+        warnings=bundle_warnings,
     )
     return audit_trace_registry(
         bundle,
@@ -1977,7 +2318,7 @@ def build_crack_trace_family(
     result_sha256: str,
     context: Mapping[str, Any] | None = None,
 ) -> TraceBundle | None:
-    """Build an exact active CT-009 2004 trace, or ``None`` when inactive."""
+    """Build an exact active CT-009 crack trace, or ``None`` when inactive."""
 
     return _expected_bundle(
         inp,
