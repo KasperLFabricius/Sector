@@ -1,4 +1,4 @@
-"""Independent CT-009 replay for the retained 2004 base crack method."""
+"""Independent CT-009 replay for retained 2004 crack-width methods."""
 
 from __future__ import annotations
 
@@ -33,10 +33,18 @@ from .calculation_trace import (
     validate_bundle,
 )
 from .crack_trace_contract import (
+    BASE_ROUTE,
     BOUNDARY,
     CODE,
     COVERAGE_ID,
     CRACK_WIDTH,
+    DK_CODE,
+    DK_CRACK_WIDTH_COARSE,
+    DK_EFFECTIVE_AREA_COARSE,
+    DK_EFFECTIVE_AREA_FINE,
+    DK_METHOD_ID,
+    DK_ROUTE,
+    DK_SPACING_CLOSE,
     EDITION,
     EFFECTIVE_AREA,
     ELASTIC,
@@ -120,9 +128,15 @@ _NON_OWNED_ELASTIC_KEYS = (
     "stress_outputs",
 )
 _PROPERTY_NAMES = ("area", "cx", "cy", "Ix", "Iy", "Ixy")
-_CASES = (
-    ("long-term", "crack", 0.4),
-    ("short-term", "crack_short", 0.6),
+_BASE_CASES = (
+    ("long-term", "crack", 0.4, False),
+    ("short-term", "crack_short", 0.6, False),
+)
+_DK_CASES = (
+    ("long-term-fine", "crack", 0.4, False),
+    ("short-term-fine", "crack_short", 0.6, False),
+    ("long-term-coarse", "crack_coarse", 0.4, True),
+    ("short-term-coarse", "crack_short_coarse", 0.6, True),
 )
 
 
@@ -131,6 +145,7 @@ class _CaseReplay:
     name: str
     output_key: str
     kt: float
+    coarse: bool
     modular_ratio: float
     evaluation: CrackWidthEvaluation
     state: Any | None
@@ -139,6 +154,7 @@ class _CaseReplay:
 
 @dataclass(frozen=True, slots=True)
 class _SuccessfulReplay:
+    dk_na: bool
     inputs: tuple[tuple[str, Any], ...]
     sibling_shape: Any
     retained: Mapping[str, Any]
@@ -153,8 +169,10 @@ class _SuccessfulReplay:
 
 @dataclass(frozen=True, slots=True)
 class _FailedReplay:
+    dk_na: bool
     inputs: tuple[tuple[str, Any], ...]
     output_shape: Any
+    metadata: tuple[tuple[str, Any], ...]
 
 
 def _mapping(value: Any, label: str, *, exact: bool = False) -> Mapping[str, Any]:
@@ -336,7 +354,7 @@ def _digest(value: Any) -> tuple[float, ...]:
     )
 
 
-def _active(inp: Mapping[str, Any]) -> bool:
+def _active_route(inp: Mapping[str, Any]) -> bool | None:
     mode = _required(inp, "mode")
     enabled = _required(inp, "sls_cw")
     if type(mode) is not str:
@@ -344,7 +362,7 @@ def _active(inp: Mapping[str, Any]) -> bool:
     if type(enabled) is not bool:
         raise TraceValidationError("sls_cw must retain Boolean type")
     if mode not in _MODES or not enabled:
-        return False
+        return None
 
     code = _required(inp, "sls_code")
     edition = _required(inp, "sls_edition")
@@ -353,17 +371,26 @@ def _active(inp: Mapping[str, Any]) -> bool:
         raise TraceValidationError("sls_code and sls_edition must retain text type")
     if type(dk_na) is not bool:
         raise TraceValidationError("sls_dk_na must retain Boolean type")
-    if (code, edition, dk_na) != (CODE, EDITION, False):
-        return False
+    if edition != EDITION:
+        return None
+    if (code, dk_na) == (CODE, False):
+        selected_dk = False
+    elif (code, dk_na) == (DK_CODE, True):
+        selected_dk = True
+    else:
+        return None
 
     if "sls_crack_limit" in inp:
         raise TraceValidationError("removed sls_crack_limit cannot enter CT-009")
-    if type(_required(inp, "sls_member")) is not str:
+    member = _required(inp, "sls_member")
+    if type(member) is not str:
         raise TraceValidationError("sls_member must retain text type")
+    if selected_dk and member not in {"Beam", "Slab"}:
+        raise TraceValidationError("DK crack member must be Beam or Slab")
     tendon_xi = _required(inp, "sls_tendon_xi")
     if type(tendon_xi) not in {int, float} or type(tendon_xi) is bool:
         raise TraceValidationError("sls_tendon_xi must retain built-in numeric type")
-    return True
+    return selected_dk
 
 
 def _validate_rings(inp: Mapping[str, Any], blocks: SectionTraceBlocks) -> None:
@@ -486,7 +513,7 @@ def _assignment_identity(inp: Mapping[str, Any], key: str) -> Any:
 
 
 def _input_identity(
-    inp: Mapping[str, Any], blocks: SectionTraceBlocks
+    inp: Mapping[str, Any], blocks: SectionTraceBlocks, *, dk_na: bool
 ) -> tuple[tuple[str, Any], ...]:
     geometry = tuple(
         (key, _required(inp, key))
@@ -526,7 +553,9 @@ def _input_identity(
         ("bar_elements", _assignment_identity(inp, "bar_elements")),
         ("tendon_elements", _assignment_identity(inp, "tendon_elements")),
     )
-    inert = frozenset({"sls_member", "sls_tendon_xi"})
+    inert = frozenset(
+        {"sls_tendon_xi"} | ({"sls_member"} if not dk_na else set())
+    )
     controls = []
     for key in (
         "mode",
@@ -739,8 +768,13 @@ def _validate_success(
 
 
 def _validate_failure(
-    out: Mapping[str, Any], candidate: Mapping[str, Any], *, cracked: bool
-) -> Any:
+    out: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    cracked: bool,
+    dk_na: bool,
+    member: str,
+) -> tuple[Any, tuple[tuple[str, Any], ...]]:
     owned = tuple(key for key in candidate if _is_owned(key))
     expected = (
         "converged",
@@ -754,7 +788,12 @@ def _validate_failure(
         "crack",
         "crack_short",
         *(
-            ("crack_code", "crack_edition", "crack_member")
+            (
+                "crack_code",
+                "crack_edition",
+                "crack_member",
+                *(("crack_coarse", "crack_short_coarse") if dk_na else ()),
+            )
             if cracked
             else ()
         ),
@@ -765,6 +804,15 @@ def _validate_failure(
     _sibling_shape(out, candidate)
     if candidate["converged"] is not False:
         raise TraceValidationError("failed CT-009 output requires converged is False")
+    metadata: dict[str, Any] = {}
+    if cracked:
+        metadata = {
+            "crack_code": DK_CODE if dk_na else CODE,
+            "crack_edition": EDITION,
+            "crack_member": member if dk_na else None,
+        }
+        for key, value in metadata.items():
+            _assert_exact(candidate[key], value, f"failed elastic.{key}")
     _assert_exact(
         candidate["crack_output"],
         {
@@ -776,11 +824,14 @@ def _validate_failure(
         },
         "failed crack_output",
     )
-    return _type_tree(out)
+    return (
+        _type_tree(out),
+        tuple(metadata.items()) if dk_na else (),
+    )
 
 
 def _reconstruct(
-    inp: Mapping[str, Any], out: Mapping[str, Any]
+    inp: Mapping[str, Any], out: Mapping[str, Any], *, dk_na: bool
 ) -> _SuccessfulReplay | _FailedReplay:
     values = _numeric_inputs(inp)
     try:
@@ -793,7 +844,7 @@ def _reconstruct(
     except (KeyError, TypeError, ValueError) as exc:
         raise TraceValidationError(f"invalid CT-009 section identity: {exc}") from exc
 
-    identity = _input_identity(inp, blocks)
+    identity = _input_identity(inp, blocks, dk_na=dk_na)
     materials = (*blocks.bars, *blocks.tendons)
     moduli = np.asarray(
         [_material_value(item, "Es", positive=True) for item in materials],
@@ -843,6 +894,8 @@ def _reconstruct(
             for item in records
         ]
     k1 = [values["sls_k1"]] * len(blocks.bars) + [1.6] * len(blocks.tendons)
+    member = _required(inp, "sls_member")
+    include_hx = not dk_na or member == "Slab" or bool(blocks.tendons)
     sustained = analyse_cracking(
         section,
         long_force,
@@ -855,6 +908,8 @@ def _reconstruct(
         kt=0.4,
         bar_diameter=diameter,
         k1=k1,
+        k3_cover_dependent=dk_na,
+        include_hx_term=include_hx,
         edition=EDITION,
         n_mult=multipliers,
         prestress_stress=locked_stress,
@@ -891,9 +946,18 @@ def _reconstruct(
         and bool(sustained.cracked_state.converged)
     )
     if not converged:
+        output_shape, failure_metadata = _validate_failure(
+            out,
+            candidate,
+            cracked=cracked,
+            dk_na=dk_na,
+            member=member,
+        )
         return _FailedReplay(
+            dk_na,
             identity,
-            _validate_failure(out, candidate, cracked=cracked),
+            output_shape,
+            failure_metadata,
         )
 
     uncracked_properties = transformed_properties(
@@ -925,30 +989,32 @@ def _reconstruct(
             ["mild"] * len(blocks.bars)
             + ["prestress"] * len(blocks.tendons)
         )
+        case_specs = _DK_CASES if dk_na else _BASE_CASES
         evaluations = tuple(
             evaluate_crack_width(
                 section,
-                state,
-                ratio,
+                states[0 if name.startswith("long-term") else 1],
+                values["nl" if name.startswith("long-term") else "ns"],
                 fctm=values["sls_fctm"],
                 Es=moduli,
                 kt=kt,
                 bar_diameter=diameter,
                 k1=k1,
+                k3_cover_dependent=dk_na,
+                include_hx_term=include_hx,
+                coarse=coarse,
                 edition=EDITION,
                 n_mult=multipliers,
                 reinforcement_types=reinforcement_types,
                 bond_ratio_xi=None,
             )
-            for state, ratio, (_name, _key, kt) in zip(
-                states, (values["nl"], values["ns"]), _CASES
-            )
+            for name, _key, kt, coarse in case_specs
         )
     else:
-        states = (None, None)
-        evaluations = (
-            CrackWidthEvaluation("NOT APPLICABLE", "The section is uncracked."),
-            CrackWidthEvaluation("NOT APPLICABLE", "The section is uncracked."),
+        case_specs = _DK_CASES if dk_na else _BASE_CASES
+        evaluations = tuple(
+            CrackWidthEvaluation("NOT APPLICABLE", "The section is uncracked.")
+            for _case in case_specs
         )
 
     cases = tuple(
@@ -956,16 +1022,21 @@ def _reconstruct(
             name=name,
             output_key=key,
             kt=kt,
-            modular_ratio=ratio,
+            coarse=coarse,
+            modular_ratio=values[
+                "nl" if name.startswith("long-term") else "ns"
+            ],
             evaluation=evaluation,
-            state=state,
+            state=(
+                None
+                if not cracked
+                else states[0 if name.startswith("long-term") else 1]
+            ),
             output=_result_payload(evaluation.result, blocks),
         )
-        for (name, key, kt), ratio, evaluation, state in zip(
-            _CASES,
-            (values["nl"], values["ns"]),
+        for (name, key, kt, coarse), evaluation in zip(
+            case_specs,
             evaluations,
-            states,
         )
     )
     expected: dict[str, Any] = {
@@ -986,17 +1057,33 @@ def _reconstruct(
     }
     if cracked:
         expected.update(
-            crack_code=CODE,
+            crack_code=DK_CODE if dk_na else CODE,
             crack_edition=EDITION,
-            crack_member=None,
+            crack_member=member if dk_na else None,
         )
+        if dk_na:
+            expected.update(
+                crack_coarse=cases[2].output,
+                crack_short_coarse=cases[3].output,
+            )
+    labels = (
+        (
+            "Long-term (fine)",
+            "Short-term (fine)",
+            "Long-term (coarse)",
+            "Short-term (coarse)",
+        )
+        if dk_na
+        else ("Long-term", "Short-term")
+    )
     expected["crack_output"] = crack_outputs(
-        {"Long-term": cases[0].output, "Short-term": cases[1].output},
+        {label: case.output for label, case in zip(labels, cases)},
         valid=True,
     )
     sibling_shape = _sibling_shape(out, candidate)
     _validate_success(candidate, expected)
     return _SuccessfulReplay(
+        dk_na=dk_na,
         inputs=identity,
         sibling_shape=sibling_shape,
         retained=expected,
@@ -1082,6 +1169,28 @@ def _identity_steps(
     return steps
 
 
+def _route_steps(
+    *,
+    dk_na: bool,
+    dependencies: Sequence[TraceStep],
+) -> list[TraceStep]:
+    if not dk_na:
+        return []
+    return [
+        _step(
+            f"route-building-dk-{position}",
+            f"Selected building-DK standards route {position}",
+            1.0,
+            ONE,
+            ROLE_COMPUTED,
+            source,
+            dependencies,
+            expression=f"Selected by exact {DK_CODE} controls identity",
+        )
+        for position, source in enumerate((BASE_ROUTE, DK_ROUTE), start=1)
+    ]
+
+
 def _shape(
     member_id: str,
     calculation: TraceCalculation,
@@ -1108,34 +1217,44 @@ def _candidate_steps(
     candidate: Any,
     position: int,
     dependencies: Sequence[TraceStep],
+    *,
+    dk_na: bool,
 ) -> tuple[list[TraceStep], TraceStep]:
     prefix = f"candidate-{position:04d}"
+    effective_area_source = (
+        DK_EFFECTIVE_AREA_COARSE
+        if dk_na and candidate.coarse
+        else DK_EFFECTIVE_AREA_FINE
+        if dk_na
+        else EFFECTIVE_AREA
+    )
+    spacing_source = (
+        SPACING_WIDE
+        if candidate.sr_max_geometric
+        else DK_SPACING_CLOSE
+        if dk_na
+        else SPACING_CLOSE
+    )
     quantities = (
         ("position", candidate.bar_index + 1, ONE, SELECTION),
         ("x", candidate.x, METRE, GEOMETRY),
         ("y", candidate.y, METRE, GEOMETRY),
         ("area", candidate.area, SQUARE_MILLIMETRE, GEOMETRY),
         ("sigma-s", candidate.sigma_s, MEGAPASCAL, ELASTIC),
-        ("hc-eff", candidate.hc_ef, METRE, EFFECTIVE_AREA),
-        ("ac-eff", candidate.ac_eff, SQUARE_METRE, EFFECTIVE_AREA),
-        ("as-eff", candidate.as_eff, SQUARE_METRE, EFFECTIVE_AREA),
-        ("ap-eff", candidate.ap_eff, SQUARE_METRE, EFFECTIVE_AREA),
+        ("hc-eff", candidate.hc_ef, METRE, effective_area_source),
+        ("ac-eff", candidate.ac_eff, SQUARE_METRE, effective_area_source),
+        ("as-eff", candidate.as_eff, SQUARE_METRE, effective_area_source),
+        ("ap-eff", candidate.ap_eff, SQUARE_METRE, effective_area_source),
         (
             "ap-eff-weighted",
             candidate.ap_eff_weighted,
             SQUARE_METRE,
-            EFFECTIVE_AREA,
+            effective_area_source,
         ),
-        ("rho-p-eff", candidate.rho_p_eff, ONE, EFFECTIVE_AREA),
+        ("rho-p-eff", candidate.rho_p_eff, ONE, effective_area_source),
         ("phi", candidate.phi, MILLIMETRE, GEOMETRY),
         ("cover", candidate.cover, MILLIMETRE, GEOMETRY),
         ("esm-ecm", candidate.esm_ecm, ONE, MEAN_STRAIN),
-        (
-            "sr-max",
-            candidate.sr_max,
-            MILLIMETRE,
-            SPACING_WIDE if candidate.sr_max_geometric else SPACING_CLOSE,
-        ),
     )
     steps = [
         _step(
@@ -1149,6 +1268,37 @@ def _candidate_steps(
         )
         for name, value, unit, source in quantities
     ]
+    spacing_dependencies = list(dependencies)
+    if dk_na and not candidate.sr_max_geometric:
+        cover_step = next(
+            step for step in steps if step.step_id == f"{prefix}-cover"
+        )
+        coefficient = (
+            3.4 * (25.0 / candidate.cover) ** (2.0 / 3.0)
+            if candidate.cover > 0.0
+            else 3.4
+        )
+        cover_coefficient = _step(
+            f"{prefix}-cover-coefficient",
+            "DK cover-dependent spacing coefficient",
+            coefficient,
+            ONE,
+            ROLE_COMPUTED,
+            DK_SPACING_CLOSE,
+            (cover_step,),
+            expression="k3 = 3.4(25/c)^(2/3), with c=0 fallback k3=3.4",
+        )
+        steps.append(cover_coefficient)
+        spacing_dependencies.append(cover_coefficient)
+    steps.append(_step(
+        f"{prefix}-sr-max",
+        "Sr Max",
+        candidate.sr_max,
+        MILLIMETRE,
+        ROLE_COMPUTED,
+        spacing_source,
+        spacing_dependencies,
+    ))
     categorical = (
         candidate.reinforcement_type,
         candidate.scope,
@@ -1176,9 +1326,13 @@ def _candidate_steps(
         candidate.wk,
         MILLIMETRE,
         ROLE_COMPUTED,
-        CRACK_WIDTH,
+        DK_CRACK_WIDTH_COARSE if dk_na and candidate.coarse else CRACK_WIDTH,
         steps,
-        expression="w_k = s_r,max * (epsilon_sm - epsilon_cm)",
+        expression=(
+            "w_k = 0.5 * s_r,max * (epsilon_sm - epsilon_cm)"
+            if dk_na and candidate.coarse
+            else "w_k = s_r,max * (epsilon_sm - epsilon_cm)"
+        ),
     )
     steps.append(width)
     return steps, width
@@ -1196,6 +1350,11 @@ def _case_member(
         prefix="input",
     )
     input_roots = tuple(steps)
+    route_steps = _route_steps(
+        dk_na=replay.dk_na,
+        dependencies=input_roots,
+    )
+    steps.extend(route_steps)
     boundary_steps = _identity_steps(
         (
             (f"{case.name}-retained-output", case.output),
@@ -1203,12 +1362,12 @@ def _case_member(
         ),
         source=BOUNDARY,
         role=ROLE_COMPUTED,
-        dependencies=input_roots,
+        dependencies=(*input_roots, *route_steps),
         prefix="output",
     )
     steps.extend(boundary_steps)
     controls = dict(dict(replay.inputs)["controls"])
-    suffix = "l" if case.name == "long-term" else "s"
+    suffix = "l" if case.name.startswith("long-term") else "s"
     actions = [
         _step(
             f"input-{key.lower()}",
@@ -1242,9 +1401,52 @@ def _case_member(
             MEAN_STRAIN,
         ),
     ]
+    if replay.dk_na:
+        system_source = (
+            DK_CRACK_WIDTH_COARSE if case.coarse else CRACK_WIDTH
+        )
+        methods.append(_step(
+            "case-system-factor",
+            "Selected crack-system factor",
+            0.5 if case.coarse else 1.0,
+            ONE,
+            ROLE_COMPUTED,
+            system_source,
+            (*input_roots, *route_steps),
+            expression=(
+                "DK coarse system uses one-half width factor"
+                if case.coarse
+                else "DK fine system uses the full width expression"
+            ),
+        ))
+        if not case.coarse:
+            include_hx = (
+                dict(dict(replay.inputs)["controls"])["sls_member"] == "Slab"
+                or bool(replay.blocks.tendons)
+            )
+            methods.append(_step(
+                "case-fine-effective-height-rule",
+                "Selected DK fine effective-height member rule",
+                1.0 if include_hx else 0.0,
+                ONE,
+                ROLE_COMPUTED,
+                DK_EFFECTIVE_AREA_FINE,
+                input_roots,
+                expression=(
+                    "Include (h-x)/3 for slab or prestressed member"
+                    if include_hx
+                    else "Omit (h-x)/3 for ordinary beam"
+                ),
+            ))
     steps.extend(actions)
     steps.extend(methods)
-    roots = (*input_roots, *boundary_steps, *actions, *methods)
+    roots = (
+        *input_roots,
+        *route_steps,
+        *boundary_steps,
+        *actions,
+        *methods,
+    )
 
     planes: list[TraceStep] = []
     stresses: list[TraceStep] = []
@@ -1308,7 +1510,10 @@ def _case_member(
         candidate_finals = []
         for position, candidate in enumerate(case.evaluation.result.candidates, start=1):
             created, candidate_final = _candidate_steps(
-                candidate, position, mechanics_roots
+                candidate,
+                position,
+                mechanics_roots,
+                dk_na=replay.dk_na,
             )
             steps.extend(created)
             candidate_finals.append(candidate_final)
@@ -1325,26 +1530,41 @@ def _case_member(
         states = FINITE_STATES
         branch = "calculated"
     steps.append(final)
-    axes = context_axes(
-        context,
+    axis_values = dict(
         crack_branch=branch,
         crack_case=case.name,
-        crack_code=trace_identity_token(CODE),
+        crack_code=trace_identity_token(DK_CODE if replay.dk_na else CODE),
         crack_direction="dominant-strain-gradient",
         crack_edition=EDITION,
-        crack_system="fine",
+        crack_system="coarse" if case.coarse else "fine",
+    )
+    if replay.dk_na:
+        axis_values["crack_route"] = "building-dk"
+    axes = context_axes(context, **axis_values)
+    calculation_id = (
+        f"ct-009-{context_id(context)}-{case.name}-building-dk-crack-width"
+        if replay.dk_na
+        else f"ct-009-{context_id(context)}-{case.name}-base-crack-width"
     )
     calculation = TraceCalculation(
-        calculation_id=f"ct-009-{context_id(context)}-{case.name}-base-crack-width",
+        calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
-        title=f"EN 1992-1-1:2004 {case.name} crack width",
-        method_id=METHOD_ID,
+        title=(
+            f"DS/EN 1992-1-1:2004 with DK NA:2024 {case.name} crack width"
+            if replay.dk_na
+            else f"EN 1992-1-1:2004 {case.name} crack width"
+        ),
+        method_id=DK_METHOD_ID if replay.dk_na else METHOD_ID,
         axes=axes,
         final_step_id=final.step_id,
         steps=tuple(steps),
         warnings=(CRACK_DIRECTIONAL_LIMITATION,),
         assumptions=(
-            "No crack limit, utilisation, verdict, DK rule, or bridge rule is inferred.",
+            (
+                "No crack limit, utilisation, resistance, or verdict is inferred."
+                if replay.dk_na
+                else "No crack limit, utilisation, verdict, DK rule, or bridge rule is inferred."
+            ),
         ),
     )
     return _shape(case.name, calculation, states), calculation
@@ -1362,6 +1582,11 @@ def _aggregate_member(
         prefix="input",
     )
     inputs = tuple(steps)
+    route_steps = _route_steps(
+        dk_na=replay.dk_na,
+        dependencies=inputs,
+    )
+    steps.extend(route_steps)
     boundary = _identity_steps(
         (
             ("retained-output", replay.retained),
@@ -1369,11 +1594,11 @@ def _aggregate_member(
         ),
         source=BOUNDARY,
         role=ROLE_COMPUTED,
-        dependencies=inputs,
+        dependencies=(*inputs, *route_steps),
         prefix="output",
     )
     steps.extend(boundary)
-    roots = (*inputs, *boundary)
+    roots = (*inputs, *route_steps, *boundary)
     state_steps = [
         _step(
             "retained-converged",
@@ -1492,25 +1717,40 @@ def _aggregate_member(
         states = UNDEFINED_STATES
         branch = "not-applicable"
     steps.append(final)
-    axes = context_axes(
-        context,
+    axis_values = dict(
         crack_branch=branch,
         crack_case="aggregate",
-        crack_code=trace_identity_token(CODE),
+        crack_code=trace_identity_token(DK_CODE if replay.dk_na else CODE),
         crack_edition=EDITION,
         crack_member_cardinality=str(len(cases)),
     )
+    if replay.dk_na:
+        axis_values["crack_route"] = "building-dk"
+    axes = context_axes(context, **axis_values)
+    calculation_id = (
+        f"ct-009-{context_id(context)}-building-dk-crack-width-aggregate"
+        if replay.dk_na
+        else f"ct-009-{context_id(context)}-base-crack-width-aggregate"
+    )
     calculation = TraceCalculation(
-        calculation_id=f"ct-009-{context_id(context)}-base-crack-width-aggregate",
+        calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
-        title="EN 1992-1-1:2004 crack-width aggregate",
-        method_id=METHOD_ID,
+        title=(
+            "DS/EN 1992-1-1:2004 with DK NA:2024 crack-width aggregate"
+            if replay.dk_na
+            else "EN 1992-1-1:2004 crack-width aggregate"
+        ),
+        method_id=DK_METHOD_ID if replay.dk_na else METHOD_ID,
         axes=axes,
         final_step_id=final.step_id,
         steps=tuple(steps),
         warnings=(CRACK_DIRECTIONAL_LIMITATION,),
         assumptions=(
-            "Case order is long-term then short-term; no verdict is implied.",
+            (
+                "Case order is long/short fine then long/short coarse; no verdict is implied."
+                if replay.dk_na
+                else "Case order is long-term then short-term; no verdict is implied."
+            ),
         ),
     )
     return _shape("aggregate", calculation, states), calculation
@@ -1527,14 +1767,27 @@ def _failed_member(
         prefix="input",
     )
     inputs = tuple(steps)
+    route_steps = _route_steps(
+        dk_na=replay.dk_na,
+        dependencies=inputs,
+    )
+    steps.extend(route_steps)
     output = _identity_steps(
         (("failure-output-structure", replay.output_shape),),
         source=BOUNDARY,
         role=ROLE_COMPUTED,
-        dependencies=inputs,
+        dependencies=(*inputs, *route_steps),
         prefix="output",
     )
     steps.extend(output)
+    metadata = _identity_steps(
+        replay.metadata,
+        source=BOUNDARY,
+        role=ROLE_COMPUTED,
+        dependencies=(*inputs, *route_steps),
+        prefix="metadata",
+    )
+    steps.extend(metadata)
     final = _step(
         "crack-width-failed-result",
         "Crack-width replay failure",
@@ -1542,7 +1795,7 @@ def _failed_member(
         MILLIMETRE,
         ROLE_FINAL,
         BOUNDARY,
-        (*inputs, *output),
+        (*inputs, *route_steps, *output, *metadata),
         result=TraceResult(
             RESULT_FAILED,
             None,
@@ -1550,18 +1803,29 @@ def _failed_member(
         ),
     )
     steps.append(final)
+    calculation_id = (
+        f"ct-009-{context_id(context)}-building-dk-crack-width-failed"
+        if replay.dk_na
+        else f"ct-009-{context_id(context)}-base-crack-width-failed"
+    )
+    failed_axes = dict(
+        crack_branch="failed",
+        crack_case="aggregate",
+        crack_code=trace_identity_token(DK_CODE if replay.dk_na else CODE),
+        crack_edition=EDITION,
+    )
+    if replay.dk_na:
+        failed_axes["crack_route"] = "building-dk"
     calculation = TraceCalculation(
-        calculation_id=f"ct-009-{context_id(context)}-base-crack-width-failed",
+        calculation_id=calculation_id,
         coverage_id=COVERAGE_ID,
-        title="EN 1992-1-1:2004 crack-width failure",
-        method_id=METHOD_ID,
-        axes=context_axes(
-            context,
-            crack_branch="failed",
-            crack_case="aggregate",
-            crack_code=trace_identity_token(CODE),
-            crack_edition=EDITION,
+        title=(
+            "DS/EN 1992-1-1:2004 with DK NA:2024 crack-width failure"
+            if replay.dk_na
+            else "EN 1992-1-1:2004 crack-width failure"
         ),
+        method_id=DK_METHOD_ID if replay.dk_na else METHOD_ID,
+        axes=context_axes(context, **failed_axes),
         final_step_id=final.step_id,
         steps=tuple(steps),
         assumptions=(
@@ -1581,13 +1845,14 @@ def _expected_bundle(
 ) -> TraceBundle | None:
     input_mapping = _mapping(inp, "CT-009 input")
     trace_context = {} if context is None else _mapping(context, "CT-009 context")
-    if not _active(input_mapping):
+    dk_na = _active_route(input_mapping)
+    if dk_na is None:
         return None
     if _required(input_mapping, "section") is None:
         return None
     output_mapping = _mapping(out, "analysis output", exact=True)
 
-    replay = _reconstruct(input_mapping, output_mapping)
+    replay = _reconstruct(input_mapping, output_mapping, dk_na=dk_na)
     if isinstance(replay, _FailedReplay):
         shape, calculation = _failed_member(replay, trace_context)
         bundle = create_bundle(
@@ -1595,7 +1860,10 @@ def _expected_bundle(
             result_sha256=result_sha256,
             calculations=(calculation,),
         )
-        return audit_trace_registry(bundle, registry_for((shape,)))
+        return audit_trace_registry(
+            bundle,
+            registry_for((shape,), dk_na=replay.dk_na),
+        )
 
     pairs = tuple(
         _case_member(replay, case, trace_context) for case in replay.cases
@@ -1613,7 +1881,10 @@ def _expected_bundle(
     )
     return audit_trace_registry(
         bundle,
-        registry_for((*case_shapes, aggregate_shape)),
+        registry_for(
+            (*case_shapes, aggregate_shape),
+            dk_na=replay.dk_na,
+        ),
     )
 
 
@@ -1625,7 +1896,7 @@ def build_crack_trace_family(
     result_sha256: str,
     context: Mapping[str, Any] | None = None,
 ) -> TraceBundle | None:
-    """Build the exact CT-009 base trace, or ``None`` when inactive."""
+    """Build an exact active CT-009 2004 trace, or ``None`` when inactive."""
 
     return _expected_bundle(
         inp,
