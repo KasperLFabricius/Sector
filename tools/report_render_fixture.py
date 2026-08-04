@@ -15,6 +15,7 @@ import functools
 import io
 import math
 import pathlib
+import re
 import sys
 
 from PIL import Image
@@ -1287,6 +1288,40 @@ def validate_pdf_content(pdf: bytes) -> str:
     ):
         if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected report content is missing: {expected}")
+
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    furniture_prefixes = ("Project:", "Rev:", "Sector 0.91", "Page ")
+    for number, page_text in enumerate(page_texts, start=1):
+        semantic_lines = [
+            line.strip()
+            for line in page_text.splitlines()
+            if line.strip() and not line.strip().startswith(furniture_prefixes)
+        ]
+        if not semantic_lines:
+            raise AssertionError(
+                f"report page {number} contains only document-control furniture"
+            )
+
+        for label in re.findall(r"\bSee (Table \d+\.\d+)\.", page_text):
+            if page_text.count(label) < 2:
+                raise AssertionError(
+                    f"report page {number} strands {label!r} away from its table"
+                )
+
+    overview_pages = [
+        number
+        for number, page_text in enumerate(page_texts, start=1)
+        if "Results overview across calculated checks" in page_text
+    ]
+    governing_note_pages = [
+        number
+        for number, page_text in enumerate(page_texts, start=1)
+        if "Gov. marks the highest PASS/FAIL utilisation" in page_text
+    ]
+    if overview_pages != governing_note_pages or len(overview_pages) != 1:
+        raise AssertionError(
+            "the stable results overview no longer fits one complete page"
+        )
     return text
 
 

@@ -34,7 +34,8 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
+from reportlab.platypus import (CondPageBreak, Image, KeepTogether,
+                                NotAtTopPageBreak, PageBreak, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
 import case_analysis
@@ -62,6 +63,8 @@ _REPORT_FRAME_PADDING = 6.0
 _A4_FRAME_USABLE_HEIGHT = A4[1] - 45 * mm - 2 * _REPORT_FRAME_PADDING
 _MIN_REPORT_TABLE_FONT = 7.2
 _REPORT_TABLE_HORIZONTAL_PADDING = 3.0
+_PUBLICATION_START_HEIGHT = 55 * mm
+_PUBLICATION_HEADING_START_HEIGHT = 65 * mm
 _ASSESSMENT_PALETTE = {
     "PASS": ("#E8F5E9", "#1B5E20"),
     "OK": ("#E8F5E9", "#1B5E20"),
@@ -776,7 +779,9 @@ class ReportBuilder:
         self._publication_subsection_title = Paragraph(
             _greek(str(text)), self.s["small"]
         ).getPlainText().strip()
-        self.flow.append(Paragraph(_greek(text), self.s["h2"]))
+        heading = Paragraph(_greek(text), self.s["h2"])
+        heading._sector_subsection_heading = True
+        self.flow.append(heading)
 
     def _p(self, text):
         self.flow.append(Paragraph(_greek(text), self.s["body"]))
@@ -952,6 +957,7 @@ class ReportBuilder:
         table_item = self._publication_counter.issue(
             "Table", "Results overview across calculated checks"
         )
+        self._publication_start()
         self.flow.append(Paragraph(
             f'See <link href="#{table_item.anchor}">{table_item.label}</link>.',
             self.s["publication_ref"],
@@ -986,8 +992,8 @@ class ReportBuilder:
             ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
             ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 1.2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
         ]
         style.extend(context_style)
         fills = {
@@ -1025,6 +1031,19 @@ class ReportBuilder:
     def _gap(self, h=4):
         self.flow.append(Spacer(1, h))
 
+    def _publication_start(self):
+        """Reserve a table start before an immediately preceding heading."""
+        if (
+            self.flow
+            and getattr(self.flow[-1], "_sector_subsection_heading", False)
+        ):
+            self.flow.insert(
+                len(self.flow) - 1,
+                CondPageBreak(_PUBLICATION_HEADING_START_HEIGHT),
+            )
+            return
+        self.flow.append(CondPageBreak(_PUBLICATION_START_HEIGHT))
+
     def _page_break(self):
         """Start a page without carrying a layout-only trailing gap onto it."""
         while self.flow:
@@ -1039,7 +1058,7 @@ class ReportBuilder:
                     self.flow.pop()
                     continue
             break
-        self.flow.append(PageBreak())
+        self.flow.append(NotAtTopPageBreak())
 
     def _keep_from(self, start):
         """Keep the flowables added since ``start`` together when they fit a page."""
@@ -1383,6 +1402,7 @@ class ReportBuilder:
             if first_header.lower() not in subject.lower():
                 caption += f": {first_header}"
         table_item = self._publication_counter.issue("Table", str(caption))
+        self._publication_start()
         self.flow.append(Paragraph(
             f'See <link href="#{table_item.anchor}">{table_item.label}</link>.',
             self.s["publication_ref"],
@@ -1559,7 +1579,7 @@ class ReportBuilder:
         self._tick(0.2, "Section and materials...")
         self._inputs()
         if self._base_out.get("clear_spacing") is not None:
-            self.flow.append(PageBreak())
+            self.flow.append(NotAtTopPageBreak())
             self.inp, self.out = self._base_inp, self._base_out
             self._clear_spacing()
         jobs = []
@@ -1602,17 +1622,17 @@ class ReportBuilder:
                 fraction = 0.42 + 0.5 * (index / max(len(jobs), 1))
                 self._tick(fraction, label)
                 if new_page:
-                    self.flow.append(PageBreak())
+                    self.flow.append(NotAtTopPageBreak())
                 getattr(self, method)()
         finally:
             self.inp, self.out = self._base_inp, self._base_out
         if self._base_out.get("fatigue") is not None:
             self._tick(0.88, "Grouped fatigue...")
-            self.flow.append(PageBreak())
+            self.flow.append(NotAtTopPageBreak())
             self._fatigue()
         if self._base_out.get("bridge") is not None:
             self._tick(0.9, "Independent bridge calculations...")
-            self.flow.append(PageBreak())
+            self.flow.append(NotAtTopPageBreak())
             self._bridge()
         if self.qa_appendix:
             self._appendix()
