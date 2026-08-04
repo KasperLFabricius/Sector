@@ -56,6 +56,13 @@ _GREY = colors.HexColor("#5A5A5A")
 _LINE = colors.HexColor("#9AA5B1")
 _HEAD_BG = colors.HexColor("#E8ECF2")
 _A4_CONTENT_WIDTH = A4[0] - 40 * mm
+_MIN_REPORT_TABLE_FONT = 7.2
+_REPORT_TABLE_HORIZONTAL_PADDING = 3.0
+_NUMERIC_TABLE_WORD = re.compile(
+    r"(?<![A-Za-z0-9_.])"
+    r"[+-]?(?:(?:\d+(?:[.,]\d*)?)|(?:[.,]\d+))(?:[eE][+-]?\d+)?%?"
+    r"(?![A-Za-z0-9_.])"
+)
 _CRACK_CANDIDATE_COL_WIDTHS = tuple(
     value * mm
     for value in (17, 7, 16, 13, 13, 10, 10, 17, 18, 18, 13, 13)
@@ -727,7 +734,122 @@ class ReportBuilder:
         if ref:
             self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
 
-    def _table(self, data, widths, header=True, font=8.5, keep=True):
+    @staticmethod
+    def _table_width_floor(cells, nominal_widths):
+        """Return the smallest lossless width for each authored column."""
+        floors = []
+        for column in range(len(cells[0])):
+            authored_content_width = max(
+                0.0,
+                float(nominal_widths[column])
+                - 2 * _REPORT_TABLE_HORIZONTAL_PADDING,
+            )
+            widest = 0.0
+            for row in cells:
+                cell = row[column]
+                text = cell.getPlainText().strip()
+                measured = cell.minWidth()
+                numeric_width = max(
+                    (
+                        pdfmetrics.stringWidth(
+                            match.group(0),
+                            cell.style.fontName,
+                            cell.style.fontSize,
+                        )
+                        for match in _NUMERIC_TABLE_WORD.finditer(text)
+                    ),
+                    default=0.0,
+                )
+                # ReportLab losslessly splits long words. Cap descriptions and
+                # machine identities at the column's authored semantic width, but
+                # retain every numeric word as an independently measured atom even
+                # when it shares the cell with a unit or annotation.
+                measured = max(
+                    min(measured, authored_content_width),
+                    numeric_width,
+                )
+                widest = max(widest, measured)
+            floors.append(widest + 2 * _REPORT_TABLE_HORIZONTAL_PADDING)
+        return floors
+
+    @staticmethod
+    def _fit_table_widths(preferred, floors, available=_A4_CONTENT_WIDTH):
+        """Reallocate preferred widths without crossing any content floor."""
+        if sum(floors) > available + 1e-7:
+            return None
+        target = [
+            max(float(width), floor)
+            for width, floor in zip(preferred, floors)
+        ]
+        if sum(target) <= available + 1e-7:
+            return target
+        growth = [width - floor for width, floor in zip(target, floors)]
+        total_growth = sum(growth)
+        if total_growth <= 0.0:
+            return list(floors)
+        distributable = available - sum(floors)
+        return [
+            floor + distributable * extra / total_growth
+            for floor, extra in zip(floors, growth)
+        ]
+
+    @staticmethod
+    def _table_column_panels(
+        floors,
+        repeated_columns,
+        available=_A4_CONTENT_WIDTH,
+    ):
+        """Partition a wide table into ordered panels with identity columns."""
+        column_count = len(floors)
+        if sum(floors) <= available + 1e-7:
+            return [tuple(range(column_count))]
+        repeat_count = max(
+            0,
+            min(int(repeated_columns), column_count - 1),
+        )
+        identity = tuple(range(repeat_count))
+        panels = []
+        current = []
+        for column in range(repeat_count, column_count):
+            proposed = (*identity, *current, column)
+            if sum(floors[index] for index in proposed) > available + 1e-7:
+                if not current:
+                    raise ValueError(
+                        "A report table contains an indivisible numeric token "
+                        "wider than the available A4 content width."
+                    )
+                panels.append((*identity, *current))
+                current = [column]
+                if (
+                    sum(floors[index] for index in (*identity, column))
+                    > available + 1e-7
+                ):
+                    raise ValueError(
+                        "A report table contains an indivisible numeric token "
+                        "wider than the available A4 content width."
+                    )
+            else:
+                current.append(column)
+        panels.append((*identity, *current))
+        return panels
+
+    def _table(
+        self,
+        data,
+        widths,
+        header=True,
+        font=8.5,
+        keep=True,
+        repeat_cols=1,
+    ):
+        if not data or not data[0]:
+            raise ValueError("A report table requires at least one cell.")
+        column_count = len(data[0])
+        if any(len(row) != column_count for row in data):
+            raise ValueError("Every report table row must retain the same columns.")
+        if len(widths) != column_count:
+            raise ValueError("Report table widths must match the column count.")
+        font = max(float(font), _MIN_REPORT_TABLE_FONT)
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
                               fontName=_FONT, leading=font + 2)
         head = ParagraphStyle("ch", parent=body, fontName=_FONT_BOLD)
@@ -740,26 +862,57 @@ class ReportBuilder:
                                     alignment=TA_LEFT if ci == 0 else TA_CENTER)
                 cells.append(Paragraph(_greek(str(cell)), st))
             rows.append(cells)
+        floors = self._table_width_floor(rows, widths)
+        panels = self._table_column_panels(floors, repeat_cols)
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
         # Any table can outgrow one page when it contains user-pasted geometry or
         # reinforcement. Repeat the labelled header regardless of whether the normal
         # short-table path first tries to keep the table together.
-        t = Table(
-            rows,
-            colWidths=widths,
-            hAlign="LEFT",
-            repeatRows=1 if header else 0,
-        )
-        t.setStyle(TableStyle([
-            ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
-            ("BACKGROUND", (0, 0), (-1, 0), _HEAD_BG if header else colors.white),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ]))
-        self.flow.append(KeepTogether(t) if keep else t)
-        self._gap(4)
+        for panel_number, columns in enumerate(panels, start=1):
+            panel_floors = [floors[index] for index in columns]
+            panel_widths = self._fit_table_widths(
+                [widths[index] for index in columns],
+                panel_floors,
+            )
+            if panel_widths is None:
+                raise ValueError("Unable to fit a report table column panel.")
+            if len(panels) > 1:
+                self._small(
+                    f"<b>Column panel {panel_number} of {len(panels)}:</b> "
+                    + ", ".join(
+                        _html_escape(header_cell.getPlainText())
+                        for header_cell in (
+                            rows[0][index] for index in columns
+                        )
+                    )
+                )
+            panel_rows = [[row[index] for index in columns] for row in rows]
+            table = Table(
+                panel_rows,
+                colWidths=panel_widths,
+                hAlign="LEFT",
+                repeatRows=1 if header else 0,
+            )
+            table._sector_source_columns = tuple(columns)
+            table._sector_panel_number = panel_number
+            table._sector_panel_count = len(panels)
+            table._sector_width_floors = tuple(panel_floors)
+            table._sector_font_size = font
+            table.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
+                ("BACKGROUND", (0, 0), (-1, 0),
+                 _HEAD_BG if header else colors.white),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1),
+                 _REPORT_TABLE_HORIZONTAL_PADDING),
+                ("RIGHTPADDING", (0, 0), (-1, -1),
+                 _REPORT_TABLE_HORIZONTAL_PADDING),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            self.flow.append(KeepTogether(table) if keep else table)
+            self._gap(4)
 
     def _fig(self, fig, w_mm=150, h_mm=95):
         if not self.figures:
