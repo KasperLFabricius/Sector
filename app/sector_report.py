@@ -34,8 +34,9 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
-                                SimpleDocTemplate, Spacer, Table, TableStyle)
+from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak,
+                                Paragraph, SimpleDocTemplate, Spacer, Table,
+                                TableStyle)
 
 import case_analysis
 import fatigue_inputs
@@ -43,6 +44,7 @@ import fatigue_presentation
 import material_catalog
 from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
+from publication_style import STYLE, suppress_kaleido_server_kopts_warning
 import report_equation_contract
 import viz
 import result_presentation as presentation
@@ -53,14 +55,21 @@ from sector.build_info import short_revision
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
-_BLUE = colors.HexColor("#1F3B66")
-_GREY = colors.HexColor("#5A5A5A")
-_LINE = colors.HexColor("#9AA5B1")
-_HEAD_BG = colors.HexColor("#E8ECF2")
-_A4_CONTENT_WIDTH = A4[0] - 40 * mm
+_BLUE = colors.HexColor(STYLE.primary_hex)
+_GREY = colors.HexColor(STYLE.muted_hex)
+_LINE = colors.HexColor(STYLE.rule_hex)
+_HEAD_BG = colors.HexColor(STYLE.header_fill_hex)
+_REPORT_LEFT_MM, _REPORT_RIGHT_MM, _REPORT_TOP_MM, _REPORT_BOTTOM_MM = (
+    STYLE.report_margins_mm
+)
+_A4_CONTENT_WIDTH = A4[0] - (_REPORT_LEFT_MM + _REPORT_RIGHT_MM) * mm
 _REPORT_FRAME_PADDING = 6.0
-_A4_FRAME_USABLE_HEIGHT = A4[1] - 45 * mm - 2 * _REPORT_FRAME_PADDING
-_MIN_REPORT_TABLE_FONT = 7.2
+_A4_FRAME_USABLE_HEIGHT = (
+    A4[1]
+    - (_REPORT_TOP_MM + _REPORT_BOTTOM_MM) * mm
+    - 2 * _REPORT_FRAME_PADDING
+)
+_MIN_REPORT_TABLE_FONT = STYLE.minimum_table_size
 _REPORT_TABLE_HORIZONTAL_PADDING = 3.0
 _ASSESSMENT_PALETTE = {
     "PASS": ("#E8F5E9", "#1B5E20"),
@@ -482,11 +491,23 @@ class _ReportDocTemplate(SimpleDocTemplate):
             )
 
 
+class _NonBlankPageBreak(PageBreak):
+    """Force a new page unless automatic pagination already supplied one."""
+
+    def wrap(self, avail_width, avail_height):
+        frame = self._doctemplateAttr("frame")
+        if frame is not None and frame._atTop:
+            return 0, 0
+        return super().wrap(avail_width, avail_height)
+
+
 def _styles():
     ss = getSampleStyleSheet()
     out = {}
-    out["title"] = ParagraphStyle("t", parent=ss["Title"], fontSize=20,
-                                  fontName=_FONT_BOLD, textColor=_BLUE, spaceAfter=4)
+    out["title"] = ParagraphStyle("t", parent=ss["Title"],
+                                  fontSize=STYLE.title_size,
+                                  fontName=_FONT_BOLD, textColor=_BLUE,
+                                  spaceAfter=STYLE.spacing(4))
     out["subtitle"] = ParagraphStyle("st", parent=ss["Normal"], fontSize=11,
                                      fontName=_FONT, textColor=_GREY, spaceAfter=2)
     out["h1"] = ParagraphStyle("h1", parent=ss["Heading1"], fontSize=14,
@@ -495,8 +516,11 @@ def _styles():
     out["h2"] = ParagraphStyle("h2", parent=ss["Heading2"], fontSize=11.5,
                               fontName=_FONT_BOLD, textColor=_BLUE, spaceBefore=8,
                               spaceAfter=4, keepWithNext=1)
-    out["body"] = ParagraphStyle("b", parent=ss["Normal"], fontSize=9.5,
-                                fontName=_FONT, leading=13, spaceAfter=4)
+    out["body"] = ParagraphStyle(
+        "b", parent=ss["Normal"], fontSize=STYLE.body_size,
+        fontName=_FONT, leading=STYLE.body_leading,
+        spaceAfter=STYLE.spacing(4),
+    )
     out["small"] = ParagraphStyle("s", parent=ss["Normal"], fontSize=8.5,
                                  fontName=_FONT, leading=11, textColor=_GREY)
     out["formula"] = ParagraphStyle(
@@ -513,14 +537,18 @@ def _styles():
                                fontName=_FONT, leading=11, leftIndent=12,
                                rightIndent=6, textColor=_GREY, spaceAfter=6)
     out["publication_ref"] = ParagraphStyle(
-        "pr", parent=ss["Normal"], fontSize=8, leading=10,
-        fontName=_FONT, textColor=_GREY, spaceBefore=2, spaceAfter=2,
+        "pr", parent=ss["Normal"], fontSize=STYLE.caption_size,
+        leading=STYLE.caption_leading,
+        fontName=_FONT, textColor=_GREY,
+        spaceBefore=STYLE.spacing(2), spaceAfter=STYLE.spacing(2),
         keepWithNext=1,
     )
     out["publication_caption"] = ParagraphStyle(
-        "pc", parent=ss["Normal"], fontSize=8, leading=10,
-        fontName=_FONT, textColor=colors.HexColor("#2C2C2A"),
-        spaceBefore=2, spaceAfter=2, keepWithNext=1,
+        "pc", parent=ss["Normal"], fontSize=STYLE.caption_size,
+        leading=STYLE.caption_leading,
+        fontName=_FONT, textColor=colors.HexColor(STYLE.text_hex),
+        spaceBefore=STYLE.spacing(2), spaceAfter=STYLE.spacing(2),
+        keepWithNext=1,
     )
     out["formula_symbol"] = ParagraphStyle(
         "fs", parent=ss["Normal"], fontSize=8.1, leading=11,
@@ -603,7 +631,10 @@ def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
 
     def _work():
         try:
-            box["v"] = fig.to_image(format="png", width=w_px, height=h_px, scale=2)
+            with suppress_kaleido_server_kopts_warning():
+                box["v"] = fig.to_image(
+                    format="png", width=w_px, height=h_px, scale=2
+                )
         except Exception:
             box["v"] = None
 
@@ -952,6 +983,7 @@ class ReportBuilder:
         table_item = self._publication_counter.issue(
             "Table", "Results overview across calculated checks"
         )
+        self.flow.append(CondPageBreak(STYLE.publication_start_height_mm * mm))
         self.flow.append(Paragraph(
             f'See <link href="#{table_item.anchor}">{table_item.label}</link>.',
             self.s["publication_ref"],
@@ -986,8 +1018,8 @@ class ReportBuilder:
             ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
             ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 1.2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
         ]
         style.extend(context_style)
         fills = {
@@ -1039,7 +1071,7 @@ class ReportBuilder:
                     self.flow.pop()
                     continue
             break
-        self.flow.append(PageBreak())
+        self.flow.append(_NonBlankPageBreak())
 
     def _keep_from(self, start):
         """Keep the flowables added since ``start`` together when they fit a page."""
@@ -1383,6 +1415,7 @@ class ReportBuilder:
             if first_header.lower() not in subject.lower():
                 caption += f": {first_header}"
         table_item = self._publication_counter.issue("Table", str(caption))
+        self.flow.append(CondPageBreak(STYLE.publication_start_height_mm * mm))
         self.flow.append(Paragraph(
             f'See <link href="#{table_item.anchor}">{table_item.label}</link>.',
             self.s["publication_ref"],
@@ -1559,7 +1592,7 @@ class ReportBuilder:
         self._tick(0.2, "Section and materials...")
         self._inputs()
         if self._base_out.get("clear_spacing") is not None:
-            self.flow.append(PageBreak())
+            self.flow.append(_NonBlankPageBreak())
             self.inp, self.out = self._base_inp, self._base_out
             self._clear_spacing()
         jobs = []
@@ -1602,17 +1635,17 @@ class ReportBuilder:
                 fraction = 0.42 + 0.5 * (index / max(len(jobs), 1))
                 self._tick(fraction, label)
                 if new_page:
-                    self.flow.append(PageBreak())
+                    self.flow.append(_NonBlankPageBreak())
                 getattr(self, method)()
         finally:
             self.inp, self.out = self._base_inp, self._base_out
         if self._base_out.get("fatigue") is not None:
             self._tick(0.88, "Grouped fatigue...")
-            self.flow.append(PageBreak())
+            self.flow.append(_NonBlankPageBreak())
             self._fatigue()
         if self._base_out.get("bridge") is not None:
             self._tick(0.9, "Independent bridge calculations...")
-            self.flow.append(PageBreak())
+            self.flow.append(_NonBlankPageBreak())
             self._bridge()
         if self.qa_appendix:
             self._appendix()
@@ -1648,8 +1681,10 @@ class ReportBuilder:
         )
         title = f"Sector cross-section report - {project} - {section}"
         doc = _ReportDocTemplate(self.buffer, pagesize=A4,
-                                 leftMargin=20 * mm, rightMargin=20 * mm,
-                                 topMargin=25 * mm, bottomMargin=20 * mm,
+                                 leftMargin=_REPORT_LEFT_MM * mm,
+                                 rightMargin=_REPORT_RIGHT_MM * mm,
+                                 topMargin=_REPORT_TOP_MM * mm,
+                                 bottomMargin=_REPORT_BOTTOM_MM * mm,
                                  title=title)
         doc.build(self.flow,
                   canvasmaker=lambda *a, **k: _NumberedCanvas(

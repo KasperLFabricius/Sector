@@ -19,7 +19,6 @@ import sys
 
 from PIL import Image
 import pypdf
-import pypdfium2 as pdfium
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
@@ -40,6 +39,12 @@ from sector import __version__  # noqa: E402
 from sector import bridge, capacity, codes, combined, detailing, shear, torsion  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
+from tools.pdf_preflight import (  # noqa: E402
+    PdfPreflightProfile,
+    render_pdf as _preflight_render_pdf,
+    validate_pdf_structure,
+    validate_rendered_pages as _preflight_validate_rendered_pages,
+)
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
 # states, two elastic states, two elastic strain profiles, one derived shear
@@ -1287,31 +1292,35 @@ def validate_pdf_content(pdf: bytes) -> str:
     ):
         if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected report content is missing: {expected}")
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    overview_pages = [
+        number
+        for number, page_text in enumerate(page_texts, start=1)
+        if "Results overview across calculated checks" in page_text
+    ]
+    governing_note_pages = [
+        number
+        for number, page_text in enumerate(page_texts, start=1)
+        if "Gov. marks the highest PASS/FAIL utilisation" in page_text
+    ]
+    if overview_pages != governing_note_pages or len(overview_pages) != 1:
+        raise AssertionError(
+            "the stable results overview no longer fits one complete page"
+        )
+    validate_pdf_structure(
+        pdf,
+        PdfPreflightProfile(
+            minimum_pages=6,
+            minimum_body_font_size=sector_report.STYLE.minimum_table_size,
+            required_numeric_tokens=("125.0 %", "245.000 MPa"),
+        ),
+    )
     return text
 
 
 def render_pdf(pdf: bytes, scale: float = 1.5) -> list[Image.Image]:
-    """Rasterise all pages through PDFium and return independent PIL images."""
-    document = pdfium.PdfDocument(pdf)
-    pages = []
-    try:
-        for index in range(len(document)):
-            page = document[index]
-            bitmap = page.render(scale=scale)
-            try:
-                pages.append(bitmap.to_pil().convert("RGB").copy())
-            finally:
-                bitmap.close()
-                page.close()
-    finally:
-        document.close()
-    return pages
-
-
-def _pixels(image: Image.Image) -> list[int]:
-    """Return flat pixel values across supported Pillow releases."""
-    getter = getattr(image, "get_flattened_data", image.getdata)
-    return list(getter())
+    """Compatibility export of the shared Sector rasteriser."""
+    return _preflight_render_pdf(pdf, scale=scale)
 
 
 def validate_rendered_pages(
@@ -1319,78 +1328,11 @@ def validate_rendered_pages(
     *,
     require_document_control: bool = False,
 ) -> None:
-    """Reject blank, clipped, malformed or ink-saturated report pages."""
-    if len(pages) < 6:
-        raise AssertionError(f"expected at least 6 report pages, got {len(pages)}")
-
-    for number, image in enumerate(pages, start=1):
-        width, height = image.size
-        ratio = width / height
-        if not 0.70 < ratio < 0.72:
-            raise AssertionError(f"page {number} is not A4 portrait: {width}x{height}")
-
-        grey = image.convert("L")
-        pixels = _pixels(grey)
-        dark = sum(value < 245 for value in pixels)
-        fraction = dark / len(pixels)
-        if not 0.002 < fraction < 0.45:
-            raise AssertionError(
-                f"page {number} has implausible ink coverage {fraction:.4f}"
-            )
-
-        bbox = Image.eval(
-            Image.frombytes("L", grey.size, bytes(
-                255 if value < 250 else 0 for value in pixels
-            )),
-            lambda value: value,
-        ).getbbox()
-        if bbox is None:
-            raise AssertionError(f"page {number} rendered blank")
-
-        edge = max(min(width, height) // 250, 2)
-        edge_pixels = (
-            _pixels(grey.crop((0, 0, width, edge)))
-            + _pixels(grey.crop((0, height - edge, width, height)))
-            + _pixels(grey.crop((0, 0, edge, height)))
-            + _pixels(grey.crop((width - edge, 0, width, height)))
-        )
-        edge_dark = sum(value < 245 for value in edge_pixels) / len(edge_pixels)
-        if edge_dark > 0.01:
-            raise AssertionError(
-                f"page {number} has content clipped against the page edge"
-            )
-
-        if require_document_control:
-            # Text extraction can still find header/footer strings when a PDF
-            # graphics-state error makes them invisible. Check their rendered
-            # text zones independently of the body and horizontal rules.
-            furniture_regions = {
-                "header project": (
-                    int(0.09 * width), int(0.028 * height),
-                    int(0.72 * width), int(0.044 * height),
-                ),
-                "header revision": (
-                    int(0.80 * width), int(0.028 * height),
-                    int(0.92 * width), int(0.044 * height),
-                ),
-                "footer identity": (
-                    int(0.09 * width), int(0.952 * height),
-                    int(0.65 * width), int(0.967 * height),
-                ),
-                "footer page number": (
-                    int(0.78 * width), int(0.952 * height),
-                    int(0.92 * width), int(0.967 * height),
-                ),
-            }
-            for label, box in furniture_regions.items():
-                region_pixels = _pixels(grey.crop(box))
-                region_dark = sum(
-                    value < 245 for value in region_pixels
-                ) / len(region_pixels)
-                if region_dark < 0.01:
-                    raise AssertionError(
-                        f"page {number} has no visible {label}"
-                    )
+    """Compatibility export of the shared Sector raster preflight."""
+    _preflight_validate_rendered_pages(
+        pages,
+        require_document_control=require_document_control,
+    )
 
 
 def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:

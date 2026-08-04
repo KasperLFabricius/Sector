@@ -11,6 +11,7 @@ from tools.report_render_fixture import (
     validate_pdf_content,
     validate_rendered_pages,
 )
+from tools.pdf_preflight import crop_difference_hash, hash_distance
 
 
 def test_reference_fixture_engineering_is_internally_consistent():
@@ -30,3 +31,7 @@ def test_issued_report_renders_every_page_and_retains_expected_content():
     validate_pdf_content(pdf)
     pages = render_pdf(pdf)
     validate_rendered_pages(pages, require_document_control=True)
+    overview_hash = crop_difference_hash(
+        pages[1], (0.08, 0.07, 0.93, 0.91)
+    )
+    assert hash_distance(overview_hash, "0c2c0c8e8c2c2c00") <= 2

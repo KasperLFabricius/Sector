@@ -19,11 +19,13 @@ if str(ROOT) not in sys.path:
 
 import manual  # noqa: E402
 from sector import __version__  # noqa: E402
-from tools.report_render_fixture import (  # noqa: E402
+from tools.pdf_preflight import (  # noqa: E402
+    PdfPreflightProfile,
     render_pdf,
-    validate_outline_destinations,
+    validate_pdf_structure,
     validate_rendered_pages,
 )
+from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
 _EXPECTED_FIGURE_COUNT = 16
 
@@ -129,6 +131,14 @@ def validate_pdf_content(pdf: bytes) -> str:
     ):
         if expected not in text:
             raise AssertionError(f"expected manual content is missing: {expected}")
+    validate_pdf_structure(
+        pdf,
+        PdfPreflightProfile(
+            minimum_pages=6,
+            minimum_body_font_size=manual.STYLE.small_size,
+            required_numeric_tokens=(f"Version {__version__}",),
+        ),
+    )
     return text
 
 

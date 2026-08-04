@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import pathlib
 import sys
+from types import SimpleNamespace
 
 import pypdf
 import pytest
@@ -202,9 +203,29 @@ def test_manual_data_tables_use_bounded_spacing_and_padding(monkeypatch):
         "manual_blocks",
         lambda: (("table", ["A", "B"], [["one", "two"]]),),
     )
+    monkeypatch.setattr(
+        manual,
+        "manual_publication_blocks",
+        lambda blocks: blocks,
+    )
+    monkeypatch.setattr(
+        manual,
+        "publish_manual_blocks",
+        lambda blocks: tuple(
+            SimpleNamespace(
+                block=block,
+                item=SimpleNamespace(
+                    anchor="table-a1-1",
+                    label="Table A1.1",
+                    caption="Focused table",
+                ),
+            )
+            for block in blocks
+        ),
+    )
 
     manual.build_manual_pdf(io.BytesIO(), figures=False)
-    table = next(item for item in captured["flow"] if type(item) is Table)
+    table = next(item for item in captured["flow"] if isinstance(item, Table))
     assert table.spaceBefore == pytest.approx(2)
     for row in table._cellStyles:
         for style in row:
