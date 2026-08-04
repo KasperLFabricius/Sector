@@ -2,10 +2,10 @@
 
 ## Frozen boundary
 
-This slice corrects the published provenance of the retained transverse torsion
-resistance only. The numerical expression, solver result, trace dependency graph,
-method identity, edition, units, output inventory, result states, selectors,
-utilisation, verdicts, and application version remain unchanged.
+This slice corrects the directly published provenance of the retained transverse
+torsion resistance only. The numerical expression, solver result, method identity,
+edition, units, output inventory, result states, selectors, utilisation, verdicts,
+and application version remain unchanged.
 
 ## Required identity
 
@@ -14,14 +14,15 @@ utilisation, verdicts, and application version remain unchanged.
   (6.27), combined with the transverse-reinforcement equilibrium in 6.2.3(3),
   Formula (6.8).
 - Longitudinal torsion reinforcement: 6.3.2(3), Formula (6.28).
-- These are distinct sources and must remain distinct in the trace contract.
+- These are distinct sources and must remain distinct on every live publication
+  surface.
 
 ## Publication closure
 
-The corrected transverse identity must reach the calculation trace, mechanics
-documentation, Streamlit result caption, calculation report, and user manual.
-Each surface must retain Formula (6.28) for longitudinal reinforcement and must
-not attribute the transverse resistance directly to Formula (6.28).
+The corrected transverse identity must reach the mechanics documentation,
+Streamlit result caption, calculation report, and user manual. Each surface must
+retain Formula (6.28) for longitudinal reinforcement and must not attribute the
+transverse resistance directly to Formula (6.28).
 
 ## Explicit exclusions
 

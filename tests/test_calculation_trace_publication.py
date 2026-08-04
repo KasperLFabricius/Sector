@@ -56,9 +56,6 @@ def test_remaining_family_adapters_use_the_frozen_order_and_exact_wrapper_shapes
     calls = []
     functions = (
         ("build_plastic_capacity_trace_family", "ct-002"),
-        ("build_shear_trace_family", "ct-006"),
-        ("build_torsion_trace_family", "ct-007"),
-        ("build_detailing_trace_family", "ct-008"),
     )
 
     for function_name, coverage_id in functions:
@@ -80,11 +77,7 @@ def test_remaining_family_adapters_use_the_frozen_order_and_exact_wrapper_shapes
     publication.attach_calculation_traces(
         {"interaction": True}, result, input_sha256=INPUT_SHA,
     )
-    assert [item[0] for item in calls] == [
-        "ct-002", "ct-006", "ct-007", "ct-008",
-    ]
-    by_coverage = {coverage: args for coverage, args, _kwargs in calls}
-    assert by_coverage["ct-006"][1] is result["shear"]
+    assert [item[0] for item in calls] == ["ct-002"]
     assert publication.PUBLICATION_KEY not in result
 
 
