@@ -408,17 +408,15 @@ def checking_pack() -> str:
         - Minimum crack reinforcement: As,min=0.4x0.8x3x100000/200
           =480 mm2; 480/600=0.8000000000: PASS.
 
-        ## Report and trace completeness
+        ## Report completeness
 
         A calculated report must contain Section and materials, Basis of analysis,
         Plastic section capacity, Elastic section response, Cracking and crack
         width, Grouped fatigue, Shear resistance, Torsion, M-V-T interaction,
         minimum reinforcement, link detailing, clear spacing, Independent bridge
-        calculations and Calculation trace. Every applicable trace must publish
-        with zero errors and the same input SHA-256 printed above. This project
-        activates CT-002 through CT-005 and CT-008 through CT-011. CT-006 and
-        CT-007 are deliberately not separate publications when combined M-V-T is
-        enabled: the accepted combined branch owns their one shared strut angle.
+        calculations, explicit equations, numerical substitutions, source notes,
+        units and genuine demand/resistance verdicts. The saved input SHA-256 above
+        identifies the exact project used for these independent comparisons.
 
         ## Numerical algorithms and failure states
 

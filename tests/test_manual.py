@@ -85,21 +85,23 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
-def test_manual_includes_complete_live_standard_trace_example():
-    rows = manual._worked_standard_trace_rows()
-    assert len(rows) == 12
-    assert rows[-1]["role"] == "final_result"
-    assert rows[-1]["state"] == "finite"
-    assert any(
-        "DS/EN 1992-2:2005 + AC:2008" in row["source"]
-        and "clause 6.1(109)-(110)" in row["source"]
-        for row in rows
-    )
+def test_manual_includes_direct_live_method_b_hand_check():
+    calculation = manual._worked_bridge_method_b()
+    row = calculation["rows"][0]
+    assert calculation["equation"] == "As,min = Mrep / (zs fyk)"
+    assert calculation["source"] == "DS/EN 1992-2:2005 6.1(109)-(110)"
+    assert row["as_required_mm2"] == pytest.approx(2500.0)
+    assert row["as_provided_mm2"] == pytest.approx(2600.0)
+    assert row["utilisation"] == pytest.approx(2500.0 / 2600.0)
+    assert row["status"] == "PASS"
     blocks = manual.manual_blocks()
     assert any(
-        block[:2] == ("h1", "Structured standards calculation trace")
+        block[:2] == ("h1", "Worked standards calculation")
         for block in blocks
     )
+    assert "calculation trace" not in " ".join(
+        str(block) for block in blocks
+    ).casefold()
 
 
 def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():

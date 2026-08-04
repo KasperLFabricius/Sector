@@ -30,7 +30,6 @@ import streamlit as st  # noqa: E402
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
 import case_analysis  # noqa: E402
-import calculation_trace_publication  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import fatigue_presentation  # noqa: E402
@@ -2829,7 +2828,7 @@ def _generate_report(inp):
         report_content = st.session_state.get(
             "rep_report_content", _REPORT_DEFAULT
         )
-        out = run_analysis(inp, input_sha256=_calculation_input_hash(inp))
+        out = run_analysis(inp)
         pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
                                          figures=figs, progress=_on_progress,
                                          qa_appendix=(
@@ -5475,6 +5474,28 @@ def _run_bridge_or_invalid(inp):
         }
 
 
+def _without_retired_case_publication(entries):
+    """Shallow-copy cached case entries that retain retired publication data."""
+
+    if entries is None:
+        return None
+    cleaned = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("results"), dict):
+            cleaned.append(entry)
+            continue
+        result = entry["results"]
+        if "calculation_traces" not in result:
+            cleaned.append(entry)
+            continue
+        clean_entry = dict(entry)
+        clean_result = dict(result)
+        clean_result.pop("calculation_traces", None)
+        clean_entry["results"] = clean_result
+        cleaned.append(clean_entry)
+    return cleaned
+
+
 def run_analysis(
     inp,
     *,
@@ -5484,7 +5505,6 @@ def run_analysis(
     reuse_plastic_bending_cases=None,
     reuse_elastic_cases=None,
     reuse_fatigue=None,
-    input_sha256=None,
 ):
     """Run every current named action and optional independent calculation."""
     bridge_result = _run_bridge_or_invalid(inp)
@@ -5494,10 +5514,7 @@ def run_analysis(
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
-        result = {"bridge": bridge_result} if bridge_active else {}
-        return calculation_trace_publication.attach_calculation_traces(
-            inp, result, input_sha256=input_sha256,
-        )
+        return {"bridge": bridge_result} if bridge_active else {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
         result = _run_single_analysis(
             inp,
@@ -5520,13 +5537,20 @@ def run_analysis(
             )
         if bridge_active:
             result["bridge"] = bridge_result
-        return calculation_trace_publication.attach_calculation_traces(
-            inp, result, input_sha256=input_sha256,
-        )
+        return result
 
     def _runner(case_inp, *, reuse_plastic=None):
         return _run_single_analysis(case_inp, reuse_plastic=reuse_plastic)
 
+    reuse_plastic_cases = _without_retired_case_publication(
+        reuse_plastic_cases
+    )
+    reuse_plastic_bending_cases = _without_retired_case_publication(
+        reuse_plastic_bending_cases
+    )
+    reuse_elastic_cases = _without_retired_case_publication(
+        reuse_elastic_cases
+    )
     result = case_analysis.run_case_tables(
         inp,
         _runner,
@@ -5550,9 +5574,7 @@ def run_analysis(
         )
     if bridge_active:
         result["bridge"] = bridge_result
-    return calculation_trace_publication.attach_calculation_traces(
-        inp, result, input_sha256=input_sha256,
-    )
+    return result
 
 
 def _run_uniaxial_capacity_checks(inp, out):
@@ -6572,7 +6594,6 @@ VIEWS = [
     "Plastic Results",
     "N-M Interaction",
     "Elastic Results",
-    "Calculation Trace",
     "Fatigue Results",
     "Bridge Calculations",
     "Detailing",
@@ -6581,76 +6602,6 @@ VIEWS = [
     "M-V-T Combined",
 ]
 _RESULT_VIEWS = tuple(VIEWS)
-
-
-def calculation_trace_view(inp, results):
-    """Render only validated solver-owned trace publication data."""
-
-    st.subheader("Calculation trace")
-    st.caption(
-        "Ordered solver-owned derivations. Each row retains its role, exact "
-        "expression and substitution, result state, unit, dependencies and source."
-    )
-    try:
-        calculations = calculation_trace_publication.published_calculations(
-            results, inp
-        )
-        errors = calculation_trace_publication.published_errors(results)
-    except calculation_trace_publication.TraceValidationError as exc:
-        st.error(f"Stored calculation trace is invalid: {exc}")
-        return
-    for error in errors:
-        st.warning(
-            f"{calculation_trace_publication.context_label(error.context)} / "
-            f"{error.coverage_id.upper()}: trace not published - {error.message}"
-        )
-    if not calculations:
-        st.info("No applicable calculation trace was published for this result.")
-        return
-    selected = st.selectbox(
-        "Calculation",
-        range(len(calculations)),
-        format_func=lambda index: calculation_trace_publication.calculation_label(
-            calculations[index]
-        ),
-        key="calculation_trace_selection",
-        help="Each option is one exact calculation member and retained context.",
-    )
-    record = calculations[selected]
-    calculation = record.calculation
-    st.caption(
-        f"Input SHA-256: {record.input_sha256} | "
-        f"Result SHA-256: {record.result_sha256} | "
-        f"Trace seal: {record.content_sha256}"
-    )
-    rows = pd.DataFrame(
-        calculation_trace_publication.format_trace_rows(calculation)
-    ).rename(columns={
-        "sequence": "No.",
-        "step": "Step",
-        "step_id": "Step ID",
-        "role": "Role",
-        "symbol": "Symbol",
-        "expression": "Symbolic expression",
-        "substitution": "Numerical substitution",
-        "state": "State",
-        "result": "Result",
-        "unit": "Unit",
-        "source": "Source / citation",
-        "dependencies": "Dependencies",
-        "warnings": "Warnings",
-        "assumptions": "Assumptions",
-    })
-    st.dataframe(
-        rows,
-        hide_index=True,
-        width="stretch",
-        height=min(800, 86 + 35 * len(rows)),
-    )
-    if calculation.warnings:
-        st.warning(" | ".join(calculation.warnings))
-    if calculation.assumptions:
-        st.caption("Assumptions: " + " | ".join(calculation.assumptions))
 
 
 def _memo_fig(name, sig, build):
@@ -10060,7 +10011,6 @@ def _analysis_workspace(inp):
             reuse_plastic_bending_cases=reuse_plastic_bending_cases,
             reuse_elastic_cases=reuse_elastic_cases,
             reuse_fatigue=reuse_fatigue,
-            input_sha256=calculation_input_sha256,
         )
         st.session_state["result_sig"] = inp["signature"]
         st.session_state["result_plastic_sig"] = inp["plastic_sig"]
@@ -10183,8 +10133,6 @@ def _analysis_workspace(inp):
 
     if view == "Results Overview":
         results_overview_view(result_inp, results, stale=stale)
-    elif view == "Calculation Trace":
-        calculation_trace_view(result_inp, results)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
