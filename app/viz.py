@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import wraps
 from html import escape as _html_escape
 import math
 
@@ -9,6 +10,257 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from sector import geometry
+
+
+_GRAYSCALE_DASH_FALLBACKS = (
+    "dash", "dot", "dashdot", "longdash", "longdashdot",
+)
+_GRAYSCALE_SYMBOL_FALLBACKS = (
+    "square", "diamond", "cross", "x", "triangle-up", "triangle-down",
+    "star", "pentagon", "hexagon", "hourglass", "bowtie", "asterisk",
+)
+_GRAYSCALE_PATTERN_FALLBACKS = ("/", "x", "-", "|", "+", ".", "\\")
+
+
+class GrayscalePublicationError(ValueError):
+    """Raised when visible named series cannot be separated without colour."""
+
+
+def _grayscale_safe(function):
+    """Finalize one public factory without changing its call contract."""
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        return apply_grayscale_safe_distinctions(function(*args, **kwargs))
+
+    wrapped._sector_grayscale_safe = True
+    return wrapped
+
+
+def _visible_named_traces(fig):
+    return [
+        trace for trace in (getattr(fig, "data", ()) or ())
+        if getattr(trace, "visible", None) is not False
+        and getattr(trace, "showlegend", None) is not False
+        and str(getattr(trace, "name", "") or "").strip()
+    ]
+
+
+def _point_count(trace):
+    lengths = []
+    for axis in ("x", "y"):
+        values = getattr(trace, axis, None)
+        if values is None:
+            continue
+        try:
+            lengths.append(len(values))
+        except TypeError:
+            pass
+    return min(lengths, default=0)
+
+
+def _trace_mode(trace):
+    mode = str(getattr(trace, "mode", "") or "")
+    trace_type = str(getattr(trace, "type", "") or "")
+    if not mode and trace_type.startswith("scatter"):
+        mode = "lines+markers" if _point_count(trace) < 20 else "lines"
+    has_lines = "lines" in mode
+    has_markers = "markers" in mode
+    return mode, has_lines, has_markers
+
+
+def _legend_marker_value(value, default=None):
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else default
+    if hasattr(value, "tolist"):
+        converted = value.tolist()
+        if isinstance(converted, list):
+            return converted[0] if converted else default
+        return converted
+    return value if value is not None else default
+
+
+def _trace_grayscale_cue(trace):
+    trace_type = str(getattr(trace, "type", "") or "")
+    if trace_type == "bar":
+        pattern = getattr(getattr(trace, "marker", None), "pattern", None)
+        return (
+            "bar",
+            getattr(pattern, "shape", None) or "",
+            getattr(pattern, "solidity", None),
+        )
+
+    _mode, has_lines, has_markers = _trace_mode(trace)
+    line = getattr(trace, "line", None)
+    marker = getattr(trace, "marker", None)
+    return (
+        "scatter",
+        has_lines,
+        (getattr(line, "dash", None) or "solid") if has_lines else None,
+        getattr(line, "width", None) if has_lines else None,
+        has_markers,
+        _legend_marker_value(getattr(marker, "symbol", None), "circle")
+        if has_markers else None,
+        _legend_marker_value(getattr(marker, "size", None))
+        if has_markers else None,
+    )
+
+
+def grayscale_distinction_cues(fig):
+    """Return the non-colour legend identities used by publication tests."""
+
+    return tuple(
+        (str(trace.name), _trace_grayscale_cue(trace))
+        for trace in _visible_named_traces(fig)
+    )
+
+
+def _reserved_authored_cues(traces):
+    dashes = set()
+    symbols = set()
+    patterns = set()
+    for trace in traces:
+        trace_type = str(getattr(trace, "type", "") or "")
+        if trace_type == "bar":
+            pattern = getattr(getattr(trace, "marker", None), "pattern", None)
+            shape = getattr(pattern, "shape", None)
+            if shape:
+                patterns.add(shape)
+            continue
+        _mode, has_lines, has_markers = _trace_mode(trace)
+        dash = getattr(getattr(trace, "line", None), "dash", None)
+        symbol = _legend_marker_value(
+            getattr(getattr(trace, "marker", None), "symbol", None)
+        )
+        if has_lines and dash:
+            dashes.add(dash)
+        if has_markers and symbol:
+            symbols.add(symbol)
+    return dashes, symbols, patterns
+
+
+def _assign_unused_dash(trace, seen, reserved):
+    for dash in _GRAYSCALE_DASH_FALLBACKS:
+        if dash in reserved:
+            continue
+        trace.line.dash = dash
+        if _trace_grayscale_cue(trace) not in seen:
+            return True
+    return False
+
+
+def _assign_unused_symbol(trace, seen, reserved):
+    for symbol in _GRAYSCALE_SYMBOL_FALLBACKS:
+        if symbol in reserved:
+            continue
+        trace.marker.symbol = symbol
+        if _trace_grayscale_cue(trace) not in seen:
+            return True
+    return False
+
+
+def _append_mode(trace, addition):
+    mode, has_lines, has_markers = _trace_mode(trace)
+    if not mode:
+        mode = "lines" if has_lines else "markers"
+    parts = mode.split("+")
+    if addition not in parts:
+        parts.append(addition)
+    trace.mode = "+".join(parts)
+
+
+def _disambiguate_scatter(trace, seen, reserved_dashes, reserved_symbols):
+    _mode, has_lines, has_markers = _trace_mode(trace)
+    line = getattr(trace, "line", None)
+    marker = getattr(trace, "marker", None)
+    authored_dash = getattr(line, "dash", None) if has_lines else None
+    authored_symbol = (
+        _legend_marker_value(getattr(marker, "symbol", None))
+        if has_markers else None
+    )
+
+    if has_lines and not authored_dash:
+        if _assign_unused_dash(trace, seen, reserved_dashes):
+            return
+    if has_markers and not authored_symbol:
+        if _assign_unused_symbol(trace, seen, reserved_symbols):
+            return
+
+    # When a duplicated cue itself is authored, preserve that primary semantic
+    # and add a secondary channel instead of rewriting it.
+    if has_lines and not has_markers:
+        _append_mode(trace, "markers")
+        if _assign_unused_symbol(trace, seen, reserved_symbols):
+            return
+    elif has_markers and not has_lines:
+        _append_mode(trace, "lines")
+        if _assign_unused_dash(trace, seen, reserved_dashes):
+            return
+
+    # A duplicated trace with both channels explicitly authored gets a visible
+    # width/size distinction while retaining both authored identities.
+    _mode, has_lines, has_markers = _trace_mode(trace)
+    if has_lines and getattr(trace.line, "width", None) is None:
+        for width in (1.0, 1.5, 2.0, 2.5, 3.0):
+            trace.line.width = width
+            if _trace_grayscale_cue(trace) not in seen:
+                return
+    if has_markers and getattr(trace.marker, "size", None) is None:
+        for size in (6, 8, 10, 12, 14):
+            trace.marker.size = size
+            if _trace_grayscale_cue(trace) not in seen:
+                return
+
+
+def _disambiguate_bar(trace, seen, reserved_patterns):
+    pattern = trace.marker.pattern
+    authored_shape = getattr(pattern, "shape", None)
+    if not authored_shape:
+        for shape in _GRAYSCALE_PATTERN_FALLBACKS:
+            if shape in reserved_patterns:
+                continue
+            pattern.shape = shape
+            if _trace_grayscale_cue(trace) not in seen:
+                return
+    if getattr(pattern, "solidity", None) is None:
+        for solidity in (0.2, 0.4, 0.6, 0.8):
+            pattern.solidity = solidity
+            if _trace_grayscale_cue(trace) not in seen:
+                return
+
+
+def apply_grayscale_safe_distinctions(fig):
+    """Disambiguate named legend series without consuming authored cues.
+
+    All existing non-colour identities are inventoried first. Defaults receive
+    only unreserved fallbacks; an explicitly authored duplicate keeps its
+    primary cue and gains a secondary marker, dash, width, size or pattern cue.
+    Data, colours, labels, axes and annotations are untouched.
+    """
+
+    traces = _visible_named_traces(fig)
+    reserved_dashes, reserved_symbols, reserved_patterns = (
+        _reserved_authored_cues(traces)
+    )
+    seen = set()
+    for trace in traces:
+        cue = _trace_grayscale_cue(trace)
+        if cue in seen:
+            trace_type = str(getattr(trace, "type", "") or "")
+            if trace_type == "bar":
+                _disambiguate_bar(trace, seen, reserved_patterns)
+            else:
+                _disambiguate_scatter(
+                    trace, seen, reserved_dashes, reserved_symbols
+                )
+            cue = _trace_grayscale_cue(trace)
+            if cue in seen:
+                raise GrayscalePublicationError(
+                    "Visible named legend series retain a duplicate "
+                    f"non-colour cue: {trace.name!r}."
+                )
+        seen.add(cue)
+    return fig
 
 
 def pct(x, nd=1):
@@ -71,6 +323,7 @@ def chord_angle_note(theta_mode):
             "resistance-optimum.")
 
 
+@_grayscale_safe
 def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
                           title="SLS strain profile"):
     """Plot the section strain plane along its steepest gradient.
@@ -474,6 +727,7 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
     return fig
 
 
+@_grayscale_safe
 def concrete_curve_figure(concrete, title="Concrete"):
     """Stress-strain diagram for a concrete law (compression is negative)."""
     # Slightly past the ultimate strain on the compression side, a little tension
@@ -497,6 +751,7 @@ def concrete_curve_figure(concrete, title="Concrete"):
     return fig
 
 
+@_grayscale_safe
 def prestress_curve_figure(prestress, title="Prestressing steel"):
     """Stress-strain diagram for a prestressing-steel law (tension only).
 
@@ -510,6 +765,7 @@ def prestress_curve_figure(prestress, title="Prestressing steel"):
     return _curve_figure(prestress, -0.001, top * 1.02, title)
 
 
+@_grayscale_safe
 def steel_curve_figure(steel, title="Mild steel", eps_max=0.025):
     """Stress-strain diagram for a reinforcement law (tension and compression).
 
@@ -688,6 +944,7 @@ def _marker_sizes(points, base, lo, hi):
     return [min(max(base * (d / med), lo), hi) if d > 0.0 else base for d in dias]
 
 
+@_grayscale_safe
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
@@ -889,6 +1146,7 @@ def _fatigue_text(value):
     return _html_escape(str(value), quote=True)
 
 
+@_grayscale_safe
 def fatigue_utilisation_map_figure(
     outer,
     holes,
@@ -1331,6 +1589,7 @@ def _finite_power_of_ten(exponent):
     return min(value, _FLOAT_MAX)
 
 
+@_grayscale_safe
 def fatigue_sn_figure(
     result,
     properties,
@@ -1538,6 +1797,7 @@ def fatigue_sn_figure(
     return fig
 
 
+@_grayscale_safe
 def fatigue_damage_figure(result, *, title=None):
     """Plot concrete equivalent utilisation or cumulative Miner damage."""
 
@@ -1813,6 +2073,7 @@ def fatigue_damage_figure(result, *, title=None):
     return fig
 
 
+@_grayscale_safe
 def detailing_geometry_figure(
     outer,
     holes,
@@ -2073,6 +2334,7 @@ def detailing_geometry_figure(
     return fig
 
 
+@_grayscale_safe
 def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                           centroid, asl_bar_ids, asl_cg_m, asl_mm2,
                           d_mm, z_mm, bw_mm, bw_source,
@@ -2300,6 +2562,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
     return fig
 
 
+@_grayscale_safe
 def biaxial_shear_overview_figure(
     outer, holes=None, bars=None, *, vx_ed=0.0, vy_ed=0.0,
     title="Biaxial shear actions",
@@ -2355,6 +2618,7 @@ def biaxial_shear_overview_figure(
     return fig
 
 
+@_grayscale_safe
 def interaction_figure(mx, my, applied=None, angles=None, util=None,
                        closed=True, title="M-M interaction"):
     """Biaxial moment capacity envelope, with an optional applied-load point.
@@ -2451,6 +2715,7 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
     return fig
 
 
+@_grayscale_safe
 def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction"):
     """Axial-moment (N-M) capacity diagram: N vertical, M horizontal.
 
@@ -2521,6 +2786,7 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     return fig
 
 
+@_grayscale_safe
 def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
                           title="V-T interaction (crushing)",
                           show_verdict=True):
@@ -2581,6 +2847,7 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
     return fig
 
 
+@_grayscale_safe
 def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
                 title="Torsion tube", scale=1000.0, unit="mm"):
     """Thin-walled torsion tube (EN 1992-1-1 6.3.2): the concrete outline, the
@@ -2631,6 +2898,7 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
     return fig
 
 
+@_grayscale_safe
 def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
     """Component rectangles of a subdivided (compound) torsion section.
 
@@ -2687,6 +2955,7 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
     return fig
 
 
+@_grayscale_safe
 def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
                  title="Variable-strut truss"):
     """Schematic of the variable-angle truss (EN 1992-1-1 6.2.3): the compression

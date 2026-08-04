@@ -1493,6 +1493,7 @@ class ReportBuilder:
             raise ReportFigureError(
                 "Engineering-figure export previously timed out; report not created."
             )
+        fig = viz.apply_grayscale_safe_distinctions(fig)
         png, timed_out = _fig_png(fig, int(w_mm * 3.78), int(h_mm * 3.78))
         if timed_out:
             self._export_hung = True

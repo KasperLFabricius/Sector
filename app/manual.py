@@ -2188,7 +2188,8 @@ def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
     ``_FIG_TIMED_OUT`` sentinel if kaleido does not finish in ``timeout``."""
     def _render():
         buf = io.BytesIO()
-        fig_callable().write_image(buf, format="png", scale=2)
+        figure = viz.apply_grayscale_safe_distinctions(fig_callable())
+        figure.write_image(buf, format="png", scale=2)
         return buf.getvalue()
 
     return _call_with_timeout(_render, timeout)
@@ -2604,7 +2605,8 @@ def render_manual_streamlit():
                 # A unique key per block: two structurally-similar figures would
                 # otherwise share an auto-generated element id and Streamlit raises a
                 # duplicate-id error (seen once other charts exist, e.g. after Calculate).
-                st.plotly_chart(block[1](), width="stretch", key=f"manual_fig_{i}")
+                figure = viz.apply_grayscale_safe_distinctions(block[1]())
+                st.plotly_chart(figure, width="stretch", key=f"manual_fig_{i}")
             except Exception as e:                       # a broken figure must not
                 st.caption(f"[figure unavailable: {e}]")  # break the whole manual
             st.caption(item.caption)
