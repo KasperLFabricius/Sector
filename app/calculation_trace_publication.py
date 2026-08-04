@@ -1,4 +1,4 @@
-"""Publish and present the accepted CT-002--CT-011 trace families.
+"""Publish and present the remaining accepted calculation-trace families.
 
 The numerical families remain owned by their ``sector.*_trace`` modules.  This
 module supplies the bounded PR-08E integration boundary: deterministic case
@@ -38,15 +38,10 @@ from sector.detailing_trace import (
     build_detailing_trace_family,
     validate_detailing_trace_family,
 )
-from sector.elastic_trace import build_elastic_trace_family, validate_elastic_trace_family
 from sector.fatigue_trace import build_fatigue_trace_family, validate_fatigue_trace_family
 from sector.plastic_capacity_trace import (
     build_plastic_capacity_trace_family,
     validate_plastic_capacity_trace_family,
-)
-from sector.plastic_interaction_trace import (
-    build_plastic_interaction_trace_families,
-    validate_plastic_interaction_trace_families,
 )
 from sector.shear_trace import build_shear_trace_family, validate_shear_trace_family
 from sector.torsion_trace import build_torsion_trace_family, validate_torsion_trace_family
@@ -155,19 +150,6 @@ def _case_specs(
     specs: list[tuple[str, Callable[[], TraceBundle | None]]] = []
     if "plastic" in out:
         specs.append(("ct-002", lambda: build_plastic_capacity_trace_family(
-            inp, out, input_sha256=input_sha256,
-            result_sha256=result_sha256, context=context,
-        )))
-        interaction = (out.get("plastic") or {}).get("interaction")
-        if inp.get("interaction") and interaction is not None:
-            specs.append(("ct-003-004", lambda:
-                build_plastic_interaction_trace_families(
-                    inp, out, input_sha256=input_sha256,
-                    result_sha256=result_sha256, context=context,
-                )
-            ))
-    if "elastic" in out:
-        specs.append(("ct-005", lambda: build_elastic_trace_family(
             inp, out, input_sha256=input_sha256,
             result_sha256=result_sha256, context=context,
         )))
@@ -437,14 +419,6 @@ def _replay_published_bundle(
     }
     if coverage == {"ct-002"}:
         checked = validate_plastic_capacity_trace_family(
-            candidate, inp, result_view, **kwargs
-        )
-    elif coverage and coverage <= {"ct-003", "ct-004"}:
-        checked = validate_plastic_interaction_trace_families(
-            candidate, inp, result_view, **kwargs
-        )
-    elif coverage == {"ct-005"}:
-        checked = validate_elastic_trace_family(
             candidate, inp, result_view, **kwargs
         )
     elif coverage == {"ct-006"}:
