@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import wraps
 from html import escape as _html_escape
 import math
 
@@ -9,6 +10,16 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from sector import geometry
+
+
+def _grayscale_safe(function):
+    """Finalize a public figure with deterministic non-colour distinctions."""
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        return apply_grayscale_safe_distinctions(function(*args, **kwargs))
+
+    return wrapped
 
 
 def pct(x, nd=1):
@@ -71,6 +82,7 @@ def chord_angle_note(theta_mode):
             "resistance-optimum.")
 
 
+@_grayscale_safe
 def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
                           title="SLS strain profile"):
     """Plot the section strain plane along its steepest gradient.
@@ -218,6 +230,106 @@ pio.templates["sector"] = go.layout.Template(layout=dict(
     yaxis=dict(gridcolor=_GRID_COLOR, zerolinecolor=_ZERO_COLOR),
 ))
 _TEMPLATE = "plotly_white+sector"
+
+_GRAYSCALE_LINE_DASHES = (
+    "solid", "dash", "dot", "dashdot", "longdash", "longdashdot",
+)
+_GRAYSCALE_MARKER_SYMBOLS = (
+    "circle", "square", "diamond", "cross", "x", "triangle-up",
+    "triangle-down", "star", "pentagon", "hourglass",
+)
+_GRAYSCALE_BAR_PATTERNS = ("", "/", "x", "-", "+", ".")
+
+
+def _visible_named_traces(fig):
+    return [
+        trace for trace in getattr(fig, "data", ())
+        if getattr(trace, "showlegend", None) is not False
+        and str(getattr(trace, "name", "") or "").strip()
+    ]
+
+
+def _grayscale_trace_cue(trace):
+    """Return the non-colour cue that survives monochrome publication."""
+
+    trace_type = str(getattr(trace, "type", "") or "")
+    if trace_type == "bar":
+        pattern = getattr(getattr(trace.marker, "pattern", None), "shape", None)
+        return ("bar", pattern or "")
+
+    mode = str(getattr(trace, "mode", "") or "")
+    has_lines = "lines" in mode or (trace_type == "scatter" and not mode)
+    has_markers = "markers" in mode
+    dash = None
+    symbol = None
+    if has_lines:
+        dash = getattr(getattr(trace, "line", None), "dash", None) or "solid"
+    if has_markers:
+        symbol = (
+            getattr(getattr(trace, "marker", None), "symbol", None) or "circle"
+        )
+        if isinstance(symbol, (list, tuple)):
+            symbol = tuple(symbol)
+    return ("scatter", has_lines, dash, has_markers, symbol)
+
+
+def grayscale_distinction_cues(fig):
+    """Expose retained non-colour legend cues for contract tests and preflight."""
+
+    return tuple(
+        (str(trace.name), _grayscale_trace_cue(trace))
+        for trace in _visible_named_traces(fig)
+    )
+
+
+def apply_grayscale_safe_distinctions(fig):
+    """Make every visible legend series distinguishable without colour.
+
+    Existing semantic dashes, marker symbols and bar patterns are retained.  A
+    deterministic fallback is assigned only when a later visible series would
+    otherwise repeat an earlier non-colour cue.
+    """
+
+    seen = set()
+    for trace_index, trace in enumerate(_visible_named_traces(fig)):
+        cue = _grayscale_trace_cue(trace)
+        if cue not in seen:
+            seen.add(cue)
+            continue
+
+        trace_type = str(getattr(trace, "type", "") or "")
+        candidates = []
+        if trace_type == "bar":
+            candidates = _GRAYSCALE_BAR_PATTERNS
+            for offset in range(1, len(candidates) + 1):
+                trace.marker.pattern.shape = candidates[
+                    (trace_index + offset) % len(candidates)
+                ]
+                cue = _grayscale_trace_cue(trace)
+                if cue not in seen:
+                    break
+        else:
+            mode = str(getattr(trace, "mode", "") or "")
+            has_lines = "lines" in mode or (trace_type == "scatter" and not mode)
+            has_markers = "markers" in mode
+            if has_lines:
+                for offset in range(1, len(_GRAYSCALE_LINE_DASHES) + 1):
+                    trace.line.dash = _GRAYSCALE_LINE_DASHES[
+                        (trace_index + offset) % len(_GRAYSCALE_LINE_DASHES)
+                    ]
+                    cue = _grayscale_trace_cue(trace)
+                    if cue not in seen:
+                        break
+            if cue in seen and has_markers:
+                for offset in range(1, len(_GRAYSCALE_MARKER_SYMBOLS) + 1):
+                    trace.marker.symbol = _GRAYSCALE_MARKER_SYMBOLS[
+                        (trace_index + offset) % len(_GRAYSCALE_MARKER_SYMBOLS)
+                    ]
+                    cue = _grayscale_trace_cue(trace)
+                    if cue not in seen:
+                        break
+        seen.add(cue)
+    return fig
 
 # Greek glyphs are written as ASCII escapes so the source stays ASCII (these are
 # Basic-Multilingual-Plane code points, so they never form surrogate pairs).
@@ -474,6 +586,7 @@ def _curve_figure(material, eps_min, eps_max, title, n=240):
     return fig
 
 
+@_grayscale_safe
 def concrete_curve_figure(concrete, title="Concrete"):
     """Stress-strain diagram for a concrete law (compression is negative)."""
     # Slightly past the ultimate strain on the compression side, a little tension
@@ -497,6 +610,7 @@ def concrete_curve_figure(concrete, title="Concrete"):
     return fig
 
 
+@_grayscale_safe
 def prestress_curve_figure(prestress, title="Prestressing steel"):
     """Stress-strain diagram for a prestressing-steel law (tension only).
 
@@ -510,6 +624,7 @@ def prestress_curve_figure(prestress, title="Prestressing steel"):
     return _curve_figure(prestress, -0.001, top * 1.02, title)
 
 
+@_grayscale_safe
 def steel_curve_figure(steel, title="Mild steel", eps_max=0.025):
     """Stress-strain diagram for a reinforcement law (tension and compression).
 
@@ -688,6 +803,7 @@ def _marker_sizes(points, base, lo, hi):
     return [min(max(base * (d / med), lo), hi) if d > 0.0 else base for d in dias]
 
 
+@_grayscale_safe
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
@@ -889,6 +1005,7 @@ def _fatigue_text(value):
     return _html_escape(str(value), quote=True)
 
 
+@_grayscale_safe
 def fatigue_utilisation_map_figure(
     outer,
     holes,
@@ -1331,6 +1448,7 @@ def _finite_power_of_ten(exponent):
     return min(value, _FLOAT_MAX)
 
 
+@_grayscale_safe
 def fatigue_sn_figure(
     result,
     properties,
@@ -1538,6 +1656,7 @@ def fatigue_sn_figure(
     return fig
 
 
+@_grayscale_safe
 def fatigue_damage_figure(result, *, title=None):
     """Plot concrete equivalent utilisation or cumulative Miner damage."""
 
@@ -1813,6 +1932,7 @@ def fatigue_damage_figure(result, *, title=None):
     return fig
 
 
+@_grayscale_safe
 def detailing_geometry_figure(
     outer,
     holes,
@@ -2073,6 +2193,7 @@ def detailing_geometry_figure(
     return fig
 
 
+@_grayscale_safe
 def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                           centroid, asl_bar_ids, asl_cg_m, asl_mm2,
                           d_mm, z_mm, bw_mm, bw_source,
@@ -2300,6 +2421,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
     return fig
 
 
+@_grayscale_safe
 def biaxial_shear_overview_figure(
     outer, holes=None, bars=None, *, vx_ed=0.0, vy_ed=0.0,
     title="Biaxial shear actions",
@@ -2355,6 +2477,7 @@ def biaxial_shear_overview_figure(
     return fig
 
 
+@_grayscale_safe
 def interaction_figure(mx, my, applied=None, angles=None, util=None,
                        closed=True, title="M-M interaction"):
     """Biaxial moment capacity envelope, with an optional applied-load point.
@@ -2451,6 +2574,7 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
     return fig
 
 
+@_grayscale_safe
 def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction"):
     """Axial-moment (N-M) capacity diagram: N vertical, M horizontal.
 
@@ -2521,6 +2645,7 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     return fig
 
 
+@_grayscale_safe
 def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
                           title="V-T interaction (crushing)",
                           show_verdict=True):
@@ -2581,6 +2706,7 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
     return fig
 
 
+@_grayscale_safe
 def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
                 title="Torsion tube", scale=1000.0, unit="mm"):
     """Thin-walled torsion tube (EN 1992-1-1 6.3.2): the concrete outline, the
@@ -2631,6 +2757,7 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
     return fig
 
 
+@_grayscale_safe
 def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
     """Component rectangles of a subdivided (compound) torsion section.
 
@@ -2687,6 +2814,7 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
     return fig
 
 
+@_grayscale_safe
 def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
                  title="Variable-strut truss"):
     """Schematic of the variable-angle truss (EN 1992-1-1 6.2.3): the compression

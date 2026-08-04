@@ -41,6 +41,7 @@ import case_analysis
 import fatigue_inputs
 import fatigue_presentation
 import material_catalog
+from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
 import report_equation_contract
 import viz
@@ -243,7 +244,47 @@ class _PaginatedReportTable(Table):
 
         self._rowSplitRange = row_split_range
         self._sector_row_split_range = row_split_range
-        return super().split(availWidth, availHeight)
+        fragments = super().split(availWidth, availHeight)
+
+        caption_row = getattr(self, "_sector_caption_row", None)
+        if caption_row is None or not fragments:
+            return fragments
+
+        caption_contract = (
+            "_sector_caption_row",
+            "_sector_caption_markup",
+            "_sector_continued_caption_markup",
+            "_sector_caption_style",
+            "_sector_publication_label",
+            "_sector_header_row",
+            "_sector_data_start",
+            "_sector_context_count",
+            "_sector_context_labels",
+        )
+        parent_is_continuation = bool(
+            getattr(self, "_sector_is_continuation", False)
+        )
+        for fragment_index, fragment in enumerate(fragments):
+            for attribute in caption_contract:
+                if hasattr(self, attribute):
+                    setattr(fragment, attribute, getattr(self, attribute))
+            is_continuation = parent_is_continuation or fragment_index > 0
+            fragment._sector_is_continuation = is_continuation
+            # ReportLab shares repeated-row lists between split fragments.  Copy
+            # the caption row before changing it or the continuation text removes
+            # the sole anchor from the leading fragment as well.
+            fragment._cellvalues = list(fragment._cellvalues)
+            fragment._cellvalues[caption_row] = list(
+                fragment._cellvalues[caption_row]
+            )
+            markup = (
+                self._sector_continued_caption_markup
+                if is_continuation else self._sector_caption_markup
+            )
+            fragment._cellvalues[caption_row][0] = Paragraph(
+                markup, self._sector_caption_style
+            )
+        return fragments
 
 
 def _kaleido_server_api():
@@ -470,6 +511,16 @@ def _styles():
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
                                fontName=_FONT, leading=11, leftIndent=12,
                                rightIndent=6, textColor=_GREY, spaceAfter=6)
+    out["publication_ref"] = ParagraphStyle(
+        "pr", parent=ss["Normal"], fontSize=8, leading=10,
+        fontName=_FONT, textColor=_GREY, spaceBefore=2, spaceAfter=2,
+        keepWithNext=1,
+    )
+    out["publication_caption"] = ParagraphStyle(
+        "pc", parent=ss["Normal"], fontSize=8, leading=10,
+        fontName=_FONT, textColor=colors.HexColor("#2C2C2A"),
+        spaceBefore=2, spaceAfter=2, keepWithNext=1,
+    )
     out["formula_symbol"] = ParagraphStyle(
         "fs", parent=ss["Normal"], fontSize=8.1, leading=11,
         leftIndent=18, rightIndent=6, spaceAfter=1, fontName=_FONT,
@@ -635,6 +686,9 @@ class ReportBuilder:
         self._table_section_context = None
         self._table_subsection_context = None
         self._table_assessment_context = None
+        self._publication_counter = PublicationCounter("0")
+        self._publication_section_title = "Document control"
+        self._publication_subsection_title = None
 
     def _case_contexts(self, family):
         """Return ordered ``(case_input, case_results)`` report contexts."""
@@ -702,6 +756,11 @@ class ReportBuilder:
         )
         self._table_subsection_context = None
         self._table_assessment_context = None
+        self._publication_counter.enter_section(str(self._chapter))
+        self._publication_section_title = Paragraph(
+            _greek(str(text)), self.s["small"]
+        ).getPlainText().strip()
+        self._publication_subsection_title = None
         heading = Paragraph(_greek(numbered), self.s["h1"])
         heading._sector_bookmark = f"sector-section-{self._chapter}"
         # The outline API does not parse Paragraph markup or numeric entities.
@@ -713,6 +772,9 @@ class ReportBuilder:
     def _h2(self, text):
         self._subsection += 1
         self._table_subsection_context = _greek(f"Subsection: {text}")
+        self._publication_subsection_title = Paragraph(
+            _greek(str(text)), self.s["small"]
+        ).getPlainText().strip()
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
 
     def _p(self, text):
@@ -809,7 +871,7 @@ class ReportBuilder:
         self._case_line(family, title)
         self._keep_from(start + 1)
 
-    def _table_context_rows(self, column_count):
+    def _table_context_rows(self, column_count, row_offset=0):
         """Freeze active publication context as complete-width table rows."""
         entries = []
         if self._table_section_context is not None:
@@ -829,7 +891,8 @@ class ReportBuilder:
         rows = []
         commands = []
         labels = []
-        for row_index, (role, markup, background, foreground) in enumerate(entries):
+        for local_index, (role, markup, background, foreground) in enumerate(entries):
+            row_index = row_offset + local_index
             style = ParagraphStyle(
                 f"table-context-{role}",
                 parent=self.s["small"],
@@ -1242,6 +1305,7 @@ class ReportBuilder:
         font=8.5,
         keep=True,
         repeat_cols=1,
+        caption=None,
     ):
         if not data or not data[0]:
             raise ValueError("A report table requires at least one cell.")
@@ -1282,6 +1346,21 @@ class ReportBuilder:
             rows, markups, literals, numeric_sources, widths, header
         )
         panels = self._table_panels(floors, repeat_cols)
+        subject = (
+            self._publication_subsection_title
+            or self._publication_section_title
+            or "Published data"
+        )
+        if caption is None:
+            first_header = rows[0][0].getPlainText().strip() if header else "Data"
+            caption = f"Published evidence for {subject}"
+            if first_header.lower() not in subject.lower():
+                caption += f": {first_header}"
+        table_item = self._publication_counter.next("Table", str(caption))
+        self.flow.append(Paragraph(
+            f'See <link href="#{table_item.anchor}">{table_item.label}</link>.',
+            self.s["publication_ref"],
+        ))
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
         # Any table can outgrow one page when it contains user-pasted geometry or
@@ -1304,13 +1383,38 @@ class ReportBuilder:
                     + ", ".join(_html_escape(label) for label in labels)
                 )
             source_rows = [[row[index] for index in columns] for row in rows]
+            panel_suffix = (
+                f" Column panel {panel_number} of {len(panels)}."
+                if len(panels) > 1 else ""
+            )
+            if panel_number == 1:
+                caption_markup = (
+                    f'<a name="{table_item.anchor}"/>'
+                    f"<b>{table_item.label}.</b> "
+                    f"{_greek(_html_escape(table_item.caption))}"
+                    f"{_greek(_html_escape(panel_suffix))}"
+                )
+            else:
+                caption_markup = (
+                    f"<b>{table_item.label} (continued).</b> "
+                    f"{_greek(_html_escape(table_item.caption))}"
+                    f"{_greek(_html_escape(panel_suffix))}"
+                )
+            continued_caption_markup = (
+                f"<b>{table_item.label} (continued).</b> "
+                f"{_greek(_html_escape(table_item.caption))}"
+                f"{_greek(_html_escape(panel_suffix))}"
+            )
+            caption_row = [[
+                Paragraph(caption_markup, self.s["publication_caption"])
+            ] + [""] * (len(columns) - 1)]
             context_rows, context_style, context_labels = self._table_context_rows(
-                len(columns)
+                len(columns), row_offset=1
             )
             context_count = len(context_rows)
-            panel_rows = context_rows + source_rows
-            header_row = context_count if header else None
-            repeat_rows = context_count + (1 if header else 0)
+            panel_rows = caption_row + context_rows + source_rows
+            header_row = 1 + context_count if header else None
+            repeat_rows = 1 + context_count + (1 if header else 0)
             table = _PaginatedReportTable(
                 panel_rows,
                 colWidths=panel_widths,
@@ -1326,10 +1430,17 @@ class ReportBuilder:
             table._sector_font_size = font
             table._sector_context_labels = context_labels
             table._sector_context_count = context_count
+            table._sector_caption_row = 0
+            table._sector_caption_markup = caption_markup
+            table._sector_continued_caption_markup = continued_caption_markup
+            table._sector_caption_style = self.s["publication_caption"]
+            table._sector_is_continuation = panel_number > 1
+            table._sector_publication_label = table_item.label
             table._sector_header_row = header_row
             table._sector_data_start = repeat_rows
             table_style = [
-                ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
+                ("SPAN", (0, 0), (-1, 0)),
+                ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("LEFTPADDING", (0, 0), (-1, -1),
                  _REPORT_TABLE_HORIZONTAL_PADDING),
@@ -1347,7 +1458,7 @@ class ReportBuilder:
             self.flow.append(KeepTogether(table) if keep else table)
             self._gap(4)
 
-    def _fig(self, fig, w_mm=150, h_mm=95):
+    def _fig(self, fig, w_mm=150, h_mm=95, caption=None):
         if not self.figures:
             return
         # Once an export has wedged the browser (a full-timeout hang), stop trying:
@@ -1356,6 +1467,7 @@ class ReportBuilder:
             raise ReportFigureError(
                 "Engineering-figure export previously timed out; report not created."
             )
+        fig = viz.apply_grayscale_safe_distinctions(fig)
         png, timed_out = _fig_png(fig, int(w_mm * 3.78), int(h_mm * 3.78))
         if timed_out:
             self._export_hung = True
@@ -1364,7 +1476,47 @@ class ReportBuilder:
             raise ReportFigureError(
                 f"Engineering-figure export {detail}; report not created."
             )
-        self.flow.append(Image(io.BytesIO(png), width=w_mm * mm, height=h_mm * mm))
+        if caption is None:
+            title = getattr(getattr(fig.layout, "title", None), "text", None)
+            title = Paragraph(
+                _greek(str(title or "")), self.s["small"]
+            ).getPlainText().strip()
+            caption = (
+                title
+                or self._publication_subsection_title
+                or self._publication_section_title
+                or "Engineering figure"
+            )
+        figure_item = self._publication_counter.next("Figure", str(caption))
+        reference = Paragraph(
+            f'See <link href="#{figure_item.anchor}">{figure_item.label}</link>.',
+            self.s["publication_ref"],
+        )
+        caption_flowable = Paragraph(
+            f'<a name="{figure_item.anchor}"/><b>{figure_item.label}.</b> '
+            f"{_greek(_html_escape(figure_item.caption))}",
+            self.s["publication_caption"],
+        )
+        figure_table = Table(
+            [
+                [reference],
+                [Image(io.BytesIO(png), width=w_mm * mm, height=h_mm * mm)],
+                [caption_flowable],
+            ],
+            colWidths=[w_mm * mm],
+            hAlign="LEFT",
+            splitByRow=0,
+            splitInRow=0,
+        )
+        figure_table.setStyle(TableStyle([
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        figure_table._sector_publication_label = figure_item.label
+        self.flow.append(figure_table)
         self._gap(4)
 
     # -- build -------------------------------------------------------------

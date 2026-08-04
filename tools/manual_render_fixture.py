@@ -122,8 +122,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Governing",
         "PDF report",
         "Every computed case",
-        "Complete worked reference - bridge brittle Method B",
-        "clause 6.1(109)-(110)",
+        "Bridge brittle Method B",
+        "DS/EN 1992-2:2005 6.1(109)-(110)",
         "Project-defined / uncited",
         "Part D - Reference",
     ):

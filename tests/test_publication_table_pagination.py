@@ -293,6 +293,9 @@ def test_headerless_tables_repeat_context_without_promoting_first_data_row():
     )
 
     assert table._sector_context_count == 1
-    assert table.repeatRows == 1
+    # The stable caption is now the first repeated row, followed by the retained
+    # section context.  The sole source row remains data, never a fake header.
+    assert table._sector_caption_row == 0
+    assert table.repeatRows == 2
     assert table._sector_header_row is None
-    assert table._sector_data_start == 1
+    assert table._sector_data_start == 2
