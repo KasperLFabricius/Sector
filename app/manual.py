@@ -37,6 +37,7 @@ from manual_equation_publication import (
     manual_publication_blocks,
     source_kind_label,
 )
+from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
 import reproducible_example
 from sector import __author__ as APP_AUTHOR
@@ -1882,6 +1883,15 @@ def manual_publication_parts() -> dict[str, list]:
     return parts
 
 
+def manual_published_item_parts():
+    """Return the visible manual with validated figure/table identities."""
+
+    parts = published_manual_parts(manual_publication_blocks(manual_blocks()))
+    if tuple(parts) != tuple(_PART_SUMMARIES):
+        raise ValueError("Published manual part identity changed.")
+    return parts
+
+
 # ==========================================================================
 # PDF RENDERER -- same content blocks, rendered with ReportLab
 # ==========================================================================
@@ -2209,6 +2219,11 @@ def _manual_pdf_styles(
     _add("MMath", fontSize=11, leading=15, alignment=align_center, spaceBefore=6,
          spaceAfter=6, fontName=font)
     _add("MSmall", fontSize=8, leading=11, textColor=colors.grey, fontName=font)
+    _add("MPubRef", fontSize=8, leading=10, textColor=colors.grey,
+         fontName=font, spaceBefore=2, spaceAfter=2, keepWithNext=1)
+    _add("MPubCaption", fontSize=8, leading=10,
+         textColor=colors.HexColor("#2c2c2a"), fontName=font,
+         spaceBefore=2, spaceAfter=3, keepWithNext=1)
     return styles
 
 
@@ -2304,7 +2319,11 @@ def build_manual_pdf(buffer, figures=True):
         if _call_with_timeout(report.ensure_image_server,
                               _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
             figures_hung = True
-    for block in manual_publication_blocks(manual_blocks()):
+    for published in publish_manual_blocks(
+        manual_publication_blocks(manual_blocks())
+    ):
+        block = published.block
+        item = published.item
         kind = block[0]
         if kind == "part":
             flow.append(Spacer(1, 0.3 * cm))
@@ -2347,6 +2366,17 @@ def build_manual_pdf(buffer, figures=True):
             flow.append(KeepTogether([t]))
             flow.append(Spacer(1, 0.15 * cm))
         elif kind == "figure":
+            if item is None:
+                raise ValueError("A published manual figure has no identity.")
+            reference = Paragraph(
+                f'See <link href="#{item.anchor}">{item.label}</link>.',
+                styles["MPubRef"],
+            )
+            caption = Paragraph(
+                f'<a name="{item.anchor}"/><b>{item.label}.</b> '
+                f"{_inline_md_to_rl(item.caption)}",
+                styles["MPubCaption"],
+            )
             if block[1] in figure_cache:
                 png = figure_cache[block[1]]
             else:
@@ -2360,30 +2390,78 @@ def build_manual_pdf(buffer, figures=True):
             if png:
                 w, h = _png_size(png)
                 img_h = page_w * (h / w) if w else 8 * cm
-                flow.append(KeepTogether([
-                    Image(io.BytesIO(png), width=page_w, height=img_h),
-                    Paragraph(_inline_md_to_rl(block[2]), styles["MSmall"])]))
+                figure_rows = [
+                    [reference],
+                    [Image(io.BytesIO(png), width=page_w, height=img_h)],
+                    [caption],
+                ]
             else:
-                flow.append(Paragraph(
-                    _inline_md_to_rl(f"[figure unavailable] {block[2]}"),
-                    styles["MSmall"]))
+                figure_rows = [
+                    [reference],
+                    [Paragraph("[figure unavailable]", styles["MSmall"])],
+                    [caption],
+                ]
+            figure_table = Table(
+                figure_rows,
+                colWidths=[page_w],
+                hAlign="LEFT",
+                splitByRow=0,
+                splitInRow=0,
+            )
+            figure_table.setStyle(TableStyle([
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            figure_table._sector_publication_label = item.label
+            flow.append(figure_table)
             flow.append(Spacer(1, 0.2 * cm))
         elif kind == "table":
+            if item is None:
+                raise ValueError("A published manual table has no identity.")
             headers, rows = block[1], block[2]
             ncol = len(headers)
-            data = [[Paragraph(f"<b>{_inline_md_to_rl(h)}</b>", styles["MSmall"])
-                     for h in headers]]
+            caption_markup = (
+                f'<a name="{item.anchor}"/><b>{item.label}.</b> '
+                f"{_inline_md_to_rl(item.caption)}"
+            )
+            continued_caption_markup = (
+                f"<b>{item.label} (continued).</b> "
+                f"{_inline_md_to_rl(item.caption)}"
+            )
+            flow.append(Paragraph(
+                f'See <link href="#{item.anchor}">{item.label}</link>.',
+                styles["MPubRef"],
+            ))
+            data = [[Paragraph(caption_markup, styles["MPubCaption"])]
+                    + [""] * (ncol - 1)]
+            data += [[Paragraph(f"<b>{_inline_md_to_rl(h)}</b>", styles["MSmall"])
+                      for h in headers]]
             data += [[Paragraph(_inline_md_to_rl(str(c)), styles["MSmall"]) for c in row]
                      for row in rows]
-            t = Table(
+            t = report._PaginatedReportTable(
                 data,
                 colWidths=[page_w / ncol] * ncol,
-                repeatRows=1,
+                repeatRows=2,
+                splitByRow=1,
+                splitInRow=1,
                 spaceBefore=2,
             )
+            t._sector_caption_row = 0
+            t._sector_caption_markup = caption_markup
+            t._sector_continued_caption_markup = continued_caption_markup
+            t._sector_caption_style = styles["MPubCaption"]
+            t._sector_is_continuation = False
+            t._sector_publication_label = item.label
+            t._sector_header_row = 1
+            t._sector_data_start = 2
             t.setStyle(TableStyle([
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                ("SPAN", (0, 0), (-1, 0)),
+                ("GRID", (0, 1), (-1, -1), 0.4, colors.lightgrey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
+                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#eef2f7")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
                 ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
@@ -2482,7 +2560,7 @@ def render_manual_streamlit():
                 on_click="ignore",
             )
 
-    parts = manual_publication_parts()
+    parts = manual_published_item_parts()
     selected_part = st.selectbox(
         "Manual part",
         list(parts),
@@ -2492,7 +2570,9 @@ def render_manual_streamlit():
     st.caption(_PART_SUMMARIES[selected_part])
 
     n1 = n2 = 0
-    for i, block in enumerate(parts[selected_part]):
+    for i, published in enumerate(parts[selected_part]):
+        block = published.block
+        item = published.item
         kind = block[0]
         if kind == "part":
             st.divider()
@@ -2516,6 +2596,10 @@ def render_manual_streamlit():
             with st.container(border=True):
                 st.markdown(f"{icon} **{title}** -- {block[2]}")
         elif kind == "figure":
+            if item is None:
+                raise ValueError("A published manual figure has no identity.")
+            st.markdown(item.markdown_reference)
+            st.markdown(f"##### {item.label}")
             try:
                 # A unique key per block: two structurally-similar figures would
                 # otherwise share an auto-generated element id and Streamlit raises a
@@ -2523,8 +2607,13 @@ def render_manual_streamlit():
                 st.plotly_chart(block[1](), width="stretch", key=f"manual_fig_{i}")
             except Exception as e:                       # a broken figure must not
                 st.caption(f"[figure unavailable: {e}]")  # break the whole manual
-            st.caption(block[2])
+            st.caption(item.caption)
         elif kind == "table":
+            if item is None:
+                raise ValueError("A published manual table has no identity.")
+            st.markdown(item.markdown_reference)
+            st.markdown(f"##### {item.label}")
+            st.caption(item.caption)
             header = "| " + " | ".join(block[1]) + " |"
             sep = "| " + " | ".join(["---"] * len(block[1])) + " |"
             body = "\n".join("| " + " | ".join(str(c) for c in row) + " |"

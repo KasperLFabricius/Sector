@@ -273,14 +273,15 @@ def test_results_overview_offsets_status_fills_after_context(monkeypatch):
         "Assessment: REVIEW - project",
     )
     assert overview._sector_context_count == 3
-    assert overview._sector_header_row == 3
-    assert overview._sector_data_start == 4
+    assert overview._sector_caption_row == 0
+    assert overview._sector_header_row == 4
+    assert overview._sector_data_start == 5
     status_fill_rows = {
         start[1]
         for command, start, end, _colour in overview._bkgrndcmds
         if command == "BACKGROUND" and start[0] == end[0] == 2
     }
-    assert status_fill_rows == {4, 5}
+    assert status_fill_rows == {5, 6}
 
 
 def test_headerless_tables_repeat_context_without_promoting_first_data_row():
@@ -293,6 +294,7 @@ def test_headerless_tables_repeat_context_without_promoting_first_data_row():
     )
 
     assert table._sector_context_count == 1
-    assert table.repeatRows == 1
+    assert table._sector_caption_row == 0
+    assert table.repeatRows == 2
     assert table._sector_header_row is None
-    assert table._sector_data_start == 1
+    assert table._sector_data_start == 2
