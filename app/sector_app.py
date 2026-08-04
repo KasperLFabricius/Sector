@@ -2286,9 +2286,10 @@ def _calculation_input_hash(inp) -> str:
         return _project_input_hash()
     except ValueError:
         # Independent bridge kernels may legitimately run while the section is
-        # invalid and therefore cannot be canonicalised as a project.  Their trace
-        # still needs an exact deterministic input identity; the same typed payload
-        # fingerprint is the documented headless-run fallback.
+        # invalid and therefore cannot be canonicalised as a project.  The
+        # calculation record still needs an exact deterministic input identity;
+        # the same typed payload fingerprint is the documented headless-run
+        # fallback.
         return project_io.result_sha256(inp)
 
 
@@ -5474,28 +5475,6 @@ def _run_bridge_or_invalid(inp):
         }
 
 
-def _without_retired_case_publication(entries):
-    """Shallow-copy cached case entries that retain retired publication data."""
-
-    if entries is None:
-        return None
-    cleaned = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("results"), dict):
-            cleaned.append(entry)
-            continue
-        result = entry["results"]
-        if "calculation_traces" not in result:
-            cleaned.append(entry)
-            continue
-        clean_entry = dict(entry)
-        clean_result = dict(result)
-        clean_result.pop("calculation_traces", None)
-        clean_entry["results"] = clean_result
-        cleaned.append(clean_entry)
-    return cleaned
-
-
 def run_analysis(
     inp,
     *,
@@ -5542,15 +5521,6 @@ def run_analysis(
     def _runner(case_inp, *, reuse_plastic=None):
         return _run_single_analysis(case_inp, reuse_plastic=reuse_plastic)
 
-    reuse_plastic_cases = _without_retired_case_publication(
-        reuse_plastic_cases
-    )
-    reuse_plastic_bending_cases = _without_retired_case_publication(
-        reuse_plastic_bending_cases
-    )
-    reuse_elastic_cases = _without_retired_case_publication(
-        reuse_elastic_cases
-    )
     result = case_analysis.run_case_tables(
         inp,
         _runner,
@@ -8646,7 +8616,7 @@ def _verdict_metric(box, label, value, ok, *, help=None):
 
 
 def _member_material_note(inp):
-    """Compact trace from shared shear/torsion parameters to their material law."""
+    """Identify the reinforcing material shared by shear/torsion checks."""
     material_id = inp.get("capacity_steel_material_id") or "-"
     name = next(
         (item.get("name", "") for item in

@@ -122,13 +122,14 @@ def test_numeric_atoms_are_measured_inside_mixed_markup(cell):
     )
 
 
-def test_escaped_trace_text_retains_its_explicit_numeric_evidence():
+def test_escaped_equation_text_retains_its_explicit_numeric_evidence():
     builder = _builder()
     atom = "123456789012345678901234567890"
     markup = sector_report._html_escape(f"CALCULATED: {atom} MPa")
     evidence = sector_report._numerical_table_text(markup, atom)
     builder._table(
-        [["Step", "Result"], [sector_report._html_escape("step-01"), evidence]],
+        [["Equation", "Result"],
+         [sector_report._html_escape("equation-01"), evidence]],
         [30 * mm, 140 * mm],
         keep=False,
     )

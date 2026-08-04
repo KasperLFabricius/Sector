@@ -102,9 +102,9 @@ class PlasticPoint:
     dy: float                 # Y component of the lever arm, m
     converged: bool
 
-    # CT-002 diagnostics are solver-owned, optional keyword-only tail state. ``None``
-    # deliberately means that a legacy public construction carries no authoritative
-    # trace evidence; finite trace validation rejects such incomplete state.
+    # Solver diagnostics are optional keyword-only tail state. ``None`` preserves
+    # the legacy public construction contract; live finite solver results populate
+    # the complete diagnostic set.
     axial_requested: float | None = field(default=None, kw_only=True, repr=False, compare=False)
     axial_residual: float | None = field(default=None, kw_only=True, repr=False, compare=False)
     axial_tolerance: float | None = field(default=None, kw_only=True, repr=False, compare=False)

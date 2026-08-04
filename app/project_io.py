@@ -30,7 +30,6 @@ from sector.build_info import source_revision
 
 FORMAT = "sector-project"
 VERSION = 23
-CALCULATION_TRACE_KEY = "calculation_traces"
 
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
 REINFORCEMENT_TABLE_KEYS = {"bars_base": "bar", "tendons_base": "tendon"}
@@ -371,11 +370,9 @@ def _fingerprint_value(value):
     """Return strict type-tagged data for an exact in-memory payload.
 
     Calculation results contain immutable dataclasses, NumPy values and pandas
-    tables that are intentionally richer than project JSON.  A trace seal must
-    distinguish retained type as well as numerical value: ``True``, ``1``,
-    ``1.0``, a list and a tuple therefore have different encodings.  The
-    publication key is excluded recursively so a result can carry the hash that
-    seals the result it describes without a self-reference.
+    tables that are intentionally richer than project JSON.  A result identity
+    hash must distinguish retained type as well as numerical value: ``True``,
+    ``1``, ``1.0``, a list and a tuple therefore have different encodings.
     """
 
     if value is None:
@@ -446,8 +443,6 @@ def _fingerprint_value(value):
     if isinstance(value, Mapping):
         items = []
         for key, item in value.items():
-            if type(key) is str and key == CALCULATION_TRACE_KEY:
-                continue
             encoded_key = _fingerprint_value(key)
             encoded_item = _fingerprint_value(item)
             sort_key = json.dumps(
