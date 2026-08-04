@@ -1949,7 +1949,9 @@ def test_report_directional_vt_table_retains_actual_verdict_outside_default_rang
     ).split())
     for label in ("Vx+T", "Vy+T"):
         start = text.index(label)
-        assert "PASS" in text[start:start + 260]
+        # The local reference, caption and repeated context precede the retained
+        # row; keep the probe inside this compact interaction table.
+        assert "PASS" in text[start:start + 520]
     assert "Directional minimum-reinforcement screens" in text
     assert "minimum sufficient" in text
     assert "left (-x)" in text and "bottom (-y)" in text
