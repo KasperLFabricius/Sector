@@ -7,6 +7,7 @@ import hashlib
 
 from manual_equation_location import (
     LocatedManualEquation,
+    ManualEquationLocation,
     MANUAL_EQUATION_LOCATIONS,
 )
 
@@ -290,7 +291,32 @@ def bind_manual_equation_sources(
     ):
         if type(equation) is not LocatedManualEquation:
             raise ValueError("Located manual equation type changed.")
-        if equation.location != location:
+        candidate_location = equation.location
+        if type(candidate_location) is not ManualEquationLocation:
+            raise ValueError(f"Located identity type changed at {source.number}.")
+        candidate_fields = (
+            candidate_location.ordinal,
+            candidate_location.key,
+            candidate_location.number,
+            candidate_location.part,
+            candidate_location.section,
+            candidate_location.subsection,
+            candidate_location.expression_sha256,
+        )
+        expected_fields = (
+            location.ordinal,
+            location.key,
+            location.number,
+            location.part,
+            location.section,
+            location.subsection,
+            location.expression_sha256,
+        )
+        if type(candidate_fields[0]) is not int or any(
+            type(value) is not str for value in candidate_fields[1:]
+        ):
+            raise ValueError(f"Located identity field type changed at {source.number}.")
+        if candidate_fields != expected_fields:
             raise ValueError(f"Located identity changed at {source.number}.")
         expression = equation.expression
         if type(expression) is not str or not expression or not expression.isascii():
