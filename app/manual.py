@@ -39,6 +39,7 @@ from manual_equation_publication import (
 )
 from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
+import publication_theme
 import reproducible_example
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
@@ -2140,8 +2141,10 @@ def _render_manual_equation_pdf(
         spaceBefore=3,
     )
     table.setStyle(TableStyle([
-        ("GRID", (0, 0), (-1, -1), 0.35, colors.lightgrey),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
+        ("GRID", (0, 0), (-1, -1), 0.35,
+         colors.HexColor(publication_theme.PALETTE.grid)),
+        ("BACKGROUND", (0, 0), (-1, 0),
+         colors.HexColor(publication_theme.PALETTE.manual_surface)),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -2188,7 +2191,8 @@ def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
     ``_FIG_TIMED_OUT`` sentinel if kaleido does not finish in ``timeout``."""
     def _render():
         buf = io.BytesIO()
-        fig_callable().write_image(buf, format="png", scale=2)
+        with publication_theme.without_kaleido_server_kopts_noise():
+            fig_callable().write_image(buf, format="png", scale=2)
         return buf.getvalue()
 
     return _call_with_timeout(_render, timeout)
@@ -2206,24 +2210,26 @@ def _manual_pdf_styles(
         if name not in styles.byName:
             styles.add(ParagraphStyle(name=name, parent=styles["Normal"], **kw))
 
-    _add("MTitle", fontSize=20, spaceAfter=6, fontName=font_b)
-    _add("MPart", fontSize=17, spaceBefore=18, spaceAfter=8, fontName=font_b,
-         textColor=colors.HexColor("#0d2440"), keepWithNext=1)
-    _add("MH1", fontSize=15, spaceBefore=14, spaceAfter=8, fontName=font_b,
-         textColor=colors.HexColor("#1f3b66"), keepWithNext=1)
-    _add("MH2", fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName=font_b,
-         keepWithNext=1)
-    _add("MH3", fontSize=11, spaceBefore=6, spaceAfter=3, fontName=font_b,
-         keepWithNext=1)
-    _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
-    _add("MMath", fontSize=11, leading=15, alignment=align_center, spaceBefore=6,
-         spaceAfter=6, fontName=font)
-    _add("MSmall", fontSize=8, leading=11, textColor=colors.grey, fontName=font)
-    _add("MPubRef", fontSize=8, leading=10, textColor=colors.grey,
-         fontName=font, spaceBefore=2, spaceAfter=2, keepWithNext=1)
-    _add("MPubCaption", fontSize=8, leading=10,
-         textColor=colors.HexColor("#2c2c2a"), fontName=font,
-         spaceBefore=2, spaceAfter=3, keepWithNext=1)
+    def themed(name, role, **extra):
+        values = publication_theme.reportlab_style_values(
+            publication_theme.MANUAL_TEXT[role],
+            font,
+            font_b,
+            colors.HexColor,
+        )
+        values.update(extra)
+        _add(name, **values)
+
+    themed("MTitle", "title")
+    themed("MPart", "part")
+    themed("MH1", "h1")
+    themed("MH2", "h2")
+    themed("MH3", "h3")
+    themed("MBody", "body")
+    themed("MMath", "math", alignment=align_center)
+    themed("MSmall", "small")
+    themed("MPubRef", "publication_ref")
+    themed("MPubCaption", "publication_caption")
     return styles
 
 
@@ -2359,8 +2365,12 @@ def build_manual_pdf(buffer, figures=True):
                               styles["MBody"])
             t = Table([[inner]], colWidths=[page_w])
             t.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#eef2f7")),
-                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#9fb3c8")),
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(
+                    publication_theme.PALETTE.manual_surface
+                )),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor(
+                    publication_theme.PALETTE.manual_rule
+                )),
                 ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                 ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
             flow.append(KeepTogether([t]))
@@ -2459,9 +2469,15 @@ def build_manual_pdf(buffer, figures=True):
             t._sector_data_start = 2
             t.setStyle(TableStyle([
                 ("SPAN", (0, 0), (-1, 0)),
-                ("GRID", (0, 1), (-1, -1), 0.4, colors.lightgrey),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
-                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#eef2f7")),
+                ("GRID", (0, 1), (-1, -1), 0.4, colors.HexColor(
+                    publication_theme.PALETTE.grid
+                )),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(
+                    publication_theme.PALETTE.manual_surface
+                )),
+                ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor(
+                    publication_theme.PALETTE.manual_surface
+                )),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
                 ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
