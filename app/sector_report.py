@@ -439,11 +439,11 @@ def _styles():
     out["small"] = ParagraphStyle("s", parent=ss["Normal"], fontSize=8.5,
                                  fontName=_FONT, leading=11, textColor=_GREY)
     out["formula"] = ParagraphStyle("f", parent=ss["Normal"], fontSize=9.5,
-                                    leading=13, leftIndent=10, spaceAfter=2,
-                                    fontName=_FONT)
+                                    leading=14, leftIndent=12, rightIndent=6,
+                                    spaceBefore=2, spaceAfter=3, fontName=_FONT)
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
-                               fontName=_FONT, leading=10, leftIndent=10,
-                               textColor=_GREY, spaceAfter=4)
+                               fontName=_FONT, leading=11, leftIndent=12,
+                               rightIndent=6, textColor=_GREY, spaceAfter=6)
     return out
 
 
@@ -639,8 +639,13 @@ class ReportBuilder:
             "status", parent=self.s["body"], fontName=_FONT_BOLD,
             textColor=fg, leading=13,
         )
-        table = Table([[Paragraph(_greek(text), style)]],
-                      colWidths=[160 * mm], hAlign="LEFT")
+        table = Table(
+            [[Paragraph(_greek(text), style)]],
+            colWidths=[160 * mm],
+            hAlign="LEFT",
+            spaceBefore=2,
+            spaceAfter=6,
+        )
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), bg),
             ("BOX", (0, 0), (-1, -1), 0.8, fg),
@@ -651,7 +656,6 @@ class ReportBuilder:
         ]))
         table._sector_status_banner = True
         self.flow.append(KeepTogether(table))
-        self._gap(4)
 
     def _case_line(self, family, title=""):
         self._small("<b>Case:</b> " + _report_action_set_text(self.inp, family))
@@ -841,6 +845,22 @@ class ReportBuilder:
 
     def _gap(self, h=4):
         self.flow.append(Spacer(1, h))
+
+    def _page_break(self):
+        """Start a page without carrying a layout-only trailing gap onto it."""
+        while self.flow:
+            trailing = self.flow[-1]
+            if isinstance(trailing, Spacer):
+                self.flow.pop()
+                continue
+            if isinstance(trailing, KeepTogether):
+                while trailing._content and isinstance(trailing._content[-1], Spacer):
+                    trailing._content.pop()
+                if not trailing._content:
+                    self.flow.pop()
+                    continue
+            break
+        self.flow.append(PageBreak())
 
     def _keep_from(self, start):
         """Keep the flowables added since ``start`` together when they fit a page."""
@@ -1360,13 +1380,15 @@ class ReportBuilder:
             self._h2("Prestressing steel")
             self._prestress_block()
             self._keep_from(start)
-        # Loads & settings.
-        start = len(self.flow)
+        # Loads and settings each start on a predictable, dedicated page. Their
+        # data tables retain the universal split contract rather than entering one
+        # combined KeepTogether block.
+        self._page_break()
         self._h2("Loads")
         self._loads_block()
+        self._page_break()
         self._h2("Analysis settings")
         self._settings_block()
-        self._keep_from(start)
 
     def _geometry_tables(self):
         inp = self.inp
@@ -2095,11 +2117,11 @@ class ReportBuilder:
                         ))
                     ),
                 ])
-        self._table(rows, [110 * mm, 55 * mm])
+        self._table(rows, [110 * mm, 55 * mm], keep=False)
         if fatigue_rows:
             self.flow.append(PageBreak())
             self._h2("Grouped fatigue settings")
-            self._table(fatigue_rows, [110 * mm, 55 * mm])
+            self._table(fatigue_rows, [110 * mm, 55 * mm], keep=False)
 
     def _theory(self):
         self._h1("Basis of analysis")
