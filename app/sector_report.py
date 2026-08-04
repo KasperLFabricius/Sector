@@ -44,6 +44,7 @@ import fatigue_presentation
 import material_catalog
 from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
+import publication_style
 import report_equation_contract
 import viz
 import result_presentation as presentation
@@ -54,25 +55,16 @@ from sector.build_info import short_revision
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
-_BLUE = colors.HexColor("#1F3B66")
-_GREY = colors.HexColor("#5A5A5A")
-_LINE = colors.HexColor("#9AA5B1")
-_HEAD_BG = colors.HexColor("#E8ECF2")
+_BLUE = colors.HexColor(publication_style.PALETTE.primary)
+_GREY = colors.HexColor(publication_style.PALETTE.muted)
+_LINE = colors.HexColor(publication_style.PALETTE.rule)
+_HEAD_BG = colors.HexColor(publication_style.PALETTE.report_header)
 _A4_CONTENT_WIDTH = A4[0] - 40 * mm
 _REPORT_FRAME_PADDING = 6.0
 _A4_FRAME_USABLE_HEIGHT = A4[1] - 45 * mm - 2 * _REPORT_FRAME_PADDING
 _MIN_REPORT_TABLE_FONT = 7.2
 _REPORT_TABLE_HORIZONTAL_PADDING = 3.0
-_ASSESSMENT_PALETTE = {
-    "PASS": ("#E8F5E9", "#1B5E20"),
-    "OK": ("#E8F5E9", "#1B5E20"),
-    "FAIL": ("#FDECEC", "#9B1C1C"),
-    "EXCEEDED": ("#FDECEC", "#9B1C1C"),
-    "INVALID": ("#FDECEC", "#9B1C1C"),
-    "REVIEW": ("#FFF4D6", "#7A4E00"),
-    "NOT ASSESSED": ("#FFF4D6", "#7A4E00"),
-    "NOT APPLICABLE": ("#EEF2F6", "#374151"),
-}
+_ASSESSMENT_PALETTE = publication_style.ASSESSMENT_PALETTE
 _NUMERIC_TABLE_WORD = re.compile(
     r"(?<![A-Za-z0-9_.-])"
     r"[+-]?(?:(?:\d+(?:[.,]\d*)?)|(?:[.,]\d+))(?:[eE][+-]?\d+)?%?"
@@ -486,20 +478,25 @@ class _ReportDocTemplate(SimpleDocTemplate):
 def _styles():
     ss = getSampleStyleSheet()
     out = {}
-    out["title"] = ParagraphStyle("t", parent=ss["Title"], fontSize=20,
-                                  fontName=_FONT_BOLD, textColor=_BLUE, spaceAfter=4)
-    out["subtitle"] = ParagraphStyle("st", parent=ss["Normal"], fontSize=11,
-                                     fontName=_FONT, textColor=_GREY, spaceAfter=2)
-    out["h1"] = ParagraphStyle("h1", parent=ss["Heading1"], fontSize=14,
-                              fontName=_FONT_BOLD, textColor=_BLUE, spaceBefore=10,
-                              spaceAfter=6, keepWithNext=1)
-    out["h2"] = ParagraphStyle("h2", parent=ss["Heading2"], fontSize=11.5,
-                              fontName=_FONT_BOLD, textColor=_BLUE, spaceBefore=8,
-                              spaceAfter=4, keepWithNext=1)
-    out["body"] = ParagraphStyle("b", parent=ss["Normal"], fontSize=9.5,
-                                fontName=_FONT, leading=13, spaceAfter=4)
-    out["small"] = ParagraphStyle("s", parent=ss["Normal"], fontSize=8.5,
-                                 fontName=_FONT, leading=11, textColor=_GREY)
+
+    def _shared(name, parent, key):
+        return ParagraphStyle(
+            name,
+            parent=parent,
+            **publication_style.paragraph_kwargs(
+                publication_style.REPORT_PARAGRAPHS[key],
+                _FONT,
+                _FONT_BOLD,
+                colors.HexColor,
+            ),
+        )
+
+    out["title"] = _shared("t", ss["Title"], "title")
+    out["subtitle"] = _shared("st", ss["Normal"], "subtitle")
+    out["h1"] = _shared("h1", ss["Heading1"], "h1")
+    out["h2"] = _shared("h2", ss["Heading2"], "h2")
+    out["body"] = _shared("b", ss["Normal"], "body")
+    out["small"] = _shared("s", ss["Normal"], "small")
     out["formula"] = ParagraphStyle(
         "f", parent=ss["Normal"], fontSize=9.5, leading=14,
         leftIndent=12, rightIndent=6, spaceBefore=2, spaceAfter=3,
@@ -513,15 +510,11 @@ def _styles():
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
                                fontName=_FONT, leading=11, leftIndent=12,
                                rightIndent=6, textColor=_GREY, spaceAfter=6)
-    out["publication_ref"] = ParagraphStyle(
-        "pr", parent=ss["Normal"], fontSize=8, leading=10,
-        fontName=_FONT, textColor=_GREY, spaceBefore=2, spaceAfter=2,
-        keepWithNext=1,
+    out["publication_ref"] = _shared(
+        "pr", ss["Normal"], "publication_ref"
     )
-    out["publication_caption"] = ParagraphStyle(
-        "pc", parent=ss["Normal"], fontSize=8, leading=10,
-        fontName=_FONT, textColor=colors.HexColor("#2C2C2A"),
-        spaceBefore=2, spaceAfter=2, keepWithNext=1,
+    out["publication_caption"] = _shared(
+        "pc", ss["Normal"], "publication_caption"
     )
     out["formula_symbol"] = ParagraphStyle(
         "fs", parent=ss["Normal"], fontSize=8.1, leading=11,
@@ -604,7 +597,10 @@ def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
 
     def _work():
         try:
-            box["v"] = fig.to_image(format="png", width=w_px, height=h_px, scale=2)
+            with publication_style.suppress_known_kaleido_server_warning():
+                box["v"] = fig.to_image(
+                    format="png", width=w_px, height=h_px, scale=2
+                )
         except Exception:
             box["v"] = None
 
@@ -954,7 +950,8 @@ class ReportBuilder:
             "Table", "Results overview across calculated checks"
         )
         caption_markup = (
-            f'<font color="#5A5A56">See <link href="#{table_item.anchor}">'
+            f'<font color="{publication_style.PALETTE.publication_reference}">'
+            f'See <link href="#{table_item.anchor}">'
             f'{table_item.label}</link>.</font><br/>'
             f'<a name="{table_item.anchor}"/><b>{table_item.label}.</b> '
             f"{_greek(_html_escape(table_item.caption))}"
@@ -1414,7 +1411,7 @@ class ReportBuilder:
             )
             continued = panel_number > 1
             reference_markup = (
-                f'<font color="#5A5A56">See '
+                f'<font color="{publication_style.PALETTE.publication_reference}">See '
                 f'<link href="#{table_item.anchor}">{table_item.label}</link>.'
                 f"</font><br/>"
                 if not continued else ""

@@ -12,15 +12,12 @@ import argparse
 import copy
 import datetime
 import functools
-import io
 import math
 import pathlib
 import re
 import sys
 
-from PIL import Image
 import pypdf
-import pypdfium2 as pdfium
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
@@ -41,6 +38,23 @@ from sector import __version__  # noqa: E402
 from sector import bridge, capacity, codes, combined, detailing, shear, torsion  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
+from tools.pdf_preflight import (  # noqa: E402
+    CropSpec,
+    REPORT_FURNITURE_REGIONS,
+    preflight_structure,
+    render_pdf,
+    validate_crop_hashes,
+    validate_publication_labels as validate_report_table_colocation,
+    validate_rendered_pages,
+)
+
+__all__ = (
+    "render_pdf",
+    "validate_outline_destinations",
+    "validate_rendered_pages",
+    "validate_report_page_semantics",
+    "validate_report_table_colocation",
+)
 
 # Geometry, concrete law, steel law, two plastic interactions, two plastic
 # states, two elastic states, two elastic strain profiles, one derived shear
@@ -49,6 +63,20 @@ from sector.section import Section  # noqa: E402
 # grouped-fatigue figures. An intentional fixture change must update this
 # explicit contract.
 _EXPECTED_FIGURE_COUNT = 23
+_REPORT_CROPS = (
+    CropSpec(
+        "report overview",
+        2,
+        (0.10, 0.08, 0.92, 0.90),
+        "9f90912ab8c3a07a51fbe57baa0d200e4e40195563e91acefc73091bc131dc18",
+    ),
+    CropSpec(
+        "report page furniture",
+        2,
+        (0.09, 0.02, 0.92, 0.98),
+        "b00d77059429378ceff06c6698042aaeb50e198bcdcc059ea30eefc22bdbb424",
+    ),
+)
 
 
 class _FixedDateTime(datetime.datetime):
@@ -1131,8 +1159,8 @@ def build_fixture_pdf() -> bytes:
 
 def validate_pdf_content(pdf: bytes) -> str:
     """Reject a report that lost figures or core engineering content."""
-    reader = pypdf.PdfReader(io.BytesIO(pdf))
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    reader, page_texts = preflight_structure(pdf, min_pages=6)
+    text = "\n".join(page_texts)
     if "figure unavailable" in text.lower():
         raise AssertionError("the report contains an unavailable-figure placeholder")
     # Plain ``sqrt(...)`` and ``sum(...)`` are now intentional solver-owned
@@ -1289,9 +1317,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected report content is missing: {expected}")
 
-    page_texts = [page.extract_text() or "" for page in reader.pages]
     validate_report_page_semantics(page_texts)
-    validate_report_table_colocation(page_texts)
     overview_pages = [
         number
         for number, page_text in enumerate(page_texts, start=1)
@@ -1307,23 +1333,6 @@ def validate_pdf_content(pdf: bytes) -> str:
             "the stable results overview no longer fits one complete page"
         )
     return text
-
-
-_REPORT_TABLE_REFERENCE = re.compile(r"\bSee (Table \d+\.\d+)\.(?!\d)")
-
-
-def validate_report_table_colocation(page_texts: list[str]) -> None:
-    """Require every exact report-table reference to share its caption page."""
-    for number, page_text in enumerate(page_texts, start=1):
-        for match in _REPORT_TABLE_REFERENCE.finditer(page_text):
-            label = match.group(1)
-            caption = re.compile(
-                rf"(?<!See ){re.escape(label)}\.(?!\d)"
-            )
-            if caption.search(page_text) is None:
-                raise AssertionError(
-                    f"page {number} strands the reference to {label}"
-                )
 
 
 def validate_report_page_semantics(page_texts: list[str]) -> None:
@@ -1350,109 +1359,6 @@ def validate_report_page_semantics(page_texts: list[str]) -> None:
             )
 
 
-def render_pdf(pdf: bytes, scale: float = 1.5) -> list[Image.Image]:
-    """Rasterise all pages through PDFium and return independent PIL images."""
-    document = pdfium.PdfDocument(pdf)
-    pages = []
-    try:
-        for index in range(len(document)):
-            page = document[index]
-            bitmap = page.render(scale=scale)
-            try:
-                pages.append(bitmap.to_pil().convert("RGB").copy())
-            finally:
-                bitmap.close()
-                page.close()
-    finally:
-        document.close()
-    return pages
-
-
-def _pixels(image: Image.Image) -> list[int]:
-    """Return flat pixel values across supported Pillow releases."""
-    getter = getattr(image, "get_flattened_data", image.getdata)
-    return list(getter())
-
-
-def validate_rendered_pages(
-    pages: list[Image.Image],
-    *,
-    require_document_control: bool = False,
-) -> None:
-    """Reject blank, clipped, malformed or ink-saturated report pages."""
-    if len(pages) < 6:
-        raise AssertionError(f"expected at least 6 report pages, got {len(pages)}")
-
-    for number, image in enumerate(pages, start=1):
-        width, height = image.size
-        ratio = width / height
-        if not 0.70 < ratio < 0.72:
-            raise AssertionError(f"page {number} is not A4 portrait: {width}x{height}")
-
-        grey = image.convert("L")
-        pixels = _pixels(grey)
-        dark = sum(value < 245 for value in pixels)
-        fraction = dark / len(pixels)
-        if not 0.002 < fraction < 0.45:
-            raise AssertionError(
-                f"page {number} has implausible ink coverage {fraction:.4f}"
-            )
-
-        bbox = Image.eval(
-            Image.frombytes("L", grey.size, bytes(
-                255 if value < 250 else 0 for value in pixels
-            )),
-            lambda value: value,
-        ).getbbox()
-        if bbox is None:
-            raise AssertionError(f"page {number} rendered blank")
-
-        edge = max(min(width, height) // 250, 2)
-        edge_pixels = (
-            _pixels(grey.crop((0, 0, width, edge)))
-            + _pixels(grey.crop((0, height - edge, width, height)))
-            + _pixels(grey.crop((0, 0, edge, height)))
-            + _pixels(grey.crop((width - edge, 0, width, height)))
-        )
-        edge_dark = sum(value < 245 for value in edge_pixels) / len(edge_pixels)
-        if edge_dark > 0.01:
-            raise AssertionError(
-                f"page {number} has content clipped against the page edge"
-            )
-
-        if require_document_control:
-            # Text extraction can still find header/footer strings when a PDF
-            # graphics-state error makes them invisible. Check their rendered
-            # text zones independently of the body and horizontal rules.
-            furniture_regions = {
-                "header project": (
-                    int(0.09 * width), int(0.028 * height),
-                    int(0.72 * width), int(0.044 * height),
-                ),
-                "header revision": (
-                    int(0.80 * width), int(0.028 * height),
-                    int(0.92 * width), int(0.044 * height),
-                ),
-                "footer identity": (
-                    int(0.09 * width), int(0.952 * height),
-                    int(0.65 * width), int(0.967 * height),
-                ),
-                "footer page number": (
-                    int(0.78 * width), int(0.952 * height),
-                    int(0.92 * width), int(0.967 * height),
-                ),
-            }
-            for label, box in furniture_regions.items():
-                region_pixels = _pixels(grey.crop(box))
-                region_dark = sum(
-                    value < 245 for value in region_pixels
-                ) / len(region_pixels)
-                if region_dark < 0.01:
-                    raise AssertionError(
-                        f"page {number} has no visible {label}"
-                    )
-
-
 def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     """Write the stable PDF and rendered page PNG evidence."""
     output.mkdir(parents=True, exist_ok=True)
@@ -1461,7 +1367,10 @@ def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     pdf_path = output / "sector-report-reference.pdf"
     pdf_path.write_bytes(pdf)
     pages = render_pdf(pdf)
-    validate_rendered_pages(pages, require_document_control=True)
+    validate_rendered_pages(
+        pages, furniture_regions=REPORT_FURNITURE_REGIONS
+    )
+    validate_crop_hashes(pages, _REPORT_CROPS)
     paths = [pdf_path]
     for index, page in enumerate(pages, start=1):
         path = output / f"sector-report-page-{index:02d}.png"

@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import argparse
 import functools
-import io
 import pathlib
 import sys
-
-import pypdf
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
@@ -19,13 +16,31 @@ if str(ROOT) not in sys.path:
 
 import manual  # noqa: E402
 from sector import __version__  # noqa: E402
-from tools.report_render_fixture import (  # noqa: E402
+from tools.pdf_preflight import (  # noqa: E402
+    CropSpec,
+    MANUAL_FURNITURE_REGIONS,
+    preflight_structure,
     render_pdf,
-    validate_outline_destinations,
+    validate_crop_hashes,
     validate_rendered_pages,
 )
+from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
 _EXPECTED_FIGURE_COUNT = 16
+_MANUAL_CROPS = (
+    CropSpec(
+        "manual title-page body",
+        1,
+        (0.10, 0.07, 0.90, 0.45),
+        "de2d41eedeefd6e05a0246d56a2d216462907d0c541af9096a615becffde0c2b",
+    ),
+    CropSpec(
+        "manual title-page footer",
+        1,
+        (0.09, 0.94, 0.92, 0.98),
+        "b8913c82877da1e9d1db0d7beb47c04985aa4c0e85651ef694a4821ddb052a7f",
+    ),
+)
 
 
 @functools.lru_cache(maxsize=1)
@@ -34,8 +49,8 @@ def build_fixture_pdf() -> bytes:
 
 
 def validate_pdf_content(pdf: bytes) -> str:
-    reader = pypdf.PdfReader(io.BytesIO(pdf))
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    reader, page_texts = preflight_structure(pdf, min_pages=6)
+    text = "\n".join(page_texts)
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
     for token in (
@@ -139,7 +154,10 @@ def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     pdf_path = output / "sector-manual-reference.pdf"
     pdf_path.write_bytes(pdf)
     pages = render_pdf(pdf)
-    validate_rendered_pages(pages)
+    validate_rendered_pages(
+        pages, furniture_regions=MANUAL_FURNITURE_REGIONS
+    )
+    validate_crop_hashes(pages, _MANUAL_CROPS)
     paths = [pdf_path]
     for index, page in enumerate(pages, start=1):
         path = output / f"sector-manual-page-{index:02d}.png"
