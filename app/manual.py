@@ -2092,7 +2092,7 @@ def build_manual_pdf(buffer, figures=True):
     _add("MTitle", fontSize=20, spaceAfter=6, fontName=font_b)
     _add("MPart", fontSize=17, spaceBefore=18, spaceAfter=8, fontName=font_b,
          textColor=colors.HexColor("#0d2440"), keepWithNext=1)
-    _add("MH1", fontSize=15, spaceBefore=14, spaceAfter=6, fontName=font_b,
+    _add("MH1", fontSize=15, spaceBefore=14, spaceAfter=8, fontName=font_b,
          textColor=colors.HexColor("#1f3b66"), keepWithNext=1)
     _add("MH2", fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName=font_b,
          keepWithNext=1)
@@ -2101,7 +2101,7 @@ def build_manual_pdf(buffer, figures=True):
     _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
     _add("MMath", fontSize=11, leading=15, alignment=TA_CENTER, spaceBefore=6,
          spaceAfter=6, fontName=font)
-    _add("MSmall", fontSize=8, leading=10, textColor=colors.grey, fontName=font)
+    _add("MSmall", fontSize=8, leading=11, textColor=colors.grey, fontName=font)
     toc_style = ParagraphStyle(
         "MTOCPart", parent=styles["MBody"], fontSize=9.5, leading=12,
         leftIndent=0, firstLineIndent=0, spaceBefore=5, spaceAfter=3,
@@ -2246,13 +2246,14 @@ def build_manual_pdf(buffer, figures=True):
                 data,
                 colWidths=[page_w / ncol] * ncol,
                 repeatRows=1,
+                spaceBefore=2,
             )
             t.setStyle(TableStyle([
                 ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+                ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
             flow.append(t)
             flow.append(Spacer(1, 0.2 * cm))
 
