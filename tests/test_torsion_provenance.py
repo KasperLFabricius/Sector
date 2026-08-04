@@ -1,34 +1,22 @@
-"""Focused publication and trace checks for transverse torsion provenance."""
+"""Focused direct-publication checks for transverse torsion provenance."""
 
 from pathlib import Path
-
-from sector.torsion_trace_contract import LONGITUDINAL_SOURCE, TRANSVERSE_SOURCE
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_transverse_and_longitudinal_torsion_sources_are_distinct():
-    transverse = TRANSVERSE_SOURCE.citation
-    longitudinal = LONGITUDINAL_SOURCE.citation
-
-    assert transverse is not None
-    assert transverse.clause == "6.3.2(1) and 6.2.3(3)"
-    assert transverse.locator == "Formulae (6.27) and (6.8)"
-    assert longitudinal is not None
-    assert longitudinal.clause == "6.3.2(3)"
-    assert longitudinal.locator == "Formula (6.28)"
-    assert TRANSVERSE_SOURCE != LONGITUDINAL_SOURCE
-
-
 def test_transverse_provenance_reaches_every_publication_surface():
     expected = {
         "app/sector_app.py": ("torsional wall shear flow (6.27)",
-                              "transverse equilibrium (6.8)"),
+                              "transverse equilibrium (6.8)",
+                              "f_{yd})$ (6.28) is"),
         "app/sector_report.py": ("wall shear flow (6.27)",
-                                 "transverse equilibrium (6.8)"),
+                                 "transverse equilibrium (6.8)",
+                                 'ref="EN 1992-1-1 (6.28)"'),
         "app/manual.py": ("torsional wall shear ", "flow (6.27)",
-                          "transverse equilibrium (6.8)"),
+                          "transverse equilibrium (6.8)",
+                          "(6.28), **in addition**"),
         "sector/torsion.py": ("6.27 + 6.8", "Formula 6.28 separately defines"),
     }
 

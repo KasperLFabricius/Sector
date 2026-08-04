@@ -29,16 +29,10 @@ from sector.calculation_trace import (
     trace_identity_token,
     validate_bundle,
 )
-from sector.detailing_trace import (
-    build_detailing_trace_family,
-    validate_detailing_trace_family,
-)
 from sector.plastic_capacity_trace import (
     build_plastic_capacity_trace_family,
     validate_plastic_capacity_trace_family,
 )
-from sector.shear_trace import build_shear_trace_family, validate_shear_trace_family
-from sector.torsion_trace import build_torsion_trace_family, validate_torsion_trace_family
 
 
 PUBLICATION_KEY = project_io.CALCULATION_TRACE_KEY
@@ -144,24 +138,6 @@ def _case_specs(
     specs: list[tuple[str, Callable[[], TraceBundle | None]]] = []
     if "plastic" in out:
         specs.append(("ct-002", lambda: build_plastic_capacity_trace_family(
-            inp, out, input_sha256=input_sha256,
-            result_sha256=result_sha256, context=context,
-        )))
-    if "shear" in out:
-        specs.append(("ct-006", lambda: build_shear_trace_family(
-            inp, out.get("shear") or {}, input_sha256=input_sha256,
-            result_sha256=result_sha256, context=context,
-            plastic_out=out.get("plastic"),
-        )))
-    if "torsion" in out:
-        specs.append(("ct-007", lambda: build_torsion_trace_family(
-            inp, out.get("torsion") or {}, input_sha256=input_sha256,
-            result_sha256=result_sha256, context=context,
-        )))
-    if any(key in out for key in (
-        "clear_spacing", "transverse_reinforcement", "minimum_reinforcement"
-    )):
-        specs.append(("ct-008", lambda: build_detailing_trace_family(
             inp, out, input_sha256=input_sha256,
             result_sha256=result_sha256, context=context,
         )))
@@ -372,22 +348,6 @@ def _replay_published_bundle(
     }
     if coverage == {"ct-002"}:
         checked = validate_plastic_capacity_trace_family(
-            candidate, inp, result_view, **kwargs
-        )
-    elif coverage == {"ct-006"}:
-        checked = validate_shear_trace_family(
-            candidate,
-            inp,
-            result_view.get("shear") or {},
-            plastic_out=result_view.get("plastic"),
-            **kwargs,
-        )
-    elif coverage == {"ct-007"}:
-        checked = validate_torsion_trace_family(
-            candidate, inp, result_view.get("torsion") or {}, **kwargs
-        )
-    elif coverage == {"ct-008"}:
-        checked = validate_detailing_trace_family(
             candidate, inp, result_view, **kwargs
         )
     else:
