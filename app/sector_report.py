@@ -57,8 +57,20 @@ _GREY = colors.HexColor("#5A5A5A")
 _LINE = colors.HexColor("#9AA5B1")
 _HEAD_BG = colors.HexColor("#E8ECF2")
 _A4_CONTENT_WIDTH = A4[0] - 40 * mm
+_REPORT_FRAME_PADDING = 6.0
+_A4_FRAME_USABLE_HEIGHT = A4[1] - 45 * mm - 2 * _REPORT_FRAME_PADDING
 _MIN_REPORT_TABLE_FONT = 7.2
 _REPORT_TABLE_HORIZONTAL_PADDING = 3.0
+_ASSESSMENT_PALETTE = {
+    "PASS": ("#E8F5E9", "#1B5E20"),
+    "OK": ("#E8F5E9", "#1B5E20"),
+    "FAIL": ("#FDECEC", "#9B1C1C"),
+    "EXCEEDED": ("#FDECEC", "#9B1C1C"),
+    "INVALID": ("#FDECEC", "#9B1C1C"),
+    "REVIEW": ("#FFF4D6", "#7A4E00"),
+    "NOT ASSESSED": ("#FFF4D6", "#7A4E00"),
+    "NOT APPLICABLE": ("#EEF2F6", "#374151"),
+}
 _NUMERIC_TABLE_WORD = re.compile(
     r"(?<![A-Za-z0-9_.-])"
     r"[+-]?(?:(?:\d+(?:[.,]\d*)?)|(?:[.,]\d+))(?:[eE][+-]?\d+)?%?"
@@ -171,6 +183,48 @@ def _greek(s):
 def _numerical_table_text(markup, evidence):
     """Retain escaped mixed cell text while identifying its numeric evidence."""
     return _NumericalReportText(markup, evidence)
+
+
+def _assessment_colors(status):
+    """Return the shared print palette for assessment banners and context."""
+    background, foreground = _ASSESSMENT_PALETTE.get(
+        status, _ASSESSMENT_PALETTE["NOT APPLICABLE"]
+    )
+    return colors.HexColor(background), colors.HexColor(foreground)
+
+
+class _PaginatedReportTable(Table):
+    """A4 data table with bounded fragments and complete tall-row fallback."""
+
+    def split(self, availWidth, availHeight):
+        # ReportLab applies rowSplitRange to both its between-row attempt and its
+        # in-row fallback. Retain three data rows at each ordinary fragment edge,
+        # but only when those groups can themselves fit a complete report frame.
+        # Using the full frame (not the current residual height) lets an ordinary
+        # table move to the next page without weakening the publication contract.
+        self._calc(availWidth, availHeight)
+        repeat_rows = self.repeatRows
+        if isinstance(repeat_rows, int):
+            repeat_count = max(0, repeat_rows)
+        else:
+            repeat_count = max(repeat_rows) + 1 if repeat_rows else 0
+        repeat_count = min(repeat_count, len(self._rowHeights))
+        data_count = len(self._rowHeights) - repeat_count
+
+        row_split_range = None
+        if data_count >= 6:
+            repeated_height = sum(self._rowHeights[:repeat_count])
+            leading_height = sum(self._rowHeights[:repeat_count + 3])
+            trailing_height = repeated_height + sum(self._rowHeights[-3:])
+            if (
+                leading_height <= _A4_FRAME_USABLE_HEIGHT + 1e-7
+                and trailing_height <= _A4_FRAME_USABLE_HEIGHT + 1e-7
+            ):
+                row_split_range = (repeat_count + 3, -3)
+
+        self._rowSplitRange = row_split_range
+        self._sector_row_split_range = row_split_range
+        return super().split(availWidth, availHeight)
 
 
 def _kaleido_server_api():
@@ -491,6 +545,9 @@ class ReportBuilder:
         self.flow = []
         self._chapter = 0
         self._export_hung = False   # set once a kaleido export hits the join timeout
+        self._table_section_context = None
+        self._table_subsection_context = None
+        self._table_assessment_context = None
 
     def _case_contexts(self, family):
         """Return ordered ``(case_input, case_results)`` report contexts."""
@@ -551,6 +608,11 @@ class ReportBuilder:
     def _h1(self, text):
         self._chapter += 1
         numbered = f"{self._chapter}. {text}"
+        self._table_section_context = _greek(
+            f"Section {self._chapter}: {text}"
+        )
+        self._table_subsection_context = None
+        self._table_assessment_context = None
         heading = Paragraph(_greek(numbered), self.s["h1"])
         heading._sector_bookmark = f"sector-section-{self._chapter}"
         # The outline API does not parse Paragraph markup or numeric entities.
@@ -560,6 +622,7 @@ class ReportBuilder:
         self.flow.append(heading)
 
     def _h2(self, text):
+        self._table_subsection_context = _greek(f"Subsection: {text}")
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
 
     def _p(self, text):
@@ -570,31 +633,23 @@ class ReportBuilder:
 
     def _status_block(self, text, status):
         """Add a prominent, print-readable assessment banner."""
-        palette = {
-            "PASS": ("#E8F5E9", "#1B5E20"),
-            "OK": ("#E8F5E9", "#1B5E20"),
-            "FAIL": ("#FDECEC", "#9B1C1C"),
-            "EXCEEDED": ("#FDECEC", "#9B1C1C"),
-            "INVALID": ("#FDECEC", "#9B1C1C"),
-            "REVIEW": ("#FFF4D6", "#7A4E00"),
-            "NOT ASSESSED": ("#FFF4D6", "#7A4E00"),
-            "NOT APPLICABLE": ("#EEF2F6", "#374151"),
-        }
-        bg, fg = palette.get(status, palette["NOT APPLICABLE"])
+        bg, fg = _assessment_colors(status)
+        self._table_assessment_context = (_greek(f"Assessment: {text}"), status)
         style = ParagraphStyle(
             "status", parent=self.s["body"], fontName=_FONT_BOLD,
-            textColor=colors.HexColor(fg), leading=13,
+            textColor=fg, leading=13,
         )
         table = Table([[Paragraph(_greek(text), style)]],
                       colWidths=[160 * mm], hAlign="LEFT")
         table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(bg)),
-            ("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor(fg)),
+            ("BACKGROUND", (0, 0), (-1, -1), bg),
+            ("BOX", (0, 0), (-1, -1), 0.8, fg),
             ("LEFTPADDING", (0, 0), (-1, -1), 7),
             ("RIGHTPADDING", (0, 0), (-1, -1), 7),
             ("TOPPADDING", (0, 0), (-1, -1), 6),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ]))
+        table._sector_status_banner = True
         self.flow.append(KeepTogether(table))
         self._gap(4)
 
@@ -660,6 +715,49 @@ class ReportBuilder:
         self._case_line(family, title)
         self._keep_from(start + 1)
 
+    def _table_context_rows(self, column_count):
+        """Freeze active publication context as complete-width table rows."""
+        entries = []
+        if self._table_section_context is not None:
+            entries.append((
+                "section", self._table_section_context, _HEAD_BG, _BLUE,
+            ))
+        if self._table_subsection_context is not None:
+            entries.append((
+                "subsection", self._table_subsection_context,
+                colors.HexColor("#F7F8FA"), _GREY,
+            ))
+        if self._table_assessment_context is not None:
+            markup, status = self._table_assessment_context
+            background, foreground = _assessment_colors(status)
+            entries.append(("assessment", markup, background, foreground))
+
+        rows = []
+        commands = []
+        labels = []
+        for row_index, (role, markup, background, foreground) in enumerate(entries):
+            style = ParagraphStyle(
+                f"table-context-{role}",
+                parent=self.s["small"],
+                fontName=_FONT_BOLD,
+                fontSize=_MIN_REPORT_TABLE_FONT,
+                leading=_MIN_REPORT_TABLE_FONT + 2,
+                textColor=foreground,
+            )
+            paragraph = Paragraph(markup, style)
+            labels.append(paragraph.getPlainText())
+            rows.append([paragraph] + [""] * (column_count - 1))
+            commands.extend([
+                ("SPAN", (0, row_index), (-1, row_index)),
+                ("BACKGROUND", (0, row_index), (-1, row_index), background),
+                ("VALIGN", (0, row_index), (-1, row_index), "MIDDLE"),
+                ("LEFTPADDING", (0, row_index), (-1, row_index), 4),
+                ("RIGHTPADDING", (0, row_index), (-1, row_index), 4),
+                ("TOPPADDING", (0, row_index), (-1, row_index), 3),
+                ("BOTTOMPADDING", (0, row_index), (-1, row_index), 3),
+            ])
+        return rows, commands, tuple(labels)
+
     def _results_overview(self):
         rows = presentation.multi_case_summary_rows(
             self._base_inp, self._base_out
@@ -693,19 +791,28 @@ class ReportBuilder:
             formatted.append([
                 Paragraph(_greek(str(cell)), style) for cell in row
             ])
-        table = Table(
+        context_rows, context_style, context_labels = self._table_context_rows(
+            len(formatted[0])
+        )
+        context_count = len(context_rows)
+        formatted = context_rows + formatted
+        header_row = context_count
+        table = _PaginatedReportTable(
             formatted,
             colWidths=[42 * mm, 25 * mm, 23 * mm, 31 * mm, 36 * mm, 13 * mm],
-            repeatRows=1,
+            repeatRows=context_count + 1,
             hAlign="LEFT",
+            splitByRow=1,
+            splitInRow=1,
         )
         style = [
             ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
-            ("BACKGROUND", (0, 0), (-1, 0), _HEAD_BG),
+            ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING", (0, 0), (-1, -1), 2),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]
+        style.extend(context_style)
         fills = {
             "PASS": colors.HexColor("#E8F5E9"),
             "FAIL": colors.HexColor("#FDECEC"),
@@ -715,11 +822,16 @@ class ReportBuilder:
             "NOT RUN": colors.HexColor("#EEF2F6"),
             "NOT APPLICABLE": colors.HexColor("#EEF2F6"),
         }
-        for row_index, row in enumerate(rows, start=1):
+        for row_index, row in enumerate(rows, start=context_count + 1):
             fill = fills.get(row["status"])
             if fill is not None:
                 style.append(("BACKGROUND", (2, row_index), (2, row_index), fill))
         table.setStyle(TableStyle(style))
+        table._sector_context_labels = context_labels
+        table._sector_context_count = context_count
+        table._sector_header_row = header_row
+        table._sector_data_start = header_row + 1
+        table._sector_results_overview = True
         self.flow.append(table)
         self._small(
             "Gov. marks the highest PASS/FAIL utilisation for each check; ties "
@@ -930,22 +1042,33 @@ class ReportBuilder:
                     f"<b>Column panel {panel_number} of {len(panels)}:</b> "
                     + ", ".join(_html_escape(label) for label in labels)
                 )
-            panel_rows = [[row[index] for index in columns] for row in rows]
-            table = Table(
+            source_rows = [[row[index] for index in columns] for row in rows]
+            context_rows, context_style, context_labels = self._table_context_rows(
+                len(columns)
+            )
+            context_count = len(context_rows)
+            panel_rows = context_rows + source_rows
+            header_row = context_count if header else None
+            repeat_rows = context_count + (1 if header else 0)
+            table = _PaginatedReportTable(
                 panel_rows,
                 colWidths=panel_widths,
                 hAlign="LEFT",
-                repeatRows=1 if header else 0,
+                repeatRows=repeat_rows,
+                splitByRow=1,
+                splitInRow=1,
             )
             table._sector_source_columns = tuple(columns)
             table._sector_panel_number = panel_number
             table._sector_panel_count = len(panels)
             table._sector_width_floors = tuple(panel_floors)
             table._sector_font_size = font
-            table.setStyle(TableStyle([
+            table._sector_context_labels = context_labels
+            table._sector_context_count = context_count
+            table._sector_header_row = header_row
+            table._sector_data_start = repeat_rows
+            table_style = [
                 ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
-                ("BACKGROUND", (0, 0), (-1, 0),
-                 _HEAD_BG if header else colors.white),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ("LEFTPADDING", (0, 0), (-1, -1),
                  _REPORT_TABLE_HORIZONTAL_PADDING),
@@ -953,7 +1076,13 @@ class ReportBuilder:
                  _REPORT_TABLE_HORIZONTAL_PADDING),
                 ("TOPPADDING", (0, 0), (-1, -1), 2),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ]))
+            ]
+            if header:
+                table_style.append(
+                    ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG)
+                )
+            table_style.extend(context_style)
+            table.setStyle(TableStyle(table_style))
             self.flow.append(KeepTogether(table) if keep else table)
             self._gap(4)
 
