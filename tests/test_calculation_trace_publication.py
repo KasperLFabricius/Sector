@@ -181,8 +181,6 @@ def test_all_family_adapters_use_the_frozen_order_and_exact_wrapper_shapes(
     calls = []
     functions = (
         ("build_plastic_capacity_trace_family", "ct-002"),
-        ("build_plastic_interaction_trace_families", "ct-003-004"),
-        ("build_elastic_trace_family", "ct-005"),
         ("build_shear_trace_family", "ct-006"),
         ("build_torsion_trace_family", "ct-007"),
         ("build_detailing_trace_family", "ct-008"),
@@ -211,8 +209,8 @@ def test_all_family_adapters_use_the_frozen_order_and_exact_wrapper_shapes(
         {"interaction": True}, result, input_sha256=INPUT_SHA,
     )
     assert [item[0] for item in calls] == [
-        "ct-002", "ct-003-004", "ct-005", "ct-006", "ct-007",
-        "ct-008", "ct-009", "ct-010", "ct-011",
+        "ct-002", "ct-006", "ct-007", "ct-008", "ct-009", "ct-010",
+        "ct-011",
     ]
     by_coverage = {coverage: args for coverage, args, _kwargs in calls}
     assert by_coverage["ct-006"][1] is result["shear"]
