@@ -56,6 +56,14 @@ _GREY = colors.HexColor("#5A5A5A")
 _LINE = colors.HexColor("#9AA5B1")
 _HEAD_BG = colors.HexColor("#E8ECF2")
 _A4_CONTENT_WIDTH = A4[0] - 40 * mm
+_A4_CONTENT_HEIGHT = A4[1] - 45 * mm
+_MIN_TABLE_FONT = 7.2
+_TABLE_HORIZONTAL_PADDING = 3.0
+_TABLE_VERTICAL_PADDING = 4.0
+_MIN_SPLIT_DATA_ROWS = 3
+_TABLE_NUMERIC_ATOM_RE = re.compile(
+    r"^[+-]?(?:(?:\d+(?:[.,]\d*)?)|(?:[.,]\d+))(?:[eE][+-]?\d+)?%?$"
+)
 _CRACK_CANDIDATE_COL_WIDTHS = tuple(
     value * mm
     for value in (17, 7, 16, 13, 13, 10, 10, 17, 18, 18, 13, 13)
@@ -341,6 +349,71 @@ class _ReportDocTemplate(SimpleDocTemplate):
             )
 
 
+class _ReadableSplitTable(Table):
+    """A report table with readable fragments and a safe tall-row fallback.
+
+    Three leading and trailing data rows are retained when those groups can fit
+    the available frame. User-authored descriptions can make one row extremely
+    tall; in that case the corresponding bound is relaxed before ReportLab chooses
+    a split, so otherwise valid rows remain pageable instead of raising a
+    ``LayoutError``.
+    """
+
+    def __init__(
+        self,
+        *args,
+        min_split_data_rows=_MIN_SPLIT_DATA_ROWS,
+        **kwargs,
+    ):
+        self._sector_min_split_data_rows = int(min_split_data_rows)
+        super().__init__(*args, **kwargs)
+
+    def _sector_header_rows(self):
+        repeated = self.repeatRows
+        if isinstance(repeated, int):
+            return max(0, repeated)
+        return max(repeated) + 1 if repeated else 0
+
+    def _sector_split_range(self, avail_height):
+        header_rows = self._sector_header_rows()
+        data_rows = max(0, self._nrows - header_rows)
+        minimum = self._sector_min_split_data_rows
+        if data_rows < 2 * minimum:
+            return None
+
+        heights = self._rowHeights
+        leading_end = header_rows + minimum
+        leading_fits = sum(heights[:leading_end]) <= avail_height + 1e-7
+        trailing_start = self._nrows - minimum
+        trailing_fits = (
+            sum(heights[:header_rows]) + sum(heights[trailing_start:])
+            <= _A4_CONTENT_HEIGHT + 1e-7
+        )
+        lower = leading_end if leading_fits else header_rows + 1
+        upper = -minimum if trailing_fits else -1
+        return lower, upper
+
+    def split(self, availWidth, availHeight):
+        # Calculate exact wrapped row heights before choosing the readable split
+        # range. ReportLab repeats this inexpensive calculation in ``Table.split``.
+        self._calc(availWidth, availHeight)
+        original = self._rowSplitRange
+        self._rowSplitRange = self._sector_split_range(availHeight)
+        try:
+            fragments = super().split(availWidth, availHeight)
+        finally:
+            self._rowSplitRange = original
+        for fragment in fragments:
+            if isinstance(fragment, _ReadableSplitTable):
+                fragment._sector_min_split_data_rows = (
+                    self._sector_min_split_data_rows
+                )
+                # An inherited range is indexed against the source row count.
+                # Each fragment derives its own valid range on demand.
+                fragment._rowSplitRange = None
+        return fragments
+
+
 def _styles():
     ss = getSampleStyleSheet()
     out = {}
@@ -464,6 +537,9 @@ class ReportBuilder:
         self.s = _styles()
         self.flow = []
         self._chapter = 0
+        self._last_h1 = ""
+        self._last_h2 = ""
+        self._last_status_text = ""
         self._export_hung = False   # set once a kaleido export hits the join timeout
 
     def _case_contexts(self, family):
@@ -532,9 +608,13 @@ class ReportBuilder:
         # appear in bookmarks exactly as they do on the page.
         heading._sector_outline = heading.getPlainText()
         self.flow.append(heading)
+        self._last_h1 = numbered
+        self._last_h2 = ""
+        self._last_status_text = ""
 
     def _h2(self, text):
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
+        self._last_h2 = text
 
     def _p(self, text):
         self.flow.append(Paragraph(_greek(text), self.s["body"]))
@@ -544,6 +624,7 @@ class ReportBuilder:
 
     def _status_block(self, text, status):
         """Add a prominent, print-readable assessment banner."""
+        self._last_status_text = text
         palette = {
             "PASS": ("#E8F5E9", "#1B5E20"),
             "OK": ("#E8F5E9", "#1B5E20"),
@@ -727,7 +808,117 @@ class ReportBuilder:
         if ref:
             self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
 
-    def _table(self, data, widths, header=True, font=8.5, keep=True):
+    def _table_context_cell(self, panel_label="", context=None):
+        h1, h2, status_text = context or (
+            self._last_h1,
+            self._last_h2,
+            self._last_status_text,
+        )
+        # Keep the continuation label distinct from the real numbered heading in
+        # both visible and extracted text, preserving one H1 occurrence per case.
+        h1 = re.sub(r"^(\d+)\.\s+", r"Section \1 - ", h1)
+        label = " / ".join(value for value in (h1, h2) if value) or "Table"
+        if status_text:
+            label += f" | Status: {status_text}"
+        if panel_label:
+            label += f" | {panel_label}"
+        style = ParagraphStyle(
+            "table-context",
+            parent=self.s["small"],
+            fontName=_FONT_BOLD,
+            fontSize=_MIN_TABLE_FONT,
+            leading=_MIN_TABLE_FONT + 2,
+            textColor=_GREY,
+        )
+        return Paragraph(_greek(label), style)
+
+    @staticmethod
+    def _column_min_widths(rows, desired=None):
+        minima = []
+        for column in range(len(rows[0])):
+            desired_content = None
+            if desired is not None:
+                desired_content = max(
+                    0.0,
+                    float(desired[column]) - 2 * _TABLE_HORIZONTAL_PADDING,
+                )
+            content = 0.0
+            for cell in (row[column] for row in rows):
+                natural = cell.minWidth() if hasattr(cell, "minWidth") else 0.0
+                plain = (
+                    cell.getPlainText().strip()
+                    if hasattr(cell, "getPlainText") else str(cell).strip()
+                )
+                # Numeric evidence remains a measured atom. Long machine
+                # identities and descriptions wrap losslessly to their authored
+                # semantic width rather than forcing the whole table off A4.
+                if (
+                    desired_content is not None
+                    and not _TABLE_NUMERIC_ATOM_RE.fullmatch(plain)
+                ):
+                    natural = min(natural, desired_content)
+                content = max(content, natural)
+            minima.append(content + 2 * _TABLE_HORIZONTAL_PADDING)
+        return minima
+
+    @staticmethod
+    def _fit_column_widths(desired, minima, available=_A4_CONTENT_WIDTH):
+        if sum(minima) > available + 1e-7:
+            return None
+        preferred = [
+            max(float(width), minimum)
+            for width, minimum in zip(desired, minima)
+        ]
+        if sum(preferred) <= available + 1e-7:
+            return preferred
+        flexible = [
+            width - minimum for width, minimum in zip(preferred, minima)
+        ]
+        total_flexible = sum(flexible)
+        if total_flexible <= 0.0:
+            return list(minima)
+        spare = available - sum(minima)
+        return [
+            minimum + spare * flex / total_flexible
+            for minimum, flex in zip(minima, flexible)
+        ]
+
+    @staticmethod
+    def _column_panels(minima, repeat_cols, available=_A4_CONTENT_WIDTH):
+        column_count = len(minima)
+        if sum(minima) <= available + 1e-7:
+            return [tuple(range(column_count))]
+        repeat_count = max(0, min(int(repeat_cols), column_count - 1))
+        repeated = tuple(range(repeat_count))
+        panels = []
+        current = []
+        for column in range(repeat_count, column_count):
+            proposed = (*repeated, *current, column)
+            if current and sum(minima[index] for index in proposed) > available:
+                panels.append((*repeated, *current))
+                current = [column]
+            else:
+                current.append(column)
+        if current or not panels:
+            panels.append((*repeated, *current))
+        for panel in panels:
+            if sum(minima[index] for index in panel) > available + 1e-7:
+                raise ValueError(
+                    "A report table contains an unbreakable cell wider than "
+                    "the available A4 content width."
+                )
+        return panels
+
+    def _table(
+        self,
+        data,
+        widths,
+        header=True,
+        font=8.5,
+        keep=True,
+        repeat_cols=1,
+    ):
+        font = max(float(font), _MIN_TABLE_FONT)
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
                               fontName=_FONT, leading=font + 2)
         head = ParagraphStyle("ch", parent=body, fontName=_FONT_BOLD)
@@ -740,25 +931,79 @@ class ReportBuilder:
                                     alignment=TA_LEFT if ci == 0 else TA_CENTER)
                 cells.append(Paragraph(_greek(str(cell)), st))
             rows.append(cells)
+        if not rows or not rows[0]:
+            raise ValueError("A report table requires at least one cell.")
+        if len(widths) != len(rows[0]):
+            raise ValueError("Report table widths must match the column count.")
+        minima = self._column_min_widths(rows, widths)
+        panels = self._column_panels(minima, repeat_cols)
+        continuation_context = (
+            self._last_h1,
+            self._last_h2,
+            self._last_status_text,
+        )
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
         # Any table can outgrow one page when it contains user-pasted geometry or
         # reinforcement. Repeat the labelled header regardless of whether the normal
         # short-table path first tries to keep the table together.
-        t = Table(
-            rows,
-            colWidths=widths,
-            hAlign="LEFT",
-            repeatRows=1 if header else 0,
-        )
-        t.setStyle(TableStyle([
-            ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
-            ("BACKGROUND", (0, 0), (-1, 0), _HEAD_BG if header else colors.white),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ]))
-        self.flow.append(KeepTogether(t) if keep else t)
+        for panel_index, columns in enumerate(panels):
+            panel_body_rows = [[row[index] for index in columns] for row in rows]
+            panel_minima = [minima[index] for index in columns]
+            panel_widths = self._fit_column_widths(
+                [widths[index] for index in columns], panel_minima
+            )
+            if panel_widths is None:
+                raise ValueError("Unable to fit a report table column panel.")
+            non_identity = columns[min(repeat_cols, len(columns)):]
+            first_data = non_identity[0] + 1 if non_identity else 1
+            last_data = non_identity[-1] + 1 if non_identity else len(columns)
+            panel_label = ""
+            if len(panels) > 1:
+                panel_label = (
+                    f"column panel {panel_index + 1}/{len(panels)}; "
+                    f"source columns {first_data}-{last_data}"
+                )
+            context_cell = self._table_context_cell(
+                panel_label, continuation_context
+            )
+            blank_context = Paragraph("", context_cell.style)
+            panel_rows = [
+                [context_cell] + [blank_context] * (len(columns) - 1),
+                *panel_body_rows,
+            ]
+            table = _ReadableSplitTable(
+                panel_rows,
+                colWidths=panel_widths,
+                hAlign="LEFT",
+                repeatRows=2 if header else 1,
+            )
+            table._sector_source_columns = tuple(columns)
+            table._sector_panel_index = panel_index
+            table._sector_panel_count = len(panels)
+            table._sector_min_widths = tuple(panel_minima)
+            table._sector_font_size = font
+            table._sector_context_text = context_cell.getPlainText()
+            table.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
+                ("SPAN", (0, 0), (-1, 0)),
+                ("BACKGROUND", (0, 0), (-1, 0),
+                 colors.HexColor("#F4F6F8")),
+                ("BACKGROUND", (0, 1), (-1, 1),
+                 _HEAD_BG if header else colors.white),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1),
+                 _TABLE_HORIZONTAL_PADDING),
+                ("RIGHTPADDING", (0, 0), (-1, -1),
+                 _TABLE_HORIZONTAL_PADDING),
+                ("TOPPADDING", (0, 0), (-1, -1),
+                 _TABLE_VERTICAL_PADDING),
+                ("BOTTOMPADDING", (0, 0), (-1, -1),
+                 _TABLE_VERTICAL_PADDING),
+            ]))
+            self.flow.append(KeepTogether(table) if keep else table)
+            if panel_index + 1 < len(panels):
+                self._gap(4)
         self._gap(4)
 
     def _fig(self, fig, w_mm=150, h_mm=95):
