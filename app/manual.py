@@ -33,6 +33,7 @@ import streamlit as st
 import bridge_analysis
 import bridge_inputs
 import calculation_trace_publication
+import manual_equation_registry
 import project_io
 from publication_notation import normalize_trusted_markup
 import reproducible_example
@@ -1880,6 +1881,26 @@ def manual_parts() -> dict[str, list]:
     return parts
 
 
+def manual_publication_blocks() -> tuple[tuple, ...]:
+    """Return blocks only after all display equations pass the frozen registry."""
+
+    return manual_equation_registry.register_manual_blocks(manual_blocks())
+
+
+def manual_publication_parts() -> dict[str, list]:
+    """Group the validated publication blocks for the in-app manual."""
+
+    parts: dict[str, list] = {}
+    current = None
+    for block in manual_publication_blocks():
+        if block[0] == "part":
+            current = block[1]
+            parts[current] = [block]
+        elif current is not None:
+            parts[current].append(block)
+    return parts
+
+
 # ==========================================================================
 # PDF RENDERER -- same content blocks, rendered with ReportLab
 # ==========================================================================
@@ -2023,6 +2044,122 @@ def _render_md_pdf(text, flow, styles, Paragraph):
     flush()
 
 
+def _manual_equation_pdf(
+    occurrence, flow, styles, Paragraph, KeepTogether, Table, TableStyle, colors, mm
+):
+    """Publish one validated equation as a compact auditable PDF record."""
+
+    spec = occurrence.spec
+    identity = Paragraph(
+        f'<a name="{spec.anchor}"/><b>Equation ({spec.number}) | '
+        f"{spec.public_id}</b>",
+        styles["MEqIdentity"],
+    )
+    expression = Paragraph(
+        _latex_to_rl(occurrence.expression) + occurrence.punctuation,
+        styles["MMath"],
+    )
+    rows = [[
+        Paragraph("<b>Symbol</b>", styles["MEqSymbol"]),
+        Paragraph("<b>Meaning and unit</b>", styles["MEqSymbol"]),
+    ]]
+    for symbol in spec.symbols:
+        unit = _latex_to_rl(manual_equation_registry.unit_markup(symbol.unit))
+        rows.append([
+            Paragraph(_latex_to_rl(symbol.latex), styles["MEqSymbol"]),
+            Paragraph(
+                f"{_inline_md_to_rl(symbol.meaning)} [{unit}]",
+                styles["MEqSymbol"],
+            ),
+        ])
+    symbol_table = Table(rows, colWidths=[38 * mm, 120 * mm], hAlign="LEFT")
+    symbol_table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#9fb3c8")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    metadata = [
+        Paragraph(
+            "<b>Dimensional closure:</b> "
+            + _inline_md_to_rl(spec.dimensional_note),
+            styles["MEqMeta"],
+        )
+    ]
+    if spec.uses:
+        links = []
+        for key in spec.uses:
+            target = manual_equation_registry.manual_equation_spec(key)
+            links.append(
+                f'<link href="#{target.anchor}">Equation ({target.number})</link>'
+            )
+        metadata.append(Paragraph(
+            "<b>Uses:</b> " + ", ".join(links), styles["MEqMeta"]
+        ))
+    metadata.append(Paragraph(
+        f"<b>Source / method ({spec.source_kind}):</b> "
+        + _inline_md_to_rl(spec.source),
+        styles["MEqMeta"],
+    ))
+    record = KeepTogether([identity, expression, symbol_table, *metadata])
+    record._manual_equation_key = spec.key
+    record._manual_equation_number = spec.number
+    record._manual_equation_anchor = spec.anchor
+    record._manual_equation_expression_sha256 = spec.expression_sha256
+    record._manual_equation_symbols = spec.symbols
+    flow.append(record)
+
+
+def _render_registered_md_pdf(
+    segments, flow, styles, Paragraph, KeepTogether, Table, TableStyle, colors, mm
+):
+    for segment in segments:
+        if segment.equation is None:
+            if segment.markdown.strip():
+                _render_md_pdf(segment.markdown, flow, styles, Paragraph)
+        else:
+            _manual_equation_pdf(
+                segment.equation, flow, styles, Paragraph, KeepTogether,
+                Table, TableStyle, colors, mm,
+            )
+
+
+def _render_registered_md_streamlit(segments, streamlit_module=None):
+    """Publish the same validated records through the Streamlit manual."""
+
+    ui = streamlit_module or st
+    for segment in segments:
+        if segment.equation is None:
+            if segment.markdown.strip():
+                ui.markdown(segment.markdown)
+            continue
+        spec = segment.equation.spec
+        ui.markdown(
+            f'<span id="{spec.anchor}"></span><b>Equation ({spec.number}) | '
+            f"{spec.public_id}</b>",
+            unsafe_allow_html=True,
+        )
+        ui.markdown(segment.markdown)
+        rows = ["| Symbol | Meaning | Unit |", "|---|---|---|"]
+        rows.extend(
+            f"| ${symbol.latex}$ | {symbol.meaning} | "
+            f"${manual_equation_registry.unit_markup(symbol.unit)}$ |"
+            for symbol in spec.symbols
+        )
+        ui.markdown("\n".join(rows))
+        ui.caption("Dimensional closure: " + spec.dimensional_note)
+        if spec.uses:
+            links = []
+            for key in spec.uses:
+                target = manual_equation_registry.manual_equation_spec(key)
+                links.append(f"[Equation ({target.number})](#{target.anchor})")
+            ui.markdown("**Uses:** " + ", ".join(links))
+        ui.caption(f"Source / method ({spec.source_kind}): {spec.source}")
+
+
 _FIG_EXPORT_TIMEOUT_S = 30.0
 _FIG_TIMED_OUT = object()
 
@@ -2089,8 +2226,15 @@ def _manual_pdf_styles(
          keepWithNext=1)
     _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
     _add("MMath", fontSize=11, leading=15, alignment=align_center, spaceBefore=6,
-         spaceAfter=6, fontName=font)
+         spaceAfter=6, fontName=font, wordWrap="LTR", splitLongWords=True)
     _add("MSmall", fontSize=8, leading=11, textColor=colors.grey, fontName=font)
+    _add("MEqIdentity", fontSize=8, leading=11, spaceBefore=5, spaceAfter=2,
+         fontName=font_b, textColor=colors.HexColor("#1f3b66"), keepWithNext=1)
+    _add("MEqSymbol", fontSize=7.8, leading=10, fontName=font,
+         wordWrap="LTR", splitLongWords=True)
+    _add("MEqMeta", fontSize=8, leading=11, spaceBefore=2, spaceAfter=2,
+         fontName=font, textColor=colors.grey, wordWrap="LTR",
+         splitLongWords=True)
     return styles
 
 
@@ -2104,7 +2248,7 @@ def build_manual_pdf(buffer, figures=True):
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-    from reportlab.lib.units import cm
+    from reportlab.lib.units import cm, mm
     from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
                                     SimpleDocTemplate, Spacer, Table, TableStyle)
     from reportlab.platypus.tableofcontents import TableOfContents
@@ -2186,7 +2330,7 @@ def build_manual_pdf(buffer, figures=True):
         if _call_with_timeout(report.ensure_image_server,
                               _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
             figures_hung = True
-    for block in manual_blocks():
+    for block in manual_publication_blocks():
         kind = block[0]
         if kind == "part":
             flow.append(Spacer(1, 0.3 * cm))
@@ -2210,7 +2354,10 @@ def build_manual_pdf(buffer, figures=True):
                 styles["MH3"], block[1], 3,
             ))
         elif kind == "md":
-            _render_md_pdf(block[1], flow, styles, Paragraph)
+            _render_registered_md_pdf(
+                block[2], flow, styles, Paragraph, KeepTogether,
+                Table, TableStyle, colors, mm,
+            )
         elif kind == "callout":
             _icon, ttl = _CALLOUT.get(block[1], ("", "Note"))
             inner = Paragraph(f"<b>{ttl}:</b> " + _inline_md_to_rl(block[2]),
@@ -2338,7 +2485,7 @@ def render_manual_streamlit():
                 on_click="ignore",
             )
 
-    parts = manual_parts()
+    parts = manual_publication_parts()
     selected_part = st.selectbox(
         "Manual part",
         list(parts),
@@ -2364,7 +2511,7 @@ def render_manual_streamlit():
         elif kind == "h3":
             st.markdown(f"#### {_strip_num(block[1])}")
         elif kind == "md":
-            st.markdown(block[1])
+            _render_registered_md_streamlit(block[2])
         elif kind == "callout":
             icon, title = _CALLOUT.get(block[1], (":information_source:", "Note"))
             with st.container(border=True):

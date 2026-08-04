@@ -199,7 +199,7 @@ def test_manual_data_tables_use_bounded_spacing_and_padding(monkeypatch):
     monkeypatch.setattr(platypus, "SimpleDocTemplate", _CaptureDoc)
     monkeypatch.setattr(
         manual,
-        "manual_blocks",
+        "manual_publication_blocks",
         lambda: (("table", ["A", "B"], [["one", "two"]]),),
     )
 
