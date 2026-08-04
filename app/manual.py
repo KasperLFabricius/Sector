@@ -33,6 +33,7 @@ import streamlit as st
 import bridge_analysis
 import bridge_inputs
 import calculation_trace_publication
+import manual_equation_catalog
 import project_io
 from publication_notation import normalize_trusted_markup
 import reproducible_example
@@ -1880,6 +1881,26 @@ def manual_parts() -> dict[str, list]:
     return parts
 
 
+def manual_publication_blocks() -> tuple[tuple, ...]:
+    """Return raw blocks with every display equation strictly catalogued."""
+
+    return manual_equation_catalog.catalogue_manual_blocks(manual_blocks())
+
+
+def manual_publication_parts() -> dict[str, list]:
+    """Return the strictly catalogued blocks grouped for the in-app renderer."""
+
+    parts: dict[str, list] = {}
+    current = None
+    for block in manual_publication_blocks():
+        if block[0] == "part":
+            current = block[1]
+            parts[current] = [block]
+        elif current is not None:
+            parts[current].append(block)
+    return parts
+
+
 # ==========================================================================
 # PDF RENDERER -- same content blocks, rendered with ReportLab
 # ==========================================================================
@@ -2023,6 +2044,119 @@ def _render_md_pdf(text, flow, styles, Paragraph):
     flush()
 
 
+def _render_manual_equation_pdf(
+    occurrence, flow, styles, Paragraph, KeepTogether
+):
+    """Render one validated manual equation with complete publication identity."""
+
+    contract = occurrence.contract
+
+    def row(markup, style_name, role, *, symbol=None):
+        paragraph = Paragraph(markup, styles[style_name])
+        paragraph._manual_equation_role = role
+        if symbol is not None:
+            paragraph._manual_equation_symbol = symbol
+        return paragraph
+
+    content = [
+        row(
+            f'<a name="{contract.anchor}"/><b>Equation ({contract.number}) | '
+            f"{contract.public_id}</b>",
+            "MEqId",
+            "identity",
+        ),
+        row(
+            _latex_to_rl(occurrence.expression) + occurrence.punctuation,
+            "MMath",
+            "expression",
+        ),
+        row("<b>Symbols:</b>", "MEqSymbol", "symbols-heading"),
+    ]
+    for symbol in contract.symbols:
+        content.append(row(
+            f"{_latex_to_rl(symbol.latex)} &#8212; "
+            f"{_inline_md_to_rl(symbol.meaning)} "
+            f"[{_latex_to_rl(manual_equation_catalog.unit_latex(symbol.unit))}]",
+            "MEqSymbol",
+            "symbol",
+            symbol=symbol,
+        ))
+    if contract.uses:
+        links = []
+        for key in contract.uses:
+            target = manual_equation_catalog.manual_equation_contract(key)
+            links.append(
+                f'<link href="#{target.anchor}">Equation ({target.number})</link>'
+            )
+        content.append(row(
+            "<b>Uses:</b> " + ", ".join(links), "MRef", "uses"
+        ))
+    content.append(row(
+        f"<b>Source / method note ({contract.source_kind}):</b> "
+        + _inline_md_to_rl(contract.source),
+        "MRef",
+        "source",
+    ))
+    equation = KeepTogether(content)
+    equation._manual_equation_key = contract.key
+    equation._manual_equation_number = contract.number
+    equation._manual_equation_anchor = contract.anchor
+    equation._manual_equation_expression_sha256 = contract.expression_sha256
+    equation._manual_equation_roles = tuple(
+        paragraph._manual_equation_role for paragraph in content
+    )
+    flow.append(equation)
+
+
+def _render_catalogued_md_pdf(segments, flow, styles, Paragraph, KeepTogether):
+    """Render exact shared Markdown segments through the PDF publication path."""
+
+    for segment in segments:
+        if segment.equation is None:
+            if segment.markdown.strip():
+                _render_md_pdf(segment.markdown, flow, styles, Paragraph)
+        else:
+            _render_manual_equation_pdf(
+                segment.equation, flow, styles, Paragraph, KeepTogether
+            )
+
+
+def _render_catalogued_md_streamlit(segments, streamlit_module=None):
+    """Render the same validated equation segments through Streamlit Markdown."""
+
+    ui = streamlit_module or st
+    for segment in segments:
+        if segment.equation is None:
+            if segment.markdown.strip():
+                ui.markdown(segment.markdown)
+            continue
+        contract = segment.equation.contract
+        ui.markdown(
+            f'<span id="{contract.anchor}"></span><b>Equation '
+            f"({contract.number}) | {contract.public_id}</b>",
+            unsafe_allow_html=True,
+        )
+        ui.markdown(segment.markdown)
+        symbol_rows = ["**Symbols:**"]
+        symbol_rows.extend(
+            f"- ${symbol.latex}$ &#8212; {symbol.meaning} "
+            f"[${manual_equation_catalog.unit_latex(symbol.unit)}$]"
+            for symbol in contract.symbols
+        )
+        ui.markdown("\n".join(symbol_rows))
+        if contract.uses:
+            uses = []
+            for key in contract.uses:
+                target = manual_equation_catalog.manual_equation_contract(key)
+                uses.append(
+                    f"[Equation ({target.number})](#{target.anchor})"
+                )
+            ui.markdown("**Uses:** " + ", ".join(uses))
+        ui.caption(
+            f"Source / method note ({contract.source_kind}): {contract.source}"
+        )
+
+
 _FIG_EXPORT_TIMEOUT_S = 30.0
 _FIG_TIMED_OUT = object()
 
@@ -2089,8 +2223,15 @@ def _manual_pdf_styles(
          keepWithNext=1)
     _add("MBody", fontSize=9.5, leading=13, spaceAfter=4, fontName=font)
     _add("MMath", fontSize=11, leading=15, alignment=align_center, spaceBefore=6,
-         spaceAfter=6, fontName=font)
+         spaceAfter=6, fontName=font, wordWrap="LTR", splitLongWords=True)
     _add("MSmall", fontSize=8, leading=11, textColor=colors.grey, fontName=font)
+    _add("MEqId", fontSize=8, leading=11, leftIndent=8, rightIndent=8,
+         spaceBefore=5, spaceAfter=2, fontName=font_b,
+         textColor=colors.HexColor("#1f3b66"), keepWithNext=1)
+    _add("MEqSymbol", fontSize=8, leading=10.5, leftIndent=14, rightIndent=8,
+         spaceAfter=1, fontName=font, wordWrap="LTR", splitLongWords=True)
+    _add("MRef", fontSize=8, leading=11, leftIndent=8, rightIndent=8,
+         spaceAfter=4, fontName=font, textColor=colors.grey)
     return styles
 
 
@@ -2186,7 +2327,7 @@ def build_manual_pdf(buffer, figures=True):
         if _call_with_timeout(report.ensure_image_server,
                               _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
             figures_hung = True
-    for block in manual_blocks():
+    for block in manual_publication_blocks():
         kind = block[0]
         if kind == "part":
             flow.append(Spacer(1, 0.3 * cm))
@@ -2210,7 +2351,9 @@ def build_manual_pdf(buffer, figures=True):
                 styles["MH3"], block[1], 3,
             ))
         elif kind == "md":
-            _render_md_pdf(block[1], flow, styles, Paragraph)
+            _render_catalogued_md_pdf(
+                block[2], flow, styles, Paragraph, KeepTogether
+            )
         elif kind == "callout":
             _icon, ttl = _CALLOUT.get(block[1], ("", "Note"))
             inner = Paragraph(f"<b>{ttl}:</b> " + _inline_md_to_rl(block[2]),
@@ -2338,7 +2481,7 @@ def render_manual_streamlit():
                 on_click="ignore",
             )
 
-    parts = manual_parts()
+    parts = manual_publication_parts()
     selected_part = st.selectbox(
         "Manual part",
         list(parts),
@@ -2364,7 +2507,7 @@ def render_manual_streamlit():
         elif kind == "h3":
             st.markdown(f"#### {_strip_num(block[1])}")
         elif kind == "md":
-            st.markdown(block[1])
+            _render_catalogued_md_streamlit(block[2])
         elif kind == "callout":
             icon, title = _CALLOUT.get(block[1], (":information_source:", "Note"))
             with st.container(border=True):
