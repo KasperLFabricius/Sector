@@ -80,6 +80,14 @@ _CRACK_CANDIDATE_COL_WIDTHS = tuple(
     value * mm
     for value in (17, 7, 16, 13, 13, 10, 10, 17, 18, 18, 13, 13)
 )
+_EQUATION_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+_DERIVED_EQUATION_SOURCE = (
+    "Derived calculation relation; no separate normative citation assigned."
+)
+_SYMBOL_CONTEXT_NOTE = (
+    "Symbols and units are defined by the surrounding titled quantity table "
+    "and the report conventions."
+)
 
 # A Unicode (Greek-capable) font for the report. DejaVuSans is free and shipped
 # with the app; Helvetica is the fallback (Greek glyphs then render as boxes, but
@@ -441,6 +449,16 @@ def _styles():
     out["formula"] = ParagraphStyle("f", parent=ss["Normal"], fontSize=9.5,
                                     leading=14, leftIndent=12, rightIndent=6,
                                     spaceBefore=2, spaceAfter=3, fontName=_FONT)
+    out["formula_meta"] = ParagraphStyle(
+        "fm", parent=ss["Normal"], fontSize=8, fontName=_FONT_BOLD,
+        leading=11, leftIndent=12, rightIndent=6, textColor=_BLUE,
+        spaceBefore=2, spaceAfter=1,
+    )
+    out["formula_detail"] = ParagraphStyle(
+        "fd", parent=ss["Normal"], fontSize=8, fontName=_FONT,
+        leading=11, leftIndent=12, rightIndent=6, textColor=_GREY,
+        spaceAfter=1,
+    )
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
                                fontName=_FONT, leading=11, leftIndent=12,
                                rightIndent=6, textColor=_GREY, spaceAfter=6)
@@ -544,6 +562,9 @@ class ReportBuilder:
         self.s = _styles()
         self.flow = []
         self._chapter = 0
+        self._subsection = 0
+        self._equation_number = 0
+        self._equations = {}
         self._export_hung = False   # set once a kaleido export hits the join timeout
         self._table_section_context = None
         self._table_subsection_context = None
@@ -607,6 +628,8 @@ class ReportBuilder:
     # -- flowable helpers --------------------------------------------------
     def _h1(self, text):
         self._chapter += 1
+        self._subsection = 0
+        self._equation_number = 0
         numbered = f"{self._chapter}. {text}"
         self._table_section_context = _greek(
             f"Section {self._chapter}: {text}"
@@ -622,6 +645,7 @@ class ReportBuilder:
         self.flow.append(heading)
 
     def _h2(self, text):
+        self._subsection += 1
         self._table_subsection_context = _greek(f"Subsection: {text}")
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
 
@@ -870,20 +894,135 @@ class ReportBuilder:
             # that wrapper makes ReportLab measure the inner block as effectively
             # page-height, which forces every following semantic group onto a new
             # page. The outer group provides the protection here, so flatten it.
-            if isinstance(item, KeepTogether):
+            if (
+                isinstance(item, KeepTogether)
+                and not hasattr(item, "_sector_equation")
+            ):
                 block.extend(item._content)
             else:
                 block.append(item)
         self.flow[start:] = [KeepTogether(block)]
 
-    def _formula(self, expr, ref=None, subst=None, result=None):
-        self.flow.append(Paragraph(_greek(expr), self.s["formula"]))
-        if subst:
-            self.flow.append(Paragraph(_greek(subst), self.s["formula"]))
-        if result:
-            self.flow.append(Paragraph(_greek(f"<b>{result}</b>"), self.s["formula"]))
-        if ref:
-            self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
+    def _formula(
+        self,
+        equation_id,
+        expr,
+        *,
+        source=_DERIVED_EQUATION_SOURCE,
+        subst=None,
+        result=None,
+        symbols=_SYMBOL_CONTEXT_NOTE,
+        numbered=False,
+        references=(),
+    ):
+        """Publish one identity-sealed equation block.
+
+        ``equation_id`` is an authored semantic key, never runtime/user text.  Its
+        section/subsection instance is therefore deterministic without placing an
+        action-set or material identifier in a PDF anchor.  Only explicitly
+        governing or reused equations consume a visible section-local number.
+        """
+        if self._chapter <= 0:
+            raise ValueError("An equation requires an active report section.")
+        equation_id = str(equation_id)
+        if not _EQUATION_ID_RE.fullmatch(equation_id):
+            raise ValueError(f"Invalid equation ID: {equation_id!r}.")
+        scope = (self._chapter, self._subsection, equation_id)
+        if scope in self._equations:
+            raise ValueError(
+                "Duplicate equation ID in report section/subsection: "
+                f"{equation_id}."
+            )
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError(f"Equation {equation_id} requires a source statement.")
+        if not isinstance(symbols, str) or not symbols.strip():
+            raise ValueError(f"Equation {equation_id} requires symbol definitions.")
+
+        targets = []
+        for target_id in references:
+            target_scope = (self._chapter, self._subsection, str(target_id))
+            target = self._equations.get(target_scope)
+            if target is None:
+                raise ValueError(
+                    f"Equation {equation_id} references unknown prior equation "
+                    f"{target_id!r} in its subsection."
+                )
+            targets.append(target)
+
+        # Registration is atomic: no failed reference or metadata validation can
+        # consume an identity or visible number.
+        anchor = (
+            f"sector-equation-{self._chapter}-{self._subsection}-{equation_id}"
+        )
+        number = None
+        if numbered:
+            self._equation_number += 1
+            number = f"{self._chapter}.{self._equation_number}"
+        record = {
+            "id": equation_id,
+            "anchor": anchor,
+            "number": number,
+            "section": self._chapter,
+            "subsection": self._subsection,
+        }
+        self._equations[scope] = record
+
+        linked = []
+        for target in targets:
+            label = (
+                f"Equation ({target['number']})"
+                if target["number"] is not None
+                else f"equation ID {target['id']}"
+            )
+            linked.append(f'<link href="#{target["anchor"]}">{label}</link>')
+
+        public_id = (
+            f"EQ-{self._chapter}.{self._subsection}-{equation_id.upper()}"
+        )
+        title = (
+            f"Equation ({number}) | ID {public_id}"
+            if number is not None
+            else f"Equation ID {public_id}"
+        )
+        block = [
+            Paragraph(f'<a name="{anchor}"/><b>{title}</b>', self.s["formula_meta"]),
+            Paragraph(_greek(f"<b>Expression:</b> {expr}"), self.s["formula"]),
+        ]
+        if subst is not None:
+            block.append(Paragraph(
+                _greek(f"<b>Substitution:</b> {subst}"), self.s["formula"]
+            ))
+        if result is not None:
+            block.append(Paragraph(
+                _greek(f"<b>Result:</b> {result}"), self.s["formula"]
+            ))
+        block.append(Paragraph(
+            _greek(f"<b>Symbols:</b> {symbols}"), self.s["formula_detail"]
+        ))
+        if linked:
+            block.append(Paragraph(
+                "<b>Uses:</b> " + ", ".join(linked),
+                self.s["formula_detail"],
+            ))
+        block.append(Paragraph(
+            _greek(f"<b>Source:</b> {source}"), self.s["ref"]
+        ))
+        wrapper = KeepTogether(block)
+        wrapper._sector_equation = record
+        wrapper._sector_equation_roles = tuple(
+            role
+            for role, value in (
+                ("identity", title),
+                ("expression", expr),
+                ("substitution", subst),
+                ("result", result),
+                ("symbols", symbols),
+                ("references", linked),
+                ("source", source),
+            )
+            if value
+        )
+        self.flow.append(wrapper)
 
     @staticmethod
     def _table_column_floors(
@@ -1476,13 +1615,16 @@ class ReportBuilder:
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
         if is_2023:
             self._formula(
+                "concrete-design-strength",
                 "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
                 "f<sub>ck</sub> / gamma<sub>c</sub>",
-                ref="EN 1992-1-1:2023 &#167;5.1.6(1), Formulae (5.3) and (5.4)",
+                source="EN 1992-1-1:2023 &#167;5.1.6(1), Formulae (5.3) and (5.4)",
                 subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
                       f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
                       f"{_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
-                result=f"= {_fmt(c.fcd, 3)} MPa")
+                result=f"= {_fmt(c.fcd, 3)} MPa",
+                numbered=True,
+            )
             if math.isclose(float(self.inp.get("concrete_k_tc") or 0.0), 1.0):
                 self._small(
                     "<b>Applicability assumption:</b> k<sub>tc</sub> = 1.00 was "
@@ -1498,20 +1640,26 @@ class ReportBuilder:
                 )
         else:
             self._formula(
+                "concrete-design-strength",
                 "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / "
                 "gamma<sub>c</sub>",
-                ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
+                source="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
                 subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / "
                       f"{_fmt(c.gamma_c, 3)}",
-                result=f"= {_fmt(c.fcd, 3)} MPa")
+                result=f"= {_fmt(c.fcd, 3)} MPa",
+                numbered=True,
+            )
         if c.curve == 2:
             self._formula(
+                "concrete-parabola-rectangle-law",
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
                 "eps<sub>c2</sub>)<super>n</super>],  for eps<sub>c</sub> &lt;= eps<sub>c2</sub>; "
                 "then f<sub>cd</sub> up to eps<sub>cu2</sub>",
-                ref=("EN 1992-1-1:2023 &#167;8.1.2(1), Formula (8.4)"
-                     if is_2023 else
-                     "DS/EN 1992-1-1 &#167;3.1.7, Eq (3.17); strains from Table 3.1"))
+                source=("EN 1992-1-1:2023 &#167;8.1.2(1), Formula (8.4)"
+                        if is_2023 else
+                        "DS/EN 1992-1-1 &#167;3.1.7, Eq (3.17); strains from Table 3.1"),
+                numbered=True,
+            )
         if self.figures:
             self._fig(viz.concrete_curve_figure(c), 130, 80)
 
@@ -1587,12 +1735,16 @@ class ReportBuilder:
                     ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
             self._table(rows, [60 * mm, 35 * mm, 50 * mm])
             source_ref = _steel_standard_reference(item.get("preset"))
-            self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
-                          ref=(source_ref or
-                               "User-defined or generic constitutive law; no "
-                               "normative curve source assigned."),
-                          subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
-                          result=f"= {_fmt(fyd, 3)} MPa")
+            self._formula(
+                f"reinforcement-design-strength-{material_index + 1}",
+                "f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
+                source=(source_ref or
+                        "User-defined or generic constitutive law; no "
+                        "normative curve source assigned."),
+                subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
+                result=f"= {_fmt(fyd, 3)} MPa",
+                numbered=True,
+            )
             if self.figures:
                 self._fig(viz.steel_curve_figure(
                     st, title=f"{material_id} - {item.get('name', '')}"
@@ -2153,17 +2305,26 @@ class ReportBuilder:
                     "design stress-strain law. For a trial neutral axis the strain "
                     "plane is scaled to the governing curvature - the first material "
                     "limit reached:")
-            self._formula("kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
-                           "min<sub>i</sub>[eps<sub>su,i</sub>/d<sub>s,i</sub>] ,  "
-                           "min<sub>j</sub>[(eps<sub>pu,j</sub>-"
-                           "eps<sub>p0,j</sub>)/d<sub>p,j</sub>] )",
-                           ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
+            self._formula(
+                "plastic-governing-curvature",
+                "kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
+                "min<sub>i</sub>[eps<sub>su,i</sub>/d<sub>s,i</sub>] ,  "
+                "min<sub>j</sub>[(eps<sub>pu,j</sub>-"
+                "eps<sub>p0,j</sub>)/d<sub>p,j</sub>] )",
+                source=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}",
+                numbered=True,
+            )
             self._small("Each bar and tendon uses its assigned material law and "
                         "strain limit in the element-wise minima.")
             self._p("The compression depth c is solved from axial equilibrium and "
                     "the moments follow from the force resultants:")
-            self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
-                          "M = &#8721;(F<sub>i</sub> &#183; d<sub>i</sub>)")
+            self._formula(
+                "plastic-force-moment-equilibrium",
+                "F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
+                "M = &#8721;(F<sub>i</sub> &#183; d<sub>i</sub>)",
+                source="Section force and moment equilibrium; project-defined / uncited.",
+                numbered=True,
+            )
         if elastic_results:
             self._p("<b>Cracked-section elastic stresses.</b> Transformed section "
                     "(reinforcement weighted by the modular ratio), concrete tension "
@@ -2188,13 +2349,16 @@ class ReportBuilder:
                 "the cyclic increment."
             )
             self._formula(
+                "fatigue-section-stress-range",
                 "&#916;sigma<sub>i</sub> = | sigma(long + "
                 "gamma<sub>Ff</sub> &#183; short)<sub>i</sub> - "
                 "sigma(long)<sub>i</sub> |",
-                ref=(
+                source="Project-defined section-action replay relation; uncited.",
+                symbols=(
                     "gamma<sub>Ff</sub> is applied to the cyclic section "
                     "actions before solving; stresses are not scaled afterwards."
                 ),
+                numbered=True,
             )
             if (fatigue.get("checks") or {}).get("reinforcement"):
                 self._p(
@@ -2203,10 +2367,13 @@ class ReportBuilder:
                     "The same bin also checks yield or proof stress."
                 )
                 self._formula(
+                    "reinforcement-fatigue-miner-sum",
                     "D = &#8721;(n<sub>i</sub> / N<sub>R,i</sub>) &#8804; 1.00",
-                    ref=_html_escape(
-                        references.get("reinforcement") or "-"
+                    source=_html_escape(
+                        references.get("reinforcement")
+                        or "Project-defined / uncited."
                     ),
+                    numbered=True,
                 )
             if (fatigue.get("checks") or {}).get("concrete"):
                 self._p(
@@ -2217,9 +2384,14 @@ class ReportBuilder:
                     "bound."
                 )
                 self._formula(
+                    "concrete-fatigue-miner-sum",
                     "D<sub>c</sub> = &#8721;(n<sub>i</sub> / "
                     "N<sub>R,i</sub>) &#8804; 1.00",
-                    ref=_html_escape(references.get("concrete") or "-"),
+                    source=_html_escape(
+                        references.get("concrete")
+                        or "Project-defined / uncited."
+                    ),
+                    numbered=True,
                 )
             self._small(
                 "Miner damage is accumulated within each named spectrum only; "
@@ -2264,10 +2436,14 @@ class ReportBuilder:
                 "minimum ratio and longitudinal spacing."
             )
             self._formula(
+                "transverse-reinforcement-ratios",
                 "&#961;<sub>w</sub> = A<sub>sw</sub> / (s b<sub>w</sub>);   "
                 "&#961;<sub>w,T</sub> = A<sub>leg</sub> / "
                 "(s t<sub>ef</sub>)",
-                ref=_html_escape(edition),
+                source=_html_escape(
+                    edition or "No detailing edition/source assigned."
+                ),
+                numbered=True,
             )
             self._small(
                 "The model contains vertical stirrups only and treats the torsion "
@@ -2342,10 +2518,12 @@ class ReportBuilder:
 
         if checks and presentation.minimum_area_check(result, checks[0]):
             self._formula(
+                "minimum-reinforcement-area-2005",
                 "A<sub>s,min</sub> = max(0.26 f<sub>ctm</sub> / "
                 "f<sub>yk</sub>, 0.0013) b<sub>t</sub>d",
-                ref=(f"{_html_escape(result.get('edition', '-'))} "
-                     "&#167;9.2.1.1(1), Formula (9.1N)"),
+                source=(f"{_html_escape(result.get('edition', '-'))} "
+                        "&#167;9.2.1.1(1), Formula (9.1N)"),
+                numbered=True,
             )
             rows = [[
                 "Axis", "Face", "A<sub>s,prov</sub>", "A<sub>s,min</sub>",
@@ -2389,9 +2567,11 @@ class ReportBuilder:
                     )
         elif checks and checks[0].get("type") == "pure tension":
             self._formula(
+                "minimum-reinforcement-direct-tension-2023",
                 "R<sub>nom</sub> = &#8721;(A<sub>s,i</sub> f<sub>yk,i</sub>) "
                 "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
-                ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+                source="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+                numbered=True,
             )
             rows = [[
                 "R<sub>cr</sub> (kN)", "R<sub>nom</sub> (kN)", "Utilisation",
@@ -2412,9 +2592,11 @@ class ReportBuilder:
                                35 * mm, 20 * mm], font=7.0)
         elif checks:
             self._formula(
+                "minimum-reinforcement-bending-2023",
                 "M<sub>R,nom</sub>(N<sub>Ed</sub>) &#8805; "
                 "M<sub>cr</sub>(N<sub>Ed</sub>)",
-                ref="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+                source="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+                numbered=True,
             )
             rows = [[
                 "M<sub>cr</sub> (kNm)", "M<sub>R,nom</sub> (kNm)",
@@ -2486,6 +2668,7 @@ class ReportBuilder:
         )
         if minimum:
             self._formula(
+                "minimum-transverse-reinforcement-ratio",
                 "&#961;<sub>w,min</sub> = "
                 f"{_fmt(minimum.get('coefficient'), 3)} "
                 "&#8730;f<sub>ck</sub> / f<sub>ywk</sub>"
@@ -2495,7 +2678,10 @@ class ReportBuilder:
                     if minimum.get("ductility_reduction_applied")
                     else ""
                 ),
-                ref=_html_escape(minimum.get("clause") or "-"),
+                source=_html_escape(
+                    minimum.get("clause") or "No clause/source assigned."
+                ),
+                numbered=True,
             )
 
         labels = {
@@ -2599,10 +2785,12 @@ class ReportBuilder:
             title="Governing clear-spacing pair",
         ), 150, 108)
         self._formula(
+            "clear-spacing-requirement",
             "c<sub>req</sub> = max(phi<sub>max</sub>, "
             "D<sub>upper</sub> + 5 mm, 20 mm)",
-            ref=(f"{_html_escape(result.get('edition', '-'))} "
-                 f"&#167;{_html_escape(result.get('clause', '-'))}"),
+            source=(f"{_html_escape(result.get('edition', '-'))} "
+                    f"&#167;{_html_escape(result.get('clause', '-'))}"),
+            numbered=True,
         )
         if governing:
             self._small(
@@ -2847,10 +3035,15 @@ class ReportBuilder:
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
         self._keep_from(start)
         self._h2("Axial equilibrium check")
-        self._formula("T - F<sub>c</sub> = N",
-                      subst=f"{_fmt(T, 3)} - {_fmt(Fc, 3)} = {_fmt(T-Fc, 3)} kN",
-                      result=f"applied N = {_fmt(P, 3)} kN  (residual "
-                             f"{_fmt(abs(T - Fc - P),3)} kN)")
+        self._formula(
+            "plastic-axial-equilibrium",
+            "T - F<sub>c</sub> = N",
+            source="Section axial-force equilibrium; project-defined / uncited.",
+            subst=f"{_fmt(T, 3)} - {_fmt(Fc, 3)} = {_fmt(T-Fc, 3)} kN",
+            result=f"applied N = {_fmt(P, 3)} kN  (residual "
+                   f"{_fmt(abs(T - Fc - P),3)} kN)",
+            numbered=True,
+        )
         self._small("The tension resultant T = F<sub>c</sub> + N balances the "
                     "section (N tension-positive); the moments above are the "
                     "resultants about the origin.")
@@ -2981,48 +3174,71 @@ class ReportBuilder:
         self._h2("Resistance")
         if res.get("a_cs", 0.0) > 0.0:
             self._formula(
+                "effective-shear-span",
                 "a<sub>cs</sub> = max(|M<sub>Ed</sub>/V<sub>Ed</sub>|, d)",
-                ref="EN 1992-1-1:2023 Formula (8.30)",
+                source="EN 1992-1-1:2023 Formula (8.30)",
                 subst=f"max(|{_fmt(sh.get('m_ed_2023'), 3)}| / "
                       f"{_fmt(sh.get('v_ed'), 3)} &#183; 1000, {_fmt(sh['d'], 1)})",
-                result=f"a<sub>cs</sub> = {_fmt(res.get('a_cs'), 1)} mm")
+                result=f"a<sub>cs</sub> = {_fmt(res.get('a_cs'), 1)} mm",
+                numbered=True,
+            )
             self._formula(
+                "axial-force-shear-factor",
                 "k<sub>vp</sub> = max(1 + N<sub>Ed</sub>/|V<sub>Ed</sub>| &#183; "
                 "d/(3a<sub>cs</sub>), 0.1)",
-                ref="EN 1992-1-1:2023 &#167;8.2.2(4), Formula (8.31)",
+                source="EN 1992-1-1:2023 &#167;8.2.2(4), Formula (8.31)",
                 subst=f"N<sub>Ed</sub> = {_fmt(res.get('n_ed_tension'), 3)} kN; "
                       f"k<sub>vp</sub> = {_fmt(res.get('k_vp'), 4)}",
-                result=f"k<sub>vp</sub>d = {_fmt(res.get('d_kvp'), 1)} mm")
+                result=f"k<sub>vp</sub>d = {_fmt(res.get('d_kvp'), 1)} mm",
+                numbered=True,
+            )
         self._formula(
+            "concrete-shear-stress-2023",
             "tau<sub>Rd,c</sub> = (0.66/gamma<sub>v</sub>)(100 rho<sub>l</sub> "
             "f<sub>ck</sub> d<sub>dg</sub>/(k<sub>vp</sub>d))<sup>1/3</sup>",
-            ref="EN 1992-1-1:2023 (8.27), stress",
+            source="EN 1992-1-1:2023 (8.27), stress",
             subst=f"(0.66/{_fmt(res['gamma_v'], 2)})(100 &#183; "
                   f"{_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)} &#183; "
                   f"{_fmt(res['ddg'], 1)}/{_fmt(res.get('d_kvp'), 1)})"
                   "<sup>1/3</sup>",
-            result=f"tau = {_fmt(res['tau_basic'], 3)} MPa")
+            result=f"tau = {_fmt(res['tau_basic'], 3)} MPa",
+            numbered=True,
+        )
         self._formula(
+            "minimum-concrete-shear-stress-2023",
             "tau<sub>Rd,c,min</sub> = (11/gamma<sub>v</sub>) "
             "&#8730;(f<sub>ck</sub>/f<sub>yd</sub> &#183; d<sub>dg</sub>/d)",
-            ref="EN 1992-1-1:2023 (8.20)",
+            source="EN 1992-1-1:2023 (8.20)",
             subst=f"(11/{_fmt(res['gamma_v'], 2)}) &#8730;({_fmt(fck, 0)}/"
                   f"{_fmt(res['fyd'], 1)} &#183; {_fmt(res['ddg'], 1)}/"
                   f"{_fmt(sh['d'], 1)})",
-            result=f"tau<sub>min</sub> = {_fmt(res['tau_min'], 3)} MPa")
+            result=f"tau<sub>min</sub> = {_fmt(res['tau_min'], 3)} MPa",
+            numbered=True,
+        )
         self._formula(
+            "concrete-shear-resistance-2023",
             "V<sub>Rd,c</sub> = max(tau<sub>Rd,c</sub>, tau<sub>Rd,c,min</sub>) "
             "b<sub>w</sub> z",
             subst=f"max({_fmt(res['tau_rdc'], 3)}, {_fmt(res['tau_min'], 3)}) &#183; "
                   f"{_fmt(sh['bw'], 1)} &#183; {_fmt(res['z'], 1)} / 1000",
-            result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
+            result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN",
+            numbered=True,
+            references=(
+                "concrete-shear-stress-2023",
+                "minimum-concrete-shear-stress-2023",
+            ),
+        )
         util = sh["util"]
         util_txt = _pct(util)
         verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._h2("Utilisation")
-        self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
-                      subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
+        self._formula(
+            "concrete-shear-utilisation-2023",
+            "|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
+            subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
+            result=f"{util_txt}  ({verdict})",
+            numbered=True,
+        )
         self._small(
             "The 2023 tau<sub>Rd,c</sub> uses d<sub>dg</sub> = 16 + "
             "D<sub>lower</sub>, the flexural design yield and the Formula (8.31) "
@@ -3247,32 +3463,49 @@ class ReportBuilder:
         # governing stress by b_w*d (and /1000 for MPa*mm^2 = N -> kN). Keep each
         # substitution in its own units so the worked calc is dimensionally consistent.
         self._formula(
+            "concrete-shear-stress-2005",
             "v = C<sub>Rd,c</sub> k (100 rho<sub>l</sub> f<sub>ck</sub>)<sup>1/3</sup> "
             "+ k<sub>1</sub> sigma<sub>cp</sub>",
-            ref="EN 1992-1-1 (6.2.a), stress",
+            source="EN 1992-1-1 (6.2.a), stress",
             subst=f"{_fmt(res['crd_c'], 4)} &#183; {_fmt(res['k'], 3)} &#183; (100 "
                   f"&#183; {_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)})<sup>1/3</sup> "
                   f"+ {_fmt(k1, 2)} &#183; {_fmt(res['sigma_cp'], 3)}",
-            result=f"v = {_fmt(res['v_basic'], 3)} MPa")
+            result=f"v = {_fmt(res['v_basic'], 3)} MPa",
+            numbered=True,
+        )
         self._formula(
+            "minimum-concrete-shear-stress-2005",
             "v<sub>min,eff</sub> = v<sub>min</sub> + k<sub>1</sub> sigma<sub>cp</sub>",
-            ref="EN 1992-1-1 (6.2.b), lower-bound stress",
+            source="EN 1992-1-1 (6.2.b), lower-bound stress",
             subst=f"{_fmt(res['vmin'], 3)} + {_fmt(k1, 2)} &#183; "
                   f"{_fmt(res['sigma_cp'], 3)}",
-            result=f"v<sub>min,eff</sub> = {_fmt(res['v_floor'], 3)} MPa")
+            result=f"v<sub>min,eff</sub> = {_fmt(res['v_floor'], 3)} MPa",
+            numbered=True,
+        )
         self._formula(
+            "concrete-shear-resistance-2005",
             "V<sub>Rd,c</sub> = max(v, v<sub>min,eff</sub>) &#183; b<sub>w</sub> "
             "&#183; d",
             subst=f"max({_fmt(res['v_basic'], 3)}, {_fmt(res['v_floor'], 3)}) &#183; "
                   f"{_fmt(sh['bw'], 1)} &#183; {_fmt(sh['d'], 1)} / 1000",
-            result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
+            result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN",
+            numbered=True,
+            references=(
+                "concrete-shear-stress-2005",
+                "minimum-concrete-shear-stress-2005",
+            ),
+        )
         util = sh["util"]
         util_txt = _pct(util)
         verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
         self._h2("Utilisation")
-        self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
-                      subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
+        self._formula(
+            "concrete-shear-utilisation-2005",
+            "|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
+            subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
+            result=f"{util_txt}  ({verdict})",
+            numbered=True,
+        )
         self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
                     "assumed fully anchored (&#8805; l<sub>bd</sub> + d) beyond the "
                     "section. sigma<sub>cp</sub> uses the plastic axial force "
@@ -3356,58 +3589,93 @@ class ReportBuilder:
                                    links["dia"], links["s"]), 130, 80)
         if model_2023:
             self._formula(
+                "link-yield-shear-stress-2023",
                 "tau<sub>Rd,sy</sub> = rho<sub>w</sub> f<sub>ywd</sub> cot theta",
-                ref="EN 1992-1-1:2023 Formula (8.42)",
+                source="EN 1992-1-1:2023 Formula (8.42)",
                 subst=f"{_fmt(lk['rho_w'], 5)} &#183; {_fmt(lk['fywd'], 1)} "
                       f"&#183; {_fmt(lk['cot'], 3)}",
-                result=f"tau<sub>Rd,sy</sub> = {_fmt(lk['tau_rd_sy'], 3)} MPa")
+                result=f"tau<sub>Rd,sy</sub> = {_fmt(lk['tau_rd_sy'], 3)} MPa",
+                numbered=True,
+            )
             self._formula(
+                "link-compression-field-2023",
                 "sigma<sub>cd</sub> = tau<sub>Ed</sub>"
                 "(cot theta + tan theta) &#8804; nu f<sub>cd</sub>",
-                ref="EN 1992-1-1:2023 Formula (8.44)",
+                source="EN 1992-1-1:2023 Formula (8.44)",
                 subst=f"{_fmt(lk['tau_ed'], 3)} &#183; "
                       f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) "
                       f"&#8804; {_fmt(lk['nu'], 3)} &#183; {_fmt(lk['fcd'], 2)}",
                 result=f"sigma<sub>cd</sub> = {_fmt(lk['sigma_cd'], 3)} MPa; "
-                       f"limit = {_fmt(lk['nu_fcd'], 3)} MPa")
+                       f"limit = {_fmt(lk['nu_fcd'], 3)} MPa",
+                numbered=True,
+            )
             self._formula(
+                "link-shear-resistance-2023",
                 "V<sub>Rd,s</sub> = tau<sub>Rd,sy</sub> b<sub>w</sub> z",
                 subst=f"{_fmt(lk['tau_rd_sy'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / 1000",
-                result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
+                result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN",
+                numbered=True,
+                references=("link-yield-shear-stress-2023",),
+            )
             self._formula(
+                "link-crushing-resistance-2023",
                 "V<sub>Rd,max</sub> = nu f<sub>cd</sub> b<sub>w</sub> z / "
                 "(cot theta + tan theta)",
                 subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / "
                       f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) / 1000",
-                result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
+                result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN",
+                numbered=True,
+                references=("link-compression-field-2023",),
+            )
         else:
             self._formula(
+                "link-shear-resistance-2005",
                 "V<sub>Rd,s</sub> = (A<sub>sw</sub>/s) z f<sub>ywd</sub> cot theta",
-                ref="EN 1992-1-1 (6.8)",
+                source="EN 1992-1-1 (6.8)",
                 subst=f"{_fmt(links['asw_over_s'], 4)} &#183; {_fmt(lk['z'], 1)} "
                       f"&#183; {_fmt(lk['fywd'], 1)} &#183; {_fmt(lk['cot'], 3)} / 1000",
-                result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
+                result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN",
+                numbered=True,
+            )
             self._formula(
+                "link-crushing-resistance-2005",
                 "V<sub>Rd,max</sub> = alpha<sub>cw</sub> b<sub>w</sub> z "
                 "nu<sub>1</sub> f<sub>cd</sub> / (cot theta + tan theta)",
-                ref="EN 1992-1-1 (6.9)",
+                source="EN 1992-1-1 (6.9)",
                 subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
                       f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
                       f"{_fmt(lk['fcd'], 2)} / ({_fmt(lk['cot'], 3)} + "
                       f"{_fmt(1.0 / lk['cot'], 3)}) / 1000",
-                result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
+                result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN",
+                numbered=True,
+            )
         self._formula(
+            "link-governing-shear-resistance",
             "V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>)",
             result=f"V<sub>Rd</sub> = {_fmt(lk['vrd'], 3)} kN "
-                   f"(governed by {lk['governs']})")
+                   f"(governed by {lk['governs']})",
+            numbered=True,
+            references=((
+                "link-shear-resistance-2023"
+                if model_2023 else "link-shear-resistance-2005"
+            ), (
+                "link-crushing-resistance-2023"
+                if model_2023 else "link-crushing-resistance-2005"
+            )),
+        )
         util = links["util"]
         util_txt = _pct(util)
         verdict = _demand_resistance_verdict(viz.util_ok(util))
-        self._formula("|V<sub>Ed</sub>| / V<sub>Rd</sub>",
-                      subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
+        self._formula(
+            "link-shear-utilisation",
+            "|V<sub>Ed</sub>| / V<sub>Rd</sub>",
+            subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
+            result=f"{util_txt}  ({verdict})",
+            numbered=True,
+            references=("link-governing-shear-resistance",),
+        )
         if links.get("theta_mode") == "utilisation":
             shared_note = (
                 "shared with torsion when enabled"
@@ -3460,11 +3728,14 @@ class ReportBuilder:
                 )
                 chord_ref = "EN 1992-1-1 6.2.3(7) + 6.3.2"
             self._formula(
+                "longitudinal-chord-demand",
                 chord_formula,
-                ref=chord_ref,
+                source=chord_ref,
                 subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
-                result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
+                result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm",
+                numbered=True,
+            )
             fallback = presentation.required_chord_fallback(links)
             fell_back = fallback is not None
             if coverage:
@@ -3480,9 +3751,13 @@ class ReportBuilder:
             else:
                 verdict_suffix = f"  ({vv})"
             self._formula(
+                "longitudinal-chord-utilisation",
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(ch['m_total'], 1)} / {_fmt(ch['m_rd'], 1)}",
-                result=f"utilisation = {_pct(ch['util'])}{verdict_suffix}")
+                result=f"utilisation = {_pct(ch['util'])}{verdict_suffix}",
+                numbered=True,
+                references=("longitudinal-chord-demand",),
+            )
             face_desc = (f"the shear tension face ({face})" if ch.get("gets_shift", True)
                          else f"the shear compression face ({face}) -- the torsion "
                          "tension governs there, with no shear shift and the bending "
@@ -3637,12 +3912,15 @@ class ReportBuilder:
             expr = "r<sub>M</sub> + r<sub>V</sub> + r<sub>T</sub>"
             note = "each action alone; N folded into the bending utilisation."
         self._formula(
+            "combined-dk-na-utilisation",
             expr,
+            source="DS/EN 1992-1-1 DK NA 6.3.2(6)",
             subst=note,
             result=(
                 "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
                 f"{_pct(c['dkna_sum'])}  ({verdict})"
             ),
+            numbered=True,
         )
         self._h2("Physical resistance components")
         component_rows = [["Component", "Utilisation", "Status", "QA note"]]
@@ -3671,11 +3949,14 @@ class ReportBuilder:
             val = cr["value"]
             vv = _demand_resistance_verdict(viz.util_ok(val))
             self._formula(
+                "combined-concrete-crushing",
                 "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
-                ref="EN 1992-1-1 (6.29)",
+                source="EN 1992-1-1 (6.29)",
                 subst=f"{_fmt(cr['t_ed'], 3)}/{_fmt(cr['trd_max'], 3)} + "
                       f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}",
-                result=f"{_pct(val)}  ({vv})")
+                result=f"{_pct(val)}  ({vv})",
+                numbered=True,
+            )
             self._small(f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
                         f"(theta = {_fmt(cr['theta_deg'], 1)}&#176;).")
             self._fig(viz.vt_interaction_figure(cr["vrd_max"], cr["trd_max"],
@@ -3704,12 +3985,16 @@ class ReportBuilder:
                 note = ("V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>: shear and torsion "
                         "demands add on the shared closed stirrup.")
             self._formula(
+                "combined-shared-stirrup-utilisation",
                 "shear share + torsion share (shared closed stirrup)",
+                source="EN 1992-1-1 6.3.2(2); derived shared-stirrup relation.",
                 subst=f"{_pct(tr['shear_fraction'])} + {_pct(tr['torsion_fraction'])}",
                 result=(
                     "closed-stirrup utilisation = "
                     f"{_pct(tr['u_stirrup'])}  ({vv})"
-                ))
+                ),
+                numbered=True,
+            )
             self._small(note + f" At the member strut angle cot theta = "
                         f"{_fmt(tr['cot'], 2)} "
                         f"(theta = {_fmt(tr['theta_deg'], 1)}&#176;) -- "
@@ -3743,14 +4028,17 @@ class ReportBuilder:
                 + viz.chord_mrd_label(ax, lg.get("m_off", 0.0),
                                       lg.get("conditional", True)) + ".")
             self._formula(
+                "combined-longitudinal-chord-demand",
                 "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>&#183;z + "
                 "F<sub>td,T</sub>&#183;z/2",
-                ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                source="EN 1992-1-1 6.2.3(7) + 6.3.2",
                 subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
                       f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
                       f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
                       f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
-                result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
+                result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm",
+                numbered=True,
+            )
             biaxial = lg.get("biaxial", False)
             fallback = presentation.required_chord_fallback(c)
             fell_back = fallback is not None
@@ -3767,9 +4055,13 @@ class ReportBuilder:
             else:
                 verdict_suffix = f"  ({vv})"
             self._formula(
+                "combined-longitudinal-chord-utilisation",
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
-                result=f"utilisation = {_pct(lg['util'])}{verdict_suffix}")
+                result=f"utilisation = {_pct(lg['util'])}{verdict_suffix}",
+                numbered=True,
+                references=("combined-longitudinal-chord-demand",),
+            )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = (
@@ -3848,13 +4140,17 @@ class ReportBuilder:
             "and the capacity is checked against M<sub>Rd</sub> "
             + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True) + ".")
         self._formula(
+            "off-axis-chord-demand",
             "M<sub>Ed,total</sub> = M<sub>Ed</sub> + F<sub>td,T</sub>&#183;z/2",
-            ref="EN 1992-1-1 6.3.2",
+            source="EN 1992-1-1 6.3.2",
             subst=f"{_fmt(och['m_ed'], 1)} + {_fmt(och['mt'], 1)} kNm  "
                   f"(z = {_fmt(och['z'], 3)} m, "
                   f"F<sub>td,T</sub> = {_fmt(och['ftd_t'], 1)} kN)",
-            result=f"M<sub>Ed,total</sub> = {_fmt(och['m_total'], 1)} kNm")
+            result=f"M<sub>Ed,total</sub> = {_fmt(och['m_total'], 1)} kNm",
+            numbered=True,
+        )
         self._formula(
+            "off-axis-chord-utilisation",
             "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
             subst=f"{_fmt(och['m_total'], 1)} / {_fmt(och['m_rd'], 1)}",
             result=(
@@ -3864,7 +4160,10 @@ class ReportBuilder:
                     if assessment_complete
                     else "(NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
                 )
-            ))
+            ),
+            numbered=True,
+            references=("off-axis-chord-demand",),
+        )
         self._small(f"z = {_fmt(och['z'], 3)} m ({och.get('z_src') or '0.9 d'}). "
                     "Each chord's capacity is conditional on the OTHER axis' "
                     "bending moment only; the longitudinal steel the two chords "
@@ -3907,8 +4206,13 @@ class ReportBuilder:
         g = t.get("governing_sub")
         gov = ("web" if g == 0 else f"part {g + 1}") if g is not None else "-"
         self._formula(
+            "subtube-governing-utilisation",
             "governing utilisation = max(T<sub>Ed,i</sub> / T<sub>Rd,i</sub>)",
-            ref=f"worst sub-tube: {gov}", result=f"{util_txt}  ({verdict})")
+            source="EN 1992-1-1 6.3.1(3)-(4); stiffness-based torque split.",
+            symbols=f"Worst sub-tube: {gov}.",
+            result=f"{util_txt}  ({verdict})",
+            numbered=True,
+        )
         self._small("The applied torque is split by stiffness, not capacity, so a "
                     "sub-tube can be overstressed even while T<sub>Ed</sub> &#8804; sum "
                     "T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}"
@@ -3941,11 +4245,14 @@ class ReportBuilder:
         val_txt = _pct(val)
         verdict_i = _demand_resistance_verdict(viz.util_ok(val))
         self._formula(
+            "torsion-shear-crushing-interaction",
             "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
-            ref="EN 1992-1-1 (6.29)",
+            source="EN 1992-1-1 (6.29)",
             subst=f"{_fmt(inter['t_ed'], 3)}/{_fmt(inter['trd_max'], 3)} + "
                   f"{_fmt(inter['v_ed'], 3)}/{_fmt(inter['vrd_max'], 3)}",
-            result=f"{val_txt}  ({verdict_i})")
+            result=f"{val_txt}  ({verdict_i})",
+            numbered=True,
+        )
         self._small("Evaluated at the common strut angle cot theta = "
                     f"{_fmt(inter['cot'], 2)} "
                     f"(theta = {_fmt(inter['theta_deg'], 1)}&#176;); "
@@ -4112,54 +4419,81 @@ class ReportBuilder:
                         "distributed longitudinal steel on both faces.")
         self._h2("Resistances")
         self._formula(
+            "torsion-transverse-steel-resistance",
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
             "cot theta",
-            ref="EN 1992-1-1 wall shear flow (6.27) and transverse equilibrium (6.8)",
+            source="EN 1992-1-1 wall shear flow (6.27) and transverse equilibrium (6.8)",
             subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
                   f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
-            result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m")
+            result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m",
+            numbered=True,
+        )
         self._formula(
+            "torsion-compression-field-resistance",
             "T<sub>Rd,max</sub> = 2 nu alpha<sub>cw</sub> f<sub>cd</sub> "
             "A<sub>k</sub> t<sub>ef</sub> sin theta cos theta",
-            ref="EN 1992-1-1 (6.30)",
+            source="EN 1992-1-1 (6.30)",
             subst=f"2 &#183; {_fmt(t['nu'], 3)} &#183; {_fmt(t['alpha_cw'], 3)} &#183; "
                   f"{_fmt(t['fcd'], 2)} &#183; {_fmt(tube['Ak'], 4)} &#183; "
                   f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; "
                   f"{_fmt(t['cot'] / (1.0 + t['cot'] ** 2), 4)} &#183; 1000",
-            result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN&#183;m")
+            result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN&#183;m",
+            numbered=True,
+        )
         self._formula(
+            "torsion-governing-resistance",
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
-                   f"(governed by {t['governs']})")
+                   f"(governed by {t['governs']})",
+            numbered=True,
+            references=(
+                "torsion-transverse-steel-resistance",
+                "torsion-compression-field-resistance",
+            ),
+        )
         self._formula(
+            "torsion-design-tensile-strength",
             "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / gamma<sub>ct</sub>",
-            ref="selected torsion method; f<sub>ctk,0.05</sub> = 0.7 f<sub>ctm</sub>",
+            source="Selected torsion method; f<sub>ctk,0.05</sub> = 0.7 f<sub>ctm</sub>.",
             subst=f"{_fmt(t.get('fctk_005'), 3)} / "
                   f"{_fmt(t.get('gamma_ct'), 3)}",
-            result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa")
+            result=f"f<sub>ctd</sub> = {_fmt(t['fctd'], 3)} MPa",
+            numbered=True,
+        )
         self._formula(
+            "torsion-cracking-resistance",
             "T<sub>Rd,c</sub> = 2 A<sub>k</sub> t<sub>ef</sub> f<sub>ctd</sub>",
-            ref="cracking (tau = f<sub>ctd</sub>)",
+            source="Torsional cracking relation (tau = f<sub>ctd</sub>); uncited.",
             subst=f"2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
                   f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; {_fmt(t['fctd'], 3)} "
                   "&#183; 1000",
-            result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN&#183;m")
+            result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN&#183;m",
+            numbered=True,
+            references=("torsion-design-tensile-strength",),
+        )
         util = t["util"]
         util_txt = _pct(util)
         verdict = _demand_resistance_verdict(viz.util_ok(util))
         self._h2("Utilisation and longitudinal steel")
-        self._formula("T<sub>Ed</sub> / T<sub>Rd</sub>",
-                      subst=f"{_fmt(t['t_ed'], 3)} / {_fmt(t['trd'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
         self._formula(
+            "torsion-utilisation",
+            "T<sub>Ed</sub> / T<sub>Rd</sub>",
+            subst=f"{_fmt(t['t_ed'], 3)} / {_fmt(t['trd'], 3)}",
+            result=f"{util_txt}  ({verdict})",
+            numbered=True,
+        )
+        self._formula(
+            "torsion-longitudinal-steel-demand",
             "&#8721;A<sub>sl</sub> = T<sub>Ed</sub> u<sub>k</sub> cot theta / "
             "(2 A<sub>k</sub> f<sub>yd</sub>)",
-            ref="EN 1992-1-1 (6.28)",
+            source="EN 1992-1-1 (6.28)",
             subst=f"{_fmt(t['t_ed'], 3)} &#183; {_fmt(tube['uk'], 4)} &#183; "
                   f"{_fmt(t['cot'], 3)} / (2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
                   f"{_fmt(t['fyd_long'], 1)}) &#183; 1000",
             result=f"&#8721;A<sub>sl</sub> = {_fmt(t['asl_req'], 0)} mm<sup>2</sup> "
-                   "(in addition to the bending steel)")
+                   "(in addition to the bending steel)",
+            numbered=True,
+        )
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
                     "MN&#183;m to kN&#183;m (resistances) and m<sup>2</sup> "
                     "to mm<sup>2</sup> "
@@ -4172,11 +4506,14 @@ class ReportBuilder:
             vv = ("minimum reinforcement suffices" if mr["ok"]
                   else "designed reinforcement required")
             self._formula(
+                "torsion-minimum-reinforcement-screen",
                 "T<sub>Ed</sub>/T<sub>Rd,c</sub> + V<sub>Ed</sub>/V<sub>Rd,c</sub>",
-                ref="EN 1992-1-1 (6.31)",
+                source="EN 1992-1-1 (6.31)",
                 subst=f"{_fmt(mr['t_ed'], 3)}/{_fmt(mr['trd_c'], 3)} + "
                       f"{_fmt(mr['v_ed'], 3)}/{_fmt(mr['vrd_c'], 3)}",
-                result=f"{_fmt(mr['value'], 3)}  ({vv})")
+                result=f"{_fmt(mr['value'], 3)}  ({vv})",
+                numbered=True,
+            )
             solid_note = ("Assumes an approximately solid rectangular section."
                           if mr["solid"] else "This section has a void: 6.31 is for "
                           "solid sections, so it does not strictly apply.")
@@ -4374,21 +4711,25 @@ class ReportBuilder:
             el.get("crack_edition") == "2023"
             or "2023" in str(el.get("crack_code", ""))
         )
-        self._formula("lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
-                      ref=("Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                           "(EN 1992-1-1:2023 &#167;9.2.1)"
-                           if crack_2023 else
-                           "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                           "(DS/EN 1992-1-1 &#167;7.1)"),
-                      subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
-                            f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa",
-                      result=(
-                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
-                          f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
-                          if valid else
-                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
-                          "no verified cracking classification"
-                      ))
+        self._formula(
+            "cracking-threshold",
+            "lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
+            source=("Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                    "(EN 1992-1-1:2023 &#167;9.2.1)"
+                    if crack_2023 else
+                    "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                    "(DS/EN 1992-1-1 &#167;7.1)"),
+            subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
+                  f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa",
+            result=(
+                f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
+                f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
+                if valid else
+                f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
+                "no verified cracking classification"
+            ),
+            numbered=True,
+        )
         if valid:
             self._small(
                 "Governing of the long-term and total (long + short) actions: "
@@ -4496,31 +4837,46 @@ class ReportBuilder:
             # spacing 1.3(h-x) directly (Eq 7.14), so the (7.11) formula would not
             # reproduce the reported value.
             self._formula(
+                "crack-spacing-2005",
                 "s<sub>r,max</sub> = 1.3&#183;(h - x)",
-                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
+                source="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
                 subst="bars not at close centres (spacing &gt; 5(c + phi/2))",
-                result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
+                result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0), 3)} mm",
+                numbered=True,
+            )
         else:
             self._formula(
+                "crack-spacing-2005",
                 "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
                 "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
-                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)")
+                source="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)",
+                numbered=True,
+            )
         self._formula(
+            "mean-strain-difference-2005",
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
             "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
             "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
             "&gt;= 0.6&#183;sigma<sub>s</sub>/E<sub>s</sub>",
-            ref="Eq (7.9)")
+            source="Selected DS/EN 1992-1-1 crack method, Eq (7.9).",
+            numbered=True,
+        )
         self._formula(
+            "crack-width-2005",
             ("w<sub>k</sub> = &#189;&#183;s<sub>r,max</sub> &#183; "
              "(eps<sub>sm</sub> - eps<sub>cm</sub>)" if coarse else
              "w<sub>k</sub> = s<sub>r,max</sub> &#183; "
              "(eps<sub>sm</sub> - eps<sub>cm</sub>)"),
-            ref="DS/EN 1992-1-1 DK NA &#167;7.3.4(1), Eq (7.8)" if coarse else "Eq (7.8)",
+            source=("DS/EN 1992-1-1 DK NA &#167;7.3.4(1), Eq (7.8)"
+                    if coarse else
+                    "Selected DS/EN 1992-1-1 crack method, Eq (7.8)."),
             subst=("= &#189; &#183; " if coarse else "= ")
                   + f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                     f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
-            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
+            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm",
+            numbered=True,
+            references=("crack-spacing-2005", "mean-strain-difference-2005"),
+        )
         if code:
             note = f"Crack-width code: {code}. "
             if "DK NA" in code:
@@ -4589,25 +4945,35 @@ class ReportBuilder:
     def _crack_worked_2023(self, cw, code):
         """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
         self._formula(
+            "crack-spacing-2023",
             "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
             "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
-            ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
+            source="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
             subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
-                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
+                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0), 3)} mm",
+            numbered=True,
+        )
         self._formula(
+            "mean-strain-difference-2023",
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
             "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
             "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
             "&gt;= (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>/E<sub>s</sub>",
-            ref="Eq (9.11)")
+            source="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.11)",
+            numbered=True,
+        )
         self._formula(
+            "crack-width-2023",
             "w<sub>k,cal</sub> = k<sub>w</sub>&#183;k<sub>1/r</sub>&#183;"
             "s<sub>r,m,cal</sub>&#183;(eps<sub>sm</sub> - eps<sub>cm</sub>)",
-            ref="Eq (9.8)",
+            source="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.8)",
             subst=f"= {_fmt(cw.get('kw',1.7), 3)} &#183; {_fmt(cw.get('k1_r',1),3)} &#183; "
                   f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
-            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
+            result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm",
+            numbered=True,
+            references=("crack-spacing-2023", "mean-strain-difference-2023"),
+        )
         if code:
             self._small(f"Crack-width code: {code}. Refined control of cracking "
                         "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
