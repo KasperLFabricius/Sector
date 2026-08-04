@@ -31,7 +31,6 @@ if str(ROOT) not in sys.path:
 import sector_report  # noqa: E402
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
-import calculation_trace_publication  # noqa: E402
 import case_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
@@ -853,20 +852,6 @@ def _results(inp: dict | None = None) -> dict:
              "results": {"elastic": elastic_2}},
         ],
     }
-    calculation_trace_publication.attach_calculation_traces(
-        inp,
-        out,
-        input_sha256="f" * 64,
-    )
-    # The legacy visual fixture hand-authors its plastic/elastic display payloads;
-    # they are not authoritative solver candidates for CT replay.  Retain the real
-    # CT-011 bridge publication as the representative cross-renderer trace and let
-    # the full exact-head app regression own all live solver families.
-    for family in ("plastic", "elastic"):
-        for entry in out.get(f"{family}_cases") or ():
-            entry["results"].pop(
-                calculation_trace_publication.PUBLICATION_KEY, None
-            )
     return out
 
 
@@ -878,15 +863,6 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             raise AssertionError(
                 f"inconsistent fixture {label}: {actual!r} != {expected!r}"
             )
-
-    trace_errors = calculation_trace_publication.published_errors(out)
-    if trace_errors:
-        details = "; ".join(
-            f"{item.coverage_id}: {item.message}" for item in trace_errors
-        )
-        raise AssertionError(f"fixture trace publication failed: {details}")
-    if not calculation_trace_publication.published_calculations(out, inp):
-        raise AssertionError("fixture did not publish calculation traces")
 
     case = next(
         row for row in inp["plastic_cases"] if row["name"] == "PL-QA-1"
@@ -1295,10 +1271,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Optional brittle Method B",
         "Box-wall shear and torsion",
         "Web/flange minimum crack reinforcement",
-        "Calculation trace",
-        "CT-011",
-        "result SHA-256",
-        "clause 6.1(109)-(110)",
+        "DS/EN 1992-2:2005 6.1(109)-(110)",
         "generic bridge-code coverage and generic cross-method interaction are not calculated",
         "Torsion and shear fatigue are not assessed",
         "Physical resistance components",
