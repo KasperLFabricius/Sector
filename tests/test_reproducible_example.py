@@ -65,7 +65,7 @@ def test_reference_download_is_current_schema_complete_and_identity_stable():
     )) == 3
 
 
-def test_complete_example_publishes_every_trace_with_the_saved_input_identity(
+def test_complete_example_retains_results_without_trace_payloads(
     calculated_example,
 ):
     state = calculated_example.session_state.filtered_state
@@ -74,29 +74,10 @@ def test_complete_example_publishes_every_trace_with_the_saved_input_identity(
     assert set(results) == {
         "plastic_cases", "plastic", "shear", "torsion", "combined",
         "minimum_reinforcement", "transverse_reinforcement", "elastic_cases",
-        "elastic", "clear_spacing", "fatigue", "bridge", "calculation_traces",
+        "elastic", "clear_spacing", "fatigue", "bridge",
     }
-    publications = [
-        results["plastic_cases"][0]["results"]["calculation_traces"],
-        results["elastic_cases"][0]["results"]["calculation_traces"],
-        results["calculation_traces"],
-    ]
-    assert all(publication["errors"] == [] for publication in publications)
-    assert all(
-        bundle["input_sha256"] == EXPECTED_INPUT_SHA256
-        for publication in publications
-        for bundle in publication["bundles"]
-    )
-    coverage = {
-        calculation["coverage_id"]
-        for publication in publications
-        for bundle in publication["bundles"]
-        for calculation in bundle["calculations"]
-    }
-    assert coverage == {
-        "ct-002", "ct-003", "ct-004", "ct-005",
-        "ct-008", "ct-009", "ct-010", "ct-011",
-    }
+    assert "calculation_traces" not in results["plastic_cases"][0]["results"]
+    assert "calculation_traces" not in results["elastic_cases"][0]["results"]
 
 
 def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
@@ -264,8 +245,8 @@ def test_checking_pack_is_separate_and_covers_every_main_family():
     for text in (
         "Plastic capacity and applied ray", "Cracked elastic and crack width",
         "Detailing and member resistance", "Fatigue",
-        "Independent bridge kernels", "Report and trace completeness",
-        "CT-002 through CT-005", "CT-008 through CT-011",
+        "Independent bridge kernels", "Report completeness",
+        "explicit equations", "genuine demand/resistance verdicts",
     ):
         assert text in pack
     manual_text = "\n".join(
@@ -312,6 +293,7 @@ def test_tables_only_report_contains_every_main_calculation_chapter(
         "Grouped fatigue", "Shear resistance", "Torsion (thin-walled tube)",
         "Combined bending + shear + torsion (M-V-T)", "minimum reinforcement",
         "Shear/torsion link detailing", "Reinforcement clear spacing",
-        "Independent bridge calculations", "Calculation trace",
+        "Independent bridge calculations",
     ):
         assert heading in text
+    assert "Calculation trace" not in text

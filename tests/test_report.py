@@ -16,7 +16,6 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
-import calculation_trace_publication  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import bridge, detailing  # noqa: E402
@@ -1676,7 +1675,7 @@ def test_report_publishes_retained_bridge_kernels_without_coverage_aggregate():
     assert "approval" not in text.casefold()
 
 
-def test_report_renders_the_same_solver_owned_trace_rows_as_the_manual_and_ui():
+def test_report_ignores_stale_trace_payload_and_has_no_trace_chapter():
     inp = _inp()
     inp.update({
         "bridge_standard": bridge.EN1992_2_BASE,
@@ -1691,20 +1690,19 @@ def test_report_renders_the_same_solver_owned_trace_rows_as_the_manual_and_ui():
         bridge_inputs.MINIMUM_CRACK_TABLE_KEY: None,
     })
     out = {"bridge": bridge_analysis.run(inp)}
-    calculation_trace_publication.attach_calculation_traces(
-        inp, out, input_sha256="a" * 64,
-    )
-    record = calculation_trace_publication.published_calculations(out, inp)[0]
-    rows = calculation_trace_publication.format_trace_rows(record.calculation)
+    out["calculation_traces"] = {
+        "bundles": [{"untrusted": object()}],
+        "errors": [{"message": "must remain inert"}],
+    }
     text = " ".join(_pdf_text(
         sector_report.build_report({}, inp, out, figures=False)
     ).split())
 
-    assert len(rows) == 12
-    assert "Calculation trace" in text
-    assert "As,min = Mrep/(zs" in text
+    assert "Independent bridge calculations" in text
+    assert "Optional brittle Method B" in text
     assert "6.1(109)-(110)" in text
-    assert rows[-1]["step_id"] in text
+    assert "Calculation trace" not in text
+    assert "must remain inert" not in text
 
 
 def test_report_handles_uncracked_section():

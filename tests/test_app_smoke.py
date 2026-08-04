@@ -502,24 +502,33 @@ def test_calculate_plastic_produces_an_envelope():
     assert pl["min_mx"] <= pl["max_mx"] and pl["min_my"] <= pl["max_my"]
 
 
-def test_calculation_trace_view_renders_published_case_evidence_and_hashes():
+def test_calculation_results_have_no_trace_payload_or_trace_view():
     at = _fresh()
     at.run()
     _set_and_click(at, "calculate", ("number_input", "pl_Mx", 50.0))
     assert not at.exception
     results = at.session_state["results"]
     entry = results["plastic_cases"][0]
-    assert "calculation_traces" in entry["results"]
+    assert "calculation_traces" not in entry["results"]
+    assert "calculation_traces" not in results
     assert len(at.session_state["calculation_record"]["result_sha256"]) == 64
+    view = at.selectbox(key="view")
+    assert "Calculation Trace" not in view.options
+    assert all(
+        box.key != "calculation_trace_selection" for box in at.selectbox
+    )
 
-    _select_view(at, "Calculation Trace")
+    # A hot-reloaded pre-retirement session can still hold the old metadata.
+    # Unchanged case results remain reusable, but the retired payload is removed.
+    entry["results"]["calculation_traces"] = {"legacy": object()}
+    results["calculation_traces"] = {"legacy": object()}
+    at.button(key="calculate").click().run()
     assert not at.exception
-    assert at.selectbox(key="calculation_trace_selection")
-    assert at.dataframe
-    text = " | ".join(item.value for item in at.caption)
-    assert "Input SHA-256" in text
-    assert "Result SHA-256" in text
-    assert "Trace seal" in text
+    recalculated = at.session_state["results"]
+    assert "calculation_traces" not in recalculated
+    assert "calculation_traces" not in (
+        recalculated["plastic_cases"][0]["results"]
+    )
 
 
 def test_plastic_view_tolerates_legacy_results_without_min_fields():

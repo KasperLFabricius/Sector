@@ -22,7 +22,6 @@ the same small subset to its own markup.
 
 from __future__ import annotations
 
-import functools
 import io
 import re
 import threading
@@ -32,15 +31,12 @@ import streamlit as st
 
 import bridge_analysis
 import bridge_inputs
-import calculation_trace_publication
-import project_io
 from publication_notation import normalize_trusted_markup
 import reproducible_example
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
 from sector import bridge, material_presets, templates
-from sector.bridge_trace import build_bridge_trace_family
 from sector.codes import fctm
 from sector.fatigue import steel_fatigue_life
 from sector.materials import Concrete, Prestress
@@ -54,9 +50,8 @@ import viz
 _MM = 1000.0
 
 
-@functools.lru_cache(maxsize=1)
-def _worked_standard_trace_rows() -> tuple[dict, ...]:
-    """Return one real, complete CT-011 standards derivation for Part C."""
+def _worked_bridge_method_b() -> dict:
+    """Return one direct live Method B calculation for the manual."""
 
     inp = {
         "section": None,
@@ -71,21 +66,14 @@ def _worked_standard_trace_rows() -> tuple[dict, ...]:
         bridge_inputs.BOX_WALL_TABLE_KEY: None,
         bridge_inputs.MINIMUM_CRACK_TABLE_KEY: None,
     }
-    out = {"bridge": bridge_analysis.run(inp)}
-    input_sha256 = project_io.result_sha256(inp)
-    result_sha256 = project_io.result_sha256(out)
-    bundle = build_bridge_trace_family(
-        inp,
-        out,
-        input_sha256=input_sha256,
-        result_sha256=result_sha256,
-        context={"analysis": "manual-reference"},
-    )
-    if bundle is None or len(bundle.calculations) != 1:
-        raise RuntimeError("manual bridge trace example is not uniquely applicable")
-    return calculation_trace_publication.format_trace_rows(
-        bundle.calculations[0]
-    )
+    result = bridge_analysis.run(inp)
+    calculation = result.get("calculations", {}).get("brittle_method_b")
+    if not isinstance(calculation, dict):
+        raise RuntimeError("manual bridge Method B example is not applicable")
+    rows = calculation.get("rows")
+    if not isinstance(rows, list) or len(rows) != 1:
+        raise RuntimeError("manual bridge Method B example is not unique")
+    return calculation
 
 
 # ==========================================================================
@@ -1120,39 +1108,31 @@ def manual_blocks() -> list:
          "values. The concrete strain limits $\\varepsilon_{c2}$ / $\\varepsilon_{cu2}$ "
          "are still entered as positive compression magnitudes (as in EC2).")
 
-    h1("Structured standards calculation trace")
-    md("Every published standards calculation uses one solver-owned ordered trace. "
-       "Its dependency graph starts at original inputs and standard-defined values, "
-       "passes through every retained intermediate, and ends at exactly one final "
-       "result. The app and PDF report render these same rows without selecting a "
-       "different governing state or recomputing a formula. Standard steps retain "
-       "their document, edition, clause and equation locator; project-defined "
-       "methods are labelled **Project-defined / uncited** and are never given an "
-       "invented citation. Failed, undefined and infinite branches remain explicit "
-       "states rather than large finite substitutes.")
-    h2("Complete worked reference - bridge brittle Method B")
+    h1("Worked standards calculation")
+    h2("Bridge brittle Method B")
     md("For one bottom region, take $M_{rep}=1000$ kNm, $z_s=0.8$ m, "
        "$f_{yk}=500$ MPa and $A_{s,provided}=2600$ mm2. The selected method is "
-       "DS/EN 1992-2:2005 + AC:2008 Method B. The following is the complete live "
-       "CT-011 trace, including the symbolic method, numerical substitution, exact "
-       "result state, dependencies and source for every step.")
-    worked_trace_rows = []
-    for row in _worked_standard_trace_rows():
-        result_text = f"{row['state']}: {row['result']} {row['unit']}"
-        worked_trace_rows.extend([
-            [f"{row['sequence']}. Step / role",
-             f"{row['step']} ({row['step_id']}); {row['role']}"],
-            ["Symbolic expression", f"{row['symbol']}: {row['expression']}"],
-            ["Numerical substitution", row["substitution"]],
-            ["Result", result_text],
-            ["Dependencies", row["dependencies"]],
-            ["Source", row["source"]],
-        ])
-    table(["Trace field", "Solver-owned published value"], worked_trace_rows)
-    md("The published final utilization is $2500/2600=0.961538...$ and "
-       "therefore retains the genuine passing result from the kernel. The report "
-       "does not infer that verdict from display text; it renders the final trace "
-       "state and its complete dependency closure.")
+       "DS/EN 1992-2:2005 + AC:2008 Method B. The live bridge kernel evaluates "
+       "$A_{s,min}=M_{rep}/(z_s f_{yk})$ and compares the required area directly "
+       "with the entered provided area.")
+    worked_method = _worked_bridge_method_b()
+    worked_row = worked_method["rows"][0]
+    table(
+        ["Calculation field", "Live solver value"],
+        [
+            ["Method", worked_method["method"]],
+            ["Equation", worked_method["equation"]],
+            ["Numerical substitution", "1000 x 1000 / (0.8 x 500)"],
+            ["Required reinforcement", f"{worked_row['as_required_mm2']:.1f} mm2"],
+            ["Provided reinforcement", f"{worked_row['as_provided_mm2']:.1f} mm2"],
+            ["Utilisation", f"{worked_row['utilisation']:.6f}"],
+            ["Verdict", worked_row["status"]],
+            ["Source", worked_method["source"]],
+        ],
+    )
+    md("The hand-check comparison is $2500/2600=0.961538...\\le1.0$, so the "
+       "published result is **PASS**. The table is populated from the same direct "
+       "bridge calculation used by the app and report.")
 
     h1("Material laws")
     h2("Concrete (parabola-rectangle)")
