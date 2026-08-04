@@ -40,6 +40,9 @@ _TEST_DIRECT_RESULT = sector_report.report_equation_contract.EquationContract(
     result_unit="kN",
 )
 
+EM_DASH = chr(0x2014)
+SUM = chr(0x2211)
+
 
 def _builder():
     builder = sector_report.ReportBuilder(
@@ -98,7 +101,10 @@ def test_equation_flowable_seals_public_identity_number_and_source():
     assert equation._sector_equation_subsection == 1
     assert equation.getPlainText() == (
         "Equation (1.1) | EQ-RESISTANCE.DIRECTION-X.RESULT "
-        "R = a + b 4 + 6 R = 10 kN "
+        "Symbolic expression: R = a + b "
+        "Numerical substitution: 4 + 6 "
+        f"Result {EM_DASH} R [kN]: R = 10 kN "
+        f"Symbols: R {EM_DASH} test result [kN] "
         "Source / method note: EN 1992-1-1 Formula (1.2)"
     )
 
@@ -220,7 +226,7 @@ def test_grouping_preserves_equation_and_existing_direct_child_audit_text():
         for child in outer._content
         if hasattr(child, "getPlainText")
     )
-    assert "sum(SEd / SRd) <= 1" in direct_text
+    assert f"{SUM}(SEd / SRd) <= 1" in direct_text
     assert "EQ-COMBINED.DIRECTIONAL.SUM" in direct_text
 
 
