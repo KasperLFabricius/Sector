@@ -19,10 +19,47 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 
 
+_TEST_RELATION = sector_report.report_equation_contract.EquationContract(
+    symbols=(
+        sector_report.report_equation_contract.EquationSymbol("x", "test symbol"),
+    ),
+)
+_TEST_NUMERIC_RESULT = sector_report.report_equation_contract.EquationContract(
+    symbols=(
+        sector_report.report_equation_contract.EquationSymbol("R", "test result", "kN"),
+    ),
+    result_symbol="R",
+    result_unit="kN",
+    substitution_role="numerical",
+)
+_TEST_DIRECT_RESULT = sector_report.report_equation_contract.EquationContract(
+    symbols=(
+        sector_report.report_equation_contract.EquationSymbol("R", "test result", "kN"),
+    ),
+    result_symbol="R",
+    result_unit="kN",
+)
+
+
 def _builder():
-    return sector_report.ReportBuilder(
+    builder = sector_report.ReportBuilder(
         io.BytesIO(), {}, {}, {}, figures=False, qa_appendix=False
     )
+    formula = builder._formula
+
+    def contracted_formula(*args, **kwargs):
+        if "equation_spec" not in kwargs:
+            result = kwargs.get("result")
+            substitution = kwargs.get("subst")
+            kwargs["equation_spec"] = (
+                _TEST_NUMERIC_RESULT if result and substitution
+                else _TEST_DIRECT_RESULT if result
+                else _TEST_RELATION
+            )
+        return formula(*args, **kwargs)
+
+    builder._formula = contracted_formula
+    return builder
 
 
 def _pdf(flow):

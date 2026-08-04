@@ -43,6 +43,7 @@ import fatigue_inputs
 import fatigue_presentation
 import material_catalog
 from publication_notation import normalize_trusted_markup, shield_literal_markup
+import report_equation_contract
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
@@ -475,9 +476,17 @@ class ReportFigureError(RuntimeError):
 class _EquationFlowable(KeepTogether):
     """Indivisible equation whose complete text remains visible to audit probes."""
 
-    def __init__(self, content, *, key, anchor, number, section, subsection):
+    def __init__(
+        self, content, *, key, variant, contract, anchor, number, section,
+        subsection,
+    ):
         super().__init__(content)
         self._sector_equation_key = key
+        self._sector_equation_variant = variant
+        self._sector_equation_symbols = contract.symbols
+        self._sector_equation_result_symbol = contract.result_symbol
+        self._sector_equation_result_unit = contract.result_unit
+        self._sector_equation_substitution_role = contract.substitution_role
         self._sector_equation_anchor = anchor
         self._sector_equation_number = number
         self._sector_equation_section = section
@@ -929,6 +938,9 @@ class ReportBuilder:
         result=None,
         *,
         equation_key,
+        equation_variant=None,
+        equation_spec=None,
+        note=None,
         references=(),
         numbered=True,
     ):
@@ -938,6 +950,28 @@ class ReportBuilder:
         equation_key = str(equation_key)
         if not _EQUATION_KEY_RE.fullmatch(equation_key):
             raise ValueError(f"Invalid report equation key: {equation_key!r}.")
+        if equation_spec is None:
+            contract = report_equation_contract.equation_contract(
+                equation_key, equation_variant
+            )
+        else:
+            if equation_variant is not None:
+                raise ValueError(
+                    "An explicit equation contract cannot also select a variant."
+                )
+            if not isinstance(
+                equation_spec, report_equation_contract.EquationContract
+            ):
+                raise TypeError("equation_spec must be an EquationContract.")
+            contract = equation_spec
+        report_equation_contract.validate_equation_payload(
+            equation_key,
+            contract,
+            expression=expr,
+            substitution=subst,
+            applicability_note=note,
+            result=result,
+        )
         scope = (self._chapter, self._subsection, equation_key)
         if scope in self._equations:
             raise ValueError(
@@ -987,6 +1021,8 @@ class ReportBuilder:
         ]
         if subst:
             content.append(Paragraph(_greek(subst), self.s["formula"]))
+        if note:
+            content.append(Paragraph(_greek(note), self.s["formula"]))
         if result:
             content.append(Paragraph(
                 _greek(f"<b>{result}</b>"), self.s["formula"]
@@ -1010,6 +1046,8 @@ class ReportBuilder:
         self.flow.append(_EquationFlowable(
             content,
             key=equation_key,
+            variant=equation_variant,
+            contract=contract,
             anchor=anchor,
             number=number,
             section=self._chapter,
@@ -1610,6 +1648,7 @@ class ReportBuilder:
                 "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
                 "f<sub>ck</sub> / gamma<sub>c</sub>",
                 equation_key="materials.concrete.fcd",
+                equation_variant="2023",
                 ref="EN 1992-1-1:2023 &#167;5.1.6(1), Formulae (5.3) and (5.4)",
                 subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
                       f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
@@ -1633,6 +1672,7 @@ class ReportBuilder:
                 "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / "
                 "gamma<sub>c</sub>",
                 equation_key="materials.concrete.fcd",
+                equation_variant="2005",
                 ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
                 subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / "
                       f"{_fmt(c.gamma_c, 3)}",
@@ -3534,6 +3574,7 @@ class ReportBuilder:
             self._formula(
                 "V<sub>Rd,s</sub> = tau<sub>Rd,sy</sub> b<sub>w</sub> z",
                 equation_key="shear.links.vrds",
+                equation_variant="2023",
                 references=("shear.links.tau-yield",),
                 subst=f"{_fmt(lk['tau_rd_sy'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / 1000",
@@ -3542,6 +3583,7 @@ class ReportBuilder:
                 "V<sub>Rd,max</sub> = nu f<sub>cd</sub> b<sub>w</sub> z / "
                 "(cot theta + tan theta)",
                 equation_key="shear.links.vrdmax",
+                equation_variant="2023",
                 references=("shear.links.sigma-field",),
                 subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / "
@@ -3551,6 +3593,7 @@ class ReportBuilder:
             self._formula(
                 "V<sub>Rd,s</sub> = (A<sub>sw</sub>/s) z f<sub>ywd</sub> cot theta",
                 equation_key="shear.links.vrds",
+                equation_variant="2005",
                 ref="EN 1992-1-1 (6.8)",
                 subst=f"{_fmt(links['asw_over_s'], 4)} &#183; {_fmt(lk['z'], 1)} "
                       f"&#183; {_fmt(lk['fywd'], 1)} &#183; {_fmt(lk['cot'], 3)} / 1000",
@@ -3559,6 +3602,7 @@ class ReportBuilder:
                 "V<sub>Rd,max</sub> = alpha<sub>cw</sub> b<sub>w</sub> z "
                 "nu<sub>1</sub> f<sub>cd</sub> / (cot theta + tan theta)",
                 equation_key="shear.links.vrdmax",
+                equation_variant="2005",
                 ref="EN 1992-1-1 (6.9)",
                 subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
                       f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
@@ -3633,6 +3677,7 @@ class ReportBuilder:
             self._formula(
                 chord_formula,
                 equation_key="shear.chord.demand",
+                equation_variant="2023" if model_2023 else "2005",
                 ref=chord_ref,
                 subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
@@ -3813,7 +3858,7 @@ class ReportBuilder:
         self._formula(
             expr,
             equation_key="combined.dk-na.sum",
-            subst=note,
+            note=note,
             result=(
                 "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
                 f"{_pct(c['dkna_sum'])}  ({verdict})"
@@ -4694,14 +4739,16 @@ class ReportBuilder:
             self._formula(
                 "s<sub>r,max</sub> = 1.3&#183;(h - x)",
                 equation_key="crack.2005.spacing",
+                equation_variant="geometric",
                 ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
-                subst="bars not at close centres (spacing &gt; 5(c + phi/2))",
+                note="bars not at close centres (spacing &gt; 5(c + phi/2))",
                 result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
         else:
             self._formula(
                 "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
                 "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
                 equation_key="crack.2005.spacing",
+                equation_variant="reinforcement",
                 ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)")
         self._formula(
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
