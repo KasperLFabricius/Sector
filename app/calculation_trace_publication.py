@@ -17,10 +17,6 @@ from typing import Any
 
 import case_analysis
 import project_io
-from sector.bridge_trace import (
-    build_bridge_trace_family,
-    validate_bridge_trace_family,
-)
 from sector.calculation_trace import (
     RESULT_FINITE,
     SOURCE_INPUT,
@@ -33,12 +29,10 @@ from sector.calculation_trace import (
     trace_identity_token,
     validate_bundle,
 )
-from sector.crack_trace import build_crack_trace_family, validate_crack_trace_family
 from sector.detailing_trace import (
     build_detailing_trace_family,
     validate_detailing_trace_family,
 )
-from sector.fatigue_trace import build_fatigue_trace_family, validate_fatigue_trace_family
 from sector.plastic_capacity_trace import (
     build_plastic_capacity_trace_family,
     validate_plastic_capacity_trace_family,
@@ -171,33 +165,6 @@ def _case_specs(
             inp, out, input_sha256=input_sha256,
             result_sha256=result_sha256, context=context,
         )))
-    if "elastic" in out:
-        specs.append(("ct-009", lambda: build_crack_trace_family(
-            inp, out, input_sha256=input_sha256,
-            result_sha256=result_sha256, context=context,
-        )))
-    return tuple(specs)
-
-
-def _global_specs(
-    inp: Mapping[str, Any],
-    out: Mapping[str, Any],
-    *,
-    input_sha256: str,
-    result_sha256: str,
-    context: Mapping[str, Any],
-) -> tuple[tuple[str, Callable[[], TraceBundle | None]], ...]:
-    specs: list[tuple[str, Callable[[], TraceBundle | None]]] = []
-    if "fatigue" in out:
-        specs.append(("ct-010", lambda: build_fatigue_trace_family(
-            inp, {"fatigue": out.get("fatigue")}, input_sha256=input_sha256,
-            result_sha256=result_sha256, context=context,
-        )))
-    if "bridge" in out:
-        specs.append(("ct-011", lambda: build_bridge_trace_family(
-            inp, {"bridge": out.get("bridge")}, input_sha256=input_sha256,
-            result_sha256=result_sha256, context=context,
-        )))
     return tuple(specs)
 
 
@@ -253,15 +220,9 @@ def attach_calculation_traces(
         result_sha256 = project_io.result_sha256(result)
         bundles: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
-        for coverage_id, builder in (
-            *_case_specs(
-                inp, result, input_sha256=digest,
-                result_sha256=result_sha256, context=context,
-            ),
-            *_global_specs(
-                inp, result, input_sha256=digest,
-                result_sha256=result_sha256, context=context,
-            ),
+        for coverage_id, builder in _case_specs(
+            inp, result, input_sha256=digest,
+            result_sha256=result_sha256, context=context,
         ):
             _attempt(coverage_id, builder, bundles, errors)
         if bundles or errors:
@@ -275,6 +236,7 @@ def attach_calculation_traces(
             )
         return result
 
+    result.pop(PUBLICATION_KEY, None)
     shared_clear = result.get("clear_spacing")
     for family in ("plastic", "elastic"):
         entries = result.get(f"{family}_cases") or ()
@@ -303,15 +265,6 @@ def attach_calculation_traces(
                 case_inp,
             )
 
-    _attach(
-        result,
-        result,
-        {"analysis": "project"},
-        digest,
-        _RESULT_SCOPE,
-        _global_specs,
-        inp,
-    )
     return result
 
 
@@ -436,24 +389,6 @@ def _replay_published_bundle(
     elif coverage == {"ct-008"}:
         checked = validate_detailing_trace_family(
             candidate, inp, result_view, **kwargs
-        )
-    elif coverage == {"ct-009"}:
-        checked = validate_crack_trace_family(
-            candidate, inp, result_view, **kwargs
-        )
-    elif coverage == {"ct-010"}:
-        checked = validate_fatigue_trace_family(
-            candidate,
-            inp,
-            {"fatigue": result_view.get("fatigue")},
-            **kwargs,
-        )
-    elif coverage == {"ct-011"}:
-        checked = validate_bridge_trace_family(
-            candidate,
-            inp,
-            {"bridge": result_view.get("bridge")},
-            **kwargs,
         )
     else:
         raise TraceValidationError(
