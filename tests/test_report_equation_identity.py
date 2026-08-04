@@ -19,6 +19,19 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 
 
+_TEST_RELATION_SPEC = sector_report.report_equation_blocks.EquationBlockSpec(
+    (("x", "test scalar", "1"),), None
+)
+_TEST_RESULT_SPEC = sector_report.report_equation_blocks.EquationBlockSpec(
+    (
+        ("R", "test resistance", "kN"),
+        ("a", "first contribution", "kN"),
+        ("b", "second contribution", "kN"),
+    ),
+    "kN",
+)
+
+
 def _builder():
     return sector_report.ReportBuilder(
         io.BytesIO(), {}, {}, {}, figures=False, qa_appendix=False
@@ -48,6 +61,7 @@ def test_equation_flowable_seals_public_identity_number_and_source():
         subst="4 + 6",
         result="R = 10 kN",
         equation_key="resistance.direction-x.result",
+        equation_spec=_TEST_RESULT_SPEC,
     )
 
     equation = builder.flow[-1]
@@ -59,9 +73,15 @@ def test_equation_flowable_seals_public_identity_number_and_source():
     assert equation._sector_equation_number == "1.1"
     assert equation._sector_equation_section == 1
     assert equation._sector_equation_subsection == 1
+    assert equation._sector_equation_result_unit == "kN"
+    assert equation._sector_equation_symbols == _TEST_RESULT_SPEC.symbols
     assert equation.getPlainText() == (
         "Equation (1.1) | EQ-RESISTANCE.DIRECTION-X.RESULT "
-        "R = a + b 4 + 6 R = 10 kN "
+        "Symbolic expression: R = a + b "
+        "Numerical substitution: 4 + 6 Result: R = 10 kN Unit: kN "
+        "Symbols: R - test resistance; unit: kN "
+        "a - first contribution; unit: kN "
+        "b - second contribution; unit: kN "
         "Source / method note: EN 1992-1-1 Formula (1.2)"
     )
 
@@ -70,9 +90,13 @@ def test_derived_source_is_explicit_and_unnumbered_relation_does_not_consume_num
     builder = _builder()
     builder._h1("Basis")
     builder._formula(
-        "a = b", equation_key="basis.informative", numbered=False
+        "a = b", equation_key="basis.informative", numbered=False,
+        equation_spec=_TEST_RELATION_SPEC,
     )
-    builder._formula("c = d", equation_key="basis.governing")
+    builder._formula(
+        "c = d", equation_key="basis.governing",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
 
     informative, governing = builder.flow[-2:]
     assert informative._sector_equation_number is None
@@ -82,7 +106,10 @@ def test_derived_source_is_explicit_and_unnumbered_relation_does_not_consume_num
     assert governing._sector_equation_number == "1.1"
 
     builder._h1("Next")
-    builder._formula("e = f", equation_key="next.governing")
+    builder._formula(
+        "e = f", equation_key="next.governing",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
     assert builder.flow[-1]._sector_equation_number == "2.1"
 
 
@@ -97,12 +124,21 @@ def test_invalid_duplicate_and_blank_source_fail_before_publication():
         with pytest.raises(ValueError, match="Invalid report equation key"):
             builder._formula("x = 1", equation_key=key)
     with pytest.raises(ValueError, match="source text"):
-        builder._formula("x = 1", ref=" ", equation_key="blank.source")
+        builder._formula(
+            "x = 1", ref=" ", equation_key="blank.source",
+            equation_spec=_TEST_RELATION_SPEC,
+        )
     assert len(builder.flow) == before
 
-    builder._formula("x = 1", equation_key="unique.key")
+    builder._formula(
+        "x = 1", equation_key="unique.key",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
     with pytest.raises(ValueError, match="Duplicate report equation key"):
-        builder._formula("x = 2", equation_key="unique.key")
+        builder._formula(
+            "x = 2", equation_key="unique.key",
+            equation_spec=_TEST_RELATION_SPEC,
+        )
 
 
 def test_unknown_reference_is_atomic_and_valid_prior_links_render():
@@ -114,14 +150,22 @@ def test_unknown_reference_is_atomic_and_valid_prior_links_render():
             "R = max(R1, R2)",
             equation_key="resistance.governing",
             references=("resistance.component-1",),
+            equation_spec=_TEST_RELATION_SPEC,
         )
 
-    builder._formula("R1 = 10", equation_key="resistance.component-1")
-    builder._formula("R2 = 12", equation_key="resistance.component-2")
+    builder._formula(
+        "R1 = 10", equation_key="resistance.component-1",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
+    builder._formula(
+        "R2 = 12", equation_key="resistance.component-2",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
     builder._formula(
         "R = max(R1, R2)",
         equation_key="resistance.governing",
         references=("resistance.component-1", "resistance.component-2"),
+        equation_spec=_TEST_RELATION_SPEC,
     )
     assert builder.flow[-1]._sector_equation_number == "1.3"
     assert "Uses: Equation (1.1), Equation (1.2)" in (
@@ -139,12 +183,19 @@ def test_equation_anchor_encoding_preserves_dot_and_hyphen_identity():
     builder = _builder()
     builder._h1("Resistance")
     builder._h2("Components")
-    builder._formula("R1 = 10", equation_key="capacity.x-y")
-    builder._formula("R2 = 12", equation_key="capacity-x.y")
+    builder._formula(
+        "R1 = 10", equation_key="capacity.x-y",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
+    builder._formula(
+        "R2 = 12", equation_key="capacity-x.y",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
     builder._formula(
         "R = max(R1, R2)",
         equation_key="capacity.governing",
         references=("capacity.x-y", "capacity-x.y"),
+        equation_spec=_TEST_RELATION_SPEC,
     )
 
     first, second, governing = builder.flow[-3:]
@@ -170,6 +221,7 @@ def test_grouping_preserves_equation_and_existing_direct_child_audit_text():
     builder._formula(
         "sum(SEd / SRd) <= 1",
         equation_key="combined.directional.sum",
+        equation_spec=_TEST_RELATION_SPEC,
     )
     equation = builder.flow[-1]
 
@@ -214,6 +266,7 @@ def test_oversized_outer_group_releases_without_splitting_equation_text():
         ref="Project-defined / uncited.",
         result="R = 12.5 kN",
         equation_key="grouped.long.resistance",
+        equation_spec=_TEST_RESULT_SPEC,
     )
     builder._keep_from(start)
 
@@ -237,9 +290,15 @@ def test_same_semantic_key_is_reusable_in_a_new_titled_subsection():
     builder = _builder()
     builder._h1("Shear")
     builder._h2("Direction x")
-    builder._formula("u = 0.5", equation_key="shear.utilisation")
+    builder._formula(
+        "u = 0.5", equation_key="shear.utilisation",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
     builder._h2("Direction y")
-    builder._formula("u = 0.7", equation_key="shear.utilisation")
+    builder._formula(
+        "u = 0.7", equation_key="shear.utilisation",
+        equation_spec=_TEST_RELATION_SPEC,
+    )
     assert builder.flow[-1]._sector_equation_anchor == (
         "sector-equation-1-2-shear__utilisation"
     )

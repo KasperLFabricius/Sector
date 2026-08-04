@@ -43,6 +43,7 @@ import fatigue_inputs
 import fatigue_presentation
 import material_catalog
 from publication_notation import normalize_trusted_markup, shield_literal_markup
+import report_equation_blocks
 import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
@@ -446,7 +447,8 @@ def _styles():
                                  fontName=_FONT, leading=11, textColor=_GREY)
     out["formula"] = ParagraphStyle("f", parent=ss["Normal"], fontSize=9.5,
                                     leading=14, leftIndent=12, rightIndent=6,
-                                    spaceBefore=2, spaceAfter=3, fontName=_FONT)
+                                    spaceBefore=2, spaceAfter=3, fontName=_FONT,
+                                    wordWrap="LTR", splitLongWords=1)
     out["formula_id"] = ParagraphStyle(
         "fi", parent=ss["Normal"], fontSize=8, fontName=_FONT_BOLD,
         leading=11, leftIndent=12, rightIndent=6, textColor=_BLUE,
@@ -455,6 +457,10 @@ def _styles():
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
                                fontName=_FONT, leading=11, leftIndent=12,
                                rightIndent=6, textColor=_GREY, spaceAfter=6)
+    out["formula_symbol"] = ParagraphStyle(
+        "fs", parent=out["ref"], leftIndent=18, firstLineIndent=-6,
+        spaceAfter=1, splitLongWords=1, wordWrap="LTR",
+    )
     return out
 
 
@@ -475,13 +481,26 @@ class ReportFigureError(RuntimeError):
 class _EquationFlowable(KeepTogether):
     """Indivisible equation whose complete text remains visible to audit probes."""
 
-    def __init__(self, content, *, key, anchor, number, section, subsection):
+    def __init__(
+        self,
+        content,
+        *,
+        key,
+        anchor,
+        number,
+        section,
+        subsection,
+        result_unit,
+        symbols,
+    ):
         super().__init__(content)
         self._sector_equation_key = key
         self._sector_equation_anchor = anchor
         self._sector_equation_number = number
         self._sector_equation_section = section
         self._sector_equation_subsection = subsection
+        self._sector_equation_result_unit = result_unit
+        self._sector_equation_symbols = symbols
 
     def getPlainText(self):
         return " ".join(
@@ -931,17 +950,50 @@ class ReportBuilder:
         equation_key,
         references=(),
         numbered=True,
+        equation_variant=None,
+        equation_spec=None,
     ):
-        """Append one stable, source-labelled and cross-referenceable equation."""
+        """Append one complete, stable and cross-referenceable equation block."""
         if self._chapter < 1:
             raise ValueError("A report equation requires an active section.")
         equation_key = str(equation_key)
         if not _EQUATION_KEY_RE.fullmatch(equation_key):
             raise ValueError(f"Invalid report equation key: {equation_key!r}.")
+        if not isinstance(expr, str) or not expr.strip():
+            raise ValueError(f"Equation {equation_key} requires an expression.")
+        for role, value in (("substitution", subst), ("result", result)):
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise ValueError(
+                    f"Equation {equation_key} has a blank {role}."
+                )
         scope = (self._chapter, self._subsection, equation_key)
         if scope in self._equations:
             raise ValueError(
                 f"Duplicate report equation key in subsection: {equation_key}."
+            )
+
+        if equation_spec is not None and equation_variant is not None:
+            raise ValueError(
+                f"Equation {equation_key} cannot combine a variant and override."
+            )
+        spec = equation_spec
+        if spec is None:
+            spec = report_equation_blocks.equation_block_spec(
+                equation_key, equation_variant
+            )
+        if not isinstance(spec, report_equation_blocks.EquationBlockSpec):
+            raise ValueError(
+                f"Equation {equation_key} has an invalid block specification."
+            )
+        if result is None and spec.result_unit is not None:
+            raise ValueError(
+                f"Equation {equation_key} requires its specified result."
+            )
+        if result is not None and spec.result_unit is None:
+            raise ValueError(
+                f"Equation {equation_key} publishes a result without a unit."
             )
         targets = []
         for target_key in references:
@@ -979,18 +1031,48 @@ class ReportBuilder:
             f"Equation ({number}) | {public}"
             if number is not None else public
         )
-        content = [
-            Paragraph(
-                f'<a name="{anchor}"/><b>{identity}</b>', self.s["formula_id"]
-            ),
-            Paragraph(_greek(expr), self.s["formula"]),
-        ]
-        if subst:
-            content.append(Paragraph(_greek(subst), self.s["formula"]))
-        if result:
-            content.append(Paragraph(
-                _greek(f"<b>{result}</b>"), self.s["formula"]
+
+        def equation_line(markup, style, role):
+            paragraph = Paragraph(_greek(markup), style)
+            paragraph._sector_equation_role = role
+            return paragraph
+
+        content = [equation_line(
+            f'<a name="{anchor}"/><b>{identity}</b>',
+            self.s["formula_id"],
+            "identity",
+        ), equation_line(
+            f"<b>Symbolic expression:</b> {expr}",
+            self.s["formula"],
+            "expression",
+        )]
+        if subst is not None:
+            content.append(equation_line(
+                f"<b>Numerical substitution:</b> {subst}",
+                self.s["formula"],
+                "substitution",
             ))
+        if result is not None:
+            content.extend((equation_line(
+                f"<b>Result: {result}</b>",
+                self.s["formula"],
+                "result",
+            ), equation_line(
+                f"<b>Unit:</b> {spec.result_unit}",
+                self.s["formula"],
+                "unit",
+            )))
+        content.append(equation_line(
+            "<b>Symbols:</b>", self.s["ref"], "symbols-heading"
+        ))
+        for symbol, meaning, unit in spec.symbols:
+            row = equation_line(
+                f"<b>{symbol}</b> - {meaning}; unit: {unit}",
+                self.s["formula_symbol"],
+                "symbol",
+            )
+            row._sector_equation_symbol = (symbol, meaning, unit)
+            content.append(row)
         if targets:
             links = []
             for target in targets:
@@ -1001,11 +1083,15 @@ class ReportBuilder:
                 links.append(
                     f'<link href="#{target["anchor"]}">{label}</link>'
                 )
-            content.append(Paragraph(
-                "<b>Uses:</b> " + ", ".join(links), self.s["ref"]
+            content.append(equation_line(
+                "<b>Uses:</b> " + ", ".join(links),
+                self.s["ref"],
+                "references",
             ))
-        content.append(Paragraph(
-            _greek(f"<b>Source / method note:</b> {source}"), self.s["ref"]
+        content.append(equation_line(
+            f"<b>Source / method note:</b> {source}",
+            self.s["ref"],
+            "source",
         ))
         self.flow.append(_EquationFlowable(
             content,
@@ -1014,6 +1100,8 @@ class ReportBuilder:
             number=number,
             section=self._chapter,
             subsection=self._subsection,
+            result_unit=spec.result_unit,
+            symbols=spec.symbols,
         ))
 
     @staticmethod
@@ -1610,6 +1698,7 @@ class ReportBuilder:
                 "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
                 "f<sub>ck</sub> / gamma<sub>c</sub>",
                 equation_key="materials.concrete.fcd",
+                equation_variant="2023",
                 ref="EN 1992-1-1:2023 &#167;5.1.6(1), Formulae (5.3) and (5.4)",
                 subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
                       f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
@@ -1633,6 +1722,7 @@ class ReportBuilder:
                 "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / "
                 "gamma<sub>c</sub>",
                 equation_key="materials.concrete.fcd",
+                equation_variant="2005",
                 ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
                 subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / "
                       f"{_fmt(c.gamma_c, 3)}",
@@ -3534,6 +3624,7 @@ class ReportBuilder:
             self._formula(
                 "V<sub>Rd,s</sub> = tau<sub>Rd,sy</sub> b<sub>w</sub> z",
                 equation_key="shear.links.vrds",
+                equation_variant="2023",
                 references=("shear.links.tau-yield",),
                 subst=f"{_fmt(lk['tau_rd_sy'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / 1000",
@@ -3542,6 +3633,7 @@ class ReportBuilder:
                 "V<sub>Rd,max</sub> = nu f<sub>cd</sub> b<sub>w</sub> z / "
                 "(cot theta + tan theta)",
                 equation_key="shear.links.vrdmax",
+                equation_variant="2023",
                 references=("shear.links.sigma-field",),
                 subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / "
@@ -3551,6 +3643,7 @@ class ReportBuilder:
             self._formula(
                 "V<sub>Rd,s</sub> = (A<sub>sw</sub>/s) z f<sub>ywd</sub> cot theta",
                 equation_key="shear.links.vrds",
+                equation_variant="2005",
                 ref="EN 1992-1-1 (6.8)",
                 subst=f"{_fmt(links['asw_over_s'], 4)} &#183; {_fmt(lk['z'], 1)} "
                       f"&#183; {_fmt(lk['fywd'], 1)} &#183; {_fmt(lk['cot'], 3)} / 1000",
@@ -3559,6 +3652,7 @@ class ReportBuilder:
                 "V<sub>Rd,max</sub> = alpha<sub>cw</sub> b<sub>w</sub> z "
                 "nu<sub>1</sub> f<sub>cd</sub> / (cot theta + tan theta)",
                 equation_key="shear.links.vrdmax",
+                equation_variant="2005",
                 ref="EN 1992-1-1 (6.9)",
                 subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
                       f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
@@ -3633,6 +3727,7 @@ class ReportBuilder:
             self._formula(
                 chord_formula,
                 equation_key="shear.chord.demand",
+                equation_variant="2023" if model_2023 else "2005",
                 ref=chord_ref,
                 subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
                       f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
@@ -4694,6 +4789,7 @@ class ReportBuilder:
             self._formula(
                 "s<sub>r,max</sub> = 1.3&#183;(h - x)",
                 equation_key="crack.2005.spacing",
+                equation_variant="coarse",
                 ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
                 subst="bars not at close centres (spacing &gt; 5(c + phi/2))",
                 result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
@@ -4702,6 +4798,7 @@ class ReportBuilder:
                 "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
                 "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
                 equation_key="crack.2005.spacing",
+                equation_variant="fine",
                 ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)")
         self._formula(
             "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
