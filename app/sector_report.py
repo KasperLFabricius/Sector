@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import atexit
 import datetime
+import html as html_lib
 import io
 import math
 import os
@@ -56,6 +57,13 @@ _GREY = colors.HexColor("#5A5A5A")
 _LINE = colors.HexColor("#9AA5B1")
 _HEAD_BG = colors.HexColor("#E8ECF2")
 _A4_CONTENT_WIDTH = A4[0] - 40 * mm
+_MIN_REPORT_TABLE_FONT = 7.2
+_REPORT_TABLE_HORIZONTAL_PADDING = 3.0
+_NUMERIC_TABLE_WORD = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"[+-]?(?:(?:\d+(?:[.,]\d*)?)|(?:[.,]\d+))(?:[eE][+-]?\d+)?%?"
+    r"(?![A-Za-z0-9_.])"
+)
 _CRACK_CANDIDATE_COL_WIDTHS = tuple(
     value * mm
     for value in (17, 7, 16, 13, 13, 10, 10, 17, 18, 18, 13, 13)
@@ -123,6 +131,19 @@ _GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#94
 _GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
 
 
+class _LiteralReportText(str):
+    """Escaped identity/description text that remains wrappable in tables."""
+
+
+class _NumericalReportText(str):
+    """Escaped mixed text with an explicit numerical-evidence source."""
+
+    def __new__(cls, markup, evidence):
+        value = super().__new__(cls, markup)
+        value._sector_numeric_evidence = str(evidence)
+        return value
+
+
 def _html_escape(value, quote=True):
     """Escape literal/user text and shield it from engineering-token rendering.
 
@@ -132,12 +153,12 @@ def _html_escape(value, quote=True):
     """
 
     escaped = shield_literal_markup(value, quote=quote)
-    return _GREEK_RE.sub(
+    return _LiteralReportText(_GREEK_RE.sub(
         lambda match: "".join(
             f"&#{ord(character)};" for character in match.group(1)
         ),
         escaped,
-    )
+    ))
 
 
 def _greek(s):
@@ -145,6 +166,11 @@ def _greek(s):
     s = _GREEK_RE.sub(lambda m: _GREEK[m.group(1)], s)
     s = s.replace("&lt;=", "&#8804;").replace("&gt;=", "&#8805;")
     return normalize_trusted_markup(s)
+
+
+def _numerical_table_text(markup, evidence):
+    """Retain escaped mixed cell text while identifying its numeric evidence."""
+    return _NumericalReportText(markup, evidence)
 
 
 def _kaleido_server_api():
@@ -427,7 +453,7 @@ def _report_action_set_text(inp, family):
         parts.append(_html_escape(record["type"]))
     if record["source"]:
         parts.append("Source: " + _html_escape(record["source"]))
-    return " | ".join(parts)
+    return _LiteralReportText(" | ".join(parts))
 
 
 def _demand_resistance_verdict(ok):
@@ -512,10 +538,10 @@ class ReportBuilder:
     def _case_register(self, family):
         """Escaped case register for cover-page document control."""
         contexts = self._case_contexts(family)
-        return "; ".join(
+        return _LiteralReportText("; ".join(
             _report_action_set_text(case_inp, family)
             for case_inp, _ in contexts
-        )
+        ))
 
     def _tick(self, frac, text):
         if self._progress is not None:
@@ -727,39 +753,209 @@ class ReportBuilder:
         if ref:
             self.flow.append(Paragraph(_greek(ref), self.s["ref"]))
 
-    def _table(self, data, widths, header=True, font=8.5, keep=True):
+    @staticmethod
+    def _table_column_floors(
+        cells, markups, literals, numeric_sources, widths, header
+    ):
+        """Return per-column floors from authored roles and rendered content."""
+        floors = []
+        first_body_row = 1 if header else 0
+        for column, nominal_width in enumerate(widths):
+            authored_width = max(
+                0.0,
+                float(nominal_width) - 2 * _REPORT_TABLE_HORIZONTAL_PADDING,
+            )
+            required = 0.0
+            for row_index, row in enumerate(cells):
+                paragraph = row[column]
+                numeric_width = 0.0
+                numeric_source = numeric_sources[row_index][column]
+                if row_index >= first_body_row and (
+                    numeric_source is not None
+                    or not literals[row_index][column]
+                ):
+                    # Work from markup-aware source text. Replacing tags with spaces
+                    # retains boundaries such as ``123<br/>method`` that
+                    # Paragraph.getPlainText() flattens to ``123method``.
+                    source_text = (
+                        _greek(numeric_source)
+                        if numeric_source is not None
+                        else markups[row_index][column]
+                    )
+                    atom_text = html_lib.unescape(
+                        re.sub(r"<[^>]*>", " ", source_text)
+                    )
+                    numeric_width = max(
+                        (
+                            pdfmetrics.stringWidth(
+                                match.group(0),
+                                paragraph.style.fontName,
+                                paragraph.style.fontSize,
+                            )
+                            for match in _NUMERIC_TABLE_WORD.finditer(atom_text)
+                        ),
+                        default=0.0,
+                    )
+                # ReportLab losslessly wraps long words. The authored width is the
+                # semantic floor for prose and machine identities; numeric evidence
+                # retains its independently measured atom.
+                required = max(
+                    required,
+                    min(paragraph.minWidth(), authored_width),
+                    numeric_width,
+                )
+            floors.append(required + 2 * _REPORT_TABLE_HORIZONTAL_PADDING)
+        return floors
+
+    @staticmethod
+    def _reallocate_table_widths(preferred, floors):
+        """Shrink preferred widths proportionally without crossing any floor."""
+        if sum(floors) > _A4_CONTENT_WIDTH + 1e-7:
+            return None
+        target = [
+            max(float(width), floor)
+            for width, floor in zip(preferred, floors)
+        ]
+        if sum(target) <= _A4_CONTENT_WIDTH + 1e-7:
+            return target
+        adjustable = [width - floor for width, floor in zip(target, floors)]
+        adjustable_total = sum(adjustable)
+        if adjustable_total <= 0.0:
+            return list(floors)
+        available_growth = _A4_CONTENT_WIDTH - sum(floors)
+        return [
+            floor + available_growth * growth / adjustable_total
+            for floor, growth in zip(floors, adjustable)
+        ]
+
+    @staticmethod
+    def _table_panels(floors, repeat_cols):
+        """Partition a wide table while retaining its leading identity columns."""
+        column_count = len(floors)
+        if sum(floors) <= _A4_CONTENT_WIDTH + 1e-7:
+            return [tuple(range(column_count))]
+        repeat_count = max(0, min(int(repeat_cols), column_count - 1))
+        identity = tuple(range(repeat_count))
+        panels = []
+        current = []
+        for column in range(repeat_count, column_count):
+            proposed = (*identity, *current, column)
+            if sum(floors[index] for index in proposed) > _A4_CONTENT_WIDTH + 1e-7:
+                if not current:
+                    raise ValueError(
+                        "A report table contains numeric evidence wider than the "
+                        "available A4 content width."
+                    )
+                panels.append((*identity, *current))
+                current = [column]
+                if (
+                    sum(floors[index] for index in (*identity, column))
+                    > _A4_CONTENT_WIDTH + 1e-7
+                ):
+                    raise ValueError(
+                        "A report table contains numeric evidence wider than the "
+                        "available A4 content width."
+                    )
+            else:
+                current.append(column)
+        panels.append((*identity, *current))
+        return panels
+
+    def _table(
+        self,
+        data,
+        widths,
+        header=True,
+        font=8.5,
+        keep=True,
+        repeat_cols=1,
+    ):
+        if not data or not data[0]:
+            raise ValueError("A report table requires at least one cell.")
+        column_count = len(data[0])
+        if any(len(row) != column_count for row in data):
+            raise ValueError("Every report table row must retain the same columns.")
+        if len(widths) != column_count:
+            raise ValueError("Report table widths must match the column count.")
+        font = max(float(font), _MIN_REPORT_TABLE_FONT)
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
                               fontName=_FONT, leading=font + 2)
         head = ParagraphStyle("ch", parent=body, fontName=_FONT_BOLD)
         rows = []
+        markups = []
+        literals = []
+        numeric_sources = []
         for r, row in enumerate(data):
             cells = []
+            rendered_row = []
+            literal_row = []
+            numeric_source_row = []
             for ci, cell in enumerate(row):
                 st = head if (header and r == 0) else body
                 st = ParagraphStyle("x", parent=st,
                                     alignment=TA_LEFT if ci == 0 else TA_CENTER)
-                cells.append(Paragraph(_greek(str(cell)), st))
+                markup = _greek(str(cell))
+                cells.append(Paragraph(markup, st))
+                rendered_row.append(markup)
+                literal_row.append(isinstance(cell, _LiteralReportText))
+                numeric_source_row.append(
+                    getattr(cell, "_sector_numeric_evidence", None)
+                )
             rows.append(cells)
+            markups.append(rendered_row)
+            literals.append(literal_row)
+            numeric_sources.append(numeric_source_row)
+        floors = self._table_column_floors(
+            rows, markups, literals, numeric_sources, widths, header
+        )
+        panels = self._table_panels(floors, repeat_cols)
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
         # Any table can outgrow one page when it contains user-pasted geometry or
         # reinforcement. Repeat the labelled header regardless of whether the normal
         # short-table path first tries to keep the table together.
-        t = Table(
-            rows,
-            colWidths=widths,
-            hAlign="LEFT",
-            repeatRows=1 if header else 0,
-        )
-        t.setStyle(TableStyle([
-            ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
-            ("BACKGROUND", (0, 0), (-1, 0), _HEAD_BG if header else colors.white),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ]))
-        self.flow.append(KeepTogether(t) if keep else t)
-        self._gap(4)
+        for panel_number, columns in enumerate(panels, start=1):
+            panel_floors = [floors[index] for index in columns]
+            panel_widths = self._reallocate_table_widths(
+                [widths[index] for index in columns], panel_floors
+            )
+            if panel_widths is None:
+                raise ValueError("Unable to fit a report table column panel.")
+            if len(panels) > 1:
+                labels = (
+                    [rows[0][index].getPlainText() for index in columns]
+                    if header else [f"Column {index + 1}" for index in columns]
+                )
+                self._small(
+                    f"<b>Column panel {panel_number} of {len(panels)}:</b> "
+                    + ", ".join(_html_escape(label) for label in labels)
+                )
+            panel_rows = [[row[index] for index in columns] for row in rows]
+            table = Table(
+                panel_rows,
+                colWidths=panel_widths,
+                hAlign="LEFT",
+                repeatRows=1 if header else 0,
+            )
+            table._sector_source_columns = tuple(columns)
+            table._sector_panel_number = panel_number
+            table._sector_panel_count = len(panels)
+            table._sector_width_floors = tuple(panel_floors)
+            table._sector_font_size = font
+            table.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.4, _LINE),
+                ("BACKGROUND", (0, 0), (-1, 0),
+                 _HEAD_BG if header else colors.white),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1),
+                 _REPORT_TABLE_HORIZONTAL_PADDING),
+                ("RIGHTPADDING", (0, 0), (-1, -1),
+                 _REPORT_TABLE_HORIZONTAL_PADDING),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            self.flow.append(KeepTogether(table) if keep else table)
+            self._gap(4)
 
     def _fig(self, fig, w_mm=150, h_mm=95):
         if not self.figures:
@@ -937,14 +1133,14 @@ class ReportBuilder:
         if fatigue is not None:
             rows.append([
                 "Fatigue spectra",
-                "; ".join(
+                _LiteralReportText("; ".join(
                     _html_escape(str(fatigue_presentation.value(
                         spectrum, "spectrum_name", "-"
                     )))
                     for spectrum in fatigue_presentation.items(
                         fatigue, "spectra"
                     )
-                ) or "-",
+                ) or "-"),
             ])
         self._table(rows, [55 * mm, 110 * mm])
         if m.get("comments"):
@@ -1198,7 +1394,7 @@ class ReportBuilder:
                 ", ".join(uses) or "-",
             ])
         self._table(summary, [18 * mm, 42 * mm, 66 * mm, 40 * mm],
-                    font=7.0, keep=False)
+                    font=7.0, keep=False, repeat_cols=3)
         self._small("Partial factors are the final effective user inputs; Sector "
                     "applies no hidden control-, construction- or consequence-"
                     "category multiplier.")
@@ -1274,7 +1470,7 @@ class ReportBuilder:
             summary.append([material_id, _html_escape(item.get("name", "")),
                             _html_escape(item.get("preset", "-")), count])
         self._table(summary, [18 * mm, 45 * mm, 78 * mm, 25 * mm],
-                    font=7.0, keep=False)
+                    font=7.0, keep=False, repeat_cols=3)
         for material_index, item in enumerate(records):
             if self.figures and material_index:
                 self.flow.append(PageBreak())
@@ -1367,6 +1563,7 @@ class ReportBuilder:
                     [15 * mm, 24 * mm] + [16 * mm] * 6 + [21 * mm, 14 * mm],
                     font=5.8,
                     keep=False,
+                    repeat_cols=2,
                 )
                 self._small("N, Vx and Vy in kN; M and T in kNm. A zero shear "
                             "component or torsion is not evaluated for that case.")
@@ -1407,6 +1604,7 @@ class ReportBuilder:
                      24 * mm, 14 * mm, 14 * mm],
                     font=6.7,
                     keep=False,
+                    repeat_cols=3,
                 )
                 self._small(
                     "N in kN; M in kNm. Stresses are always reported and "
@@ -1448,6 +1646,7 @@ class ReportBuilder:
                     + [15 * mm] * 6,
                     font=5.1,
                     keep=False,
+                    repeat_cols=3,
                 )
                 self._small(
                     "N in kN; M in kNm. Long is the sustained state; short is "
@@ -1471,14 +1670,18 @@ class ReportBuilder:
             )
             mx = "-" if cap_only else _fmt(inp.get("Mx_pl"), 3)
             my = "-" if cap_only else _fmt(inp.get("My_pl"), 3)
-            rows.append([label, _fmt(inp.get("P_pl"), 3), mx, my])
+            rows.append([
+                _LiteralReportText(label), _fmt(inp.get("P_pl"), 3), mx, my
+            ])
         if "elastic" in out:
             case = _html_escape(
                 presentation.action_set(inp, "elastic")["id"] or "-"
             )
-            rows.append([f"{case} - long-term", _fmt(inp.get("P_el_l"), 3),
+            rows.append([_LiteralReportText(f"{case} - long-term"),
+                         _fmt(inp.get("P_el_l"), 3),
                          _fmt(inp.get("Mx_el_l"), 3), _fmt(inp.get("My_el_l"), 3)])
-            rows.append([f"{case} - short-term", _fmt(inp.get("P_el_s"), 3),
+            rows.append([_LiteralReportText(f"{case} - short-term"),
+                         _fmt(inp.get("P_el_s"), 3),
                          _fmt(inp.get("Mx_el_s"), 3), _fmt(inp.get("My_el_s"), 3)])
         self._table(rows, [55 * mm, 35 * mm, 38 * mm, 38 * mm])
 
@@ -2022,6 +2225,7 @@ class ReportBuilder:
                  14 * mm, 14 * mm, 13 * mm, 13 * mm, 18 * mm, 14 * mm],
                 font=5.9,
                 keep=False,
+                repeat_cols=2,
             )
             self._small(
                 "Areas in mm<super>2</super>; b<sub>t</sub> and d in mm; "
@@ -2195,6 +2399,7 @@ class ReportBuilder:
                  20 * mm, 33 * mm],
                 font=6.2,
                 keep=False,
+                repeat_cols=2,
             )
         for check in result.get("checks") or []:
             details = []
@@ -2274,8 +2479,13 @@ class ReportBuilder:
                 ]
                 for pair in pairs
             ])
-            self._table(rows, [38 * mm, 30 * mm, 26 * mm, 30 * mm,
-                               26 * mm, 20 * mm], font=6.4, keep=False)
+            self._table(
+                rows,
+                [38 * mm, 30 * mm, 26 * mm, 30 * mm, 26 * mm, 20 * mm],
+                font=6.4,
+                keep=False,
+                repeat_cols=2,
+            )
         for limitation in result.get("limitations") or []:
             self._small("<b>Scope:</b> " + _html_escape(limitation))
 
@@ -2516,6 +2726,7 @@ class ReportBuilder:
                  32 * mm, 37 * mm],
                 font=6.8,
                 keep=False,
+                repeat_cols=3,
             )
             self._small(
                 "Coordinates in mm; strain in permille; design stress in MPa. "
@@ -2546,6 +2757,7 @@ class ReportBuilder:
                  22 * mm, 22 * mm, 20 * mm],
                 font=6.1,
                 keep=False,
+                repeat_cols=3,
             )
             self._small(
                 "Coordinates in mm; area in mm<super>2</super>; strain in "
@@ -3960,6 +4172,7 @@ class ReportBuilder:
                 [19 * mm, 17 * mm, 13 * mm, 13 * mm, 17 * mm, 18 * mm,
                  18 * mm, 18 * mm, 17 * mm, 18 * mm],
                 font=6.0, keep=False,
+                repeat_cols=2,
             )
             self._small("Coordinates in mm; area in mm<super>2</super>; strain in "
                         "permille; stresses in MPa.")
@@ -3980,6 +4193,7 @@ class ReportBuilder:
                 [16 * mm, 29 * mm, 20 * mm, 19 * mm, 19 * mm,
                  28 * mm, 29 * mm],
                 font=7, keep=False,
+                repeat_cols=3,
             )
             self._small("Coordinates in mm; strain in permille; stress in MPa "
                         "(compression negative). Cracked concrete carries "
@@ -4210,7 +4424,7 @@ class ReportBuilder:
         self._table(
             rows,
             _CRACK_CANDIDATE_COL_WIDTHS,
-            font=5.4, keep=False,
+            font=5.4, keep=False, repeat_cols=3,
         )
         self._small(
             "LT = long-term; ST = short-term. Coordinates, c, phi and "
@@ -4432,12 +4646,18 @@ class ReportBuilder:
                         f"{row['sequence']}. {row['step']} ({row['step_id']})"
                     ),
                     _html_escape(f"{row['role']} / {row['symbol']}"),
-                    _html_escape(
-                        f"Symbolic: {row['expression']}; "
-                        f"Substitution: {row['substitution']}"
+                    _numerical_table_text(
+                        _html_escape(
+                            f"Symbolic: {row['expression']}; "
+                            f"Substitution: {row['substitution']}"
+                        ),
+                        row["substitution"],
                     ),
-                    _html_escape(
-                        f"{row['state']}: {row['result']} {row['unit']}"
+                    _numerical_table_text(
+                        _html_escape(
+                            f"{row['state']}: {row['result']} {row['unit']}"
+                        ),
+                        row["result"],
                     ),
                     _html_escape("; ".join(notes)),
                 ])
@@ -4446,6 +4666,7 @@ class ReportBuilder:
                 [25 * mm, 22 * mm, 56 * mm, 24 * mm, 43 * mm],
                 font=5.4,
                 keep=False,
+                repeat_cols=2,
             )
             if long_dependencies:
                 self._small("<b>Complete long dependency lists</b>")
@@ -4604,6 +4825,7 @@ class ReportBuilder:
                  10 * mm, 10 * mm, 23 * mm, 31 * mm],
                 font=5.3,
                 keep=False,
+                repeat_cols=4,
             )
 
         summary_rows = fatigue_presentation.spectrum_rows(payload)
@@ -4704,6 +4926,7 @@ class ReportBuilder:
                     [18 * mm, 30 * mm, 16 * mm] + [17 * mm] * 6,
                     font=5.3,
                     keep=False,
+                    repeat_cols=2,
                 )
                 self._small(
                     "N in kN; M in kNm; N tension-positive. "
@@ -4764,6 +4987,7 @@ class ReportBuilder:
                      23 * mm, 29 * mm, 19 * mm, 16 * mm],
                     font=5.7,
                     keep=False,
+                    repeat_cols=3,
                 )
                 governing_id = fatigue_presentation.value(
                     spectrum, "governing_reinforcement_id"
@@ -4938,6 +5162,7 @@ class ReportBuilder:
                      16 * mm, 18 * mm, 22 * mm, 16 * mm, 14 * mm],
                     font=5.4,
                     keep=False,
+                    repeat_cols=2,
                 )
                 self._small(
                     "Coordinates in mm; f<sub>cd,fat</sub> in MPa. The selected "
