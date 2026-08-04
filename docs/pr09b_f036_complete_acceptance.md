@@ -21,12 +21,12 @@ fatigue and bridge calculations. Its actual calculated result must therefore
 emit every main report chapter: conventions, section/materials, analysis basis,
 clear spacing, Plastic, minimum reinforcement, transverse detailing, shear,
 torsion, combined M-V-T, Elastic, cracking, grouped fatigue, bridge calculations,
-calculation trace and provenance/QA appendix.
+and provenance/QA appendix.
 
 ## Independent oracle
 
 The frozen oracle must not import or call Sector production solvers, selectors,
-trace replayers or result-presentation functions. From parsed original project
+or result-presentation functions. From parsed original project
 inputs and explicitly retained low-level section intermediates it independently
 establishes:
 
@@ -42,11 +42,9 @@ establishes:
   equations;
 - the exact expected result states and report chapter inventory.
 
-The combined branch owns the one shared shear/torsion strut angle. Therefore
-this single project publishes CT-002 through CT-005 and CT-008 through CT-011;
-CT-006/CT-007 are not separate applicable publications in that combined state.
-The app must exclude its attached publication transport metadata from subsequent
-family replay and must carry the selected concrete identity into CT-009.
+The combined branch owns the one shared shear/torsion strut angle. The project
+must retain the selected concrete identity and every direct calculation input in
+the ordinary solver and publication payloads.
 
 The downloadable checking pack records the formulas, substituted original
 inputs, unrounded reference outputs, units, method/edition/source identities and

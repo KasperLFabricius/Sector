@@ -11,8 +11,6 @@ unit-testable.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-import hashlib
-import json
 
 import load_cases
 
@@ -68,33 +66,6 @@ def case_records(inp: Mapping, family: str) -> list[dict]:
 def case_signature(record: Mapping, key: str) -> tuple:
     """Stable per-row signature used only after shared inputs have matched."""
     return tuple(record[column] for column in load_cases.TABLE_COLUMNS[key])
-
-
-def trace_context(family: str, index: int, entry: Mapping) -> dict:
-    """Return the exact, compact identity of one published table-case trace."""
-
-    if family not in {"plastic", "elastic"}:
-        raise ValueError(f"unknown case family: {family}")
-    if type(index) is not int or index < 0:
-        raise ValueError("case trace index must be a non-negative integer")
-    signature = entry.get("signature")
-    if type(signature) is not tuple:
-        raise ValueError("case trace entry needs its retained tuple signature")
-    canonical = json.dumps(
-        signature,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-    return {
-        "analysis": "case-table",
-        "family": family,
-        "case_index": index + 1,
-        "case_name": str(entry.get("name") or ""),
-        "case_signature_sha256": hashlib.sha256(
-            canonical.encode("ascii")
-        ).hexdigest(),
-    }
 
 
 def plastic_bending_signature(record: Mapping) -> tuple:

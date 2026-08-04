@@ -18,14 +18,13 @@ import numpy as np
 import pytest
 
 from sector import PlasticPoint
-from sector.calculation_trace import TraceValidationError
 from sector.materials import Concrete, MildSteel
 from sector.plastic import _band_stresses, plastic_capacity_at_angle, solve_plastic
-from sector.plastic_capacity_trace import _point_expected
 from sector.section import Section
 
 
-# Frozen from d01e6beb040f766985bf5547d99940d649f520c1, before CT-002.
+# Frozen from d01e6beb040f766985bf5547d99940d649f520c1, before the
+# optional solver-diagnostic tail fields.
 _LEGACY_PLASTIC_POINT_FIELDS = (
     "V", "Mx", "My", "axial", "U", "R", "na_x_intercept",
     "na_y_intercept", "eps_concrete", "eps_steel", "eps_steel_comp",
@@ -94,13 +93,6 @@ def test_solver_points_carry_complete_finite_diagnostics():
     )
     assert type(point.axial_reachable) is bool
     assert type(point.search_iterations) is int and point.search_iterations >= 0
-    assert _point_expected(point)["axial_requested"] == point.axial_requested
-
-
-def test_legacy_point_cannot_be_used_as_authoritative_finite_trace_evidence():
-    point = PlasticPoint(*_LEGACY_PLASTIC_POINT_VALUES)
-    with pytest.raises(TraceValidationError, match="complete finite solver diagnostics"):
-        _point_expected(point)
 
 
 def fundamentsbjaelke():

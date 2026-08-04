@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import json
 import pathlib
 import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -15,6 +17,39 @@ import fatigue_inputs
 import load_cases
 import project_io
 import reinforcement_table
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (True, 1),
+        (1, 1.0),
+        ([1.0], (1.0,)),
+        (np.float32(1.0), np.float64(1.0)),
+        (np.array([1.0], dtype="float32"), np.array([1.0], dtype="float64")),
+    ],
+)
+def test_result_fingerprint_retains_concrete_type(first, second):
+    assert project_io.result_sha256(first) != project_io.result_sha256(second)
+
+
+def test_result_fingerprint_is_order_independent_and_seals_every_mapping_field():
+    first = {
+        "b": pd.DataFrame({"x": [1.0], "label": ["one"]}),
+        "a": {"value": -0.0},
+    }
+    reordered = {
+        "a": {"value": -0.0},
+        "b": pd.DataFrame({"x": [1.0], "label": ["one"]}),
+    }
+    assert project_io.result_sha256(first) == project_io.result_sha256(reordered)
+
+    changed = copy.deepcopy(reordered)
+    changed["a"]["retired_metadata"] = {"value": 1}
+    assert project_io.result_sha256(changed) != project_io.result_sha256(first)
+    assert project_io.result_sha256({"a": [1, True, -0.0]}) == (
+        "39b6f6999c42d6fe396078a0a062e91fc58193bd96159099d9a88e96e41ab9f0"
+    )
 
 
 def _current_project():

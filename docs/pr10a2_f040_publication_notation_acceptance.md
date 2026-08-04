@@ -4,8 +4,8 @@
 
 This slice supplies one shared, trust-aware notation layer for the retained PDF
 report and user manual. It changes publication markup only. Numerical values,
-solver and trace mechanics, output precision, source identities, verdicts,
-layout geometry, pagination, schemas, and application version remain unchanged.
+solver mechanics, output precision, source identities, verdicts, layout geometry,
+pagination, schemas, and application version remain unchanged.
 
 ## Trusted engineering inventory
 
@@ -22,7 +22,7 @@ layout geometry, pagination, schemas, and application version remain unchanged.
 
 Project and author metadata, action-set identities and sources, material names
 and descriptions, fatigue spectrum/bin names and descriptions, provenance text,
-and trace labels are literal channels. Scientific-looking or unit-looking text
+and calculation labels are literal channels. Scientific-looking or unit-looking text
 inside those channels remains exactly visible after ReportLab decoding. Escaping
 must occur before trusted notation or Greek-token rendering.
 

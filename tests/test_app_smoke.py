@@ -518,19 +518,6 @@ def test_calculation_results_have_no_trace_payload_or_trace_view():
         box.key != "calculation_trace_selection" for box in at.selectbox
     )
 
-    # A hot-reloaded pre-retirement session can still hold the old metadata.
-    # Unchanged case results remain reusable, but the retired payload is removed.
-    entry["results"]["calculation_traces"] = {"legacy": object()}
-    results["calculation_traces"] = {"legacy": object()}
-    at.button(key="calculate").click().run()
-    assert not at.exception
-    recalculated = at.session_state["results"]
-    assert "calculation_traces" not in recalculated
-    assert "calculation_traces" not in (
-        recalculated["plastic_cases"][0]["results"]
-    )
-
-
 def test_plastic_view_tolerates_legacy_results_without_min_fields():
     # A result payload cached before min_mx/min_my existed (inputs unchanged, so no
     # recompute) must still render the Plastic Results view: the minima are derived

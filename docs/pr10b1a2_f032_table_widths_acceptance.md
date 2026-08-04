@@ -11,16 +11,16 @@ Exact base: `af2a835c3da31adc41ac3075dee0fb794ffa305b`
 - Numerical body cells are measured from markup-aware source text. Every concrete
   numeric word retains an indivisible width floor when bare, beside a unit or
   annotation, or immediately before a ReportLab line-break tag.
-- Escaped mixed calculation-trace cells identify their structured substitution
-  and result evidence explicitly; escaping provenance cannot make used numbers
-  inert, while step/dependency identities remain losslessly wrappable.
+- Escaped mixed equation cells identify their structured substitution and result
+  evidence explicitly; escaping provenance cannot make used numbers inert, while
+  equation identities remain losslessly wrappable.
 - Authored widths are reallocated inside the 170 mm A4 frame without crossing
   content floors. Wider tables become ordered sequential panels; configured
   leading identity columns repeat, and each panel lists its source headers.
 - Composite row identities are explicit at production call sites. Case and
   description, case/description/part, spectrum/bin/description, scope/check,
   geometric point/ring indices, element/material/state, crack candidate keys,
-  trace step/role, and fatigue detail/result identities remain present on every
+  equation/result, and fatigue detail/result identities remain present on every
   panel where their table can split horizontally.
 - Missing, empty, ragged and width/cardinality-mismatched table inventories fail
   before rendering. A single numeric atom wider than A4 fails explicitly.
