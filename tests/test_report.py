@@ -541,6 +541,25 @@ def test_report_preserves_literal_engineering_token_identifiers():
     assert "&#951;" not in protected  # no beta -> b + Greek eta suffix collision
 
 
+def test_report_preserves_notation_like_case_and_cover_identities():
+    inp = _inp()
+    inp["plastic_case"]["id"] = "Case 1e-12 % in 100 m2"
+    meta = {
+        "proj_no": "Project 2E+03 deg",
+        "proj_name": "Bridge 100 m2",
+        "section": "Section cm3 / mm4",
+        "rev": "1e-9%",
+        "author": "Engineer 1,25e-6",
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        meta, inp, _out(), figures=False
+    )).split())
+
+    for literal in (*meta.values(), inp["plastic_case"]["id"]):
+        assert literal in text
+
+
 def test_report_outline_decodes_literal_engineering_token_case_id():
     import io
     import pypdf
@@ -1144,8 +1163,9 @@ def test_report_does_not_round_small_nonzero_product_inertia_to_zero():
     out["elastic"]["props_un"]["Ixy"] = 1.234567e-8
     out["elastic"]["props_cr"]["Ixy"] = -2.345678e-9
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "1.23457e-08" in txt
-    assert "-2.34568e-09" in txt
+    times = chr(0x00D7)
+    assert f"1.23457 {times} 10-8" in txt
+    assert f"-2.34568 {times} 10-9" in txt
 
 
 def test_crack_candidate_table_stays_inside_a4_content_width():
