@@ -15,6 +15,7 @@ import functools
 import io
 import math
 import pathlib
+import re
 import sys
 
 from PIL import Image
@@ -1289,6 +1290,8 @@ def validate_pdf_content(pdf: bytes) -> str:
             raise AssertionError(f"expected report content is missing: {expected}")
 
     page_texts = [page.extract_text() or "" for page in reader.pages]
+    validate_report_page_semantics(page_texts)
+    validate_report_table_colocation(page_texts)
     overview_pages = [
         number
         for number, page_text in enumerate(page_texts, start=1)
@@ -1304,6 +1307,47 @@ def validate_pdf_content(pdf: bytes) -> str:
             "the stable results overview no longer fits one complete page"
         )
     return text
+
+
+_REPORT_TABLE_REFERENCE = re.compile(r"\bSee (Table \d+\.\d+)\.(?!\d)")
+
+
+def validate_report_table_colocation(page_texts: list[str]) -> None:
+    """Require every exact report-table reference to share its caption page."""
+    for number, page_text in enumerate(page_texts, start=1):
+        for match in _REPORT_TABLE_REFERENCE.finditer(page_text):
+            label = match.group(1)
+            caption = re.compile(
+                rf"(?<!See ){re.escape(label)}\.(?!\d)"
+            )
+            if caption.search(page_text) is None:
+                raise AssertionError(
+                    f"page {number} strands the reference to {label}"
+                )
+
+
+def validate_report_page_semantics(page_texts: list[str]) -> None:
+    """Reject a report page containing only repeated document furniture."""
+    footer_prefix = f"Sector {__version__} - "
+    for number, page_text in enumerate(page_texts, start=1):
+        semantic_lines = []
+        for raw_line in page_text.splitlines():
+            line = " ".join(raw_line.split())
+            if not line:
+                continue
+            if line.startswith("Project: QA-REFERENCE"):
+                continue
+            if line.startswith("Rev: "):
+                continue
+            if line.startswith(footer_prefix):
+                continue
+            if re.fullmatch(r"Page \d+ of \d+", line):
+                continue
+            semantic_lines.append(line)
+        if not semantic_lines:
+            raise AssertionError(
+                f"page {number} contains document furniture but no report body"
+            )
 
 
 def render_pdf(pdf: bytes, scale: float = 1.5) -> list[Image.Image]:
