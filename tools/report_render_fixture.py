@@ -1287,6 +1287,22 @@ def validate_pdf_content(pdf: bytes) -> str:
     ):
         if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected report content is missing: {expected}")
+
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    overview_pages = [
+        number
+        for number, page_text in enumerate(page_texts, start=1)
+        if "Results overview across calculated checks" in page_text
+    ]
+    governing_note_pages = [
+        number
+        for number, page_text in enumerate(page_texts, start=1)
+        if "Gov. marks the highest PASS/FAIL utilisation" in page_text
+    ]
+    if overview_pages != governing_note_pages or len(overview_pages) != 1:
+        raise AssertionError(
+            "the stable results overview no longer fits one complete page"
+        )
     return text
 
 
