@@ -187,6 +187,19 @@ def _greek(s):
     return normalize_trusted_markup(s)
 
 
+_EQUATION_MATH_TOKENS = {"Delta": "&#916;", "sum": "&#8721;"}
+_EQUATION_MATH_RE = re.compile(
+    r"\b(" + "|".join(_EQUATION_MATH_TOKENS) + r")\b"
+)
+
+
+def _equation_math(s):
+    """Render the additional ASCII tokens reserved for equation mathematics."""
+    return _EQUATION_MATH_RE.sub(
+        lambda match: _EQUATION_MATH_TOKENS[match.group(1)], _greek(s)
+    )
+
+
 def _numerical_table_text(markup, evidence):
     """Retain escaped mixed cell text while identifying its numeric evidence."""
     return _NumericalReportText(markup, evidence)
@@ -445,9 +458,11 @@ def _styles():
                                 fontName=_FONT, leading=13, spaceAfter=4)
     out["small"] = ParagraphStyle("s", parent=ss["Normal"], fontSize=8.5,
                                  fontName=_FONT, leading=11, textColor=_GREY)
-    out["formula"] = ParagraphStyle("f", parent=ss["Normal"], fontSize=9.5,
-                                    leading=14, leftIndent=12, rightIndent=6,
-                                    spaceBefore=2, spaceAfter=3, fontName=_FONT)
+    out["formula"] = ParagraphStyle(
+        "f", parent=ss["Normal"], fontSize=9.5, leading=14,
+        leftIndent=12, rightIndent=6, spaceBefore=2, spaceAfter=3,
+        fontName=_FONT, wordWrap="LTR", splitLongWords=True,
+    )
     out["formula_id"] = ParagraphStyle(
         "fi", parent=ss["Normal"], fontSize=8, fontName=_FONT_BOLD,
         leading=11, leftIndent=12, rightIndent=6, textColor=_BLUE,
@@ -456,6 +471,11 @@ def _styles():
     out["ref"] = ParagraphStyle("r", parent=ss["Normal"], fontSize=8,
                                fontName=_FONT, leading=11, leftIndent=12,
                                rightIndent=6, textColor=_GREY, spaceAfter=6)
+    out["formula_symbol"] = ParagraphStyle(
+        "fs", parent=ss["Normal"], fontSize=8.1, leading=11,
+        leftIndent=18, rightIndent=6, spaceAfter=1, fontName=_FONT,
+        wordWrap="LTR", splitLongWords=True,
+    )
     return out
 
 
@@ -491,6 +511,9 @@ class _EquationFlowable(KeepTogether):
         self._sector_equation_number = number
         self._sector_equation_section = section
         self._sector_equation_subsection = subsection
+        self._sector_equation_roles = tuple(
+            child._sector_equation_role for child in content
+        )
 
     def getPlainText(self):
         return " ".join(
@@ -498,6 +521,22 @@ class _EquationFlowable(KeepTogether):
             for child in self._content
             if hasattr(child, "getPlainText")
         )
+
+
+def _equation_paragraph(markup, style, role, *, symbol=None):
+    """Build one auditable row in a standard report equation block."""
+    paragraph = Paragraph(markup, style)
+    paragraph._sector_equation_role = role
+    if symbol is not None:
+        paragraph._sector_equation_symbol = symbol
+    return paragraph
+
+
+def _equation_result_unit(unit, result):
+    """Retain the canonical unit while naming percentage presentation."""
+    if unit == "dimensionless" and "%" in result:
+        return "dimensionless; displayed as %"
+    return unit
 
 
 def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
@@ -1014,18 +1053,48 @@ class ReportBuilder:
             if number is not None else public
         )
         content = [
-            Paragraph(
-                f'<a name="{anchor}"/><b>{identity}</b>', self.s["formula_id"]
+            _equation_paragraph(
+                f'<a name="{anchor}"/><b>{identity}</b>',
+                self.s["formula_id"],
+                "identity",
             ),
-            Paragraph(_greek(expr), self.s["formula"]),
+            _equation_paragraph(
+                f"<b>Symbolic expression:</b> {_equation_math(expr)}",
+                self.s["formula"],
+                "symbolic-expression",
+            ),
         ]
         if subst:
-            content.append(Paragraph(_greek(subst), self.s["formula"]))
+            content.append(_equation_paragraph(
+                f"<b>Numerical substitution:</b> {_equation_math(subst)}",
+                self.s["formula"],
+                "numerical-substitution",
+            ))
         if note:
-            content.append(Paragraph(_greek(note), self.s["formula"]))
+            content.append(_equation_paragraph(
+                f"<b>Applicability / method note:</b> {_greek(note)}",
+                self.s["formula"],
+                "applicability-note",
+            ))
         if result:
-            content.append(Paragraph(
-                _greek(f"<b>{result}</b>"), self.s["formula"]
+            display_unit = _equation_result_unit(contract.result_unit, result)
+            content.append(_equation_paragraph(
+                "<b>Result &#8212; "
+                f"{_equation_math(contract.result_symbol)} "
+                f"[{_greek(display_unit)}]:</b> {_equation_math(result)}",
+                self.s["formula"],
+                "result",
+            ))
+        content.append(_equation_paragraph(
+            "<b>Symbols:</b>", self.s["formula_symbol"], "symbols-heading"
+        ))
+        for symbol in contract.symbols:
+            content.append(_equation_paragraph(
+                f"{_equation_math(symbol.markup)} &#8212; "
+                f"{_greek(symbol.meaning)} [{_greek(symbol.unit)}]",
+                self.s["formula_symbol"],
+                "symbol",
+                symbol=symbol,
             ))
         if targets:
             links = []
@@ -1037,11 +1106,15 @@ class ReportBuilder:
                 links.append(
                     f'<link href="#{target["anchor"]}">{label}</link>'
                 )
-            content.append(Paragraph(
-                "<b>Uses:</b> " + ", ".join(links), self.s["ref"]
+            content.append(_equation_paragraph(
+                "<b>Uses:</b> " + ", ".join(links),
+                self.s["ref"],
+                "uses",
             ))
-        content.append(Paragraph(
-            _greek(f"<b>Source / method note:</b> {source}"), self.s["ref"]
+        content.append(_equation_paragraph(
+            _greek(f"<b>Source / method note:</b> {source}"),
+            self.s["ref"],
+            "source",
         ))
         self.flow.append(_EquationFlowable(
             content,

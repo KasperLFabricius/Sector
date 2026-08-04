@@ -357,7 +357,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("T<sub>Rd,max</sub>", "torsion concrete-strut resistance", "kNm"),
         ("V<sub>Ed</sub>", "applied design shear", "kN"),
         ("V<sub>Rd,max</sub>", "shear concrete-strut resistance", "kN"),
-        ("interaction", "combined concrete-crushing utilisation"),
+        ("interaction", "combined concrete-strut interaction value"),
     ),
     ("combined.stirrup.utilisation", None): _result(
         "closed-stirrup utilisation", "dimensionless",
@@ -405,7 +405,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("T<sub>Rd,max</sub>", "torsion concrete-strut resistance", "kNm"),
         ("V<sub>Ed</sub>", "applied design shear", "kN"),
         ("V<sub>Rd,max</sub>", "shear concrete-strut resistance", "kN"),
-        ("interaction", "combined concrete-crushing utilisation"),
+        ("interaction", "combined concrete-strut interaction value"),
     ),
     ("torsion.resistance.steel", None): _result(
         "T<sub>Rd,s</sub>", "kNm",
