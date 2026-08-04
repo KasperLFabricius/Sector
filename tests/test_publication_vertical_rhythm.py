@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import pathlib
 import sys
+from types import SimpleNamespace
 
 import pypdf
 import pytest
@@ -15,7 +16,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     KeepTogether,
-    PageBreak,
+    NotAtTopPageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -105,8 +106,8 @@ def test_loads_and_analysis_settings_start_on_distinct_pages(monkeypatch):
         index for index, item in enumerate(builder.flow)
         if isinstance(item, Paragraph) and item.getPlainText() == "Analysis settings"
     )
-    assert isinstance(builder.flow[loads_index - 1], PageBreak)
-    assert isinstance(builder.flow[settings_index - 1], PageBreak)
+    assert isinstance(builder.flow[loads_index - 1], NotAtTopPageBreak)
+    assert isinstance(builder.flow[settings_index - 1], NotAtTopPageBreak)
     assert not any(
         isinstance(item, KeepTogether)
         and "LOADS BODY" in " ".join(
@@ -133,7 +134,7 @@ def test_forced_page_break_discards_only_trailing_layout_gaps():
     builder.flow.extend([first, Spacer(1, 4)])
     builder._page_break()
     assert builder.flow == [first, builder.flow[-1]]
-    assert isinstance(builder.flow[-1], PageBreak)
+    assert isinstance(builder.flow[-1], NotAtTopPageBreak)
 
     builder = _builder()
     nested = Paragraph("nested semantic block", builder.s["body"])
@@ -142,7 +143,7 @@ def test_forced_page_break_discards_only_trailing_layout_gaps():
     builder._page_break()
     assert builder.flow[0] is wrapper
     assert wrapper._content == [nested]
-    assert isinstance(builder.flow[-1], PageBreak)
+    assert isinstance(builder.flow[-1], NotAtTopPageBreak)
 
 
 def test_main_and_grouped_fatigue_settings_tables_are_splittable():
@@ -202,9 +203,25 @@ def test_manual_data_tables_use_bounded_spacing_and_padding(monkeypatch):
         "manual_blocks",
         lambda: (("table", ["A", "B"], [["one", "two"]]),),
     )
+    monkeypatch.setattr(manual, "manual_publication_blocks", lambda blocks: blocks)
+    monkeypatch.setattr(
+        manual,
+        "publish_manual_blocks",
+        lambda blocks: tuple(
+            SimpleNamespace(
+                block=block,
+                item=SimpleNamespace(
+                    anchor="table-a1-1",
+                    label="Table A1.1",
+                    caption="Focused table",
+                ),
+            )
+            for block in blocks
+        ),
+    )
 
     manual.build_manual_pdf(io.BytesIO(), figures=False)
-    table = next(item for item in captured["flow"] if type(item) is Table)
+    table = next(item for item in captured["flow"] if isinstance(item, Table))
     assert table.spaceBefore == pytest.approx(2)
     for row in table._cellStyles:
         for style in row:
