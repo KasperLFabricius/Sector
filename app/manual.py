@@ -31,6 +31,12 @@ import streamlit as st
 
 import bridge_analysis
 import bridge_inputs
+from manual_equation_publication import (
+    EQUATION_BLOCK,
+    dependency_numbers,
+    manual_publication_blocks,
+    source_kind_label,
+)
 from publication_notation import normalize_trusted_markup
 import reproducible_example
 from sector import __author__ as APP_AUTHOR
@@ -1860,6 +1866,22 @@ def manual_parts() -> dict[str, list]:
     return parts
 
 
+def manual_publication_parts() -> dict[str, list]:
+    """Return the fail-closed visible manual, grouped by navigable part."""
+
+    parts: dict[str, list] = {}
+    current = None
+    for block in manual_publication_blocks(manual_blocks()):
+        if block[0] == "part":
+            current = block[1]
+            parts[current] = [block]
+        elif current is not None:
+            parts[current].append(block)
+    if tuple(parts) != tuple(_PART_SUMMARIES):
+        raise ValueError("Published manual part identity changed.")
+    return parts
+
+
 # ==========================================================================
 # PDF RENDERER -- same content blocks, rendered with ReportLab
 # ==========================================================================
@@ -1964,6 +1986,38 @@ def _inline_md_to_rl(text: str) -> str:
     return normalize_trusted_markup(text)
 
 
+def _manual_equation_anchor(number: str) -> str:
+    return "equation-" + number.casefold()
+
+
+def _manual_equation_results_markdown(equation) -> str:
+    rows = (
+        f"${term.markup}$ - {term.meaning} (`{term.unit}`)"
+        for term in equation.contract.results
+    )
+    return "**Result:** " + "; ".join(rows)
+
+
+def _manual_equation_dependencies_markdown(equation) -> str:
+    numbers = dependency_numbers(equation)
+    if not numbers:
+        return ""
+    links = (
+        f"[Equation {number}](#{_manual_equation_anchor(number)})"
+        for number in numbers
+    )
+    return "**Uses:** " + ", ".join(links)
+
+
+def _manual_equation_symbols_markdown(equation) -> str:
+    rows = ["| Symbol | Meaning | Unit |", "| --- | --- | --- |"]
+    rows.extend(
+        f"| ${term.markup}$ | {term.meaning} | `{term.unit}` |"
+        for term in equation.contract.symbols
+    )
+    return "\n".join(rows)
+
+
 def _render_md_pdf(text, flow, styles, Paragraph):
     """Render a Markdown block (paragraphs, ``- ``/``1.`` lists, standalone
     ``$$display$$`` formulas) to ReportLab flowables."""
@@ -2001,6 +2055,90 @@ def _render_md_pdf(text, flow, styles, Paragraph):
         else:
             buf.append(s)
     flush()
+
+
+def _render_manual_equation_pdf(
+    equation,
+    flow,
+    styles,
+    Paragraph,
+    Table,
+    TableStyle,
+    KeepTogether,
+    Spacer,
+    colors,
+    page_w,
+):
+    """Render one exact contracted equation as a standard PDF block."""
+
+    contract = equation.contract
+    anchor = _manual_equation_anchor(contract.number)
+    heading = (
+        f'<a name="{anchor}"/><b>Equation {contract.number}</b> | '
+        f"{_inline_md_to_rl(contract.dimensional_class)}"
+    )
+    results = "; ".join(
+        f"{_latex_to_rl(term.markup)} - {_inline_md_to_rl(term.meaning)} "
+        f"[{_latex_to_rl(term.unit)}]"
+        for term in contract.results
+    )
+    dependencies = dependency_numbers(equation)
+    metadata = [
+        Paragraph(heading, styles["MBody"]),
+        Paragraph(
+            _latex_to_rl(equation.equation.equation.expression),
+            styles["MMath"],
+        ),
+        Paragraph(f"<b>Result:</b> {results}", styles["MSmall"]),
+    ]
+    if dependencies:
+        dependency_links = ", ".join(
+            f'<link href="#{_manual_equation_anchor(number)}">'
+            f"Equation {number}</link>"
+            for number in dependencies
+        )
+        metadata.append(
+            Paragraph(f"<b>Uses:</b> {dependency_links}", styles["MSmall"])
+        )
+    metadata.append(
+        Paragraph(
+            f"<b>{source_kind_label(equation)}:</b> "
+            f"{_inline_md_to_rl(equation.equation.source.source_text)}",
+            styles["MSmall"],
+        )
+    )
+    flow.append(KeepTogether(metadata))
+
+    data = [[
+        Paragraph("<b>Symbol</b>", styles["MSmall"]),
+        Paragraph("<b>Meaning</b>", styles["MSmall"]),
+        Paragraph("<b>Unit</b>", styles["MSmall"]),
+    ]]
+    data.extend(
+        [
+            Paragraph(_latex_to_rl(term.markup), styles["MSmall"]),
+            Paragraph(_inline_md_to_rl(term.meaning), styles["MSmall"]),
+            Paragraph(_latex_to_rl(term.unit), styles["MSmall"]),
+        ]
+        for term in contract.symbols
+    )
+    table = Table(
+        data,
+        colWidths=[0.22 * page_w, 0.58 * page_w, 0.20 * page_w],
+        repeatRows=1,
+        splitByRow=1,
+        spaceBefore=3,
+    )
+    table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.lightgrey),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    flow.extend((table, Spacer(1, 6)))
 
 
 _FIG_EXPORT_TIMEOUT_S = 30.0
@@ -2166,7 +2304,7 @@ def build_manual_pdf(buffer, figures=True):
         if _call_with_timeout(report.ensure_image_server,
                               _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
             figures_hung = True
-    for block in manual_blocks():
+    for block in manual_publication_blocks(manual_blocks()):
         kind = block[0]
         if kind == "part":
             flow.append(Spacer(1, 0.3 * cm))
@@ -2191,6 +2329,11 @@ def build_manual_pdf(buffer, figures=True):
             ))
         elif kind == "md":
             _render_md_pdf(block[1], flow, styles, Paragraph)
+        elif kind == EQUATION_BLOCK:
+            _render_manual_equation_pdf(
+                block[1], flow, styles, Paragraph, Table, TableStyle,
+                KeepTogether, Spacer, colors, page_w,
+            )
         elif kind == "callout":
             _icon, ttl = _CALLOUT.get(block[1], ("", "Note"))
             inner = Paragraph(f"<b>{ttl}:</b> " + _inline_md_to_rl(block[2]),
@@ -2267,6 +2410,27 @@ def build_manual_pdf_bytes(figures=True):
 # STREAMLIT RENDERER
 # ==========================================================================
 
+def _render_manual_equation_streamlit(equation) -> None:
+    """Render one exact contracted equation with on-demand semantic detail."""
+
+    number = equation.contract.number
+    st.markdown(f"##### Equation {number}")
+    st.caption(f"Dimensional class: {equation.contract.dimensional_class}")
+    st.markdown(f"$$\n{equation.equation.equation.expression}\n$$")
+    st.markdown(_manual_equation_results_markdown(equation))
+    dependencies = _manual_equation_dependencies_markdown(equation)
+    if dependencies:
+        st.markdown(dependencies)
+    st.caption(
+        f"{source_kind_label(equation)}: "
+        f"{equation.equation.source.source_text}"
+    )
+    with st.expander(
+        f"Symbols and units - Equation {number}", expanded=False
+    ):
+        st.markdown(_manual_equation_symbols_markdown(equation))
+
+
 def render_manual_streamlit():
     """Render the selected manual part and its PDF actions."""
     with st.container(horizontal=True):
@@ -2318,7 +2482,7 @@ def render_manual_streamlit():
                 on_click="ignore",
             )
 
-    parts = manual_parts()
+    parts = manual_publication_parts()
     selected_part = st.selectbox(
         "Manual part",
         list(parts),
@@ -2345,6 +2509,8 @@ def render_manual_streamlit():
             st.markdown(f"#### {_strip_num(block[1])}")
         elif kind == "md":
             st.markdown(block[1])
+        elif kind == EQUATION_BLOCK:
+            _render_manual_equation_streamlit(block[1])
         elif kind == "callout":
             icon, title = _CALLOUT.get(block[1], (":information_source:", "Note"))
             with st.container(border=True):
