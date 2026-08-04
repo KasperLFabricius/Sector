@@ -953,11 +953,9 @@ class ReportBuilder:
         table_item = self._publication_counter.issue(
             "Table", "Results overview across calculated checks"
         )
-        self.flow.append(Paragraph(
-            f'See <link href="#{table_item.anchor}">{table_item.label}</link>.',
-            self.s["publication_ref"],
-        ))
         caption_markup = (
+            f'<font color="#5A5A56">See <link href="#{table_item.anchor}">'
+            f'{table_item.label}</link>.</font><br/>'
             f'<a name="{table_item.anchor}"/><b>{table_item.label}.</b> '
             f"{_greek(_html_escape(table_item.caption))}"
         )
@@ -1016,6 +1014,7 @@ class ReportBuilder:
         table._sector_header_row = header_row
         table._sector_data_start = header_row + 1
         table._sector_results_overview = True
+        table.keepWithNext = 1
         self.flow.append(table)
         self._small(
             "Gov. marks the highest PASS/FAIL utilisation for each check; ties "
@@ -1384,12 +1383,10 @@ class ReportBuilder:
             if first_header.lower() not in subject.lower():
                 caption += f": {first_header}"
         table_item = self._publication_counter.issue("Table", str(caption))
-        self.flow.append(Paragraph(
-            f'See <link href="#{table_item.anchor}">{table_item.label}</link>.',
-            self.s["publication_ref"],
-        ))
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
+        # The first caption row owns the reference as well as the destination, so
+        # no page-position guard can separate ``See Table ...`` from its object.
         # Any table can outgrow one page when it contains user-pasted geometry or
         # reinforcement. Repeat the labelled header regardless of whether the normal
         # short-table path first tries to keep the table together.
@@ -1416,6 +1413,12 @@ class ReportBuilder:
                 else ""
             )
             continued = panel_number > 1
+            reference_markup = (
+                f'<font color="#5A5A56">See '
+                f'<link href="#{table_item.anchor}">{table_item.label}</link>.'
+                f"</font><br/>"
+                if not continued else ""
+            )
             visible_label = (
                 f"{table_item.label} (continued)"
                 if continued
@@ -1423,7 +1426,7 @@ class ReportBuilder:
             )
             anchor = f'<a name="{table_item.anchor}"/>' if not continued else ""
             caption_markup = (
-                f"{anchor}<b>{visible_label}.</b> "
+                f"{reference_markup}{anchor}<b>{visible_label}.</b> "
                 f"{_greek(_html_escape(table_item.caption))}"
                 f"{_greek(_html_escape(panel_note))}"
             )

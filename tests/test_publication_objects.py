@@ -226,11 +226,14 @@ def test_report_table_reference_caption_and_fragments_share_one_identity():
         _flow_text(value) for value in builder.flow
     )
     assert table._cellvalues[0][0].getPlainText() == (
+        "See Table 1.1."
         "Table 1.1. Published evidence for Design values: Force (kN)"
     )
     assert table.repeatRows == 4
     leading, trailing = table.split(80 * mm, 70 * mm)
+    assert "See Table 1.1." in leading._cellvalues[0][0].getPlainText()
     assert "(continued)" not in leading._cellvalues[0][0].getPlainText()
+    assert "See Table 1.1." not in trailing._cellvalues[0][0].getPlainText()
     assert "Table 1.1 (continued)." in trailing._cellvalues[0][0].getPlainText()
     for fragment in (leading, trailing):
         assert [
