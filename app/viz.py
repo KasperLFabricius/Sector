@@ -189,6 +189,7 @@ BAR_NEUTRAL = "#534ab7"                      # purple (unstressed / plane marker
 TENDON = "#0b7285"                           # teal
 COMP_ZONE_FILL = "rgba(213,94,0,0.22)"       # concrete compression zone
 TENS_ZONE_FILL = "rgba(0,114,178,0.12)"      # tension side (no concrete stress)
+_ZONE_OUTLINE_DASHES = ("solid", "dash", "dot", "dashdot")
 NA_LINE = "#E69F00"                          # neutral axis (amber)
 # Material stress-strain curves
 CURVE_CHAR = "#534ab7"                        # characteristic curve + its input markers
@@ -725,11 +726,19 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     fig.add_trace(go.Scatter(x=xs, y=ys, fill="toself", mode="lines",
                              fillcolor=CONCRETE_FILL, line=dict(color=CONCRETE_LINE),
                              hoverinfo="skip", showlegend=False))
-    for verts, color, name in zones or []:
+    for zone_index, (verts, color, name) in enumerate(zones or []):
         if len(verts) >= 3:
             zx, zy = _ring_xy(verts)
             fig.add_trace(go.Scatter(x=zx, y=zy, fill="toself", mode="lines",
-                                     fillcolor=color, line=dict(width=0),
+                                     fillcolor=color,
+                                     line=dict(
+                                         color=CONCRETE_LINE,
+                                         width=1.3,
+                                         dash=_ZONE_OUTLINE_DASHES[
+                                             zone_index
+                                             % len(_ZONE_OUTLINE_DASHES)
+                                         ],
+                                     ),
                                      hoverinfo="skip", name=name))
     for hole in holes or []:
         hx, hy = _ring_xy(hole)
@@ -780,14 +789,14 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     if BAR_TENSION in state_colors:
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode="markers", name="tension (+): plain marker",
-            marker=dict(size=9, symbol="circle", color=BAR_TENSION,
+            marker=dict(size=9, symbol="square", color=BAR_TENSION,
                         line=dict(color="white", width=1)),
             hoverinfo="skip", showlegend=True,
         ))
     if BAR_COMPRESSION in state_colors:
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode="markers", name="compression (-): x marker",
-            marker=dict(size=9, symbol="circle-x", color=BAR_COMPRESSION,
+            marker=dict(size=9, symbol="square-x", color=BAR_COMPRESSION,
                         line=dict(color="white", width=1)),
             hoverinfo="skip", showlegend=True,
         ))
@@ -1963,7 +1972,7 @@ def detailing_geometry_figure(
             name="governing spacing pair",
             marker=dict(
                 size=22,
-                symbol="circle-open",
+                symbol="diamond-open",
                 color=colour,
                 line=dict(color=colour, width=2.6),
             ),
@@ -2598,7 +2607,8 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
     if len(outer) >= 3:
         ox, oy = _ring_xy([(p[0] * scale, p[1] * scale) for p in outer])
         fig.add_trace(go.Scatter(x=ox, y=oy, fill="toself", mode="lines",
-                                 fillcolor=CONCRETE_FILL, line=dict(color=CONCRETE_LINE),
+                                 fillcolor=CONCRETE_FILL,
+                                 line=dict(color=CONCRETE_LINE, width=2),
                                  name="outline", hoverinfo="skip"))
     for hole in holes:
         hx, hy = _ring_xy([(p[0] * scale, p[1] * scale) for p in hole])
@@ -2704,7 +2714,7 @@ def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
                              line=dict(color=BAR_COMPRESSION, width=3),
                              name="compression chord"))
     fig.add_trace(go.Scatter(x=[0, L], y=[0, 0], mode="lines",
-                             line=dict(color=BAR_TENSION, width=3),
+                             line=dict(color=BAR_TENSION, width=3, dash="dash"),
                              name="tension chord"))
     fig.add_trace(go.Scatter(x=[0, panel], y=[0, z], mode="lines",
                              line=dict(color=CONCRETE_LINE, width=7), opacity=0.55,
@@ -2718,7 +2728,7 @@ def truss_figure(theta_deg, z_mm, legs=2.0, dia_mm=0.0, s_mm=0.0,
     tie_name = f"links (s = {s_mm:.0f} mm)" if s_mm else "links"
     for k, xv in enumerate(xs):
         fig.add_trace(go.Scatter(x=[xv, xv], y=[0, z], mode="lines",
-                                 line=dict(color=LINK_LINE, width=1.5),
+                                 line=dict(color=LINK_LINE, width=1.5, dash="dot"),
                                  name=tie_name, showlegend=(k == 0)))
     # Angle arc at the strut base (between the tension chord and the strut) so the
     # strut angle theta reads directly off the figure.
