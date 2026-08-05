@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import argparse
 import functools
-import io
 import pathlib
 import sys
-
-import pypdf
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
@@ -19,13 +16,36 @@ if str(ROOT) not in sys.path:
 
 import manual  # noqa: E402
 from sector import __version__  # noqa: E402
-from tools.report_render_fixture import (  # noqa: E402
+from tools.publication_preflight import (  # noqa: E402
+    MANUAL_FURNITURE,
+    RasterCrop,
+    preflight_pdf,
     render_pdf,
-    validate_outline_destinations,
-    validate_rendered_pages,
+    validate_crops,
+    validate_raster_pages,
 )
+from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
 _EXPECTED_FIGURE_COUNT = 16
+_MANUAL_CROPS = (
+    RasterCrop(
+        "manual cover and contents",
+        1,
+        (0.10, 0.07, 0.90, 0.45),
+        "ef560fe7132bc0611aa3a016d21363d373897e63fda2ab477f8f75e8cb10b07c",
+    ),
+    RasterCrop(
+        "manual cover footer",
+        1,
+        (0.09, 0.94, 0.92, 0.98),
+        "020cbe9bd6073e7a3ccb32718007d6cac3c1dc7b7b7f6c130c6568685537ca5d",
+    ),
+)
+
+
+def validate_rendered_pages(pages):
+    """Retain the fixture API while delegating to the shared raster gate."""
+    return validate_raster_pages(pages, min_pages=6)
 
 
 @functools.lru_cache(maxsize=1)
@@ -34,8 +54,8 @@ def build_fixture_pdf() -> bytes:
 
 
 def validate_pdf_content(pdf: bytes) -> str:
-    reader = pypdf.PdfReader(io.BytesIO(pdf))
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    reader, page_texts = preflight_pdf(pdf, min_pages=6)
+    text = "\n".join(page_texts)
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
     for token in (
@@ -139,7 +159,10 @@ def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     pdf_path = output / "sector-manual-reference.pdf"
     pdf_path.write_bytes(pdf)
     pages = render_pdf(pdf)
-    validate_rendered_pages(pages)
+    validate_raster_pages(
+        pages, min_pages=6, furniture=MANUAL_FURNITURE
+    )
+    validate_crops(pages, _MANUAL_CROPS)
     paths = [pdf_path]
     for index, page in enumerate(pages, start=1):
         path = output / f"sector-manual-page-{index:02d}.png"
