@@ -1675,6 +1675,43 @@ def test_report_publishes_retained_bridge_kernels_without_coverage_aggregate():
     assert "approval" not in text.casefold()
 
 
+def test_report_publishes_typed_invalid_bridge_failure_without_numbers():
+    inp = _inp()
+    inp.update({
+        "bridge_standard": bridge.COMPONENT_METHODS,
+        bridge_inputs.BRITTLE_TABLE_KEY: [{
+            "region_id": "underflow",
+            "m_rep_knm": 1.0,
+            "z_s_m": 1.0e-200,
+            "f_yk_mpa": 1.0e-200,
+            "as_provided_mm2": 1.0,
+        }],
+        bridge_inputs.BOX_WALL_TABLE_KEY: [{
+            "wall_id": "retained-valid-wall",
+            "cot_theta": 1.5,
+            "v_ed_kn": 50.0,
+            "v_rd_max_kn": 100.0,
+            "t_ed_equivalent_kn": 10.0,
+            "t_rd_max_equivalent_kn": 100.0,
+        }],
+        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: None,
+    })
+    out = _out()
+    out["bridge"] = bridge_analysis.run_or_invalid(inp)
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "INVALID - bridge calculation" in text
+    assert "NON_FINITE_RESULT" in text
+    assert "field=As,min" in text
+    assert "could not be represented as a finite result" in text
+    assert "Box-wall shear and torsion" in text
+    assert "retained-valid-wall" in text.replace(" ", "")
+    assert "As,req" not in text
+
+
 def test_report_ignores_stale_trace_payload_and_has_no_trace_chapter():
     inp = _inp()
     inp.update({

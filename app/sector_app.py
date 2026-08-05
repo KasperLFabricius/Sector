@@ -5595,17 +5595,7 @@ def _run_fatigue_or_invalid(inp):
 
 def _run_bridge_or_invalid(inp):
     """Run optional bridge kernels without suppressing other valid results."""
-    try:
-        return bridge_analysis.run(inp)
-    except (TypeError, ValueError) as exc:
-        return {
-            "selected_standard": inp.get(
-                "bridge_standard", bridge.COMPONENT_METHODS
-            ),
-            "scope": "Independent numerical bridge calculations.",
-            "calculations": {},
-            "errors": (str(exc),),
-        }
+    return bridge_analysis.run_or_invalid(inp)
 
 
 def run_analysis(
@@ -5621,7 +5611,7 @@ def run_analysis(
     """Run every current named action and optional independent calculation."""
     bridge_result = _run_bridge_or_invalid(inp)
     bridge_active = bool(
-        bridge_result.get("calculations") or bridge_result.get("errors")
+        bridge_result.get("calculations") or bridge_result.get("failures")
     )
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
@@ -8681,14 +8671,20 @@ def bridge_view(inp, results):
         "These are separate numerical methods. Generic bridge-code coverage and "
         "generic cross-method interaction are not calculated."
     )
-    errors = tuple(payload.get("errors") or ())
-    if errors:
-        for error in errors:
-            st.error(f"Invalid bridge input: {error}")
-        return
+    failures = tuple(payload.get("failures") or ())
+    if failures:
+        for failure in failures:
+            st.error(
+                "INVALID - bridge calculation | "
+                f"{failure.get('family', 'bridge')} | "
+                f"{failure.get('message', 'Unknown bridge failure')} "
+                f"[{failure.get('code', 'INVALID_INPUT')}; "
+                f"field={failure.get('field', '-')}]."
+            )
     calculations = payload.get("calculations") or {}
     if not calculations:
-        st.info("No bridge calculation rows were supplied.")
+        if not failures:
+            st.info("No bridge calculation rows were supplied.")
         return
 
     brittle = calculations.get("brittle_method_b")

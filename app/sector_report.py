@@ -1736,7 +1736,7 @@ class ReportBuilder:
             )
         bridge_payload = self._base_out.get("bridge") or {}
         bridge_calculations = bridge_payload.get("calculations") or {}
-        if bridge_calculations or bridge_payload.get("errors"):
+        if bridge_calculations or bridge_payload.get("failures"):
             labels.append(
                 "independent bridge calculations ("
                 f"{len(bridge_calculations)} method"
@@ -5127,14 +5127,28 @@ class ReportBuilder:
             + ". These are separate numerical methods; generic bridge-code "
             "coverage and generic cross-method interaction are not calculated."
         )
-        errors = tuple(payload.get("errors") or ())
-        if errors:
-            for error in errors:
-                self._small("<b>Invalid bridge input:</b> " + _html_escape(str(error)))
-            return
+        failures = tuple(payload.get("failures") or ())
+        if failures:
+            for failure in failures:
+                message = failure.get("message", "Unknown bridge failure")
+                code = failure.get("code", "INVALID_INPUT")
+                field = failure.get("field", "-")
+                family = failure.get("family", "bridge")
+                self._small(
+                    "<b>INVALID - bridge calculation ("
+                    + _html_escape(str(family))
+                    + "):</b> "
+                    + _html_escape(str(message))
+                    + " ["
+                    + _html_escape(str(code))
+                    + "; field="
+                    + _html_escape(str(field))
+                    + "]."
+                )
         calculations = payload.get("calculations") or {}
         if not calculations:
-            self._small("No bridge calculation rows were supplied.")
+            if not failures:
+                self._small("No bridge calculation rows were supplied.")
             return
 
         brittle = calculations.get("brittle_method_b")
