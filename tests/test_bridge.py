@@ -1,3 +1,5 @@
+import json
+import numpy as np
 import pandas as pd
 import pathlib
 import sys
@@ -9,6 +11,35 @@ sys.path.insert(0, str(ROOT / "app"))
 import bridge_analysis
 import bridge_inputs
 from sector import bridge
+
+
+_RAW_BOUNDARY_ROWS = {
+    bridge_inputs.BRITTLE_TABLE_KEY: {
+        "region_id": "R1",
+        "m_rep_knm": 100.0,
+        "z_s_m": 0.5,
+        "f_yk_mpa": 500.0,
+        "as_provided_mm2": 500.0,
+    },
+    bridge_inputs.BOX_WALL_TABLE_KEY: {
+        "wall_id": "W1",
+        "cot_theta": 1.5,
+        "v_ed_kn": 50.0,
+        "v_rd_max_kn": 100.0,
+        "t_ed_equivalent_kn": 10.0,
+        "t_rd_max_equivalent_kn": 100.0,
+    },
+    bridge_inputs.MINIMUM_CRACK_TABLE_KEY: {
+        "component": "web",
+        "act_mm2": 1000.0,
+        "k_c": 0.4,
+        "k": 0.8,
+        "fct_eff_mpa": 3.0,
+        "sigma_s_mpa": 200.0,
+        "as_provided_mm2": 100.0,
+        "restrained_shrinkage": False,
+    },
+}
 
 
 def test_optional_brittle_method_b_remains_numerical_under_danish_selection():
@@ -102,6 +133,147 @@ def test_bridge_adapter_runs_only_nonempty_tables_without_coverage_rows():
     assert set(payload["calculations"]) == {"brittle_method_b"}
     assert "coverage" not in payload
     assert "approval" not in str(payload).casefold()
+
+
+@pytest.mark.parametrize(
+    ("table_key", "column"),
+    [
+        (table_key, column)
+        for table_key in bridge_inputs.TABLE_KEYS
+        for column in bridge_inputs.TABLE_COLUMNS[table_key]
+    ],
+)
+@pytest.mark.parametrize("blank", [pd.NA, pd.NaT, float("nan")])
+def test_scalar_pandas_and_numeric_blanks_stay_inert(
+    table_key,
+    column,
+    blank,
+):
+    frame = bridge_inputs.normalise_table([{column: blank}], table_key)
+
+    if column in bridge_inputs.TEXT_COLUMNS[table_key]:
+        assert frame.loc[0, column] == ""
+    elif column in bridge_inputs.BOOLEAN_COLUMNS[table_key]:
+        assert frame.loc[0, column] is False or not frame.loc[0, column]
+    else:
+        assert pd.isna(frame.loc[0, column])
+    assert bridge_inputs.records(frame, table_key) == []
+
+
+@pytest.mark.parametrize(
+    ("table_key", "column"),
+    [
+        (table_key, column)
+        for table_key in bridge_inputs.TABLE_KEYS
+        for column in bridge_inputs.NUMERIC_COLUMNS[table_key]
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "not numeric",
+        True,
+        float("inf"),
+        float("-inf"),
+        complex(1.0, -2.0),
+        np.complex64(1.0 - 2.0j),
+    ],
+)
+def test_every_numeric_bridge_cell_retains_invalid_identity(
+    table_key,
+    column,
+    invalid,
+):
+    row = dict(_RAW_BOUNDARY_ROWS[table_key])
+    row[column] = invalid
+    expected = bridge_inputs.table_signature([row], table_key)
+
+    frame = bridge_inputs.normalise_table([row], table_key)
+    frame = bridge_inputs.normalise_table(frame, table_key)
+    encoded = bridge_inputs.project_cell(frame.loc[0, column], table_key, column)
+
+    assert bridge_inputs.table_signature(frame, table_key) == expected
+    json.dumps(encoded, allow_nan=False)
+    with pytest.raises(ValueError, match=f"{column} must be finite numeric"):
+        bridge_inputs.records(frame, table_key)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["yes", 1, 0.0, float("inf"), complex(1.0, -2.0)],
+)
+def test_bridge_boolean_cell_retains_invalid_identity(invalid):
+    table_key = bridge_inputs.MINIMUM_CRACK_TABLE_KEY
+    row = dict(_RAW_BOUNDARY_ROWS[table_key])
+    row["restrained_shrinkage"] = invalid
+    expected = bridge_inputs.table_signature([row], table_key)
+
+    frame = bridge_inputs.normalise_table([row], table_key)
+    frame = bridge_inputs.normalise_table(frame, table_key)
+    encoded = bridge_inputs.project_cell(
+        frame.loc[0, "restrained_shrinkage"],
+        table_key,
+        "restrained_shrinkage",
+    )
+
+    assert bridge_inputs.table_signature(frame, table_key) == expected
+    json.dumps(encoded, allow_nan=False)
+    with pytest.raises(ValueError, match="restrained_shrinkage must be Boolean"):
+        bridge_inputs.records(frame, table_key)
+
+
+def test_bridge_table_signature_preserves_the_valid_legacy_shape():
+    table_key = bridge_inputs.BOX_WALL_TABLE_KEY
+
+    assert bridge_inputs.table_signature(
+        [_RAW_BOUNDARY_ROWS[table_key]],
+        table_key,
+    ) == (("W1", 1.5, 50.0, 100.0, 10.0, 100.0),)
+
+
+def test_bridge_rows_are_materialised_once_and_duplicate_columns_fail():
+    table_key = bridge_inputs.BOX_WALL_TABLE_KEY
+    rows = (row for row in [_RAW_BOUNDARY_ROWS[table_key]])
+
+    assert bridge_inputs.records(rows, table_key)[0]["wall_id"] == "W1"
+
+    duplicate = pd.DataFrame(
+        [["W1", "W2"]],
+        columns=["wall_id", "wall_id"],
+    )
+    with pytest.raises(ValueError, match="duplicate columns"):
+        bridge_inputs.normalise_table(duplicate, table_key)
+
+
+def test_bridge_column_order_defaults_unknowns_and_non_tabular_input_are_pinned():
+    table_key = bridge_inputs.BOX_WALL_TABLE_KEY
+    frame = bridge_inputs.normalise_table(
+        [{"v_ed_kn": 50.0, "wall_id": "W1", "outside": "discarded"}],
+        table_key,
+    )
+
+    assert tuple(frame.columns) == bridge_inputs.TABLE_COLUMNS[table_key]
+    assert "outside" not in frame
+    assert bridge_inputs.records([{"outside": "discarded"}], table_key) == []
+    with pytest.raises(ValueError, match="must be tabular"):
+        bridge_inputs.normalise_table(1.0, table_key)
+
+
+def test_pr13a1a_r2_acceptance_contract_is_frozen():
+    text = (
+        ROOT / "docs" / "pr13a1a_r2_f013_bridge_raw_boundary_acceptance.md"
+    ).read_text(encoding="utf-8")
+
+    for marker in (
+        "89fbc4a9713727093f453d0af7ffdce2dae17393",
+        "Scalar pandas-null blanks",
+        "bridge-specific project encoding",
+        "materialized exactly once",
+        "No bridge formula",
+        "typed kernel/result adapter",
+        "v0.93",
+    ):
+        assert marker in text
 
 
 def test_malformed_bridge_numeric_value_is_rejected():

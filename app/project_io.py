@@ -205,12 +205,23 @@ def _normalise_table(value, key: str) -> pd.DataFrame:
 
 def _table_to_obj(value, key: str) -> dict:
     frame = _normalise_table(value, key)
+    columns = [str(column) for column in frame.columns]
+    if key in BRIDGE_TABLE_KEYS:
+        rows = [
+            [
+                bridge_inputs.project_cell(cell, key, column)
+                for column, cell in zip(columns, row)
+            ]
+            for row in frame.itertuples(index=False, name=None)
+        ]
+    else:
+        rows = [
+            [_cell(cell) for cell in row]
+            for row in frame.itertuples(index=False, name=None)
+        ]
     return {
-        "columns": [str(column) for column in frame.columns],
-        "rows": [[_cell(value) for value in row] for row in frame.itertuples(
-            index=False,
-            name=None,
-        )],
+        "columns": columns,
+        "rows": rows,
     }
 
 
