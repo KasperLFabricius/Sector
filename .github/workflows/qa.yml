@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - name: Set up pinned Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -38,8 +40,13 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Path qa-artifacts -Force | Out-Null
 
-      - name: Run complete test suite
-        run: python -m pytest tests -n 4 --junitxml=qa-artifacts/test-results.xml
+      - name: Validate non-shrinking coverage gate
+        env:
+          SECTOR_COVERAGE_BASELINE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: python tools/verify_coverage_gate.py quality-coverage-gate.toml --workflow .github/workflows/qa.yml --baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF
+
+      - name: Run complete test suite with coverage
+        run: python -m pytest tests -n 4 --cov=app --cov=sector --cov-report=term-missing:skip-covered --cov-report=xml:qa-artifacts/coverage.xml --cov-fail-under=50 --junitxml=qa-artifacts/test-results.xml
 
       - name: Render report fixture with real figures
         if: always()
