@@ -2078,26 +2078,7 @@ def _fatigue_spectrum_signature(value):
 
 
 def _bridge_table_signature(value, key):
-    frame = bridge_inputs.normalise_table(value, key)
-    rows = []
-    for record in frame.to_dict("records"):
-        rows.append(tuple(
-            (
-                bool(record[column])
-                if column in bridge_inputs.BOOLEAN_COLUMNS[key]
-                else (
-                    str(record[column])
-                    if column in bridge_inputs.TEXT_COLUMNS[key]
-                    else (
-                        float(record[column])
-                        if math.isfinite(float(record[column]))
-                        else "<invalid>"
-                    )
-                )
-            )
-            for column in bridge_inputs.TABLE_COLUMNS[key]
-        ))
-    return tuple(rows)
+    return bridge_inputs.table_signature(value, key)
 
 
 # Input widgets are not rendered on the Analysis page. Streamlit consequently

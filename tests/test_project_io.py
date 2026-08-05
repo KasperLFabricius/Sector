@@ -144,6 +144,80 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert json.loads(second)["version"] == project_io.VERSION
 
 
+def test_current_schema_preserves_invalid_bridge_cells_for_validation():
+    tables, scalars = _current_project()
+    tables[bridge_inputs.BOX_WALL_TABLE_KEY] = [{
+        "wall_id": "W1",
+        "cot_theta": "not numeric",
+    }]
+    tables[bridge_inputs.MINIMUM_CRACK_TABLE_KEY] = [{
+        "component": "web",
+        "act_mm2": 1000.0,
+        "k_c": 0.4,
+        "k": 0.8,
+        "fct_eff_mpa": 3.0,
+        "sigma_s_mpa": 200.0,
+        "as_provided_mm2": 100.0,
+        "restrained_shrinkage": "yes",
+    }]
+
+    text = project_io.dump_project(tables, scalars)
+    loaded, _ = project_io.parse_project(text)
+
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+    assert loaded[bridge_inputs.BOX_WALL_TABLE_KEY].loc[
+        0, "cot_theta"
+    ] == "not numeric"
+    assert loaded[bridge_inputs.MINIMUM_CRACK_TABLE_KEY].loc[
+        0, "restrained_shrinkage"
+    ] == "yes"
+    with pytest.raises(ValueError, match="cot_theta must be finite numeric"):
+        bridge_inputs.records(
+            loaded[bridge_inputs.BOX_WALL_TABLE_KEY],
+            bridge_inputs.BOX_WALL_TABLE_KEY,
+        )
+    with pytest.raises(ValueError, match="restrained_shrinkage must be Boolean"):
+        bridge_inputs.records(
+            loaded[bridge_inputs.MINIMUM_CRACK_TABLE_KEY],
+            bridge_inputs.MINIMUM_CRACK_TABLE_KEY,
+        )
+
+
+@pytest.mark.parametrize(
+    ("table_key", "column", "value"),
+    [
+        (bridge_inputs.BRITTLE_TABLE_KEY, "m_rep_knm", float("inf")),
+        (bridge_inputs.BOX_WALL_TABLE_KEY, "cot_theta", float("-inf")),
+        (bridge_inputs.MINIMUM_CRACK_TABLE_KEY, "act_mm2", float("inf")),
+        (bridge_inputs.BOX_WALL_TABLE_KEY, "cot_theta", complex(1.0, -2.0)),
+    ],
+)
+def test_current_schema_round_trips_json_safe_invalid_bridge_identity(
+    table_key,
+    column,
+    value,
+):
+    tables, scalars = _current_project()
+    tables[table_key] = [{column: value}]
+    expected_signature = bridge_inputs.table_signature(tables[table_key], table_key)
+
+    text = project_io.dump_project(tables, scalars)
+    loaded, loaded_scalars = project_io.parse_project(text)
+    resaved = project_io.dump_project(loaded, loaded_scalars)
+    reloaded, _ = project_io.parse_project(resaved)
+
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+    assert project_io.project_provenance(resaved)["input_hash_valid"] is True
+    assert bridge_inputs.table_signature(loaded[table_key], table_key) == (
+        expected_signature
+    )
+    assert bridge_inputs.table_signature(reloaded[table_key], table_key) == (
+        expected_signature
+    )
+    with pytest.raises(ValueError, match=f"{column} must be finite numeric"):
+        bridge_inputs.records(reloaded[table_key], table_key)
+
+
 def test_corrupt_current_input_is_rejected_by_hash():
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
