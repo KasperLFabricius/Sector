@@ -8,25 +8,24 @@ schema and carries no legacy compliance or cover-calculator migration.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import dataclasses
-from datetime import datetime, timezone
 import hashlib
 import json
 import math
-
-import numpy as np
-import pandas as pd
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 
 import bridge_inputs
 import fatigue_inputs
 import load_cases
 import material_catalog
+import numpy as np
+import pandas as pd
 import reinforcement_table as rebar_table
-from sector import bridge, geometry
-from sector import __version__ as sector_version
-from sector.build_info import source_revision
 
+from sector import __version__ as sector_version
+from sector import bridge, capacity, geometry
+from sector.build_info import source_revision
 
 FORMAT = "sector-project"
 VERSION = 23
@@ -355,6 +354,14 @@ def _canonical_scalars(scalars: Mapping) -> dict:
     standard = payload.get("bridge_standard")
     if standard is not None and standard not in bridge.METHODS:
         raise ValueError(f"unknown bridge_standard: {standard}")
+    method_resolvers = (
+        ("shear_method", capacity.selected_shear_code),
+        ("torsion_method", capacity.selected_torsion_code),
+        ("combined_method", capacity.selected_combined_code),
+    )
+    for key, resolver in method_resolvers:
+        if key in payload:
+            resolver(payload[key])
     if payload.get("torsion_on") and "torsion_gamma_ct" not in payload:
         raise ValueError(
             "torsion_gamma_ct is required when the torsion calculation is enabled"

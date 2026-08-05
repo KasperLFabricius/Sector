@@ -9,13 +9,27 @@ and prevents UI reruns from becoming the only way to exercise member checks.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
 from . import codes, combined, geometry, shear, templates, torsion
 from .plastic import FACE_ANGLE, conditional_capacity, plastic_capacity_at_angle
 
-
 SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
+_MISSING = object()
+
+
+class CapacityInputError(ValueError):
+    """Expected invalid input at a member-capacity boundary."""
+
+
+class CapacityMethodError(CapacityInputError):
+    """An exact selected capacity-method identity is unsupported."""
+
+
+class CapacityResultError(ArithmeticError):
+    """A retained low-level solver violated its published result contract."""
 
 
 def _is_boolean_scalar(value):
@@ -32,16 +46,102 @@ def _is_boolean_scalar(value):
 def _positive_finite_real(value, label):
     """Return one calculation coefficient, rejecting only malformed values."""
     if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
-        raise ValueError(f"{label} must be a positive finite real number")
+        raise CapacityInputError(
+            f"{label} must be a positive finite real number"
+        )
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CapacityInputError(
             f"{label} must be a positive finite real number"
         ) from exc
     if not math.isfinite(number) or number <= 0.0:
-        raise ValueError(f"{label} must be a positive finite real number")
+        raise CapacityInputError(
+            f"{label} must be a positive finite real number"
+        )
     return number
+
+
+def _nonnegative_finite_real(value: Any, label: str) -> float:
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+        raise CapacityInputError(
+            f"{label} must be a non-negative finite real number"
+        )
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CapacityInputError(
+            f"{label} must be a non-negative finite real number"
+        ) from exc
+    if not math.isfinite(number) or number < 0.0:
+        raise CapacityInputError(
+            f"{label} must be a non-negative finite real number"
+        )
+    return number
+
+
+def _selected_code(
+    methods: Mapping[str, codes.DesignCode],
+    value: object,
+    label: str,
+) -> codes.DesignCode:
+    if type(value) is not str or value not in methods:
+        raise CapacityMethodError(f"unsupported {label}: {value!r}")
+    return methods[value]
+
+
+def selected_shear_code(value: object) -> codes.DesignCode:
+    """Resolve one exact supported shear-method identity without a default."""
+    return _selected_code(SHEAR_METHODS, value, "shear method")
+
+
+def selected_torsion_code(value: object) -> codes.DesignCode:
+    """Resolve one exact supported torsion-method identity."""
+    return _selected_code(SHEAR_CODES, value, "torsion method")
+
+
+def selected_combined_code(value: object) -> codes.DesignCode:
+    """Resolve one exact supported combined-method identity."""
+    return _selected_code(SHEAR_CODES, value, "combined method")
+
+
+def _finite_solver_result(value: Any, label: str) -> float:
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+        raise CapacityResultError(f"{label} must be a finite real result")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise CapacityResultError(
+            f"{label} must be a finite real result"
+        ) from exc
+    if not math.isfinite(number):
+        raise CapacityResultError(f"{label} must be a finite real result")
+    return number
+
+
+def _solver_flag(value: object, label: str) -> bool:
+    if type(value) is not bool:
+        raise CapacityResultError(f"{label} must be a concrete Boolean result")
+    return value
+
+
+def _solver_member(result: object, name: str, label: str) -> object:
+    value = getattr(result, name, _MISSING)
+    if value is _MISSING:
+        raise CapacityResultError(f"{label} is missing returned member {name}")
+    return value
+
+
+def _face_angle(axis: object, tension_low: object) -> float:
+    if (
+        not isinstance(axis, str)
+        or axis not in ("x", "y")
+        or type(tension_low) is not bool
+    ):
+        raise CapacityInputError(
+            "capacity face identity requires axis x or y and a Boolean face"
+        )
+    return FACE_ANGLE[(axis, tension_low)]
 
 
 def _require_valid_input_geometry(inp):
@@ -109,23 +209,33 @@ def prestress_axial(inp):
 
 def shear_lever_arm(inp, axis, tension_low, d_mm):
     """Return the plastic internal shear lever arm in mm, or the ``0.9 d`` fallback."""
-    fallback = (0.9 * d_mm, "0.9 d (fallback)")
+    depth = _nonnegative_finite_real(d_mm, "effective depth d")
+    fallback = (0.9 * depth, "0.9 d (fallback)")
     if inp["section"] is None:
         return fallback
+    angle = _face_angle(axis, tension_low)
     _require_valid_input_geometry(inp)
-    angle = FACE_ANGLE[(axis, tension_low)]
     prestress = inp["prestress"] if inp["tendons"] else None
-    try:
-        point = plastic_capacity_at_angle(
-            inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
-            angle, prestress=prestress,
-            bar_materials=inp.get("bar_materials"),
-            tendon_materials=inp.get("tendon_materials"),
-        )
-    except Exception:
+    point = plastic_capacity_at_angle(
+        inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
+        angle, prestress=prestress,
+        bar_materials=inp.get("bar_materials"),
+        tendon_materials=inp.get("tendon_materials"),
+    )
+    if not _solver_flag(
+        _solver_member(point, "converged", "plastic point"),
+        "plastic-point converged",
+    ):
         return fallback
-    lever = abs(point.dy) if axis == "x" else abs(point.dx)
-    if not point.converged or lever <= 1e-6:
+    lever = abs(_finite_solver_result(
+        _solver_member(
+            point,
+            "dy" if axis == "x" else "dx",
+            "plastic point",
+        ),
+        "plastic internal lever arm",
+    ))
+    if lever <= 1e-6:
         return fallback
     return lever * 1000.0, "plastic internal lever arm"
 
@@ -134,32 +244,51 @@ def shear_face_mrd(inp, axis, tension_low, m_off=0.0):
     """Return chord ``M_Rd`` conditional on the coexisting off-axis moment."""
     if inp["section"] is None:
         return 0.0, False
+    angle = _face_angle(axis, tension_low)
     _require_valid_input_geometry(inp)
     prestress = inp["prestress"] if inp["tendons"] else None
-    try:
-        mrd, exact = conditional_capacity(
-            inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
-            axis, tension_low, m_off, prestress=prestress,
-            bar_materials=inp.get("bar_materials"),
-            tendon_materials=inp.get("tendon_materials"),
+    conditional = conditional_capacity(
+        inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
+        axis, tension_low, m_off, prestress=prestress,
+        bar_materials=inp.get("bar_materials"),
+        tendon_materials=inp.get("tendon_materials"),
+    )
+    if type(conditional) is not tuple or len(conditional) != 2:
+        raise CapacityResultError(
+            "conditional capacity must return a two-item tuple"
         )
-    except Exception:
-        mrd, exact = 0.0, False
+    mrd = _finite_solver_result(conditional[0], "conditional capacity")
+    exact = _solver_flag(conditional[1], "conditional-capacity exact")
+    if mrd < 0.0:
+        raise CapacityResultError(
+            "conditional capacity must be a non-negative finite result"
+        )
     if exact:
         return mrd, True
-    angle = FACE_ANGLE[(axis, tension_low)]
-    try:
-        point = plastic_capacity_at_angle(
-            inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
-            angle, prestress=prestress,
-            bar_materials=inp.get("bar_materials"),
-            tendon_materials=inp.get("tendon_materials"),
+    if mrd != 0.0:
+        raise CapacityResultError(
+            "a non-exact conditional capacity must use the zero placeholder"
         )
-    except Exception:
+    point = plastic_capacity_at_angle(
+        inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
+        angle, prestress=prestress,
+        bar_materials=inp.get("bar_materials"),
+        tendon_materials=inp.get("tendon_materials"),
+    )
+    if not _solver_flag(
+        _solver_member(point, "converged", "pure-axis plastic point"),
+        "pure-axis plastic-point converged",
+    ):
         return 0.0, False
-    if not point.converged:
-        return 0.0, False
-    return (abs(point.Mx) if axis == "x" else abs(point.My)), False
+    moment = _finite_solver_result(
+        _solver_member(
+            point,
+            "Mx" if axis == "x" else "My",
+            "pure-axis plastic point",
+        ),
+        "pure-axis chord resistance",
+    )
+    return abs(moment), False
 
 
 def tube_torsion(
@@ -327,9 +456,9 @@ def _build_shear_face_context(
     bw_override,
     link_legs,
     face_mode,
+    code,
 ):
     """Build one face candidate for one physical shear component."""
-    code = SHEAR_METHODS.get(inp["shear_method"], codes.EC2_2005_DKNA)
     model_2023 = getattr(code, "shear_model", "2005") == "2023"
     area, cx, cy = gross_area_centroid(inp["outer"], inp["holes"])
     _, mx_prestress, my_prestress = prestress_resultants(inp, cx, cy)
@@ -462,6 +591,7 @@ def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
     """
     if not inp.get("shear_on"):
         return {}
+    code = selected_shear_code(inp.get("shear_method"))
     _require_valid_input_geometry(inp)
     definitions = shear_direction_specs(inp)
     contexts = {}
@@ -481,6 +611,7 @@ def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
                 bw_override=definition["bw"],
                 link_legs=definition["legs"],
                 face_mode=str(definition["face"]),
+                code=code,
             )
             for tension_low in faces
         ]
@@ -503,6 +634,7 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
     """
     if not inp.get("shear_on"):
         return None, None
+    code = selected_shear_code(inp.get("shear_method"))
     _require_valid_input_geometry(inp)
     axis = inp["shear_axis"]
     return _build_shear_face_context(
@@ -516,15 +648,18 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
         bw_override=float(inp["shear_bw"]),
         link_legs=float(inp["shear_link_legs"]),
         face_mode="selected",
+        code=code,
     )
 
 
 def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
-    if not inp.get("torsion_on") or inp["section"] is None:
+    if not inp.get("torsion_on"):
+        return None
+    tcode = selected_torsion_code(inp.get("torsion_method"))
+    if inp["section"] is None:
         return None
     _require_valid_input_geometry(inp)
-    tcode = SHEAR_CODES.get(inp["torsion_method"], codes.EC2_2005_DKNA)
     fck = inp["concrete"].fck
     fcd = inp["concrete"].fcd
     area, _cx, _cy = gross_area_centroid(inp["outer"], inp["holes"])
@@ -647,6 +782,7 @@ def finalize_combined(inp, out):
     """Build the final combined M-V-T payload from completed component checks."""
     if not inp.get("combined_on"):
         return
+    selected_combined_code(inp.get("combined_method"))
     plastic = out.get("plastic")
     shear_out = out.get("shear")
     torsion_out = out.get("torsion")
