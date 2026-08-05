@@ -10,6 +10,7 @@ pytest-xdist>=3.0,<4
 pytest-cov>=7.1,<8
 pip-tools>=7.6,<8
 pyyaml>=6.0,<7
+ruff>=0.16.1,<0.17
 
 # Cross-platform PDFium renderer used to inspect the actual report pages in CI.
 pypdfium2>=5.0,<6

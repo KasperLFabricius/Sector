@@ -45,6 +45,14 @@ jobs:
           SECTOR_COVERAGE_BASELINE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
         run: python tools/verify_coverage_gate.py quality-coverage-gate.toml --workflow .github/workflows/qa.yml --baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF
 
+      - name: Validate Ruff policy ratchet
+        env:
+          SECTOR_RUFF_POLICY_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: python tools/verify_ruff_policy.py quality-ruff-policy.toml --workflow .github/workflows/qa.yml --baseline-ref $env:SECTOR_RUFF_POLICY_BASE
+
+      - name: Execute Ruff policy
+        run: python tools/verify_ruff_policy.py quality-ruff-policy.toml --execute
+
       - name: Run complete test suite with coverage
         run: python -m pytest tests -n 4 --cov=app --cov=sector --cov-report=term-missing:skip-covered --cov-report=xml:qa-artifacts/coverage.xml --cov-fail-under=50 --junitxml=qa-artifacts/test-results.xml
 
