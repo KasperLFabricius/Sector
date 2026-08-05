@@ -96,15 +96,14 @@ def _goto_input_tab(at, name):
 
 
 def _goto_material_tab(at, name):
-    """Open Material parameters and select one material subtab."""
+    """Open Material parameters and select one material family."""
     _goto_input_tab(at, "Material parameters")
     try:
         current = at.session_state["_material_tab"]
     except KeyError:
         current = None
     if current != name:
-        at.session_state["_material_tab"] = name
-        at.run()
+        at.selectbox(key="_material_tab").set_value(name).run()
     return at
 
 
@@ -3613,6 +3612,101 @@ def test_only_selected_outer_stage_mounts_and_retains_material_edits():
 
     _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_fck").value == 55.0
+    assert not at.exception
+
+
+def test_only_selected_material_family_mounts_and_retains_sibling_edits():
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Material parameters")
+
+    family = at.selectbox(key="_material_tab")
+    assert family.options == ["Concrete", "Mild steel", "Prestressing steel"]
+    assert family.value == "Concrete"
+    assert not at.tabs
+    number_keys = {widget.key for widget in at.number_input}
+    assert "conc_fck" in number_keys
+    assert "mild_fytk" not in number_keys
+    assert "pre_fytk" not in number_keys
+
+    at.number_input(key="conc_fck").set_value(55.0).run()
+    at.selectbox(key="_material_tab").set_value("Mild steel").run()
+    number_keys = {widget.key for widget in at.number_input}
+    assert "conc_fck" not in number_keys
+    assert "mild_fytk" in number_keys
+    assert "pre_fytk" not in number_keys
+    at.number_input(key="mild_fytk").set_value(525.0).run()
+
+    at.selectbox(key="_material_tab").set_value("Prestressing steel").run()
+    number_keys = {widget.key for widget in at.number_input}
+    assert "conc_fck" not in number_keys
+    assert "mild_fytk" not in number_keys
+    assert "pre_fytk" in number_keys
+
+    at.selectbox(key="_material_tab").set_value("Concrete").run()
+    assert at.number_input(key="conc_fck").value == 55.0
+    assert at.session_state["mild_fytk"] == 525.0
+    assert not at.exception
+
+
+def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner():
+    at = _fresh()
+    at.run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+    _goto_input_tab(at, "Material parameters")
+
+    family = at.selectbox(key="_material_tab")
+    assert family.options == [
+        "Concrete", "Mild steel", "Prestressing steel", "Fatigue details"
+    ]
+    family.set_value("Fatigue details").run()
+    assert any(button.key == "fatigue_catalog_add_mild" for button in at.button)
+    assert "conc_fck" not in {widget.key for widget in at.number_input}
+
+    _goto_input_tab(at, "Analysis settings")
+    assert not any(button.key == "fatigue_catalog_add_mild" for button in at.button)
+    at.toggle(key="fatigue_on").set_value(False).run()
+    assert at.session_state["_material_tab"] == "Concrete"
+
+    _goto_input_tab(at, "Material parameters")
+    family = at.selectbox(key="_material_tab")
+    assert family.options == ["Concrete", "Mild steel", "Prestressing steel"]
+    assert family.value == "Concrete"
+    assert not at.exception
+
+
+def test_auto_all_updates_concrete_while_mild_family_is_mounted():
+    at = _fresh()
+    at.run()
+    at.radio(key="mode").set_value("Both").run()
+    _goto_material_tab(at, "Concrete")
+    for key, value in {
+        "conc_eps_c2": 4.0,
+        "conc_eps_cu2": 6.0,
+        "conc_n": 3.0,
+        "sls_fctm": 1.0,
+        "conc_Ec": 10.0,
+    }.items():
+        at.number_input(key=key).set_value(value).run()
+
+    _goto_material_tab(at, "Mild steel")
+    assert "conc_eps_c2" not in {widget.key for widget in at.number_input}
+    at.button(key="auto_all_btn").click().run()
+
+    expected = {
+        "conc_eps_c2": 2.0,
+        "conc_eps_cu2": 3.5,
+        "conc_n": 2.0,
+        "sls_fctm": 3.21,
+        "conc_Ec": 34.1,
+    }
+    assert at.session_state["_material_tab"] == "Mild steel"
+    for key, value in expected.items():
+        assert at.session_state[key] == pytest.approx(value)
+        assert at.session_state["_durable_input_scalars"][key] == pytest.approx(
+            value
+        )
+    assert "_pending_input_events" not in at.session_state
     assert not at.exception
 
 
