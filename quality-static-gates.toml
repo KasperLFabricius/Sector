@@ -1,0 +1,44 @@
+schema_version = 1
+
+[coverage]
+targets = ["app", "sector"]
+minimum_percent = 50
+
+[[ruff.scopes]]
+id = "repository-fatal"
+paths = ["app", "sector", "tools", "tests"]
+select = ["E9", "F63", "F7", "F82"]
+ignore = []
+
+[[ruff.scopes]]
+id = "capacity-boundary"
+paths = ["sector/capacity.py", "tests/test_capacity.py"]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = []
+
+[[ruff.scopes]]
+id = "project-io-bootstrap"
+paths = ["tests/test_project_io.py"]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["E402"]
+
+[[waivers]]
+id = "coverage-pr14-calibration"
+gate = "coverage"
+owner = "Kasper Lindskov Fabricius"
+reason = "The unpublished static-gate slice does not run the consolidated full suite reserved for PR-14."
+exit_condition = "PR-14 records exact-head app/sector coverage and raises the whole-percent floor when the stable result exceeds 50 percent."
+
+[[waivers]]
+id = "ruff-existing-scope"
+gate = "ruff"
+owner = "Kasper Lindskov Fabricius"
+reason = "Pre-existing non-fatal style debt remains outside the selected clean boundary."
+exit_condition = "Expand by one clean coherent module or rule set; an already selected scope may never shrink or gain a new ignore."
+
+[[waivers]]
+id = "ruff-project-io-e402"
+gate = "ruff"
+owner = "Kasper Lindskov Fabricius"
+reason = "Only test_project_io.py inserts the app directory before importing application modules."
+exit_condition = "Remove E402 when application imports no longer require test-time path bootstrapping."

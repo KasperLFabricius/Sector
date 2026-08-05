@@ -38,8 +38,20 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Path qa-artifacts -Force | Out-Null
 
+      - name: Validate coverage and Ruff ratchets
+        run: python tools/verify_static_gates.py quality-static-gates.toml --workflow .github/workflows/qa.yml
+
+      - name: Run repository-wide fatal Ruff checks
+        run: python -m ruff check app sector tools tests --select E9,F63,F7,F82
+
+      - name: Run capacity-boundary Ruff checks
+        run: python -m ruff check sector/capacity.py tests/test_capacity.py --select E4,E7,E9,F,I
+
+      - name: Run project-I/O Ruff checks
+        run: python -m ruff check tests/test_project_io.py --select E4,E7,E9,F,I --ignore E402
+
       - name: Run complete test suite
-        run: python -m pytest tests -n 4 --junitxml=qa-artifacts/test-results.xml
+        run: python -m pytest tests -n 4 --cov=app --cov=sector --cov-report=term-missing:skip-covered --cov-report=xml:qa-artifacts/coverage.xml --cov-fail-under=50 --junitxml=qa-artifacts/test-results.xml
 
       - name: Render report fixture with real figures
         if: always()
