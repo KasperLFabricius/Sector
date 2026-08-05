@@ -19,6 +19,35 @@ import project_io
 import reinforcement_table
 
 
+_BRIDGE_PROJECT_ROWS = {
+    bridge_inputs.BRITTLE_TABLE_KEY: {
+        "region_id": "R1",
+        "m_rep_knm": 100.0,
+        "z_s_m": 0.5,
+        "f_yk_mpa": 500.0,
+        "as_provided_mm2": 500.0,
+    },
+    bridge_inputs.BOX_WALL_TABLE_KEY: {
+        "wall_id": "W1",
+        "cot_theta": 1.5,
+        "v_ed_kn": 50.0,
+        "v_rd_max_kn": 100.0,
+        "t_ed_equivalent_kn": 10.0,
+        "t_rd_max_equivalent_kn": 100.0,
+    },
+    bridge_inputs.MINIMUM_CRACK_TABLE_KEY: {
+        "component": "web",
+        "act_mm2": 1000.0,
+        "k_c": 0.4,
+        "k": 0.8,
+        "fct_eff_mpa": 3.0,
+        "sigma_s_mpa": 200.0,
+        "as_provided_mm2": 100.0,
+        "restrained_shrinkage": False,
+    },
+}
+
+
 @pytest.mark.parametrize(
     ("first", "second"),
     [
@@ -142,6 +171,103 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert json.loads(first)["version"] == project_io.VERSION
     assert json.loads(second)["version"] == project_io.VERSION
+
+
+@pytest.mark.parametrize(
+    ("table_key", "column"),
+    [
+        (table_key, column)
+        for table_key in bridge_inputs.TABLE_KEYS
+        for column in bridge_inputs.NUMERIC_COLUMNS[table_key]
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "not numeric",
+        True,
+        float("inf"),
+        float("-inf"),
+        complex(1.0, -2.0),
+        np.complex64(1.0 - 2.0j),
+    ],
+)
+def test_current_project_round_trips_every_invalid_bridge_numeric_cell(
+    table_key,
+    column,
+    invalid,
+):
+    tables, scalars = _current_project()
+    row = dict(_BRIDGE_PROJECT_ROWS[table_key])
+    row[column] = invalid
+    tables[table_key] = [row]
+    expected = bridge_inputs.table_signature([row], table_key)
+
+    first = project_io.dump_project(tables, scalars)
+    loaded, loaded_scalars = project_io.parse_project(first)
+    second = project_io.dump_project(loaded, loaded_scalars)
+    reloaded, _ = project_io.parse_project(second)
+
+    assert project_io.project_provenance(first)["input_hash_valid"] is True
+    assert project_io.project_provenance(second)["input_hash_valid"] is True
+    assert bridge_inputs.table_signature(loaded[table_key], table_key) == expected
+    assert bridge_inputs.table_signature(reloaded[table_key], table_key) == expected
+    with pytest.raises(ValueError, match=f"{column} must be finite numeric"):
+        bridge_inputs.records(reloaded[table_key], table_key)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["yes", 1, 0.0, float("inf"), complex(1.0, -2.0)],
+)
+def test_current_project_round_trips_invalid_bridge_boolean_identity(invalid):
+    table_key = bridge_inputs.MINIMUM_CRACK_TABLE_KEY
+    tables, scalars = _current_project()
+    row = dict(_BRIDGE_PROJECT_ROWS[table_key])
+    row["restrained_shrinkage"] = invalid
+    tables[table_key] = [row]
+    expected = bridge_inputs.table_signature([row], table_key)
+
+    text = project_io.dump_project(tables, scalars)
+    loaded, _ = project_io.parse_project(text)
+
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+    assert bridge_inputs.table_signature(loaded[table_key], table_key) == expected
+    with pytest.raises(ValueError, match="restrained_shrinkage must be Boolean"):
+        bridge_inputs.records(loaded[table_key], table_key)
+
+
+def test_current_project_keeps_scalar_pandas_bridge_blanks_inert():
+    tables, scalars = _current_project()
+    for table_key in bridge_inputs.TABLE_KEYS:
+        tables[table_key] = [{
+            column: pd.NA
+            for column in bridge_inputs.TABLE_COLUMNS[table_key]
+        }]
+
+    text = project_io.dump_project(tables, scalars)
+    loaded, _ = project_io.parse_project(text)
+
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+    for table_key in bridge_inputs.TABLE_KEYS:
+        assert bridge_inputs.records(loaded[table_key], table_key) == []
+
+
+def test_encoded_invalid_bridge_identity_is_covered_by_the_project_hash():
+    table_key = bridge_inputs.BOX_WALL_TABLE_KEY
+    tables, scalars = _current_project()
+    row = dict(_BRIDGE_PROJECT_ROWS[table_key])
+    row["cot_theta"] = float("inf")
+    tables[table_key] = [row]
+    data = json.loads(project_io.dump_project(tables, scalars))
+    column = data["tables"][table_key]["columns"].index("cot_theta")
+    cell = data["tables"][table_key]["rows"][0][column]
+    cell["__sector_bridge_invalid_cell_v1__"]["representation"] = (
+        "negative_infinity"
+    )
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        project_io.parse_project(json.dumps(data))
 
 
 def test_corrupt_current_input_is_rejected_by_hash():
