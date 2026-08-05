@@ -387,7 +387,7 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
         "st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)",
         'st.session_state[_INPUT_BUILD_KEY] = False',
         'st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"',
-        "_maybe_autosave()",
+        "_measured_autosave()",
         "_generate_report(inp)",
     )
     assert [input_commit.index(token) for token in ordered_commit] == sorted(
