@@ -108,6 +108,7 @@ _SHEAR_CODES = capacity.SHEAR_CODES
 _SHEAR_METHODS = capacity.SHEAR_METHODS
 
 app_run_probe.open_run(st.session_state)
+_startup_probe = app_run_probe.start_phase(st.session_state, "startup")
 st.set_page_config(
     layout="wide",
     page_title=f"Sector v{APP_VERSION}",
@@ -2445,6 +2446,16 @@ def _maybe_autosave() -> None:
         st.toast("Autosaved.")
 
 
+def _measured_autosave() -> None:
+    """Service autosave inside the optional local run phase."""
+
+    token = app_run_probe.start_phase(st.session_state, "autosave")
+    try:
+        _maybe_autosave()
+    finally:
+        app_run_probe.stop_phase(st.session_state, token)
+
+
 def _autosave_startup() -> None:
     """Once per session, restore the last autosaved project (the BriCoS principle:
     re-open where you left off) and start the autosave clock. A missing autosave
@@ -2652,6 +2663,7 @@ def _save_load_panel() -> None:
     controls rerun only this fragment; loading a project explicitly requests the
     full rerun needed to rebuild every dependent input.
     """
+    app_run_probe.open_fragment_run(st.session_state, "save_load")
     box = st.expander("Save / Load", expanded=False)
     try:
         project_data = _gather_project()
@@ -2703,10 +2715,12 @@ def _save_load_panel() -> None:
         if st.session_state.get("_project_upload_id") != fid:
             st.session_state["_project_upload_id"] = fid
             st.session_state["_pending_project"] = up.getvalue().decode("utf-8")
+            app_run_probe.close_fragment_run(st.session_state)
             st.rerun()
     msg = st.session_state.pop("_project_msg", None)
     if msg:
         (box.success if msg[0] == "success" else box.error)(msg[1])
+    app_run_probe.close_fragment_run(st.session_state)
 
 
 _REPORT_FIELDS = [
@@ -2779,6 +2793,7 @@ def _report_panel(input_signature):
     escalates to a full rerun because the completed input payload and result views
     live outside this panel.
     """
+    app_run_probe.open_fragment_run(st.session_state, "report")
     box = st.expander("Report", expanded=False)
     box.caption("Fill in the project details, press Generate, then download the PDF. "
                 "The report uses the current inputs and the analyses for the selected "
@@ -2808,6 +2823,7 @@ def _report_panel(input_signature):
     if box.button("Generate report", type="primary", width="stretch",
                   key="gen_report"):
         st.session_state["_generating_report"] = True
+        app_run_probe.close_fragment_run(st.session_state)
         st.rerun()
     # A progress placeholder in the panel (filled live during generation, which runs
     # at the end of this same run), in the BriCoS location -- below the button.
@@ -2834,6 +2850,7 @@ def _report_panel(input_signature):
                 "Report out of date: inputs or report metadata changed. "
                 "Generate it again before downloading."
             )
+    app_run_probe.close_fragment_run(st.session_state)
 
 
 def _generate_report(inp):
@@ -3232,6 +3249,7 @@ def _quick_section_viewport():
     therefore rebuilds only the form and its live preview, not the unchanged input
     tabs. Apply and Back still call a full rerun because they leave this viewport.
     """
+    app_run_probe.open_fragment_run(st.session_state, "quick_section")
     _qs_restore_settings()   # bring back the settings from the last time it was open
     st.markdown("## Quick Section builder")
     st.caption("Generate a parametric section. Apply overwrites the corner, bar "
@@ -3246,20 +3264,25 @@ def _quick_section_viewport():
     with form:
         outer, holes, bars, tendons = _quick_section_geometry(st)
     _qs_mirror_settings()   # keep the durable copy current with what is shown
-    with preview:
-        bar_xy = [(x, y, a) for x, y, a in bars]
-        tendon_xy = [(x, y, a) for x, y, a in tendons]
-        st.plotly_chart(
-            viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
-                               title="Preview", show_labels=True, height=560,
-                               scale=_MM, unit="mm"),
-            width="stretch")
-        st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
-                   f"{len(bars)} bars, {len(tendons)} tendons.")
+    preview_token = app_run_probe.start_phase(st.session_state, "preview")
+    try:
+        with preview:
+            bar_xy = [(x, y, a) for x, y, a in bars]
+            tendon_xy = [(x, y, a) for x, y, a in tendons]
+            st.plotly_chart(
+                viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
+                                   title="Preview", show_labels=True, height=560,
+                                   scale=_MM, unit="mm"),
+                width="stretch")
+            st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
+                       f"{len(bars)} bars, {len(tendons)} tendons.")
+    finally:
+        app_run_probe.stop_phase(st.session_state, preview_token)
 
     if back:
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
+        app_run_probe.close_fragment_run(st.session_state)
         st.rerun()
     if apply:
         _discard_clear_recovery()
@@ -3276,7 +3299,9 @@ def _quick_section_viewport():
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
+        app_run_probe.close_fragment_run(st.session_state)
         st.rerun()
+    app_run_probe.close_fragment_run(st.session_state)
 
 
 def _modular_ratio_readout(box, mild_entries, prestress_entries,
@@ -3371,6 +3396,9 @@ _CAPACITY_CONTEXT_SIG_KEYS = tuple(
 def build_inputs(host=st):
     """Render one selected outer input stage and return the full payload."""
     s = host
+    normalization_token = app_run_probe.start_phase(
+        st.session_state, "normalization"
+    )
     _ensure_material_catalog_state()
     _ensure_fatigue_catalog_state()
     st.session_state.setdefault("_fatigue_basis_revision", 0)
@@ -3394,6 +3422,7 @@ def build_inputs(host=st):
     prestress_material_ids = mat_catalog.material_ids(
         prestress_catalogue, "prestress"
     )
+    app_run_probe.stop_phase(st.session_state, normalization_token)
 
     # A full-width selector replaces the narrow tab strip. Panels carry
     # the calculation methodology (Elastic / Plastic), not a limit state -- the
@@ -4873,7 +4902,10 @@ def build_inputs(host=st):
                 help="Open the user manual.",
             ):
                 _open_manual_dialog()
-    return dict(section=section, geometry_error=geometry_error,
+    input_assembly_token = app_run_probe.start_phase(
+        st.session_state, "input_assembly"
+    )
+    inp = dict(section=section, geometry_error=geometry_error,
                 void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
                 fatigue_assignment_error=fatigue_assignment_error,
@@ -4995,6 +5027,8 @@ def build_inputs(host=st):
                 plastic_case_context_sig=plastic_case_context_sig,
                 elastic_case_context_sig=elastic_case_context_sig,
                 plastic_bending_context_sig=plastic_bending_context_sig)
+    app_run_probe.stop_phase(st.session_state, input_assembly_token)
+    return inp
 
 
 def _commit_input_fragment(inp) -> None:
@@ -5010,7 +5044,7 @@ def _commit_input_fragment(inp) -> None:
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
     st.session_state[_INPUT_BUILD_KEY] = False
     st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
-    _maybe_autosave()
+    _measured_autosave()
     _generate_report(inp)
 
 
@@ -5024,11 +5058,19 @@ def _input_workspace() -> None:
     every journaled genuine edit before any widget is remounted.
     """
 
+    app_run_probe.open_fragment_run(st.session_state, "inputs")
     if st.session_state.get(_INPUT_BUILD_KEY, False):
         _restore_input_state(replace=True)
     st.session_state[_INPUT_BUILD_KEY] = True
-    inp = build_inputs(st)
+    pane_token = app_run_probe.start_phase(
+        st.session_state, "pane_construction"
+    )
+    try:
+        inp = build_inputs(st)
+    finally:
+        app_run_probe.stop_phase(st.session_state, pane_token)
     _commit_input_fragment(inp)
+    app_run_probe.close_fragment_run(st.session_state)
 
 
 # ---------------------------------------------------------------------------
@@ -6716,41 +6758,72 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
         f"{len(bars)} bars | {len(tendons)} tendons"
     )
     if visible:
-        bar_xy = [(b[0], b[1], b[2]) for b in bars]
-        tendon_xy = [(t[0], t[1], t[2]) for t in tendons]
-        bar_records = list(bar_elements or [])
-        tendon_records = list(tendon_elements or [])
-        bar_ids = [item["id"] for item in bar_records]
-        tendon_ids = [item["id"] for item in tendon_records]
+        preview_token = app_run_probe.start_phase(st.session_state, "preview")
+        try:
+            bar_xy = [(b[0], b[1], b[2]) for b in bars]
+            tendon_xy = [(t[0], t[1], t[2]) for t in tendons]
+            bar_records = list(bar_elements or [])
+            tendon_records = list(tendon_elements or [])
+            bar_ids = [item["id"] for item in bar_records]
+            tendon_ids = [item["id"] for item in tendon_records]
 
-        def assignment_hover(records):
-            out = []
-            for item in records:
-                line = f"material = {item.get('material_id') or '-'}"
-                diameter = item.get("diameter_mm")
-                if diameter is not None:
-                    line += f"<br>diameter = {float(diameter):.3g} mm"
-                line += f"<br>size basis = {item.get('size_mode') or '-'}"
-                out.append(line)
-            return out
+            def assignment_hover(records):
+                out = []
+                for item in records:
+                    line = f"material = {item.get('material_id') or '-'}"
+                    diameter = item.get("diameter_mm")
+                    if diameter is not None:
+                        line += f"<br>diameter = {float(diameter):.3g} mm"
+                    line += f"<br>size basis = {item.get('size_mode') or '-'}"
+                    out.append(line)
+                return out
 
-        bar_hover = assignment_hover(bar_records)
-        tendon_hover = assignment_hover(tendon_records)
-        assignment_sig = tuple(
-            (item.get("id"), item.get("material_id"), item.get("diameter_mm"),
-             item.get("size_mode"))
-            for item in bar_records + tendon_records
-        )
-        sig = (outer, holes, bar_xy, tendon_xy, tuple(bar_ids), tuple(tendon_ids),
-               assignment_sig, label_scale, label_min_gap)
-        fig = _memo_fig("section", sig, lambda: viz.section_figure(
-            outer, holes, bar_xy, title="Section preview", tendons=tendon_xy,
-            show_labels=True, label_scale=label_scale,
-            label_min_gap=label_min_gap, height=640, scale=_MM, unit="mm",
-            bar_ids=bar_ids, tendon_ids=tendon_ids,
-            bar_hover=bar_hover, tendon_hover=tendon_hover,
-        ))
-        box.plotly_chart(fig, width="stretch")
+            bar_hover = assignment_hover(bar_records)
+            tendon_hover = assignment_hover(tendon_records)
+            assignment_sig = tuple(
+                (
+                    item.get("id"),
+                    item.get("material_id"),
+                    item.get("diameter_mm"),
+                    item.get("size_mode"),
+                )
+                for item in bar_records + tendon_records
+            )
+            sig = (
+                outer,
+                holes,
+                bar_xy,
+                tendon_xy,
+                tuple(bar_ids),
+                tuple(tendon_ids),
+                assignment_sig,
+                label_scale,
+                label_min_gap,
+            )
+            fig = _memo_fig(
+                "section",
+                sig,
+                lambda: viz.section_figure(
+                    outer,
+                    holes,
+                    bar_xy,
+                    title="Section preview",
+                    tendons=tendon_xy,
+                    show_labels=True,
+                    label_scale=label_scale,
+                    label_min_gap=label_min_gap,
+                    height=640,
+                    scale=_MM,
+                    unit="mm",
+                    bar_ids=bar_ids,
+                    tendon_ids=tendon_ids,
+                    bar_hover=bar_hover,
+                    tendon_hover=tendon_hover,
+                ),
+            )
+            box.plotly_chart(fig, width="stretch")
+        finally:
+            app_run_probe.stop_phase(st.session_state, preview_token)
     return label_scale, label_min_gap
 
 
@@ -6758,15 +6831,19 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
                             title=None):
     """Render one live material law only when its nested input tab is visible."""
     if visible:
-        signature = (material, title) if title is not None else material
-        if title is None:
-            build = lambda: figure_builder(material)
-        else:
-            build = lambda: figure_builder(material, title=title)
-        box.plotly_chart(
-            _memo_fig(cache_name, signature, build),
-            width="stretch",
-        )
+        preview_token = app_run_probe.start_phase(st.session_state, "preview")
+        try:
+            signature = (material, title) if title is not None else material
+            if title is None:
+                build = lambda: figure_builder(material)
+            else:
+                build = lambda: figure_builder(material, title=title)
+            box.plotly_chart(
+                _memo_fig(cache_name, signature, build),
+                width="stretch",
+            )
+        finally:
+            app_run_probe.stop_phase(st.session_state, preview_token)
 
 
 def results_overview_view(inp, results, *, stale=False):
@@ -9992,13 +10069,14 @@ def _analysis_workspace(inp):
     An input edit still causes a normal full rerun and invokes this function with a
     freshly built input payload.
     """
+    app_run_probe.open_fragment_run(st.session_state, "analysis")
     # No input widget owns these keys on Analysis. Restore the last completed
     # draft on every fragment rerun before autosave, hashing or calculation reads.
     _restore_input_state(replace=True)
     # This must live inside the fragment: Calculate, View and result-detail changes
     # rerun only this function, not the top-level page dispatcher.  Quick Section
     # and the manual do not invoke the fragment, so their exclusion is preserved.
-    _maybe_autosave()
+    _measured_autosave()
 
     # Migrate a renamed view label before either workspace control renders. A keyed
     # selectbox otherwise keeps returning the stale string, which the dispatch no
@@ -10142,6 +10220,7 @@ def _analysis_workspace(inp):
             "The stale calculation has no matching input snapshot. Press "
             "Calculate before viewing its input-dependent results."
         )
+        app_run_probe.close_fragment_run(st.session_state)
         return
     if st.session_state.get("_case_error"):
         st.error(st.session_state["_case_error"])
@@ -10215,6 +10294,7 @@ def _analysis_workspace(inp):
         combined_view(view_inp, view_results)
     else:
         elastic_view(view_inp, view_results)
+    app_run_probe.close_fragment_run(st.session_state)
 
 
 # ---------------------------------------------------------------------------
@@ -10249,6 +10329,7 @@ _restore_input_state(
         )
     )
 )
+app_run_probe.stop_phase(st.session_state, _startup_probe)
 
 main_page = st.segmented_control(
     "Workspace",

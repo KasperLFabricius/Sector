@@ -18,8 +18,14 @@ sys.path.insert(0, str(ROOT / "app"))
 class FakeContext:
     def __init__(self, fragment_ids=()):
         self.fragment_ids_this_run = list(fragment_ids)
+        self.parallel_coordinator = object()
         self.forwarded = []
         self._enqueue = self.forwarded.append
+
+    def next_run(self, fragment_ids=None):
+        if fragment_ids is not None:
+            self.fragment_ids_this_run = list(fragment_ids)
+        self.parallel_coordinator = object()
 
 
 class FakeMessage:
@@ -52,7 +58,7 @@ def test_disabled_probe_is_exactly_inert(monkeypatch):
     assert state == {}
     assert context._enqueue == original
     assert app_run_probe.snapshot(state) == {
-        "schema_version": 1,
+        "schema_version": 2,
         "enabled": False,
         "history": [],
         "active": None,
@@ -88,11 +94,12 @@ def test_full_run_seals_all_messages_and_final_labels(monkeypatch):
 
     assert [message.size for message in context.forwarded] == [125, 375]
     assert record == {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_number": 1,
         "kind": "app",
         "started_utc": "2026-08-05T15:30:00+00:00",
         "interrupted": False,
+        "phases": {},
         "forward_message_count": 2,
         "forward_message_bytes": 500,
         "largest_forward_message_bytes": 375,
@@ -113,6 +120,190 @@ def test_fragment_context_never_opens_or_closes_full_run(monkeypatch):
     assert app_run_probe.close_run(state, context=context, now_ns=1) is None
     assert state == {}
     assert context.forwarded == []
+
+
+def test_coalesced_parent_and_nested_queue_records_each_root_once(monkeypatch):
+    monkeypatch.setenv(app_run_probe.ENABLE_ENV, "1")
+    state = {}
+    context = FakeContext(("outer-id", "nested-id"))
+
+    assert app_run_probe.open_fragment_run(
+        state,
+        "inputs",
+        context=context,
+        fragment_id="outer-id",
+        now_ns=0,
+    ) == 1
+    context._enqueue(FakeMessage(100))
+    assert app_run_probe.open_fragment_run(
+        state,
+        "save_load",
+        context=context,
+        fragment_id="nested-id",
+        now_ns=1_000_000,
+    ) is None
+    assert app_run_probe.close_fragment_run(
+        state,
+        context=context,
+        fragment_id="nested-id",
+        now_ns=2_000_000,
+    ) is None
+    outer = app_run_probe.close_fragment_run(
+        state,
+        context=context,
+        fragment_id="outer-id",
+        now_ns=3_000_000,
+    )
+
+    assert outer["fragment_name"] == "inputs"
+    assert outer["fragment_id"] == "outer-id"
+    assert outer["interrupted"] is False
+    assert outer["forward_message_bytes"] == 100
+
+    assert app_run_probe.open_fragment_run(
+        state,
+        "save_load",
+        context=context,
+        fragment_id="nested-id",
+        now_ns=4_000_000,
+    ) == 2
+    context._enqueue(FakeMessage(250))
+    nested = app_run_probe.close_fragment_run(
+        state,
+        context=context,
+        fragment_id="nested-id",
+        now_ns=6_000_000,
+    )
+
+    assert nested["fragment_name"] == "save_load"
+    assert nested["fragment_id"] == "nested-id"
+    assert nested["interrupted"] is False
+    assert nested["forward_message_bytes"] == 250
+    assert [record["fragment_name"] for record in state[
+        app_run_probe.state_keys()[2]
+    ]] == ["inputs", "save_load"]
+
+
+def test_new_streamlit_run_interrupts_unsealed_fragment(monkeypatch):
+    monkeypatch.setenv(app_run_probe.ENABLE_ENV, "1")
+    state = {}
+    context = FakeContext(("inputs-id",))
+
+    app_run_probe.open_fragment_run(
+        state,
+        "inputs",
+        context=context,
+        fragment_id="inputs-id",
+        now_ns=0,
+    )
+    context.next_run(("analysis-id",))
+    assert app_run_probe.open_fragment_run(
+        state,
+        "analysis",
+        context=context,
+        fragment_id="analysis-id",
+        now_ns=5_000_000,
+    ) == 2
+    current = app_run_probe.close_fragment_run(
+        state,
+        context=context,
+        fragment_id="analysis-id",
+        now_ns=8_000_000,
+    )
+
+    history = app_run_probe.snapshot(state)["history"]
+    assert [record["fragment_name"] for record in history] == [
+        "inputs",
+        "analysis",
+    ]
+    assert [record["interrupted"] for record in history] == [True, False]
+    assert current["duration_ms"] == pytest.approx(3.0)
+
+
+def test_fragment_owner_is_fenced_to_current_queue(monkeypatch):
+    monkeypatch.setenv(app_run_probe.ENABLE_ENV, "1")
+    state = {}
+    context = FakeContext(("analysis-id",))
+
+    assert app_run_probe.open_fragment_run(
+        state,
+        "inputs",
+        context=context,
+        fragment_id="inputs-id",
+        now_ns=0,
+    ) is None
+    assert app_run_probe.close_fragment_run(
+        state,
+        context=context,
+        fragment_id="inputs-id",
+        now_ns=1,
+    ) is None
+    assert state == {}
+
+
+def test_fragment_owner_names_are_frozen_even_when_probe_is_disabled(monkeypatch):
+    monkeypatch.delenv(app_run_probe.ENABLE_ENV, raising=False)
+
+    with pytest.raises(ValueError, match="Unknown fragment owner"):
+        app_run_probe.open_fragment_run({}, "solver")
+
+
+def test_phases_accumulate_and_cannot_cross_run_boundaries(monkeypatch):
+    monkeypatch.setenv(app_run_probe.ENABLE_ENV, "1")
+    state = {}
+    context = FakeContext()
+
+    app_run_probe.open_run(state, context=context, now_ns=0)
+    first = app_run_probe.start_phase(state, "preview", now_ns=1_000_000)
+    assert app_run_probe.stop_phase(
+        state, first, now_ns=4_000_000
+    ) == pytest.approx(3.0)
+    second = app_run_probe.start_phase(state, "preview", now_ns=5_000_000)
+    app_run_probe.stop_phase(state, second, now_ns=10_000_000)
+    stale = app_run_probe.start_phase(state, "autosave", now_ns=11_000_000)
+    app_run_probe.close_run(state, context=context, now_ns=12_000_000)
+
+    context.next_run()
+    app_run_probe.open_run(state, context=context, now_ns=20_000_000)
+    assert app_run_probe.stop_phase(
+        state, stale, now_ns=25_000_000
+    ) is None
+    record = app_run_probe.close_run(
+        state, context=context, now_ns=30_000_000
+    )
+
+    first_record = app_run_probe.snapshot(state)["history"][0]
+    assert first_record["phases"]["preview"] == {
+        "count": 2,
+        "total_ms": pytest.approx(8.0),
+        "max_ms": pytest.approx(5.0),
+        "last_ms": pytest.approx(5.0),
+    }
+    assert "autosave" not in record["phases"]
+
+
+def test_phase_names_are_frozen_even_when_probe_is_disabled(monkeypatch):
+    monkeypatch.delenv(app_run_probe.ENABLE_ENV, raising=False)
+
+    with pytest.raises(ValueError, match="Unknown run phase"):
+        app_run_probe.start_phase({}, "solver")
+
+
+def test_forged_phase_token_cannot_publish_an_unknown_phase(monkeypatch):
+    monkeypatch.setenv(app_run_probe.ENABLE_ENV, "1")
+    state = {}
+    context = FakeContext()
+    app_run_probe.open_run(state, context=context, now_ns=0)
+
+    assert app_run_probe.stop_phase(
+        state,
+        {"run_number": 1, "name": "solver", "started_ns": 0},
+        now_ns=1_000_000,
+    ) is None
+    record = app_run_probe.close_run(
+        state, context=context, now_ns=2_000_000
+    )
+    assert record["phases"] == {}
 
 
 def test_superseded_full_run_is_retained_as_interrupted(monkeypatch):
@@ -276,6 +467,54 @@ def test_probe_encloses_every_top_level_streamlit_message():
     ).strip()
 
 
+def test_all_fragment_owners_are_explicit_and_bounded():
+    source = pathlib.Path(APP).read_text(encoding="utf-8")
+    expected = {"inputs", "save_load", "report", "quick_section", "analysis"}
+
+    assert set(app_run_probe.FRAGMENT_NAMES) == expected
+    assert {
+        name
+        for name in expected
+        if f'open_fragment_run(st.session_state, "{name}")' in source
+    } == expected
+    assert source.count("app_run_probe.open_fragment_run") == len(expected)
+    assert source.count("app_run_probe.close_fragment_run") == 10
+
+    for marker in (
+        'def _save_load_panel()',
+        'def _report_panel(input_signature)',
+        'def _quick_section_viewport()',
+        'def _input_workspace()',
+        'def _analysis_workspace(inp)',
+    ):
+        body = source[source.index(marker):]
+        next_definition = body.find("\ndef ", 1)
+        if next_definition >= 0:
+            body = body[:next_definition]
+        assert "app_run_probe.open_fragment_run" in body
+        assert "app_run_probe.close_fragment_run" in body
+
+
+def test_phase_labels_and_structural_placement_are_frozen():
+    source = pathlib.Path(APP).read_text(encoding="utf-8")
+
+    assert app_run_probe.PHASE_NAMES == (
+        "startup",
+        "pane_construction",
+        "normalization",
+        "input_assembly",
+        "preview",
+        "autosave",
+    )
+    assert source.index('start_phase(st.session_state, "startup")') < source.index(
+        "st.set_page_config("
+    )
+    assert source.index(
+        "app_run_probe.stop_phase(st.session_state, _startup_probe)"
+    ) < source.index("main_page = st.segmented_control(")
+    assert "_measured_autosave()" in source
+
+
 def test_disabled_live_app_creates_no_probe_state(monkeypatch):
     monkeypatch.delenv(app_run_probe.ENABLE_ENV, raising=False)
     monkeypatch.delenv(app_run_probe.OUTPUT_ENV, raising=False)
@@ -305,6 +544,13 @@ def test_enabled_live_app_seals_complete_record(monkeypatch):
     assert record["largest_forward_message_bytes"] > 0
     assert record["byte_accounting"] is True
     assert record["interrupted"] is False
+    assert {
+        "startup",
+        "pane_construction",
+        "normalization",
+        "input_assembly",
+        "autosave",
+    }.issubset(record["phases"])
 
 
 def test_probe_state_is_excluded_from_current_project_schema():
