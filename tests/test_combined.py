@@ -14,7 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
-from app_case_inputs import apply_case_changes  # noqa: E402
+from app_case_inputs import apply_widget_changes  # noqa: E402
 
 
 # -- engine -----------------------------------------------------------------
@@ -189,19 +189,7 @@ def _select_view(at, value):
 
 
 def _set(at, *changes):
-    """Stage already-rendered widget changes and perform one Streamlit rerun."""
-    changes, case_changed = apply_case_changes(at, changes)
-    if case_changed:
-        _goto_page(at, "Inputs")
-    if changes:
-        widget_type, key, _value = changes[0]
-        try:
-            getattr(at, widget_type)(key=key)
-        except KeyError:
-            _goto_page(at, "Analysis" if key == "view" else "Inputs")
-    for widget_type, key, value in changes:
-        getattr(at, widget_type)(key=key).set_value(value)
-    return at.run()
+    return apply_widget_changes(at, changes)
 
 
 def _set_and_click(at, button_key, *changes):

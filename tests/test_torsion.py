@@ -292,7 +292,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
-from app_case_inputs import apply_case_changes, first_case_value  # noqa: E402
+from app_case_inputs import (  # noqa: E402
+    apply_widget_changes,
+    first_case_value,
+    goto_input_stage,
+)
 
 
 def _fresh():
@@ -323,19 +327,7 @@ def _select_view(at, value):
 
 
 def _set(at, *changes):
-    """Stage already-rendered widget changes and perform one Streamlit rerun."""
-    changes, case_changed = apply_case_changes(at, changes)
-    if case_changed:
-        _goto_page(at, "Inputs")
-    if changes:
-        widget_type, key, _value = changes[0]
-        try:
-            getattr(at, widget_type)(key=key)
-        except KeyError:
-            _goto_page(at, "Analysis" if key == "view" else "Inputs")
-    for widget_type, key, value in changes:
-        getattr(at, widget_type)(key=key).set_value(value)
-    return at.run()
+    return apply_widget_changes(at, changes)
 
 
 def _set_and_click(at, button_key, *changes):
@@ -740,6 +732,7 @@ def test_app_torsion_only_axial_input_enabled():
         ("checkbox", "torsion_on", True),
     )
     _set(at, ("number_input", "torsion_T", 30.0))
+    goto_input_stage(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     _calculate(at)
     base = at.session_state["results"]["torsion"]["trd_max"]
