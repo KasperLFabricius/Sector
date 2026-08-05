@@ -75,7 +75,7 @@ def _goto_page(at, page):
 
 
 def _goto_input_tab(at, name):
-    """Select one tracked input tab by its short engineering name."""
+    """Select one tracked input stage by its short engineering name."""
     _goto_page(at, "Inputs")
     d = chr(0x00B7)
     labels = {
@@ -91,8 +91,7 @@ def _goto_input_tab(at, name):
     except KeyError:
         current = None
     if current != label:
-        at.session_state["_input_tab"] = label
-        at.run()
+        at.selectbox(key="_input_tab").set_value(label).run()
     return at
 
 
@@ -104,9 +103,23 @@ def _goto_material_tab(at, name):
     except KeyError:
         current = None
     if current != name:
-        at.session_state["_material_tab"] = name
-        at.run()
+        at.selectbox(key="_material_tab").set_value(name).run()
     return at
+
+
+def _goto_widget_owner(at, key):
+    """Mount the input pane that owns one widget key."""
+    if key.startswith("conc_") or key == "sls_fctm":
+        return _goto_material_tab(at, "Concrete")
+    if key.startswith("mild_") or key.startswith("mildcat_"):
+        return _goto_material_tab(at, "Mild steel")
+    if key.startswith("pre_") or key.startswith("precat_"):
+        return _goto_material_tab(at, "Prestressing steel")
+    if key == "el_phi":
+        return _goto_input_tab(at, "Loads")
+    if key.startswith(("autosave_", "rep_", "project_")):
+        return _goto_input_tab(at, "Project & report")
+    return _goto_input_tab(at, "Analysis settings")
 
 
 def _calculate(at):
@@ -192,19 +205,24 @@ def _replace_case_table(at, base_key, value):
 
 
 def _set(at, *changes):
-    """Stage already-rendered widget changes and perform one Streamlit rerun."""
+    """Stage input changes, including values retained in an unmounted pane."""
     changes, case_changed = apply_case_changes(at, changes)
     if case_changed:
         _goto_page(at, "Inputs")
-    if changes:
-        widget_type, key, _value = changes[0]
-        try:
-            getattr(at, widget_type)(key=key)
-        except KeyError:
-            _goto_page(at, "Analysis" if key == "view" else "Inputs")
     for widget_type, key, value in changes:
-        getattr(at, widget_type)(key=key).set_value(value)
-    return at.run()
+        try:
+            widget = getattr(at, widget_type)(key=key)
+        except KeyError:
+            if key == "view":
+                _goto_page(at, "Analysis")
+            else:
+                _goto_widget_owner(at, key)
+            try:
+                widget = getattr(at, widget_type)(key=key)
+            except KeyError:
+                raise AssertionError(f"No mounted owner for widget {key!r}")
+        widget.set_value(value).run()
+    return at
 
 
 def _set_and_click(at, button_key, *changes):
@@ -219,8 +237,9 @@ def _set_and_click(at, button_key, *changes):
     elif button_key == "calculate" and changes:
         _set(at, *changes)
         changes = ()
-    for widget_type, key, value in changes:
-        getattr(at, widget_type)(key=key).set_value(value)
+    elif changes:
+        _set(at, *changes)
+        changes = ()
     if button_key == "calculate":
         # Submit the edited input page first, then calculate from the independently
         # rendered Analysis page.
@@ -1604,6 +1623,7 @@ def test_high_grade_concrete_auto_strain_calculates():
     # section still calculates (eps_cu2 ~ 2.66 permille at C70).
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(70.0).run()
     at.button(key="conc_strain_auto").click().run()
     assert at.session_state["conc_eps_cu2"] == pytest.approx(2.66, abs=0.05)
@@ -1618,6 +1638,7 @@ def test_invalid_concrete_strain_order_is_recoverable():
     # must warn and clamp, not abort the run.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_eps_c2").set_value(5.0).run()   # peak above eps_cu2 (3.5)
     assert not at.exception
     assert any("must be at least" in w.value and "peak strain" in w.value
@@ -1645,6 +1666,7 @@ def test_save_load_round_trip_through_the_app():
          if k in at.session_state},
         {k: at.session_state[k] for k in project_io.SCALAR_KEYS if k in at.session_state})
     assert '"format": "sector-project"' in text
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(20.0).run()
     at.session_state["_pending_project"] = text
     at.run()
@@ -1689,7 +1711,9 @@ def test_app_restores_fatigue_inputs_into_the_ui():
     assert at.selectbox(key="fatigue_edition").value == (
         fatigue_inputs.EC2_2005_DKNA
     )
+    _goto_input_tab(at, "Loads")
     assert "fatigue_spectrum_editor" in at.session_state
+    _goto_material_tab(at, "Fatigue details")
     assert at.selectbox(key="_fatigue_catalog_selected").value == "F1"
     assert (
         at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY]["items"][0]["id"]
@@ -1984,6 +2008,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     calculated_fatigue_sig = at.session_state["result_fatigue_sig"]
     current_fck = float(at.session_state["conc_fck"])
     changed_fck = current_fck + 5.0 if current_fck <= 195.0 else current_fck - 5.0
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(changed_fck).run()
     fck_fatigue_sig = at.session_state["_latest_inputs"]["fatigue_sig"]
     assert fck_fatigue_sig != calculated_fatigue_sig
@@ -1992,6 +2017,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     at.number_input(key="conc_alpha_cc").set_value(changed_alpha_cc).run()
     assert at.session_state["_latest_inputs"]["fatigue_sig"] != fck_fatigue_sig
 
+    _goto_input_tab(at, "Analysis settings")
     at.number_input(key="fatigue_gamma_s").set_value(1.20).run()
     assert at.session_state["result_sig"] != (
         at.session_state["_latest_inputs"]["signature"]
@@ -2353,6 +2379,7 @@ def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(42.0).run()
     _goto_page(at, "Analysis")
     assert not (tmp_path / "autosave.json").exists()
@@ -2413,6 +2440,7 @@ def test_autosave_restores_last_session_on_next_launch(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(42.0).run()
     at.session_state["_autosave_t"] = 0.0          # make a save due
     at.run()
@@ -2586,16 +2614,22 @@ def test_shear_method_changes_do_not_lock_the_case_table():
     at.radio(key="mode").set_value("Elastic").run()
     at.checkbox(key="shear_on").set_value(True).run()
     at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
+    _goto_input_tab(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_gamma_c").disabled is False
+    _goto_material_tab(at, "Mild steel")
     assert at.number_input(key="mild_gamma_y").disabled is False
     _set(at, ("number_input", "pl_Mx", 110.0))
     assert not at.exception
 
     # The 2005 method has no action-moment term, but changing method must not imply
     # that the table belongs to a particular limit state or solver.
+    _goto_input_tab(at, "Analysis settings")
     at.selectbox(key="shear_method").set_value(codes.EC2_2005_DKNA.label).run()
+    _goto_input_tab(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_gamma_c").disabled is False
 
 
@@ -2605,6 +2639,7 @@ def test_prestress_always_available_without_a_toggle():
     at = _fresh()
     at.run()
     assert "use_pre" not in {cb.key for cb in at.checkbox}
+    _goto_material_tab(at, "Prestressing steel")
     assert "pre_Es" in {ni.key for ni in at.number_input}   # prestress panel rendered
     assert "tendons_base" in at.session_state                # tendon table mounted
 
@@ -2674,6 +2709,7 @@ def test_material_preset_switch_calculates():
 
 def test_mild_preset_selector_exposes_concrete_identity_without_rewriting_value():
     at = _fresh().run()
+    _goto_material_tab(at, "Mild steel")
     selector = at.selectbox(key="mild_preset")
     assert any(
         "Curve 2 (elastic-perfectly-plastic)" in option
@@ -2711,10 +2747,15 @@ def test_material_catalogue_add_duplicate_delete_and_assignment_guard():
         "mild_material_catalog"]["items"]] == ["M1", "M2"]
     assert at.button(key="mild_catalog_delete").disabled is False
 
-    at.checkbox(key="shear_on").set_value(True).run()
-    at.selectbox(key="capacity_steel_material_id").set_value("M2").run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "capacity_steel_material_id", "M2"),
+    )
+    _goto_material_tab(at, "Mild steel")
     assert at.button(key="mild_catalog_delete").disabled is True
-    at.selectbox(key="capacity_steel_material_id").set_value("M1").run()
+    _set(at, ("selectbox", "capacity_steel_material_id", "M1"))
+    _goto_material_tab(at, "Mild steel")
     assert at.button(key="mild_catalog_delete").disabled is False
 
     at.text_input(key="mildcat_r1_M2_name").set_value(
@@ -2783,6 +2824,7 @@ def test_2023_concrete_fck_edit_calculates():
     # Editing fck under the strength-dependent 2023 preset (alpha_cc tracks fck).
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
     _set_and_click(
         at, "calculate", ("number_input", "conc_fck", 50.0)
@@ -2797,6 +2839,7 @@ def test_2023_concrete_fck_edit_calculates():
 def test_2023_concrete_k_tc_is_explicit_and_updates_fcd():
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
     assert at.session_state["conc_k_tc"] == pytest.approx(0.85)
     fcd_general = 0.85 * at.session_state["conc_fck"] / at.session_state["conc_gamma_c"]
@@ -2854,9 +2897,12 @@ def test_es_field_present_and_editable():
     # panel is always shown, like mild steel).
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Mild steel")
     keys = {ni.key for ni in at.number_input}
-    assert "mild_Es" in keys and "pre_Es" in keys
+    assert "mild_Es" in keys and "pre_Es" not in keys
     at.number_input(key="mild_Es").set_value(210.0).run()   # GPa
+    _goto_material_tab(at, "Prestressing steel")
+    assert "pre_Es" in {ni.key for ni in at.number_input}
     assert not at.exception
     _calculate(at)
     assert not at.exception
@@ -2868,6 +2914,7 @@ def test_eut_below_yield_strain_warns_and_calculates():
     # with a warning rather than accepted.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Mild steel")
     at.number_input(key="mild_eut").set_value(0.5).run()  # 0.5 permille, below ey ~ 2.5
     assert any("yield strain" in w.value for w in at.warning)
     _calculate(at)
@@ -2879,6 +2926,7 @@ def test_two_yield_fields_live_under_default_preset():
     # (k) is accepted and recomputes without error.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Mild steel")
     at.number_input(key="mild_k").set_value(0.8).run()
     at.number_input(key="mild_ey0t").set_value(3.0).run()  # 3 permille
     assert not at.exception
@@ -2891,6 +2939,7 @@ def test_mild_fyck_zero_is_allowed_and_calculates():
     # valid input and still compute.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Mild steel")
     at.number_input(key="mild_fyck").set_value(0.0).run()
     assert not at.exception
     _calculate(at)
@@ -2903,6 +2952,7 @@ def test_material_fields_are_flat_regardless_of_preset():
     # fields exist even under the elastic-perfectly-plastic (curve 2) preset.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Mild steel")
     at.selectbox(key="mild_preset").set_value(
         "Curve 2 (elastic-perfectly-plastic)").run()
     keys = {ni.key for ni in at.number_input}
@@ -2917,17 +2967,22 @@ def test_material_laws_locked_in_elastic_only_mode():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
-    for locked in ("conc_gamma_c", "conc_alpha_cc", "mild_fytk", "mild_fyck",
-                   "mild_futk", "mild_eut", "mild_gamma_y", "mild_k", "mild_ey0t"):
+    _goto_material_tab(at, "Concrete")
+    for locked in ("conc_gamma_c", "conc_alpha_cc"):
         assert at.number_input(key=locked).disabled is True, locked
-    for editable in ("conc_fck", "mild_Es"):
-        assert at.number_input(key=editable).disabled is False, editable
+    assert at.number_input(key="conc_fck").disabled is False
+    _goto_material_tab(at, "Mild steel")
+    for locked in ("mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
+                   "mild_gamma_y", "mild_k", "mild_ey0t"):
+        assert at.number_input(key=locked).disabled is True, locked
+    assert at.number_input(key="mild_Es").disabled is False
 
 
 def test_prestress_law_locked_in_elastic_only_mode():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Elastic").run()
+    _goto_material_tab(at, "Prestressing steel")
     # The stress-strain law parameters are plastic-only, so they lock; but the
     # initial prestrain IS and the modulus Es (Ep) stay editable -- the elastic
     # analysis applies the tendon prestress Ep*IS and uses Ep/Ec for the tendon.
@@ -2966,9 +3021,13 @@ def test_material_laws_editable_in_both_and_plastic_modes():
     at = _fresh()
     at.run()
     at.radio(key="mode").set_value("Both").run()
+    _goto_material_tab(at, "Mild steel")
     assert at.number_input(key="mild_fytk").disabled is False
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_gamma_c").disabled is False
+    _goto_input_tab(at, "Analysis settings")
     at.radio(key="mode").set_value("Plastic").run()
+    _goto_material_tab(at, "Mild steel")
     assert at.number_input(key="mild_fytk").disabled is False
 
 
@@ -2977,9 +3036,12 @@ def test_fctm_and_ec_locked_in_plastic_only_mode():
     # disables them; Elastic re-enables them.
     at = _fresh()
     at.run()                                   # default mode is Plastic
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="sls_fctm").disabled is True
     assert at.number_input(key="conc_Ec").disabled is True
+    _goto_input_tab(at, "Analysis settings")
     at.radio(key="mode").set_value("Elastic").run()
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="sls_fctm").disabled is False
     assert at.number_input(key="conc_Ec").disabled is False
 
@@ -2987,11 +3049,15 @@ def test_fctm_and_ec_locked_in_plastic_only_mode():
 def test_fatigue_unlocks_the_elastic_material_parameters():
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_Ec").disabled is True
 
+    _goto_input_tab(at, "Analysis settings")
     at.toggle(key="fatigue_on").set_value(True).run()
 
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_Ec").disabled is False
+    _goto_input_tab(at, "Loads")
     assert at.number_input(key="el_phi").disabled is False
 
 
@@ -3001,6 +3067,7 @@ def test_default_material_preset_is_dk_na_with_550():
     at.run()
     assert at.session_state["conc_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
     assert at.session_state["mild_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
+    _goto_material_tab(at, "Mild steel")
     for f in ("mild_fytk", "mild_fyck", "mild_futk"):
         assert at.number_input(key=f).value == pytest.approx(550.0)
 
@@ -3013,6 +3080,7 @@ def test_active_in_compression_toggle_changes_plastic_capacity():
     _calculate(at)
     base = at.session_state["results"]["plastic"]["max_mx"]
     _set(at, ("checkbox", "mild_active_comp", False))
+    _goto_material_tab(at, "Mild steel")
     assert at.number_input(key="mild_fyck").disabled is True
     _calculate(at)
     assert not at.exception
@@ -3034,6 +3102,7 @@ def test_degenerate_rupture_stress_does_not_crash():
     # and still render rather than raise.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Mild steel")
     at.selectbox(key="mild_preset").set_value("Curve 1 (bilinear hardening)").run()
     at.number_input(key="mild_futk").set_value(0.0).run()
     assert not at.exception
@@ -3045,10 +3114,12 @@ def test_inputs_carry_help_tooltips():
     # Inputs across the panels expose hover help (the "?" tooltip).
     at = _fresh()
     at.run()
-    for key in ("conc_fck", "mild_fytk", "mild_eut", "el_phi"):
+    _goto_input_tab(at, "Loads")
+    for key in ("el_phi",):
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
+    _goto_input_tab(at, "Analysis settings")
     for key in (
         "fatigue_edition",
         "fatigue_check_steel",
@@ -3078,6 +3149,12 @@ def test_inputs_carry_help_tooltips():
     )
     assert r"$\beta_{cc}(t_0)$" in at.number_input(
         key="fatigue_t0_days").help
+
+    _goto_material_tab(at, "Concrete")
+    assert at.number_input(key="conc_fck").help
+    _goto_material_tab(at, "Mild steel")
+    for key in ("mild_fytk", "mild_eut"):
+        assert at.number_input(key=key).help
     for widget_group in (
         at.number_input, at.selectbox, at.text_input, at.toggle, at.checkbox,
     ):
@@ -3087,6 +3164,7 @@ def test_inputs_carry_help_tooltips():
                     r"[\x00-\x08\x0b\x0c\x0e-\x1f]",
                     value or "",
                 ), (widget.key, value)
+    _goto_input_tab(at, "Analysis settings")
     assert at.number_input(key="v_min").label == (
         r"Start angle $\varphi_{NA,\min}$ ($^\circ$)"
     )
@@ -3126,6 +3204,7 @@ def test_inputs_carry_help_tooltips():
         and str(w.key).endswith("_n_star")
     )
     assert n_star.label == r"Reference cycles $N^*$"
+    _goto_input_tab(at, "Analysis settings")
     assert at.radio(key="mode").help
     _goto_page(at, "Analysis")
     assert at.selectbox(key="view").help
@@ -3243,6 +3322,7 @@ def test_results_views_render_after_calculate():
 def test_native_load_case_editors_use_consistent_ed_columns():
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Loads")
 
     plastic = _widget(at.dataframe, "plastic_cases_editor").value
     elastic = _widget(at.dataframe, "elastic_cases_editor").value
@@ -3257,7 +3337,9 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
         "calculate_crack_width",
     ]
+    _goto_input_tab(at, "Analysis settings")
     at.toggle(key="fatigue_on").set_value(True).run()
+    _goto_input_tab(at, "Loads")
     fatigue = _widget(at.dataframe, "fatigue_spectrum_editor").value
     assert list(fatigue.columns) == [
         "spectrum", "name", "description", "cycles",
@@ -3472,7 +3554,7 @@ def test_applied_moments_default_to_zero():
     assert first_case_value(at, "el_long_Mx") == 0.0
 
 
-def test_page_navigation_and_input_tabs_follow_the_workflow_order():
+def test_page_navigation_and_input_stages_follow_the_workflow_order():
     # Only the selected top-level page renders. The Inputs page stages the four
     # engineering steps plus project/report without tying either solver to a limit
     # state.
@@ -3488,12 +3570,10 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         f"4 {d} Loads",
         "Project & report",
     ]
-    labels = [tab.label for tab in at.tabs]
-    assert labels == [
-        *expected_outer[:3],
-        "Concrete", "Mild steel", "Prestressing steel",
-        *expected_outer[3:],
-    ]
+    selector = at.selectbox(key="_input_tab")
+    assert selector.options == expected_outer
+    assert selector.value == expected_outer[0]
+    assert not at.tabs
     assert at.session_state["_input_tab"] == expected_outer[0]
     labels = [ex.label for ex in at.expander]
     assert labels == [
@@ -3502,26 +3582,128 @@ def test_page_navigation_and_input_tabs_follow_the_workflow_order():
         "Fatigue",
         "Optional bridge calculations",
         "Shear, torsion & combined (Plastic)",
-        "Bulk assignments",
     ]
     _goto_input_tab(at, "Project & report")
     labels = [ex.label for ex in at.expander]
     assert labels == [
-        "Elastic crack-width method",
-        "Reinforcement detailing",
-        "Fatigue",
-        "Optional bridge calculations",
-        "Shear, torsion & combined (Plastic)",
-        "Bulk assignments",
         "About",
         "Report",
         "Save / Load",
     ]
 
 
+def test_active_input_stage_mounts_only_itself_and_restores_inactive_edits():
+    at = _fresh()
+    at.run()
+
+    initial_number_keys = {widget.key for widget in at.number_input}
+    assert "conc_fck" not in initial_number_keys
+    assert "section_label_scale" not in initial_number_keys
+    assert not at.get("data_editor")
+
+    _goto_material_tab(at, "Concrete")
+    assert at.selectbox(key="_material_tab").options == [
+        "Concrete",
+        "Mild steel",
+        "Prestressing steel",
+    ]
+    at.number_input(key="conc_fck").set_value(55.0).run()
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
+
+    _goto_input_tab(at, "Loads")
+    load_number_keys = {widget.key for widget in at.number_input}
+    assert "conc_fck" not in load_number_keys
+    assert at.session_state["conc_fck"] == 55.0
+
+    _goto_material_tab(at, "Concrete")
+    assert at.number_input(key="conc_fck").value == 55.0
+    assert not at.exception
+
+
+def test_inactive_native_editors_cannot_replay_stale_seeds_over_base_tables():
+    import bridge_inputs
+    import fatigue_inputs
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    at.toggle(key="fatigue_on").set_value(True).run()
+
+    plastic = load_cases.default_tables()[load_cases.PLASTIC_TABLE_KEY]
+    plastic = plastic.copy(deep=True)
+    plastic.loc[0, "name"] = "LATEST-PLASTIC"
+    plastic.loc[0, "n_ed_kn"] = -321.0
+    stale_plastic = plastic.copy(deep=True)
+    stale_plastic.loc[0, "name"] = "STALE-PLASTIC"
+
+    spectrum = fatigue_inputs.normalise_spectrum_table([{
+        "spectrum": "Traffic",
+        "name": "LATEST-FATIGUE",
+        "cycles": 2.0e6,
+        "n_long_ed_kn": -100.0,
+        "mx_short_ed_knm": 25.0,
+    }])
+    stale_spectrum = fatigue_inputs.empty_spectrum_table()
+
+    brittle = bridge_inputs.normalise_table([{
+        "region_id": "LATEST-BRIDGE",
+        "m_rep_knm": 100.0,
+        "z_s_m": 0.5,
+        "f_yk_mpa": 500.0,
+        "as_provided_mm2": 500.0,
+    }], bridge_inputs.BRITTLE_TABLE_KEY)
+    stale_brittle = bridge_inputs.empty_table(bridge_inputs.BRITTLE_TABLE_KEY)
+
+    inactive_load_cases = (
+        (
+            load_cases.PLASTIC_TABLE_KEY,
+            "plastic_cases_editor",
+            plastic,
+            stale_plastic,
+        ),
+        (
+            fatigue_inputs.SPECTRUM_TABLE_KEY,
+            "fatigue_spectrum_editor",
+            spectrum,
+            stale_spectrum,
+        ),
+    )
+    for base_key, editor_key, current, stale in inactive_load_cases:
+        at.session_state[base_key] = current.copy(deep=True)
+        at.session_state[f"_{base_key}_editor_seed"] = stale.copy(deep=True)
+        at.session_state[editor_key] = {
+            "edited_rows": {}, "added_rows": [], "deleted_rows": []
+        }
+
+    at.run()
+
+    assert at.session_state[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"] == (
+        "LATEST-PLASTIC"
+    )
+    assert at.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY].loc[0, "name"] == (
+        "LATEST-FATIGUE"
+    )
+
+    _goto_input_tab(at, "Loads")
+    at.session_state[bridge_inputs.BRITTLE_TABLE_KEY] = brittle.copy(deep=True)
+    at.session_state[
+        f"_{bridge_inputs.BRITTLE_TABLE_KEY}_editor_seed"
+    ] = stale_brittle.copy(deep=True)
+    at.session_state[f"{bridge_inputs.BRITTLE_TABLE_KEY}_editor"] = {
+        "edited_rows": {}, "added_rows": [], "deleted_rows": []
+    }
+    at.run()
+
+    assert at.session_state[bridge_inputs.BRITTLE_TABLE_KEY].loc[0, "region_id"] == (
+        "LATEST-BRIDGE"
+    )
+    assert not at.exception
+
+
 def test_interrupted_inputs_build_cannot_replace_the_last_complete_snapshot():
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(55.0).run()
     assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
 
@@ -3542,7 +3724,9 @@ def test_interrupted_inputs_build_cannot_replace_the_last_complete_snapshot():
 def test_interrupted_inputs_callback_cannot_commit_partial_widget_values():
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(55.0).run()
+    _goto_input_tab(at, "Section")
 
     # Quick Section is a callback on the still-visible Inputs page. It must still
     # navigate, but may not snapshot a partially reconstructed widget namespace.
@@ -3559,6 +3743,7 @@ def test_interrupted_inputs_callback_cannot_commit_partial_widget_values():
 def test_interrupted_inputs_recovery_replays_the_genuine_engineering_event():
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(55.0).run()
 
     # The browser records the next widget event before the superseding rerun.
@@ -3575,6 +3760,7 @@ def test_interrupted_inputs_recovery_replays_the_genuine_engineering_event():
 def test_live_data_editor_event_is_not_reassigned_before_widget_mount():
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Loads")
 
     # A browser data-editor edit is installed in widget state before its callback
     # journals the same payload.  Reassigning that live payload through Session
@@ -3593,6 +3779,7 @@ def test_live_data_editor_event_is_not_reassigned_before_widget_mount():
 def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(55.0).run()
     section_tab = f"2 {chr(0x00B7)} Section"
 
@@ -3843,8 +4030,10 @@ def test_material_manual_override_calculates():
     at = _fresh()
     at.run()
     # A picked preset must remain editable.
+    _goto_material_tab(at, "Concrete")
     at.number_input(key="conc_fck").set_value(45.0).run()
     at.number_input(key="conc_gamma_c").set_value(0.5).run()
+    _goto_material_tab(at, "Mild steel")
     at.number_input(key="mild_gamma_y").set_value(2.0).run()
     assert not at.exception
     _calculate(at)
@@ -4327,6 +4516,7 @@ def test_fctm_auto_button_tracks_grade():
     # Table 3.1): C50 -> 0.30*50^(2/3) ~ 4.07 MPa.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Concrete")
     _set_and_click(
         at,
         "sls_fctm_auto",

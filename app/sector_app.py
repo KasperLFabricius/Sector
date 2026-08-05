@@ -34,6 +34,7 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import fatigue_presentation  # noqa: E402
 import load_cases  # noqa: E402
+from lazy_input_host import active_panes  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
@@ -378,13 +379,15 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     if auto is not None:
         st.session_state["conc_alpha_cc"] = auto
         label, lo, hi, step = mp.CONCRETE_FIELD_META["alpha_cc"]
-        alpha_cc = box.number_input(
+        st.session_state["_conc_alpha_cc_display"] = auto
+        box.number_input(
             r"Effective $\eta_{cc} k_{tc}$", float(lo), float(hi), step=float(step),
-            key="conc_alpha_cc", disabled=True, format="%.6f",
+            key="_conc_alpha_cc_display", disabled=True, format="%.6f",
             help="Derived EN 1992-1-1:2023 design-strength coefficient: "
                  r"$\eta_{cc}=\min[(40/f_{ck})^{1/3},1.0]$, multiplied by the "
                  r"selected $k_{tc}$.",
         )
+        alpha_cc = auto
     else:
         alpha_cc = _number(
             box, "conc", "alpha_cc", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
@@ -1289,6 +1292,14 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     only re-seeds when its version token changes (see ``_reseed_table``), so a
     typed or pasted value sticks on the first keystroke instead of lagging behind.
     """
+    if not bool(getattr(box, "open", True)):
+        base = st.session_state[base_key]
+        return (
+            rebar_table.normalise_table(base, _reinforcement_kind(base_key))
+            if _reinforcement_kind(base_key)
+            else base.reindex(columns=cols).copy(deep=True)
+        )
+
     version = st.session_state.get(ed_key + "_ver", 0)
     data_version = _point_data_version(base_key, version)
     kind = _reinforcement_kind(base_key)
@@ -1675,6 +1686,10 @@ def _case_table_editor(box, key):
     avoids the Streamlit data-editor feedback loop where assigning the returned
     frame back to the frame used as widget input can drop every other edit.
     """
+    if not bool(getattr(box, "open", True)):
+        current = load_cases.normalise_table(st.session_state.get(key), key)
+        return load_cases.active_table(current, key)
+
     editor_key = _CASE_EDITOR_KEYS[key]
     seed_key = f"_{key}_editor_seed"
     if editor_key not in st.session_state or seed_key not in st.session_state:
@@ -1822,6 +1837,9 @@ def _fatigue_spectrum_editor(box):
     seed_key = f"_{key}_editor_seed"
     if key not in st.session_state:
         st.session_state[key] = fatigue_inputs.empty_spectrum_table()
+    if not bool(getattr(box, "open", True)):
+        current = fatigue_inputs.normalise_spectrum_table(st.session_state[key])
+        return fatigue_inputs.active_spectrum_table(current)
     if _FATIGUE_EDITOR_KEY not in st.session_state or seed_key not in st.session_state:
         st.session_state[seed_key] = fatigue_inputs.normalise_spectrum_table(
             st.session_state[key]
@@ -1910,6 +1928,8 @@ def _bridge_table_editor(box, key):
     seed_key = f"_{key}_editor_seed"
     if key not in st.session_state:
         st.session_state[key] = bridge_inputs.empty_table(key)
+    if not bool(getattr(box, "open", True)):
+        return bridge_inputs.normalise_table(st.session_state[key], key)
     if editor_key not in st.session_state or seed_key not in st.session_state:
         st.session_state[seed_key] = bridge_inputs.normalise_table(
             st.session_state[key], key
@@ -2254,7 +2274,10 @@ def _project_state():
               for base, ed, cols in _PROJECT_TABLES if base in st.session_state}
     durable = st.session_state.get(_INPUT_STATE_KEY, {})
     scalars = {
-        key: st.session_state[key] if key in st.session_state else durable[key]
+        # The durable mirror is refreshed after every complete Inputs render.
+        # Prefer it once a pane is unmounted: Streamlit can retain an older live
+        # widget value for a key that no longer has a mounted widget owner.
+        key: durable[key] if key in durable else st.session_state[key]
         for key in project_io.SCALAR_KEYS
         if key in st.session_state or key in durable
     }
@@ -3325,11 +3348,10 @@ _CAPACITY_CONTEXT_SIG_KEYS = tuple(
     "transverse_ductility_class", "transverse_apply_ductility_reduction",
 )
 def build_inputs(host=st):
-    """Render staged, full-width input tabs and return the analysis payload.
+    """Render one selected full-width input stage and return the full payload.
 
-    All input widgets are built on every run so their values survive tab changes.
-    The active tab is tracked only to avoid serialising hidden Plotly previews.
-    Containers are created in workflow order but filled below in dependency order.
+    Inactive widgets read the canonical durable draft without mounting. Containers
+    remain ordered by workflow but are filled below in dependency order.
     """
     s = host
     _ensure_material_catalog_state()
@@ -3356,7 +3378,7 @@ def build_inputs(host=st):
         prestress_catalogue, "prestress"
     )
 
-    # Full-width tabs replace the former long, narrow sidebar stack. Panels carry
+    # One full-width selector replaces the clipped narrow tab strip. Panels carry
     # the calculation methodology (Elastic / Plastic), not a limit state -- the
     # same analysis can serve several load combinations.
     _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
@@ -3370,10 +3392,21 @@ def build_inputs(host=st):
     stored_input_tab = st.session_state.get("_input_tab")
     if stored_input_tab is not None and stored_input_tab not in input_tab_labels:
         st.session_state.pop("_input_tab", None)
-    aset, sec_tab, mat_tab, loads, project = s.tabs(
+    st.session_state.setdefault("_input_tab", input_tab_labels[0])
+    selected_input_tab = s.selectbox(
+        "Input stage",
         input_tab_labels,
         key="_input_tab",
         on_change=_snapshot_completed_input_state,
+        width="stretch",
+        help="Choose the engineering input stage or the project/report tools.",
+    )
+    input_host = s.container()
+    aset, sec_tab, mat_tab, loads, project = active_panes(
+        input_host,
+        input_tab_labels,
+        selected_input_tab,
+        state=st.session_state,
     )
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
@@ -4509,11 +4542,26 @@ def build_inputs(host=st):
         material_tab_labels.append("Fatigue details")
     stored_material_tab = st.session_state.get("_material_tab")
     if stored_material_tab is not None and stored_material_tab not in material_tab_labels:
-        st.session_state.pop("_material_tab", None)
-    material_tabs = mat_tab.tabs(
+        stored_material_tab = None
+    if stored_material_tab is None:
+        stored_material_tab = material_tab_labels[0]
+    # This selector is itself unmounted outside Material parameters. Recreate it
+    # from the durable selection as a widget default, rather than leaving a stale
+    # cleaned-up widget value to make Streamlit select the first family again.
+    st.session_state.pop("_material_tab", None)
+    selected_material_tab = mat_tab.selectbox(
+        "Material family",
         material_tab_labels,
+        index=material_tab_labels.index(stored_material_tab),
         key="_material_tab",
         on_change=_snapshot_completed_input_state,
+        width="stretch",
+    )
+    material_tabs = active_panes(
+        mat_tab.container(),
+        material_tab_labels,
+        selected_material_tab,
+        state=st.session_state,
     )
     conc_tab, mild_tab, pre_tab = material_tabs[:3]
     fatigue_tab = material_tabs[3] if fatigue_on else None
@@ -9901,6 +9949,11 @@ def _analysis_workspace(inp):
     An input edit still causes a normal full rerun and invokes this function with a
     freshly built input payload.
     """
+    # No input widget owns these keys while Analysis is mounted.  Restore the
+    # completed durable draft on every fragment rerun so Streamlit's widget
+    # cleanup cannot expose an old default through session state, project save,
+    # or calculation metadata.
+    _restore_input_state(replace=True)
     # This must live inside the fragment: Calculate, View and result-detail changes
     # rerun only this function, not the top-level page dispatcher.  Quick Section
     # and the manual do not invoke the fragment, so their exclusion is preserved.
