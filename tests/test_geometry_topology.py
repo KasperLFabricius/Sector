@@ -652,7 +652,9 @@ def test_capacity_orchestrator_entries_do_not_swallow_topology_errors(entry):
         "outer": section.concrete[0],
         "holes": [],
         "shear_on": True,
+        "shear_method": capacity.codes.EC2_2005_DKNA.label,
         "torsion_on": True,
+        "torsion_method": capacity.codes.EC2_2005_DKNA.label,
     }
     with pytest.raises(geometry.GeometryTopologyError):
         entry(inp)

@@ -17,8 +17,8 @@ import fatigue_inputs
 import load_cases
 import project_io
 import reinforcement_table
-from sector import bridge
 
+from sector import bridge, capacity, codes
 
 _BRIDGE_PROJECT_ROWS = {
     bridge_inputs.BRITTLE_TABLE_KEY: {
@@ -172,6 +172,82 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert json.loads(first)["version"] == project_io.VERSION
     assert json.loads(second)["version"] == project_io.VERSION
+
+
+@pytest.mark.parametrize(
+    ("key", "label"),
+    [
+        *(
+            ("shear_method", label)
+            for label in capacity.SHEAR_METHODS
+        ),
+        *(
+            ("torsion_method", label)
+            for label in capacity.SHEAR_CODES
+        ),
+        *(
+            ("combined_method", label)
+            for label in capacity.SHEAR_CODES
+        ),
+    ],
+)
+def test_current_schema_retains_every_capacity_method_identity(key, label):
+    tables, scalars = _current_project()
+    scalars[key] = label
+
+    first = project_io.dump_project(tables, scalars)
+    loaded_tables, loaded_scalars = project_io.parse_project(first)
+    second = project_io.dump_project(loaded_tables, loaded_scalars)
+    _, reloaded_scalars = project_io.parse_project(second)
+
+    assert loaded_scalars[key] == label
+    assert reloaded_scalars[key] == label
+    assert project_io.project_provenance(first)["input_hash_valid"] is True
+    assert project_io.project_provenance(second)["input_hash_valid"] is True
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["shear_method", "torsion_method", "combined_method"],
+)
+@pytest.mark.parametrize(
+    "invalid",
+    [None, "", "unsupported method", True, 1, []],
+)
+def test_current_schema_rejects_present_unsupported_capacity_method(
+    key,
+    invalid,
+):
+    tables, scalars = _current_project()
+    scalars[key] = invalid
+
+    with pytest.raises(capacity.CapacityMethodError, match="unsupported"):
+        project_io.dump_project(tables, scalars)
+
+
+@pytest.mark.parametrize(
+    ("key", "label"),
+    [
+        ("shear_method", codes.EC2_2005_DKNA.label),
+        ("torsion_method", codes.EC2_2005.label),
+        ("combined_method", codes.EC2_2005_DKNA.label),
+    ],
+)
+def test_current_loader_rejects_coherently_rehashed_unsupported_method(
+    key,
+    label,
+):
+    tables, scalars = _current_project()
+    scalars[key] = label
+    data = json.loads(project_io.dump_project(tables, scalars))
+    data["scalars"][key] = "unsupported method"
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(capacity.CapacityMethodError, match="unsupported"):
+        project_io.parse_project(json.dumps(data))
 
 
 @pytest.mark.parametrize(

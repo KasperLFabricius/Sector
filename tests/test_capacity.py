@@ -60,7 +60,7 @@ def _member_input(**overrides):
         "torsion_subdivide": False,
         "torsion_subrects": [],
         "combined_on": False,
-        "combined_method": "DS/EN 1992-1-1 + DK NA",
+        "combined_method": codes.EC2_2005_DKNA.label,
         "combined_mv_independent": False,
     }
     inp.update(overrides)
@@ -83,6 +83,392 @@ def test_capacity_module_has_no_ui_dependency():
         if isinstance(node, ast.ImportFrom)
     )
     assert not any(name == "streamlit" or name.startswith("streamlit.") for name in imports)
+
+
+def test_capacity_method_registries_preserve_exact_identity_and_order():
+    assert tuple(capacity.SHEAR_METHODS) == (
+        codes.EC2_2005_DKNA.label,
+        codes.EC2_2005.label,
+        codes.EC2_2023.label,
+    )
+    assert tuple(capacity.SHEAR_CODES) == (
+        codes.EC2_2005_DKNA.label,
+        codes.EC2_2005.label,
+    )
+    for label, code in capacity.SHEAR_METHODS.items():
+        assert capacity.selected_shear_code(label) is code
+    for label, code in capacity.SHEAR_CODES.items():
+        assert capacity.selected_torsion_code(label) is code
+        assert capacity.selected_combined_code(label) is code
+
+
+@pytest.mark.parametrize(
+    "resolver",
+    [
+        capacity.selected_shear_code,
+        capacity.selected_torsion_code,
+        capacity.selected_combined_code,
+    ],
+)
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        "",
+        "unsupported method",
+        True,
+        1,
+        [],
+        np.bool_(True),
+        np.str_(codes.EC2_2005_DKNA.label),
+    ],
+)
+def test_capacity_method_resolvers_reject_every_unretained_identity(
+    resolver,
+    invalid,
+):
+    with pytest.raises(capacity.CapacityMethodError, match="unsupported"):
+        resolver(invalid)
+
+
+@pytest.mark.parametrize("invalid", [None, "", "unsupported method", True, []])
+def test_active_capacity_methods_fail_before_geometry_or_mechanics(
+    monkeypatch,
+    invalid,
+):
+    def geometry_was_reached(_inp):
+        raise AssertionError("geometry must not run before method validation")
+
+    monkeypatch.setattr(
+        capacity,
+        "_require_valid_input_geometry",
+        geometry_was_reached,
+    )
+    with pytest.raises(capacity.CapacityMethodError, match="shear method"):
+        capacity.build_shear_context(
+            _member_input(shear_method=invalid), 0.0, 0.0
+        )
+    with pytest.raises(capacity.CapacityMethodError, match="shear method"):
+        capacity.build_directional_shear_contexts(
+            _member_input(
+                shear_method=invalid,
+                shear_Vx=10.0,
+                shear_Vy=10.0,
+            ),
+            0.0,
+            0.0,
+        )
+    with pytest.raises(capacity.CapacityMethodError, match="torsion method"):
+        capacity.build_torsion_context(
+            _member_input(torsion_on=True, torsion_method=invalid),
+            0.0,
+        )
+    with pytest.raises(capacity.CapacityMethodError, match="combined method"):
+        capacity.finalize_combined(
+            _member_input(combined_on=True, combined_method=invalid),
+            {},
+        )
+
+
+def test_inactive_capacity_families_leave_optional_method_identity_inert():
+    inp = _member_input(
+        shear_on=False,
+        shear_method="unsupported method",
+        torsion_on=False,
+        torsion_method="unsupported method",
+        combined_on=False,
+        combined_method="unsupported method",
+    )
+    assert capacity.build_shear_context(inp, 0.0, 0.0) == (None, None)
+    assert capacity.build_directional_shear_contexts(inp, 0.0, 0.0) == {}
+    assert capacity.build_torsion_context(inp, 0.0) is None
+    out = {}
+    assert capacity.finalize_combined(inp, out) is None
+    assert out == {}
+
+
+def _plastic_point(**overrides):
+    values = {
+        "converged": True,
+        "dx": 0.25,
+        "dy": 0.20,
+        "Mx": 120.0,
+        "My": 80.0,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_shear_lever_arm_preserves_finite_and_expected_fallback_states(
+    monkeypatch,
+):
+    inp = _member_input()
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(dy=0.20),
+    )
+    assert capacity.shear_lever_arm(inp, "x", True, 550.0) == (
+        200.0,
+        "plastic internal lever arm",
+    )
+
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(
+            converged=False,
+            dy=math.nan,
+        ),
+    )
+    assert capacity.shear_lever_arm(inp, "x", True, 550.0) == (
+        pytest.approx(495.0),
+        "0.9 d (fallback)",
+    )
+
+
+@pytest.mark.parametrize(
+    "depth",
+    [True, -1.0, math.nan, math.inf, -math.inf, "550", 10 ** 4000],
+)
+def test_shear_lever_arm_rejects_malformed_fallback_depth(depth):
+    with pytest.raises(capacity.CapacityInputError, match="non-negative finite"):
+        capacity.shear_lever_arm(
+            _member_input(section=None),
+            "x",
+            True,
+            depth,
+        )
+
+
+def test_shear_lever_arm_retains_zero_fallback_depth():
+    assert capacity.shear_lever_arm(
+        _member_input(section=None),
+        "x",
+        True,
+        0.0,
+    ) == (0.0, "0.9 d (fallback)")
+
+
+def test_shear_lever_arm_propagates_unexpected_solver_fault(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("lever solve blew up")
+
+    monkeypatch.setattr(capacity, "plastic_capacity_at_angle", boom)
+    with pytest.raises(RuntimeError, match="lever solve blew up"):
+        capacity.shear_lever_arm(_member_input(), "x", True, 550.0)
+
+
+@pytest.mark.parametrize("converged", [None, 0, 1, np.bool_(True)])
+def test_shear_lever_arm_rejects_malformed_convergence_state(
+    monkeypatch,
+    converged,
+):
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(converged=converged),
+    )
+    with pytest.raises(capacity.CapacityResultError, match="Boolean"):
+        capacity.shear_lever_arm(_member_input(), "x", True, 550.0)
+
+
+@pytest.mark.parametrize("lever", [math.nan, math.inf, -math.inf, "bad"])
+def test_shear_lever_arm_rejects_nonfinite_converged_result(
+    monkeypatch,
+    lever,
+):
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(dy=lever),
+    )
+    with pytest.raises(capacity.CapacityResultError, match="finite real"):
+        capacity.shear_lever_arm(_member_input(), "x", True, 550.0)
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        None,
+        SimpleNamespace(dy=0.20),
+        SimpleNamespace(converged=True),
+    ],
+)
+def test_shear_lever_arm_rejects_missing_solver_members(monkeypatch, point):
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: point,
+    )
+    with pytest.raises(capacity.CapacityResultError, match="missing returned"):
+        capacity.shear_lever_arm(_member_input(), "x", True, 550.0)
+
+
+@pytest.mark.parametrize(
+    ("axis", "tension_low"),
+    [("z", True), ([], True), ("x", 1), ("x", np.bool_(True))],
+)
+def test_capacity_face_identity_rejects_wrong_axis_or_retained_type(
+    axis,
+    tension_low,
+):
+    with pytest.raises(capacity.CapacityInputError, match="face identity"):
+        capacity.shear_lever_arm(
+            _member_input(), axis, tension_low, 550.0
+        )
+
+
+def test_shear_face_mrd_preserves_conditional_and_pure_axis_states(
+    monkeypatch,
+):
+    inp = _member_input()
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: (75.0, True),
+    )
+    assert capacity.shear_face_mrd(inp, "x", True, 25.0) == (75.0, True)
+
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: (0.0, True),
+    )
+    assert capacity.shear_face_mrd(inp, "x", True, 25.0) == (0.0, True)
+
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: (0.0, False),
+    )
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(Mx=-120.0),
+    )
+    assert capacity.shear_face_mrd(inp, "x", True, 25.0) == (
+        120.0,
+        False,
+    )
+
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(
+            converged=False,
+            Mx=math.nan,
+        ),
+    )
+    assert capacity.shear_face_mrd(inp, "x", True, 25.0) == (0.0, False)
+
+
+def test_shear_face_mrd_propagates_both_unexpected_solver_faults(monkeypatch):
+    inp = _member_input()
+
+    def conditional_boom(*args, **kwargs):
+        raise RuntimeError("conditional solve blew up")
+
+    monkeypatch.setattr(capacity, "conditional_capacity", conditional_boom)
+    with pytest.raises(RuntimeError, match="conditional solve blew up"):
+        capacity.shear_face_mrd(inp, "x", True, 25.0)
+
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: (0.0, False),
+    )
+
+    def pure_axis_boom(*args, **kwargs):
+        raise RuntimeError("pure-axis solve blew up")
+
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        pure_axis_boom,
+    )
+    with pytest.raises(RuntimeError, match="pure-axis solve blew up"):
+        capacity.shear_face_mrd(inp, "x", True, 25.0)
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        None,
+        [0.0, False],
+        (0.0,),
+        (0.0, False, "extra"),
+        (-1.0, True),
+        (math.nan, True),
+        (math.inf, True),
+        (1.0, False),
+        (0.0, np.bool_(True)),
+    ],
+)
+def test_shear_face_mrd_rejects_malformed_conditional_result(
+    monkeypatch,
+    candidate,
+):
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: candidate,
+    )
+    with pytest.raises(capacity.CapacityResultError):
+        capacity.shear_face_mrd(_member_input(), "x", True, 25.0)
+
+
+@pytest.mark.parametrize(
+    ("point", "message"),
+    [
+        (_plastic_point(converged=1), "Boolean"),
+        (_plastic_point(Mx=math.nan), "finite real"),
+        (_plastic_point(Mx=math.inf), "finite real"),
+    ],
+)
+def test_shear_face_mrd_rejects_malformed_pure_axis_result(
+    monkeypatch,
+    point,
+    message,
+):
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: (0.0, False),
+    )
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: point,
+    )
+    with pytest.raises(capacity.CapacityResultError, match=message):
+        capacity.shear_face_mrd(_member_input(), "x", True, 25.0)
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        None,
+        SimpleNamespace(Mx=100.0),
+        SimpleNamespace(converged=True),
+    ],
+)
+def test_shear_face_mrd_rejects_missing_pure_axis_members(
+    monkeypatch,
+    point,
+):
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: (0.0, False),
+    )
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: point,
+    )
+    with pytest.raises(capacity.CapacityResultError, match="missing returned"):
+        capacity.shear_face_mrd(_member_input(), "x", True, 25.0)
 
 
 def _torsion_cracking_result(method, gamma_ct, demand=28.0):
@@ -182,6 +568,7 @@ def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd()
     inp = _member_input(
         shear_method=codes.EC2_2023.label,
         shear_links=True,
+        section=None,
         transverse_ductility_class="B",
     )
     _payload, links = capacity.build_shear_context(

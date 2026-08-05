@@ -549,9 +549,9 @@ def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially()
 
 def test_shear_face_mrd_falls_back_to_pure_axis_on_solve_failure(monkeypatch):
     # The fallback chain has to be exercised on the real code, not a hand-built
-    # payload: when the conditional solve fails (raises, or returns (0.0, False)),
-    # _shear_face_mrd returns the LEGACY pure-axis capacity with conditional=False,
-    # which drives the UI/report biaxial warning.
+    # payload: the retained (0.0, False) non-convergence state returns the LEGACY
+    # pure-axis capacity with conditional=False, which drives the UI/report biaxial
+    # warning. Unexpected exceptions are implementation faults and must propagate.
     from sector import capacity
     ex = manual.example_beam()
     inp = dict(section=manual._section_of(ex), concrete=ex["concrete"],
@@ -566,5 +566,5 @@ def test_shear_face_mrd_falls_back_to_pure_axis_on_solve_failure(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("solve blew up")
     monkeypatch.setattr(capacity, "conditional_capacity", _boom)
-    mrd2, cond2 = capacity.shear_face_mrd(inp, "x", True, m_off=50.0)
-    assert cond2 is False and mrd2 == pytest.approx(legacy)
+    with pytest.raises(RuntimeError, match="solve blew up"):
+        capacity.shear_face_mrd(inp, "x", True, m_off=50.0)
