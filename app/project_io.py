@@ -236,6 +236,18 @@ def _obj_to_table(value, key: str) -> pd.DataFrame:
         or not isinstance(rows, list)
     ):
         raise ValueError(f"{key} table columns/rows are malformed")
+    if key in BRIDGE_TABLE_KEYS:
+        if len(set(columns)) != len(columns):
+            raise ValueError(f"{key} contains duplicate columns")
+        if any(
+            not isinstance(row, list) or len(row) != len(columns)
+            for row in rows
+        ):
+            raise ValueError(f"{key} table rows are not tabular")
+        return bridge_inputs.normalise_table(
+            [dict(zip(columns, row)) for row in rows],
+            key,
+        )
     try:
         frame = pd.DataFrame(rows, columns=columns)
     except (TypeError, ValueError) as exc:

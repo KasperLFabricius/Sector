@@ -24,7 +24,10 @@ sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` 
 
 APP = str(ROOT / "app" / "sector_app.py")
 
-from app_case_inputs import apply_case_changes, first_case_value  # noqa: E402
+import bridge_inputs
+from app_case_inputs import apply_case_changes, first_case_value
+
+from sector import bridge
 
 _MATH_SPAN_RE = re.compile(r"\${1,2}.*?\${1,2}", flags=re.DOTALL)
 _LEAKED_MATH_RE = re.compile(
@@ -3752,6 +3755,73 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
         "Report",
         "Save / Load",
     ]
+
+
+def test_bridge_typed_failure_does_not_mask_valid_sibling_result():
+    at = _fresh()
+    at.session_state["bridge_standard"] = bridge.COMPONENT_METHODS
+    at.session_state[bridge_inputs.BRITTLE_TABLE_KEY] = [{
+        "region_id": "bottom",
+        "m_rep_knm": 1.0,
+        "z_s_m": 1.0e-200,
+        "f_yk_mpa": 1.0e-200,
+        "as_provided_mm2": 1.0,
+    }]
+    at.session_state[bridge_inputs.BOX_WALL_TABLE_KEY] = [{
+        "wall_id": "left",
+        "cot_theta": 1.5,
+        "v_ed_kn": 20.0,
+        "v_rd_max_kn": 100.0,
+        "t_ed_equivalent_kn": 10.0,
+        "t_rd_max_equivalent_kn": 100.0,
+    }]
+    at.session_state[bridge_inputs.MINIMUM_CRACK_TABLE_KEY] = []
+
+    at.run()
+    _calculate(at)
+    _select_view(at, "Bridge Calculations")
+
+    assert not at.exception
+    assert any(
+        "brittle method b: invalid (numerical_failure)" in error.value.lower()
+        for error in at.error
+    )
+    wall_table = next(
+        frame.value
+        for frame in at.dataframe
+        if "Wall" in frame.value.columns
+    )
+    assert wall_table.iloc[0]["Wall"] == "left"
+    results = at.session_state["results"]
+    assert "plastic" in results
+    payload = results["bridge"]
+    assert tuple(payload["calculations"]) == ("box_walls",)
+    assert payload["failures"][0]["state"] == "INVALID"
+
+
+def test_bridge_failure_only_result_remains_active_with_section_results():
+    at = _fresh()
+    at.session_state["bridge_standard"] = bridge.COMPONENT_METHODS
+    at.session_state[bridge_inputs.BRITTLE_TABLE_KEY] = [{
+        "region_id": "bottom",
+        "m_rep_knm": 1.0,
+        "z_s_m": 1.0e-200,
+        "f_yk_mpa": 1.0e-200,
+        "as_provided_mm2": 1.0,
+    }]
+    at.session_state[bridge_inputs.BOX_WALL_TABLE_KEY] = []
+    at.session_state[bridge_inputs.MINIMUM_CRACK_TABLE_KEY] = []
+
+    at.run()
+    _calculate(at)
+    _select_view(at, "Bridge Calculations")
+
+    assert not at.exception
+    results = at.session_state["results"]
+    assert "plastic" in results
+    assert results["bridge"]["calculations"] == {}
+    assert results["bridge"]["failures"][0]["code"] == "NUMERICAL_FAILURE"
+    assert any("numerical_failure" in error.value.lower() for error in at.error)
 
 
 def test_only_selected_outer_stage_mounts_and_retains_material_edits():

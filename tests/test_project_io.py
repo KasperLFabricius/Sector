@@ -17,6 +17,7 @@ import fatigue_inputs
 import load_cases
 import project_io
 import reinforcement_table
+from sector import bridge
 
 
 _BRIDGE_PROJECT_ROWS = {
@@ -188,6 +189,7 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
         True,
         float("inf"),
         float("-inf"),
+        10 ** 4000,
         complex(1.0, -2.0),
         np.complex64(1.0 - 2.0j),
     ],
@@ -212,13 +214,23 @@ def test_current_project_round_trips_every_invalid_bridge_numeric_cell(
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert bridge_inputs.table_signature(loaded[table_key], table_key) == expected
     assert bridge_inputs.table_signature(reloaded[table_key], table_key) == expected
-    with pytest.raises(ValueError, match=f"{column} must be finite numeric"):
+    with pytest.raises(
+        bridge.BridgeInputError,
+        match=f"{column} must be finite numeric",
+    ):
         bridge_inputs.records(reloaded[table_key], table_key)
 
 
 @pytest.mark.parametrize(
     "invalid",
-    ["yes", 1, 0.0, float("inf"), complex(1.0, -2.0)],
+    [
+        "yes",
+        1,
+        0.0,
+        float("inf"),
+        10 ** 4000,
+        complex(1.0, -2.0),
+    ],
 )
 def test_current_project_round_trips_invalid_bridge_boolean_identity(invalid):
     table_key = bridge_inputs.MINIMUM_CRACK_TABLE_KEY
@@ -233,7 +245,10 @@ def test_current_project_round_trips_invalid_bridge_boolean_identity(invalid):
 
     assert project_io.project_provenance(text)["input_hash_valid"] is True
     assert bridge_inputs.table_signature(loaded[table_key], table_key) == expected
-    with pytest.raises(ValueError, match="restrained_shrinkage must be Boolean"):
+    with pytest.raises(
+        bridge.BridgeInputError,
+        match="restrained_shrinkage must be Boolean",
+    ):
         bridge_inputs.records(loaded[table_key], table_key)
 
 
@@ -251,6 +266,25 @@ def test_current_project_keeps_scalar_pandas_bridge_blanks_inert():
     assert project_io.project_provenance(text)["input_hash_valid"] is True
     for table_key in bridge_inputs.TABLE_KEYS:
         assert bridge_inputs.records(loaded[table_key], table_key) == []
+
+
+def test_bridge_project_loader_rejects_duplicate_columns_before_mapping():
+    key = bridge_inputs.BRITTLE_TABLE_KEY
+    with pytest.raises(ValueError, match="contains duplicate columns"):
+        project_io._obj_to_table({
+            "columns": ["region_id", "region_id"],
+            "rows": [["R1", "R2"]],
+        }, key)
+
+
+@pytest.mark.parametrize("row", [["R1"], "R1", {"region_id": "R1"}])
+def test_bridge_project_loader_rejects_wrong_row_cardinality(row):
+    key = bridge_inputs.BRITTLE_TABLE_KEY
+    with pytest.raises(ValueError, match="rows are not tabular"):
+        project_io._obj_to_table({
+            "columns": list(bridge_inputs.TABLE_COLUMNS[key]),
+            "rows": [row],
+        }, key)
 
 
 def test_encoded_invalid_bridge_identity_is_covered_by_the_project_hash():

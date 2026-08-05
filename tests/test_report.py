@@ -1675,6 +1675,41 @@ def test_report_publishes_retained_bridge_kernels_without_coverage_aggregate():
     assert "approval" not in text.casefold()
 
 
+def test_report_publishes_typed_bridge_failure_and_valid_sibling():
+    inp = _inp()
+    inp.update({
+        "bridge_standard": bridge.COMPONENT_METHODS,
+        bridge_inputs.BRITTLE_TABLE_KEY: [{
+            "region_id": "bottom",
+            "m_rep_knm": 1.0,
+            "z_s_m": 1.0e-200,
+            "f_yk_mpa": 1.0e-200,
+            "as_provided_mm2": 1.0,
+        }],
+        bridge_inputs.BOX_WALL_TABLE_KEY: [{
+            "wall_id": "left",
+            "cot_theta": 1.5,
+            "v_ed_kn": 20.0,
+            "v_rd_max_kn": 100.0,
+            "t_ed_equivalent_kn": 10.0,
+            "t_rd_max_equivalent_kn": 100.0,
+        }],
+        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: None,
+    })
+    out = _out()
+    out["bridge"] = bridge_analysis.run(inp)
+
+    text = " ".join(_pdf_text(
+        sector_report.build_report({}, inp, out, figures=False)
+    ).split())
+
+    assert "brittle method b: INVALID (NUMERICAL_FAILURE)" in text
+    assert "bottom: As,min cannot be represented as a finite result" in text
+    assert "Box-wall shear and torsion" in text
+    assert "Optional brittle Method B" not in text
+    assert "Util." in text
+
+
 def test_report_ignores_stale_trace_payload_and_has_no_trace_chapter():
     inp = _inp()
     inp.update({

@@ -19,6 +19,11 @@ TABLE_KEYS = (
     BOX_WALL_TABLE_KEY,
     MINIMUM_CRACK_TABLE_KEY,
 )
+CALCULATION_KEYS = {
+    BRITTLE_TABLE_KEY: "brittle_method_b",
+    BOX_WALL_TABLE_KEY: "box_walls",
+    MINIMUM_CRACK_TABLE_KEY: "minimum_crack_reinforcement",
+}
 _INVALID_CELL_TAG = "__sector_bridge_invalid_cell_v1__"
 
 TABLE_COLUMNS = {
@@ -71,7 +76,7 @@ NUMERIC_COLUMNS = {
 
 def _key(key: str) -> str:
     if key not in TABLE_KEYS:
-        raise ValueError(f"unknown bridge table: {key}")
+        raise bridge.BridgeInputError(f"unknown bridge table: {key}")
     return key
 
 
@@ -133,7 +138,7 @@ def _invalid_identity(value) -> tuple[str, str]:
     ):
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
         else:
             if not math.isfinite(number):
@@ -164,7 +169,7 @@ def _number(value):
         return math.nan
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return math.nan
     return number if math.isfinite(number) else math.nan
 
@@ -185,7 +190,7 @@ def _raw_number(value):
         return value
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return value
     return number if math.isfinite(number) else value
 
@@ -206,10 +211,15 @@ def _frame(value, key: str) -> pd.DataFrame:
             if isinstance(value, pd.DataFrame)
             else pd.DataFrame(value)
         )
+    except OverflowError:
+        try:
+            frame = pd.DataFrame(value, dtype="object")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise bridge.BridgeInputError(f"{key} must be tabular") from exc
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{key} must be tabular") from exc
+        raise bridge.BridgeInputError(f"{key} must be tabular") from exc
     if bool(frame.columns.duplicated().any()):
-        raise ValueError(f"{key} contains duplicate columns")
+        raise bridge.BridgeInputError(f"{key} contains duplicate columns")
     return frame
 
 
@@ -246,13 +256,33 @@ def normalise_table(value, key: str) -> pd.DataFrame:
         if column in TEXT_COLUMNS[key]:
             result[column] = source.map(_text).astype("string")
         elif column in BOOLEAN_COLUMNS[key]:
-            flags = source.map(_raw_flag)
-            if all(type(item) is bool for item in flags.astype(object).tolist()):
-                result[column] = flags.astype("bool")
-            else:
-                result[column] = flags.astype("object")
+            flags = [
+                _raw_flag(item)
+                for item in source.astype("object").tolist()
+            ]
+            result[column] = pd.Series(
+                flags,
+                index=frame.index,
+                dtype=(
+                    "bool"
+                    if all(type(item) is bool for item in flags)
+                    else "object"
+                ),
+            )
         else:
-            result[column] = source.map(_raw_number)
+            values = [
+                _raw_number(item)
+                for item in source.astype("object").tolist()
+            ]
+            result[column] = pd.Series(
+                values,
+                index=frame.index,
+                dtype=(
+                    "float64"
+                    if all(type(item) is float for item in values)
+                    else "object"
+                ),
+            )
     return result.loc[:, TABLE_COLUMNS[key]].reset_index(drop=True)
 
 
@@ -282,19 +312,19 @@ def records(value, key: str) -> list[dict]:
         for column in NUMERIC_COLUMNS[key]:
             value_number = _number(record[column])
             if not math.isfinite(value_number):
-                raise ValueError(
+                raise bridge.BridgeInputError(
                     f"{key} row {number}: {column} must be finite numeric"
                 )
             record[column] = value_number
         for column in BOOLEAN_COLUMNS[key]:
             if type(record[column]) is not bool:
-                raise ValueError(
+                raise bridge.BridgeInputError(
                     f"{key} row {number}: {column} must be Boolean"
                 )
         if key == MINIMUM_CRACK_TABLE_KEY:
             component = _text(record["component"]).casefold()
             if component not in {"web", "flange"}:
-                raise ValueError(
+                raise bridge.BridgeInputError(
                     f"{key} row {number}: component must be Web or Flange"
                 )
             record["component"] = component
@@ -347,7 +377,7 @@ def project_cell(value, key: str, column: str):
     """Encode one normalized bridge cell as strict canonical JSON data."""
     key = _key(key)
     if column not in TABLE_COLUMNS[key]:
-        raise ValueError(f"unknown {key} column: {column}")
+        raise bridge.BridgeInputError(f"unknown {key} column: {column}")
     if column in TEXT_COLUMNS[key]:
         return _text(value)
     if _missing(value):
@@ -372,33 +402,57 @@ def project_cell(value, key: str, column: str):
 def table_from_records(value, key: str) -> pd.DataFrame:
     if value is None:
         return empty_table(key)
-    if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
-        raise ValueError(f"{key} must be a list of row objects")
+    if not isinstance(value, list) or not all(
+        isinstance(item, Mapping) for item in value
+    ):
+        raise bridge.BridgeInputError(
+            f"{key} must be a list of row objects"
+        )
     return normalise_table(value, key)
 
 
-def calculate(tables: Mapping, *, standard: str) -> dict:
-    """Calculate every enabled optional bridge table."""
-    out = {}
-    brittle_rows = records(tables.get(BRITTLE_TABLE_KEY), BRITTLE_TABLE_KEY)
-    if brittle_rows:
-        out["brittle_method_b"] = bridge.calculate_brittle_method_b(
-            (bridge.PrestressBrittleRegion(**row) for row in brittle_rows),
+def calculate_family(
+    value,
+    key: str,
+    *,
+    standard: str,
+) -> tuple[str, bridge.BridgeResult] | None:
+    """Calculate one independently enabled optional bridge family."""
+    key = _key(key)
+    family = CALCULATION_KEYS[key]
+    family_rows = records(value, key)
+    if not family_rows:
+        return None
+    if key == BRITTLE_TABLE_KEY:
+        result: bridge.BridgeResult = bridge.calculate_brittle_method_b(
+            (bridge.PrestressBrittleRegion(**row) for row in family_rows),
             selected_standard=standard,
         )
-    wall_rows = records(tables.get(BOX_WALL_TABLE_KEY), BOX_WALL_TABLE_KEY)
-    if wall_rows:
-        out["box_walls"] = bridge.calculate_box_walls(
-            bridge.BoxWall(**row) for row in wall_rows
+    elif key == BOX_WALL_TABLE_KEY:
+        result = bridge.calculate_box_walls(
+            bridge.BoxWall(**row) for row in family_rows
         )
-    minimum_rows = records(
-        tables.get(MINIMUM_CRACK_TABLE_KEY),
-        MINIMUM_CRACK_TABLE_KEY,
-    )
-    if minimum_rows:
-        out["minimum_crack_reinforcement"] = (
-            bridge.calculate_minimum_crack_reinforcement(
-                bridge.MinimumCrackComponent(**row) for row in minimum_rows
-            )
+    else:
+        result = bridge.calculate_minimum_crack_reinforcement(
+            bridge.MinimumCrackComponent(**row) for row in family_rows
         )
+    return family, result
+
+
+def calculate(
+    tables: Mapping,
+    *,
+    standard: str,
+) -> dict[str, bridge.BridgeResult]:
+    """Calculate every enabled optional bridge table in retained order."""
+    out: dict[str, bridge.BridgeResult] = {}
+    for key in TABLE_KEYS:
+        family_result = calculate_family(
+            tables.get(key),
+            key,
+            standard=standard,
+        )
+        if family_result is not None:
+            family, result = family_result
+            out[family] = result
     return out

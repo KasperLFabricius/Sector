@@ -1736,11 +1736,19 @@ class ReportBuilder:
             )
         bridge_payload = self._base_out.get("bridge") or {}
         bridge_calculations = bridge_payload.get("calculations") or {}
-        if bridge_calculations or bridge_payload.get("errors"):
+        bridge_failures = tuple(bridge_payload.get("failures") or ())
+        if bridge_calculations or bridge_failures:
+            failure_suffix = (
+                f", {len(bridge_failures)} failure"
+                f"{'s' if len(bridge_failures) != 1 else ''}"
+                if bridge_failures
+                else ""
+            )
             labels.append(
                 "independent bridge calculations ("
                 f"{len(bridge_calculations)} method"
-                f"{'s' if len(bridge_calculations) != 1 else ''})"
+                f"{'s' if len(bridge_calculations) != 1 else ''}"
+                f"{failure_suffix})"
             )
         ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
@@ -5127,14 +5135,23 @@ class ReportBuilder:
             + ". These are separate numerical methods; generic bridge-code "
             "coverage and generic cross-method interaction are not calculated."
         )
-        errors = tuple(payload.get("errors") or ())
-        if errors:
-            for error in errors:
-                self._small("<b>Invalid bridge input:</b> " + _html_escape(str(error)))
-            return
+        failures = tuple(payload.get("failures") or ())
+        for failure in failures:
+            family = str(failure.get("family") or "bridge").replace("_", " ")
+            state = str(failure.get("state") or "INVALID")
+            code = str(failure.get("code") or "INVALID_INPUT")
+            message = str(
+                failure.get("message") or "Calculation unavailable"
+            )
+            self._small(
+                f"<b>{_html_escape(family)}:</b> "
+                f"{_html_escape(state)} ({_html_escape(code)}) - "
+                f"{_html_escape(message)}"
+            )
         calculations = payload.get("calculations") or {}
         if not calculations:
-            self._small("No bridge calculation rows were supplied.")
+            if not failures:
+                self._small("No bridge calculation rows were supplied.")
             return
 
         brittle = calculations.get("brittle_method_b")
