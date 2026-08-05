@@ -1,0 +1,59 @@
+schema_version = 1
+
+[coverage]
+targets = ["app", "sector"]
+minimum_percent = 50
+
+[ruff]
+critical_paths = ["app", "sector", "tools", "tests"]
+critical_select = ["E9", "F63", "F7", "F82"]
+selected_paths = [
+  "sector/capacity.py",
+  "tests/test_capacity.py",
+  "tests/test_project_io.py",
+]
+selected_select = ["E4", "E7", "E9", "F", "I"]
+selected_ignore = ["E402"]
+
+[typing]
+strict = true
+paths = [
+  "sector/bridge.py",
+  "app/bridge_analysis.py",
+  "app/manual_equation_contract.py",
+  "app/manual_equation_publication.py",
+]
+
+[dependency_security]
+requirements = "requirements-dev.txt"
+strict = true
+require_hashes = true
+disable_pip = true
+
+[[waivers]]
+id = "coverage-pr14-calibration"
+gate = "coverage"
+owner = "Kasper Lindskov Fabricius"
+reason = "The unpublished PR-13 slice must not pay or reinterpret the consolidated full-suite evidence reserved for PR-14."
+exit_condition = "PR-14 records exact-head app/sector coverage and raises minimum_percent to the stable whole-percent floor when it exceeds 50 percent."
+
+[[waivers]]
+id = "ruff-existing-scope"
+gate = "ruff"
+owner = "Kasper Lindskov Fabricius"
+reason = "The retained tree contains pre-existing non-fatal style debt outside the selected clean boundary."
+exit_condition = "Expand the selected rule and file sets one clean coherent module at a time; new warnings are not accepted inside an already selected scope."
+
+[[waivers]]
+id = "ruff-project-io-e402"
+gate = "ruff"
+owner = "Kasper Lindskov Fabricius"
+reason = "The project-I/O regression module intentionally inserts the app directory before importing application modules."
+exit_condition = "Remove E402 from selected_ignore when application imports no longer require test-time path bootstrapping."
+
+[[waivers]]
+id = "mypy-existing-scope"
+gate = "typing"
+owner = "Kasper Lindskov Fabricius"
+reason = "Strict typing is initially ratcheted at four already-clean solver/publication boundaries rather than masking whole-tree debt."
+exit_condition = "Add the next coherent solver or publication boundary after it is strict-clean; files already listed here may never regress."

@@ -48,4 +48,8 @@ def test_ci_runs_full_tests_artifact_renders_and_windows_build():
     assert "tools/report_render_fixture.py" in workflow
     assert "tools/manual_render_fixture.py" in workflow
     assert "python -m PyInstaller" in workflow
-    assert workflow.count("--require-hashes") == 2
+    assert workflow.count("--require-hashes") == 3
+    assert (
+        "python -m pip_audit --strict --require-hashes --disable-pip "
+        "-r requirements-dev.txt"
+    ) in workflow
