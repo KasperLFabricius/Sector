@@ -351,6 +351,7 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
     import sector_app
 
     for func in (
+        sector_app._input_workspace,
         sector_app._analysis_workspace,
         sector_app._quick_section_viewport,
         sector_app._report_panel,
@@ -365,6 +366,129 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
         panel_source = inspect.getsource(panel.__wrapped__)
         assert "st.expander(" in panel_source
         assert "parent." not in panel_source
+
+    input_workspace = inspect.getsource(sector_app._input_workspace.__wrapped__)
+    input_commit = inspect.getsource(sector_app._commit_input_fragment)
+    quick_section_exit = inspect.getsource(sector_app._open_analysis_content)
+    manual_exit = inspect.getsource(sector_app._open_manual_dialog)
+    app_source = inspect.getsource(sector_app)
+    assert "parallel=True" not in inspect.getsource(sector_app._input_workspace)
+    assert input_workspace.index("_restore_input_state(replace=True)") < (
+        input_workspace.index("st.session_state[_INPUT_BUILD_KEY] = True")
+    )
+    assert input_workspace.index("st.session_state[_INPUT_BUILD_KEY] = True") < (
+        input_workspace.index("build_inputs(st)")
+    )
+    assert input_workspace.index("build_inputs(st)") < input_workspace.index(
+        "_commit_input_fragment(inp)"
+    )
+    ordered_commit = (
+        "_snapshot_input_state(inp)",
+        "st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)",
+        'st.session_state[_INPUT_BUILD_KEY] = False',
+        'st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"',
+        "_maybe_autosave()",
+        "_generate_report(inp)",
+    )
+    assert [input_commit.index(token) for token in ordered_commit] == sorted(
+        input_commit.index(token) for token in ordered_commit
+    )
+    assert 'st.session_state["_next_main_page"] = "Analysis"' in quick_section_exit
+    assert 'st.rerun(scope="app")' in quick_section_exit
+    assert 'st.rerun(scope="app")' in manual_exit
+    assert "on_click=_open_analysis_content" not in app_source
+    assert "on_click=_open_manual_dialog" not in app_source
+
+
+def test_input_fragment_exit_callbacks_request_full_app_reruns(monkeypatch):
+    import sector_app
+
+    class FakeStreamlit:
+        def __init__(self):
+            self.session_state = {}
+            self.rerun_scopes = []
+
+        def rerun(self, *, scope):
+            self.rerun_scopes.append(scope)
+
+    fake_st = FakeStreamlit()
+    snapshots = []
+    monkeypatch.setattr(sector_app, "st", fake_st)
+    monkeypatch.setattr(
+        sector_app,
+        "_snapshot_completed_input_state",
+        lambda: snapshots.append("complete"),
+    )
+
+    sector_app._open_analysis_content("quick_section")
+    assert fake_st.session_state["_qs_open"] is True
+    assert fake_st.session_state["_next_main_page"] == "Analysis"
+    assert "_main_page" not in fake_st.session_state
+
+    sector_app._open_manual_dialog()
+    assert fake_st.session_state["_manual_open"] is True
+    assert snapshots == ["complete", "complete"]
+    assert fake_st.rerun_scopes == ["app", "app"]
+
+
+def test_interrupted_input_fragment_batches_latest_cross_pane_events():
+    at = _fresh()
+    at.run()
+    d = chr(0x00B7)
+    material_stage = f"3 {d} Material parameters"
+
+    # Reproduce two genuine edits plus rapid outer/nested navigation arriving
+    # before the preceding Inputs fragment reached its commit point.
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["_pending_input_events"] = {
+        "conc_fck": 47.0,
+        "v_inc": 30.0,
+        "_input_tab": material_stage,
+        "_material_tab": "Mild steel",
+    }
+    at.session_state["_input_tab"] = material_stage
+    at.session_state["_material_tab"] = "Mild steel"
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["_inputs_build_in_progress"] is False
+    assert "_pending_input_events" not in at.session_state
+    assert at.session_state["_input_tab"] == material_stage
+    assert at.session_state["_material_tab"] == "Mild steel"
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == pytest.approx(
+        47.0
+    )
+    assert at.session_state["_durable_input_scalars"]["v_inc"] == pytest.approx(
+        30.0
+    )
+    latest = at.session_state["_latest_inputs"]
+    assert latest["concrete"].fck == pytest.approx(47.0)
+    assert latest["v_inc"] == pytest.approx(30.0)
+
+    _calculate(at)
+    snapshot = at.session_state["result_input_snapshot"]
+    assert snapshot["concrete"].fck == pytest.approx(47.0)
+    assert snapshot["v_inc"] == pytest.approx(30.0)
+
+
+def test_input_fragment_commits_latest_value_before_due_autosave(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _goto_material_tab(at, "Concrete")
+    at.session_state["_autosave_t"] = 0.0
+    at.number_input(key="conc_fck").set_value(43.0).run()
+
+    assert not at.exception
+    saved = tmp_path / "autosave.json"
+    assert saved.exists()
+    import project_io
+
+    _, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert scalars["conc_fck"] == pytest.approx(43.0)
+    assert at.session_state["_latest_inputs"]["concrete"].fck == pytest.approx(43.0)
 
 
 def test_persisted_settings_use_the_seeded_number_helper():
@@ -3363,6 +3487,43 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "el_long_P", "el_long_Mx", "el_long_My",
         "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
     })
+
+
+def test_fatigue_editor_submits_sparse_new_rows_with_zero_action_defaults():
+    import fatigue_inputs
+
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Analysis settings")
+    at.toggle(key="fatigue_on").set_value(True).run()
+    _goto_input_tab(at, "Loads")
+
+    editor = _widget(at.dataframe, "fatigue_spectrum_editor")
+    column_config = json.loads(editor.proto.columns)
+    for key in fatigue_inputs.ACTION_COLUMNS:
+        assert column_config[key]["required"] is True
+        assert column_config[key]["default"] == pytest.approx(0.0)
+
+    # Regression for the observed one-bin Train spectrum: the engineer only
+    # enters the non-zero cyclic moment. Streamlit must still be able to submit
+    # the row, and Sector's canonical contract retains every omitted component
+    # as an explicit zero rather than dropping the spectrum.
+    sparse_row = {
+        "spectrum": "1",
+        "name": "Train",
+        "description": None,
+        "cycles": 36000.0,
+        "mx_short_ed_knm": 17.0,
+    }
+    canonical = fatigue_inputs.normalise_spectrum_table([sparse_row])
+    assert fatigue_inputs.spectrum_errors(canonical, require_rows=True) == []
+    record = fatigue_inputs.spectrum_records(canonical)[0]
+    assert record["mx_short_ed_knm"] == pytest.approx(17.0)
+    assert all(
+        record[key] == pytest.approx(0.0)
+        for key in fatigue_inputs.ACTION_COLUMNS
+        if key != "mx_short_ed_knm"
+    )
 
 
 def test_detailing_controls_run_selected_case_and_section_wide_spacing():

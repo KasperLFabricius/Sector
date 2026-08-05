@@ -1777,6 +1777,7 @@ def _fatigue_spectrum_column_config():
             help=help_text,
             format="%.3f",
             required=True,
+            default=0.0,
             min_value=-100000.0,
             max_value=100000.0,
             step=10.0,
@@ -2225,16 +2226,18 @@ def _restore_input_state(*, replace: bool = False) -> None:
 
 
 def _open_analysis_content(flag: str) -> None:
-    """Open a full-width auxiliary view from an input-page button callback."""
+    """Leave the input fragment for a full-width auxiliary view."""
     _snapshot_completed_input_state()
     st.session_state["_qs_open"] = flag == "quick_section"
-    st.session_state["_main_page"] = "Analysis"
+    st.session_state["_next_main_page"] = "Analysis"
+    st.rerun(scope="app")
 
 
 def _open_manual_dialog() -> None:
-    """Open the manual above the current workspace without navigating away."""
+    """Leave the input fragment to open the manual above the workspace."""
     _snapshot_completed_input_state()
     st.session_state["_manual_open"] = True
+    st.rerun(scope="app")
 
 
 def _set_main_page(page: str) -> None:
@@ -4319,13 +4322,13 @@ def build_inputs(host=st):
             else:
                 _reseed_table(base_key, ed_key, _corners_df([]))
 
-    sec.button(
+    if sec.button(
         "Open Quick Section...", key="open_qs", width="stretch",
         help="Open a full-width builder: pick a shape, dimensions and "
              "reinforcement with a live preview, then Apply to fill the "
              "point tables.",
-        on_click=_open_analysis_content, args=("quick_section",),
-    )
+    ):
+        _open_analysis_content("quick_section")
 
     if sec.button("Clear section...", key="clear_pts", width="stretch",
                   disabled=_section_tables_are_empty(),
@@ -4863,11 +4866,11 @@ def build_inputs(host=st):
             st.caption(
                 f"Proprietary software; licensed to {APP_LICENSEE} for internal use."
             )
-            st.button(
+            if st.button(
                 "User manual", key="open_manual", width="stretch",
                 help="Open the user manual.",
-                on_click=_open_manual_dialog,
-            )
+            ):
+                _open_manual_dialog()
     return dict(section=section, geometry_error=geometry_error,
                 void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
@@ -4990,6 +4993,40 @@ def build_inputs(host=st):
                 plastic_case_context_sig=plastic_case_context_sig,
                 elastic_case_context_sig=elastic_case_context_sig,
                 plastic_bending_context_sig=plastic_bending_context_sig)
+
+
+def _commit_input_fragment(inp) -> None:
+    """Publish one complete Inputs render as the canonical engineering draft.
+
+    A fragment rerun can be superseded by a later browser event.  Nothing from
+    that partial build becomes durable until ``build_inputs`` returns normally;
+    then the scalar/table mirrors, full analysis payload, autosave service and
+    report request all observe the same completed state.
+    """
+
+    _snapshot_input_state(inp)
+    st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    st.session_state[_INPUT_BUILD_KEY] = False
+    st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
+    _maybe_autosave()
+    _generate_report(inp)
+
+
+@st.fragment
+def _input_workspace() -> None:
+    """Render and commit the selected input pane in one sequential fragment.
+
+    Ordinary input edits and stage switches rerun this boundary without
+    reconstructing the top-level workspace or Analysis UI.  If a rapid event
+    interrupted the preceding build, restore the last complete draft and replay
+    every journaled genuine edit before any widget is remounted.
+    """
+
+    if st.session_state.get(_INPUT_BUILD_KEY, False):
+        _restore_input_state(replace=True)
+    st.session_state[_INPUT_BUILD_KEY] = True
+    inp = build_inputs(st)
+    _commit_input_fragment(inp)
 
 
 # ---------------------------------------------------------------------------
@@ -10222,17 +10259,7 @@ main_page = st.segmented_control(
 )
 
 if main_page == "Inputs":
-    # Set this before constructing any input widget.  If Streamlit supersedes the
-    # run, the flag survives and the next run restores the last complete snapshot.
-    st.session_state[_INPUT_BUILD_KEY] = True
-    inp = build_inputs(st)
-    _snapshot_input_state(inp)
-    st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
-    st.session_state[_INPUT_BUILD_KEY] = False
-    st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
-    # Autosave rides a normal input/edit rerun once the interval has elapsed.
-    _maybe_autosave()
-    _generate_report(inp)
+    _input_workspace()
 else:
     st.session_state[_INPUT_BUILD_KEY] = False
     reset_input_stage_mounts(st.session_state)
