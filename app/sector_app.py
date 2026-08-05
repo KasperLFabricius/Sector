@@ -41,6 +41,7 @@ from input_stage_host import (  # noqa: E402
 )
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
+import performance_diagnostics  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
 import result_presentation as presentation  # noqa: E402
@@ -2443,6 +2444,16 @@ def _maybe_autosave() -> None:
         st.toast("Autosaved.")
 
 
+def _timed_autosave() -> None:
+    """Run autosave inside the optional local performance phase."""
+
+    token = performance_diagnostics.begin_phase(st.session_state, "autosave")
+    try:
+        _maybe_autosave()
+    finally:
+        performance_diagnostics.end_phase(st.session_state, token)
+
+
 def _autosave_startup() -> None:
     """Once per session, restore the last autosaved project (the BriCoS principle:
     re-open where you left off) and start the autosave clock. A missing autosave
@@ -3230,6 +3241,8 @@ def _quick_section_viewport():
     therefore rebuilds only the form and its live preview, not the unchanged input
     tabs. Apply and Back still call a full rerun because they leave this viewport.
     """
+    performance_diagnostics.begin_fragment_run(st.session_state)
+    finish_fragment_run = performance_diagnostics.finish_fragment_run
     _qs_restore_settings()   # bring back the settings from the last time it was open
     st.markdown("## Quick Section builder")
     st.caption("Generate a parametric section. Apply overwrites the corner, bar "
@@ -3244,6 +3257,9 @@ def _quick_section_viewport():
     with form:
         outer, holes, bars, tendons = _quick_section_geometry(st)
     _qs_mirror_settings()   # keep the durable copy current with what is shown
+    preview_token = performance_diagnostics.begin_phase(
+        st.session_state, "preview"
+    )
     with preview:
         bar_xy = [(x, y, a) for x, y, a in bars]
         tendon_xy = [(x, y, a) for x, y, a in tendons]
@@ -3254,10 +3270,12 @@ def _quick_section_viewport():
             width="stretch")
         st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
                    f"{len(bars)} bars, {len(tendons)} tendons.")
+    performance_diagnostics.end_phase(st.session_state, preview_token)
 
     if back:
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
+        finish_fragment_run(st.session_state)
         st.rerun()
     if apply:
         _discard_clear_recovery()
@@ -3274,7 +3292,9 @@ def _quick_section_viewport():
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
+        finish_fragment_run(st.session_state)
         st.rerun()
+    finish_fragment_run(st.session_state)
 
 
 def _modular_ratio_readout(box, mild_entries, prestress_entries,
@@ -3369,6 +3389,9 @@ _CAPACITY_CONTEXT_SIG_KEYS = tuple(
 def build_inputs(host=st):
     """Render one selected outer input stage and return the full payload."""
     s = host
+    normalization_token = performance_diagnostics.begin_phase(
+        st.session_state, "normalization"
+    )
     _ensure_material_catalog_state()
     _ensure_fatigue_catalog_state()
     st.session_state.setdefault("_fatigue_basis_revision", 0)
@@ -3392,6 +3415,7 @@ def build_inputs(host=st):
     prestress_material_ids = mat_catalog.material_ids(
         prestress_catalogue, "prestress"
     )
+    performance_diagnostics.end_phase(st.session_state, normalization_token)
 
     # A full-width selector replaces the narrow tab strip. Panels carry
     # the calculation methodology (Elastic / Plastic), not a limit state -- the
@@ -4871,7 +4895,10 @@ def build_inputs(host=st):
                 help="Open the user manual.",
             ):
                 _open_manual_dialog()
-    return dict(section=section, geometry_error=geometry_error,
+    assembly_token = performance_diagnostics.begin_phase(
+        st.session_state, "input_assembly"
+    )
+    inp = dict(section=section, geometry_error=geometry_error,
                 void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
                 fatigue_assignment_error=fatigue_assignment_error,
@@ -4993,6 +5020,8 @@ def build_inputs(host=st):
                 plastic_case_context_sig=plastic_case_context_sig,
                 elastic_case_context_sig=elastic_case_context_sig,
                 plastic_bending_context_sig=plastic_bending_context_sig)
+    performance_diagnostics.end_phase(st.session_state, assembly_token)
+    return inp
 
 
 def _commit_input_fragment(inp) -> None:
@@ -5008,7 +5037,7 @@ def _commit_input_fragment(inp) -> None:
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
     st.session_state[_INPUT_BUILD_KEY] = False
     st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
-    _maybe_autosave()
+    _timed_autosave()
     _generate_report(inp)
 
 
@@ -5022,11 +5051,19 @@ def _input_workspace() -> None:
     every journaled genuine edit before any widget is remounted.
     """
 
+    performance_diagnostics.begin_fragment_run(st.session_state)
     if st.session_state.get(_INPUT_BUILD_KEY, False):
         _restore_input_state(replace=True)
     st.session_state[_INPUT_BUILD_KEY] = True
-    inp = build_inputs(st)
+    pane_token = performance_diagnostics.begin_phase(
+        st.session_state, "pane_construction"
+    )
+    try:
+        inp = build_inputs(st)
+    finally:
+        performance_diagnostics.end_phase(st.session_state, pane_token)
     _commit_input_fragment(inp)
+    performance_diagnostics.finish_fragment_run(st.session_state)
 
 
 # ---------------------------------------------------------------------------
@@ -6714,6 +6751,9 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
         f"{len(bars)} bars | {len(tendons)} tendons"
     )
     if visible:
+        preview_token = performance_diagnostics.begin_phase(
+            st.session_state, "preview"
+        )
         bar_xy = [(b[0], b[1], b[2]) for b in bars]
         tendon_xy = [(t[0], t[1], t[2]) for t in tendons]
         bar_records = list(bar_elements or [])
@@ -6749,6 +6789,7 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
             bar_hover=bar_hover, tendon_hover=tendon_hover,
         ))
         box.plotly_chart(fig, width="stretch")
+        performance_diagnostics.end_phase(st.session_state, preview_token)
     return label_scale, label_min_gap
 
 
@@ -6756,6 +6797,9 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
                             title=None):
     """Render one live material law only when its nested input tab is visible."""
     if visible:
+        preview_token = performance_diagnostics.begin_phase(
+            st.session_state, "preview"
+        )
         signature = (material, title) if title is not None else material
         if title is None:
             build = lambda: figure_builder(material)
@@ -6765,6 +6809,7 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
             _memo_fig(cache_name, signature, build),
             width="stretch",
         )
+        performance_diagnostics.end_phase(st.session_state, preview_token)
 
 
 def results_overview_view(inp, results, *, stale=False):
@@ -9990,13 +10035,14 @@ def _analysis_workspace(inp):
     An input edit still causes a normal full rerun and invokes this function with a
     freshly built input payload.
     """
+    performance_diagnostics.begin_fragment_run(st.session_state)
     # No input widget owns these keys on Analysis. Restore the last completed
     # draft on every fragment rerun before autosave, hashing or calculation reads.
     _restore_input_state(replace=True)
     # This must live inside the fragment: Calculate, View and result-detail changes
     # rerun only this function, not the top-level page dispatcher.  Quick Section
     # and the manual do not invoke the fragment, so their exclusion is preserved.
-    _maybe_autosave()
+    _timed_autosave()
 
     # Migrate a renamed view label before either workspace control renders. A keyed
     # selectbox otherwise keeps returning the stale string, which the dispatch no
@@ -10140,6 +10186,7 @@ def _analysis_workspace(inp):
             "The stale calculation has no matching input snapshot. Press "
             "Calculate before viewing its input-dependent results."
         )
+        performance_diagnostics.finish_fragment_run(st.session_state)
         return
     if st.session_state.get("_case_error"):
         st.error(st.session_state["_case_error"])
@@ -10213,12 +10260,15 @@ def _analysis_workspace(inp):
         combined_view(view_inp, view_results)
     else:
         elastic_view(view_inp, view_results)
+    performance_diagnostics.finish_fragment_run(st.session_state)
 
 
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
 
+performance_diagnostics.begin_run(st.session_state)
+startup_token = performance_diagnostics.begin_phase(st.session_state, "startup")
 _autosave_startup()        # restore the last autosaved session (BriCoS-style) on launch
 _apply_pending_project()   # restore an uploaded project before any widget is built
 # Migrate renamed workspace choices even while Inputs is selected; otherwise an old
@@ -10247,6 +10297,7 @@ _restore_input_state(
         )
     )
 )
+performance_diagnostics.end_phase(st.session_state, startup_token)
 
 main_page = st.segmented_control(
     "Workspace",
@@ -10282,3 +10333,4 @@ else:
 if manual_open:
     import manual                          # lazy: keep the manual off the hot path
     manual.render_manual_dialog()
+performance_diagnostics.finish_app_run(st.session_state)
