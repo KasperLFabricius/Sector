@@ -120,3 +120,81 @@ def first_case_value(at, legacy_key):
     """Read one former scalar value from canonical row 1 for assertions."""
     base_key, column = _FIELDS[legacy_key]
     return at.session_state[base_key].iloc[0][column]
+
+
+def _goto_inputs(at):
+    try:
+        page = at.session_state["_main_page"]
+    except KeyError:
+        page = None
+    if page != "Inputs":
+        at.segmented_control(key="_main_page").set_value("Inputs").run()
+
+
+def goto_input_stage(at, short_name):
+    _goto_inputs(at)
+    dot = chr(0x00B7)
+    labels = {
+        "Analysis settings": f"1 {dot} Analysis settings",
+        "Section": f"2 {dot} Section",
+        "Material parameters": f"3 {dot} Material parameters",
+        "Loads": f"4 {dot} Loads",
+        "Project & report": "Project & report",
+    }
+    target = labels[short_name]
+    try:
+        current = at.session_state["_input_tab"]
+    except KeyError:
+        current = None
+    if current != target:
+        at.selectbox(key="_input_tab").set_value(target).run()
+
+
+def _goto_material(at, family):
+    goto_input_stage(at, "Material parameters")
+    try:
+        current = at.session_state["_material_tab"]
+    except KeyError:
+        current = None
+    if current != family:
+        at.session_state["_material_tab"] = family
+        at.run()
+
+
+def _goto_widget_owner(at, key):
+    if key.startswith("conc_") or key == "sls_fctm":
+        return _goto_material(at, "Concrete")
+    if key.startswith(("mild_", "mildcat_")):
+        return _goto_material(at, "Mild steel")
+    if key.startswith(("pre_", "precat_")):
+        return _goto_material(at, "Prestressing steel")
+    if key.startswith("fatiguecat_"):
+        return _goto_material(at, "Fatigue details")
+    if key == "el_phi":
+        return goto_input_stage(at, "Loads")
+    if key.startswith(("autosave_", "rep_", "project_")):
+        return goto_input_stage(at, "Project & report")
+    if key.startswith(("section_", "label_")):
+        return goto_input_stage(at, "Section")
+    return goto_input_stage(at, "Analysis settings")
+
+
+def apply_widget_changes(at, changes):
+    """Apply legacy case aliases and mount each ordinary widget's owner."""
+
+    ordinary, case_changed = apply_case_changes(at, changes)
+    if case_changed:
+        _goto_inputs(at)
+        if not ordinary:
+            at.run()
+    for widget_type, key, value in ordinary:
+        try:
+            widget = getattr(at, widget_type)(key=key)
+        except KeyError:
+            if key == "view":
+                at.segmented_control(key="_main_page").set_value("Analysis").run()
+            else:
+                _goto_widget_owner(at, key)
+            widget = getattr(at, widget_type)(key=key)
+        widget.set_value(value).run()
+    return at

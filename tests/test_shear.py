@@ -19,7 +19,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
 APP = str(ROOT / "app" / "sector_app.py")
 
-from app_case_inputs import apply_case_changes, first_case_value  # noqa: E402
+from app_case_inputs import (  # noqa: E402
+    apply_widget_changes,
+    first_case_value,
+    goto_input_stage,
+)
 
 
 # -- design-code shear NDPs -------------------------------------------------
@@ -505,19 +509,7 @@ def _select_view(at, value):
 
 
 def _set(at, *changes):
-    """Stage already-rendered widget changes and perform one Streamlit rerun."""
-    changes, case_changed = apply_case_changes(at, changes)
-    if case_changed:
-        _goto_page(at, "Inputs")
-    if changes:
-        widget_type, key, _value = changes[0]
-        try:
-            getattr(at, widget_type)(key=key)
-        except KeyError:
-            _goto_page(at, "Analysis" if key == "view" else "Inputs")
-    for widget_type, key, value in changes:
-        getattr(at, widget_type)(key=key).set_value(value)
-    return at.run()
+    return apply_widget_changes(at, changes)
 
 
 def _set_and_click(at, button_key, *changes):
@@ -800,6 +792,7 @@ def test_app_shear_axial_input_enabled_in_elastic_mode():
         ("radio", "mode", "Elastic"),
         ("checkbox", "shear_on", True),
     )
+    goto_input_stage(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     _set_and_click(at, "calculate", ("number_input", "shear_V", 50.0))
     assert not at.exception
