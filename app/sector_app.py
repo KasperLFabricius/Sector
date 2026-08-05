@@ -27,6 +27,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
+import app_run_probe  # noqa: E402
 import bridge_analysis  # noqa: E402
 import bridge_inputs  # noqa: E402
 import case_analysis  # noqa: E402
@@ -106,6 +107,7 @@ _CRACK_CODE_ALIASES = {
 _SHEAR_CODES = capacity.SHEAR_CODES
 _SHEAR_METHODS = capacity.SHEAR_METHODS
 
+app_run_probe.open_run(st.session_state)
 st.set_page_config(
     layout="wide",
     page_title=f"Sector v{APP_VERSION}",
@@ -10282,3 +10284,4 @@ else:
 if manual_open:
     import manual                          # lazy: keep the manual off the hot path
     manual.render_manual_dialog()
+app_run_probe.close_run(st.session_state)
