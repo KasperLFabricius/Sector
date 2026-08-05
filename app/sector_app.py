@@ -33,7 +33,12 @@ import case_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import fatigue_presentation  # noqa: E402
-from input_stage_host import input_stages, live_fragment_value  # noqa: E402
+from input_stage_host import (  # noqa: E402
+    input_stages,
+    live_fragment_value,
+    normalise_stage_selection,
+    reset_input_stage_mounts,
+)
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
 import project_io  # noqa: E402
@@ -421,6 +426,10 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         st.session_state["conc_eps_c2"] = a_ec2
         st.session_state["conc_eps_cu2"] = a_ecu2
         st.session_state["conc_n"] = a_n
+        if auto_all:
+            _journal_current_input_values(
+                "conc_eps_c2", "conc_eps_cu2", "conc_n"
+            )
     eps_c2 = _number(box, "conc", "eps_c2", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
                      disabled=strain_lock)
     eps_cu2 = _number(box, "conc", "eps_cu2", mp.CONCRETE_FIELD_META, mp.CONCRETE_HELP,
@@ -455,6 +464,8 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
                         "concrete grade. Press again after changing the grade.")
             or (auto_all and not lock_elastic)):
         st.session_state["sls_fctm"] = fctm_ec
+        if auto_all:
+            _journal_current_input_values("sls_fctm")
     fctm_val = box.number_input(r"Tensile strength $f_{ctm}$ (MPa)", 0.0, 10.0, step=0.1,
                                 key="sls_fctm",
                                 **_input_widget_kwargs(
@@ -479,6 +490,8 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
                         "current grade.")
             or (auto_all and not lock_elastic)):
         st.session_state["conc_Ec"] = ecm_gpa
+        if auto_all:
+            _journal_current_input_values("conc_Ec")
     Ec = box.number_input(r"Elastic modulus $E_c$ (GPa)", 1.0, 100.0, step=0.5,
                           key="conc_Ec",
                           **_input_widget_kwargs(
@@ -2180,10 +2193,18 @@ def _restore_input_state(*, replace: bool = False) -> None:
         # A tab event is written before its callback/rerun. Keep that event while
         # replacing engineering values from the last complete Inputs render;
         # otherwise recovery would appear to ignore the engineer's tab click.
+        # Returning from Analysis is different: no input-stage event can originate
+        # there, and Streamlit may leave a stale default under a remounted selector
+        # key. Restore the durable preference in that lifecycle transition.
+        returning_from_analysis = (
+            st.session_state.get("_main_page") == "Inputs"
+            and st.session_state.get(_LAST_WORKSPACE_KEY) == "Analysis"
+        )
         preserve_navigation = (
             replace
             and key in _INPUT_NAVIGATION_KEYS
             and key in st.session_state
+            and not returning_from_analysis
         )
         if not preserve_navigation and (replace or key not in st.session_state):
             st.session_state[key] = value
@@ -3380,10 +3401,7 @@ def build_inputs(host=st):
         f"4 {_dot} Loads",
         "Project & report",
     ]
-    stored_input_tab = st.session_state.get("_input_tab")
-    if stored_input_tab is not None and stored_input_tab not in input_tab_labels:
-        st.session_state.pop("_input_tab", None)
-    st.session_state.setdefault("_input_tab", input_tab_labels[0])
+    normalise_stage_selection(st.session_state, "_input_tab", input_tab_labels)
     selected_input_tab = s.selectbox(
         "Input stage",
         input_tab_labels,
@@ -4531,13 +4549,23 @@ def build_inputs(host=st):
     material_tab_labels = ["Concrete", "Mild steel", "Prestressing steel"]
     if fatigue_on:
         material_tab_labels.append("Fatigue details")
-    stored_material_tab = st.session_state.get("_material_tab")
-    if stored_material_tab is not None and stored_material_tab not in material_tab_labels:
-        st.session_state.pop("_material_tab", None)
-    material_tabs = mat_tab.tabs(
+    normalise_stage_selection(
+        st.session_state, "_material_tab", material_tab_labels
+    )
+    selected_material_tab = mat_tab.selectbox(
+        "Material family",
         material_tab_labels,
         key="_material_tab",
         on_change=_snapshot_completed_input_state,
+        width="stretch",
+        help="Choose the material law or fatigue-detail catalogue to edit.",
+    )
+    material_stage_host = mat_tab.container()
+    material_tabs = input_stages(
+        material_stage_host,
+        material_tab_labels,
+        selected_material_tab,
+        state=st.session_state,
     )
     conc_tab, mild_tab, pre_tab = material_tabs[:3]
     fatigue_tab = material_tabs[3] if fatigue_on else None
@@ -10207,6 +10235,7 @@ if main_page == "Inputs":
     _generate_report(inp)
 else:
     st.session_state[_INPUT_BUILD_KEY] = False
+    reset_input_stage_mounts(st.session_state)
     st.session_state[_LAST_WORKSPACE_KEY] = "Analysis"
     inp = st.session_state.get("_latest_inputs")
     if quick_section_open:

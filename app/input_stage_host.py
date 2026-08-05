@@ -9,6 +9,26 @@ from collections.abc import Sequence
 _INERT_ACTIONS = frozenset(
     {"button", "download_button", "form_submit_button", "link_button"}
 )
+_VALUE_WIDGETS = frozenset(
+    {
+        "checkbox",
+        "color_picker",
+        "date_input",
+        "multiselect",
+        "number_input",
+        "pills",
+        "radio",
+        "segmented_control",
+        "select_slider",
+        "selectbox",
+        "slider",
+        "text_area",
+        "text_input",
+        "time_input",
+        "toggle",
+    }
+)
+_MOUNTED_WIDGET_KEYS = "_mounted_input_stage_widget_keys"
 
 
 def _detached(value):
@@ -26,19 +46,26 @@ def _detached(value):
 def _selected_option(args, kwargs):
     options = kwargs.get("options", args[1] if len(args) > 1 else ())
     options = list(options or ())
-    index = kwargs.get("index", 0)
+    index = kwargs.get("index", args[2] if len(args) > 2 else 0)
     if index is None or not options:
         return None
     return options[index]
 
 
 def _declared_default(method, args, kwargs):
-    if method in {"radio", "selectbox", "segmented_control", "pills"}:
+    if method in {"radio", "selectbox"}:
         return _selected_option(args, kwargs)
+    if method in {"segmented_control", "pills"}:
+        default = kwargs.get("default")
+        if default is None and kwargs.get("required", False):
+            return _selected_option(args, kwargs)
+        return default
     if method == "multiselect":
         return kwargs.get("default", args[2] if len(args) > 2 else [])
     if method == "select_slider":
-        return kwargs.get("value", _selected_option(args, kwargs))
+        return kwargs.get(
+            "value", args[2] if len(args) > 2 else _selected_option(args, kwargs)
+        )
     if method in {"checkbox", "toggle"}:
         return kwargs.get("value", args[1] if len(args) > 1 else False)
     if method in {"text_input", "text_area"}:
@@ -65,6 +92,9 @@ def _retained_widget_value(method, args, kwargs, state):
 
     key = kwargs.get("key")
     if key is not None:
+        mounted = set(state.get(_MOUNTED_WIDGET_KEYS, ()))
+        mounted.discard(key)
+        state[_MOUNTED_WIDGET_KEYS] = mounted
         pending = state.get("_pending_input_events", {})
         durable = state.get("_durable_input_scalars", {})
         for source in (pending, durable, state):
@@ -77,6 +107,48 @@ def _retained_widget_value(method, args, kwargs, state):
     if key is not None and value is not None:
         state[key] = _detached(value)
     return value
+
+
+def _seed_arguments(method, args, kwargs, value):
+    """Give a remounted Streamlit widget one explicit retained initial value."""
+
+    args = list(args)
+    kwargs = dict(kwargs)
+    if method in {"radio", "selectbox"}:
+        options = list(kwargs.get("options", args[1] if len(args) > 1 else ()))
+        if value in options:
+            index = options.index(value)
+            if len(args) > 2:
+                args[2] = index
+                kwargs.pop("index", None)
+            else:
+                kwargs["index"] = index
+    elif method in {"segmented_control", "pills"}:
+        kwargs["default"] = value
+    elif method == "multiselect":
+        if len(args) > 2:
+            args[2] = value
+            kwargs.pop("default", None)
+        else:
+            kwargs["default"] = value
+    elif method == "select_slider":
+        if len(args) > 2:
+            args[2] = value
+            kwargs.pop("value", None)
+        else:
+            kwargs["value"] = value
+    elif method in {"checkbox", "toggle", "text_input", "text_area",
+                    "date_input", "time_input", "color_picker"}:
+        if len(args) > 1:
+            args[1] = value
+        else:
+            kwargs["value"] = value
+    elif method in {"number_input", "slider"}:
+        if len(args) > 3:
+            args[3] = value
+        else:
+            kwargs["value"] = value
+    return tuple(args), kwargs
 
 
 class InputStage:
@@ -144,7 +216,34 @@ class InputStage:
 
     def __getattr__(self, method):
         if self.open:
-            return getattr(self._delegate, method)
+            delegate = getattr(self._delegate, method)
+
+            def active(*args, **kwargs):
+                key = kwargs.get("key")
+                mounted = set(self._state.get(_MOUNTED_WIDGET_KEYS, ()))
+                if (
+                    method in _VALUE_WIDGETS
+                    and key is not None
+                    and key in self._state
+                    and key not in mounted
+                ):
+                    value = _detached(self._state[key])
+                    seeded_args, seeded_kwargs = _seed_arguments(
+                        method, args, kwargs, value
+                    )
+                    self._state.pop(key, None)
+                    try:
+                        result = delegate(*seeded_args, **seeded_kwargs)
+                    except Exception:
+                        self._state[key] = value
+                        raise
+                    self._state.setdefault(key, _detached(result))
+                    mounted.add(key)
+                    self._state[_MOUNTED_WIDGET_KEYS] = mounted
+                    return result
+                return delegate(*args, **kwargs)
+
+            return active
 
         def inactive(*args, **kwargs):
             return _retained_widget_value(method, args, kwargs, self._state)
@@ -156,11 +255,41 @@ def input_stages(host, labels: Sequence[str], selected: str, *, state):
     """Return ordered containers with only ``selected`` allowed to delegate."""
 
     labels = tuple(labels)
+    parent_open = bool(getattr(host, "open", True))
+    delegate = host._delegate if isinstance(host, InputStage) else host
     return tuple(
-        InputStage(host if label == selected else None,
-                   active=label == selected, state=state)
+        InputStage(
+            delegate if parent_open and label == selected else None,
+            active=parent_open and label == selected,
+            state=state,
+        )
         for label in labels
     )
+
+
+def normalise_stage_selection(state, key, labels: Sequence[str]):
+    """Remove unavailable navigation values from live and retained mirrors."""
+
+    labels = tuple(labels)
+    if not labels:
+        raise ValueError("A stage selector requires at least one label")
+    allowed = set(labels)
+    pending = state.get("_pending_input_events", {})
+    if pending.get(key) not in allowed:
+        pending.pop(key, None)
+    durable = state.get("_durable_input_scalars", {})
+    if key in durable and durable[key] not in allowed:
+        durable[key] = labels[0]
+    if state.get(key) not in allowed:
+        state.pop(key, None)
+    state.setdefault(key, labels[0])
+    return state[key]
+
+
+def reset_input_stage_mounts(state):
+    """Mark every input widget unmounted after leaving the Inputs workspace."""
+
+    state.pop(_MOUNTED_WIDGET_KEYS, None)
 
 
 def live_fragment_value(state, durable, key):

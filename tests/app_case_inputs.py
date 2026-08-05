@@ -157,8 +157,7 @@ def _goto_material(at, family):
     except KeyError:
         current = None
     if current != family:
-        at.session_state["_material_tab"] = family
-        at.run()
+        at.selectbox(key="_material_tab").set_value(family).run()
 
 
 def _goto_widget_owner(at, key):
