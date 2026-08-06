@@ -60,6 +60,10 @@ def _streamlit_argv(app_path, port) -> list:
 
 
 def main() -> None:
+    print(
+        "Starting Sector; the local browser will open when the interface is ready.",
+        flush=True,
+    )
     app = _bundle_base() / "app" / "sector_app.py"
     data = _user_data_dir()
     try:
