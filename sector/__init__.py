@@ -89,5 +89,10 @@ __all__ = [
 # Single source of truth for release and ownership metadata shown by the app,
 # reports, manuals, saved-project provenance and packaged-build manifest.
 __version__ = "0.91"
+__product_name__ = "Sector"
+__description__ = "Structural-analysis and design calculation tool"
 __author__ = "Kasper Lindskov Fabricius"
 __licensee__ = "Sweco Danmark A/S"
+__copyright__ = (
+    "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
+)
