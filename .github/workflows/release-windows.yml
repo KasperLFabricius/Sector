@@ -1,0 +1,156 @@
+name: Sector protected Windows signing
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact lowercase 40-hex commit currently at main
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sector-production-signing
+  cancel-in-progress: false
+
+jobs:
+  sign-windows:
+    name: Sign verified Windows package
+    if: github.ref == 'refs/heads/main'
+    environment: sector-production-signing
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out current main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Establish exact current-main trust boundary
+        shell: pwsh
+        env:
+          SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sourceRevision = [string]$env:SECTOR_RELEASE_SOURCE_SHA
+          if ($sourceRevision -cnotmatch '^[0-9a-f]{40}$') {
+            throw "source_sha must be an exact lowercase 40-hex commit"
+          }
+
+          $headRevision = [string](git rev-parse HEAD)
+          if ($LASTEXITCODE -ne 0 -or $headRevision -cnotmatch '^[0-9a-f]{40}$') {
+            throw "Cannot resolve the checked-out commit"
+          }
+
+          git fetch --force --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Cannot refresh origin/main"
+          }
+          $mainRevision = [string](git rev-parse refs/remotes/origin/main)
+          if ($LASTEXITCODE -ne 0 -or $mainRevision -cnotmatch '^[0-9a-f]{40}$') {
+            throw "Cannot resolve current origin/main"
+          }
+
+          if (-not [string]::Equals($sourceRevision, $headRevision, [System.StringComparison]::Ordinal)) {
+            throw "Requested source_sha does not equal checked-out HEAD"
+          }
+          if (-not [string]::Equals($sourceRevision, $mainRevision, [System.StringComparison]::Ordinal)) {
+            throw "Requested source_sha is not current origin/main"
+          }
+
+          $credentialKeys = @(git config --local --name-only --get-regexp '^http\..*\.extraheader$')
+          if ($LASTEXITCODE -notin @(0, 1)) {
+            throw "Cannot inspect checkout credential configuration"
+          }
+          foreach ($credentialKey in $credentialKeys) {
+            git config --local --unset-all $credentialKey
+            if ($LASTEXITCODE -ne 0) {
+              throw "Cannot remove checkout credential configuration"
+            }
+          }
+          $remainingCredentialKeys = @(git config --local --name-only --get-regexp '^http\..*\.extraheader$')
+          if ($LASTEXITCODE -ne 1 -or $remainingCredentialKeys.Count -ne 0) {
+            throw "Checkout credentials remain after the trust-boundary fetch"
+          }
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: Run isolated release preflight
+        env:
+          SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python -I -S tools/verify_windows_release.py --root . --source-revision $env:SECTOR_RELEASE_SOURCE_SHA --preflight
+
+      - name: Install locked build environment
+        run: python -m pip install --require-hashes -r requirements-build.txt
+
+      - name: Build source-bound package
+        shell: pwsh
+        env:
+          SECTOR_SOURCE_REVISION: ${{ inputs.source_sha }}
+        run: |
+          python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
+          python -m PyInstaller --noconfirm --clean packaging/sector.spec
+          Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
+          Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
+
+      - name: Verify unsigned package before secret exposure
+        env:
+          SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python -I -S tools/verify_windows_release.py --root . --package dist/Sector --source-revision $env:SECTOR_RELEASE_SOURCE_SHA
+
+      - name: Verify Windows identity before secret exposure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $versionInfo = (Get-Item -LiteralPath "dist/Sector/Sector.exe").VersionInfo
+          $expectedIdentity = [ordered]@{
+            ProductName = "Sector"
+            FileDescription = "Structural-analysis and design calculation tool"
+            FileVersion = "0.91.0.0"
+            ProductVersion = "0.91.0.0"
+            OriginalFilename = "Sector.exe"
+            LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
+          }
+          foreach ($field in $expectedIdentity.Keys) {
+            if (-not [string]::Equals([string]$versionInfo.$field, [string]$expectedIdentity[$field], [System.StringComparison]::Ordinal)) {
+              throw "Unexpected Windows identity field $field"
+            }
+          }
+          if (-not [string]::IsNullOrWhiteSpace([string]$versionInfo.CompanyName)) {
+            throw "Sector.exe must not advertise a company or publisher identity"
+          }
+
+      - name: Sign and independently verify release package
+        shell: pwsh
+        env:
+          SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
+          SECTOR_SIGNING_PFX_BASE64: ${{ secrets.SECTOR_SIGNING_PFX_BASE64 }}
+          SECTOR_SIGNING_PFX_PASSWORD: ${{ secrets.SECTOR_SIGNING_PFX_PASSWORD }}
+          SECTOR_SIGNING_THUMBPRINT: ${{ secrets.SECTOR_SIGNING_THUMBPRINT }}
+          SECTOR_SIGNING_SUBJECT: ${{ secrets.SECTOR_SIGNING_SUBJECT }}
+        run: |
+          ./packaging/sign_and_verify.ps1 `
+            -PackageDirectory "dist/Sector" `
+            -SourceRevision $env:SECTOR_RELEASE_SOURCE_SHA `
+            -PfxBase64 $env:SECTOR_SIGNING_PFX_BASE64 `
+            -PfxPassword $env:SECTOR_SIGNING_PFX_PASSWORD `
+            -ExpectedThumbprint $env:SECTOR_SIGNING_THUMBPRINT `
+            -ExpectedSubject $env:SECTOR_SIGNING_SUBJECT
+
+      - name: Upload verified signed package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Sector-Windows-signed-${{ inputs.source_sha }}
+          path: dist/Sector/
+          if-no-files-found: error
+          retention-days: 30
