@@ -12,6 +12,7 @@ pip-tools>=7.6,<8
 pyyaml>=6.0,<7
 ruff>=0.16.1,<0.17
 mypy>=2.3,<2.4
+pip-audit>=2.10,<2.11
 
 # Cross-platform PDFium renderer used to inspect the actual report pages in CI.
 pypdfium2>=5.0,<6

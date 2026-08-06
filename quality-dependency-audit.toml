@@ -1,0 +1,20 @@
+schema_version = 1
+
+[audit]
+requirements = [
+    "requirements-dev.txt",
+    "requirements-build.txt",
+]
+vulnerability_service = "pypi"
+strict = true
+require_hashes = true
+disable_pip = true
+python_isolated = true
+progress_spinner = "off"
+format = "json"
+descriptions = "off"
+aliases = "on"
+timeout_seconds = 15
+output_path = "qa-artifacts/dependency-audit.json"
+cache_path = ".qa-cache/pip-audit"
+ignored_vulnerabilities = []

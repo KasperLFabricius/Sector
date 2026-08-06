@@ -40,6 +40,14 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Path qa-artifacts -Force | Out-Null
 
+      - name: Validate dependency audit policy ratchet
+        env:
+          SECTOR_DEPENDENCY_AUDIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: python tools/verify_dependency_audit.py quality-dependency-audit.toml --workflow .github/workflows/qa.yml --baseline-ref $env:SECTOR_DEPENDENCY_AUDIT_BASE
+
+      - name: Execute dependency vulnerability audit
+        run: python tools/verify_dependency_audit.py quality-dependency-audit.toml --execute
+
       - name: Validate non-shrinking coverage gate
         env:
           SECTOR_COVERAGE_BASELINE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
