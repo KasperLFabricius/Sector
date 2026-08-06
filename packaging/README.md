@@ -1,8 +1,12 @@
 # Packaging Sector as a standalone Windows app
 
-This builds a self-contained Sector that colleagues can run **without installing
-Python** -- a folder with `Sector.exe` and its bundled dependencies (PyInstaller
-ONEDIR).
+These convenience commands build an **unsigned QA package**. The output is for
+package inspection only: do not launch or distribute its executable. A
+distributable build requires separately authorised code signing; there is no
+unsigned fallback.
+
+The build output is a self-contained folder with `Sector.exe` and its bundled
+dependencies (PyInstaller ONEDIR).
 
 ## Build
 
@@ -26,9 +30,10 @@ Copy-Item LICENSE dist/Sector/LICENSE.txt
 Copy-Item build/legal/THIRD_PARTY_NOTICES.txt dist/Sector/THIRD_PARTY_NOTICES.txt
 ```
 
-The result is `dist/Sector/`, including Sector's proprietary notice and the
-generated third-party notice bundle. Zip that whole folder to distribute it;
-the user unzips it anywhere and runs `Sector.exe`.
+The result is `dist/Sector/`, including Sector's proprietary notice, generated
+third-party notice bundle, exact Windows product/version resources and packaged
+source provenance. This local output remains unsigned and must not be launched,
+zipped for distribution or treated as a release.
 
 ## What it does
 
@@ -52,7 +57,8 @@ the console for support.
 | File | Purpose |
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
-| `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
+| `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab, applies the Windows version resource and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
+| `windows_version_info.txt` | Exact Windows product, version, author/copyright and internal-license identity for `Sector.exe`. |
 | `build.ps1` | Convenience build script: installs the lock, generates notices, builds and assembles the package. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
 
