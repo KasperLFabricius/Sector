@@ -93,7 +93,7 @@ jobs:
           retention-days: 14
 
   windows-package:
-    name: Reproducible Windows package
+    name: Unsigned QA Windows package
     needs: test
     runs-on: windows-latest
     timeout-minutes: 60
@@ -112,15 +112,18 @@ jobs:
       - name: Install locked build environment
         run: python -m pip install --require-hashes -r requirements-build.txt
 
-      - name: Build Sector
+      - name: Build unsigned QA package
         shell: pwsh
+        env:
+          SECTOR_SOURCE_REVISION: ${{ github.sha }}
         run: |
+          Write-Warning "UNSIGNED QA PACKAGE ONLY. Do not launch or distribute this artifact."
           python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
           python -m PyInstaller --noconfirm --clean packaging/sector.spec
           Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
           Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
 
-      - name: Verify package contents
+      - name: Verify unsigned QA package contents and identity
         shell: pwsh
         run: |
           if (-not (Test-Path -LiteralPath "dist/Sector/Sector.exe")) {
@@ -142,10 +145,44 @@ jobs:
             throw "Third-party notice bundle is missing"
           }
 
-      - name: Upload Windows package
+          $versionInfo = (Get-Item -LiteralPath "dist/Sector/Sector.exe").VersionInfo
+          $expectedVersionInfo = [ordered]@{
+            ProductName = "Sector"
+            FileDescription = "Structural-analysis and design calculation tool"
+            FileVersion = "0.91.0.0"
+            ProductVersion = "0.91.0.0"
+            OriginalFilename = "Sector.exe"
+            LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
+          }
+          foreach ($field in $expectedVersionInfo.Keys) {
+            if ([string]$versionInfo.$field -ne [string]$expectedVersionInfo[$field]) {
+              throw "Unexpected Windows identity field $field"
+            }
+          }
+          if (-not [string]::IsNullOrWhiteSpace([string]$versionInfo.CompanyName)) {
+            throw "Sector.exe must not advertise a company or publisher identity"
+          }
+
+          $manifest = Get-Content -LiteralPath "dist/Sector/_internal/sector/sector_build_info.json" -Raw | ConvertFrom-Json
+          $expectedManifest = [ordered]@{
+            product_name = "Sector"
+            description = "Structural-analysis and design calculation tool"
+            sector_version = "0.91"
+            source_revision = $env:GITHUB_SHA
+            author = "Kasper Lindskov Fabricius"
+            licensee = "Sweco Danmark A/S"
+            copyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
+          }
+          foreach ($field in $expectedManifest.Keys) {
+            if ([string]$manifest.$field -ne [string]$expectedManifest[$field]) {
+              throw "Unexpected package manifest field $field"
+            }
+          }
+
+      - name: Upload unsigned QA package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Sector-Windows
+          name: Sector-Windows-unsigned-QA
           path: dist/Sector/
           if-no-files-found: error
           retention-days: 7
