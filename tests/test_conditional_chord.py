@@ -30,7 +30,10 @@ from sector.plastic import (  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 
-from app_case_inputs import apply_widget_changes  # noqa: E402
+from app_case_inputs import (  # noqa: E402
+    apply_widget_changes,
+    discard_retired_qs_fragment,
+)
 
 
 def _beam():
@@ -350,7 +353,10 @@ def _set_and_click(at, button_key, *changes):
     if button_key == "calculate":
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
-    return at.run()
+    at.run()
+    if button_key in {"qs_apply", "qs_back"}:
+        discard_retired_qs_fragment(at)
+    return at
 
 
 # Distinct Mx/My magnitudes so an axis/argument transposition changes the numbers

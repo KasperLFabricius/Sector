@@ -25,7 +25,11 @@ sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` 
 APP = str(ROOT / "app" / "sector_app.py")
 
 import bridge_inputs
-from app_case_inputs import apply_case_changes, first_case_value
+from app_case_inputs import (
+    apply_case_changes,
+    discard_retired_qs_fragment,
+    first_case_value,
+)
 
 from sector import bridge
 
@@ -253,7 +257,10 @@ def _set_and_click(at, button_key, *changes):
         # rendered Analysis page.
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
-    return at.run()
+    at.run()
+    if button_key in {"qs_apply", "qs_back"}:
+        discard_retired_qs_fragment(at)
+    return at
 
 
 def _open_qs(at):
@@ -267,11 +274,13 @@ def _open_qs(at):
 def _apply_qs(at):
     """Apply the builder to the point tables and return to the analysis layout."""
     at.button(key="qs_apply").click().run()
+    discard_retired_qs_fragment(at)
     return at
 
 
 def _clear_section(at):
     """Confirm the two-step section clear and return the rerun AppTest."""
+    _goto_input_tab(at, "Section")
     at.button(key="clear_pts").click().run()
     at.button(key="confirm_clear_pts").click().run()
     return at
@@ -596,7 +605,7 @@ def test_quick_section_dimensions_survive_a_midsession_project_load():
     text = project_io.dump_project({}, scalars)
 
     at2 = _fresh_qs()                                    # use the builder first...
-    at2.button(key="qs_back").click().run()             # (sets qs_shape_prev)
+    _set_and_click(at2, "qs_back")                      # (sets qs_shape_prev)
     at2.session_state["_pending_project"] = text        # ...then load the project
     at2.session_state["_qs_open"] = True
     at2.run()
@@ -1446,6 +1455,7 @@ def test_clear_section_requires_confirmation_and_undo_restores_all_tables():
     bases = ("corners_base", "hole_base", "bars_base", "tendons_base")
     before = {base: at.session_state[base].copy(deep=True) for base in bases}
 
+    _goto_input_tab(at, "Section")
     at.button(key="clear_pts").click().run()
     assert not at.exception
     for base in bases:
@@ -1570,7 +1580,7 @@ def test_remove_void_button_drops_the_last_void():
     at = _fresh()
     at.run()
     at.session_state["hole_base"] = _two_void_table()
-    at.run()
+    _goto_input_tab(at, "Section")
     at.button(key="rem_void").click().run()
     assert not at.exception
     hb = at.session_state["hole_base"]
@@ -1597,6 +1607,7 @@ def test_void_buttons_preserve_unsaved_edits():
             {"x (mm)": 80.0, "y (mm)": -50.0},
         ],
     }}
+    _goto_input_tab(at, "Section")
     at.button(key="add_void").click().run()   # handler reads the live rows before re-render
     assert not at.exception
     hb = at.session_state["hole_base"]
@@ -1617,7 +1628,7 @@ def test_cleared_grid_is_respected_not_resurrected():
         "data_version": str(at.session_state["ed_hole_ver"]),
         "rows": [],
     }
-    at.run()
+    _goto_input_tab(at, "Section")
     assert not at.exception
     assert at.button(key="rem_void").disabled  # 0 voids -> Remove disabled
 
@@ -1635,7 +1646,7 @@ def test_void_cap_enforced_when_parsing_not_only_the_button():
         xs += [10.0 * i, 10.0 * i + 5.0, 10.0 * i + 2.0]
         ys += [0.0, 0.0, 10.0]
     at.session_state["hole_base"] = pd.DataFrame({"x (mm)": xs, "y (mm)": ys})
-    at.run()
+    _goto_input_tab(at, "Section")
     assert not at.exception
     assert any("ignored" in w.value.lower() for w in at.warning)
 
@@ -1646,7 +1657,7 @@ def test_add_void_button_appends_a_separator():
     at.run()
     at.session_state["hole_base"] = pd.DataFrame({
         "x (mm)": [-100.0, -40.0, -70.0], "y (mm)": [-50.0, -50.0, 50.0]})
-    at.run()
+    _goto_input_tab(at, "Section")
     before = len(at.session_state["hole_base"])
     at.button(key="add_void").click().run()
     assert not at.exception
@@ -2263,6 +2274,7 @@ def test_bulk_reinforcement_assignment_updates_all_and_selected_rows():
     assert len(element_ids) > 1
     assert list(before.columns) == rebar_table.COLUMNS
 
+    _goto_input_tab(at, "Section")
     at.selectbox(key="_ed_bars_bulk_fatigue").set_value("F1").run()
     assert at.button(key="_ed_bars_bulk_apply").disabled is False
     at.button(key="_ed_bars_bulk_apply").click().run()
@@ -2590,7 +2602,7 @@ def test_autosave_after_quick_section_apply_saves_applied_geometry(tmp_path, mon
     at = _fresh_qs()
     at.number_input(key="h_mm").set_value(900.0).run()   # distinctive height (450 mm half)
     at.session_state["_autosave_t"] = 0.0                # a save is due
-    at.button(key="qs_apply").click().run()              # reseed + close builder + rerun
+    _set_and_click(at, "qs_apply")                       # reseed + close builder + rerun
     assert not at.exception
     saved = tmp_path / "autosave.json"
     assert saved.exists()
@@ -2725,6 +2737,7 @@ def test_capacity_only_toggle_drops_utilisation_without_locking_case_table():
     at = _fresh()
     at.run()
     at.checkbox(key="pl_check_util").set_value(False).run()
+    _goto_input_tab(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     _calculate(at)
     assert not at.exception
@@ -2751,6 +2764,7 @@ def test_shear_method_changes_do_not_lock_the_case_table():
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
     _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_gamma_c").disabled is False
+    _goto_material_tab(at, "Mild steel")
     assert at.number_input(key="mild_gamma_y").disabled is False
     _set(at, ("number_input", "pl_Mx", 110.0))
     assert not at.exception
@@ -3025,14 +3039,15 @@ def test_removed_design_basis_aggregate_is_absent():
 
 
 def test_es_field_present_and_editable():
-    # The steel modulus Es/Ep is a direct input for both materials (the prestress
-    # panel is always shown, like mild steel).
+    # The steel modulus Es/Ep is a direct input in both material stages.
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
     keys = {ni.key for ni in at.number_input}
-    assert "mild_Es" in keys and "pre_Es" in keys
+    assert "mild_Es" in keys
     at.number_input(key="mild_Es").set_value(210.0).run()   # GPa
+    _goto_material_tab(at, "Prestressing steel")
+    assert "pre_Es" in {ni.key for ni in at.number_input}
     assert not at.exception
     _calculate(at)
     assert not at.exception
@@ -3231,6 +3246,7 @@ def test_degenerate_rupture_stress_does_not_crash():
     # and still render rather than raise.
     at = _fresh()
     at.run()
+    _goto_material_tab(at, "Mild steel")
     at.selectbox(key="mild_preset").set_value("Curve 1 (bilinear hardening)").run()
     at.number_input(key="mild_futk").set_value(0.0).run()
     assert not at.exception
@@ -3406,7 +3422,7 @@ def test_workspace_choices_survive_quick_section_viewport():
     )
     assert at.session_state["view"] == "Results Overview"
     _open_qs(at)
-    at.button(key="qs_back").click().run()
+    _set_and_click(at, "qs_back")
     _goto_page(at, "Analysis")
     assert at.session_state["view"] == "Results Overview"
     _goto_input_tab(at, "Section")
@@ -4080,7 +4096,7 @@ def test_tracked_input_tabs_survive_page_and_auxiliary_view_lifecycle():
     assert at.session_state["_material_tab"] == "Prestressing steel"
 
     _open_qs(at)
-    at.button(key="qs_back").click().run()
+    _set_and_click(at, "qs_back")
     assert at.session_state["_main_page"] == "Inputs"
     assert at.session_state["_input_tab"] == outer
     assert at.session_state["_material_tab"] == "Prestressing steel"

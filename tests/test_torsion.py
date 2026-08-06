@@ -294,6 +294,7 @@ APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import (  # noqa: E402
     apply_widget_changes,
+    discard_retired_qs_fragment,
     first_case_value,
     goto_input_stage,
 )
@@ -343,7 +344,10 @@ def _set_and_click(at, button_key, *changes):
     if button_key == "calculate":
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
-    return at.run()
+    at.run()
+    if button_key in {"qs_apply", "qs_back"}:
+        discard_retired_qs_fragment(at)
+    return at
 
 
 def _apply_t_section(at, bf=1000.0, hf=200.0, bw=300.0, hw=600.0):

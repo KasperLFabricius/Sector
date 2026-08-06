@@ -621,6 +621,8 @@ def test_native_manual_dismissal_event_closes_and_stays_closed():
     # a widget ID and makes this regression fail.
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
+    at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
+    at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()
     at.session_state["_input_tab"] = "Project & report"
     at.run()
@@ -651,6 +653,8 @@ def test_native_manual_dismissal_event_closes_and_stays_closed():
 def test_opening_and_closing_the_manual_keeps_inputs():
     # Dialog fragment reruns must not unmount or reset the Inputs page widgets.
     at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input
     at.session_state["_input_tab"] = "Project & report"
