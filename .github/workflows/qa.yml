@@ -53,6 +53,14 @@ jobs:
       - name: Execute Ruff policy
         run: python tools/verify_ruff_policy.py quality-ruff-policy.toml --execute
 
+      - name: Validate mypy policy ratchet
+        env:
+          SECTOR_MYPY_POLICY_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: python tools/verify_mypy_policy.py quality-mypy-policy.toml --workflow .github/workflows/qa.yml --baseline-ref $env:SECTOR_MYPY_POLICY_BASE
+
+      - name: Execute strict mypy policy
+        run: python tools/verify_mypy_policy.py quality-mypy-policy.toml --execute
+
       - name: Run complete test suite with coverage
         run: python -m pytest tests -n 4 --cov=app --cov=sector --cov-report=term-missing:skip-covered --cov-report=xml:qa-artifacts/coverage.xml --cov-fail-under=50 --junitxml=qa-artifacts/test-results.xml
 
