@@ -1,13 +1,16 @@
-# Build the standalone Sector executable (ONEDIR) into dist/Sector.
+# Build an unsigned Sector QA package (ONEDIR) into dist/Sector.
 #
 # Usage (from anywhere):
 #   powershell -ExecutionPolicy Bypass -File packaging/build.ps1
 #
-# Produces dist/Sector/Sector.exe with its _internal dependency folder. Zip the
-# whole dist/Sector folder to distribute it.
+# The result is for static QA inspection only. It must not be launched, zipped
+# or distributed. A distributable Sector build requires the separately
+# authorised signing workflow.
 
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)   # repo root
+
+Write-Warning "UNSIGNED QA PACKAGE ONLY. Do not launch, zip or distribute this artifact."
 
 Write-Host "Installing locked build dependencies..."
 python -m pip install --quiet --require-hashes -r requirements-build.txt
@@ -23,4 +26,5 @@ Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
 Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt `
   -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
 
-Write-Host "Done. Run dist/Sector/Sector.exe"
+Write-Host "Unsigned QA build complete at dist/Sector."
+Write-Host "Inspection only: do not launch, zip or distribute this artifact."

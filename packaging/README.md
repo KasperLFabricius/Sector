@@ -1,14 +1,16 @@
-# Packaging Sector as a standalone Windows app
+# Inspecting an unsigned Sector Windows QA build
 
-This builds a self-contained Sector that colleagues can run **without installing
-Python** -- a folder with `Sector.exe` and its bundled dependencies (PyInstaller
-ONEDIR).
+The ordinary build scripts and the `Sector QA` workflow produce an **unsigned,
+non-distributable QA artifact** for static package inspection. Do not launch,
+zip or distribute this artifact. A distributable Sector package requires the
+separately authorised signing workflow; there is no unsigned fallback.
 
 ## Build
 
-The easiest way is to **double-click `packaging/build.bat`**. It wraps the
-PowerShell build with an execution-policy bypass (so it works even when running
-`.ps1` files is blocked) and keeps the window open to show the result.
+The easiest inspection build is to **double-click `packaging/build.bat`**. It
+wraps the PowerShell build with an execution-policy bypass (so it works even
+when running `.ps1` files is blocked) and keeps the window open to show the
+result and the unsigned-artifact warning.
 
 Equivalently, from the repository root:
 
@@ -26,15 +28,16 @@ Copy-Item LICENSE dist/Sector/LICENSE.txt
 Copy-Item build/legal/THIRD_PARTY_NOTICES.txt dist/Sector/THIRD_PARTY_NOTICES.txt
 ```
 
-The result is `dist/Sector/`, including Sector's proprietary notice and the
-generated third-party notice bundle. Zip that whole folder to distribute it;
-the user unzips it anywhere and runs `Sector.exe`.
+The inspection result is `dist/Sector/`, including Sector's proprietary notice
+and the generated third-party notice bundle. Keep it local and use it only for
+static QA inspection. Do not execute `Sector.exe` from this unsigned output.
 
-## What it does
+## Signed-package runtime design
 
-`Sector.exe` launches the Streamlit app exactly as `streamlit run app/sector_app.py`
-does (`packaging/run_sector.py` is the entry point) and opens the browser at the
-local URL. A console window stays open to show that URL and any messages.
+After a package has passed the separately authorised signing gate, `Sector.exe`
+launches the Streamlit app exactly as `streamlit run app/sector_app.py` does
+(`packaging/run_sector.py` is the entry point) and opens the browser at the local
+URL. A console window stays open to show that URL and any messages.
 
 Sector serves only on this computer at **127.0.0.1:8502**
 (`http://127.0.0.1:8502`) instead of Streamlit's default 8501, so it can run
