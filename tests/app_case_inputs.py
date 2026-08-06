@@ -38,6 +38,47 @@ _WIDGET_ALIASES = {
 }
 
 
+def _tree_contains_key(node, keys):
+    if getattr(node, "key", None) in keys:
+        return True
+    children = getattr(node, "children", {})
+    values = children.values() if isinstance(children, dict) else children
+    return any(_tree_contains_key(child, keys) for child in values)
+
+
+def _tree_parent_of_key(node, key):
+    children = getattr(node, "children", {})
+    values = children.values() if isinstance(children, dict) else children
+    if any(getattr(child, "key", None) == key for child in values):
+        return node
+    for child in values:
+        parent = _tree_parent_of_key(child, key)
+        if parent is not None:
+            return parent
+    return None
+
+
+def discard_retired_qs_fragment(at):
+    """Mirror the browser removal of Quick Section after its full rerun."""
+
+    main = next(
+        child
+        for child in at._tree.children.values()
+        if getattr(child, "type", None) == "main"
+    )
+    input_host = _tree_parent_of_key(main, "_input_tab")
+    if input_host is None:
+        return at
+    retired_markers = {"qs_apply", "qs_back", "shape"}
+    for index, child in list(input_host.children.items()):
+        if (
+            getattr(child, "key", None) != "_input_tab"
+            and _tree_contains_key(child, retired_markers)
+        ):
+            del input_host.children[index]
+    return at
+
+
 def _delete(state, key):
     try:
         del state[key]

@@ -21,6 +21,7 @@ APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import (  # noqa: E402
     apply_widget_changes,
+    discard_retired_qs_fragment,
     first_case_value,
     goto_input_stage,
 )
@@ -525,7 +526,10 @@ def _set_and_click(at, button_key, *changes):
     if button_key == "calculate":
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
-    return at.run()
+    at.run()
+    if button_key in {"qs_apply", "qs_back"}:
+        discard_retired_qs_fragment(at)
+    return at
 
 
 def test_app_shear_check_produces_a_resistance():
