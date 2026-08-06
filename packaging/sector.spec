@@ -13,6 +13,7 @@ import re
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
+WINDOWS_VERSION_INFO = os.path.join(SPECPATH, "windows_version_info.txt")
 
 datas, binaries, hiddenimports = [], [], []
 
@@ -21,7 +22,9 @@ def _source_revision(root):
     """Read the checkout revision without depending on a Git executable."""
     revision = os.environ.get("SECTOR_SOURCE_REVISION") or os.environ.get("GITHUB_SHA")
     if revision:
-        return revision.strip()
+        revision = revision.strip()
+        if revision and revision.casefold() != "unavailable":
+            return revision
     git_dir = os.path.join(root, ".git")
     try:
         if os.path.isfile(git_dir):
@@ -34,37 +37,75 @@ def _source_revision(root):
         with open(os.path.join(git_dir, "HEAD"), encoding="ascii") as stream:
             head = stream.read().strip()
         if not head.startswith("ref:"):
-            return head
+            if head and head.casefold() != "unavailable":
+                return head
+            raise ValueError(
+                "Sector package source revision is unavailable; set "
+                "SECTOR_SOURCE_REVISION to the exact source revision"
+            )
         ref = head.split(":", 1)[1].strip()
         loose = os.path.join(git_dir, *ref.split("/"))
         if os.path.isfile(loose):
             with open(loose, encoding="ascii") as stream:
-                return stream.read().strip()
+                revision = stream.read().strip()
+            if revision and revision.casefold() != "unavailable":
+                return revision
         packed = os.path.join(git_dir, "packed-refs")
         if os.path.isfile(packed):
             with open(packed, encoding="ascii") as stream:
                 for line in stream:
                     if line.rstrip().endswith(" " + ref):
-                        return line.split(" ", 1)[0]
+                        revision = line.split(" ", 1)[0].strip()
+                        if revision and revision.casefold() != "unavailable":
+                            return revision
     except OSError:
         pass
-    return "unavailable"
+    raise ValueError(
+        "Sector package source revision is unavailable; set "
+        "SECTOR_SOURCE_REVISION to the exact source revision"
+    )
 
 
-def _sector_version(root):
+def _sector_metadata(root):
     with open(os.path.join(root, "sector", "__init__.py"), encoding="utf-8") as stream:
-        match = re.search(r'^__version__\s*=\s*"([^"]+)"', stream.read(), re.MULTILINE)
-    return match.group(1) if match else "unavailable"
+        source = stream.read()
+    metadata = {}
+    for key in (
+        "__version__",
+        "__product_name__",
+        "__description__",
+        "__author__",
+        "__licensee__",
+    ):
+        match = re.search(
+            rf'^{re.escape(key)}\s*=\s*"([^"]+)"', source, re.MULTILINE
+        )
+        if match is None:
+            raise ValueError(f"Sector product identity is missing {key}")
+        metadata[key] = match.group(1)
+    copyright_match = re.search(
+        r'__copyright__\s*=\s*\(\s*"([^"]+)"\s*\)', source, re.MULTILINE
+    )
+    if copyright_match is None:
+        raise ValueError("Sector product identity is missing __copyright__")
+    metadata["__copyright__"] = copyright_match.group(1)
+    return metadata
 
 
 # Embed the exact source state in the packaged runtime. The generated manifest
 # lives under ignored build output and is added beside sector/build_info.py.
 manifest_path = os.path.join(ROOT, "build", "sector_build_info.json")
 os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+metadata = _sector_metadata(ROOT)
 with open(manifest_path, "w", encoding="utf-8") as stream:
     json.dump({
-        "sector_version": _sector_version(ROOT),
+        "product_name": metadata["__product_name__"],
+        "description": metadata["__description__"],
+        "sector_version": metadata["__version__"],
         "source_revision": _source_revision(ROOT),
+        "author": metadata["__author__"],
+        "licensee": metadata["__licensee__"],
+        "copyright": metadata["__copyright__"],
         "built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(
             timespec="seconds"
         ),
@@ -130,6 +171,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="Sector",
+    version=WINDOWS_VERSION_INFO,
     console=True,                 # keep a console so the local URL / errors are visible
     icon=None,
 )
