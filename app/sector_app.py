@@ -28,38 +28,79 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import app_run_probe  # noqa: E402
-import bridge_analysis  # noqa: E402
-import bridge_inputs  # noqa: E402
-import case_analysis  # noqa: E402
-import fatigue_analysis  # noqa: E402
-import fatigue_inputs  # noqa: E402
-import fatigue_presentation  # noqa: E402
+from deferred_import import deferred_module  # noqa: E402
 from input_stage_host import (  # noqa: E402
     input_stages,
     live_fragment_value,
     normalise_stage_selection,
     reset_input_stage_mounts,
 )
-import load_cases  # noqa: E402
-import material_catalog as mat_catalog  # noqa: E402
-import project_io  # noqa: E402
-import reinforcement_table as rebar_table  # noqa: E402
-import result_presentation as presentation  # noqa: E402
-import viz  # noqa: E402
 from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import (bridge, capacity, codes, combined, detailing, geometry,  # noqa: E402
-                    kernels, material_presets as mp, shear, templates, torsion)
+from sector import bridge, codes  # noqa: E402
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
-from sector import sls as sls_core  # noqa: E402
-from sector.elastic import solve_elastic_combined, transformed_properties  # noqa: E402
-from sector.plastic import solve_interaction, solve_plastic  # noqa: E402
-from sector.section import Section  # noqa: E402
-from sector.serviceability import (analyse_cracking, combined_cracking,  # noqa: E402
-                                   crack_width)
+
+# The app has many independent calculation and publication surfaces. Keep their
+# modules inert until the active input stage or requested result actually reaches
+# them; importing a hidden stage must not dominate first render time.
+bridge_analysis = deferred_module("bridge_analysis")
+bridge_inputs = deferred_module("bridge_inputs")
+case_analysis = deferred_module("case_analysis")
+fatigue_analysis = deferred_module("fatigue_analysis")
+fatigue_inputs = deferred_module("fatigue_inputs")
+fatigue_presentation = deferred_module("fatigue_presentation")
+load_cases = deferred_module("load_cases")
+mat_catalog = deferred_module("material_catalog")
+project_io = deferred_module("project_io")
+rebar_table = deferred_module("reinforcement_table")
+presentation = deferred_module("result_presentation")
+viz = deferred_module("viz")
+
+capacity = deferred_module("sector.capacity")
+combined = deferred_module("sector.combined")
+detailing = deferred_module("sector.detailing")
+elastic_core = deferred_module("sector.elastic")
+geometry = deferred_module("sector.geometry")
+kernels = deferred_module("sector.kernels")
+mp = deferred_module("sector.material_presets")
+plastic_core = deferred_module("sector.plastic")
+section_core = deferred_module("sector.section")
+serviceability_core = deferred_module("sector.serviceability")
+shear = deferred_module("sector.shear")
+sls_core = deferred_module("sector.sls")
+templates = deferred_module("sector.templates")
+torsion = deferred_module("sector.torsion")
+
+
+def solve_elastic_combined(*args, **kwargs):
+    return elastic_core.solve_elastic_combined(*args, **kwargs)
+
+
+def transformed_properties(*args, **kwargs):
+    return elastic_core.transformed_properties(*args, **kwargs)
+
+
+def solve_interaction(*args, **kwargs):
+    return plastic_core.solve_interaction(*args, **kwargs)
+
+
+def solve_plastic(*args, **kwargs):
+    return plastic_core.solve_plastic(*args, **kwargs)
+
+
+def analyse_cracking(*args, **kwargs):
+    return serviceability_core.analyse_cracking(*args, **kwargs)
+
+
+def combined_cracking(*args, **kwargs):
+    return serviceability_core.combined_cracking(*args, **kwargs)
+
+
+def crack_width(*args, **kwargs):
+    return serviceability_core.crack_width(*args, **kwargs)
 
 # The tool version comes from the sector package (the single source of truth); it
 # shows in the title, the browser tab, the About panel and the report footer.
@@ -100,12 +141,30 @@ _CRACK_CODE_ALIASES = {
     "DS/EN 1992-1-1 + DK NA (coarse crack system)": "DS/EN 1992-1-1 + DK NA",
 }
 
-# Shear methods for a member without shear reinforcement. The 2005 variable-strut
-# family drives the with-links truss, the torsion tube and the combined lock; the
-# strain-based EN 1992-1-1:2023 tau_Rd,c (sec. 8.2.2) is offered for the shear check
-# without links. Default is the DK NA:2024 edition (the house default material code).
-_SHEAR_CODES = capacity.SHEAR_CODES
-_SHEAR_METHODS = capacity.SHEAR_METHODS
+# Lightweight UI identities for the optional fatigue controls. The active
+# fatigue adapter validates these exact retained solver identities again when a
+# calculation is requested; opening Analysis settings must not import the full
+# elastic fatigue engine merely to populate a select box.
+_FATIGUE_CONCRETE_MINER = "Explicit Palmgren-Miner spectrum"
+_FATIGUE_CONCRETE_PROJECT_MINER = "User-defined Miner S-N relation"
+_FATIGUE_CONCRETE_EQUIVALENT = "Damage-equivalent stress amplitude"
+_FATIGUE_CONCRETE_METHODS = (
+    _FATIGUE_CONCRETE_MINER,
+    _FATIGUE_CONCRETE_PROJECT_MINER,
+    _FATIGUE_CONCRETE_EQUIVALENT,
+)
+
+
+def _shear_codes():
+    """Return retained shear/torsion editions when that stage needs them."""
+
+    return capacity.SHEAR_CODES
+
+
+def _shear_methods():
+    """Return retained shear methods when that stage needs them."""
+
+    return capacity.SHEAR_METHODS
 
 app_run_probe.open_run(st.session_state)
 _startup_probe = app_run_probe.start_phase(st.session_state, "startup")
@@ -272,7 +331,7 @@ def _seed_torsion_gamma_ct(method):
     method changes preserve that actual value. Loaded projects are marked
     explicit in :func:`_apply_pending_project` before this helper runs.
     """
-    code = _SHEAR_CODES.get(method, codes.EC2_2005_DKNA)
+    code = _shear_codes().get(method, codes.EC2_2005_DKNA)
     default = float(code.gamma_ct)
     previous_method = st.session_state.get(_TORSION_GAMMA_METHOD_KEY)
     if "torsion_gamma_ct" not in st.session_state:
@@ -3089,7 +3148,6 @@ def _quick_section_geometry(box):
         # Bar-centre covers (add a radius when the cover is measured to the bar edge).
         bot_e, top_e = _edge(bot_cov, rd_bot), _edge(top_cov, rd_top)
         bot_w, top_w = b - 2.0 * bot_e, width_b - 2.0 * top_e
-        n_at_bot = n_at_top = None     # by-number: a fixed count per layer
         if by_spacing:
             s_bot = _seeded_number(c1, "Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
                                    "bot_s", help="Target centre-to-centre spacing.") / 1000.0
@@ -3108,6 +3166,7 @@ def _quick_section_geometry(box):
             def n_at_top(xs, xe):
                 return templates.count_for_spacing(xe - xs, s_top)
         else:
+            n_at_bot = n_at_top = None  # by-number: fixed count per layer
             nb_bot = _seeded_number(c1, "Bottom bars", 0, 100, 6, 1, "bot_n",
                                     help="Number of bars in the first bottom layer.")
             nb_top = _seeded_number(c2, "Top bars", 0, 100, 2, 1, "top_n",
@@ -3147,7 +3206,6 @@ def _quick_section_geometry(box):
         # below the flange must fit the narrower web (width b) or it would fall
         # outside the concrete. The bottom layers stay in the web (b) and only ever
         # widen into the flange, so they need no such limit.
-        top_span_at = None
         if shape == "T-section":
             flange_y = h / 2 - hf
 
@@ -3155,6 +3213,8 @@ def _quick_section_geometry(box):
                 if y >= flange_y:                 # within the flange
                     return -width_b / 2 + top_e, width_b / 2 - top_e
                 return -b / 2 + top_e, b / 2 - top_e  # below the flange -> the web
+        else:
+            top_span_at = None
 
         if shape == "Box girder":
             # A box girder's rows split into the side walls once they rise into the
@@ -3400,9 +3460,7 @@ def build_inputs(host=st):
         st.session_state[mat_catalog.PRESTRESS_CATALOG_KEY], "prestress"
     )
     mild_material_ids = mat_catalog.material_ids(mild_catalogue, "mild")
-    prestress_material_ids = mat_catalog.material_ids(
-        prestress_catalogue, "prestress"
-    )
+    mat_catalog.material_ids(prestress_catalogue, "prestress")
     app_run_probe.stop_phase(st.session_state, normalization_token)
 
     # A full-width selector replaces the narrow tab strip. Panels carry
@@ -3497,8 +3555,8 @@ def build_inputs(host=st):
     fatigue_concrete_method = _seeded_selectbox(
         fat,
         "Concrete fatigue method",
-        list(fatigue_analysis.CONCRETE_METHODS),
-        fatigue_analysis.CONCRETE_MINER,
+        list(_FATIGUE_CONCRETE_METHODS),
+        _FATIGUE_CONCRETE_MINER,
         "fatigue_concrete_method",
         disabled=not (fatigue_on and fatigue_check_concrete),
         help=(
@@ -3599,7 +3657,7 @@ def build_inputs(host=st):
         "fatigue_concrete_c",
         disabled=(
             not (fatigue_on and fatigue_check_concrete)
-            or fatigue_concrete_method == fatigue_analysis.CONCRETE_EQUIVALENT
+            or fatigue_concrete_method == _FATIGUE_CONCRETE_EQUIVALENT
         ),
         help=r"Coefficient in the implemented $\log_{10}N_R$ concrete fatigue-life "
              "relation.",
@@ -3632,7 +3690,6 @@ def build_inputs(host=st):
     P_pl = case_head["pl_P"]
     Mx_pl = case_head["pl_Mx"]
     My_pl = case_head["pl_My"]
-    shear_V = case_head["shear_V"]
     torsion_T = case_head["torsion_T"]
     P_el_l = case_head["el_long_P"]
     Mx_el_l = case_head["el_long_Mx"]
@@ -3910,6 +3967,9 @@ def build_inputs(host=st):
         "Lap and bundle verification is outside this section-plane spacing check."
     )
 
+    shear_codes_by_label = _shear_codes()
+    shear_methods_by_label = _shear_methods()
+
     sts.markdown(r"**Combined $M$-$V$-$T$ interaction**")
     sts.caption(r"Tie the bending (plastic $M$), shear ($V$) and torsion ($T$) checks "
                  "together under one consistent code edition (6.3.2). Enable Plastic "
@@ -3919,7 +3979,7 @@ def build_inputs(host=st):
         help=r"Tie the $M$, $V$ and $T$ checks together (crushing 6.29 and the DK NA sum rule); "
              "locks their method to the shared edition below. See the manual.")
     combined_method = _seeded_selectbox(
-        sts, "Combined edition (shared)", list(_SHEAR_CODES),
+        sts, "Combined edition (shared)", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label, key="combined_method", disabled=not combined_on,
         help="The single code edition used for the shear and torsion checks while "
              "Combined is on (their own method selectors are locked to this).")
@@ -3942,15 +4002,19 @@ def build_inputs(host=st):
         help=r"Compute directional $V_{Rd,c}$ and utilisation. Enable links below when "
              "shear reinforcement is present.")
     shear_method = _seeded_selectbox(
-        sts, "Shear method", list(_SHEAR_METHODS), codes.EC2_2005_DKNA.label,
+        sts, "Shear method", list(shear_methods_by_label),
+        codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
         help=r"Code edition for the shear rules: the 2005 family ($V_{Rd,c}$, 6.2.2(1)) "
              r"or EN 1992-1-1:2023 (8.2.2 without links; 8.2.3 with links). See the "
              "manual for the difference.")
     _eff_shear_method = combined_method if combined_on else shear_method
-    _shear_2023 = (_SHEAR_METHODS.get(_eff_shear_method) is not None
-                   and getattr(_SHEAR_METHODS[_eff_shear_method], "shear_model",
-                               "2005") == "2023")
+    _shear_2023 = (
+        shear_methods_by_label.get(_eff_shear_method) is not None
+        and getattr(
+            shear_methods_by_label[_eff_shear_method], "shear_model", "2005"
+        ) == "2023"
+    )
     shear_dlower = _seeded_number(
         sts, r"Aggregate size $D_{\mathrm{lower}}$ (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
         disabled=not (shear_on and _shear_2023),
@@ -3994,7 +4058,8 @@ def build_inputs(host=st):
              "plus the combined shear-torsion crushing check "
              "(6.29) when links are also defined.")
     torsion_method = _seeded_selectbox(
-        sts, "Torsion method", list(_SHEAR_CODES), codes.EC2_2005_DKNA.label,
+        sts, "Torsion method", list(shear_codes_by_label),
+        codes.EC2_2005_DKNA.label,
         key="torsion_method", disabled=(not torsion_on) or combined_on,
         help="Code edition for the torsion rules. The DK NA:2024 uses its plasticity "
              r"pure-torsion strut factor $\nu_t=0.7(0.7-f_{ck}/200)$ (5.104 NA) in "
@@ -4162,10 +4227,12 @@ def build_inputs(host=st):
     if _stirrups:
         active_strut_codes = []
         if _links:
-            active_strut_codes.append(_SHEAR_METHODS[_eff_shear_method])
+            active_strut_codes.append(shear_methods_by_label[_eff_shear_method])
         if _tors:
             active_strut_codes.append(
-                _SHEAR_CODES[combined_method if combined_on else torsion_method]
+                shear_codes_by_label[
+                    combined_method if combined_on else torsion_method
+                ]
             )
         code_cot_min = max(
             code.shear_cot_min_limit for code in active_strut_codes
@@ -4596,7 +4663,7 @@ def build_inputs(host=st):
         conc_preview,
         "concrete",
         concrete,
-        viz.concrete_curve_figure,
+        lambda material: viz.concrete_curve_figure(material),
         visible=bool(mat_tab.open and conc_tab.open),
     )
     mild_catalogue, selected_mild_id, selected_steel = _material_catalog_panel(
@@ -4610,7 +4677,7 @@ def build_inputs(host=st):
         mild_preview,
         f"steel_{selected_mild_id}",
         selected_steel,
-        viz.steel_curve_figure,
+        lambda material, **kwargs: viz.steel_curve_figure(material, **kwargs),
         title=mat_catalog.entry_label(
             mat_catalog.entry_map(mild_catalogue, "mild")[selected_mild_id]
         ),
@@ -4628,7 +4695,9 @@ def build_inputs(host=st):
         pre_preview,
         f"prestress_{selected_prestress_id}",
         selected_prestress,
-        viz.prestress_curve_figure,
+        lambda material, **kwargs: viz.prestress_curve_figure(
+            material, **kwargs
+        ),
         title=mat_catalog.entry_label(
             mat_catalog.entry_map(
                 prestress_catalogue, "prestress"
@@ -4730,7 +4799,7 @@ def build_inputs(host=st):
     section = None
     if len(outer) >= 3:
         try:
-            section = Section.from_polygon(
+            section = section_core.Section.from_polygon(
                 corners=outer,
                 bars_xy_area_mm2=bars,
                 tendons_xy_area_mm2=tendons,
@@ -5140,9 +5209,16 @@ def _outline_bbox(outer):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-_shear_lever_arm = capacity.shear_lever_arm
-_shear_face_mrd = capacity.shear_face_mrd
-_tube_torsion = capacity.tube_torsion
+def _shear_lever_arm(*args, **kwargs):
+    return capacity.shear_lever_arm(*args, **kwargs)
+
+
+def _shear_face_mrd(*args, **kwargs):
+    return capacity.shear_face_mrd(*args, **kwargs)
+
+
+def _tube_torsion(*args, **kwargs):
+    return capacity.tube_torsion(*args, **kwargs)
 
 
 def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
@@ -5283,9 +5359,11 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
         ) if all_laws else None)
         prestress_stress = pre_resultant = None
         if inp["tendons"]:
-            sec = Section.from_polygon(corners=inp["outer"],
-                                       bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
-                                       holes=inp["holes"])
+            sec = section_core.Section.from_polygon(
+                corners=inp["outer"],
+                bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
+                holes=inp["holes"],
+            )
             nb = len(inp["bars"])
             sig_ps = [material.Es * material.IS * 1000.0
                       for material in tendon_laws]
@@ -9588,7 +9666,10 @@ def torsion_view(inp, results):
             "differ from the stand-alone values above.")
 
 
-_pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps screen == report
+def _pct(value):
+    """Shared util-percent formatter, resolved only for a requested result."""
+
+    return viz.pct(value)
 
 
 def _no_common_angle_msg(d):
@@ -9801,7 +9882,7 @@ def combined_view(inp, results):
                        f"kN <= VRd,c = {tr['vrd_c']:.1f} kN, 6.2.1), so the shear "
                        "takes NO stirrup -- the whole closed stirrup serves torsion.")
         else:
-            st.caption(f"VEd > VRd,c, so the stirrup carries both: shear and torsion "
+            st.caption("VEd > VRd,c, so the stirrup carries both: shear and torsion "
                        "demands add on the shared closed stirrup.")
         st.caption(
             f"At the member strut angle $\\cot\\theta={tr['cot']:.2f}$ "

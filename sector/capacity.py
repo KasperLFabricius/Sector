@@ -10,14 +10,20 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from importlib import import_module
 from typing import Any
 
-from . import codes, combined, geometry, shear, templates, torsion
-from .plastic import FACE_ANGLE, conditional_capacity, plastic_capacity_at_angle
+from . import codes
 
 SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
 _MISSING = object()
+
+
+def _module(name: str):
+    """Resolve one calculation dependency only when its family is requested."""
+
+    return import_module(f".{name}", __package__)
 
 
 class CapacityInputError(ValueError):
@@ -30,6 +36,27 @@ class CapacityMethodError(CapacityInputError):
 
 class CapacityResultError(ArithmeticError):
     """A retained low-level solver violated its published result contract."""
+
+
+def plastic_capacity_at_angle(*args, **kwargs):
+    """Resolve the plastic point solver only when a capacity check needs it.
+
+    This named seam deliberately remains on :mod:`sector.capacity`: retained
+    tests and callers can replace it independently, while importing the member
+    orchestration module no longer imports or compiles the plastic kernels.
+    """
+
+    from .plastic import plastic_capacity_at_angle as solve
+
+    return solve(*args, **kwargs)
+
+
+def conditional_capacity(*args, **kwargs):
+    """Resolve the conditional chord solver only at calculation time."""
+
+    from .plastic import conditional_capacity as solve
+
+    return solve(*args, **kwargs)
 
 
 def _is_boolean_scalar(value):
@@ -141,6 +168,8 @@ def _face_angle(axis: object, tension_low: object) -> float:
         raise CapacityInputError(
             "capacity face identity requires axis x or y and a Boolean face"
         )
+    from .plastic import FACE_ANGLE
+
     return FACE_ANGLE[(axis, tension_low)]
 
 
@@ -151,11 +180,14 @@ def _require_valid_input_geometry(inp):
     if callable(validator):
         validator()
         return
-    geometry.require_valid_section_topology(inp["outer"], inp.get("holes") or [])
+    _module("geometry").require_valid_section_topology(
+        inp["outer"], inp.get("holes") or []
+    )
 
 
 def gross_area_centroid(outer, holes):
     """Return net concrete area (m2) and centroid ``(cx, cy)`` in metres."""
+    geometry = _module("geometry")
     geometry.require_valid_section_topology(outer, holes or [])
     mo = geometry.area_moments(outer)
     area = abs(mo.area)
@@ -312,9 +344,10 @@ def tube_torsion(
     a_t = asw_over_s * fywd
     b_t = nu_t * alpha_cw * fcd * tube["tef"]
     cot = (
-        shear.optimum_cot_theta(a_t, b_t, cot_min, cot_max)
+        _module("shear").optimum_cot_theta(a_t, b_t, cot_min, cot_max)
         if a_t > 0.0 else max(cot_min, 1.0)
     )
+    torsion = _module("torsion")
     trd_s = torsion.trd_s(tube["Ak"], fywd, asw_over_s, cot)
     trd_max = torsion.trd_max(
         fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot,
@@ -463,6 +496,7 @@ def _build_shear_face_context(
     area, cx, cy = gross_area_centroid(inp["outer"], inp["holes"])
     _, mx_prestress, my_prestress = prestress_resultants(inp, cx, cy)
     centroid_coord = cy if axis == "x" else cx
+    shear = _module("shear")
     asl, cg, asl_bar_ids = shear.tension_reinforcement_selection(
         inp["bars"], axis, tension_low, centroid_coord
     )
@@ -538,7 +572,7 @@ def _build_shear_face_context(
             "compression_extension_credited": False,
             "clause": "EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
         }
-    asw = link_legs * templates.bar_area(inp["shear_link_dia"])
+    asw = link_legs * _module("templates").bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
     z_mm, z_source = shear_lever_arm(inp, axis, tension_low, d_mm)
 
@@ -665,13 +699,14 @@ def build_torsion_context(inp, n_ed_comp):
     area, _cx, _cy = gross_area_centroid(inp["outer"], inp["holes"])
     sigma_cp = n_ed_comp / area / 1000.0 if area > 0.0 else 0.0
     alpha_cw = tcode.shear_alpha_cw(sigma_cp, fcd)
+    torsion = _module("torsion")
     tube = torsion.tube_properties(
         inp["outer"], inp["holes"], tef_override=inp["torsion_tef"]
     )
     gamma_s = inp["steel"].gamma_y
     fywd = inp["shear_fywk"] / gamma_s
     fyd_long = design_yield(inp["steel"])
-    asw = templates.bar_area(inp["shear_link_dia"])
+    asw = _module("templates").bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
     cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
     cot_max = max(inp["strut_cot_min"], inp["strut_cot_max"])
@@ -711,12 +746,12 @@ def build_torsion_context(inp, n_ed_comp):
             for x_mm, y_mm, b_mm, h_mm in subrects
         ]
         subdivision_valid, subdivision_reason = (
-            geometry.rectangles_partition_concrete(
+            _module("geometry").rectangles_partition_concrete(
                 inp["outer"], inp.get("holes") or [], rectangles_m
             )
         )
     subdivide = subdivision_requested and subdivision_valid
-    compound_detected = not geometry.polygon_is_convex(inp["outer"])
+    compound_detected = not _module("geometry").polygon_is_convex(inp["outer"])
     if subdivision_requested and not subdivision_valid:
         tube = dict(
             tube,
@@ -804,6 +839,7 @@ def finalize_combined(inp, out):
     r_v = links["util"] if links is not None else shear_out["util"]
     r_t = torsion_out["util"]
     independent_mv = bool(inp["combined_mv_independent"])
+    combined = _module("combined")
     dk_sum = combined.dkna_sum(
         r_m, r_v, r_t, m_v_independent=independent_mv
     )

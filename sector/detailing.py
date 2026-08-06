@@ -27,14 +27,51 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from importlib import import_module
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from . import combined, geometry
-from .elastic import solve_elastic_uncracked
 from .materials import MildSteel
-from .plastic import FACE_ANGLE, plastic_capacity_at_angle, solve_plastic
-from .section import Bar, Section
+
+if TYPE_CHECKING:
+    from .section import Section
+
+
+def _module(name: str):
+    """Resolve one numerical dependency only for an active detailing check."""
+
+    return import_module(f".{name}", __package__)
+
+
+def solve_elastic_uncracked(*args, **kwargs):
+    """Load the elastic solver only for an active detailing calculation."""
+
+    from .elastic import solve_elastic_uncracked as solve
+
+    return solve(*args, **kwargs)
+
+
+def plastic_capacity_at_angle(*args, **kwargs):
+    """Load the plastic point solver only for a 2023 detailing check."""
+
+    from .plastic import plastic_capacity_at_angle as solve
+
+    return solve(*args, **kwargs)
+
+
+def solve_plastic(*args, **kwargs):
+    """Load the plastic envelope solver only for a 2023 detailing check."""
+
+    from .plastic import solve_plastic as solve
+
+    return solve(*args, **kwargs)
+
+
+def _face_angle(axis: str, tension_low: bool) -> float:
+    from .plastic import FACE_ANGLE
+
+    return FACE_ANGLE[(axis, tension_low)]
 
 
 EC2_2005 = "EN 1992-1-1:2005"
@@ -60,7 +97,7 @@ def _status(statuses: Sequence[str]) -> str:
 
 
 def _moments(section: Section):
-    return geometry.area_moments_rings(section.integration_rings())
+    return _module("geometry").area_moments_rings(section.integration_rings())
 
 
 def _centroid(section: Section) -> tuple[float, float]:
@@ -124,6 +161,7 @@ def tension_zone_mean_width(
     # Keep coord <= cut for a low face, coord >= cut for a high face.
     c = cut if tension_low else -cut
     clipped_area = 0.0
+    geometry = _module("geometry")
     for ring in section.integration_rings():
         clipped = geometry.clip_halfplane(ring, a, b, c)
         clipped_area += geometry.area_moments(clipped).area
@@ -149,6 +187,8 @@ def _resultant_tension_zone(
     """
     if len(elements) != len(section.bars) or len(materials) != len(section.bars):
         raise ValueError("one element record and material are required per bar")
+    from .section import Section
+
     plain = Section([np.asarray(ring, dtype=float).copy()
                      for ring in section.concrete])
     bending = solve_elastic_uncracked(
@@ -169,6 +209,7 @@ def _resultant_tension_zone(
     tension_depth = float(np.max(signed_vertices))
     compression_extreme = float(np.min(signed_vertices))
     clipped_area = 0.0
+    geometry = _module("geometry")
     for ring in section.integration_rings():
         clipped = geometry.clip_halfplane(
             ring, float(direction[0]), float(direction[1]), neutral_c
@@ -352,6 +393,8 @@ def minimum_reinforcement_2005(
 
 
 def _recentred_without_tendons(section: Section) -> Section:
+    from .section import Bar, Section
+
     cx, cy = _centroid(section)
     rings = [
         np.asarray(ring, dtype=float) - np.array([cx, cy], dtype=float)
@@ -386,6 +429,8 @@ def _cracking_action(
     fctm_mpa: float,
 ) -> dict:
     """Cracking action in the direction of the supplied centroidal moment."""
+    from .section import Section
+
     plain = Section([ring.copy() for ring in section.concrete])
     axial = solve_elastic_uncracked(
         plain, -float(n_ed_tension_kn), 0.0, 0.0, 1.0
@@ -524,7 +569,7 @@ def _nominal_capacity_utilisation(
             ),
         }
     if abs(my) <= _TOL:
-        angle = FACE_ANGLE[("x", mx > 0.0)]
+        angle = _face_angle("x", mx > 0.0)
         point = plastic_capacity_at_angle(
             section,
             concrete,
@@ -542,7 +587,7 @@ def _nominal_capacity_utilisation(
             "model": "uniaxial x",
         }
     if abs(mx) <= _TOL:
-        angle = FACE_ANGLE[("y", my > 0.0)]
+        angle = _face_angle("y", my > 0.0)
         point = plastic_capacity_at_angle(
             section,
             concrete,
@@ -571,7 +616,7 @@ def _nominal_capacity_utilisation(
     )
     if not all(point.converged for point in points):
         return {"valid": False, "utilisation": None, "mr_nom_knm": None}
-    util, governing = combined.radial_util(
+    util, governing = _module("combined").radial_util(
         [point.Mx for point in points],
         [point.My for point in points],
         mx,
