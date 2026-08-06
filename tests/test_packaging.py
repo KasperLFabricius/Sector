@@ -32,6 +32,23 @@ def test_build_script_uses_the_hashed_lock():
     assert '"pyinstaller>=' not in script.lower()
 
 
+def test_build_preflight_binds_and_fences_recursively_packaged_source():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    script = (root / "packaging" / "build.ps1").read_text(encoding="utf-8")
+    assert (root / "tools" / "verify_packaged_source.py").is_file()
+    for token in (
+        "git rev-parse HEAD",
+        "^[0-9a-f]{40}$",
+        "python -I -S tools/verify_packaged_source.py",
+        "--root . --source-revision $sourceRevision",
+        "$env:SECTOR_SOURCE_REVISION = $sourceRevision",
+    ):
+        assert token in script
+    assert script.index("verify_packaged_source.py") < script.index(
+        "pip install"
+    ) < script.index("PyInstaller")
+
+
 def test_distribution_notices_are_generated_and_package_gated():
     root = pathlib.Path(__file__).resolve().parent.parent
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md",

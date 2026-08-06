@@ -21,12 +21,22 @@ powershell -ExecutionPolicy Bypass -File packaging/build.ps1
 or directly:
 
 ```powershell
+$sourceRevision = git rev-parse HEAD
+python -I -S tools/verify_packaged_source.py --root . --source-revision $sourceRevision
+$env:SECTOR_SOURCE_REVISION = $sourceRevision
 python -m pip install --require-hashes -r requirements-build.txt
 python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
 python -m PyInstaller --noconfirm --clean packaging/sector.spec
 Copy-Item LICENSE dist/Sector/LICENSE.txt
 Copy-Item build/legal/THIRD_PARTY_NOTICES.txt dist/Sector/THIRD_PARTY_NOTICES.txt
 ```
+
+The source preflight requires an exact current commit and a clean tracked tree.
+It also rejects every untracked file beneath the recursively packaged `app`,
+`sector`, and `assets` directories, including ignored bytecode, native libraries,
+and caches. Untracked or ignored QA artifacts elsewhere remain untouched and do
+not block packaging. Use a clean checkout for a controlled build; the preflight
+never deletes or moves local artifacts.
 
 The inspection result is `dist/Sector/`, including Sector's proprietary notice
 and the generated third-party notice bundle. Keep it local and use it only for
