@@ -1,8 +1,10 @@
 # Packaging Sector as a standalone Windows app
 
-This builds a self-contained Sector that colleagues can run **without installing
-Python** -- a folder with `Sector.exe` and its bundled dependencies (PyInstaller
-ONEDIR).
+This packages Sector as a self-contained Windows folder with `Sector.exe` and
+its bundled dependencies (PyInstaller ONEDIR), so an approved signed release can
+run **without installing Python**. The local scripts produce only unsigned QA
+builds; colleagues must receive the protected workflow's verified signed
+artifact.
 
 ## Build
 
@@ -26,9 +28,13 @@ Copy-Item LICENSE dist/Sector/LICENSE.txt
 Copy-Item build/legal/THIRD_PARTY_NOTICES.txt dist/Sector/THIRD_PARTY_NOTICES.txt
 ```
 
-The result is `dist/Sector/`, including Sector's proprietary notice and the
-generated third-party notice bundle. Zip that whole folder to distribute it;
-the user unzips it anywhere and runs `Sector.exe`.
+The local result is `dist/Sector/`, including Sector's proprietary notice and
+the generated third-party notice bundle. It is an **unsigned QA build**: do not
+launch or distribute its executable. A releasable package is produced only by
+the protected `Signed Sector Windows release` workflow, which fails before the
+build when genuine signing credentials are unavailable and uploads nothing
+until Authenticode, signer, timestamp, product metadata, provenance and legal
+files have all been independently verified.
 
 ## What it does
 
@@ -52,9 +58,20 @@ the console for support.
 | File | Purpose |
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
-| `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
-| `build.ps1` | Convenience build script: installs the lock, generates notices, builds and assembles the package. |
+| `sector.spec` | PyInstaller spec: embeds the exact Windows product/version resource, records build provenance, collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
+| `windows_version_info.txt` | Exact Windows file/product metadata for Sector 0.91; synchronized and checked against `sector/__init__.py`. |
+| `build.ps1` | Convenience QA build script: installs the lock, generates notices, builds and assembles an explicitly unsigned package. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
+
+## Signed release authority
+
+The manual release workflow runs in the protected
+`sector-production-signing` environment. It requires a genuine code-signing PFX,
+its password, and the independently configured expected certificate subject and
+thumbprint. Those values are secrets and are never stored in this repository.
+The workflow applies a SHA-256 Authenticode signature with an RFC 3161 timestamp,
+then verifies the signature and package identity before its sole artifact upload.
+Missing signing authority is a release blocker; there is no unsigned fallback.
 
 ## Runtime notes
 

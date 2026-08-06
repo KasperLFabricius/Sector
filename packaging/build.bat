@@ -17,7 +17,8 @@ echo.
 if not "%RC%"=="0" (
     echo Build FAILED with exit code %RC%.
 ) else (
-    echo Build complete. Run dist\Sector\Sector.exe
+    echo Unsigned QA build complete. Do not launch or distribute Sector.exe.
+    echo Use the protected signed-release workflow for a releasable package.
 )
 echo.
 pause

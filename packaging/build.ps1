@@ -9,6 +9,8 @@
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)   # repo root
 
+Write-Warning "This local build is an unsigned QA artifact. Do not launch or distribute it."
+
 Write-Host "Installing locked build dependencies..."
 python -m pip install --quiet --require-hashes -r requirements-build.txt
 
@@ -23,4 +25,4 @@ Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
 Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt `
   -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
 
-Write-Host "Done. Run dist/Sector/Sector.exe"
+Write-Host "Unsigned QA build complete at dist/Sector. Use the controlled signed-release workflow for an executable that may be launched or distributed."

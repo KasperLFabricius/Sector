@@ -93,7 +93,7 @@ jobs:
           retention-days: 14
 
   windows-package:
-    name: Reproducible Windows package
+    name: Unsigned QA Windows package
     needs: test
     runs-on: windows-latest
     timeout-minutes: 60
@@ -145,7 +145,7 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Sector-Windows
+          name: Sector-Windows-unsigned-QA
           path: dist/Sector/
           if-no-files-found: error
           retention-days: 7

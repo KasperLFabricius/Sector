@@ -13,6 +13,14 @@ import re
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
+PRODUCT_NAME = "Sector"
+FILE_DESCRIPTION = "Sector structural-analysis and design calculation tool"
+LEGAL_COPYRIGHT = (
+    "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
+)
+WINDOWS_VERSION_RESOURCE = os.path.join(
+    ROOT, "packaging", "windows_version_info.txt"
+)
 
 datas, binaries, hiddenimports = [], [], []
 
@@ -51,20 +59,40 @@ def _source_revision(root):
     return "unavailable"
 
 
-def _sector_version(root):
+def _sector_identity(root):
     with open(os.path.join(root, "sector", "__init__.py"), encoding="utf-8") as stream:
-        match = re.search(r'^__version__\s*=\s*"([^"]+)"', stream.read(), re.MULTILINE)
-    return match.group(1) if match else "unavailable"
+        source = stream.read()
+    identity = {}
+    for field, attribute in (
+        ("sector_version", "__version__"),
+        ("author", "__author__"),
+        ("licensee", "__licensee__"),
+    ):
+        match = re.search(
+            rf'^{re.escape(attribute)}\s*=\s*"([^"]+)"',
+            source,
+            re.MULTILINE,
+        )
+        if match is None:
+            raise ValueError(f"Missing Sector product identity: {attribute}")
+        identity[field] = match.group(1)
+    return identity
 
 
 # Embed the exact source state in the packaged runtime. The generated manifest
 # lives under ignored build output and is added beside sector/build_info.py.
 manifest_path = os.path.join(ROOT, "build", "sector_build_info.json")
 os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+identity = _sector_identity(ROOT)
 with open(manifest_path, "w", encoding="utf-8") as stream:
     json.dump({
-        "sector_version": _sector_version(ROOT),
+        "product_name": PRODUCT_NAME,
+        "file_description": FILE_DESCRIPTION,
+        "sector_version": identity["sector_version"],
         "source_revision": _source_revision(ROOT),
+        "author": identity["author"],
+        "licensee": identity["licensee"],
+        "legal_copyright": LEGAL_COPYRIGHT,
         "built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(
             timespec="seconds"
         ),
@@ -132,6 +160,7 @@ exe = EXE(
     name="Sector",
     console=True,                 # keep a console so the local URL / errors are visible
     icon=None,
+    version=WINDOWS_VERSION_RESOURCE,
 )
 
 coll = COLLECT(
