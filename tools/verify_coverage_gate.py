@@ -15,7 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 INITIAL_TARGETS = {"app", "sector"}
 INITIAL_MINIMUM_PERCENT = 50
-REQUIRED_WAIVER_IDS = {"coverage-pr14-calibration"}
+REQUIRED_WAIVER_IDS: set[str] = set()
 VALIDATOR_STEP_NAME = "Validate non-shrinking coverage gate"
 COVERAGE_STEP_NAME = "Run complete test suite with coverage"
 CHECKOUT_STEP_NAME = "Check out source"

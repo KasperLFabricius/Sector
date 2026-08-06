@@ -34,10 +34,30 @@ def test_windows_job_is_explicitly_unsigned_qa_only():
     warning = "UNSIGNED QA PACKAGE ONLY. Do not launch or distribute this artifact."
     assert script.count(warning) == 1
     assert script.index(warning) < script.index("PyInstaller")
+    assert script.count("python -m PyInstaller") == 2
+    assert "--workpath build/primary" in script
+    assert "--workpath build/repro-check" in script
+
+    epoch = _step(job, "Establish controlled source epoch")
+    assert epoch["env"] == {"SECTOR_SOURCE_REVISION": "${{ github.sha }}"}
+    for token in (
+        "^[0-9a-f]{40}$",
+        "git show -s --format=%ct $env:SECTOR_SOURCE_REVISION",
+        "SOURCE_DATE_EPOCH=$sourceDateEpoch",
+        "$env:GITHUB_ENV",
+    ):
+        assert token in epoch["run"]
 
     upload = _step(job, "Upload unsigned QA package")
     assert upload["with"]["name"] == "Sector-Windows-unsigned-QA"
     assert upload["with"]["retention-days"] == 7
+    evidence = _step(job, "Upload controlled-build reproducibility evidence")
+    assert evidence["with"] == {
+        "name": "Sector-Windows-reproducibility-QA",
+        "path": "build/reproducibility/package-reproducibility.json",
+        "if-no-files-found": "error",
+        "retention-days": 14,
+    }
 
 
 def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
@@ -46,6 +66,12 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
     upload = _step(job, "Upload unsigned QA package")
     assert job["steps"].index(verify) < job["steps"].index(upload)
     script = verify["run"]
+
+    assert script.count("tools/verify_windows_release.py") == 2
+    assert "--package dist/Sector" in script
+    assert "--package dist/repro-check/Sector" in script
+    assert "tools/verify_package_reproducibility.py" in script
+    assert "--first dist/Sector --second dist/repro-check/Sector" in script
 
     for token in (
         'ProductName = "Sector"',

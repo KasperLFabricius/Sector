@@ -102,6 +102,27 @@ def _source_revision(root):
     )
 
 
+def _source_date_epoch():
+    """Return the controlled source commit epoch used by the whole build."""
+    candidate = str(os.environ.get("SOURCE_DATE_EPOCH") or "").strip()
+    if (
+        not candidate
+        or not candidate.isascii()
+        or not candidate.isdecimal()
+        or (len(candidate) > 1 and candidate.startswith("0"))
+    ):
+        raise ValueError(
+            "Sector package source date epoch is unavailable; set "
+            "SOURCE_DATE_EPOCH to the non-negative integer commit timestamp"
+        )
+    epoch = int(candidate)
+    try:
+        datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("Sector package source date epoch is outside UTC range") from exc
+    return epoch
+
+
 def _sector_metadata(root):
     """Read complete package identity from Sector's source-of-truth module."""
     path = os.path.join(root, "sector", "__init__.py")
@@ -138,19 +159,24 @@ manifest_path = os.path.join(ROOT, "build", "sector_build_info.json")
 os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
 metadata = _sector_metadata(ROOT)
 source_revision = _source_revision(ROOT)
+source_date_epoch = _source_date_epoch()
 with open(manifest_path, "w", encoding="utf-8") as stream:
     json.dump({
         "product_name": metadata["__product_name__"],
         "description": metadata["__description__"],
         "sector_version": metadata["__version__"],
         "source_revision": source_revision,
+        "source_date_epoch": source_date_epoch,
         "author": metadata["__author__"],
         "licensee": metadata["__licensee__"],
         "copyright": metadata["__copyright__"],
-        "built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(
+        "built_at_utc": datetime.datetime.fromtimestamp(
+            source_date_epoch, tz=datetime.timezone.utc
+        ).isoformat(
             timespec="seconds"
         ),
     }, stream, indent=2)
+    stream.write("\n")
 datas += [(manifest_path, "sector")]
 
 

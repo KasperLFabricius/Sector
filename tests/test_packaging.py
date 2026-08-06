@@ -35,7 +35,8 @@ def test_build_script_uses_the_hashed_lock():
 def test_distribution_notices_are_generated_and_package_gated():
     root = pathlib.Path(__file__).resolve().parent.parent
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md",
-                 "tools/generate_third_party_notices.py"):
+                 "tools/generate_third_party_notices.py",
+                 "tools/canonicalize_pyinstaller_archive.py"):
         assert (root / name).is_file(), f"{name} missing from the repository"
     build = (root / "packaging" / "build.ps1").read_text(encoding="utf-8")
     workflow = (root / ".github" / "workflows" / "qa.yml").read_text(
@@ -43,8 +44,32 @@ def test_distribution_notices_are_generated_and_package_gated():
     )
     for text in (build, workflow):
         assert "generate_third_party_notices.py" in text
-        assert "dist/Sector/LICENSE.txt" in text
-        assert "dist/Sector/THIRD_PARTY_NOTICES.txt" in text
+        assert "LICENSE.txt" in text
+        assert "THIRD_PARTY_NOTICES.txt" in text
+        assert "verify_windows_release.py" in text
+        assert "verify_package_reproducibility.py" in text
+        assert text.count("canonicalize_pyinstaller_archive.py") == 2
+
+
+def test_local_build_is_unique_source_bound_and_non_destructive():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    script = (root / "packaging" / "build.ps1").read_text(encoding="utf-8")
+    ignored = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    for token in (
+        "git rev-parse HEAD",
+        "git show -s --format=%ct $sourceRevision",
+        "$env:SECTOR_SOURCE_REVISION = $sourceRevision",
+        "$env:SOURCE_DATE_EPOCH = $sourceDateEpoch",
+        "build\\unsigned-package-",
+        "[guid]::NewGuid()",
+        "--workpath $primaryWork",
+        "--workpath $secondaryWork",
+    ):
+        assert token in script
+    assert "build/" in ignored
+    assert "output\\unsigned-package-" not in script
+    assert script.count("python -m PyInstaller") == 2
+    assert "Remove-Item" not in script
 
 
 def test_kaleido_cli_mocker_is_excluded_from_the_frozen_runtime():

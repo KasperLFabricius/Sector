@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
 SCRIPT = ROOT / "packaging" / "sign_and_verify.ps1"
 COMMIT = "a" * 40
+EPOCH = 1_785_996_000
 
 
 def _workflow():
@@ -79,6 +80,9 @@ def test_checkout_is_fixed_to_main_and_trust_gate_precedes_repository_code():
         "git rev-parse HEAD",
         'refs/heads/main:refs/remotes/origin/main',
         "git rev-parse refs/remotes/origin/main",
+        "git show -s --format=%ct $sourceRevision",
+        "SOURCE_DATE_EPOCH=$sourceDateEpoch",
+        "$env:GITHUB_ENV",
         "StringComparison]::Ordinal",
         "git config --local --name-only --get-regexp '^http\\..*\\.extraheader$'",
         "git config --local --unset-all $credentialKey",
@@ -86,6 +90,7 @@ def test_checkout_is_fixed_to_main_and_trust_gate_precedes_repository_code():
     ):
         assert token in script
     assert script.index("git fetch") < script.index("git config --local --unset-all")
+    assert script.index("git show -s") < script.index("git config --local --unset-all")
     assert all("run" not in step for step in steps[:1])
     assert "tools/" not in script and "packaging/" not in script
 
@@ -104,6 +109,7 @@ def test_preflight_is_isolated_and_runs_before_dependencies_or_build():
     install = _step("Install locked build environment")
     build = _step("Build source-bound package")
     assert "python -I -S tools/verify_windows_release.py" in preflight["run"]
+    assert "--source-date-epoch $env:SOURCE_DATE_EPOCH" in preflight["run"]
     assert steps.index(preflight) < steps.index(install) < steps.index(build)
     assert "--require-hashes -r requirements-build.txt" in install["run"]
 
@@ -137,6 +143,13 @@ def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
         < steps.index(upload)
     )
     assert "--package dist/Sector" in package_gate["run"]
+    assert "--package dist/repro-check/Sector" in package_gate["run"]
+    assert "tools/verify_package_reproducibility.py" in package_gate["run"]
+    assert "--first dist/Sector --second dist/repro-check/Sector" in package_gate["run"]
+    build = _step("Build source-bound package")["run"]
+    assert build.count("python -m PyInstaller") == 2
+    assert "--workpath build/primary" in build
+    assert "--workpath build/repro-check" in build
     for token in (
         "ProductName",
         "FileDescription",
@@ -151,6 +164,13 @@ def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
     assert upload["with"] == {
         "name": "Sector-Windows-signed-${{ inputs.source_sha }}",
         "path": "dist/Sector/",
+        "if-no-files-found": "error",
+        "retention-days": 30,
+    }
+    evidence_upload = _step("Upload controlled-build reproducibility evidence")
+    assert evidence_upload["with"] == {
+        "name": "Sector-Windows-reproducibility-${{ inputs.source_sha }}",
+        "path": "build/reproducibility/package-reproducibility.json",
         "if-no-files-found": "error",
         "retention-days": 30,
     }
@@ -220,6 +240,8 @@ def test_stdlib_preflight_succeeds_without_site_packages():
             str(ROOT),
             "--source-revision",
             COMMIT,
+            "--source-date-epoch",
+            str(EPOCH),
             "--preflight",
         ],
         cwd=ROOT,
@@ -236,7 +258,13 @@ def test_stdlib_preflight_succeeds_without_site_packages():
 )
 def test_source_preflight_rejects_non_exact_commit_identity(revision):
     with pytest.raises(ReleaseVerificationError, match="lowercase 40-hex"):
-        verify_source(ROOT, revision)
+        verify_source(ROOT, revision, EPOCH)
+
+
+@pytest.mark.parametrize("epoch", (True, "", "-1", "01", "1.5", "uncontrolled"))
+def test_source_preflight_rejects_noncanonical_build_epoch(epoch):
+    with pytest.raises(ReleaseVerificationError, match="non-negative integer"):
+        verify_source(ROOT, COMMIT, epoch)
 
 
 def _package(tmp_path: Path, *, revision: str = COMMIT) -> Path:
@@ -255,6 +283,7 @@ def _package(tmp_path: Path, *, revision: str = COMMIT) -> Path:
         "description": EXPECTED_SOURCE_IDENTITY["__description__"],
         "sector_version": EXPECTED_SOURCE_IDENTITY["__version__"],
         "source_revision": revision,
+        "source_date_epoch": EPOCH,
         "author": EXPECTED_SOURCE_IDENTITY["__author__"],
         "licensee": EXPECTED_SOURCE_IDENTITY["__licensee__"],
         "copyright": EXPECTED_SOURCE_IDENTITY["__copyright__"],
@@ -267,7 +296,7 @@ def _package(tmp_path: Path, *, revision: str = COMMIT) -> Path:
 
 
 def test_package_gate_accepts_complete_source_bound_fixture(tmp_path):
-    verify_package(ROOT, _package(tmp_path), COMMIT)
+    verify_package(ROOT, _package(tmp_path), COMMIT, EPOCH)
 
 
 @pytest.mark.parametrize(
@@ -277,7 +306,8 @@ def test_package_gate_accepts_complete_source_bound_fixture(tmp_path):
         ("foreign_license", "differs from source"),
         ("unknown_manifest", "keys are incomplete or unknown"),
         ("wrong_revision", "manifest field: source_revision"),
-        ("local_timestamp", "explicit UTC timestamp"),
+        ("wrong_epoch", "manifest field: source_date_epoch"),
+        ("resealed_timestamp", "controlled source date epoch"),
     ),
 )
 def test_package_gate_rejects_incomplete_or_resealed_identity(tmp_path, mutation, match):
@@ -293,8 +323,10 @@ def test_package_gate_rejects_incomplete_or_resealed_identity(tmp_path, mutation
             manifest["extra"] = "accepted?"
         elif mutation == "wrong_revision":
             manifest["source_revision"] = "b" * 40
-        elif mutation == "local_timestamp":
-            manifest["built_at_utc"] = "2026-08-06T06:00:00"
+        elif mutation == "wrong_epoch":
+            manifest["source_date_epoch"] = EPOCH + 1
+        elif mutation == "resealed_timestamp":
+            manifest["built_at_utc"] = "2026-08-06T06:00:01+00:00"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReleaseVerificationError, match=match):
-        verify_package(ROOT, package, COMMIT)
+        verify_package(ROOT, package, COMMIT, EPOCH)

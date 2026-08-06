@@ -44,8 +44,12 @@ def _spec_helpers(*names: str):
     ]
     assert {node.name for node in selected} == set(names)
     harness = ast.Module(
-        body=[ast.Import(names=[ast.alias(name="ast")]),
-              ast.Import(names=[ast.alias(name="os")]), *selected],
+        body=[
+            ast.Import(names=[ast.alias(name="ast")]),
+            ast.Import(names=[ast.alias(name="datetime")]),
+            ast.Import(names=[ast.alias(name="os")]),
+            *selected,
+        ],
         type_ignores=[],
     )
     namespace = {}
@@ -87,10 +91,11 @@ def test_packager_maps_every_identity_to_resource_and_manifest():
         '"description": metadata["__description__"]',
         '"sector_version": metadata["__version__"]',
         '"source_revision": source_revision',
+        '"source_date_epoch": source_date_epoch',
         '"author": metadata["__author__"]',
         '"licensee": metadata["__licensee__"]',
         '"copyright": metadata["__copyright__"]',
-        '"built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(',
+        '"built_at_utc": datetime.datetime.fromtimestamp(',
     ):
         assert spec.count(mapping) == 1
     assert "subprocess" not in spec
@@ -108,6 +113,35 @@ def test_source_revision_prefers_only_complete_environment_identity(monkeypatch)
     monkeypatch.setenv("SECTOR_SOURCE_REVISION", "unavailable")
     monkeypatch.setenv("GITHUB_SHA", COMMIT)
     assert namespace["_source_revision"](ROOT / "missing") == COMMIT
+
+
+def test_source_date_epoch_is_explicit_canonical_and_utc_representable(monkeypatch):
+    namespace = _spec_helpers("_source_date_epoch")
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1786000000")
+    assert namespace["_source_date_epoch"]() == 1_786_000_000
+
+    for invalid in ("", "-1", "01", "1.5", "not-an-epoch"):
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", invalid)
+        try:
+            namespace["_source_date_epoch"]()
+        except ValueError as exc:
+            assert "non-negative integer commit timestamp" in str(exc)
+        else:
+            raise AssertionError(f"packager accepted invalid source epoch {invalid!r}")
+
+
+def test_source_date_epoch_is_required(monkeypatch):
+    namespace = _spec_helpers("_source_date_epoch")
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+    try:
+        namespace["_source_date_epoch"]()
+    except ValueError as exc:
+        assert str(exc) == (
+            "Sector package source date epoch is unavailable; set "
+            "SOURCE_DATE_EPOCH to the non-negative integer commit timestamp"
+        )
+    else:
+        raise AssertionError("packager accepted an uncontrolled wall-clock build")
 
 
 def test_source_revision_rejects_an_untraceable_export(tmp_path, monkeypatch):

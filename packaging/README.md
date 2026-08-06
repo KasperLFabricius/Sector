@@ -18,19 +18,25 @@ Equivalently, from the repository root:
 powershell -ExecutionPolicy Bypass -File packaging/build.ps1
 ```
 
-or directly:
+The script requires a clean tracked source tree and rejects untracked files
+inside the packaged `app`, `sector`, or `assets` trees. It derives the exact
+source revision and `SOURCE_DATE_EPOCH` from the checked-out commit, then builds
+two clean package trees with separate work directories. PyInstaller's generated
+stored standard-library ZIP is canonicalized by validated member name and order;
+member payloads are not filtered or changed. Both packages then pass the complete
+source/product/legal verifier and an independent path/size/SHA-256 comparison.
 
-```powershell
-python -m pip install --require-hashes -r requirements-build.txt
-python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
-python -m PyInstaller --noconfirm --clean packaging/sector.spec
-Copy-Item LICENSE dist/Sector/LICENSE.txt
-Copy-Item build/legal/THIRD_PARTY_NOTICES.txt dist/Sector/THIRD_PARTY_NOTICES.txt
-```
+Every run uses a new directory under the repository's ignored
+`build/unsigned-package-*` tree; previous QA artifacts are not overwritten and
+the generated packages cannot be staged accidentally. The `primary/Sector/`
+subtree is the inspection package and `package-reproducibility.json` records the
+controlled unsigned tree hash. Keep both packages local and use them only for
+static QA inspection. Do not execute either unsigned `Sector.exe`.
 
-The inspection result is `dist/Sector/`, including Sector's proprietary notice
-and the generated third-party notice bundle. Keep it local and use it only for
-static QA inspection. Do not execute `Sector.exe` from this unsigned output.
+The reproducibility claim applies to the complete unsigned package built twice
+from the same locked environment, source revision and commit epoch. Genuine
+Authenticode/RFC3161 signing changes the executable, so Sector does not claim
+that independently signed package bytes are identical.
 
 ## Signed-package runtime design
 
@@ -56,7 +62,7 @@ the console for support.
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
-| `build.ps1` | Convenience build script: installs the lock, generates notices, builds and assembles the package. |
+| `build.ps1` | Controlled QA build: derives source identity, builds twice, verifies both trees and writes SHA-256 comparison evidence. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
 
 ## Runtime notes

@@ -12,7 +12,10 @@ numba>=0.63; python_version >= "3.14"
 numba>=0.62; python_version < "3.14"
 
 streamlit>=1.52,<2
+# Streamlit imports GitPython; keep its transitive runtime dependency above the
+# complete published security-fix floor.
+gitpython>=3.1.57,<4
 plotly>=5.18,<7
 reportlab>=4.0,<5
 kaleido>=0.2.1
-pypdf>=4.0,<6
+pypdf>=6.14.2,<7

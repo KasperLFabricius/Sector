@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+EPOCH_RE = re.compile(r"^(0|[1-9][0-9]*)$")
 EXPECTED_SOURCE_IDENTITY = {
     "__version__": "0.91",
     "__product_name__": "Sector",
@@ -26,6 +27,7 @@ EXPECTED_MANIFEST_KEYS = {
     "description",
     "sector_version",
     "source_revision",
+    "source_date_epoch",
     "author",
     "licensee",
     "copyright",
@@ -80,23 +82,46 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def _validate_timestamp(value: Any) -> None:
-    if not isinstance(value, str) or not value.endswith("+00:00"):
-        raise ReleaseVerificationError("built_at_utc must be an explicit UTC timestamp")
+def _source_date_epoch(value: object) -> int:
+    if isinstance(value, bool):
+        raise ReleaseVerificationError(
+            "source date epoch must be a non-negative integer"
+        )
+    text = str(value).strip()
+    if EPOCH_RE.fullmatch(text) is None:
+        raise ReleaseVerificationError(
+            "source date epoch must be a non-negative integer"
+        )
+    epoch = int(text)
     try:
-        parsed = dt.datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise ReleaseVerificationError("built_at_utc is malformed") from exc
-    if parsed.tzinfo != dt.timezone.utc:
-        raise ReleaseVerificationError("built_at_utc must use the UTC offset")
+        dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ReleaseVerificationError(
+            "source date epoch is outside the supported UTC range"
+        ) from exc
+    return epoch
 
 
-def verify_source(root: Path, source_revision: str) -> None:
+def _source_date_utc(epoch: int) -> str:
+    return dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc).isoformat(
+        timespec="seconds"
+    )
+
+
+def _validate_timestamp(value: Any, epoch: int) -> None:
+    if value != _source_date_utc(epoch):
+        raise ReleaseVerificationError(
+            "built_at_utc must equal the controlled source date epoch in UTC"
+        )
+
+
+def verify_source(root: Path, source_revision: str, source_date_epoch: object) -> None:
     """Validate immutable source identities before installing build dependencies."""
     if COMMIT_RE.fullmatch(source_revision) is None:
         raise ReleaseVerificationError(
             "source revision must be an exact lowercase 40-hex commit"
         )
+    _source_date_epoch(source_date_epoch)
     values = _literal_assignments(
         root / "sector" / "__init__.py", set(EXPECTED_SOURCE_IDENTITY)
     )
@@ -125,9 +150,15 @@ def verify_source(root: Path, source_revision: str) -> None:
         raise ReleaseVerificationError("Windows resource advertises a company identity")
 
 
-def verify_package(root: Path, package: Path, source_revision: str) -> None:
+def verify_package(
+    root: Path,
+    package: Path,
+    source_revision: str,
+    source_date_epoch: object,
+) -> None:
     """Validate a built package before any signing secret is exposed."""
-    verify_source(root, source_revision)
+    epoch = _source_date_epoch(source_date_epoch)
+    verify_source(root, source_revision, epoch)
     required = {
         "executable": package / "Sector.exe",
         "app": package / "_internal" / "app" / "sector_app.py",
@@ -160,6 +191,7 @@ def verify_package(root: Path, package: Path, source_revision: str) -> None:
         "description": EXPECTED_SOURCE_IDENTITY["__description__"],
         "sector_version": EXPECTED_SOURCE_IDENTITY["__version__"],
         "source_revision": source_revision,
+        "source_date_epoch": epoch,
         "author": EXPECTED_SOURCE_IDENTITY["__author__"],
         "licensee": EXPECTED_SOURCE_IDENTITY["__licensee__"],
         "copyright": EXPECTED_SOURCE_IDENTITY["__copyright__"],
@@ -167,13 +199,14 @@ def verify_package(root: Path, package: Path, source_revision: str) -> None:
     for key, value in expected.items():
         if manifest[key] != value:
             raise ReleaseVerificationError(f"unexpected package manifest field: {key}")
-    _validate_timestamp(manifest["built_at_utc"])
+    _validate_timestamp(manifest["built_at_utc"], epoch)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--source-date-epoch", required=True)
     parser.add_argument("--package", type=Path)
     parser.add_argument("--preflight", action="store_true")
     return parser
@@ -182,14 +215,19 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root = args.root.resolve()
-    verify_source(root, args.source_revision)
+    verify_source(root, args.source_revision, args.source_date_epoch)
     if args.preflight:
         if args.package is not None:
             raise ReleaseVerificationError("preflight does not accept a package")
     else:
         if args.package is None:
             raise ReleaseVerificationError("package verification requires --package")
-        verify_package(root, args.package.resolve(), args.source_revision)
+        verify_package(
+            root,
+            args.package.resolve(),
+            args.source_revision,
+            args.source_date_epoch,
+        )
     return 0
 
 

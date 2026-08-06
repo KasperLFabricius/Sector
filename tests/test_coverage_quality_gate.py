@@ -53,7 +53,7 @@ def test_exact_contract_and_workflow_are_aligned():
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
     )
     assert "--cov=app --cov=sector" in expected_coverage_command(data)
-    assert "--cov-fail-under=50" in expected_coverage_command(data)
+    assert "--cov-fail-under=90" in expected_coverage_command(data)
 
 
 def test_raised_accepted_floor_and_targets_cannot_shrink():
@@ -102,12 +102,21 @@ def test_duplicate_missing_and_escaping_targets_are_rejected(tmp_path):
         validate_contract(data, repository_root)
 
 
-@pytest.mark.parametrize("field", ["owner", "reason", "exit_condition"])
-def test_calibration_waiver_retains_owner_reason_and_exit(field):
-    data = deepcopy(_contract())
-    data["waivers"][0][field] = ""
+def _calibration_waiver():
+    return {
+        "id": "coverage-pr14-calibration",
+        "gate": "coverage",
+        "owner": "PR-14C integration owner",
+        "reason": "Temporary calibration",
+        "exit_condition": "PR-14C exact-head measurement",
+    }
 
-    with pytest.raises(CoverageGateContractError, match=field):
+
+def test_expired_calibration_waiver_cannot_return():
+    data = deepcopy(_contract())
+    data["waivers"].append(_calibration_waiver())
+
+    with pytest.raises(CoverageGateContractError, match="waiver inventory"):
         validate_contract(data, ROOT)
 
 
@@ -123,26 +132,28 @@ def test_unknown_contract_keys_and_waiver_drift_are_rejected():
         validate_contract(data, ROOT)
 
     data = deepcopy(_contract())
-    data["waivers"].append(deepcopy(data["waivers"][0]))
+    waiver = _calibration_waiver()
+    data["waivers"] = [waiver, deepcopy(waiver)]
     with pytest.raises(CoverageGateContractError, match="duplicate waiver"):
-        validate_contract(data, ROOT)
+        validate_contract(data, ROOT, candidate_waiver_ids={waiver["id"]})
 
     data = deepcopy(_contract())
-    data["waivers"][0]["gate"] = "ruff"
+    waiver = _calibration_waiver()
+    waiver["gate"] = "ruff"
+    data["waivers"] = [waiver]
     with pytest.raises(CoverageGateContractError, match="wrong gate"):
-        validate_contract(data, ROOT)
+        validate_contract(data, ROOT, candidate_waiver_ids={waiver["id"]})
 
 
 def test_satisfied_calibration_waiver_can_expire_against_accepted_baseline():
     baseline = deepcopy(_contract())
-    candidate = deepcopy(baseline)
-    candidate["waivers"] = []
+    baseline["waivers"] = [_calibration_waiver()]
+    candidate = deepcopy(_contract())
 
     validate_contract(
         candidate,
         ROOT,
         baseline=baseline,
-        candidate_waiver_ids=set(),
     )
 
 
@@ -166,7 +177,7 @@ def test_git_baseline_is_loaded_from_the_accepted_object(tmp_path):
     assert load_git_baseline("HEAD", candidate_contract, repository) is None
 
     baseline_text = CONTRACT.read_text(encoding="utf-8").replace(
-        "minimum_percent = 50", "minimum_percent = 61"
+        "minimum_percent = 90", "minimum_percent = 91"
     )
     candidate_contract.write_text(baseline_text, encoding="utf-8")
     for arguments in (
@@ -186,7 +197,7 @@ def test_git_baseline_is_loaded_from_the_accepted_object(tmp_path):
 
     baseline = load_git_baseline("HEAD", candidate_contract, repository)
     assert baseline is not None
-    assert baseline["coverage"]["minimum_percent"] == 61
+    assert baseline["coverage"]["minimum_percent"] == 91
     with pytest.raises(CoverageGateContractError, match="previously accepted"):
         validate_contract(_contract(), ROOT, baseline=baseline)
     with pytest.raises(CoverageGateContractError, match="git baseline inspection"):
@@ -262,6 +273,6 @@ def test_filtered_trigger_or_command_drift_is_rejected():
     workflow = _workflow()
     _step(workflow, COVERAGE_STEP_NAME)["run"] = _step(
         workflow, COVERAGE_STEP_NAME
-    )["run"].replace("--cov-fail-under=50", "--cov-fail-under=49")
+    )["run"].replace("--cov-fail-under=90", "--cov-fail-under=89")
     with pytest.raises(CoverageGateContractError, match="coverage test command"):
         validate_workflow(_contract(), _workflow_text(workflow))

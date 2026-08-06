@@ -63,6 +63,12 @@ jobs:
             throw "Requested source_sha is not current origin/main"
           }
 
+          $sourceDateEpoch = [string](git show -s --format=%ct $sourceRevision)
+          if ($LASTEXITCODE -ne 0 -or $sourceDateEpoch -cnotmatch '^(0|[1-9][0-9]*)$') {
+            throw "Cannot resolve the source commit timestamp"
+          }
+          "SOURCE_DATE_EPOCH=$sourceDateEpoch" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
           $credentialKeys = @(git config --local --name-only --get-regexp '^http\..*\.extraheader$')
           if ($LASTEXITCODE -notin @(0, 1)) {
             throw "Cannot inspect checkout credential configuration"
@@ -88,7 +94,7 @@ jobs:
       - name: Run isolated release preflight
         env:
           SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
-        run: python -I -S tools/verify_windows_release.py --root . --source-revision $env:SECTOR_RELEASE_SOURCE_SHA --preflight
+        run: python -I -S tools/verify_windows_release.py --root . --source-revision $env:SECTOR_RELEASE_SOURCE_SHA --source-date-epoch $env:SOURCE_DATE_EPOCH --preflight
 
       - name: Install locked build environment
         run: python -m pip install --require-hashes -r requirements-build.txt
@@ -99,14 +105,22 @@ jobs:
           SECTOR_SOURCE_REVISION: ${{ inputs.source_sha }}
         run: |
           python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
-          python -m PyInstaller --noconfirm --clean packaging/sector.spec
+          python -m PyInstaller --noconfirm --clean --distpath dist --workpath build/primary packaging/sector.spec
+          python -I -S tools/canonicalize_pyinstaller_archive.py --archive dist/Sector/_internal/base_library.zip
           Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
           Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
+          python -m PyInstaller --noconfirm --clean --distpath dist/repro-check --workpath build/repro-check packaging/sector.spec
+          python -I -S tools/canonicalize_pyinstaller_archive.py --archive dist/repro-check/Sector/_internal/base_library.zip
+          Copy-Item -LiteralPath LICENSE -Destination dist/repro-check/Sector/LICENSE.txt -Force
+          Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt -Destination dist/repro-check/Sector/THIRD_PARTY_NOTICES.txt -Force
 
       - name: Verify unsigned package before secret exposure
         env:
           SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
-        run: python -I -S tools/verify_windows_release.py --root . --package dist/Sector --source-revision $env:SECTOR_RELEASE_SOURCE_SHA
+        run: |
+          python -I -S tools/verify_windows_release.py --root . --package dist/Sector --source-revision $env:SECTOR_RELEASE_SOURCE_SHA --source-date-epoch $env:SOURCE_DATE_EPOCH
+          python -I -S tools/verify_windows_release.py --root . --package dist/repro-check/Sector --source-revision $env:SECTOR_RELEASE_SOURCE_SHA --source-date-epoch $env:SOURCE_DATE_EPOCH
+          python -I -S tools/verify_package_reproducibility.py --first dist/Sector --second dist/repro-check/Sector --source-revision $env:SECTOR_RELEASE_SOURCE_SHA --source-date-epoch $env:SOURCE_DATE_EPOCH --output build/reproducibility/package-reproducibility.json
 
       - name: Verify Windows identity before secret exposure
         shell: pwsh
@@ -152,5 +166,13 @@ jobs:
         with:
           name: Sector-Windows-signed-${{ inputs.source_sha }}
           path: dist/Sector/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload controlled-build reproducibility evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Sector-Windows-reproducibility-${{ inputs.source_sha }}
+          path: build/reproducibility/package-reproducibility.json
           if-no-files-found: error
           retention-days: 30
