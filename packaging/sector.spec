@@ -5,66 +5,148 @@ Build from the repo root:  pyinstaller packaging/sector.spec
 The result is dist/Sector/Sector.exe plus its _internal dependencies.
 """
 
+import ast
 import datetime
 import json
 import os
-import re
 
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
+WINDOWS_VERSION_INFO = os.path.join(SPECPATH, "windows_version_info.txt")
 
 datas, binaries, hiddenimports = [], [], []
 
 
+def _commit_revision(value):
+    """Return a complete Git commit identity, never a label or abbreviation."""
+    candidate = str(value or "").strip()
+    hexadecimal = "0123456789abcdefABCDEF"
+    if len(candidate) != 40 or any(char not in hexadecimal for char in candidate):
+        return None
+    return candidate
+
+
+def _git_directories(root):
+    """Return the worktree and shared Git metadata directories."""
+    control = os.path.join(root, ".git")
+    if os.path.isdir(control):
+        git_dir = control
+    else:
+        with open(control, encoding="ascii") as stream:
+            marker = stream.read().strip()
+        prefix, separator, location = marker.partition(":")
+        if separator != ":" or prefix.casefold() != "gitdir" or not location.strip():
+            raise ValueError("invalid .git control file")
+        git_dir = location.strip()
+        if not os.path.isabs(git_dir):
+            git_dir = os.path.abspath(os.path.join(root, git_dir))
+
+    common_dir = git_dir
+    common_marker = os.path.join(git_dir, "commondir")
+    if os.path.isfile(common_marker):
+        with open(common_marker, encoding="ascii") as stream:
+            common_dir = stream.read().strip()
+        if not common_dir:
+            raise ValueError("empty Git commondir")
+        if not os.path.isabs(common_dir):
+            common_dir = os.path.abspath(os.path.join(git_dir, common_dir))
+    return git_dir, common_dir
+
+
 def _source_revision(root):
-    """Read the checkout revision without depending on a Git executable."""
-    revision = os.environ.get("SECTOR_SOURCE_REVISION") or os.environ.get("GITHUB_SHA")
-    if revision:
-        return revision.strip()
-    git_dir = os.path.join(root, ".git")
+    """Resolve an exact commit from the environment or checkout metadata."""
+    for variable in ("SECTOR_SOURCE_REVISION", "GITHUB_SHA"):
+        revision = _commit_revision(os.environ.get(variable))
+        if revision is not None:
+            return revision
+
     try:
-        if os.path.isfile(git_dir):
-            with open(git_dir, encoding="ascii") as stream:
-                marker = stream.read().strip()
-            if marker.lower().startswith("gitdir:"):
-                git_dir = marker.split(":", 1)[1].strip()
-                if not os.path.isabs(git_dir):
-                    git_dir = os.path.abspath(os.path.join(root, git_dir))
+        git_dir, common_dir = _git_directories(root)
         with open(os.path.join(git_dir, "HEAD"), encoding="ascii") as stream:
             head = stream.read().strip()
         if not head.startswith("ref:"):
-            return head
-        ref = head.split(":", 1)[1].strip()
-        loose = os.path.join(git_dir, *ref.split("/"))
-        if os.path.isfile(loose):
-            with open(loose, encoding="ascii") as stream:
-                return stream.read().strip()
-        packed = os.path.join(git_dir, "packed-refs")
-        if os.path.isfile(packed):
-            with open(packed, encoding="ascii") as stream:
-                for line in stream:
-                    if line.rstrip().endswith(" " + ref):
-                        return line.split(" ", 1)[0]
-    except OSError:
+            revision = _commit_revision(head)
+            if revision is not None:
+                return revision
+        else:
+            ref = head.partition(":")[2].strip()
+            if not ref:
+                raise ValueError("empty symbolic HEAD")
+            ref_roots = [git_dir]
+            if common_dir != git_dir:
+                ref_roots.append(common_dir)
+            for ref_root in ref_roots:
+                loose = os.path.join(ref_root, *ref.split("/"))
+                if os.path.isfile(loose):
+                    with open(loose, encoding="ascii") as stream:
+                        revision = _commit_revision(stream.read())
+                    if revision is not None:
+                        return revision
+            for ref_root in ref_roots:
+                packed = os.path.join(ref_root, "packed-refs")
+                if not os.path.isfile(packed):
+                    continue
+                with open(packed, encoding="ascii") as stream:
+                    for line in stream:
+                        revision_text, separator, packed_ref = line.strip().partition(" ")
+                        if separator and packed_ref == ref:
+                            revision = _commit_revision(revision_text)
+                            if revision is not None:
+                                return revision
+    except (OSError, ValueError):
         pass
-    return "unavailable"
+    raise ValueError(
+        "Sector package source revision is unavailable; set "
+        "SECTOR_SOURCE_REVISION to the exact 40-hex commit"
+    )
 
 
-def _sector_version(root):
-    with open(os.path.join(root, "sector", "__init__.py"), encoding="utf-8") as stream:
-        match = re.search(r'^__version__\s*=\s*"([^"]+)"', stream.read(), re.MULTILINE)
-    return match.group(1) if match else "unavailable"
+def _sector_metadata(root):
+    """Read complete package identity from Sector's source-of-truth module."""
+    path = os.path.join(root, "sector", "__init__.py")
+    with open(path, encoding="utf-8") as stream:
+        tree = ast.parse(stream.read(), filename=path)
+    required = {
+        "__version__",
+        "__product_name__",
+        "__description__",
+        "__author__",
+        "__licensee__",
+        "__copyright__",
+    }
+    metadata = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or target.id not in required:
+            continue
+        value = ast.literal_eval(node.value)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Sector product identity is invalid: {target.id}")
+        metadata[target.id] = value
+    missing = sorted(required.difference(metadata))
+    if missing:
+        raise ValueError(f"Sector product identity is missing: {', '.join(missing)}")
+    return metadata
 
 
 # Embed the exact source state in the packaged runtime. The generated manifest
 # lives under ignored build output and is added beside sector/build_info.py.
 manifest_path = os.path.join(ROOT, "build", "sector_build_info.json")
 os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+metadata = _sector_metadata(ROOT)
+source_revision = _source_revision(ROOT)
 with open(manifest_path, "w", encoding="utf-8") as stream:
     json.dump({
-        "sector_version": _sector_version(ROOT),
-        "source_revision": _source_revision(ROOT),
+        "product_name": metadata["__product_name__"],
+        "description": metadata["__description__"],
+        "sector_version": metadata["__version__"],
+        "source_revision": source_revision,
+        "author": metadata["__author__"],
+        "licensee": metadata["__licensee__"],
+        "copyright": metadata["__copyright__"],
         "built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(
             timespec="seconds"
         ),
@@ -130,6 +212,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="Sector",
+    version=WINDOWS_VERSION_INFO,
     console=True,                 # keep a console so the local URL / errors are visible
     icon=None,
 )
