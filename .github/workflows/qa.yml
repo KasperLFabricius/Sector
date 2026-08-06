@@ -33,12 +33,23 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
+      - name: Preflight locked dependency inputs
+        run: python tools/verify_dependency_audit.py quality-dependency-audit.toml --preflight-locks
+
       - name: Install locked QA environment
         run: python -m pip install --require-hashes -r requirements-dev.txt
 
       - name: Prepare QA evidence directory
         shell: pwsh
         run: New-Item -ItemType Directory -Path qa-artifacts -Force | Out-Null
+
+      - name: Validate dependency audit policy
+        env:
+          SECTOR_DEPENDENCY_AUDIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: python tools/verify_dependency_audit.py quality-dependency-audit.toml --workflow .github/workflows/qa.yml --baseline-ref $env:SECTOR_DEPENDENCY_AUDIT_BASE
+
+      - name: Execute locked dependency audit
+        run: python tools/verify_dependency_audit.py quality-dependency-audit.toml --execute
 
       - name: Validate non-shrinking coverage gate
         env:
