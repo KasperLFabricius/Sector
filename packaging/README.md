@@ -5,6 +5,10 @@ non-distributable QA artifact** for static package inspection. Each run first
 exports one exact commit into a new isolated directory; dependency installation,
 notice generation, PyInstaller analysis, and package assembly then read only
 from that exported tree. Mutable worktree files are never packaging inputs.
+The run also preserves a canonical `source-identity.json` seal whose commit,
+tree, committer epoch, UTC time, file/byte counts, and raw inventory digest are
+derived directly from authenticated Git objects. Package time is the commit
+epoch; the spec has no checkout, `GITHUB_SHA`, or wall-clock fallback.
 Do not launch, zip or distribute this artifact. A distributable Sector package
 requires the separately authorised signing workflow; there is no unsigned
 fallback.
@@ -36,6 +40,13 @@ preserves the exact exported source and PyInstaller work evidence. A path is
 never reused, deleted, or overwritten. Keep the result local and use it only
 for static QA inspection. Do not execute `Sector.exe` from unsigned output.
 
+Before upload or signing, the package verifier independently rereads the raw
+selected commit and preserves its authenticated blob bytes in memory. The
+packaged `app`, `sector`, and `assets` trees are compared directly with that
+snapshot, never with the mutable exported build directory. Matching changes to
+the worktree, build source, evidence, manifest, and package therefore cannot
+reseal a foreign package as the selected commit.
+
 ## Signed-package runtime design
 
 After a package has passed the separately authorised signing gate, `Sector.exe`
@@ -63,6 +74,7 @@ the console for support.
 | `build.ps1` | Convenience wrapper: selects an exact commit and unique output before delegating to the isolated driver. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
 | `../tools/build_exact_commit.py` | Standard-library driver: exports exact source, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
+| `../tools/verify_windows_release.py` | Standard-library gate: authenticates the raw commit, canonical evidence/manifest, and packaged source bytes before publication or signing. |
 
 ## Runtime notes
 
