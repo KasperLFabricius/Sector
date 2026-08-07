@@ -28,33 +28,53 @@ def test_windows_job_is_explicitly_unsigned_qa_only():
     assert "permissions" not in job
     assert "continue-on-error" not in job
 
-    build = _step(job, "Build unsigned QA package from exact exported source")
-    assert build["env"] == {
+    first = _step(job, "Build first unsigned QA package from exact exported source")
+    second = _step(job, "Build second unsigned QA package from exact exported source")
+    assert first["env"] == {
         "SECTOR_SOURCE_REVISION": "${{ github.sha }}",
         "SECTOR_EXACT_BUILD_ROOT": (
             "qa-artifacts/windows-package-"
-            "${{ github.run_id }}-${{ github.run_attempt }}"
+            "${{ github.run_id }}-${{ github.run_attempt }}-build-a"
         ),
     }
-    script = build["run"]
-    warning = "UNSIGNED QA PACKAGE ONLY. Do not launch or distribute this artifact."
+    assert second["env"] == {
+        "SECTOR_SOURCE_REVISION": "${{ github.sha }}",
+        "SECTOR_EXACT_BUILD_ROOT": (
+            "qa-artifacts/windows-package-"
+            "${{ github.run_id }}-${{ github.run_attempt }}-build-b"
+        ),
+    }
+    script = first["run"]
+    warning = (
+        "TWO UNSIGNED QA PACKAGES ONLY. "
+        "Do not launch or distribute either artifact."
+    )
     assert script.count(warning) == 1
     assert script.index(warning) < script.index("tools/build_exact_commit.py")
     assert "--source-revision $env:SECTOR_SOURCE_REVISION" in script
     assert "--output $env:SECTOR_EXACT_BUILD_ROOT" in script
-    assert "python -m PyInstaller" not in script
+    assert "python -m PyInstaller" not in script + second["run"]
 
-    upload = _step(job, "Upload unsigned QA package")
+    upload = _step(job, "Upload unsigned QA reproducibility evidence")
     assert upload["with"]["name"] == "Sector-Windows-unsigned-QA"
-    assert upload["with"]["path"] == "${{ env.SECTOR_PACKAGE_ROOT }}/"
+    for token in (
+        "${{ env.SECTOR_PACKAGE_ROOT_A }}/",
+        "${{ env.SECTOR_PACKAGE_ROOT_B }}/",
+        "${{ env.SECTOR_SOURCE_IDENTITY_A }}",
+        "${{ env.SECTOR_SOURCE_IDENTITY_B }}",
+        "${{ env.SECTOR_REPRODUCIBILITY_EVIDENCE }}",
+    ):
+        assert token in upload["with"]["path"]
     assert upload["with"]["retention-days"] == 7
 
 
 def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
     job = _workflow()["jobs"]["windows-package"]
-    verify = _step(job, "Verify unsigned QA package contents and identity")
-    upload = _step(job, "Upload unsigned QA package")
-    assert job["steps"].index(verify) < job["steps"].index(upload)
+    verify = _step(job, "Verify both unsigned QA package identities")
+    compare = _step(job, "Compare independent unsigned QA package builds")
+    upload = _step(job, "Upload unsigned QA reproducibility evidence")
+    assert job["steps"].index(verify) < job["steps"].index(compare)
+    assert job["steps"].index(compare) < job["steps"].index(upload)
     script = verify["run"]
 
     for token in (
@@ -70,10 +90,17 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
     for token in (
         "tools/verify_windows_release.py",
         "--source-revision $env:GITHUB_SHA",
-        "--source-identity $env:SECTOR_SOURCE_IDENTITY",
-        "--package $packageRoot",
+        "--source-identity $env:SECTOR_SOURCE_IDENTITY_A",
+        "--source-identity $env:SECTOR_SOURCE_IDENTITY_B",
+        "--package $env:SECTOR_PACKAGE_ROOT_A",
+        "--package $env:SECTOR_PACKAGE_ROOT_B",
     ):
-        assert script.count(token) == 1
+        expected = 2 if token in (
+            "tools/verify_windows_release.py",
+            "--source-revision $env:GITHUB_SHA",
+        ) else 1
+        assert script.count(token) == expected
+    assert "tools/verify_reproducible_windows_builds.py" in compare["run"]
 
     verifier = (ROOT / "tools" / "verify_windows_release.py").read_text(
         encoding="utf-8"

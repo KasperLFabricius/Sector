@@ -6,6 +6,7 @@ These exercise ``packaging/run_sector.py`` without building or starting Streamli
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import sys
 import tomllib
@@ -61,6 +62,32 @@ def test_kaleido_cli_mocker_is_excluded_from_the_frozen_runtime():
     spec = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
     assert "filter_submodules" in spec
     assert 'name.startswith("kaleido.mocker")' in spec
+
+
+def test_only_path_bound_installer_record_metadata_is_omitted():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    helper = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_without_installer_records"
+    )
+    namespace = {}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), "sector.spec", "exec"), namespace)
+    entries = [
+        ("jsonschema-4.26.0.dist-info/RECORD", "path-bound", "DATA"),
+        ("streamlit-1.57.0.DIST-INFO\\record", "path-bound", "DATA"),
+        ("jsonschema-4.26.0.dist-info/METADATA", "retain", "DATA"),
+        ("jsonschema-4.26.0.dist-info/licenses/RECORD", "retain", "DATA"),
+        ("runtime/RECORD", "retain", "DATA"),
+    ]
+
+    filtered = namespace["_without_installer_records"](entries)
+
+    assert filtered == entries[2:]
+    assert entries[0][0].endswith("RECORD")
 
 
 def test_packaged_runtime_embeds_exact_source_provenance():

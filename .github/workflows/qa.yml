@@ -109,31 +109,51 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-build.txt
 
-      - name: Build unsigned QA package from exact exported source
+      - name: Build first unsigned QA package from exact exported source
         shell: pwsh
         env:
           SECTOR_SOURCE_REVISION: ${{ github.sha }}
-          SECTOR_EXACT_BUILD_ROOT: qa-artifacts/windows-package-${{ github.run_id }}-${{ github.run_attempt }}
+          SECTOR_EXACT_BUILD_ROOT: qa-artifacts/windows-package-${{ github.run_id }}-${{ github.run_attempt }}-build-a
         run: |
-          Write-Warning "UNSIGNED QA PACKAGE ONLY. Do not launch or distribute this artifact."
+          Write-Warning "TWO UNSIGNED QA PACKAGES ONLY. Do not launch or distribute either artifact."
           python -I -S tools/build_exact_commit.py `
             --root . `
             --source-revision $env:SECTOR_SOURCE_REVISION `
             --output $env:SECTOR_EXACT_BUILD_ROOT
-          "SECTOR_PACKAGE_ROOT=$env:SECTOR_EXACT_BUILD_ROOT\dist\Sector" | Out-File `
+          "SECTOR_PACKAGE_ROOT_A=$env:SECTOR_EXACT_BUILD_ROOT\dist\Sector" | Out-File `
             -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "SECTOR_SOURCE_IDENTITY=$env:SECTOR_EXACT_BUILD_ROOT\source-identity.json" | Out-File `
+          "SECTOR_SOURCE_IDENTITY_A=$env:SECTOR_EXACT_BUILD_ROOT\source-identity.json" | Out-File `
             -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Verify unsigned QA package contents and identity
+      - name: Build second unsigned QA package from exact exported source
+        shell: pwsh
+        env:
+          SECTOR_SOURCE_REVISION: ${{ github.sha }}
+          SECTOR_EXACT_BUILD_ROOT: qa-artifacts/windows-package-${{ github.run_id }}-${{ github.run_attempt }}-build-b
+        run: |
+          python -I -S tools/build_exact_commit.py `
+            --root . `
+            --source-revision $env:SECTOR_SOURCE_REVISION `
+            --output $env:SECTOR_EXACT_BUILD_ROOT
+          "SECTOR_PACKAGE_ROOT_B=$env:SECTOR_EXACT_BUILD_ROOT\dist\Sector" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SECTOR_SOURCE_IDENTITY_B=$env:SECTOR_EXACT_BUILD_ROOT\source-identity.json" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify both unsigned QA package identities
         shell: pwsh
         run: |
-          $packageRoot = $env:SECTOR_PACKAGE_ROOT
           python -I -S tools/verify_windows_release.py `
             --root . `
-            --package $packageRoot `
+            --package $env:SECTOR_PACKAGE_ROOT_A `
             --source-revision $env:GITHUB_SHA `
-            --source-identity $env:SECTOR_SOURCE_IDENTITY
+            --source-identity $env:SECTOR_SOURCE_IDENTITY_A
+          python -I -S tools/verify_windows_release.py `
+            --root . `
+            --package $env:SECTOR_PACKAGE_ROOT_B `
+            --source-revision $env:GITHUB_SHA `
+            --source-identity $env:SECTOR_SOURCE_IDENTITY_B
+          $packageRoot = $env:SECTOR_PACKAGE_ROOT_A
           if (-not (Test-Path -LiteralPath "$packageRoot/Sector.exe")) {
             throw "Sector.exe was not produced"
           }
@@ -171,10 +191,31 @@ jobs:
             throw "Sector.exe must not advertise a company or publisher identity"
           }
 
-      - name: Upload unsigned QA package
+      - name: Compare independent unsigned QA package builds
+        shell: pwsh
+        env:
+          SECTOR_REPRODUCIBILITY_EVIDENCE: qa-artifacts/windows-package-${{ github.run_id }}-${{ github.run_attempt }}-reproducibility.json
+        run: |
+          python -I -S tools/verify_reproducible_windows_builds.py `
+            --root . `
+            --source-revision $env:GITHUB_SHA `
+            --package-a $env:SECTOR_PACKAGE_ROOT_A `
+            --package-b $env:SECTOR_PACKAGE_ROOT_B `
+            --source-identity-a $env:SECTOR_SOURCE_IDENTITY_A `
+            --source-identity-b $env:SECTOR_SOURCE_IDENTITY_B `
+            --evidence $env:SECTOR_REPRODUCIBILITY_EVIDENCE
+          "SECTOR_REPRODUCIBILITY_EVIDENCE=$env:SECTOR_REPRODUCIBILITY_EVIDENCE" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload unsigned QA reproducibility evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Sector-Windows-unsigned-QA
-          path: ${{ env.SECTOR_PACKAGE_ROOT }}/
+          path: |
+            ${{ env.SECTOR_PACKAGE_ROOT_A }}/
+            ${{ env.SECTOR_PACKAGE_ROOT_B }}/
+            ${{ env.SECTOR_SOURCE_IDENTITY_A }}
+            ${{ env.SECTOR_SOURCE_IDENTITY_B }}
+            ${{ env.SECTOR_REPRODUCIBILITY_EVIDENCE }}
           if-no-files-found: error
           retention-days: 7

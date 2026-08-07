@@ -120,6 +120,22 @@ def _kaleido_runtime_module(name):
     return not name.startswith("kaleido.mocker")
 
 
+def _without_installer_records(entries):
+    """Omit pip RECORD inventories whose external launcher hashes are path-bound."""
+    retained = []
+    for entry in entries:
+        destination = str(entry[0]).replace("\\", "/")
+        parts = destination.split("/")
+        if (
+            len(parts) >= 2
+            and parts[-1].casefold() == "record"
+            and parts[-2].casefold().endswith(".dist-info")
+        ):
+            continue
+        retained.append(entry)
+    return retained
+
+
 # Heavy third-party packages: pull in their data files, binaries and submodules
 # (Streamlit ships its compiled frontend as data; numba/llvmlite ship binaries).
 for pkg in ("streamlit", "plotly", "numba", "llvmlite", "kaleido",
@@ -164,6 +180,12 @@ a = Analysis(
     excludes=["tkinter", "pytest", "PyInstaller"],
     noarchive=False,
 )
+# Hook-provided distribution metadata can include pip's RECORD inventory. On
+# Windows it hashes generated ../Scripts/*.exe launchers whose bytes embed the
+# unique virtual-environment path; those launchers are not part of the frozen
+# package. Retain runtime metadata, licences and entry points, but omit only the
+# installer inventory after every hook has expanded its data inputs.
+a.datas = _without_installer_records(a.datas)
 
 pyz = PYZ(a.pure)
 

@@ -47,6 +47,16 @@ snapshot, never with the mutable exported build directory. Matching changes to
 the worktree, build source, evidence, manifest, and package therefore cannot
 reseal a foreign package as the selected commit.
 
+The QA and protected-release workflows create two sequential packages in
+different, new build roots from the same sealed commit. Each package first
+passes the raw-commit verifier independently. A separate standard-library gate
+then compares every complete-package path and byte, including `Sector.exe` and
+all runtime dependencies, twice. The two passes must have the same file count,
+byte count, per-file SHA-256 records, and aggregate inventory digest. Canonical
+comparison evidence is written create-only outside both build roots. Both
+unsigned QA witnesses and their identity records are retained by the QA
+artifact; neither executable is launched.
+
 ## Signed-package runtime design
 
 After a package has passed the separately authorised signing gate, `Sector.exe`
@@ -70,11 +80,12 @@ the console for support.
 | File | Purpose |
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
-| `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
+| `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend); retains runtime distribution metadata while omitting pip `RECORD` installer inventories whose absent launcher hashes are build-path-bound. |
 | `build.ps1` | Convenience wrapper: selects an exact commit and unique output before delegating to the isolated driver. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
-| `../tools/build_exact_commit.py` | Standard-library driver: exports exact source, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
+| `../tools/build_exact_commit.py` | Standard-library driver: exports exact source, fixes the source epoch and PyInstaller build hash seed, uses safe-path/user-site isolation while honoring those controls, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
 | `../tools/verify_windows_release.py` | Standard-library gate: authenticates the raw commit, canonical evidence/manifest, and packaged source bytes before publication or signing. |
+| `../tools/verify_reproducible_windows_builds.py` | Independent two-build gate: checks distinct roots, reauthenticates both packages, compares all package bytes twice, and writes canonical create-only evidence. |
 
 ## Runtime notes
 

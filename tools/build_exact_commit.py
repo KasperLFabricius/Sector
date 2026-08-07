@@ -78,11 +78,10 @@ def _build_environment(
     source_total_bytes: int,
     source_inventory_sha256: str,
 ) -> dict[str, str]:
-    excluded = {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"}
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not key.upper().startswith("GIT_") and key.upper() not in excluded
+        if not key.upper().startswith(("GIT_", "PYTHON"))
     }
     environment["PYTHONNOUSERSITE"] = "1"
     environment["SECTOR_SOURCE_REVISION"] = source_revision
@@ -93,6 +92,10 @@ def _build_environment(
     environment["SECTOR_SOURCE_TOTAL_BYTES"] = str(source_total_bytes)
     environment["SECTOR_SOURCE_INVENTORY_SHA256"] = source_inventory_sha256
     environment["SOURCE_DATE_EPOCH"] = str(source_committer_epoch)
+    # PyInstaller documents build-time hash randomization as a source of
+    # otherwise unexplained byte differences in its compiled archives. Pin
+    # the seed so an inherited value cannot make controlled builds diverge.
+    environment["PYTHONHASHSEED"] = "1"
     return environment
 
 
@@ -209,7 +212,8 @@ def prepare_exact_build(
         _command(
             (
                 str(environment_python),
-                "-I",
+                "-P",
+                "-s",
                 "-m",
                 "PyInstaller",
                 "--noconfirm",
