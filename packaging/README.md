@@ -1,16 +1,20 @@
 # Inspecting an unsigned Sector Windows QA build
 
 The ordinary build scripts and the `Sector QA` workflow produce an **unsigned,
-non-distributable QA artifact** for static package inspection. Do not launch,
-zip or distribute this artifact. A distributable Sector package requires the
-separately authorised signing workflow; there is no unsigned fallback.
+non-distributable QA artifact** for static package inspection. Each run first
+exports one exact commit into a new isolated directory; dependency installation,
+notice generation, PyInstaller analysis, and package assembly then read only
+from that exported tree. Mutable worktree files are never packaging inputs.
+Do not launch, zip or distribute this artifact. A distributable Sector package
+requires the separately authorised signing workflow; there is no unsigned
+fallback.
 
 ## Build
 
 The easiest inspection build is to **double-click `packaging/build.bat`**. It
-wraps the PowerShell build with an execution-policy bypass (so it works even
-when running `.ps1` files is blocked) and keeps the window open to show the
-result and the unsigned-artifact warning.
+resolves the exact current commit, creates a uniquely named run root under
+`qa-artifacts/`, wraps the PowerShell build with an execution-policy bypass, and
+keeps the window open to show the preserved output path and unsigned warning.
 
 Equivalently, from the repository root:
 
@@ -18,19 +22,19 @@ Equivalently, from the repository root:
 powershell -ExecutionPolicy Bypass -File packaging/build.ps1
 ```
 
-or directly:
+To select the identity and new output path explicitly:
 
 ```powershell
-python -m pip install --require-hashes -r requirements-build.txt
-python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
-python -m PyInstaller --noconfirm --clean packaging/sector.spec
-Copy-Item LICENSE dist/Sector/LICENSE.txt
-Copy-Item build/legal/THIRD_PARTY_NOTICES.txt dist/Sector/THIRD_PARTY_NOTICES.txt
+powershell -ExecutionPolicy Bypass -File packaging/build.ps1 `
+  -SourceRevision <exact-lowercase-40-hex> `
+  -OutputDirectory <new-nonexistent-path>
 ```
 
-The inspection result is `dist/Sector/`, including Sector's proprietary notice
-and the generated third-party notice bundle. Keep it local and use it only for
-static QA inspection. Do not execute `Sector.exe` from this unsigned output.
+The inspection result is `<run-root>/dist/Sector/`, including Sector's
+proprietary notice and generated third-party notice bundle. The same run root
+preserves the exact exported source and PyInstaller work evidence. A path is
+never reused, deleted, or overwritten. Keep the result local and use it only
+for static QA inspection. Do not execute `Sector.exe` from unsigned output.
 
 ## Signed-package runtime design
 
@@ -56,8 +60,9 @@ the console for support.
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
-| `build.ps1` | Convenience build script: installs the lock, generates notices, builds and assembles the package. |
+| `build.ps1` | Convenience wrapper: selects an exact commit and unique output before delegating to the isolated driver. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
+| `../tools/build_exact_commit.py` | Standard-library driver: exports exact source, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
 
 ## Runtime notes
 

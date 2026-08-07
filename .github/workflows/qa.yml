@@ -109,43 +109,44 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-build.txt
 
-      - name: Install locked build environment
-        run: python -m pip install --require-hashes -r requirements-build.txt
-
-      - name: Build unsigned QA package
+      - name: Build unsigned QA package from exact exported source
         shell: pwsh
         env:
           SECTOR_SOURCE_REVISION: ${{ github.sha }}
+          SECTOR_EXACT_BUILD_ROOT: qa-artifacts/windows-package-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           Write-Warning "UNSIGNED QA PACKAGE ONLY. Do not launch or distribute this artifact."
-          python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
-          python -m PyInstaller --noconfirm --clean packaging/sector.spec
-          Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
-          Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
+          python -I -S tools/build_exact_commit.py `
+            --root . `
+            --source-revision $env:SECTOR_SOURCE_REVISION `
+            --output $env:SECTOR_EXACT_BUILD_ROOT
+          "SECTOR_PACKAGE_ROOT=$env:SECTOR_EXACT_BUILD_ROOT\dist\Sector" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Verify unsigned QA package contents and identity
         shell: pwsh
         run: |
-          if (-not (Test-Path -LiteralPath "dist/Sector/Sector.exe")) {
+          $packageRoot = $env:SECTOR_PACKAGE_ROOT
+          if (-not (Test-Path -LiteralPath "$packageRoot/Sector.exe")) {
             throw "Sector.exe was not produced"
           }
-          if (-not (Test-Path -LiteralPath "dist/Sector/_internal/app/sector_app.py")) {
+          if (-not (Test-Path -LiteralPath "$packageRoot/_internal/app/sector_app.py")) {
             throw "Packaged app source is missing"
           }
-          if (-not (Test-Path -LiteralPath "dist/Sector/_internal/sector/__init__.py")) {
+          if (-not (Test-Path -LiteralPath "$packageRoot/_internal/sector/__init__.py")) {
             throw "Packaged numerical core is missing"
           }
-          if (-not (Test-Path -LiteralPath "dist/Sector/_internal/sector/sector_build_info.json")) {
+          if (-not (Test-Path -LiteralPath "$packageRoot/_internal/sector/sector_build_info.json")) {
             throw "Packaged source-provenance manifest is missing"
           }
-          if (-not (Test-Path -LiteralPath "dist/Sector/LICENSE.txt")) {
+          if (-not (Test-Path -LiteralPath "$packageRoot/LICENSE.txt")) {
             throw "Sector proprietary notice is missing"
           }
-          if (-not (Test-Path -LiteralPath "dist/Sector/THIRD_PARTY_NOTICES.txt")) {
+          if (-not (Test-Path -LiteralPath "$packageRoot/THIRD_PARTY_NOTICES.txt")) {
             throw "Third-party notice bundle is missing"
           }
 
-          $versionInfo = (Get-Item -LiteralPath "dist/Sector/Sector.exe").VersionInfo
+          $versionInfo = (Get-Item -LiteralPath "$packageRoot/Sector.exe").VersionInfo
           $expectedVersionInfo = [ordered]@{
             ProductName = "Sector"
             FileDescription = "Structural-analysis and design calculation tool"
@@ -163,7 +164,7 @@ jobs:
             throw "Sector.exe must not advertise a company or publisher identity"
           }
 
-          $manifest = Get-Content -LiteralPath "dist/Sector/_internal/sector/sector_build_info.json" -Raw | ConvertFrom-Json
+          $manifest = Get-Content -LiteralPath "$packageRoot/_internal/sector/sector_build_info.json" -Raw | ConvertFrom-Json
           $expectedManifest = [ordered]@{
             product_name = "Sector"
             description = "Structural-analysis and design calculation tool"
@@ -183,6 +184,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Sector-Windows-unsigned-QA
-          path: dist/Sector/
+          path: ${{ env.SECTOR_PACKAGE_ROOT }}/
           if-no-files-found: error
           retention-days: 7

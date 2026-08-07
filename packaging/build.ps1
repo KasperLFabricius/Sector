@@ -1,30 +1,57 @@
-# Build an unsigned Sector QA package (ONEDIR) into dist/Sector.
+# Build an unsigned Sector QA package from one exact commit export.
 #
 # Usage (from anywhere):
 #   powershell -ExecutionPolicy Bypass -File packaging/build.ps1
+#   powershell -ExecutionPolicy Bypass -File packaging/build.ps1 `
+#     -SourceRevision <exact-lowercase-40-hex> -OutputDirectory <new-path>
 #
-# The result is for static QA inspection only. It must not be launched, zipped
-# or distributed. A distributable Sector build requires the separately
-# authorised signing workflow.
+# Every run uses a new evidence directory. The result is for static inspection
+# only and must not be launched, zipped, or distributed.
+
+param(
+    [string]$SourceRevision = $env:SECTOR_SOURCE_REVISION,
+    [string]$OutputDirectory
+)
 
 $ErrorActionPreference = "Stop"
-Set-Location (Split-Path $PSScriptRoot -Parent)   # repo root
+$repoRoot = Split-Path $PSScriptRoot -Parent
 
-Write-Warning "UNSIGNED QA PACKAGE ONLY. Do not launch, zip or distribute this artifact."
+# Repository-selection controls are not allowed to influence default identity.
+Get-ChildItem Env: | Where-Object { $_.Name -like "GIT_*" } | ForEach-Object {
+    Remove-Item -LiteralPath ("Env:" + $_.Name)
+}
 
-Write-Host "Installing locked build dependencies..."
-python -m pip install --quiet --require-hashes -r requirements-build.txt
+if ([string]::IsNullOrWhiteSpace($SourceRevision)) {
+    $SourceRevision = [string](git --no-replace-objects -C $repoRoot rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot resolve the exact source revision"
+    }
+}
+if ($SourceRevision -cnotmatch '^[0-9a-f]{40}$') {
+    throw "SourceRevision must be an exact lowercase 40-hex commit"
+}
 
-Write-Host "Generating third-party notices..."
-python tools/generate_third_party_notices.py `
-  --output build/legal/THIRD_PARTY_NOTICES.txt
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $stamp = [DateTime]::UtcNow.ToString(
+        "yyyyMMddTHHmmssfffffffZ",
+        [Globalization.CultureInfo]::InvariantCulture
+    )
+    $token = [Guid]::NewGuid().ToString("N")
+    $OutputDirectory = Join-Path $repoRoot (
+        "qa-artifacts/windows-build-{0}-{1}" -f $stamp, $token
+    )
+}
 
-Write-Host "Building (this can take a few minutes)..."
-python -m PyInstaller --noconfirm --clean packaging/sector.spec
+Write-Warning "UNSIGNED QA PACKAGE ONLY. Do not launch, zip or distribute it."
+Write-Host "Exporting exact source and building in a new isolated run root..."
 
-Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
-Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt `
-  -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
+python -I -S (Join-Path $repoRoot "tools/build_exact_commit.py") `
+    --root $repoRoot `
+    --source-revision $SourceRevision `
+    --output $OutputDirectory
+if ($LASTEXITCODE -ne 0) {
+    throw "Exact-source build failed with exit code $LASTEXITCODE"
+}
 
-Write-Host "Unsigned QA build complete at dist/Sector."
+Write-Host "Unsigned QA build evidence preserved at $OutputDirectory"
 Write-Host "Inspection only: do not launch, zip or distribute this artifact."

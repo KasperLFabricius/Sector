@@ -28,15 +28,25 @@ def test_windows_job_is_explicitly_unsigned_qa_only():
     assert "permissions" not in job
     assert "continue-on-error" not in job
 
-    build = _step(job, "Build unsigned QA package")
-    assert build["env"] == {"SECTOR_SOURCE_REVISION": "${{ github.sha }}"}
+    build = _step(job, "Build unsigned QA package from exact exported source")
+    assert build["env"] == {
+        "SECTOR_SOURCE_REVISION": "${{ github.sha }}",
+        "SECTOR_EXACT_BUILD_ROOT": (
+            "qa-artifacts/windows-package-"
+            "${{ github.run_id }}-${{ github.run_attempt }}"
+        ),
+    }
     script = build["run"]
     warning = "UNSIGNED QA PACKAGE ONLY. Do not launch or distribute this artifact."
     assert script.count(warning) == 1
-    assert script.index(warning) < script.index("PyInstaller")
+    assert script.index(warning) < script.index("tools/build_exact_commit.py")
+    assert "--source-revision $env:SECTOR_SOURCE_REVISION" in script
+    assert "--output $env:SECTOR_EXACT_BUILD_ROOT" in script
+    assert "python -m PyInstaller" not in script
 
     upload = _step(job, "Upload unsigned QA package")
     assert upload["with"]["name"] == "Sector-Windows-unsigned-QA"
+    assert upload["with"]["path"] == "${{ env.SECTOR_PACKAGE_ROOT }}/"
     assert upload["with"]["retention-days"] == 7
 
 

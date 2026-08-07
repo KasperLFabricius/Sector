@@ -28,8 +28,11 @@ def test_packaging_files_are_in_the_repo():
 def test_build_script_uses_the_hashed_lock():
     root = pathlib.Path(__file__).resolve().parent.parent
     script = (root / "packaging" / "build.ps1").read_text(encoding="utf-8")
-    assert "--require-hashes -r requirements-build.txt" in script
-    assert '"pyinstaller>=' not in script.lower()
+    driver = (root / "tools" / "build_exact_commit.py").read_text(encoding="utf-8")
+    assert "tools/build_exact_commit.py" in script
+    assert '"--require-hashes"' in driver
+    assert '"requirements-build.txt"' in driver
+    assert '"pyinstaller>=' not in (script + driver).lower()
 
 
 def test_distribution_notices_are_generated_and_package_gated():
@@ -38,13 +41,19 @@ def test_distribution_notices_are_generated_and_package_gated():
                  "tools/generate_third_party_notices.py"):
         assert (root / name).is_file(), f"{name} missing from the repository"
     build = (root / "packaging" / "build.ps1").read_text(encoding="utf-8")
+    driver = (root / "tools" / "build_exact_commit.py").read_text(
+        encoding="utf-8"
+    )
     workflow = (root / ".github" / "workflows" / "qa.yml").read_text(
         encoding="utf-8"
     )
-    for text in (build, workflow):
-        assert "generate_third_party_notices.py" in text
-        assert "dist/Sector/LICENSE.txt" in text
-        assert "dist/Sector/THIRD_PARTY_NOTICES.txt" in text
+    assert "tools/build_exact_commit.py" in build
+    assert "tools/build_exact_commit.py" in workflow
+    assert "generate_third_party_notices.py" in driver
+    assert '"LICENSE.txt"' in driver
+    assert '"THIRD_PARTY_NOTICES.txt"' in driver
+    assert "$packageRoot/LICENSE.txt" in workflow
+    assert "$packageRoot/THIRD_PARTY_NOTICES.txt" in workflow
 
 
 def test_kaleido_cli_mocker_is_excluded_from_the_frozen_runtime():
