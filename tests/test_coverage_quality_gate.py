@@ -26,6 +26,13 @@ from tools.verify_coverage_gate import (
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "quality-coverage-gate.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
+CALIBRATION_WAIVER = {
+    "id": "coverage-pr14-calibration",
+    "gate": "coverage",
+    "owner": "PR-14C integration owner",
+    "reason": "Temporary calibration floor.",
+    "exit_condition": "Remove after the final exact-head measurement.",
+}
 
 
 def _contract():
@@ -53,16 +60,17 @@ def test_exact_contract_and_workflow_are_aligned():
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
     )
     assert "--cov=app --cov=sector" in expected_coverage_command(data)
-    assert "--cov-fail-under=50" in expected_coverage_command(data)
+    assert "--cov-fail-under=90" in expected_coverage_command(data)
+    assert data["waivers"] == []
 
 
 def test_raised_accepted_floor_and_targets_cannot_shrink():
     baseline = deepcopy(_contract())
-    baseline["coverage"]["minimum_percent"] = 63
+    baseline["coverage"]["minimum_percent"] = 93
     baseline["coverage"]["targets"].append("docs")
 
     candidate = deepcopy(baseline)
-    candidate["coverage"]["minimum_percent"] = 62
+    candidate["coverage"]["minimum_percent"] = 92
     with pytest.raises(CoverageGateContractError, match="previously accepted"):
         validate_contract(candidate, ROOT, baseline=baseline)
 
@@ -72,7 +80,7 @@ def test_raised_accepted_floor_and_targets_cannot_shrink():
         validate_contract(candidate, ROOT, baseline=baseline)
 
 
-@pytest.mark.parametrize("minimum", [49, True, 50.5, 101])
+@pytest.mark.parametrize("minimum", [49, 89, True, 50.5, 101])
 def test_invalid_initial_floor_is_rejected(minimum):
     data = deepcopy(_contract())
     data["coverage"]["minimum_percent"] = minimum
@@ -103,12 +111,14 @@ def test_duplicate_missing_and_escaping_targets_are_rejected(tmp_path):
 
 
 @pytest.mark.parametrize("field", ["owner", "reason", "exit_condition"])
-def test_calibration_waiver_retains_owner_reason_and_exit(field):
+def test_reintroduced_waiver_cannot_hide_incomplete_ownership(field):
     data = deepcopy(_contract())
-    data["waivers"][0][field] = ""
+    waiver = deepcopy(CALIBRATION_WAIVER)
+    waiver[field] = ""
+    data["waivers"].append(waiver)
 
     with pytest.raises(CoverageGateContractError, match=field):
-        validate_contract(data, ROOT)
+        validate_contract(data, ROOT, candidate_waiver_ids={waiver["id"]})
 
 
 def test_unknown_contract_keys_and_waiver_drift_are_rejected():
@@ -123,27 +133,28 @@ def test_unknown_contract_keys_and_waiver_drift_are_rejected():
         validate_contract(data, ROOT)
 
     data = deepcopy(_contract())
-    data["waivers"].append(deepcopy(data["waivers"][0]))
+    data["waivers"] = [deepcopy(CALIBRATION_WAIVER)] * 2
     with pytest.raises(CoverageGateContractError, match="duplicate waiver"):
-        validate_contract(data, ROOT)
+        validate_contract(
+            data, ROOT, candidate_waiver_ids={CALIBRATION_WAIVER["id"]}
+        )
 
     data = deepcopy(_contract())
+    data["waivers"] = [deepcopy(CALIBRATION_WAIVER)]
     data["waivers"][0]["gate"] = "ruff"
     with pytest.raises(CoverageGateContractError, match="wrong gate"):
-        validate_contract(data, ROOT)
+        validate_contract(
+            data, ROOT, candidate_waiver_ids={CALIBRATION_WAIVER["id"]}
+        )
 
 
 def test_satisfied_calibration_waiver_can_expire_against_accepted_baseline():
     baseline = deepcopy(_contract())
-    candidate = deepcopy(baseline)
-    candidate["waivers"] = []
+    baseline["coverage"]["minimum_percent"] = 50
+    baseline["waivers"] = [deepcopy(CALIBRATION_WAIVER)]
+    candidate = deepcopy(_contract())
 
-    validate_contract(
-        candidate,
-        ROOT,
-        baseline=baseline,
-        candidate_waiver_ids=set(),
-    )
+    validate_contract(candidate, ROOT, baseline=baseline)
 
 
 def test_git_baseline_is_loaded_from_the_accepted_object(tmp_path):
@@ -166,7 +177,7 @@ def test_git_baseline_is_loaded_from_the_accepted_object(tmp_path):
     assert load_git_baseline("HEAD", candidate_contract, repository) is None
 
     baseline_text = CONTRACT.read_text(encoding="utf-8").replace(
-        "minimum_percent = 50", "minimum_percent = 61"
+        "minimum_percent = 90", "minimum_percent = 91"
     )
     candidate_contract.write_text(baseline_text, encoding="utf-8")
     for arguments in (
@@ -186,7 +197,7 @@ def test_git_baseline_is_loaded_from_the_accepted_object(tmp_path):
 
     baseline = load_git_baseline("HEAD", candidate_contract, repository)
     assert baseline is not None
-    assert baseline["coverage"]["minimum_percent"] == 61
+    assert baseline["coverage"]["minimum_percent"] == 91
     with pytest.raises(CoverageGateContractError, match="previously accepted"):
         validate_contract(_contract(), ROOT, baseline=baseline)
     with pytest.raises(CoverageGateContractError, match="git baseline inspection"):
@@ -262,6 +273,6 @@ def test_filtered_trigger_or_command_drift_is_rejected():
     workflow = _workflow()
     _step(workflow, COVERAGE_STEP_NAME)["run"] = _step(
         workflow, COVERAGE_STEP_NAME
-    )["run"].replace("--cov-fail-under=50", "--cov-fail-under=49")
+    )["run"].replace("--cov-fail-under=90", "--cov-fail-under=89")
     with pytest.raises(CoverageGateContractError, match="coverage test command"):
         validate_workflow(_contract(), _workflow_text(workflow))
