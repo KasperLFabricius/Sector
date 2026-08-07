@@ -15,7 +15,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 INITIAL_TARGETS = {"app", "sector"}
 INITIAL_MINIMUM_PERCENT = 50
-REQUIRED_WAIVER_IDS = {"coverage-pr14-calibration"}
+FINAL_MINIMUM_PERCENT = 90
+REQUIRED_WAIVER_IDS: set[str] = set()
 VALIDATOR_STEP_NAME = "Validate non-shrinking coverage gate"
 COVERAGE_STEP_NAME = "Run complete test suite with coverage"
 CHECKOUT_STEP_NAME = "Check out source"
@@ -128,6 +129,10 @@ def validate_contract(
     targets, minimum = _snapshot(
         data, repository_root, required_waiver_ids=required_waiver_ids
     )
+    if minimum < FINAL_MINIMUM_PERCENT:
+        raise CoverageGateContractError(
+            f"coverage minimum may not fall below final accepted {FINAL_MINIMUM_PERCENT}"
+        )
     if baseline is None:
         return
     baseline_targets, baseline_minimum = _snapshot(
