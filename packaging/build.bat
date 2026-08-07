@@ -1,12 +1,13 @@
 @echo off
 REM ===========================================================================
-REM Build an unsigned Sector QA package (ONEDIR) into dist\Sector.
+REM Build an unsigned Sector QA package from an exact commit export.
 REM
 REM Just double-click this file, or run it from a command prompt. It wraps
 REM build.ps1 with an ExecutionPolicy bypass so packaging works even when the
 REM system PowerShell execution policy would otherwise block the script.
 REM
-REM Requires Python on PATH; the build installs the Python dependencies itself.
+REM Requires Git and Python on PATH. A unique qa-artifacts run directory is
+REM created automatically and all build inputs come from the exact HEAD export.
 REM The output is for static QA inspection only. Never launch, zip or distribute
 REM it. A distributable build requires the separately authorised signing path.
 REM ===========================================================================
@@ -22,7 +23,7 @@ echo.
 if not "%RC%"=="0" (
     echo Build FAILED with exit code %RC%.
 ) else (
-    echo Unsigned QA build complete for inspection at dist\Sector.
+    echo Unsigned QA build complete in the unique path printed above.
     echo Do not launch, zip or distribute this artifact.
 )
 echo.

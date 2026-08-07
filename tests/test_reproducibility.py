@@ -47,5 +47,6 @@ def test_ci_runs_full_tests_artifact_renders_and_windows_build():
     assert "python -m pytest tests" in workflow
     assert "tools/report_render_fixture.py" in workflow
     assert "tools/manual_render_fixture.py" in workflow
-    assert "python -m PyInstaller" in workflow
-    assert workflow.count("--require-hashes") == 2
+    assert "tools/build_exact_commit.py" in workflow
+    assert "SECTOR_EXACT_BUILD_ROOT" in workflow
+    assert workflow.count("--require-hashes") == 1
