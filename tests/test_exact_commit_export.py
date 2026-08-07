@@ -17,6 +17,7 @@ from tools.export_commit_tree import (
     _parse_commit,
     _parse_tree_object,
     export_commit,
+    snapshot_commit,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,13 +65,23 @@ def _write_literal(root: Path, kind: str, payload: bytes) -> str:
     )
 
 
-def _commit_payload(tree: str, *, author: bytes | None = None) -> bytes:
+def _commit_payload(
+    tree: str,
+    *,
+    author: bytes | None = None,
+    committer: bytes | None = None,
+) -> bytes:
     identity = author or b"Sector tests <sector-tests@example.invalid> 1 +0000"
+    committer_identity = (
+        committer or b"Sector tests <sector-tests@example.invalid> 1 +0000"
+    )
     return (
         f"tree {tree}\n".encode("ascii")
         + b"author "
         + identity
-        + b"\ncommitter Sector tests <sector-tests@example.invalid> 1 +0000\n\nfixture\n"
+        + b"\ncommitter "
+        + committer_identity
+        + b"\n\nfixture\n"
     )
 
 
@@ -117,6 +128,32 @@ def test_repeated_exports_have_identical_evidence_and_bytes(tmp_path):
         for path in second.rglob("*")
         if path.is_file()
     }
+
+
+def test_snapshot_preserves_raw_commit_bytes_and_epoch_identity(tmp_path):
+    root, commit = _repository(tmp_path)
+    destination = tmp_path / "exact-source"
+
+    evidence = export_commit(root, commit, destination)
+    snapshot = snapshot_commit(root, commit)
+    (root / "app" / "tracked.txt").write_bytes(b"hostile mutable worktree\n")
+
+    assert snapshot.evidence == evidence
+    assert evidence.source_tree == _git(root, "rev-parse", f"{commit}^{{tree}}")
+    assert evidence.source_committer_epoch == int(
+        _git(root, "show", "-s", "--format=%ct", commit)
+    )
+    assert evidence.source_committed_at_utc.endswith("+00:00")
+    payloads = {item.path: item.payload for item in snapshot.files}
+    assert payloads["app/tracked.txt"] == b"accepted:app\n"
+
+
+@pytest.mark.parametrize("timestamp", (b"-1", b"01"))
+def test_commit_parser_rejects_noncanonical_source_epoch(timestamp):
+    identity = b"Sector tests <sector-tests@example.invalid> " + timestamp + b" +0000"
+
+    with pytest.raises(CommitTreeError, match="canonical nonnegative timestamp"):
+        _parse_commit(_commit_payload("a" * 40, committer=identity))
 
 
 def test_unrelated_malformed_object_does_not_affect_selected_closure(tmp_path):
