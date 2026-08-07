@@ -96,12 +96,15 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path):
     assert plan.commands[3].arguments[-1] == str(
         plan.source_root / "packaging" / "sector.spec"
     )
+    assert plan.commands[3].arguments[1:5] == ("-P", "-s", "-m", "PyInstaller")
+    assert "-I" not in plan.commands[3].arguments
     assert "--workpath" in plan.commands[3].arguments
     assert "--distpath" in plan.commands[3].arguments
     assert "--clean" not in plan.commands[3].arguments
     for command in plan.commands:
         assert command.cwd == plan.source_root
         assert command.environment["SECTOR_SOURCE_REVISION"] == commit
+        assert command.environment["PYTHONHASHSEED"] == "1"
         assert str(root) not in command.arguments
 
 
@@ -111,6 +114,9 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     monkeypatch.setenv("PYTHONPATH", "hostile")
     monkeypatch.setenv("PYTHONHOME", "hostile")
     monkeypatch.setenv("PYTHONSTARTUP", "hostile")
+    monkeypatch.setenv("PYTHONHASHSEED", "random")
+    monkeypatch.setenv("PYTHONOPTIMIZE", "2")
+    monkeypatch.setenv("PYTHONWARNINGS", "error")
     monkeypatch.setenv("SECTOR_SOURCE_REVISION", "wrong")
     monkeypatch.setenv("SECTOR_KEEP", "yes")
 
@@ -125,9 +131,11 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     )
 
     assert all(not key.upper().startswith("GIT_") for key in environment)
-    assert all(key.upper() not in {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"}
-               for key in environment)
+    assert {
+        key.upper() for key in environment if key.upper().startswith("PYTHON")
+    } == {"PYTHONHASHSEED", "PYTHONNOUSERSITE"}
     assert environment["PYTHONNOUSERSITE"] == "1"
+    assert environment["PYTHONHASHSEED"] == "1"
     assert environment["SECTOR_SOURCE_REVISION"] == "a" * 40
     assert environment["SECTOR_SOURCE_TREE"] == "b" * 40
     assert environment["SECTOR_SOURCE_COMMITTER_EPOCH"] == "123"
@@ -139,6 +147,27 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     assert environment["SECTOR_SOURCE_TOTAL_BYTES"] == "11"
     assert environment["SECTOR_SOURCE_INVENTORY_SHA256"] == "c" * 64
     assert environment["SECTOR_KEEP"] == "yes"
+
+
+def test_pyinstaller_safe_flags_honor_the_fixed_build_hash_seed():
+    environment = dict(os.environ)
+    environment["PYTHONHASHSEED"] = "1"
+    command = [
+        sys.executable,
+        "-P",
+        "-s",
+        "-c",
+        "print(hash('Sector reproducibility'))",
+    ]
+
+    first = subprocess.run(
+        command, capture_output=True, text=True, check=True, env=environment
+    ).stdout
+    second = subprocess.run(
+        command, capture_output=True, text=True, check=True, env=environment
+    ).stdout
+
+    assert first == second
 
 
 def test_prepare_writes_create_only_canonical_source_identity(tmp_path):
