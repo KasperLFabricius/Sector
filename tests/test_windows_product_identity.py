@@ -5,11 +5,27 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = ROOT / "packaging" / "sector.spec"
 RESOURCE = ROOT / "packaging" / "windows_version_info.txt"
 COMMIT = "a" * 40
+TREE = "b" * 40
+INVENTORY = "c" * 64
+EPOCH = "123"
+COMMITTED_AT_UTC = "1970-01-01T00:02:03+00:00"
+SOURCE_SEAL = {
+    "SECTOR_SOURCE_REVISION": COMMIT,
+    "SECTOR_SOURCE_TREE": TREE,
+    "SECTOR_SOURCE_COMMITTER_EPOCH": EPOCH,
+    "SECTOR_SOURCE_COMMITTED_AT_UTC": COMMITTED_AT_UTC,
+    "SECTOR_SOURCE_FILE_COUNT": "235",
+    "SECTOR_SOURCE_TOTAL_BYTES": "6032876",
+    "SECTOR_SOURCE_INVENTORY_SHA256": INVENTORY,
+    "SOURCE_DATE_EPOCH": EPOCH,
+}
 
 EXPECTED = {
     "__version__": "0.91",
@@ -45,12 +61,19 @@ def _spec_helpers(*names: str):
     assert {node.name for node in selected} == set(names)
     harness = ast.Module(
         body=[ast.Import(names=[ast.alias(name="ast")]),
+              ast.Import(names=[ast.alias(name="datetime")]),
               ast.Import(names=[ast.alias(name="os")]), *selected],
         type_ignores=[],
     )
     namespace = {}
     exec(compile(ast.fix_missing_locations(harness), str(SPEC), "exec"), namespace)
     return namespace
+
+
+def _set_source_seal(monkeypatch, **overrides):
+    values = {**SOURCE_SEAL, **overrides}
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
 
 
 def test_source_product_identity_is_exact_and_complete():
@@ -86,14 +109,16 @@ def test_packager_maps_every_identity_to_resource_and_manifest():
         '"product_name": metadata["__product_name__"]',
         '"description": metadata["__description__"]',
         '"sector_version": metadata["__version__"]',
-        '"source_revision": source_revision',
         '"author": metadata["__author__"]',
         '"licensee": metadata["__licensee__"]',
         '"copyright": metadata["__copyright__"]',
-        '"built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(',
+        '"built_at_utc": source_seal["source_committed_at_utc"]',
+        "**source_seal",
     ):
         assert spec.count(mapping) == 1
     assert "subprocess" not in spec
+    assert "GITHUB_SHA" not in spec
+    assert "datetime.datetime.now" not in spec
 
 
 def test_packager_reconstructs_complete_source_identity():
@@ -101,106 +126,66 @@ def test_packager_reconstructs_complete_source_identity():
     assert namespace["_sector_metadata"](ROOT) == EXPECTED
 
 
-def test_source_revision_prefers_only_complete_environment_identity(monkeypatch):
+def test_source_seal_accepts_only_the_complete_canonical_environment(monkeypatch):
     namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
+        "_commit_revision", "_canonical_integer", "_source_seal"
     )
-    monkeypatch.setenv("SECTOR_SOURCE_REVISION", "unavailable")
-    monkeypatch.setenv("GITHUB_SHA", COMMIT)
-    assert namespace["_source_revision"](ROOT / "missing") == COMMIT
+    _set_source_seal(monkeypatch)
+    assert namespace["_source_seal"]() == {
+        "source_revision": COMMIT,
+        "source_tree": TREE,
+        "source_committer_epoch": 123,
+        "source_committed_at_utc": COMMITTED_AT_UTC,
+        "source_file_count": 235,
+        "source_total_bytes": 6032876,
+        "source_inventory_sha256": INVENTORY,
+    }
 
 
-def test_source_revision_rejects_an_untraceable_export(tmp_path, monkeypatch):
+def test_source_seal_rejects_missing_identity_despite_github_fallback(
+    monkeypatch,
+):
     namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
+        "_commit_revision", "_canonical_integer", "_source_seal"
     )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-    try:
-        namespace["_source_revision"](tmp_path)
-    except ValueError as exc:
-        assert str(exc) == (
-            "Sector package source revision is unavailable; set "
-            "SECTOR_SOURCE_REVISION to the exact 40-hex commit"
-        )
-    else:
-        raise AssertionError("packager accepted an untraceable source tree")
+    _set_source_seal(monkeypatch)
+    monkeypatch.delenv("SECTOR_SOURCE_TREE")
+    monkeypatch.setenv("GITHUB_SHA", TREE)
+    with pytest.raises(ValueError, match="invalid sealed source commit identity"):
+        namespace["_source_seal"]()
 
 
-def test_source_revision_resolves_the_current_checkout(monkeypatch):
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    (
+        ("SECTOR_SOURCE_REVISION", COMMIT.upper(), "commit identity"),
+        ("SECTOR_SOURCE_COMMITTER_EPOCH", "0123", "source integer"),
+        ("SOURCE_DATE_EPOCH", "124", "does not match"),
+        ("SECTOR_SOURCE_COMMITTED_AT_UTC", "1970-01-01T00:02:04+00:00", "UTC time"),
+        ("SECTOR_SOURCE_INVENTORY_SHA256", INVENTORY.upper(), "inventory digest"),
+    ),
+)
+def test_source_seal_rejects_noncanonical_or_mismatched_fields(
+    monkeypatch, name, value, message
+):
     namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
+        "_commit_revision", "_canonical_integer", "_source_seal"
     )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-    revision = namespace["_source_revision"](ROOT)
-    assert len(revision) == 40
-    assert all(char in "0123456789abcdefABCDEF" for char in revision)
+    _set_source_seal(monkeypatch, **{name: value})
+    with pytest.raises(ValueError, match=message):
+        namespace["_source_seal"]()
 
 
-def test_source_revision_resolves_detached_head(tmp_path, monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-    (git_dir / "HEAD").write_text(COMMIT + "\n", encoding="ascii")
-    assert namespace["_source_revision"](tmp_path) == COMMIT
-
-
-def test_source_revision_resolves_linked_worktree_common_refs(tmp_path, monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-
-    project = tmp_path / "project"
-    worktree_git = tmp_path / "repo" / ".git" / "worktrees" / "sector"
-    common_git = tmp_path / "repo" / ".git"
-    branch_ref = common_git / "refs" / "heads" / "candidate"
-    project.mkdir()
-    worktree_git.mkdir(parents=True)
-    branch_ref.parent.mkdir(parents=True)
-    (project / ".git").write_text(
-        "gitdir: ../repo/.git/worktrees/sector\n", encoding="ascii"
-    )
-    (worktree_git / "HEAD").write_text(
-        "ref: refs/heads/candidate\n", encoding="ascii"
-    )
-    (worktree_git / "commondir").write_text("../..\n", encoding="ascii")
-    branch_ref.write_text(COMMIT + "\n", encoding="ascii")
-
-    assert namespace["_source_revision"](project) == COMMIT
-
-
-def test_source_revision_resolves_common_packed_refs(tmp_path, monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-
-    project = tmp_path / "project"
-    worktree_git = tmp_path / "repo" / ".git" / "worktrees" / "sector"
-    common_git = tmp_path / "repo" / ".git"
-    project.mkdir()
-    worktree_git.mkdir(parents=True)
-    (project / ".git").write_text(
-        "gitdir: ../repo/.git/worktrees/sector\n", encoding="ascii"
-    )
-    (worktree_git / "HEAD").write_text(
-        "ref: refs/heads/packed-candidate\n", encoding="ascii"
-    )
-    (worktree_git / "commondir").write_text("../..\n", encoding="ascii")
-    (common_git / "packed-refs").write_text(
-        f"# pack-refs with: peeled fully-peeled sorted\n{COMMIT} refs/heads/packed-candidate\n",
-        encoding="ascii",
-    )
-
-    assert namespace["_source_revision"](project) == COMMIT
+def test_spec_contains_no_git_or_checkout_identity_fallback():
+    tree = ast.parse(SPEC.read_text(encoding="utf-8"), filename=str(SPEC))
+    function_names = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    assert {"_commit_revision", "_canonical_integer", "_source_seal"} <= function_names
+    assert {"_git_directories", "_source_revision"}.isdisjoint(function_names)
+    text = SPEC.read_text(encoding="utf-8")
+    for forbidden in ("GITHUB_SHA", "git rev-parse", "packed-refs", "subprocess"):
+        assert forbidden not in text
 
 
 def test_static_identity_surface_contains_no_signing_authority():

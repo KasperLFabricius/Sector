@@ -65,15 +65,32 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
         'OriginalFilename = "Sector.exe"',
         'LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."',
         "versionInfo.CompanyName",
-        'product_name = "Sector"',
-        'description = "Structural-analysis and design calculation tool"',
-        'sector_version = "0.91"',
-        "source_revision = $env:GITHUB_SHA",
-        'author = "Kasper Lindskov Fabricius"',
-        'licensee = "Sweco Danmark A/S"',
-        'copyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."',
     ):
         assert script.count(token) == 1
+    for token in (
+        "tools/verify_windows_release.py",
+        "--source-revision $env:GITHUB_SHA",
+        "--source-identity $env:SECTOR_SOURCE_IDENTITY",
+        "--package $packageRoot",
+    ):
+        assert script.count(token) == 1
+
+    verifier = (ROOT / "tools" / "verify_windows_release.py").read_text(
+        encoding="utf-8"
+    )
+    for token in (
+        '"__product_name__": "Sector"',
+        '"__description__": "Structural-analysis and design calculation tool"',
+        '"__version__": "0.91"',
+        '"__author__": "Kasper Lindskov Fabricius"',
+        '"__licensee__": "Sweco Danmark A/S"',
+        '"source_revision"',
+        '"source_tree"',
+        '"source_committer_epoch"',
+        '"source_inventory_sha256"',
+        "_require_raw_snapshot_tree",
+    ):
+        assert token in verifier
 
 
 def test_ordinary_build_surfaces_forbid_unsigned_launch_and_distribution():

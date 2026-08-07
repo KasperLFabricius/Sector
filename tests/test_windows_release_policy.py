@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -13,14 +16,21 @@ import yaml
 from tools.verify_windows_release import (
     EXPECTED_SOURCE_IDENTITY,
     ReleaseVerificationError,
+    _regular_tree,
     verify_package,
     verify_source,
 )
+from tools.export_commit_tree import snapshot_commit
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
 SCRIPT = ROOT / "packaging" / "sign_and_verify.ps1"
-COMMIT = "a" * 40
+COMMIT = subprocess.run(
+    ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+    capture_output=True,
+    text=True,
+    check=True,
+).stdout.strip()
 
 
 def _workflow():
@@ -101,11 +111,24 @@ def test_dispatch_data_is_never_interpolated_into_executable_source():
 def test_preflight_is_isolated_and_runs_before_dependencies_or_build():
     steps = _job()["steps"]
     preflight = _step("Run isolated release preflight")
-    install = _step("Install locked build environment")
-    build = _step("Build source-bound package")
+    build = _step("Build exact source-bound package")
     assert "python -I -S tools/verify_windows_release.py" in preflight["run"]
-    assert steps.index(preflight) < steps.index(install) < steps.index(build)
-    assert "--require-hashes -r requirements-build.txt" in install["run"]
+    assert steps.index(preflight) < steps.index(build)
+    assert "tools/build_exact_commit.py" in build["run"]
+
+
+def test_release_and_qa_use_exact_driver_and_authenticated_identity_evidence():
+    release = WORKFLOW.read_text(encoding="utf-8")
+    qa = (ROOT / ".github" / "workflows" / "qa.yml").read_text(encoding="utf-8")
+
+    for workflow in (release, qa):
+        assert "tools/build_exact_commit.py" in workflow
+        assert "tools/verify_windows_release.py" in workflow
+        assert "source-identity.json" in workflow
+        assert "python -m PyInstaller" not in workflow
+    assert "generate_third_party_notices.py --output" not in release
+    assert "Copy-Item -LiteralPath LICENSE" not in release
+    assert "dist/Sector" not in release
 
 
 def test_only_signing_step_receives_the_four_protected_secrets():
@@ -136,7 +159,8 @@ def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
         < steps.index(signing)
         < steps.index(upload)
     )
-    assert "--package dist/Sector" in package_gate["run"]
+    assert "--package $env:SECTOR_PACKAGE_ROOT" in package_gate["run"]
+    assert "--source-identity $env:SECTOR_SOURCE_IDENTITY" in package_gate["run"]
     for token in (
         "ProductName",
         "FileDescription",
@@ -150,7 +174,7 @@ def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
         assert token in identity_gate["run"]
     assert upload["with"] == {
         "name": "Sector-Windows-signed-${{ inputs.source_sha }}",
-        "path": "dist/Sector/",
+        "path": "${{ env.SECTOR_PACKAGE_ROOT }}/",
         "if-no-files-found": "error",
         "retention-days": 30,
     }
@@ -239,45 +263,177 @@ def test_source_preflight_rejects_non_exact_commit_identity(revision):
         verify_source(ROOT, revision)
 
 
-def _package(tmp_path: Path, *, revision: str = COMMIT) -> Path:
+def _package(
+    tmp_path: Path, *, revision: str = COMMIT, repository: Path = ROOT
+) -> Path:
+    snapshot = snapshot_commit(repository, revision)
     package = tmp_path / "Sector"
-    (package / "_internal" / "app").mkdir(parents=True)
-    (package / "_internal" / "sector").mkdir(parents=True)
+    for item in snapshot.files:
+        prefix = item.path.split("/", 1)[0]
+        if prefix not in {"app", "sector", "assets"}:
+            continue
+        target = package / "_internal" / Path(*PurePosixPath(item.path).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(item.payload)
     (package / "Sector.exe").write_bytes(b"not executed")
-    (package / "_internal" / "app" / "sector_app.py").write_text("# app\n", encoding="utf-8")
-    (package / "_internal" / "sector" / "__init__.py").write_text("# core\n", encoding="utf-8")
-    (package / "LICENSE.txt").write_text((ROOT / "LICENSE").read_text(encoding="utf-8"), encoding="utf-8")
+    raw_files = {item.path: item.payload for item in snapshot.files}
+    (package / "LICENSE.txt").write_bytes(raw_files["LICENSE"])
     (package / "THIRD_PARTY_NOTICES.txt").write_text(
         "SECTOR THIRD-PARTY NOTICES\nnumpy\nstreamlit\n", encoding="utf-8"
+    )
+    evidence = {
+        "source_revision": snapshot.evidence.source_revision,
+        "source_tree": snapshot.evidence.source_tree,
+        "source_committer_epoch": snapshot.evidence.source_committer_epoch,
+        "source_committed_at_utc": snapshot.evidence.source_committed_at_utc,
+        "source_file_count": snapshot.evidence.file_count,
+        "source_total_bytes": snapshot.evidence.total_bytes,
+        "source_inventory_sha256": snapshot.evidence.inventory_sha256,
+    }
+    (tmp_path / "source-identity.json").write_bytes(
+        (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode("ascii")
     )
     manifest = {
         "product_name": EXPECTED_SOURCE_IDENTITY["__product_name__"],
         "description": EXPECTED_SOURCE_IDENTITY["__description__"],
         "sector_version": EXPECTED_SOURCE_IDENTITY["__version__"],
-        "source_revision": revision,
         "author": EXPECTED_SOURCE_IDENTITY["__author__"],
         "licensee": EXPECTED_SOURCE_IDENTITY["__licensee__"],
         "copyright": EXPECTED_SOURCE_IDENTITY["__copyright__"],
-        "built_at_utc": "2026-08-06T06:00:00+00:00",
+        "built_at_utc": evidence["source_committed_at_utc"],
+        **evidence,
     }
-    (package / "_internal" / "sector" / "sector_build_info.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
+    (package / "_internal" / "sector" / "sector_build_info.json").write_bytes(
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("ascii")
     )
     return package
 
 
+def _minimal_release_repository(tmp_path: Path) -> tuple[Path, str]:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    commands = (
+        ("init", "--quiet"),
+        ("config", "user.email", "sector-release@example.invalid"),
+        ("config", "user.name", "Sector release tests"),
+        ("config", "core.autocrlf", "false"),
+    )
+    for arguments in commands:
+        subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            check=True,
+            capture_output=True,
+        )
+    files = {
+        "LICENSE": (ROOT / "LICENSE").read_bytes(),
+        "sector/__init__.py": (ROOT / "sector" / "__init__.py").read_bytes(),
+        "packaging/windows_version_info.txt": (
+            ROOT / "packaging" / "windows_version_info.txt"
+        ).read_bytes(),
+        "app/sector_app.py": b"accepted raw application\n",
+        "assets/logo.txt": b"accepted raw asset\n",
+    }
+    for relative, payload in files.items():
+        target = repository / Path(*PurePosixPath(relative).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+    subprocess.run(
+        ["git", "-C", str(repository), "add", "."],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "--quiet", "-m", "fixture"],
+        check=True,
+        capture_output=True,
+    )
+    revision = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return repository, revision
+
+
 def test_package_gate_accepts_complete_source_bound_fixture(tmp_path):
-    verify_package(ROOT, _package(tmp_path), COMMIT)
+    verify_package(
+        ROOT, _package(tmp_path), COMMIT, tmp_path / "source-identity.json"
+    )
+
+
+def test_matching_worktree_and_package_mutation_cannot_reseal_raw_snapshot(tmp_path):
+    repository, revision = _minimal_release_repository(tmp_path)
+    package = _package(tmp_path, revision=revision, repository=repository)
+    evidence = tmp_path / "source-identity.json"
+    hostile = b"hostile matching mutable source\n"
+
+    (repository / "app" / "sector_app.py").write_bytes(hostile)
+    verify_package(repository, package, revision, evidence)
+
+    (package / "_internal" / "app" / "sector_app.py").write_bytes(hostile)
+    with pytest.raises(ReleaseVerificationError, match="differs from raw commit"):
+        verify_package(repository, package, revision, evidence)
+
+
+def test_coherent_evidence_and_manifest_reseal_is_rejected(tmp_path):
+    package = _package(tmp_path)
+    evidence_path = tmp_path / "source-identity.json"
+    manifest_path = package / "_internal" / "sector" / "sector_build_info.json"
+    evidence = json.loads(evidence_path.read_text(encoding="ascii"))
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    evidence["source_inventory_sha256"] = "d" * 64
+    manifest["source_inventory_sha256"] = "d" * 64
+    evidence_path.write_bytes(
+        (json.dumps(evidence, indent=2, sort_keys=True) + "\n").encode("ascii")
+    )
+    manifest_path.write_bytes(
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("ascii")
+    )
+
+    with pytest.raises(ReleaseVerificationError, match="raw commit closure"):
+        verify_package(ROOT, package, COMMIT, evidence_path)
+
+
+@pytest.mark.parametrize("ancestor", ("package", "internal", "tree"))
+def test_package_tree_rejects_reparse_root_and_ancestors(
+    tmp_path, monkeypatch, ancestor
+):
+    package = tmp_path / "Sector"
+    tree = package / "_internal" / "app"
+    tree.mkdir(parents=True)
+    (tree / "accepted.py").write_bytes(b"accepted\n")
+    targets = {
+        "package": package,
+        "internal": package / "_internal",
+        "tree": tree,
+    }
+    reparse_path = targets[ancestor]
+    real_stat = os.stat
+
+    def report_reparse(path, *, dir_fd=None, follow_symlinks=True):
+        if not follow_symlinks and Path(path) == reparse_path:
+            return SimpleNamespace(
+                st_mode=stat.S_IFDIR,
+                st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT,
+            )
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "stat", report_reparse)
+
+    with pytest.raises(ReleaseVerificationError, match="link or reparse point"):
+        _regular_tree(tree, boundary=package)
 
 
 @pytest.mark.parametrize(
     ("mutation", "match"),
     (
         ("delete_exe", "missing required files"),
-        ("foreign_license", "differs from source"),
-        ("unknown_manifest", "keys are incomplete or unknown"),
-        ("wrong_revision", "manifest field: source_revision"),
-        ("local_timestamp", "explicit UTC timestamp"),
+        ("foreign_license", "differs from raw source commit"),
+        ("unknown_manifest", "manifest does not match"),
+        ("wrong_revision", "manifest does not match"),
+        ("local_timestamp", "manifest does not match"),
+        ("mutated_app", "differs from raw commit"),
     ),
 )
 def test_package_gate_rejects_incomplete_or_resealed_identity(tmp_path, mutation, match):
@@ -287,6 +443,10 @@ def test_package_gate_rejects_incomplete_or_resealed_identity(tmp_path, mutation
         (package / "Sector.exe").unlink()
     elif mutation == "foreign_license":
         (package / "LICENSE.txt").write_text("different", encoding="utf-8")
+    elif mutation == "mutated_app":
+        (package / "_internal" / "app" / "sector_app.py").write_text(
+            "hostile matching mutable source\n", encoding="utf-8"
+        )
     else:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if mutation == "unknown_manifest":
@@ -297,4 +457,6 @@ def test_package_gate_rejects_incomplete_or_resealed_identity(tmp_path, mutation
             manifest["built_at_utc"] = "2026-08-06T06:00:00"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReleaseVerificationError, match=match):
-        verify_package(ROOT, package, COMMIT)
+        verify_package(
+            ROOT, package, COMMIT, tmp_path / "source-identity.json"
+        )

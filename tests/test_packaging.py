@@ -70,7 +70,10 @@ def test_packaged_runtime_embeds_exact_source_provenance():
         encoding="utf-8"
     )
     assert "sector_build_info.json" in spec
-    assert "GITHUB_SHA" in spec
+    assert "GITHUB_SHA" not in spec
+    assert "SOURCE_DATE_EPOCH" in spec
+    assert "SECTOR_SOURCE_TREE" in spec
+    assert "datetime.datetime.now" not in spec
     assert "source_revision" in spec
     assert "subprocess" not in spec
     assert "sector/sector_build_info.json" in workflow

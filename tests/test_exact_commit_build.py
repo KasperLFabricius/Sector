@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -113,14 +114,52 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     monkeypatch.setenv("SECTOR_SOURCE_REVISION", "wrong")
     monkeypatch.setenv("SECTOR_KEEP", "yes")
 
-    environment = _build_environment("a" * 40)
+    environment = _build_environment(
+        source_revision="a" * 40,
+        source_tree="b" * 40,
+        source_committer_epoch=123,
+        source_committed_at_utc="1970-01-01T00:02:03+00:00",
+        source_file_count=7,
+        source_total_bytes=11,
+        source_inventory_sha256="c" * 64,
+    )
 
     assert all(not key.upper().startswith("GIT_") for key in environment)
     assert all(key.upper() not in {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"}
                for key in environment)
     assert environment["PYTHONNOUSERSITE"] == "1"
     assert environment["SECTOR_SOURCE_REVISION"] == "a" * 40
+    assert environment["SECTOR_SOURCE_TREE"] == "b" * 40
+    assert environment["SECTOR_SOURCE_COMMITTER_EPOCH"] == "123"
+    assert environment["SOURCE_DATE_EPOCH"] == "123"
+    assert environment["SECTOR_SOURCE_COMMITTED_AT_UTC"] == (
+        "1970-01-01T00:02:03+00:00"
+    )
+    assert environment["SECTOR_SOURCE_FILE_COUNT"] == "7"
+    assert environment["SECTOR_SOURCE_TOTAL_BYTES"] == "11"
+    assert environment["SECTOR_SOURCE_INVENTORY_SHA256"] == "c" * 64
     assert environment["SECTOR_KEEP"] == "yes"
+
+
+def test_prepare_writes_create_only_canonical_source_identity(tmp_path):
+    root, commit, _accepted = _repository(tmp_path)
+    plan = prepare_exact_build(root, commit, tmp_path / "build-run")
+
+    identity = json.loads(plan.source_identity_path.read_text(encoding="ascii"))
+    evidence = plan.source_evidence
+    assert identity == {
+        "source_revision": commit,
+        "source_tree": evidence.source_tree,
+        "source_committer_epoch": evidence.source_committer_epoch,
+        "source_committed_at_utc": evidence.source_committed_at_utc,
+        "source_file_count": evidence.file_count,
+        "source_total_bytes": evidence.total_bytes,
+        "source_inventory_sha256": evidence.inventory_sha256,
+    }
+    assert plan.source_identity_path == plan.run_root / "source-identity.json"
+    assert plan.commands[3].environment["SOURCE_DATE_EPOCH"] == str(
+        evidence.source_committer_epoch
+    )
 
 
 def test_execute_build_assembles_only_new_files_from_isolated_source(tmp_path):

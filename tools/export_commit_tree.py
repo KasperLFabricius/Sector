@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import os
@@ -63,9 +64,33 @@ class SourceFile:
 @dataclass(frozen=True)
 class ExportEvidence:
     source_revision: str
+    source_tree: str
+    source_committer_epoch: int
+    source_committed_at_utc: str
     file_count: int
     total_bytes: int
     inventory_sha256: str
+
+
+@dataclass(frozen=True)
+class SnapshotFile:
+    mode: str
+    path: str
+    object_id: str
+    payload: bytes
+
+
+@dataclass(frozen=True)
+class CommitSnapshot:
+    evidence: ExportEvidence
+    files: tuple[SnapshotFile, ...]
+
+
+@dataclass(frozen=True)
+class ParsedCommit:
+    tree_id: str
+    committer_epoch: int
+    committed_at_utc: str
 
 
 @dataclass(frozen=True)
@@ -212,14 +237,22 @@ def _parse_headers(payload: bytes) -> list[tuple[bytes, bytes]]:
     return headers
 
 
-def _validate_identity(field: str, value: bytes) -> None:
+def _validate_identity(field: str, value: bytes) -> int:
     match = IDENTITY.fullmatch(value)
     if match is None:
         raise CommitTreeError(f"commit {field} identity is malformed")
+    timestamp = match.group(1)
+    if timestamp.startswith(b"-") or (
+        len(timestamp) > 1 and timestamp.startswith(b"0")
+    ):
+        raise CommitTreeError(
+            f"commit {field} identity must use a canonical nonnegative timestamp"
+        )
     hours = int(match.group(3))
     minutes = int(match.group(4))
     if hours > 14 or minutes > 59 or (hours == 14 and minutes != 0):
         raise CommitTreeError(f"commit {field} identity has an invalid timezone")
+    return int(timestamp)
 
 
 def _header_object_id(field: str, value: bytes) -> str:
@@ -232,8 +265,8 @@ def _header_object_id(field: str, value: bytes) -> str:
     return candidate
 
 
-def _parse_commit(payload: bytes) -> str:
-    """Strictly validate one commit object and return its root-tree identity."""
+def _parse_commit(payload: bytes) -> ParsedCommit:
+    """Strictly validate one commit and return canonical package-time identity."""
     headers = _parse_headers(payload)
     if headers[0][0] != b"tree":
         raise CommitTreeError("commit must begin with one exact tree identity")
@@ -242,6 +275,7 @@ def _parse_commit(payload: bytes) -> str:
     counts = {b"tree": 0, b"author": 0, b"committer": 0}
     parents: set[str] = set()
     phase = "parents"
+    committer_epoch: int | None = None
     for index, (key, value) in enumerate(headers):
         if key in counts:
             counts[key] += 1
@@ -263,13 +297,21 @@ def _parse_commit(payload: bytes) -> str:
         elif key == b"committer":
             if phase != "committer":
                 raise CommitTreeError("commit committer header is misplaced")
-            _validate_identity("committer", value)
+            committer_epoch = _validate_identity("committer", value)
             phase = "extra"
         elif phase in {"parents", "committer"}:
             raise CommitTreeError("commit required identity headers are misplaced")
     if counts != {b"tree": 1, b"author": 1, b"committer": 1} or phase != "extra":
         raise CommitTreeError("commit must contain one tree, author, and committer")
-    return tree_id
+    if committer_epoch is None:
+        raise CommitTreeError("commit committer timestamp is unavailable")
+    try:
+        committed_at = dt.datetime.fromtimestamp(
+            committer_epoch, tz=dt.timezone.utc
+        ).isoformat(timespec="seconds")
+    except (OverflowError, OSError, ValueError) as exc:
+        raise CommitTreeError("commit committer timestamp is out of range") from exc
+    return ParsedCommit(tree_id, committer_epoch, committed_at)
 
 
 def _device_stem(component: str) -> str:
@@ -398,22 +440,71 @@ def _inventory_digest(files: list[SourceFile], payloads: dict[str, bytes]) -> st
     return digest.hexdigest()
 
 
+def _resolved_repository(root: Path) -> Path:
+    try:
+        resolved = root.resolve(strict=True)
+    except OSError as exc:
+        raise CommitTreeError("repository root does not exist") from exc
+    if not resolved.is_dir():
+        raise CommitTreeError("repository root is not a directory")
+    _repository_boundary(resolved)
+    return resolved
+
+
+def _snapshot_from_resolved_root(
+    root: Path, source_revision: str
+) -> CommitSnapshot:
+    if OBJECT_ID.fullmatch(source_revision) is None:
+        raise CommitTreeError("source revision must be an exact lowercase 40-hex SHA-1")
+    commit = _read_objects(root, [source_revision])[0]
+    if commit.kind != "commit":
+        raise CommitTreeError("source revision must be a commit object")
+    parsed = _parse_commit(commit.payload)
+    files = _inventory_tree(root, parsed.tree_id)
+    blob_ids = _unique([item.object_id for item in files])
+    blobs = _read_objects(root, blob_ids)
+    if any(item.kind != "blob" for item in blobs):
+        raise CommitTreeError("commit regular-file entry references a non-blob object")
+    payloads = {item.object_id: item.payload for item in blobs}
+    evidence = ExportEvidence(
+        source_revision=source_revision,
+        source_tree=parsed.tree_id,
+        source_committer_epoch=parsed.committer_epoch,
+        source_committed_at_utc=parsed.committed_at_utc,
+        file_count=len(files),
+        total_bytes=sum(len(payloads[item.object_id]) for item in files),
+        inventory_sha256=_inventory_digest(files, payloads),
+    )
+    return CommitSnapshot(
+        evidence=evidence,
+        files=tuple(
+            SnapshotFile(
+                mode=item.mode,
+                path=item.path,
+                object_id=item.object_id,
+                payload=payloads[item.object_id],
+            )
+            for item in files
+        ),
+    )
+
+
+def snapshot_commit(root: Path, source_revision: str) -> CommitSnapshot:
+    """Capture authenticated raw blobs and identity from one exact commit."""
+    return _snapshot_from_resolved_root(_resolved_repository(root), source_revision)
+
+
 def export_commit(root: Path, source_revision: str, output: Path) -> ExportEvidence:
     """Export the authenticated source tree of one exact commit into a new path."""
     if OBJECT_ID.fullmatch(source_revision) is None:
         raise CommitTreeError("source revision must be an exact lowercase 40-hex SHA-1")
-    try:
-        root = root.resolve(strict=True)
-    except OSError as exc:
-        raise CommitTreeError("repository root does not exist") from exc
+    root = _resolved_repository(root)
     lexical_output = Path(os.path.abspath(output))
     if lexical_output == root or lexical_output in root.parents:
         raise CommitTreeError("export output cannot contain the repository")
     if os.path.lexists(output):
         raise CommitTreeError(f"export output already exists: {output}")
     output = output.resolve(strict=False)
-    if not root.is_dir():
-        raise CommitTreeError("repository root is not a directory")
     if output == root or output in root.parents:
         raise CommitTreeError("export output cannot contain the repository")
     if output.exists():
@@ -424,36 +515,22 @@ def export_commit(root: Path, source_revision: str, output: Path) -> ExportEvide
         if _inside(output, metadata):
             raise CommitTreeError("export output cannot be inside Git metadata")
 
-    commit = _read_objects(root, [source_revision])[0]
-    if commit.kind != "commit":
-        raise CommitTreeError("source revision must be a commit object")
-    tree_id = _parse_commit(commit.payload)
-    files = _inventory_tree(root, tree_id)
-    blob_ids = _unique([item.object_id for item in files])
-    blobs = _read_objects(root, blob_ids)
-    if any(item.kind != "blob" for item in blobs):
-        raise CommitTreeError("commit regular-file entry references a non-blob object")
-    payloads = {item.object_id: item.payload for item in blobs}
+    snapshot = _snapshot_from_resolved_root(root, source_revision)
 
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.mkdir()
-        for item in files:
+        for item in snapshot.files:
             relative = PurePosixPath(item.path)
             target = output.joinpath(*relative.parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             with target.open("xb") as stream:
-                stream.write(payloads[item.object_id])
+                stream.write(item.payload)
             os.chmod(target, 0o755 if item.mode == "100755" else 0o644)
     except OSError as exc:
         raise CommitTreeError(f"cannot materialize commit tree: {exc}") from exc
 
-    return ExportEvidence(
-        source_revision=source_revision,
-        file_count=len(files),
-        total_bytes=sum(len(payloads[item.object_id]) for item in files),
-        inventory_sha256=_inventory_digest(files, payloads),
-    )
+    return snapshot.evidence
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -475,7 +552,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(
         "exact commit exported: "
-        f"{evidence.source_revision} | {evidence.file_count} files | "
+        f"{evidence.source_revision} | tree {evidence.source_tree} | "
+        f"epoch {evidence.source_committer_epoch} | {evidence.file_count} files | "
         f"{evidence.total_bytes} bytes | {evidence.inventory_sha256}"
     )
     return 0
