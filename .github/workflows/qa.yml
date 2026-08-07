@@ -122,11 +122,24 @@ jobs:
             --output $env:SECTOR_EXACT_BUILD_ROOT
           "SECTOR_PACKAGE_ROOT=$env:SECTOR_EXACT_BUILD_ROOT\dist\Sector" | Out-File `
             -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SECTOR_EXACT_SOURCE_ROOT=$env:SECTOR_EXACT_BUILD_ROOT\source" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SECTOR_SOURCE_IDENTITY_PATH=$env:SECTOR_EXACT_BUILD_ROOT\source-identity.json" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Verify unsigned QA package contents and identity
         shell: pwsh
         run: |
           $packageRoot = $env:SECTOR_PACKAGE_ROOT
+          python -I -S tools/verify_windows_release.py `
+            --root $env:SECTOR_EXACT_SOURCE_ROOT `
+            --package $packageRoot `
+            --source-revision $env:GITHUB_SHA `
+            --source-identity $env:SECTOR_SOURCE_IDENTITY_PATH `
+            --repository-root .
+          if ($LASTEXITCODE -ne 0) {
+            throw "Exact source/package identity verification failed"
+          }
           if (-not (Test-Path -LiteralPath "$packageRoot/Sector.exe")) {
             throw "Sector.exe was not produced"
           }
@@ -162,22 +175,6 @@ jobs:
           }
           if (-not [string]::IsNullOrWhiteSpace([string]$versionInfo.CompanyName)) {
             throw "Sector.exe must not advertise a company or publisher identity"
-          }
-
-          $manifest = Get-Content -LiteralPath "$packageRoot/_internal/sector/sector_build_info.json" -Raw | ConvertFrom-Json
-          $expectedManifest = [ordered]@{
-            product_name = "Sector"
-            description = "Structural-analysis and design calculation tool"
-            sector_version = "0.91"
-            source_revision = $env:GITHUB_SHA
-            author = "Kasper Lindskov Fabricius"
-            licensee = "Sweco Danmark A/S"
-            copyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
-          }
-          foreach ($field in $expectedManifest.Keys) {
-            if ([string]$manifest.$field -ne [string]$expectedManifest[$field]) {
-              throw "Unexpected package manifest field $field"
-            }
           }
 
       - name: Upload unsigned QA package

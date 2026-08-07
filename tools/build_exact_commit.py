@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -29,6 +30,7 @@ _EXPORTER = _load_exporter()
 CommitTreeError = _EXPORTER.CommitTreeError
 ExportEvidence = _EXPORTER.ExportEvidence
 export_commit = _EXPORTER.export_commit
+SOURCE_IDENTITY_SCHEMA = "sector-source-identity-v1"
 
 
 class ExactBuildError(RuntimeError):
@@ -47,6 +49,7 @@ class ExactBuildPlan:
     source_revision: str
     run_root: Path
     source_root: Path
+    source_identity_path: Path
     package_root: Path
     source_evidence: ExportEvidence
     commands: tuple[BuildCommand, ...]
@@ -55,14 +58,47 @@ class ExactBuildPlan:
 @dataclass(frozen=True)
 class ExactBuildEvidence:
     source_revision: str
+    source_tree: str
+    source_epoch: int
+    built_at_utc: str
     source_file_count: int
     source_total_bytes: int
     source_inventory_sha256: str
     source_root: Path
+    source_identity_path: Path
     package_root: Path
 
 
-def _build_environment(source_revision: str) -> dict[str, str]:
+def _source_identity(source_evidence: ExportEvidence) -> dict[str, object]:
+    return {
+        "schema": SOURCE_IDENTITY_SCHEMA,
+        "source_revision": source_evidence.source_revision,
+        "source_tree": source_evidence.source_tree,
+        "source_epoch": source_evidence.source_epoch,
+        "built_at_utc": source_evidence.built_at_utc,
+        "source_file_count": source_evidence.file_count,
+        "source_total_bytes": source_evidence.total_bytes,
+        "source_inventory_sha256": source_evidence.inventory_sha256,
+    }
+
+
+def _write_source_identity(path: Path, source_evidence: ExportEvidence) -> None:
+    payload = json.dumps(
+        _source_identity(source_evidence),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii") + b"\n"
+    try:
+        with path.open("xb") as stream:
+            stream.write(payload)
+    except FileExistsError as exc:
+        raise ExactBuildError(f"source identity already exists: {path}") from exc
+    except OSError as exc:
+        raise ExactBuildError(f"cannot write source identity: {path}") from exc
+
+
+def _build_environment(source_evidence: ExportEvidence) -> dict[str, str]:
     excluded = {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"}
     environment = {
         key: value
@@ -70,7 +106,18 @@ def _build_environment(source_revision: str) -> dict[str, str]:
         if not key.upper().startswith("GIT_") and key.upper() not in excluded
     }
     environment["PYTHONNOUSERSITE"] = "1"
-    environment["SECTOR_SOURCE_REVISION"] = source_revision
+    environment.update(
+        {
+            "SECTOR_SOURCE_IDENTITY_SCHEMA": SOURCE_IDENTITY_SCHEMA,
+            "SECTOR_SOURCE_REVISION": source_evidence.source_revision,
+            "SECTOR_SOURCE_TREE": source_evidence.source_tree,
+            "SECTOR_SOURCE_EPOCH": str(source_evidence.source_epoch),
+            "SOURCE_DATE_EPOCH": str(source_evidence.source_epoch),
+            "SECTOR_SOURCE_FILE_COUNT": str(source_evidence.file_count),
+            "SECTOR_SOURCE_TOTAL_BYTES": str(source_evidence.total_bytes),
+            "SECTOR_SOURCE_INVENTORY_SHA256": source_evidence.inventory_sha256,
+        }
+    )
     return environment
 
 
@@ -93,7 +140,9 @@ def prepare_exact_build(
     except CommitTreeError as exc:
         raise ExactBuildError(f"cannot export exact build source: {exc}") from exc
 
-    environment = _build_environment(source_revision)
+    source_identity_path = run_root / "source-identity.json"
+    _write_source_identity(source_identity_path, source_evidence)
+    environment = _build_environment(source_evidence)
     python = str(Path(sys.executable).resolve())
     build_environment_root = run_root / "build-environment"
     environment_python = build_environment_root / (
@@ -169,6 +218,7 @@ def prepare_exact_build(
         source_revision=source_revision,
         run_root=run_root,
         source_root=source_root,
+        source_identity_path=source_identity_path,
         package_root=dist_path / "Sector",
         source_evidence=source_evidence,
         commands=commands,
@@ -233,10 +283,14 @@ def execute_exact_build(
     evidence = plan.source_evidence
     return ExactBuildEvidence(
         source_revision=plan.source_revision,
+        source_tree=evidence.source_tree,
+        source_epoch=evidence.source_epoch,
+        built_at_utc=evidence.built_at_utc,
         source_file_count=evidence.file_count,
         source_total_bytes=evidence.total_bytes,
         source_inventory_sha256=evidence.inventory_sha256,
         source_root=plan.source_root,
+        source_identity_path=plan.source_identity_path,
         package_root=plan.package_root,
     )
 
@@ -263,7 +317,8 @@ def main(argv: list[str] | None = None) -> int:
         "unsigned exact-source QA package built: "
         f"{evidence.source_revision} | {evidence.source_file_count} files | "
         f"{evidence.source_total_bytes} bytes | "
-        f"{evidence.source_inventory_sha256} | {evidence.package_root}"
+        f"{evidence.source_inventory_sha256} | epoch {evidence.source_epoch} | "
+        f"{evidence.package_root}"
     )
     print("inspection only: do not launch, zip, or distribute this unsigned package")
     return 0

@@ -45,6 +45,7 @@ def _spec_helpers(*names: str):
     assert {node.name for node in selected} == set(names)
     harness = ast.Module(
         body=[ast.Import(names=[ast.alias(name="ast")]),
+              ast.Import(names=[ast.alias(name="datetime")]),
               ast.Import(names=[ast.alias(name="os")]), *selected],
         type_ignores=[],
     )
@@ -86,11 +87,10 @@ def test_packager_maps_every_identity_to_resource_and_manifest():
         '"product_name": metadata["__product_name__"]',
         '"description": metadata["__description__"]',
         '"sector_version": metadata["__version__"]',
-        '"source_revision": source_revision',
         '"author": metadata["__author__"]',
         '"licensee": metadata["__licensee__"]',
         '"copyright": metadata["__copyright__"]',
-        '"built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(',
+        "**source_identity",
     ):
         assert spec.count(mapping) == 1
     assert "subprocess" not in spec
@@ -101,106 +101,77 @@ def test_packager_reconstructs_complete_source_identity():
     assert namespace["_sector_metadata"](ROOT) == EXPECTED
 
 
-def test_source_revision_prefers_only_complete_environment_identity(monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
+def _sealed_environment(monkeypatch):
+    values = {
+        "SECTOR_SOURCE_IDENTITY_SCHEMA": "sector-source-identity-v1",
+        "SECTOR_SOURCE_REVISION": COMMIT,
+        "SECTOR_SOURCE_TREE": "b" * 40,
+        "SECTOR_SOURCE_EPOCH": "1785996000",
+        "SOURCE_DATE_EPOCH": "1785996000",
+        "SECTOR_SOURCE_FILE_COUNT": "234",
+        "SECTOR_SOURCE_TOTAL_BYTES": "6005838",
+        "SECTOR_SOURCE_INVENTORY_SHA256": "c" * 64,
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    return values
+
+
+def _identity_helpers():
+    return _spec_helpers(
+        "_required_environment",
+        "_exact_lower_hex",
+        "_canonical_integer",
+        "_source_identity",
     )
-    monkeypatch.setenv("SECTOR_SOURCE_REVISION", "unavailable")
+
+
+def test_packager_accepts_only_the_complete_sealed_environment(monkeypatch):
+    values = _sealed_environment(monkeypatch)
+    identity = _identity_helpers()["_source_identity"]()
+
+    assert identity["schema"] == values["SECTOR_SOURCE_IDENTITY_SCHEMA"]
+    assert identity["source_revision"] == COMMIT
+    assert identity["source_tree"] == "b" * 40
+    assert identity["source_epoch"] == 1785996000
+    assert identity["source_file_count"] == 234
+    assert identity["source_total_bytes"] == 6005838
+    assert identity["source_inventory_sha256"] == "c" * 64
+    assert identity["built_at_utc"].endswith("+00:00")
+
+
+def test_packager_has_no_checkout_or_github_identity_fallback(monkeypatch):
+    values = _sealed_environment(monkeypatch)
+    for key in values:
+        monkeypatch.delenv(key)
     monkeypatch.setenv("GITHUB_SHA", COMMIT)
-    assert namespace["_source_revision"](ROOT / "missing") == COMMIT
 
-
-def test_source_revision_rejects_an_untraceable_export(tmp_path, monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
     try:
-        namespace["_source_revision"](tmp_path)
+        _identity_helpers()["_source_identity"]()
     except ValueError as exc:
-        assert str(exc) == (
-            "Sector package source revision is unavailable; set "
-            "SECTOR_SOURCE_REVISION to the exact 40-hex commit"
-        )
+        assert "SECTOR_SOURCE_IDENTITY_SCHEMA" in str(exc)
     else:
-        raise AssertionError("packager accepted an untraceable source tree")
+        raise AssertionError("packager accepted an unsealed checkout identity")
 
 
-def test_source_revision_resolves_the_current_checkout(monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-    revision = namespace["_source_revision"](ROOT)
-    assert len(revision) == 40
-    assert all(char in "0123456789abcdefABCDEF" for char in revision)
+def test_packager_rejects_mismatched_or_noncanonical_epoch(monkeypatch):
+    _sealed_environment(monkeypatch)
+    source_identity = _identity_helpers()["_source_identity"]
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1785996001")
+    try:
+        source_identity()
+    except ValueError as exc:
+        assert "differs" in str(exc)
+    else:
+        raise AssertionError("packager accepted a mismatched source epoch")
 
-
-def test_source_revision_resolves_detached_head(tmp_path, monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-    git_dir = tmp_path / ".git"
-    git_dir.mkdir()
-    (git_dir / "HEAD").write_text(COMMIT + "\n", encoding="ascii")
-    assert namespace["_source_revision"](tmp_path) == COMMIT
-
-
-def test_source_revision_resolves_linked_worktree_common_refs(tmp_path, monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-
-    project = tmp_path / "project"
-    worktree_git = tmp_path / "repo" / ".git" / "worktrees" / "sector"
-    common_git = tmp_path / "repo" / ".git"
-    branch_ref = common_git / "refs" / "heads" / "candidate"
-    project.mkdir()
-    worktree_git.mkdir(parents=True)
-    branch_ref.parent.mkdir(parents=True)
-    (project / ".git").write_text(
-        "gitdir: ../repo/.git/worktrees/sector\n", encoding="ascii"
-    )
-    (worktree_git / "HEAD").write_text(
-        "ref: refs/heads/candidate\n", encoding="ascii"
-    )
-    (worktree_git / "commondir").write_text("../..\n", encoding="ascii")
-    branch_ref.write_text(COMMIT + "\n", encoding="ascii")
-
-    assert namespace["_source_revision"](project) == COMMIT
-
-
-def test_source_revision_resolves_common_packed_refs(tmp_path, monkeypatch):
-    namespace = _spec_helpers(
-        "_commit_revision", "_git_directories", "_source_revision"
-    )
-    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-
-    project = tmp_path / "project"
-    worktree_git = tmp_path / "repo" / ".git" / "worktrees" / "sector"
-    common_git = tmp_path / "repo" / ".git"
-    project.mkdir()
-    worktree_git.mkdir(parents=True)
-    (project / ".git").write_text(
-        "gitdir: ../repo/.git/worktrees/sector\n", encoding="ascii"
-    )
-    (worktree_git / "HEAD").write_text(
-        "ref: refs/heads/packed-candidate\n", encoding="ascii"
-    )
-    (worktree_git / "commondir").write_text("../..\n", encoding="ascii")
-    (common_git / "packed-refs").write_text(
-        f"# pack-refs with: peeled fully-peeled sorted\n{COMMIT} refs/heads/packed-candidate\n",
-        encoding="ascii",
-    )
-
-    assert namespace["_source_revision"](project) == COMMIT
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "01785996000")
+    try:
+        source_identity()
+    except ValueError as exc:
+        assert "noncanonical" in str(exc)
+    else:
+        raise AssertionError("packager accepted an ambiguous source epoch")
 
 
 def test_static_identity_surface_contains_no_signing_authority():

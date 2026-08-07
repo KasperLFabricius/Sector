@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import os
 import subprocess
@@ -17,6 +18,7 @@ from tools.export_commit_tree import (
     _parse_commit,
     _parse_tree_object,
     export_commit,
+    verify_exported_commit,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +91,11 @@ def test_export_uses_only_raw_files_from_the_requested_commit(tmp_path):
     evidence = export_commit(root, commit, destination)
 
     assert evidence.source_revision == commit
+    assert evidence.source_tree == _git(root, "rev-parse", f"{commit}^{{tree}}")
+    assert evidence.source_epoch == int(_git(root, "show", "-s", "--format=%ct", commit))
+    assert evidence.built_at_utc == dt.datetime.fromtimestamp(
+        evidence.source_epoch, dt.timezone.utc
+    ).isoformat(timespec="seconds")
     assert evidence.file_count == 4
     assert evidence.total_bytes == sum(
         item.stat().st_size for item in destination.rglob("*") if item.is_file()
@@ -117,6 +124,43 @@ def test_repeated_exports_have_identical_evidence_and_bytes(tmp_path):
         for path in second.rglob("*")
         if path.is_file()
     }
+
+
+def test_export_verification_rejects_post_export_mutation_and_extra_file(tmp_path):
+    root, commit = _repository(tmp_path)
+    destination = tmp_path / "exact-source"
+    evidence = export_commit(root, commit, destination)
+
+    assert verify_exported_commit(root, commit, destination) == evidence
+    (destination / "app" / "tracked.txt").write_bytes(b"post-export mutation\n")
+    with pytest.raises(CommitTreeError, match="differs from selected commit"):
+        verify_exported_commit(root, commit, destination)
+
+    (destination / "app" / "tracked.txt").write_bytes(b"accepted:app\n")
+    (destination / "unexpected.txt").write_bytes(b"unexpected\n")
+    with pytest.raises(CommitTreeError, match="inventory differs"):
+        verify_exported_commit(root, commit, destination)
+
+
+def test_export_verification_allows_only_named_generated_evidence(tmp_path):
+    root, commit = _repository(tmp_path)
+    destination = tmp_path / "exact-source"
+    evidence = export_commit(root, commit, destination)
+    notice = destination / "build" / "legal" / "THIRD_PARTY_NOTICES.txt"
+    manifest = destination / "build" / "sector_build_info.json"
+    notice.parent.mkdir(parents=True)
+    notice.write_bytes(b"generated notices\n")
+    manifest.write_bytes(b"{}\n")
+
+    assert verify_exported_commit(
+        root,
+        commit,
+        destination,
+        allowed_extra_files=(
+            "build/legal/THIRD_PARTY_NOTICES.txt",
+            "build/sector_build_info.json",
+        ),
+    ) == evidence
 
 
 def test_unrelated_malformed_object_does_not_affect_selected_closure(tmp_path):
@@ -407,6 +451,21 @@ def test_commit_parser_requires_strict_author_and_committer_identity():
     payload = _commit_payload(tree, author=b"No Email 1 +0000")
 
     with pytest.raises(CommitTreeError, match="author identity"):
+        _parse_commit(payload)
+
+
+@pytest.mark.parametrize("timestamp", (b"-1", b"01"))
+def test_commit_parser_rejects_ambiguous_source_epoch(timestamp):
+    tree = "a" * 40
+    payload = (
+        f"tree {tree}\n".encode("ascii")
+        + b"author Sector <sector@example.invalid> 1 +0000\n"
+        + b"committer Sector <sector@example.invalid> "
+        + timestamp
+        + b" +0000\n\nfixture\n"
+    )
+
+    with pytest.raises(CommitTreeError, match="timestamp|epoch"):
         _parse_commit(payload)
 
 

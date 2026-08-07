@@ -18,88 +18,59 @@ WINDOWS_VERSION_INFO = os.path.join(SPECPATH, "windows_version_info.txt")
 datas, binaries, hiddenimports = [], [], []
 
 
-def _commit_revision(value):
-    """Return a complete Git commit identity, never a label or abbreviation."""
-    candidate = str(value or "").strip()
-    hexadecimal = "0123456789abcdefABCDEF"
-    if len(candidate) != 40 or any(char not in hexadecimal for char in candidate):
-        return None
-    return candidate
+def _required_environment(name):
+    value = os.environ.get(name)
+    if value is None or not value or value != value.strip():
+        raise ValueError(f"Sector package identity is missing or ambiguous: {name}")
+    return value
 
 
-def _git_directories(root):
-    """Return the worktree and shared Git metadata directories."""
-    control = os.path.join(root, ".git")
-    if os.path.isdir(control):
-        git_dir = control
-    else:
-        with open(control, encoding="ascii") as stream:
-            marker = stream.read().strip()
-        prefix, separator, location = marker.partition(":")
-        if separator != ":" or prefix.casefold() != "gitdir" or not location.strip():
-            raise ValueError("invalid .git control file")
-        git_dir = location.strip()
-        if not os.path.isabs(git_dir):
-            git_dir = os.path.abspath(os.path.join(root, git_dir))
-
-    common_dir = git_dir
-    common_marker = os.path.join(git_dir, "commondir")
-    if os.path.isfile(common_marker):
-        with open(common_marker, encoding="ascii") as stream:
-            common_dir = stream.read().strip()
-        if not common_dir:
-            raise ValueError("empty Git commondir")
-        if not os.path.isabs(common_dir):
-            common_dir = os.path.abspath(os.path.join(git_dir, common_dir))
-    return git_dir, common_dir
+def _exact_lower_hex(name, length):
+    value = _required_environment(name)
+    if len(value) != length or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"Sector package identity is invalid: {name}")
+    return value
 
 
-def _source_revision(root):
-    """Resolve an exact commit from the environment or checkout metadata."""
-    for variable in ("SECTOR_SOURCE_REVISION", "GITHUB_SHA"):
-        revision = _commit_revision(os.environ.get(variable))
-        if revision is not None:
-            return revision
+def _canonical_integer(name, minimum):
+    value = _required_environment(name)
+    if not value.isascii() or not value.isdecimal():
+        raise ValueError(f"Sector package identity is invalid: {name}")
+    number = int(value)
+    if number < minimum or str(number) != value:
+        raise ValueError(f"Sector package identity is noncanonical: {name}")
+    return number
 
+
+def _source_identity():
+    schema = _required_environment("SECTOR_SOURCE_IDENTITY_SCHEMA")
+    if schema != "sector-source-identity-v1":
+        raise ValueError("Sector package source-identity schema is unsupported")
+    revision = _exact_lower_hex("SECTOR_SOURCE_REVISION", 40)
+    source_tree = _exact_lower_hex("SECTOR_SOURCE_TREE", 40)
+    source_epoch = _canonical_integer("SECTOR_SOURCE_EPOCH", 0)
+    source_date_epoch = _canonical_integer("SOURCE_DATE_EPOCH", 0)
+    if source_date_epoch != source_epoch:
+        raise ValueError("SOURCE_DATE_EPOCH differs from the sealed source epoch")
+    source_file_count = _canonical_integer("SECTOR_SOURCE_FILE_COUNT", 1)
+    source_total_bytes = _canonical_integer("SECTOR_SOURCE_TOTAL_BYTES", 0)
+    inventory = _exact_lower_hex("SECTOR_SOURCE_INVENTORY_SHA256", 64)
     try:
-        git_dir, common_dir = _git_directories(root)
-        with open(os.path.join(git_dir, "HEAD"), encoding="ascii") as stream:
-            head = stream.read().strip()
-        if not head.startswith("ref:"):
-            revision = _commit_revision(head)
-            if revision is not None:
-                return revision
-        else:
-            ref = head.partition(":")[2].strip()
-            if not ref:
-                raise ValueError("empty symbolic HEAD")
-            ref_roots = [git_dir]
-            if common_dir != git_dir:
-                ref_roots.append(common_dir)
-            for ref_root in ref_roots:
-                loose = os.path.join(ref_root, *ref.split("/"))
-                if os.path.isfile(loose):
-                    with open(loose, encoding="ascii") as stream:
-                        revision = _commit_revision(stream.read())
-                    if revision is not None:
-                        return revision
-            for ref_root in ref_roots:
-                packed = os.path.join(ref_root, "packed-refs")
-                if not os.path.isfile(packed):
-                    continue
-                with open(packed, encoding="ascii") as stream:
-                    for line in stream:
-                        revision_text, separator, packed_ref = line.strip().partition(" ")
-                        if separator and packed_ref == ref:
-                            revision = _commit_revision(revision_text)
-                            if revision is not None:
-                                return revision
-    except (OSError, ValueError):
-        pass
-    raise ValueError(
-        "Sector package source revision is unavailable; set "
-        "SECTOR_SOURCE_REVISION to the exact 40-hex commit"
-    )
+        built_at_utc = datetime.datetime.fromtimestamp(
+            source_epoch, datetime.timezone.utc
+        ).isoformat(timespec="seconds")
+    except (OSError, OverflowError, ValueError) as exc:
+        raise ValueError("Sector package source epoch is outside the UTC range") from exc
+    return {
+        "schema": schema,
+        "source_revision": revision,
+        "source_tree": source_tree,
+        "source_epoch": source_epoch,
+        "built_at_utc": built_at_utc,
+        "source_file_count": source_file_count,
+        "source_total_bytes": source_total_bytes,
+        "source_inventory_sha256": inventory,
+    }
 
 
 def _sector_metadata(root):
@@ -137,20 +108,17 @@ def _sector_metadata(root):
 manifest_path = os.path.join(ROOT, "build", "sector_build_info.json")
 os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
 metadata = _sector_metadata(ROOT)
-source_revision = _source_revision(ROOT)
-with open(manifest_path, "w", encoding="utf-8") as stream:
+source_identity = _source_identity()
+with open(manifest_path, "x", encoding="utf-8") as stream:
     json.dump({
         "product_name": metadata["__product_name__"],
         "description": metadata["__description__"],
         "sector_version": metadata["__version__"],
-        "source_revision": source_revision,
         "author": metadata["__author__"],
         "licensee": metadata["__licensee__"],
         "copyright": metadata["__copyright__"],
-        "built_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(
-            timespec="seconds"
-        ),
-    }, stream, indent=2)
+        **source_identity,
+    }, stream, indent=2, sort_keys=True)
 datas += [(manifest_path, "sector")]
 
 

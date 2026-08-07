@@ -70,10 +70,19 @@ def test_packaged_runtime_embeds_exact_source_provenance():
         encoding="utf-8"
     )
     assert "sector_build_info.json" in spec
-    assert "GITHUB_SHA" in spec
-    assert "source_revision" in spec
+    assert "GITHUB_SHA" not in spec
+    for token in (
+        "SECTOR_SOURCE_REVISION",
+        "SECTOR_SOURCE_TREE",
+        "SECTOR_SOURCE_EPOCH",
+        "SOURCE_DATE_EPOCH",
+        "SECTOR_SOURCE_INVENTORY_SHA256",
+    ):
+        assert token in spec
     assert "subprocess" not in spec
     assert "sector/sector_build_info.json" in workflow
+    assert "--source-identity" in workflow
+    assert "--repository-root" in workflow
 
 
 def test_bundle_base_resolves_to_the_app_tree_in_dev():

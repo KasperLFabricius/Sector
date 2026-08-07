@@ -5,6 +5,16 @@ non-distributable QA artifact** for static package inspection. Each run first
 exports one exact commit into a new isolated directory; dependency installation,
 notice generation, PyInstaller analysis, and package assembly then read only
 from that exported tree. Mutable worktree files are never packaging inputs.
+The driver derives the root tree and timestamp from the independently
+authenticated commit object, records a create-only `source-identity.json`, and
+sets `SOURCE_DATE_EPOCH` from that commit rather than the clock. The package
+manifest carries the same revision, tree, epoch, UTC timestamp, file/byte
+counts, and inventory digest. Before upload or signing, the standard verifier
+checks that manifest against both the preserved identity file and a fresh raw
+inspection of the selected Git closure. It also rechecks every exported
+committed byte and requires the packaged `app`, `sector`, and `assets` trees to
+match that verified export; missing, ambiguous, concurrently modified, or
+coherently resealed identities fail closed.
 Do not launch, zip or distribute this artifact. A distributable Sector package
 requires the separately authorised signing workflow; there is no unsigned
 fallback.
@@ -32,7 +42,8 @@ powershell -ExecutionPolicy Bypass -File packaging/build.ps1 `
 
 The inspection result is `<run-root>/dist/Sector/`, including Sector's
 proprietary notice and generated third-party notice bundle. The same run root
-preserves the exact exported source and PyInstaller work evidence. A path is
+preserves `source-identity.json`, the exact exported source, and PyInstaller
+work evidence. A path is
 never reused, deleted, or overwritten. Keep the result local and use it only
 for static QA inspection. Do not execute `Sector.exe` from unsigned output.
 
@@ -62,7 +73,8 @@ the console for support.
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend). |
 | `build.ps1` | Convenience wrapper: selects an exact commit and unique output before delegating to the isolated driver. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
-| `../tools/build_exact_commit.py` | Standard-library driver: exports exact source, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
+| `../tools/build_exact_commit.py` | Standard-library driver: exports exact source, derives create-only source identity/epoch evidence, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
+| `../tools/verify_windows_release.py` | Standard-library gate: re-authenticates the selected commit closure and requires the package manifest to match its preserved identity evidence. |
 
 ## Runtime notes
 

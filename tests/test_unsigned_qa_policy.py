@@ -65,13 +65,12 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
         'OriginalFilename = "Sector.exe"',
         'LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."',
         "versionInfo.CompanyName",
-        'product_name = "Sector"',
-        'description = "Structural-analysis and design calculation tool"',
-        'sector_version = "0.91"',
-        "source_revision = $env:GITHUB_SHA",
-        'author = "Kasper Lindskov Fabricius"',
-        'licensee = "Sweco Danmark A/S"',
-        'copyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."',
+        "python -I -S tools/verify_windows_release.py",
+        "--root $env:SECTOR_EXACT_SOURCE_ROOT",
+        "--package $packageRoot",
+        "--source-revision $env:GITHUB_SHA",
+        "--source-identity $env:SECTOR_SOURCE_IDENTITY_PATH",
+        "--repository-root .",
     ):
         assert script.count(token) == 1
 

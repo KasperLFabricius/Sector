@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -11,7 +12,6 @@ import pytest
 
 from tools.build_exact_commit import (
     ExactBuildError,
-    _build_environment,
     execute_exact_build,
     prepare_exact_build,
 )
@@ -76,6 +76,18 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path):
     assert plan.source_revision == commit
     assert plan.run_root == output.resolve()
     assert plan.source_root == output.resolve() / "source"
+    assert plan.source_identity_path == output.resolve() / "source-identity.json"
+    identity = json.loads(plan.source_identity_path.read_text(encoding="utf-8"))
+    assert identity == {
+        "built_at_utc": plan.source_evidence.built_at_utc,
+        "schema": "sector-source-identity-v1",
+        "source_epoch": plan.source_evidence.source_epoch,
+        "source_file_count": plan.source_evidence.file_count,
+        "source_inventory_sha256": plan.source_evidence.inventory_sha256,
+        "source_revision": commit,
+        "source_total_bytes": plan.source_evidence.total_bytes,
+        "source_tree": plan.source_evidence.source_tree,
+    }
     for relative, payload in accepted.items():
         assert (plan.source_root / relative).read_bytes() == payload
     assert len(plan.commands) == 4
@@ -101,10 +113,23 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path):
     for command in plan.commands:
         assert command.cwd == plan.source_root
         assert command.environment["SECTOR_SOURCE_REVISION"] == commit
+        assert command.environment["SECTOR_SOURCE_TREE"] == identity["source_tree"]
+        assert command.environment["SECTOR_SOURCE_EPOCH"] == str(identity["source_epoch"])
+        assert command.environment["SOURCE_DATE_EPOCH"] == str(identity["source_epoch"])
+        assert command.environment["SECTOR_SOURCE_FILE_COUNT"] == str(
+            identity["source_file_count"]
+        )
+        assert command.environment["SECTOR_SOURCE_TOTAL_BYTES"] == str(
+            identity["source_total_bytes"]
+        )
+        assert command.environment["SECTOR_SOURCE_INVENTORY_SHA256"] == identity[
+            "source_inventory_sha256"
+        ]
         assert str(root) not in command.arguments
 
 
-def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
+def test_build_environment_removes_inherited_code_and_git_controls(tmp_path, monkeypatch):
+    root, commit, _accepted = _repository(tmp_path)
     monkeypatch.setenv("GIT_DIR", "hostile")
     monkeypatch.setenv("git_config_global", "hostile")
     monkeypatch.setenv("PYTHONPATH", "hostile")
@@ -113,14 +138,34 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     monkeypatch.setenv("SECTOR_SOURCE_REVISION", "wrong")
     monkeypatch.setenv("SECTOR_KEEP", "yes")
 
-    environment = _build_environment("a" * 40)
+    plan = prepare_exact_build(root, commit, tmp_path / "build-run")
+    environment = plan.commands[0].environment
 
     assert all(not key.upper().startswith("GIT_") for key in environment)
     assert all(key.upper() not in {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"}
                for key in environment)
     assert environment["PYTHONNOUSERSITE"] == "1"
-    assert environment["SECTOR_SOURCE_REVISION"] == "a" * 40
+    assert environment["SECTOR_SOURCE_REVISION"] == commit
     assert environment["SECTOR_KEEP"] == "yes"
+
+
+def test_spec_requires_one_sealed_identity_and_has_no_mutable_fallback():
+    spec = (ROOT / "packaging" / "sector.spec").read_text(encoding="utf-8")
+
+    for token in (
+        "SECTOR_SOURCE_REVISION",
+        "SECTOR_SOURCE_TREE",
+        "SECTOR_SOURCE_EPOCH",
+        "SOURCE_DATE_EPOCH",
+        "SECTOR_SOURCE_FILE_COUNT",
+        "SECTOR_SOURCE_TOTAL_BYTES",
+        "SECTOR_SOURCE_INVENTORY_SHA256",
+        "sector-source-identity-v1",
+    ):
+        assert token in spec
+    assert "GITHUB_SHA" not in spec
+    assert "datetime.datetime.now" not in spec
+    assert "_git_directories" not in spec
 
 
 def test_execute_build_assembles_only_new_files_from_isolated_source(tmp_path):
@@ -228,6 +273,8 @@ def test_powershell_and_qa_workflow_delegate_to_exact_build_driver():
         assert "generate_third_party_notices.py --output" not in text
         assert "Copy-Item -LiteralPath LICENSE" not in text
     assert "SECTOR_EXACT_BUILD_ROOT" in workflow
+    assert "SECTOR_SOURCE_IDENTITY_PATH" in workflow
+    assert "--source-identity" in workflow
     assert "dist/Sector" not in script
     assert "-Force" not in script
 

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import unicodedata
@@ -61,8 +63,18 @@ class SourceFile:
 
 
 @dataclass(frozen=True)
+class CommitIdentity:
+    source_tree: str
+    source_epoch: int
+    built_at_utc: str
+
+
+@dataclass(frozen=True)
 class ExportEvidence:
     source_revision: str
+    source_tree: str
+    source_epoch: int
+    built_at_utc: str
     file_count: int
     total_bytes: int
     inventory_sha256: str
@@ -212,14 +224,19 @@ def _parse_headers(payload: bytes) -> list[tuple[bytes, bytes]]:
     return headers
 
 
-def _validate_identity(field: str, value: bytes) -> None:
+def _validate_identity(field: str, value: bytes) -> int:
     match = IDENTITY.fullmatch(value)
     if match is None:
         raise CommitTreeError(f"commit {field} identity is malformed")
+    raw_timestamp = match.group(1)
+    timestamp = int(raw_timestamp)
+    if timestamp < 0 or str(timestamp).encode("ascii") != raw_timestamp:
+        raise CommitTreeError(f"commit {field} timestamp is not a canonical epoch")
     hours = int(match.group(3))
     minutes = int(match.group(4))
     if hours > 14 or minutes > 59 or (hours == 14 and minutes != 0):
         raise CommitTreeError(f"commit {field} identity has an invalid timezone")
+    return timestamp
 
 
 def _header_object_id(field: str, value: bytes) -> str:
@@ -232,8 +249,8 @@ def _header_object_id(field: str, value: bytes) -> str:
     return candidate
 
 
-def _parse_commit(payload: bytes) -> str:
-    """Strictly validate one commit object and return its root-tree identity."""
+def _parse_commit_identity(payload: bytes) -> CommitIdentity:
+    """Strictly validate one commit and derive its immutable source identity."""
     headers = _parse_headers(payload)
     if headers[0][0] != b"tree":
         raise CommitTreeError("commit must begin with one exact tree identity")
@@ -242,6 +259,7 @@ def _parse_commit(payload: bytes) -> str:
     counts = {b"tree": 0, b"author": 0, b"committer": 0}
     parents: set[str] = set()
     phase = "parents"
+    committer_epoch: int | None = None
     for index, (key, value) in enumerate(headers):
         if key in counts:
             counts[key] += 1
@@ -263,13 +281,25 @@ def _parse_commit(payload: bytes) -> str:
         elif key == b"committer":
             if phase != "committer":
                 raise CommitTreeError("commit committer header is misplaced")
-            _validate_identity("committer", value)
+            committer_epoch = _validate_identity("committer", value)
             phase = "extra"
         elif phase in {"parents", "committer"}:
             raise CommitTreeError("commit required identity headers are misplaced")
     if counts != {b"tree": 1, b"author": 1, b"committer": 1} or phase != "extra":
         raise CommitTreeError("commit must contain one tree, author, and committer")
-    return tree_id
+    assert committer_epoch is not None
+    try:
+        built_at_utc = dt.datetime.fromtimestamp(
+            committer_epoch, dt.timezone.utc
+        ).isoformat(timespec="seconds")
+    except (OSError, OverflowError, ValueError) as exc:
+        raise CommitTreeError("commit committer epoch is outside the UTC range") from exc
+    return CommitIdentity(tree_id, committer_epoch, built_at_utc)
+
+
+def _parse_commit(payload: bytes) -> str:
+    """Strictly validate one commit object and return its root-tree identity."""
+    return _parse_commit_identity(payload).source_tree
 
 
 def _device_stem(component: str) -> str:
@@ -398,6 +428,202 @@ def _inventory_digest(files: list[SourceFile], payloads: dict[str, bytes]) -> st
     return digest.hexdigest()
 
 
+def _inspect_selected_closure(
+    root: Path, source_revision: str
+) -> tuple[ExportEvidence, list[SourceFile], dict[str, bytes]]:
+    commit = _read_objects(root, [source_revision])[0]
+    if commit.kind != "commit":
+        raise CommitTreeError("source revision must be a commit object")
+    identity = _parse_commit_identity(commit.payload)
+    files = _inventory_tree(root, identity.source_tree)
+    blob_ids = _unique([item.object_id for item in files])
+    blobs = _read_objects(root, blob_ids)
+    if any(item.kind != "blob" for item in blobs):
+        raise CommitTreeError("commit regular-file entry references a non-blob object")
+    payloads = {item.object_id: item.payload for item in blobs}
+    evidence = ExportEvidence(
+        source_revision=source_revision,
+        source_tree=identity.source_tree,
+        source_epoch=identity.source_epoch,
+        built_at_utc=identity.built_at_utc,
+        file_count=len(files),
+        total_bytes=sum(len(payloads[item.object_id]) for item in files),
+        inventory_sha256=_inventory_digest(files, payloads),
+    )
+    return evidence, files, payloads
+
+
+def _is_reparse_point(info: os.stat_result) -> bool:
+    flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(flag and getattr(info, "st_file_attributes", 0) & flag)
+
+
+def _materialized_inventory(root: Path) -> tuple[dict[str, Path], set[str]]:
+    """Inventory one ordinary directory without following filesystem links."""
+    if not os.path.lexists(root):
+        raise CommitTreeError(f"materialized source root does not exist: {root}")
+    try:
+        root_info = root.lstat()
+    except OSError as exc:
+        raise CommitTreeError(f"cannot inspect materialized source root: {root}") from exc
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or stat.S_ISLNK(root_info.st_mode)
+        or _is_reparse_point(root_info)
+    ):
+        raise CommitTreeError("materialized source root must be an ordinary directory")
+
+    files: dict[str, Path] = {}
+    directories: set[str] = set()
+    normalized: set[str] = set()
+    pending: list[tuple[tuple[str, ...], Path]] = [((), root)]
+    while pending:
+        parts, directory = pending.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda item: item.name)
+        except OSError as exc:
+            raise CommitTreeError(f"cannot inspect materialized source: {directory}") from exc
+        for entry in entries:
+            try:
+                raw_name = entry.name.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise CommitTreeError("materialized source name is not valid UTF-8") from exc
+            name = _validate_component(raw_name)
+            child_parts = (*parts, name)
+            relative = PurePosixPath(*child_parts).as_posix()
+            key = unicodedata.normalize("NFC", relative).casefold()
+            if key in normalized:
+                raise CommitTreeError("materialized source has colliding paths")
+            normalized.add(key)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise CommitTreeError(
+                    f"cannot inspect materialized source entry: {relative}"
+                ) from exc
+            if stat.S_ISLNK(info.st_mode) or _is_reparse_point(info):
+                raise CommitTreeError(
+                    f"materialized source contains a filesystem link: {relative}"
+                )
+            path = Path(entry.path)
+            if stat.S_ISDIR(info.st_mode):
+                directories.add(relative)
+                pending.append((child_parts, path))
+            elif stat.S_ISREG(info.st_mode):
+                files[relative] = path
+            else:
+                raise CommitTreeError(
+                    f"materialized source contains a non-regular entry: {relative}"
+                )
+    return files, directories
+
+
+def materialized_file_inventory(root: Path) -> dict[str, Path]:
+    """Return the fail-closed regular-file inventory of one ordinary tree."""
+    files, _directories = _materialized_inventory(root)
+    return files
+
+
+def _validated_extra_paths(paths: tuple[str, ...]) -> set[str]:
+    validated: set[str] = set()
+    for path in paths:
+        candidate = PurePosixPath(path)
+        if candidate.is_absolute() or not candidate.parts or ".." in candidate.parts:
+            raise CommitTreeError("allowed generated source path is unsafe")
+        normalized_parts = []
+        for component in candidate.parts:
+            try:
+                raw_component = component.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise CommitTreeError(
+                    "allowed generated source path is not UTF-8"
+                ) from exc
+            normalized_parts.append(_validate_component(raw_component))
+        normalized = PurePosixPath(*normalized_parts).as_posix()
+        if normalized != path or normalized in validated:
+            raise CommitTreeError("allowed generated source path is ambiguous")
+        validated.add(normalized)
+    return validated
+
+
+def _parent_directories(paths: set[str]) -> set[str]:
+    parents: set[str] = set()
+    for path in paths:
+        candidate = PurePosixPath(path)
+        for index in range(1, len(candidate.parts)):
+            parents.add(PurePosixPath(*candidate.parts[:index]).as_posix())
+    return parents
+
+
+def verify_exported_commit(
+    root: Path,
+    source_revision: str,
+    source_root: Path,
+    *,
+    allowed_extra_files: tuple[str, ...] = (),
+) -> ExportEvidence:
+    """Re-authenticate an existing export against the selected Git closure."""
+    if OBJECT_ID.fullmatch(source_revision) is None:
+        raise CommitTreeError("source revision must be an exact lowercase 40-hex SHA-1")
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise CommitTreeError("repository root does not exist") from exc
+    if not root.is_dir():
+        raise CommitTreeError("repository root is not a directory")
+    _repository_boundary(root)
+    evidence, expected_files, payloads = _inspect_selected_closure(
+        root, source_revision
+    )
+    allowed = _validated_extra_paths(allowed_extra_files)
+    actual_files, actual_directories = _materialized_inventory(source_root)
+    expected_paths = {item.path for item in expected_files}
+    if set(actual_files) != expected_paths | allowed:
+        raise CommitTreeError("materialized source inventory differs from selected commit")
+    if actual_directories != _parent_directories(expected_paths | allowed):
+        raise CommitTreeError(
+            "materialized source directory inventory differs from selected commit"
+        )
+
+    for item in expected_files:
+        try:
+            actual = actual_files[item.path].read_bytes()
+        except OSError as exc:
+            raise CommitTreeError(
+                f"cannot read materialized source file: {item.path}"
+            ) from exc
+        if actual != payloads[item.object_id]:
+            raise CommitTreeError(
+                f"materialized source file differs from selected commit: {item.path}"
+            )
+        if os.name != "nt":
+            executable = bool(actual_files[item.path].stat().st_mode & 0o111)
+            if executable != (item.mode == "100755"):
+                raise CommitTreeError(
+                    f"materialized source mode differs from selected commit: {item.path}"
+                )
+    final_files, final_directories = _materialized_inventory(source_root)
+    if set(final_files) != set(actual_files) or final_directories != actual_directories:
+        raise CommitTreeError("materialized source changed during verification")
+    return evidence
+
+
+def inspect_commit(root: Path, source_revision: str) -> ExportEvidence:
+    """Authenticate one selected commit closure without creating output."""
+    if OBJECT_ID.fullmatch(source_revision) is None:
+        raise CommitTreeError("source revision must be an exact lowercase 40-hex SHA-1")
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise CommitTreeError("repository root does not exist") from exc
+    if not root.is_dir():
+        raise CommitTreeError("repository root is not a directory")
+    _repository_boundary(root)
+    evidence, _files, _payloads = _inspect_selected_closure(root, source_revision)
+    return evidence
+
+
 def export_commit(root: Path, source_revision: str, output: Path) -> ExportEvidence:
     """Export the authenticated source tree of one exact commit into a new path."""
     if OBJECT_ID.fullmatch(source_revision) is None:
@@ -424,16 +650,7 @@ def export_commit(root: Path, source_revision: str, output: Path) -> ExportEvide
         if _inside(output, metadata):
             raise CommitTreeError("export output cannot be inside Git metadata")
 
-    commit = _read_objects(root, [source_revision])[0]
-    if commit.kind != "commit":
-        raise CommitTreeError("source revision must be a commit object")
-    tree_id = _parse_commit(commit.payload)
-    files = _inventory_tree(root, tree_id)
-    blob_ids = _unique([item.object_id for item in files])
-    blobs = _read_objects(root, blob_ids)
-    if any(item.kind != "blob" for item in blobs):
-        raise CommitTreeError("commit regular-file entry references a non-blob object")
-    payloads = {item.object_id: item.payload for item in blobs}
+    evidence, files, payloads = _inspect_selected_closure(root, source_revision)
 
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -448,12 +665,7 @@ def export_commit(root: Path, source_revision: str, output: Path) -> ExportEvide
     except OSError as exc:
         raise CommitTreeError(f"cannot materialize commit tree: {exc}") from exc
 
-    return ExportEvidence(
-        source_revision=source_revision,
-        file_count=len(files),
-        total_bytes=sum(len(payloads[item.object_id]) for item in files),
-        inventory_sha256=_inventory_digest(files, payloads),
-    )
+    return evidence
 
 
 def _parser() -> argparse.ArgumentParser:

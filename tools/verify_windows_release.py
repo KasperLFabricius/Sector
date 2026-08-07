@@ -5,12 +5,17 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime as dt
+import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+TREE_RE = COMMIT_RE
+DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_IDENTITY_SCHEMA = "sector-source-identity-v1"
 EXPECTED_SOURCE_IDENTITY = {
     "__version__": "0.91",
     "__product_name__": "Sector",
@@ -29,8 +34,47 @@ EXPECTED_MANIFEST_KEYS = {
     "author",
     "licensee",
     "copyright",
+    "schema",
+    "source_tree",
+    "source_epoch",
     "built_at_utc",
+    "source_file_count",
+    "source_total_bytes",
+    "source_inventory_sha256",
 }
+SOURCE_IDENTITY_KEYS = {
+    "schema",
+    "source_revision",
+    "source_tree",
+    "source_epoch",
+    "built_at_utc",
+    "source_file_count",
+    "source_total_bytes",
+    "source_inventory_sha256",
+}
+
+
+def _load_exporter():
+    path = Path(__file__).resolve().with_name("export_commit_tree.py")
+    specification = importlib.util.spec_from_file_location(
+        "sector_release_commit_inspector", path
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("cannot load the accepted exact-commit inspector")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+_EXPORTER = _load_exporter()
+CommitTreeError = _EXPORTER.CommitTreeError
+materialized_file_inventory = _EXPORTER.materialized_file_inventory
+verify_exported_commit = _EXPORTER.verify_exported_commit
+GENERATED_SOURCE_FILES = (
+    "build/legal/THIRD_PARTY_NOTICES.txt",
+    "build/sector_build_info.json",
+)
 
 
 class ReleaseVerificationError(ValueError):
@@ -70,25 +114,113 @@ def _require_exact_file(path: Path, expected: str) -> None:
         raise ReleaseVerificationError(f"packaged file differs from source: {path.name}")
 
 
-def _read_json_object(path: Path) -> dict[str, Any]:
+def _require_exact_bytes(actual: Path, expected: Path) -> None:
+    try:
+        actual_bytes = actual.read_bytes()
+        expected_bytes = expected.read_bytes()
+    except OSError as exc:
+        raise ReleaseVerificationError(f"cannot compare packaged source: {exc}") from exc
+    if actual_bytes != expected_bytes:
+        raise ReleaseVerificationError(
+            f"packaged source file differs from verified export: {actual.name}"
+        )
+
+
+def _require_exact_tree(
+    source: Path, packaged: Path, *, allowed_packaged_files: tuple[str, ...] = ()
+) -> None:
+    try:
+        source_files = materialized_file_inventory(source)
+        packaged_files = materialized_file_inventory(packaged)
+    except CommitTreeError as exc:
+        raise ReleaseVerificationError(f"cannot compare packaged source tree: {exc}") from exc
+    allowed = set(allowed_packaged_files)
+    if set(packaged_files) != set(source_files) | allowed:
+        raise ReleaseVerificationError("packaged source tree differs from verified export")
+    for relative, source_file in source_files.items():
+        _require_exact_bytes(packaged_files[relative], source_file)
+
+
+def _read_json_object(path: Path, label: str) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ReleaseVerificationError(f"cannot read package manifest: {exc}") from exc
+        raise ReleaseVerificationError(f"cannot read {label}: {exc}") from exc
     if not isinstance(value, dict):
-        raise ReleaseVerificationError("package manifest must be an object")
+        raise ReleaseVerificationError(f"{label} must be an object")
     return value
 
 
-def _validate_timestamp(value: Any) -> None:
-    if not isinstance(value, str) or not value.endswith("+00:00"):
-        raise ReleaseVerificationError("built_at_utc must be an explicit UTC timestamp")
+def _source_timestamp(source_epoch: int) -> str:
     try:
-        parsed = dt.datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise ReleaseVerificationError("built_at_utc is malformed") from exc
-    if parsed.tzinfo != dt.timezone.utc:
-        raise ReleaseVerificationError("built_at_utc must use the UTC offset")
+        return dt.datetime.fromtimestamp(source_epoch, dt.timezone.utc).isoformat(
+            timespec="seconds"
+        )
+    except (OSError, OverflowError, ValueError) as exc:
+        raise ReleaseVerificationError("source epoch is outside the UTC range") from exc
+
+
+def load_source_identity(path: Path, source_revision: str) -> dict[str, Any]:
+    """Load and strictly validate create-only evidence from the exact exporter."""
+    identity = _read_json_object(path, "source identity")
+    if set(identity) != SOURCE_IDENTITY_KEYS:
+        raise ReleaseVerificationError("source identity keys are incomplete or unknown")
+    if identity["schema"] != SOURCE_IDENTITY_SCHEMA:
+        raise ReleaseVerificationError("source identity schema is unsupported")
+    if identity["source_revision"] != source_revision:
+        raise ReleaseVerificationError("source identity revision differs from requested source")
+    source_tree = identity["source_tree"]
+    if not isinstance(source_tree, str) or TREE_RE.fullmatch(source_tree) is None:
+        raise ReleaseVerificationError("source identity tree is not an exact SHA-1")
+    epoch = identity["source_epoch"]
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+        raise ReleaseVerificationError("source identity epoch is invalid")
+    if identity["built_at_utc"] != _source_timestamp(epoch):
+        raise ReleaseVerificationError("source identity timestamp differs from source epoch")
+    for key, minimum in (("source_file_count", 1), ("source_total_bytes", 0)):
+        value = identity[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ReleaseVerificationError(f"source identity field is invalid: {key}")
+    digest = identity["source_inventory_sha256"]
+    if not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None:
+        raise ReleaseVerificationError("source identity inventory digest is invalid")
+    return identity
+
+
+def authenticate_source_identity(
+    path: Path,
+    source_revision: str,
+    repository_root: Path,
+    source_root: Path,
+) -> dict[str, Any]:
+    """Bind source-identity evidence to the authenticated selected Git closure."""
+    identity = load_source_identity(path, source_revision)
+    try:
+        evidence = verify_exported_commit(
+            repository_root,
+            source_revision,
+            source_root,
+            allowed_extra_files=GENERATED_SOURCE_FILES,
+        )
+    except CommitTreeError as exc:
+        raise ReleaseVerificationError(
+            f"cannot authenticate selected source commit: {exc}"
+        ) from exc
+    expected = {
+        "schema": SOURCE_IDENTITY_SCHEMA,
+        "source_revision": evidence.source_revision,
+        "source_tree": evidence.source_tree,
+        "source_epoch": evidence.source_epoch,
+        "built_at_utc": evidence.built_at_utc,
+        "source_file_count": evidence.file_count,
+        "source_total_bytes": evidence.total_bytes,
+        "source_inventory_sha256": evidence.inventory_sha256,
+    }
+    if identity != expected:
+        raise ReleaseVerificationError(
+            "source identity differs from the authenticated commit closure"
+        )
+    return identity
 
 
 def verify_source(root: Path, source_revision: str) -> None:
@@ -125,18 +257,32 @@ def verify_source(root: Path, source_revision: str) -> None:
         raise ReleaseVerificationError("Windows resource advertises a company identity")
 
 
-def verify_package(root: Path, package: Path, source_revision: str) -> None:
+def verify_package(
+    root: Path,
+    package: Path,
+    source_revision: str,
+    source_identity_path: Path,
+    repository_root: Path,
+) -> None:
     """Validate a built package before any signing secret is exposed."""
     verify_source(root, source_revision)
+    source_identity = authenticate_source_identity(
+        source_identity_path, source_revision, repository_root, root
+    )
     required = {
         "executable": package / "Sector.exe",
         "app": package / "_internal" / "app" / "sector_app.py",
         "core": package / "_internal" / "sector" / "__init__.py",
+        "assets": package / "_internal" / "assets",
         "manifest": package / "_internal" / "sector" / "sector_build_info.json",
         "license": package / "LICENSE.txt",
         "notices": package / "THIRD_PARTY_NOTICES.txt",
     }
-    missing = [label for label, path in required.items() if not path.is_file()]
+    missing = [
+        label
+        for label, path in required.items()
+        if not (path.is_dir() if label == "assets" else path.is_file())
+    ]
     if missing:
         raise ReleaseVerificationError(
             f"package is missing required files: {', '.join(sorted(missing))}"
@@ -144,6 +290,16 @@ def verify_package(root: Path, package: Path, source_revision: str) -> None:
     if required["executable"].stat().st_size <= 0:
         raise ReleaseVerificationError("Sector.exe is empty")
     _require_exact_file(required["license"], (root / "LICENSE").read_text(encoding="utf-8"))
+    _require_exact_bytes(
+        required["notices"], root / "build" / "legal" / "THIRD_PARTY_NOTICES.txt"
+    )
+    _require_exact_tree(root / "app", package / "_internal" / "app")
+    _require_exact_tree(
+        root / "sector",
+        package / "_internal" / "sector",
+        allowed_packaged_files=("sector_build_info.json",),
+    )
+    _require_exact_tree(root / "assets", required["assets"])
 
     notices = required["notices"].read_text(encoding="utf-8")
     for token in ("SECTOR THIRD-PARTY NOTICES", "numpy", "streamlit"):
@@ -152,7 +308,7 @@ def verify_package(root: Path, package: Path, source_revision: str) -> None:
                 f"third-party notice bundle is missing {token}"
             )
 
-    manifest = _read_json_object(required["manifest"])
+    manifest = _read_json_object(required["manifest"], "package manifest")
     if set(manifest) != EXPECTED_MANIFEST_KEYS:
         raise ReleaseVerificationError("package manifest keys are incomplete or unknown")
     expected = {
@@ -163,11 +319,14 @@ def verify_package(root: Path, package: Path, source_revision: str) -> None:
         "author": EXPECTED_SOURCE_IDENTITY["__author__"],
         "licensee": EXPECTED_SOURCE_IDENTITY["__licensee__"],
         "copyright": EXPECTED_SOURCE_IDENTITY["__copyright__"],
+        **source_identity,
     }
     for key, value in expected.items():
         if manifest[key] != value:
             raise ReleaseVerificationError(f"unexpected package manifest field: {key}")
-    _validate_timestamp(manifest["built_at_utc"])
+    _require_exact_bytes(
+        required["manifest"], root / "build" / "sector_build_info.json"
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -175,6 +334,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--package", type=Path)
+    parser.add_argument("--source-identity", type=Path)
+    parser.add_argument("--repository-root", type=Path)
     parser.add_argument("--preflight", action="store_true")
     return parser
 
@@ -184,12 +345,31 @@ def main(argv: list[str] | None = None) -> int:
     root = args.root.resolve()
     verify_source(root, args.source_revision)
     if args.preflight:
-        if args.package is not None:
-            raise ReleaseVerificationError("preflight does not accept a package")
+        if (
+            args.package is not None
+            or args.source_identity is not None
+            or args.repository_root is not None
+        ):
+            raise ReleaseVerificationError(
+                "preflight does not accept a package or source identity"
+            )
     else:
-        if args.package is None:
-            raise ReleaseVerificationError("package verification requires --package")
-        verify_package(root, args.package.resolve(), args.source_revision)
+        if (
+            args.package is None
+            or args.source_identity is None
+            or args.repository_root is None
+        ):
+            raise ReleaseVerificationError(
+                "package verification requires --package, --source-identity, "
+                "and --repository-root"
+            )
+        verify_package(
+            root,
+            args.package.resolve(),
+            args.source_revision,
+            args.source_identity.resolve(),
+            args.repository_root.resolve(),
+        )
     return 0
 
 

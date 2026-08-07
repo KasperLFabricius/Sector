@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tools.export_commit_tree import export_commit, inspect_commit
 from tools.verify_windows_release import (
     EXPECTED_SOURCE_IDENTITY,
     ReleaseVerificationError,
@@ -20,7 +23,13 @@ from tools.verify_windows_release import (
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
 SCRIPT = ROOT / "packaging" / "sign_and_verify.ps1"
-COMMIT = "a" * 40
+COMMIT = subprocess.run(
+    ["git", "--no-replace-objects", "-C", str(ROOT), "rev-parse", "HEAD"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+SOURCE_EVIDENCE = inspect_commit(ROOT, COMMIT)
 
 
 def _workflow():
@@ -98,14 +107,16 @@ def test_dispatch_data_is_never_interpolated_into_executable_source():
     assert "ref: ${{ inputs.source_sha }}" not in workflow_text
 
 
-def test_preflight_is_isolated_and_runs_before_dependencies_or_build():
+def test_preflight_is_isolated_and_runs_before_exact_source_build():
     steps = _job()["steps"]
     preflight = _step("Run isolated release preflight")
-    install = _step("Install locked build environment")
     build = _step("Build source-bound package")
     assert "python -I -S tools/verify_windows_release.py" in preflight["run"]
-    assert steps.index(preflight) < steps.index(install) < steps.index(build)
-    assert "--require-hashes -r requirements-build.txt" in install["run"]
+    assert steps.index(preflight) < steps.index(build)
+    assert "tools/build_exact_commit.py" in build["run"]
+    assert "--source-revision" in build["run"]
+    assert "--output" in build["run"]
+    assert all(step["name"] != "Install locked build environment" for step in steps)
 
 
 def test_only_signing_step_receives_the_four_protected_secrets():
@@ -136,7 +147,9 @@ def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
         < steps.index(signing)
         < steps.index(upload)
     )
-    assert "--package dist/Sector" in package_gate["run"]
+    assert "--package $env:SECTOR_RELEASE_PACKAGE_ROOT" in package_gate["run"]
+    assert "--source-identity $env:SECTOR_RELEASE_SOURCE_IDENTITY" in package_gate["run"]
+    assert "--repository-root ." in package_gate["run"]
     for token in (
         "ProductName",
         "FileDescription",
@@ -150,7 +163,7 @@ def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
         assert token in identity_gate["run"]
     assert upload["with"] == {
         "name": "Sector-Windows-signed-${{ inputs.source_sha }}",
-        "path": "dist/Sector/",
+        "path": "${{ env.SECTOR_RELEASE_PACKAGE_ROOT }}/",
         "if-no-files-found": "error",
         "retention-days": 30,
     }
@@ -239,35 +252,85 @@ def test_source_preflight_rejects_non_exact_commit_identity(revision):
         verify_source(ROOT, revision)
 
 
-def _package(tmp_path: Path, *, revision: str = COMMIT) -> Path:
-    package = tmp_path / "Sector"
-    (package / "_internal" / "app").mkdir(parents=True)
-    (package / "_internal" / "sector").mkdir(parents=True)
-    (package / "Sector.exe").write_bytes(b"not executed")
-    (package / "_internal" / "app" / "sector_app.py").write_text("# app\n", encoding="utf-8")
-    (package / "_internal" / "sector" / "__init__.py").write_text("# core\n", encoding="utf-8")
-    (package / "LICENSE.txt").write_text((ROOT / "LICENSE").read_text(encoding="utf-8"), encoding="utf-8")
-    (package / "THIRD_PARTY_NOTICES.txt").write_text(
-        "SECTOR THIRD-PARTY NOTICES\nnumpy\nstreamlit\n", encoding="utf-8"
+def _source_identity_payload(*, revision: str = COMMIT) -> dict[str, object]:
+    return {
+        "schema": "sector-source-identity-v1",
+        "source_revision": revision,
+        "source_tree": SOURCE_EVIDENCE.source_tree,
+        "source_epoch": SOURCE_EVIDENCE.source_epoch,
+        "built_at_utc": dt.datetime.fromtimestamp(
+            SOURCE_EVIDENCE.source_epoch, dt.timezone.utc
+        ).isoformat(timespec="seconds"),
+        "source_file_count": SOURCE_EVIDENCE.file_count,
+        "source_total_bytes": SOURCE_EVIDENCE.total_bytes,
+        "source_inventory_sha256": SOURCE_EVIDENCE.inventory_sha256,
+    }
+
+
+def _source_identity(tmp_path: Path, *, revision: str = COMMIT) -> Path:
+    path = tmp_path / "source-identity.json"
+    path.write_text(
+        json.dumps(_source_identity_payload(revision=revision)), encoding="utf-8"
     )
-    manifest = {
+    return path
+
+
+def _manifest_payload(*, revision: str = COMMIT) -> dict[str, object]:
+    return {
         "product_name": EXPECTED_SOURCE_IDENTITY["__product_name__"],
         "description": EXPECTED_SOURCE_IDENTITY["__description__"],
         "sector_version": EXPECTED_SOURCE_IDENTITY["__version__"],
-        "source_revision": revision,
         "author": EXPECTED_SOURCE_IDENTITY["__author__"],
         "licensee": EXPECTED_SOURCE_IDENTITY["__licensee__"],
         "copyright": EXPECTED_SOURCE_IDENTITY["__copyright__"],
-        "built_at_utc": "2026-08-06T06:00:00+00:00",
+        **_source_identity_payload(revision=revision),
     }
+
+
+def _source_root(tmp_path: Path, *, revision: str = COMMIT) -> Path:
+    source = tmp_path / "exact-source"
+    export_commit(ROOT, COMMIT, source)
+    notice = source / "build" / "legal" / "THIRD_PARTY_NOTICES.txt"
+    notice.parent.mkdir(parents=True)
+    notice.write_text(
+        "SECTOR THIRD-PARTY NOTICES\nnumpy\nstreamlit\n", encoding="utf-8"
+    )
+    (source / "build" / "sector_build_info.json").write_text(
+        json.dumps(_manifest_payload(revision=revision)), encoding="utf-8"
+    )
+    return source
+
+
+def _package(
+    tmp_path: Path, source: Path, *, revision: str = COMMIT
+) -> Path:
+    package = tmp_path / "Sector"
+    internal = package / "_internal"
+    shutil.copytree(source / "app", internal / "app")
+    shutil.copytree(source / "sector", internal / "sector")
+    shutil.copytree(source / "assets", internal / "assets")
+    (package / "Sector.exe").write_bytes(b"not executed")
+    shutil.copyfile(source / "LICENSE", package / "LICENSE.txt")
+    shutil.copyfile(
+        source / "build" / "legal" / "THIRD_PARTY_NOTICES.txt",
+        package / "THIRD_PARTY_NOTICES.txt",
+    )
     (package / "_internal" / "sector" / "sector_build_info.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
+        json.dumps(_manifest_payload(revision=revision)), encoding="utf-8"
     )
     return package
 
 
+def _release_fixture(tmp_path: Path):
+    source = _source_root(tmp_path)
+    package = _package(tmp_path, source)
+    identity = _source_identity(tmp_path)
+    return source, package, identity
+
+
 def test_package_gate_accepts_complete_source_bound_fixture(tmp_path):
-    verify_package(ROOT, _package(tmp_path), COMMIT)
+    source, package, identity = _release_fixture(tmp_path)
+    verify_package(source, package, COMMIT, identity, ROOT)
 
 
 @pytest.mark.parametrize(
@@ -277,14 +340,20 @@ def test_package_gate_accepts_complete_source_bound_fixture(tmp_path):
         ("foreign_license", "differs from source"),
         ("unknown_manifest", "keys are incomplete or unknown"),
         ("wrong_revision", "manifest field: source_revision"),
-        ("local_timestamp", "explicit UTC timestamp"),
+        ("wrong_epoch", "manifest field: source_epoch"),
+        ("local_timestamp", "manifest field: built_at_utc"),
+        ("alter_app", "packaged source file differs"),
     ),
 )
 def test_package_gate_rejects_incomplete_or_resealed_identity(tmp_path, mutation, match):
-    package = _package(tmp_path)
+    source, package, identity = _release_fixture(tmp_path)
     manifest_path = package / "_internal" / "sector" / "sector_build_info.json"
     if mutation == "delete_exe":
         (package / "Sector.exe").unlink()
+    elif mutation == "alter_app":
+        (package / "_internal" / "app" / "sector_app.py").write_text(
+            "# post-build mutation\n", encoding="utf-8"
+        )
     elif mutation == "foreign_license":
         (package / "LICENSE.txt").write_text("different", encoding="utf-8")
     else:
@@ -293,8 +362,46 @@ def test_package_gate_rejects_incomplete_or_resealed_identity(tmp_path, mutation
             manifest["extra"] = "accepted?"
         elif mutation == "wrong_revision":
             manifest["source_revision"] = "b" * 40
+        elif mutation == "wrong_epoch":
+            manifest["source_epoch"] += 1
         elif mutation == "local_timestamp":
             manifest["built_at_utc"] = "2026-08-06T06:00:00"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ReleaseVerificationError, match=match):
-        verify_package(ROOT, package, COMMIT)
+        verify_package(source, package, COMMIT, identity, ROOT)
+
+
+def test_package_gate_rejects_missing_or_mismatched_source_identity(tmp_path):
+    source = _source_root(tmp_path)
+    package = _package(tmp_path, source)
+    missing = tmp_path / "missing-source-identity.json"
+    with pytest.raises(ReleaseVerificationError, match="cannot read source identity"):
+        verify_package(source, package, COMMIT, missing, ROOT)
+
+    identity = _source_identity(tmp_path, revision="d" * 40)
+    with pytest.raises(ReleaseVerificationError, match="revision differs"):
+        verify_package(source, package, COMMIT, identity, ROOT)
+
+
+def test_package_gate_rejects_coherently_resealed_commit_evidence(tmp_path):
+    source, package, identity_path = _release_fixture(tmp_path)
+    manifest_path = package / "_internal" / "sector" / "sector_build_info.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    identity["source_tree"] = "d" * 40
+    manifest["source_tree"] = "d" * 40
+    identity_path.write_text(json.dumps(identity), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ReleaseVerificationError, match="authenticated commit closure"):
+        verify_package(source, package, COMMIT, identity_path, ROOT)
+
+
+def test_package_gate_rejects_post_export_source_mutation(tmp_path):
+    source, package, identity = _release_fixture(tmp_path)
+    (source / "app" / "sector_app.py").write_text(
+        "# concurrent post-export mutation\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ReleaseVerificationError, match="differs from selected commit"):
+        verify_package(source, package, COMMIT, identity, ROOT)

@@ -90,29 +90,39 @@ jobs:
           SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
         run: python -I -S tools/verify_windows_release.py --root . --source-revision $env:SECTOR_RELEASE_SOURCE_SHA --preflight
 
-      - name: Install locked build environment
-        run: python -m pip install --require-hashes -r requirements-build.txt
-
       - name: Build source-bound package
         shell: pwsh
         env:
           SECTOR_SOURCE_REVISION: ${{ inputs.source_sha }}
+          SECTOR_EXACT_BUILD_ROOT: release-artifacts/windows-package-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          python tools/generate_third_party_notices.py --output build/legal/THIRD_PARTY_NOTICES.txt
-          python -m PyInstaller --noconfirm --clean packaging/sector.spec
-          Copy-Item -LiteralPath LICENSE -Destination dist/Sector/LICENSE.txt -Force
-          Copy-Item -LiteralPath build/legal/THIRD_PARTY_NOTICES.txt -Destination dist/Sector/THIRD_PARTY_NOTICES.txt -Force
+          python -I -S tools/build_exact_commit.py `
+            --root . `
+            --source-revision $env:SECTOR_SOURCE_REVISION `
+            --output $env:SECTOR_EXACT_BUILD_ROOT
+          "SECTOR_RELEASE_PACKAGE_ROOT=$env:SECTOR_EXACT_BUILD_ROOT\dist\Sector" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SECTOR_RELEASE_SOURCE_ROOT=$env:SECTOR_EXACT_BUILD_ROOT\source" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SECTOR_RELEASE_SOURCE_IDENTITY=$env:SECTOR_EXACT_BUILD_ROOT\source-identity.json" | Out-File `
+            -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Verify unsigned package before secret exposure
         env:
           SECTOR_RELEASE_SOURCE_SHA: ${{ inputs.source_sha }}
-        run: python -I -S tools/verify_windows_release.py --root . --package dist/Sector --source-revision $env:SECTOR_RELEASE_SOURCE_SHA
+        run: >-
+          python -I -S tools/verify_windows_release.py
+          --root $env:SECTOR_RELEASE_SOURCE_ROOT
+          --package $env:SECTOR_RELEASE_PACKAGE_ROOT
+          --source-revision $env:SECTOR_RELEASE_SOURCE_SHA
+          --source-identity $env:SECTOR_RELEASE_SOURCE_IDENTITY
+          --repository-root .
 
       - name: Verify Windows identity before secret exposure
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $versionInfo = (Get-Item -LiteralPath "dist/Sector/Sector.exe").VersionInfo
+          $versionInfo = (Get-Item -LiteralPath "$env:SECTOR_RELEASE_PACKAGE_ROOT/Sector.exe").VersionInfo
           $expectedIdentity = [ordered]@{
             ProductName = "Sector"
             FileDescription = "Structural-analysis and design calculation tool"
@@ -140,7 +150,7 @@ jobs:
           SECTOR_SIGNING_SUBJECT: ${{ secrets.SECTOR_SIGNING_SUBJECT }}
         run: |
           ./packaging/sign_and_verify.ps1 `
-            -PackageDirectory "dist/Sector" `
+            -PackageDirectory $env:SECTOR_RELEASE_PACKAGE_ROOT `
             -SourceRevision $env:SECTOR_RELEASE_SOURCE_SHA `
             -PfxBase64 $env:SECTOR_SIGNING_PFX_BASE64 `
             -PfxPassword $env:SECTOR_SIGNING_PFX_PASSWORD `
@@ -151,6 +161,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Sector-Windows-signed-${{ inputs.source_sha }}
-          path: dist/Sector/
+          path: ${{ env.SECTOR_RELEASE_PACKAGE_ROOT }}/
           if-no-files-found: error
           retention-days: 30
