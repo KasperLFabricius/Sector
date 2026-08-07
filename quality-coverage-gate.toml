@@ -1,12 +1,6 @@
 schema_version = 1
+waivers = []
 
 [coverage]
 targets = ["app", "sector"]
-minimum_percent = 50
-
-[[waivers]]
-id = "coverage-pr14-calibration"
-gate = "coverage"
-owner = "PR-14C integration owner"
-reason = "The final exact-head full suite is reserved for PR-14C, so this slice starts at a conservative measured floor."
-exit_condition = "PR-14C records its exact-head coverage and raises this floor when the stable measured result permits it."
+minimum_percent = 90
