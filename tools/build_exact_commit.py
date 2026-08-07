@@ -93,6 +93,10 @@ def _build_environment(
     environment["SECTOR_SOURCE_TOTAL_BYTES"] = str(source_total_bytes)
     environment["SECTOR_SOURCE_INVENTORY_SHA256"] = source_inventory_sha256
     environment["SOURCE_DATE_EPOCH"] = str(source_committer_epoch)
+    # PyInstaller documents build-time hash randomization as a source of
+    # otherwise unexplained byte differences in its compiled archives. Pin
+    # the seed so an inherited value cannot make controlled builds diverge.
+    environment["PYTHONHASHSEED"] = "1"
     return environment
 
 

@@ -111,7 +111,7 @@ def test_dispatch_data_is_never_interpolated_into_executable_source():
 def test_preflight_is_isolated_and_runs_before_dependencies_or_build():
     steps = _job()["steps"]
     preflight = _step("Run isolated release preflight")
-    build = _step("Build exact source-bound package")
+    build = _step("Build first exact source-bound package")
     assert "python -I -S tools/verify_windows_release.py" in preflight["run"]
     assert steps.index(preflight) < steps.index(build)
     assert "tools/build_exact_commit.py" in build["run"]
@@ -149,18 +149,25 @@ def test_only_signing_step_receives_the_four_protected_secrets():
 
 def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
     steps = _job()["steps"]
-    package_gate = _step("Verify unsigned package before secret exposure")
+    package_gate = _step("Verify both unsigned packages before secret exposure")
+    reproducibility_gate = _step("Compare independent builds before secret exposure")
     identity_gate = _step("Verify Windows identity before secret exposure")
     signing = _step("Sign and independently verify release package")
     upload = _step("Upload verified signed package")
     assert (
         steps.index(package_gate)
+        < steps.index(reproducibility_gate)
         < steps.index(identity_gate)
         < steps.index(signing)
         < steps.index(upload)
     )
-    assert "--package $env:SECTOR_PACKAGE_ROOT" in package_gate["run"]
-    assert "--source-identity $env:SECTOR_SOURCE_IDENTITY" in package_gate["run"]
+    assert "--package $env:SECTOR_PACKAGE_ROOT_A" in package_gate["run"]
+    assert "--package $env:SECTOR_PACKAGE_ROOT_B" in package_gate["run"]
+    assert "--source-identity $env:SECTOR_SOURCE_IDENTITY_A" in package_gate["run"]
+    assert "--source-identity $env:SECTOR_SOURCE_IDENTITY_B" in package_gate["run"]
+    assert "tools/verify_reproducible_windows_builds.py" in reproducibility_gate[
+        "run"
+    ]
     for token in (
         "ProductName",
         "FileDescription",
@@ -174,7 +181,7 @@ def test_unsigned_package_is_verified_before_secret_exposure_and_upload():
         assert token in identity_gate["run"]
     assert upload["with"] == {
         "name": "Sector-Windows-signed-${{ inputs.source_sha }}",
-        "path": "${{ env.SECTOR_PACKAGE_ROOT }}/",
+        "path": "${{ env.SECTOR_PACKAGE_ROOT_A }}/",
         "if-no-files-found": "error",
         "retention-days": 30,
     }

@@ -102,6 +102,7 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path):
     for command in plan.commands:
         assert command.cwd == plan.source_root
         assert command.environment["SECTOR_SOURCE_REVISION"] == commit
+        assert command.environment["PYTHONHASHSEED"] == "1"
         assert str(root) not in command.arguments
 
 
@@ -111,6 +112,7 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     monkeypatch.setenv("PYTHONPATH", "hostile")
     monkeypatch.setenv("PYTHONHOME", "hostile")
     monkeypatch.setenv("PYTHONSTARTUP", "hostile")
+    monkeypatch.setenv("PYTHONHASHSEED", "random")
     monkeypatch.setenv("SECTOR_SOURCE_REVISION", "wrong")
     monkeypatch.setenv("SECTOR_KEEP", "yes")
 
@@ -128,6 +130,7 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     assert all(key.upper() not in {"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"}
                for key in environment)
     assert environment["PYTHONNOUSERSITE"] == "1"
+    assert environment["PYTHONHASHSEED"] == "1"
     assert environment["SECTOR_SOURCE_REVISION"] == "a" * 40
     assert environment["SECTOR_SOURCE_TREE"] == "b" * 40
     assert environment["SECTOR_SOURCE_COMMITTER_EPOCH"] == "123"
