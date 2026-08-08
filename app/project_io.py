@@ -2,8 +2,8 @@
 
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
-Sector is unreleased, so this module intentionally supports only the current
-schema and carries no legacy compliance or cover-calculator migration.
+Sector 0.92 intentionally supports only current schema version 23 and carries
+no legacy compliance or cover-calculator migration.
 """
 
 from __future__ import annotations
