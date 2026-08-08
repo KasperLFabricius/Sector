@@ -5,6 +5,11 @@
 Current release: **Sector 0.92**. This is a source/application release; no
 Windows executable is published. See [CHANGELOG.md](CHANGELOG.md).
 
+Active development toward Sector 0.93 is governed by the
+[v0.93 decision register](docs/v093_decision_register.md) and the detailed
+[v0.93 pull-request programme](docs/v093_pr_programme.md). These records do not
+change the current 0.92 release behaviour.
+
 Sector is a transparent structural calculation tool, not a compliance,
 certification, sign-off or code-completeness system. The engineer controls
 methods, action sets and coefficients; selected standards supply equations,
