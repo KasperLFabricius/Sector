@@ -81,9 +81,9 @@ def test_trace_findings_are_retired_with_exact_closure_columns() -> None:
         }
 
 
-def test_retirement_is_complete_and_version_remains_0_91() -> None:
+def test_retirement_is_complete_and_current_release_is_0_92() -> None:
     contract = " ".join(CONTRACT.read_text(encoding="ascii").split())
     assert "no calculation-trace data contract" in contract
     assert "trace switch" in contract
     assert "direct calculations and results" in contract
-    assert __version__ == "0.91"
+    assert __version__ == "0.92"

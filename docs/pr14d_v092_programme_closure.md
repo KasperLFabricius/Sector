@@ -121,3 +121,11 @@ This closure is implementation QA, not engineering certification. Sector is a
 transparent calculation tool; a qualified engineer remains responsible for
 input validity, standards applicability, independent verification, design
 judgement and acceptance of every engineering result.
+
+## Release transition
+
+This closure map records the accepted programme while the application remained
+at version 0.91. The subsequent, bounded release-identity transition to the
+0.92 source/application release is specified separately in the
+[PR-15 release acceptance](pr15_v092_source_app_release_acceptance.md). That
+transition does not rewrite the historical identities or claims above.

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 0.92 - 2026-08-08
+
+Sector 0.92 completes the implementation and independent QA programme for the
+current source application.
+
+- Added scale-aware geometry and topology validation across direct APIs,
+  project loading, application inputs and solver entry points.
+- Corrected Danish fatigue defaults and the EC2:2023 effective reinforcement
+  ratio for mixed reinforcing and prestressing steel.
+- Simplified Sector around its transparent calculation-tool identity while
+  retaining direct calculations, inputs, provenance, warnings and genuine
+  demand/resistance results.
+- Improved report and manual equations, tables, notation, cross-references,
+  grayscale figures, pagination and structural/raster preflight.
+- Reworked Streamlit navigation and state ownership so only the active input
+  stage is mounted, interrupted edits recover deterministically and ordinary
+  interactions avoid unrelated workspace rebuilds.
+- Added stricter typed boundaries, Ruff and strict-mypy gates, a 90% coverage
+  floor, locked dependency auditing and exact-commit source/build identity.
+- Added static Windows product metadata, reproducible unsigned QA builds and a
+  fail-closed protected signing path without claiming unavailable signing or
+  publisher authority.
+- Published 0.92 as source/application code only. The release contains no
+  Windows executable or installer; unsigned Windows QA artifacts remain
+  non-distributable test evidence.
+
+Project schema remains version 23. The release is implementation QA, not
+engineering certification or code-completeness approval.
+
 ## 0.91 - 2026-07-24
 
 Sector 0.91 adds mixed reinforcement, directional shear, longitudinal detailing

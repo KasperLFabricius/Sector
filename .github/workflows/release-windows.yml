@@ -152,8 +152,8 @@ jobs:
           $expectedIdentity = [ordered]@{
             ProductName = "Sector"
             FileDescription = "Structural-analysis and design calculation tool"
-            FileVersion = "0.91.0.0"
-            ProductVersion = "0.91.0.0"
+            FileVersion = "0.92.0.0"
+            ProductVersion = "0.92.0.0"
             OriginalFilename = "Sector.exe"
             LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
           }
