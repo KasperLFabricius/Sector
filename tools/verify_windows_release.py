@@ -33,7 +33,7 @@ CommitSnapshot = _EXPORTER.CommitSnapshot
 snapshot_commit = _EXPORTER.snapshot_commit
 
 EXPECTED_SOURCE_IDENTITY = {
-    "__version__": "0.91",
+    "__version__": "0.92",
     "__product_name__": "Sector",
     "__description__": "Structural-analysis and design calculation tool",
     "__author__": "Kasper Lindskov Fabricius",
@@ -148,10 +148,10 @@ def _validate_product_identity(snapshot: CommitSnapshot) -> None:
             f"Windows version resource is invalid: {exc}"
         ) from exc
     required_tokens = (
-        "filevers=(0, 91, 0, 0)",
-        "prodvers=(0, 91, 0, 0)",
-        "StringStruct('FileVersion', '0.91.0.0')",
-        "StringStruct('ProductVersion', '0.91.0.0')",
+        "filevers=(0, 92, 0, 0)",
+        "prodvers=(0, 92, 0, 0)",
+        "StringStruct('FileVersion', '0.92.0.0')",
+        "StringStruct('ProductVersion', '0.92.0.0')",
         "StringStruct('ProductName', 'Sector')",
         "StringStruct('OriginalFilename', 'Sector.exe')",
         "Licensed to Sweco Danmark A/S for internal organisational use only.",

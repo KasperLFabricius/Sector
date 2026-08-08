@@ -24,7 +24,7 @@ SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
 JOB_CONTRACT_SHA256 = {
     "test": "4b220d25de52b376ed6ce47f1b123be8989ba7832835f992e9aee4bca91c805f",
     "windows-package": (
-        "73448f98fd78607f56d29626b383bbc3e04117af639c254ce509b67efdd63541"
+        "b1d2dc20ddfbbe626296637a3c240c38873bccc18e118c664acde1ffc9e0f8a1"
     ),
 }
 

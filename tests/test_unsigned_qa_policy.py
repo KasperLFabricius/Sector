@@ -80,8 +80,8 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
     for token in (
         'ProductName = "Sector"',
         'FileDescription = "Structural-analysis and design calculation tool"',
-        'FileVersion = "0.91.0.0"',
-        'ProductVersion = "0.91.0.0"',
+        'FileVersion = "0.92.0.0"',
+        'ProductVersion = "0.92.0.0"',
         'OriginalFilename = "Sector.exe"',
         'LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."',
         "versionInfo.CompanyName",
@@ -108,7 +108,7 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
     for token in (
         '"__product_name__": "Sector"',
         '"__description__": "Structural-analysis and design calculation tool"',
-        '"__version__": "0.91"',
+        '"__version__": "0.92"',
         '"__author__": "Kasper Lindskov Fabricius"',
         '"__licensee__": "Sweco Danmark A/S"',
         '"source_revision"',
