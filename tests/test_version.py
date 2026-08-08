@@ -4,7 +4,6 @@ from pathlib import Path
 
 from sector import __author__, __licensee__, __version__
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -25,5 +24,6 @@ def test_release_is_declared_as_source_application_only():
     assert "Current release: **Sector 0.92**" in readme
     assert "no Windows executable is published" in normalized_readme
     assert "## 0.92 - 2026-08-08" in changelog
-    assert "source/application code only" in changelog
+    assert "exact-commit source/application ZIP" in changelog
     assert "No EXE, MSI or unsigned QA package is a release asset" in acceptance
+    assert "`Sector-v0.92-source.zip` asset" in acceptance

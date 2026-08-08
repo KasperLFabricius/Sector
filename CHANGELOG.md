@@ -24,9 +24,9 @@ current source application.
 - Added static Windows product metadata, reproducible unsigned QA builds and a
   fail-closed protected signing path without claiming unavailable signing or
   publisher authority.
-- Published 0.92 as source/application code only. The release contains no
-  Windows executable or installer; unsigned Windows QA artifacts remain
-  non-distributable test evidence.
+- Published 0.92 as a provenance-bearing exact-commit source/application ZIP.
+  The release contains no Windows executable or installer; unsigned Windows QA
+  artifacts remain non-distributable test evidence.
 
 Project schema remains version 23. The release is implementation QA, not
 engineering certification or code-completeness approval.

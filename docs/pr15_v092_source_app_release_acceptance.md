@@ -16,10 +16,18 @@ schema, user workflow or accepted programme lineage.
 
 ## Release deliverables
 
-The release consists of the annotated `v0.92` tag, the GitHub Release record,
-and GitHub's source-code ZIP and TAR archives generated from the exact accepted
-squash commit. Those sources run the local Streamlit application through the
-locked requirements and commands documented in `README.md`.
+The release consists of the annotated `v0.92` tag, the GitHub Release record
+and the attached `Sector-v0.92-source.zip` asset. The archive is produced from
+the authenticated raw tree of the exact accepted squash commit by
+`tools/build_source_release.py`. It embeds
+`sector/sector_build_info.json`, including the exact revision, tree, commit
+time and source inventory, so saved projects and reports retain accepted-commit
+provenance after extraction without `.git` metadata. The sources run the local
+Streamlit application through the locked requirements and commands documented
+in `README.md`.
+
+GitHub's automatic source-code ZIP and TAR links do not embed that manifest and
+are not the provenance-bearing runnable release asset.
 
 No EXE, MSI or unsigned QA package is a release asset. No signed executable,
 publisher identity, certificate, timestamp, reputation or administrator
@@ -45,9 +53,10 @@ identity. This consistency update is not a Windows production release.
    followed by the complete exact-head Sector QA workflow.
 5. Exact-head Codex Review has no unresolved P1 or P2 thread, and the accepted
    candidate tree is verified after squash merge.
-6. The `v0.92` tag and source-only GitHub Release resolve to that exact squash
-   commit. The release has no uploaded binary assets and states the Windows
-   production boundary plainly.
+6. The `v0.92` tag, source ZIP manifest and source-only GitHub Release resolve
+   to that exact squash commit. The source ZIP is independently reverified
+   before upload, its SHA-256 is recorded in the release, and the release has no
+   Windows binary asset.
 
 This acceptance is implementation QA, not engineering certification. A
 qualified engineer remains responsible for inputs, standards applicability,
