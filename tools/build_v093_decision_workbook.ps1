@@ -75,7 +75,7 @@ function Get-DecisionRows {
 function Get-ProgrammeRows {
     param([Parameter(Mandatory)][string]$Text)
 
-    $pattern = '(?m)^\| (\d+) \| (PR-[^|]+?) \| ([^|]+?) \| (In progress|Planned) \|$'
+    $pattern = '(?m)^\| (\d+) \| (PR-[^|]+?) \| ([^|]+?) \| (Merged|In progress|Planned) \|$'
     $rows = [System.Collections.Generic.List[object[]]]::new()
     foreach ($match in [regex]::Matches($Text, $pattern)) {
         $rows.Add(@(
@@ -677,7 +677,9 @@ try {
     for ($rowNumber = 5; $rowNumber -le 14; $rowNumber++) {
         $cell = $programme.Range("D$rowNumber")
         $cell.Interior.Color = Get-OleColor $(
-            if ($cell.Value2 -eq "In progress") { "#FFF2CC" } else { "#E7E6E6" }
+            if ($cell.Value2 -eq "Merged") { "#E2F0D9" }
+            elseif ($cell.Value2 -eq "In progress") { "#FFF2CC" }
+            else { "#E7E6E6" }
         )
         $cell.Font.Bold = $true
         $cell.HorizontalAlignment = -4108
@@ -711,11 +713,13 @@ try {
     $readMe.Range("E8").Formula = '=COUNTIF(''PR Programme''!D5:D14,"Planned")'
     $readMe.Range("E9").Formula = '=COUNTIF(''PR Programme''!D5:D14,"In progress")'
     $readMe.Calculate()
+    $expectedPlanned = @($programmeRows | Where-Object { $_[3] -eq "Planned" }).Count
+    $expectedInProgress = @($programmeRows | Where-Object { $_[3] -eq "In progress" }).Count
     if ([int]$readMe.Range("E5").Value2 -ne 27) { throw "Decision count formula is incorrect: $($readMe.Range('E5').Value2)" }
     if ([int]$readMe.Range("E6").Value2 -ne 26) { throw "Implementation count formula is incorrect: $($readMe.Range('E6').Value2)" }
     if ([int]$readMe.Range("E7").Value2 -ne 1) { throw "Deferred count formula is incorrect: $($readMe.Range('E7').Value2)" }
-    if ([int]$readMe.Range("E8").Value2 -ne 9) { throw "Planned PR count formula is incorrect: $($readMe.Range('E8').Value2)" }
-    if ([int]$readMe.Range("E9").Value2 -ne 1) { throw "In-progress PR count formula is incorrect: $($readMe.Range('E9').Value2)" }
+    if ([int]$readMe.Range("E8").Value2 -ne $expectedPlanned) { throw "Planned PR count formula is incorrect: $($readMe.Range('E8').Value2)" }
+    if ([int]$readMe.Range("E9").Value2 -ne $expectedInProgress) { throw "In-progress PR count formula is incorrect: $($readMe.Range('E9').Value2)" }
 
     foreach ($sheet in @($readMe, $decisions, $programme, $standards, $publication)) {
         foreach ($cell in $sheet.UsedRange.Cells) {

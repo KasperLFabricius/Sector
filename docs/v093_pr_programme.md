@@ -22,7 +22,10 @@ Exact starting point:
 - tracked tree and index: clean at programme start
 - open pull requests: none at programme start
 
-Programme status is updated only after objective evidence exists:
+Programme status is updated only after objective evidence exists. The controlled
+lifecycle is `Planned` -> `In progress` -> `Merged`: completed slices form one
+contiguous prefix, at most one following slice is in progress, and all remaining
+slices stay planned.
 
 | Order | Slice | Depends on | Status |
 |---|---|---|---|
@@ -660,7 +663,10 @@ Scope:
 - record the standards status, deferred scope and identity transitions;
 - freeze the test-economy and publication acceptance rules; and
 - create, independently inspect and hash-pin the formatted Excel decision
-  snapshot.
+  snapshot. This is the immutable PR-01 planning snapshot, not a live status
+  dashboard; routine programme-status changes do not regenerate it. Any refresh
+  requires an explicit reviewed workbook and acceptance update, planned for
+  PR-09.
 
 Acceptance:
 

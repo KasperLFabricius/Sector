@@ -10,7 +10,6 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DECISIONS = ROOT / "docs" / "v093_decision_register.md"
 PROGRAMME = ROOT / "docs" / "v093_pr_programme.md"
@@ -24,15 +23,11 @@ BASELINE_TREE = "f09bf8cb500f2ae02c2c30a8f085c67153fe619a"
 _MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-_CORE_NS = (
-    "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
-)
+_CORE_NS = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 _DC_NS = "http://purl.org/dc/elements/1.1/"
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 
-_OFFICE_REL = (
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
-)
+_OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 _EXPECTED_OOXML_PARTS = {
     "[Content_Types].xml",
     "_rels/.rels",
@@ -46,16 +41,15 @@ _EXPECTED_OOXML_PARTS = {
     "xl/workbook.xml",
     *(f"xl/tables/table{number}.xml" for number in range(1, 6)),
     *(f"xl/worksheets/sheet{number}.xml" for number in range(1, 6)),
-    *(
-        f"xl/worksheets/_rels/sheet{number}.xml.rels"
-        for number in range(1, 6)
-    ),
+    *(f"xl/worksheets/_rels/sheet{number}.xml.rels" for number in range(1, 6)),
 }
 _EXPECTED_RELATIONSHIPS = {
     "_rels/.rels": {
         (
-            "http://schemas.openxmlformats.org/package/2006/relationships/"
-            "metadata/core-properties",
+            (
+                "http://schemas.openxmlformats.org/package/2006/relationships/"
+                "metadata/core-properties"
+            ),
             "docProps/core.xml",
         ),
         (_OFFICE_REL + "extended-properties", "docProps/app.xml"),
@@ -86,9 +80,7 @@ _EXPECTED_CONTENT_TYPE_OVERRIDES = {
     "/xl/workbook.xml": (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
     ),
-    "/xl/theme/theme1.xml": (
-        "application/vnd.openxmlformats-officedocument.theme+xml"
-    ),
+    "/xl/theme/theme1.xml": ("application/vnd.openxmlformats-officedocument.theme+xml"),
     "/xl/styles.xml": (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
     ),
@@ -104,8 +96,7 @@ _EXPECTED_CONTENT_TYPE_OVERRIDES = {
     ),
     **{
         f"/xl/worksheets/sheet{number}.xml": (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml."
-            "worksheet+xml"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
         )
         for number in range(1, 6)
     },
@@ -139,6 +130,227 @@ _PUBLICATION_HEADERS = [
     "Observed issue",
     "Required treatment",
 ]
+
+# These two tables are evidence from the immutable PR-01 workbook snapshot.
+# The living programme may advance statuses and refine its publication plan
+# without rewriting this artifact or its acceptance hash.
+_PR01_PROGRAMME_SNAPSHOT_ROWS: tuple[tuple[str, ...], ...] = (
+    ("Order", "Slice", "Depends on", "Status"),
+    (
+        "1",
+        "PR-01 - Programme, decisions and acceptance freeze",
+        "v0.92 baseline",
+        "In progress",
+    ),
+    (
+        "2",
+        "PR-02 - Bridge scope reset, schema 24 and design-standard registry",
+        "PR-01",
+        "Planned",
+    ),
+    (
+        "3",
+        "PR-03 - Textbook calculation evidence and complete substitutions",
+        "PR-02",
+        "Planned",
+    ),
+    (
+        "4",
+        "PR-04 - Input correctness, reusable IDs and mathematical table guides",
+        "PR-02",
+        "Planned",
+    ),
+    (
+        "5",
+        "PR-05 - Stateful input tabs and explicit modelled direction",
+        "PR-04",
+        "Planned",
+    ),
+    (
+        "6",
+        "PR-06 - Optional crack criterion and DK/NA heightened check",
+        "PR-03, PR-04, PR-05",
+        "Planned",
+    ),
+    (
+        "7",
+        "PR-07A - Eurocode-style shared equation renderer",
+        "PR-03",
+        "Planned",
+    ),
+    (
+        "8",
+        "PR-07B - Manual/report information architecture and profiles",
+        "PR-06, PR-07A",
+        "Planned",
+    ),
+    (
+        "9",
+        "PR-08 - Double-click portable Windows packaging",
+        "PR-07B",
+        "Planned",
+    ),
+    (
+        "10",
+        "PR-09 - Full qualification and Sector 0.93 release",
+        "PR-01 through PR-08",
+        "Planned",
+    ),
+)
+
+_PR01_PUBLICATION_QA_SNAPSHOT_ROWS: tuple[tuple[str, ...], ...] = (
+    ("Surface", "Current page", "Observed issue", "Required treatment"),
+    (
+        "Manual",
+        "1",
+        (
+            "The visible contents lists only four Parts although the PDF outline "
+            "contains 82 entries."
+        ),
+        (
+            "Show chapters and selected task/method subsections in a clickable "
+            "visible TOC that agrees with the bookmark tree."
+        ),
+    ),
+    (
+        "Manual",
+        "2",
+        ("Scope and limitation material is valuable but fills a dense opening page."),
+        (
+            "Replace the long capability sequence with a compact "
+            "workflow/capability matrix while retaining the responsibility boundary."
+        ),
+    ),
+    (
+        "Manual",
+        "11",
+        (
+            "Modelled reinforcement direction is buried inside continuous detailing "
+            "prose."
+        ),
+        (
+            "Give it a named terminology panel and diagram linked from UI and result "
+            "explanations."
+        ),
+    ),
+    (
+        "Manual",
+        "19-40",
+        (
+            "Nearly every equation repeats a full symbol table, so new information "
+            "and repeated notation have equal visual weight."
+        ),
+        (
+            "Establish chapter notation once and define only new/ambiguous symbols "
+            "locally."
+        ),
+    ),
+    (
+        "Manual",
+        "29-31",
+        "Crack equations use slash division and linear grouping.",
+        (
+            "Render true fractions, radicals, scalable delimiters and right-aligned "
+            "publication equation numbers."
+        ),
+    ),
+    (
+        "Manual",
+        "41",
+        "Combined M-V-T explanation is a 29 percent ink-density mechanism wall.",
+        (
+            "Use a load-path diagram, responsibility cards and governing-sequence "
+            "table, retaining detailed prose in the method reference."
+        ),
+    ),
+    (
+        "Manual",
+        "42, 44 and 46",
+        (
+            "Approximately 4, 8 and 6 percent ink coverage respectively because of "
+            "forced breaks/poor table balance."
+        ),
+        (
+            "Treat chapter openers intentionally and permit safe balancing/splitting "
+            "of assumptions and glossary tables."
+        ),
+    ),
+    (
+        "Report",
+        "2",
+        "A 40-row mixed-state overview is set at 7.2 pt.",
+        (
+            "Separate acceptance, calculated-output and scope-state groups; place "
+            "failures/warnings first and keep Standard tables at 8.5 pt or larger."
+        ),
+    ),
+    (
+        "Report",
+        "3-4 and 27",
+        "Internal EQ-* keys and text equations are visible to ordinary readers.",
+        (
+            "Show user-facing publication numbers/titles; retain internal keys only "
+            "as Audit metadata."
+        ),
+    ),
+    (
+        "Report",
+        "27 and 35",
+        (
+            "Approximately 5 and 7 percent ink coverage follows over-broad "
+            "keep-together rules."
+        ),
+        (
+            "Keep equation/substitution/result together but permit notation/prose to "
+            "continue normally."
+        ),
+    ),
+    (
+        "Report",
+        "42",
+        (
+            "The report honestly states that crack width was calculated without a "
+            "criterion."
+        ),
+        (
+            "Preserve the distinction using the controlled CALCULATED - ACCEPTANCE "
+            "NOT ASSESSED state."
+        ),
+    ),
+    (
+        "Report",
+        "43",
+        "Crack spacing and mean-strain equations omit numerical substitution.",
+        (
+            "Publish every operand, substitution and interim result from typed solver "
+            "evidence."
+        ),
+    ),
+    (
+        "Report",
+        "49-54",
+        "Fatigue detail is useful for audit but excessive for ordinary review.",
+        (
+            "Brief shows governing status; Standard shows spectrum/governing element; "
+            "Audit retains bins and damage chains."
+        ),
+    ),
+    (
+        "Report",
+        "55",
+        "Component-mapped bridge checks remain visible.",
+        "Remove them completely under PR-02.",
+    ),
+    (
+        "Report",
+        "56",
+        "The QA appendix is a continuous bullet wall.",
+        (
+            "Replace it with a structured basis register: standard, edition, clause, "
+            "option/NDP, assumption, limitation and affected result."
+        ),
+    ),
+)
 
 
 def _ascii(path: Path) -> str:
@@ -204,7 +416,6 @@ def _markdown_table_after(
 
 def _expected_workbook_rows() -> dict[str, list[list[str]]]:
     decisions_text = _ascii(DECISIONS)
-    programme_text = _ascii(PROGRAMME)
     decisions = _markdown_rows(decisions_text, r"^\| D093-\d{3} \|", 5)
     decision_rows = [
         [
@@ -214,38 +425,17 @@ def _expected_workbook_rows() -> dict[str, list[list[str]]]:
         ]
         for row in decisions
     ]
-    programme_rows = _markdown_rows(
-        programme_text,
-        r"^\| \d+ \| PR-",
-        4,
-    )
     standards_rows = _markdown_table_after(
         decisions_text,
         "## Standards status frozen for implementation",
         "Family",
         4,
     )
-    manual_rows = _markdown_table_after(
-        programme_text,
-        "### 2.8 Manual review and target information architecture",
-        "Current page",
-        3,
-    )
-    report_rows = _markdown_table_after(
-        programme_text,
-        "### 2.9 Report review and target profiles",
-        "Current page",
-        3,
-    )
-    publication_rows = [
-        *[["Manual", *row] for row in manual_rows],
-        *[["Report", *row] for row in report_rows],
-    ]
     return {
         "Decisions": [_DECISION_HEADERS, *decision_rows],
-        "PR Programme": [_PROGRAMME_HEADERS, *programme_rows],
+        "PR Programme": [list(row) for row in _PR01_PROGRAMME_SNAPSHOT_ROWS],
         "Standards": [_STANDARDS_HEADERS, *standards_rows],
-        "Publication QA": [_PUBLICATION_HEADERS, *publication_rows],
+        "Publication QA": [list(row) for row in _PR01_PUBLICATION_QA_SNAPSHOT_ROWS],
     }
 
 
@@ -293,9 +483,7 @@ def _xlsx_sheet_cells(
         formula = formula_node.text if formula_node is not None else None
         cell_type = cell.attrib.get("t")
         if cell_type == "inlineStr":
-            value = "".join(
-                node.text or "" for node in cell.iter(f"{{{_MAIN_NS}}}t")
-            )
+            value = "".join(node.text or "" for node in cell.iter(f"{{{_MAIN_NS}}}t"))
         else:
             value_node = cell.find(f"{{{_MAIN_NS}}}v")
             value = "" if value_node is None else value_node.text or ""
@@ -326,6 +514,18 @@ def _relationships(
     return {(item.attrib["Type"], item.attrib["Target"]) for item in relationships}
 
 
+def _programme_status_lifecycle_is_valid(statuses: list[str]) -> bool:
+    """Return whether statuses form a completed prefix and optional active row."""
+    merged_count = 0
+    while merged_count < len(statuses) and statuses[merged_count] == "Merged":
+        merged_count += 1
+
+    remaining = statuses[merged_count:]
+    if remaining and remaining[0] == "In progress":
+        remaining = remaining[1:]
+    return all(status == "Planned" for status in remaining)
+
+
 def test_v093_programme_documents_are_ascii_and_linked_from_readme():
     decisions = _ascii(DECISIONS)
     programme = _ascii(PROGRAMME)
@@ -334,11 +534,17 @@ def test_v093_programme_documents_are_ascii_and_linked_from_readme():
 
     assert "[v0.93 decision register](docs/v093_decision_register.md)" in readme
     assert "[v0.93 pull-request programme](docs/v093_pr_programme.md)" in readme
-    assert "[formatted Excel register](docs/sector_v093_decision_register.xlsx)" in readme
+    assert (
+        "[formatted Excel register](docs/sector_v093_decision_register.xlsx)" in readme
+    )
     assert "[programme acceptance](docs/pr01_v093_programme_acceptance.md)" in readme
     assert "[Sector product identity](product_identity.md)" in decisions
     assert "[v0.93 decision register](v093_decision_register.md)" in programme
     assert "[Sector product identity](product_identity.md)" in acceptance
+    assert "immutable PR-01 planning snapshot" in programme
+    assert "immutable PR-01 planning snapshot" in acceptance
+    assert "routine programme-status changes do not regenerate it" in programme
+    assert "PR-09 owns the planned final refresh" in " ".join(acceptance.split())
 
 
 def test_pr01_baseline_revision_and_tree_are_exact_everywhere():
@@ -396,20 +602,18 @@ def test_owner_scope_decisions_are_explicit_and_noncontradictory():
     ):
         assert required in decisions
 
-    assert (
-        "no fictitious `en 1992-2:2023` option is created"
-        in decisions.casefold()
-    )
+    assert "no fictitious `en 1992-2:2023` option is created" in decisions.casefold()
     assert "No Danish National Annex for that edition is applied" not in decisions
     assert "no Danish NA applied" in decisions
     assert "OCR is not an implementation authority" in decisions
     assert "docs/sector_v093_decision_register.xlsx" in decisions
 
 
-def test_programme_slice_order_and_initial_status_are_frozen():
+def test_programme_slice_order_dependencies_and_status_lifecycle_are_controlled():
     programme = _ascii(PROGRAMME)
     rows = re.findall(
-        r"^\| (\d+) \| (PR-[^|]+?) \| ([^|]+?) \| (In progress|Planned) \|$",
+        r"^\| (\d+) \| (PR-[^|]+?) \| ([^|]+?) \| "
+        r"(Merged|In progress|Planned) \|$",
         programme,
         flags=re.MULTILINE,
     )
@@ -427,8 +631,44 @@ def test_programme_slice_order_and_initial_status_are_frozen():
         "PR-08",
         "PR-09",
     ]
-    assert rows[0][3] == "In progress"
-    assert all(row[3] == "Planned" for row in rows[1:])
+    assert [row[2] for row in rows] == [
+        "v0.92 baseline",
+        "PR-01",
+        "PR-02",
+        "PR-02",
+        "PR-04",
+        "PR-03, PR-04, PR-05",
+        "PR-03",
+        "PR-06, PR-07A",
+        "PR-07B",
+        "PR-01 through PR-08",
+    ]
+
+    assert _programme_status_lifecycle_is_valid([row[3] for row in rows])
+
+
+def test_programme_status_lifecycle_supports_future_execution_updates():
+    assert _programme_status_lifecycle_is_valid(["Planned"] * 10)
+    assert _programme_status_lifecycle_is_valid(
+        ["Merged", "In progress", *("Planned" for _ in range(8))]
+    )
+    assert _programme_status_lifecycle_is_valid(
+        ["Merged", *("Planned" for _ in range(9))]
+    )
+    assert _programme_status_lifecycle_is_valid(["Merged"] * 10)
+
+    assert not _programme_status_lifecycle_is_valid(
+        ["In progress", "Merged", *("Planned" for _ in range(8))]
+    )
+    assert not _programme_status_lifecycle_is_valid(
+        ["Merged", "In progress", "In progress", *("Planned" for _ in range(7))]
+    )
+    assert not _programme_status_lifecycle_is_valid(
+        ["Merged", "Planned", "In progress", *("Planned" for _ in range(7))]
+    )
+
+    builder = _ascii(WORKBOOK_BUILDER)
+    assert "(Merged|In progress|Planned)" in builder
 
 
 def test_excel_decision_register_package_is_publication_safe():
@@ -516,8 +756,8 @@ def test_excel_decision_register_matches_every_canonical_row_and_formula():
             "E5": ("27", "COUNTA(Decisions!A5:A31)"),
             "E6": ("26", 'COUNTIF(Decisions!G5:G31,"Implement")'),
             "E7": ("1", 'COUNTIF(Decisions!G5:G31,"Deferred")'),
-            "E8": ("9", 'COUNTIF(\'PR Programme\'!D5:D14,"Planned")'),
-            "E9": ("1", 'COUNTIF(\'PR Programme\'!D5:D14,"In progress")'),
+            "E8": ("9", "COUNTIF('PR Programme'!D5:D14,\"Planned\")"),
+            "E9": ("1", "COUNTIF('PR Programme'!D5:D14,\"In progress\")"),
         }
         assert {cell: read_me[cell] for cell in expected_summary} == expected_summary
 
@@ -586,9 +826,7 @@ def test_excel_decision_register_matches_every_canonical_row_and_formula():
         for sheet_name, sheet_path in sheet_paths.items():
             sheet = ET.fromstring(archive.read(sheet_path))
             pane = sheet.find(
-                f"{{{_MAIN_NS}}}sheetViews/"
-                f"{{{_MAIN_NS}}}sheetView/"
-                f"{{{_MAIN_NS}}}pane"
+                f"{{{_MAIN_NS}}}sheetViews/{{{_MAIN_NS}}}sheetView/{{{_MAIN_NS}}}pane"
             )
             assert pane is not None, sheet_name
             assert pane.attrib == {
@@ -630,7 +868,10 @@ def test_complete_calculation_not_only_crack_spacing_is_textbook_readable():
     programme = _ascii(PROGRAMME)
     collapsed = " ".join(programme.split())
 
-    assert "Crack spacing is the example that exposed the defect, not the scope boundary." in collapsed
+    assert (
+        "Crack spacing is the example that exposed the defect, not the scope boundary."
+        in collapsed
+    )
     for family in (
         "geometry properties",
         "elastic and cracked section response",
@@ -687,7 +928,10 @@ def test_programme_preserves_product_and_release_boundaries():
 
     assert "EN 1992-2:2023" in combined
     assert combined.count("fictitious `EN 1992-2:2023`") == 1
-    assert "PASS/FAIL is reserved for an implemented demand-versus-resistance equation" in identity
+    assert (
+        "PASS/FAIL is reserved for an implemented demand-versus-resistance equation"
+        in identity
+    )
     assert "`WITHIN USER-SPECIFIED LIMIT`" in combined
     assert "`EXCEEDS USER-SPECIFIED LIMIT`" in combined
     assert "does not reuse demand/resistance `PASS`/`FAIL` terminology" in combined

@@ -34,6 +34,12 @@ logic. The committed package is sanitized after Excel closes: local paths,
 corporate sensitivity-label properties, tenant identifiers, external
 relationships and active OOXML parts are rejected before publication.
 
+This workbook is the immutable PR-01 planning snapshot, not the living status
+dashboard. Later programme-status and publication-plan edits update the Markdown
+without rewriting this artifact or its historical hash. A workbook refresh
+requires a separate reviewed workbook and acceptance update; PR-09 owns the
+planned final refresh.
+
 ## Accepted decisions and boundaries
 
 PR-01 freezes D093-001 through D093-027, the ten-slice dependency order, the
@@ -85,11 +91,11 @@ unrequested overwrite, and preserves an earlier generated workbook on an
 authorized rebuild.
 
 The final focused gate used a verified previously nonexistent QA basetemp and
-passed 203 tests:
+passed 204 tests:
 
 ```text
 python -m pytest tests/test_v093_programme_docs.py tests/test_version.py tests/test_ascii_only.py -q
-203 passed
+204 passed
 ```
 
 The generator also passed the PowerShell parser before execution. These checks
