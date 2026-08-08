@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Corrected unsigned QA builds from the official extracted source archive. The
+  source-release manifest now seals the commit object and every source file, so
+  `packaging/build.bat` can authenticate and isolate an archive without `.git`;
+  changed, missing or extra files fail closed. Git-checkout builds retain their
+  raw-object export path, and no signing, launch or distribution authority was
+  added.
+
 ## 0.92 - 2026-08-08
 
 Sector 0.92 completes the implementation and independent QA programme for the

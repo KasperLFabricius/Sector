@@ -2,13 +2,17 @@
 
 The ordinary build scripts and the `Sector QA` workflow produce an **unsigned,
 non-distributable QA artifact** for static package inspection. Each run first
-exports one exact commit into a new isolated directory; dependency installation,
-notice generation, PyInstaller analysis, and package assembly then read only
-from that exported tree. Mutable worktree files are never packaging inputs.
+authenticates exact source and copies it into a new isolated directory. A Git
+checkout is authenticated from raw commit objects. An official extracted Sector
+source release is authenticated from its embedded commit object, Git tree and
+per-file inventory; a changed, missing or extra path is rejected. Dependency
+installation, notice generation, PyInstaller analysis, and package assembly
+then read only from that isolated tree. Mutable worktree files are never
+packaging inputs.
 The run also preserves a canonical `source-identity.json` seal whose commit,
 tree, committer epoch, UTC time, file/byte counts, and raw inventory digest are
-derived directly from authenticated Git objects. Package time is the commit
-epoch; the spec has no checkout, `GITHUB_SHA`, or wall-clock fallback.
+derived from the authenticated exact source. Package time is the commit epoch;
+the spec has no checkout, `GITHUB_SHA`, or wall-clock fallback.
 Do not launch, zip or distribute this artifact. A distributable Sector package
 requires the separately authorised signing workflow; there is no unsigned
 fallback.
@@ -16,9 +20,11 @@ fallback.
 ## Build
 
 The easiest inspection build is to **double-click `packaging/build.bat`**. It
-resolves the exact current commit, creates a uniquely named run root under
-`qa-artifacts/`, wraps the PowerShell build with an execution-policy bypass, and
-keeps the window open to show the preserved output path and unsigned warning.
+resolves the exact current Git commit or the verified source-release revision,
+creates a uniquely named sibling `<source-folder>-qa-artifacts` run root, wraps
+the PowerShell build with an execution-policy bypass, and keeps the window open
+to show the preserved output path and unsigned warning. Git is not required for
+an official source release; Python is required for both input forms.
 
 Equivalently, from the repository root:
 
@@ -33,6 +39,10 @@ powershell -ExecutionPolicy Bypass -File packaging/build.ps1 `
   -SourceRevision <exact-lowercase-40-hex> `
   -OutputDirectory <new-nonexistent-path>
 ```
+
+For an extracted source release, the explicit output must be outside the source
+folder so the input inventory remains closed and cannot recursively include
+build output.
 
 The inspection result is `<run-root>/dist/Sector/`, including Sector's
 proprietary notice and generated third-party notice bundle. The same run root
@@ -81,9 +91,9 @@ the console for support.
 |---|---|
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend); retains runtime distribution metadata while omitting pip `RECORD` installer inventories whose absent launcher hashes are build-path-bound. |
-| `build.ps1` | Convenience wrapper: selects an exact commit and unique output before delegating to the isolated driver. |
+| `build.ps1` | Convenience wrapper: selects an exact Git or source-release revision and unique sibling output before delegating to the isolated driver. |
 | `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
-| `../tools/build_exact_commit.py` | Standard-library driver: exports exact source, fixes the source epoch and PyInstaller build hash seed, uses safe-path/user-site isolation while honoring those controls, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
+| `../tools/build_exact_commit.py` | Standard-library driver: exports an exact Git commit or materializes a verified source release, fixes the source epoch and PyInstaller build hash seed, uses safe-path/user-site isolation while honoring those controls, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
 | `../tools/verify_windows_release.py` | Standard-library gate: authenticates the raw commit, canonical evidence/manifest, and packaged source bytes before publication or signing. |
 | `../tools/verify_reproducible_windows_builds.py` | Independent two-build gate: checks distinct roots, reauthenticates both packages, compares all package bytes twice, and writes canonical create-only evidence. |
 

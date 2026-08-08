@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,8 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def _git(root: Path, *arguments: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(root), *arguments],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -298,6 +297,10 @@ def test_powershell_and_qa_workflow_delegate_to_exact_build_driver():
     assert "SECTOR_EXACT_BUILD_ROOT" in workflow
     assert "dist/Sector" not in script
     assert "-Force" not in script
+    assert "sector/sector_build_info.json" in script
+    assert "ConvertFrom-Json" in script
+    assert "2>$null" in script
+    assert "Split-Path $repoRoot -Parent" in script
 
 
 def test_driver_cli_isolated_help_has_no_third_party_dependency():

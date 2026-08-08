@@ -145,10 +145,11 @@ does not grant a personal or public licence. See [LICENSE](LICENSE). Windows bui
 include a generated third-party notice bundle beside `Sector.exe`; the source
 process is documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The Sector 0.92 GitHub release provides `Sector-v0.92-source.zip` as the official
-runnable source/application asset. It is exported from the exact accepted
-commit and embeds that revision for saved-project and report provenance. Use
-that asset rather than GitHub's automatic source snapshots when revision
-traceability is required. The release contains no Windows executable or
-installer. Unsigned Windows QA packages are test evidence only and must not be
-launched or distributed.
+The corrective Sector 0.92 source release, tagged `v0.92-source.1`, provides
+`Sector-v0.92-source.zip` as the official runnable source/application asset. It
+is exported from the exact accepted commit and embeds a self-verifying commit
+and file inventory for saved-project, report and optional unsigned-build
+provenance without `.git`. Use that asset rather than GitHub's automatic source
+snapshots when revision traceability is required. The release contains no
+Windows executable or installer. Unsigned Windows QA packages are test evidence
+only and must not be launched or distributed.
