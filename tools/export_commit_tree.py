@@ -83,6 +83,7 @@ class SnapshotFile:
 @dataclass(frozen=True)
 class CommitSnapshot:
     evidence: ExportEvidence
+    commit_payload: bytes
     files: tuple[SnapshotFile, ...]
 
 
@@ -118,8 +119,7 @@ def _run_git(root: Path, *arguments: str, input_bytes: bytes | None = None) -> b
         completed = subprocess.run(
             _git_command(root, *arguments),
             input=input_bytes,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
             env=_git_environment(),
         )
@@ -477,6 +477,7 @@ def _snapshot_from_resolved_root(
     )
     return CommitSnapshot(
         evidence=evidence,
+        commit_payload=commit.payload,
         files=tuple(
             SnapshotFile(
                 mode=item.mode,

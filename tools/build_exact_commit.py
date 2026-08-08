@@ -8,9 +8,13 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+
+# Loading the standard-library provenance helpers must not mutate an extracted
+# source release before its closed inventory is authenticated.
+sys.dont_write_bytecode = True
 
 
 def _load_exporter():
@@ -26,10 +30,26 @@ def _load_exporter():
     return module
 
 
+def _load_source_release():
+    path = Path(__file__).resolve().with_name("build_source_release.py")
+    specification = importlib.util.spec_from_file_location(
+        "sector_verified_source_release", path
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("cannot load the accepted source-release verifier")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
 _EXPORTER = _load_exporter()
 CommitTreeError = _EXPORTER.CommitTreeError
 ExportEvidence = _EXPORTER.ExportEvidence
 export_commit = _EXPORTER.export_commit
+_SOURCE_RELEASE = _load_source_release()
+SourceReleaseError = _SOURCE_RELEASE.SourceReleaseError
+materialize_source_release = _SOURCE_RELEASE.materialize_source_release
 
 
 class ExactBuildError(RuntimeError):
@@ -134,15 +154,23 @@ def _command(
 def prepare_exact_build(
     root: Path, source_revision: str, output: Path
 ) -> ExactBuildPlan:
-    """Export exact source first, then produce an isolated immutable build plan."""
+    """Authenticate exact source first, then create an isolated immutable build plan."""
     if os.path.lexists(output):
         raise ExactBuildError(f"exact build output already exists: {output}")
     run_root = output.resolve(strict=False)
     source_root = run_root / "source"
     try:
         source_evidence = export_commit(root, source_revision, source_root)
-    except CommitTreeError as exc:
-        raise ExactBuildError(f"cannot export exact build source: {exc}") from exc
+    except CommitTreeError as git_error:
+        try:
+            source_evidence = materialize_source_release(
+                root, source_revision, source_root
+            )
+        except SourceReleaseError as release_error:
+            raise ExactBuildError(
+                "cannot authenticate exact build source as a Git commit or verified "
+                f"source release: Git: {git_error}; source release: {release_error}"
+            ) from release_error
 
     source_identity_path = run_root / "source-identity.json"
     _write_source_identity(source_identity_path, source_evidence)
