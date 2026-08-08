@@ -607,9 +607,9 @@ def manual_blocks() -> list:
     h1("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
-       "earlier results; press *Calculate* to create current results. Sector is "
-       "unreleased, so only the current project schema is supported; older schemas "
-       "are rejected rather than migrated.")
+       "earlier results; press *Calculate* to create current results. Sector 0.92 "
+       "supports only current project schema version 23; older schemas are rejected "
+       "rather than migrated.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
