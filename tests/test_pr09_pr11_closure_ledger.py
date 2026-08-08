@@ -115,4 +115,4 @@ def test_reconciliation_preserves_scope_and_programme_identity() -> None:
     assert "PR-12 through PR-14 remain planned" in normalized_map
     assert "Calculation-trace retirement is reconciled separately" in normalized_map
     assert "Removed trace files and surfaces are not evidence" in normalized_map
-    assert sector.__version__ == "0.91"
+    assert sector.__version__ == "0.92"

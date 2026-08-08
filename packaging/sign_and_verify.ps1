@@ -121,8 +121,8 @@ foreach ($requiredPath in ($executable, $manifestPath, $licensePath, $noticesPat
 $expectedIdentity = [ordered]@{
   ProductName = "Sector"
   FileDescription = "Structural-analysis and design calculation tool"
-  FileVersion = "0.91.0.0"
-  ProductVersion = "0.91.0.0"
+  FileVersion = "0.92.0.0"
+  ProductVersion = "0.92.0.0"
   OriginalFilename = "Sector.exe"
   LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
 }
@@ -138,7 +138,7 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $expectedManifest = [ordered]@{
   product_name = "Sector"
   description = "Structural-analysis and design calculation tool"
-  sector_version = "0.91"
+  sector_version = "0.92"
   source_revision = $SourceRevision
   author = "Kasper Lindskov Fabricius"
   licensee = "Sweco Danmark A/S"

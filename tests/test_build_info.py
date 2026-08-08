@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sector import build_info
 
 
@@ -34,6 +36,21 @@ def test_git_revision_resolves_worktree_marker(tmp_path):
     )
 
     assert build_info._git_revision(checkout) == "e" * 40
+
+
+def test_source_archive_manifest_preserves_exact_revision(tmp_path, monkeypatch):
+    sector_dir = tmp_path / "sector"
+    sector_dir.mkdir()
+    marker = sector_dir / "sector_build_info.json"
+    marker.write_text(
+        json.dumps({"source_revision": "a" * 40}),
+        encoding="ascii",
+    )
+    monkeypatch.delenv("SECTOR_SOURCE_REVISION", raising=False)
+    monkeypatch.setattr(build_info, "__file__", str(sector_dir / "build_info.py"))
+
+    assert build_info.source_revision() == "a" * 40
+    assert build_info.short_revision() == "a" * 12
 
 
 def test_short_revision_keeps_unavailable_label():

@@ -154,7 +154,7 @@ def test_finding_map_uses_each_accepted_slice_without_scope_expansion() -> None:
     assert "makes no zero-long-task claim" in contract
     assert "PR-13 and PR-14 remain planned" in contract
     assert "changes no solver, formula, result, project schema" in contract
-    assert sector.__version__ == "0.91"
+    assert sector.__version__ == "0.92"
 
 
 @pytest.mark.parametrize(
