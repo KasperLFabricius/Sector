@@ -17,7 +17,7 @@ certification or sign-off system. The immutable owner choices are in the
 Exact starting point:
 
 - Git revision: `decd1232abb0a082639de90726c125dc988e1078`
-- Git tree: `f25a74a1a234b7b09ddc1be216fe31187333abbd`
+- Git tree: `f09bf8cb500f2ae02c2c30a8f085c67153fe619a`
 - release tag: `v0.92-source.1`
 - tracked tree and index: clean at programme start
 - open pull requests: none at programme start
@@ -131,16 +131,18 @@ the corresponding capability.
 
 Important naming and status rules are:
 
-- first-generation bridge family: EN 1992-2:2005 with AC and DK NA:2015 where
-  selected;
+- first-generation bridge family: DS/EN 1992-2:2005 with AC; DK NA:2015 is
+  project context only and is not selectable unless a retained solver declares
+  an exact verified NA-specific capability;
 - second-generation concrete/bridge family: DS/EN 1992-1-1:2023, including
-  normative Annex K; and
+  normative Annex K as standard scope, not a Sector implementation claim; and
 - never expose `EN 1992-2:2023`, because the second-generation bridge provisions
   are incorporated into Part 1-1.
 
 The 2023 option is a published reference option requiring project adoption. No
-Danish National Annex for that edition is applied. Any recommended NDP value
-used by Sector must be displayed and published as such.
+Danish National Annex for that edition is applied. Any Eurocode recommended
+value used by Sector for a Nationally Determined Parameter must be displayed and
+published with the statement that no Danish national choice is applied.
 
 The registry also prevents edition labels from outrunning implementations.
 Current torsion and combined M-V-T solvers remain first-generation only and are
@@ -158,7 +160,7 @@ contract adds a nullable, positive finite user criterion. The result state is:
 | Calculation state | Published status | Required publication |
 |---|---|---|
 | Width available; criterion omitted | `CALCULATED - ACCEPTANCE NOT ASSESSED` | Calculated width, method and warning that no criterion was supplied |
-| Width and criterion available | `PASS` or `FAIL` for the named comparison only | Width, user limit, ratio, equation, units and criterion source |
+| Width and criterion available | `WITHIN USER-SPECIFIED LIMIT` or `EXCEEDS USER-SPECIFIED LIMIT` | Width, user limit, ratio, equation, units and criterion source; no demand/resistance `PASS`/`FAIL` terminology |
 | Width unavailable because the section/case does not permit it | `NOT ASSESSED` or an existing typed calculation failure | Exact reason; no invented zero |
 | Crack calculation not requested | `NOT REQUESTED` | No acceptance icon or compliance wording |
 
@@ -657,13 +659,15 @@ Scope:
 - add this programme and the version-controlled decision register;
 - record the standards status, deferred scope and identity transitions;
 - freeze the test-economy and publication acceptance rules; and
-- create the formatted Excel decision snapshot when the workbook runtime is
-  available.
+- create, independently inspect and hash-pin the formatted Excel decision
+  snapshot.
 
 Acceptance:
 
 - documentation is ASCII-clean and link-valid;
 - baseline revision/tree and owner decisions are exact;
+- the Excel workbook matches the canonical decision IDs, programme rows,
+  formulas and hashes and passes rendered review of every worksheet;
 - historical v0.92 evidence is unchanged;
 - no runtime, solver, schema, version or packaging behaviour changes; and
 - review finds no contradiction with the product identity.
@@ -681,8 +685,11 @@ Scope:
   result-snapshot, calculation-record and report session state so hidden v0.92
   values cannot reappear after their widgets are removed;
 - add a typed capability registry for first- and second-generation standards;
-- expose no inert standard or bridge-compliance selector; and
-- pin confinement as absent/deferred.
+- expose no inert standard or bridge-compliance selector;
+- keep DK NA:2015 as project context unless an exact retained calculation
+  declares a verified NA-specific capability; and
+- pin confinement enhancement as absent/deferred while publishing the
+  limitation where relevant.
 
 Acceptance:
 
@@ -789,7 +796,8 @@ Scope:
 Acceptance:
 
 - no criterion yields width only plus explicit not-assessed status;
-- a positive criterion yields exact ratio and bounded PASS/FAIL;
+- a positive criterion yields the exact ratio and the controlled
+  `WITHIN USER-SPECIFIED LIMIT` or `EXCEEDS USER-SPECIFIED LIMIT` result;
 - zero, negative, Boolean and non-finite criteria are rejected without data
   loss;
 - the heightened option requires a positive criterion;
@@ -968,7 +976,8 @@ The v0.93 programme is complete only when:
 - D093-001 through D093-027 are implemented, verified or explicitly recorded
   as deferred/excluded exactly as frozen;
 - every PR acceptance record identifies its accepted commit and evidence;
-- no component-mapped bridge workflow or confinement claim remains;
+- no component-mapped bridge workflow or confinement enhancement/claim remains,
+  and relevant 2023 scopes disclose that confinement is not included;
 - load decimals/blanks, reusable IDs, table guides, tabs and direction labels
   work through save/load and calculation;
 - ordinary crack comparison and DK heightened reinforcement behave exactly as
