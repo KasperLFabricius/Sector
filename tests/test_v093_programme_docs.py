@@ -54,6 +54,8 @@ def test_owner_scope_decisions_are_explicit_and_noncontradictory():
     assert "no fictitious `EN 1992-2:2023` option is created" in decisions
     assert "No Danish National Annex for that edition is applied" not in decisions
     assert "no Danish NA applied" in decisions
+    assert "OCR is not an implementation authority" in decisions
+    assert "docs/sector_v093_decision_register.xlsx" in decisions
 
 
 def test_programme_slice_order_and_initial_status_are_frozen():
@@ -134,6 +136,8 @@ def test_programme_preserves_product_and_release_boundaries():
         "unsigned portable",
         "does not install or require administrator privileges",
         "never claims a digital signature",
+        "Current torsion and combined M-V-T solvers remain first-generation only",
+        "two independent human readings of the licensed visual formula",
     ):
         assert required.casefold() in combined.casefold()
 

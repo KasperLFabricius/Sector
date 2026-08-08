@@ -118,6 +118,11 @@ result, report and manual surfaces in one PR. Concrete compression fatigue and
 ordinary whole-section calculations remain in their genuine generic modules;
 they are not relabelled as complete bridge checks.
 
+The corrected concrete compression-fatigue route sourced specifically from
+DS/EN 1992-2:2005/AC:2008 Formula 6.106 is the only retained explicitly
+bridge-sourced non-component calculation. It remains a bounded method using the
+user-supplied section-action spectrum, not a complete bridge-fatigue check.
+
 The first and second Eurocode generations still need honest selection where an
 implemented non-component calculation differs by edition. The registry will
 model three facts separately: standard family, national choice and calculation
@@ -136,6 +141,14 @@ Important naming and status rules are:
 The 2023 option is a published reference option requiring project adoption. No
 Danish National Annex for that edition is applied. Any recommended NDP value
 used by Sector must be displayed and published as such.
+
+The registry also prevents edition labels from outrunning implementations.
+Current torsion and combined M-V-T solvers remain first-generation only and are
+disabled or reported `NOT ASSESSED` under a 2023 selection. Generic editable
+mild-steel and prestress families remain project-defined material laws unless
+their complete edition-specific parameters and domain are explicitly fixed and
+published; a familiar family name does not silently turn a custom law into an
+EC2 preset.
 
 ### 2.5 Crack width and heightened Danish crack control
 
@@ -162,6 +175,12 @@ The result exposes the selected fine/coarse crack system, effective tensile
 strength, crack-system factor, effective tension area, required reinforcement
 ratio/area, provided area and bounded comparison. It must not appear beneath
 the 2023 option as if a Danish National Annex had been adopted there.
+
+The local text extraction corrupts the displayed Formula 7.100 NA fraction.
+Implementation therefore requires two independent human readings of the
+licensed visual formula, reconciliation against the symbol definitions and
+dimensions, and an independently calculated benchmark before code review. OCR
+text must never be copied directly into the solver.
 
 ### 2.6 Textbook calculation evidence and numerical substitution
 
@@ -658,6 +677,9 @@ Scope:
 - remove all three component-mapped bridge input/check pipelines end to end;
 - bump the current-only project schema to 24 with no migration;
 - remove obsolete result, report and manual surfaces and stale-result hashes;
+- purge retired bridge keys once from live, durable, pending, latest-input,
+  result-snapshot, calculation-record and report session state so hidden v0.92
+  values cannot reappear after their widgets are removed;
 - add a typed capability registry for first- and second-generation standards;
 - expose no inert standard or bridge-compliance selector; and
 - pin confinement as absent/deferred.
@@ -670,6 +692,8 @@ Acceptance:
 - generic fatigue/section calculations remain unchanged;
 - second-generation labels use DS/EN 1992-1-1:2023 and disclose no Danish NA;
 - stale bridge results cannot survive deletion; and
+- the strict-mypy ratchet remains non-shrinking through typed decommission
+  marker modules and addition of the standards registry;
 - the package has no `EN 1992-2:2023` or complete-bridge-compliance wording.
 
 Tests: project I/O, bridge absence, result freshness, registry, app smoke,
@@ -770,6 +794,8 @@ Acceptance:
   loss;
 - the heightened option requires a positive criterion;
 - Formula 7.100 NA is unavailable for the 2023 option;
+- Formula 7.100 NA has dual visual transcription evidence from the licensed
+  standard and no OCR-derived implementation path;
 - independent fine/coarse/smooth-reinforcement benchmarks pass; and
 - no exposure or bridge-owner applicability is inferred.
 
