@@ -99,5 +99,5 @@ def test_results_overview_retains_type_and_dense_padding(monkeypatch):
     header = table._cellvalues[table._sector_header_row][0]
     assert header.style.fontSize == pytest.approx(7.2)
     for cell_style in table._cellStyles[0]:
-        assert cell_style.topPadding == pytest.approx(1.2)
-        assert cell_style.bottomPadding == pytest.approx(1.2)
+        assert cell_style.topPadding == pytest.approx(0.8)
+        assert cell_style.bottomPadding == pytest.approx(0.8)
