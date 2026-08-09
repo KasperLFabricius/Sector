@@ -16,6 +16,7 @@ import math
 import pathlib
 import re
 import sys
+from dataclasses import asdict
 
 import pypdf
 
@@ -26,25 +27,36 @@ if str(APP) not in sys.path:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import sector_report  # noqa: E402
-import case_analysis  # noqa: E402
-import fatigue_analysis  # noqa: E402
-import fatigue_inputs  # noqa: E402
-import load_cases  # noqa: E402
-import material_catalog  # noqa: E402
-from sector import __version__  # noqa: E402
-from sector import capacity, codes, combined, detailing, shear, torsion  # noqa: E402
-from sector.design_standards import DesignBasisKey  # noqa: E402
-from sector.materials import Concrete  # noqa: E402
-from sector.section import Section  # noqa: E402
-from tools.publication_preflight import (  # noqa: E402
+import case_analysis
+import fatigue_analysis
+import fatigue_inputs
+import load_cases
+import material_catalog
+import result_presentation
+import sector_report
+
+from sector import (
+    __version__,
+    capacity,
+    codes,
+    combined,
+    detailing,
+    shear,
+    torsion,
+)
+from sector.design_standards import DesignBasisKey
+from sector.materials import Concrete
+from sector.section import Section
+from tools.publication_preflight import (
     REPORT_FURNITURE,
     RasterCrop,
     preflight_pdf,
     render_pdf,
-    validate_caption_colocation as validate_report_table_colocation,
     validate_crops,
     validate_raster_pages,
+)
+from tools.publication_preflight import (
+    validate_caption_colocation as validate_report_table_colocation,
 )
 
 __all__ = (
@@ -53,27 +65,30 @@ __all__ = (
     "validate_rendered_pages",
     "validate_report_page_semantics",
     "validate_report_table_colocation",
+    "validate_worked_example_text",
 )
 
-# Geometry, concrete law, steel law, two plastic interactions, two plastic
-# states, two elastic states, two elastic strain profiles, one derived shear
-# geometry, one shear-truss figure, one torsion-tube figure, two V-T interaction
-# figures, one minimum-reinforcement figure, one clear-spacing figure and four
-# grouped-fatigue figures. An intentional fixture change must update this
+# Geometry, concrete law, two steel laws, clear-spacing and minimum-reinforcement
+# geometry, derived shear geometry, shear truss, torsion tube, two V-T interaction
+# figures, one plastic interaction and state, one elastic state and strain profile,
+# and four grouped-fatigue figures. An intentional fixture change must update this
 # explicit contract.
-_EXPECTED_FIGURE_COUNT = 23
+_EXPECTED_FIGURE_COUNT = 19
+_EXPECTED_PLASTIC_WORKED_HEADING = (
+    "Worked plastic calculation (utilisation direction)"
+)
 _REPORT_CROPS = (
     RasterCrop(
         "report overview",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "d8268acbd4ad0955b5b7f123aea3d02458603e126ead37d38544342a364eb0d0",
+        "b65332482da8ad1429aee2e1f3b57a8c91688c1d6d3088c2871436c75769a661",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "9b64441a8c8f251fa433daa8a2d9848b8ccc36d52db7897627296f62f8ad71a8",
+        "aed8ddb13b51957b1c778e994b218d0ff6dbb9d3fd7198b158918d3a58be91a5",
     ),
 )
 
@@ -87,6 +102,12 @@ class _FixedDateTime(datetime.datetime):
 
 def validate_outline_destinations(reader: pypdf.PdfReader) -> list[tuple[str, int]]:
     """Return outline titles/pages after proving every link reaches its heading."""
+
+    def normalized_text(value: object) -> str:
+        # PDF extractors insert line breaks when a long visible heading wraps.
+        # Bookmark titles are unwrapped strings, so compare semantic whitespace
+        # rather than page-layout line boundaries.
+        return " ".join(str(value).split())
     entries = []
 
     def visit(items):
@@ -101,7 +122,7 @@ def validate_outline_destinations(reader: pypdf.PdfReader) -> list[tuple[str, in
                     f"outline destination is invalid: {title!r} -> page {page}"
                 )
             page_text = reader.pages[page - 1].extract_text() or ""
-            if title not in page_text:
+            if normalized_text(title) not in normalized_text(page_text):
                 raise AssertionError(
                     f"outline destination misses its heading: {title!r} -> page {page}"
                 )
@@ -328,7 +349,165 @@ def _inputs() -> dict:
     }
 
 
+def _plastic_point() -> dict:
+    """Return the retained accepted-state operands for the worked capacity point."""
+    return {
+        "V": 0.0,
+        "Mx": 100.0,
+        "My": 0.0,
+        "na_x": 0.0,
+        "na_y": -0.0075,
+        "eps_c": 0.35,
+        "eps_s": 0.25,
+        "eps_s_comp": -0.1,
+        "eps_cable": 0.0,
+        "kappa": 0.0035 / 0.1575,
+        "comp_force": 250.0,
+        "lever": 0.2,
+        "dx": 0.0,
+        "dy": 0.2,
+        "converged": True,
+        "axial_requested": 0.0,
+        "axial_achieved": 0.0,
+        "axial_residual": 0.0,
+        "axial_tolerance": 1.0e-6,
+        "axial_reachable": True,
+        "compression_depth": 0.1575,
+        "neutral_axis_offset": -0.0075,
+        "strain_gradient_x": 0.0,
+        "strain_gradient_y": 0.0035 / 0.1575,
+        "strain_offset": 1.0 / 6000.0,
+        "search_lower_depth": 0.01,
+        "search_upper_depth": 0.29,
+        "search_lower_axial": -45.0,
+        "search_upper_axial": 62.0,
+        "search_iterations": 8,
+        "concrete_force": 250.0,
+        "concrete_mx": 70.0,
+        "concrete_my": 0.0,
+        "bar_force": -250.0,
+        "bar_mx": 30.0,
+        "bar_my": 0.0,
+        "tendon_force": 0.0,
+        "tendon_mx": 0.0,
+        "tendon_my": 0.0,
+        "compression_mx": 70.0,
+        "compression_my": 0.0,
+        "tension_force": -250.0,
+        "tension_mx": 30.0,
+        "tension_my": 0.0,
+        "concrete_corner_states": [{
+            "point_no": 4,
+            "ring": "Outer",
+            "ring_point_no": 4,
+            "x_mm": -100.0,
+            "y_mm": 150.0,
+            "section_strain_permille": 3.5,
+            "strain_permille": -3.5,
+            "stress_mpa": -20.0,
+        }],
+        "reinforcement_states": [{
+            "element_type": "Bar",
+            "element_no": 1,
+            "element_id": "bar 1",
+            "material_id": "M1",
+            "material_name": "B500",
+            "state": "Tension",
+            "x_mm": 0.0,
+            "y_mm": -120.0,
+            "area_mm2": 500.0,
+            "section_strain_permille": -2.5,
+            "initial_strain_permille": 0.0,
+            "strain_permille": 2.5,
+            "stress_mpa": 500.0,
+            "force_kn": 250.0,
+            "internal_force_kn": -250.0,
+            "internal_mx_knm": 30.0,
+            "internal_my_knm": 0.0,
+        }],
+        "curvature_candidates": [{
+            "mode": "concrete_crushing",
+            "element_index": None,
+            "element_id": None,
+            "strain_limit": 0.0035,
+            "distance_from_na_m": 0.1575,
+            "curvature_per_m": 0.0035 / 0.1575,
+            "selected": True,
+        }],
+        "curvature_selection": {
+            "mode": "concrete_crushing",
+            "element_index": None,
+            "curvature_per_m": 0.0035 / 0.1575,
+        },
+    }
+
+
+def _elastic_state(mx: float) -> dict:
+    """Return one retained accepted elastic state without rerunning the solver."""
+    return {
+        "raw_stress_plane": {
+            "sigma0_kpa": 0.0,
+            "gradient_x_kpa_per_m": mx,
+            "gradient_y_kpa_per_m": 0.0,
+        },
+        "iterations": 4,
+        "converged": True,
+        "equilibrium": {
+            "matrix": [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            "target": {"n": 0.0, "mx": mx, "my": 0.0},
+            "internal": {"n": 0.0, "mx": mx, "my": 0.0},
+            "residual": {"n": 0.0, "mx": 0.0, "my": 0.0},
+            "residual_scale": abs(mx),
+            "normalised_residual": 0.0,
+            "relative_tolerance": 1.0e-8,
+        },
+    }
+
+
 def _crack() -> dict:
+    """Return a complete retained 2005 crack-width worked example."""
+    rho = 2.72 / 99.0
+    ac_eff = 0.0005 / rho
+    concrete_reduction = 0.4 * 2.9 / rho * (1.0 + 6.06 * rho)
+    mean_strain = 0.213 / 235.0
+    sigma_s = mean_strain * 200_000.0 + concrete_reduction
+    mean = {
+        "record_kind": "CrackMeanStrainOperands",
+        "sigma_s": sigma_s,
+        "kt": 0.4,
+        "fctm": 2.9,
+        "rho_p_eff": rho,
+        "alpha_e": 6.06,
+        "es": 200_000.0,
+        "concrete_tension_reduction": concrete_reduction,
+        "formula_candidate": mean_strain,
+        "lower_bound_factor": 0.6,
+        "lower_bound_candidate": 0.6 * sigma_s / 200_000.0,
+        "selected_candidate": "formula-7.9",
+        "selected_esm_ecm": mean_strain,
+    }
+    spacing = {
+        "record_kind": "CrackSpacing2005Operands",
+        "cover": 40.0,
+        "diameter": 16.0,
+        "rho_p_eff": rho,
+        "k1": 0.8,
+        "k2": 0.5,
+        "k3_base": 3.4,
+        "k3_used": 3.4,
+        "k4": 0.425,
+        "nearest_neighbour_spacing": 100.0,
+        "close_spacing_limit": 240.0,
+        "tension_zone_depth": 0.15,
+        "formula_7_11": 235.0,
+        "geometric_7_14": 195.0,
+        "selected_candidate": "formula-7.11",
+        "selected_spacing": 235.0,
+    }
     candidate = {
         "element_type": "Bar",
         "element_no": 1,
@@ -338,10 +517,10 @@ def _crack() -> dict:
         "area_mm2": 500.0,
         "wk": 0.213,
         "sr_max": 235.0,
-        "esm_ecm": 8.4e-4,
-        "sigma_s": 215.0,
-        "rho_p_eff": 0.04,
-        "ac_eff": 0.0125,
+        "esm_ecm": mean_strain,
+        "sigma_s": sigma_s,
+        "rho_p_eff": rho,
+        "ac_eff": ac_eff,
         "hc_ef": 0.125,
         "phi": 16.0,
         "cover": 40.0,
@@ -351,8 +530,46 @@ def _crack() -> dict:
         "k1_r": 1.0,
         "kfl": 1.0,
         "sr_max_geometric": False,
+        "as_eff": 0.0005,
+        "ap_eff": 0.0,
+        "ap_eff_weighted": 0.0,
+        "xi1": None,
+        "reinforcement_type": "mild",
+        "bc_ef": 0.0,
+        "direct_tension": False,
+        "scope": "dominant direction",
+        "direction_deg": 90.0,
+        "equivalent_diameter": 25.231,
+        "diameter_source": "provided",
+        "cover_source": "geometry",
+        "bond_coefficient": 0.8,
+        "modular_ratio": 6.06,
+        "mean_strain_operands": mean,
+        "spacing_operands": spacing,
     }
-    return dict(candidate, gov_bar=1, candidates=[candidate])
+    effective_area = {
+        "record_kind": "CrackEffectiveArea2005Fine",
+        "section_depth": 0.3,
+        "effective_depth": 0.25,
+        "tension_zone_depth": 0.4,
+        "h_minus_d": 0.05,
+        "candidate_2_5_h_minus_d": 0.125,
+        "candidate_h_minus_x_over_3": 0.13333333333333333,
+        "candidate_h_over_2": 0.15,
+        "selected_candidate": "2.5(h-d)",
+        "selected_hc_eff": 0.125,
+        "band_limit": -0.025,
+        "ac_eff": ac_eff,
+    }
+    return dict(
+        candidate,
+        gov_bar=1,
+        effective_area_operands=effective_area,
+        effective_reinforcement_2023=None,
+        governing_rule="maximum-wk-then-lowest-bar-index",
+        governing_candidate=dict(candidate),
+        candidates=[candidate],
+    )
 
 
 def _results(inp: dict | None = None) -> dict:
@@ -443,22 +660,9 @@ def _results(inp: dict | None = None) -> dict:
         "check_util": True,
         "applied": (80.0, 0.0),
         "converged": True,
-        "points": [{
-            "V": 0.0,
-            "Mx": 100.0,
-            "My": 0.0,
-            "na_x": 0.0,
-            "na_y": 0.05,
-            "eps_c": 0.35,
-            "eps_s": 2.0,
-            "eps_s_comp": -0.1,
-            "eps_cable": 0.0,
-            "kappa": 0.02,
-            "comp_force": 300.0,
-            "lever": 0.2,
-            "dx": 0.0,
-            "dy": 0.2,
-        }],
+        "worked_point_index": 0,
+        "worked_point_basis": "utilisation direction",
+        "points": [_plastic_point()],
     }
     elastic = {
         "total": [150.0],
@@ -492,6 +696,9 @@ def _results(inp: dict | None = None) -> dict:
             "long_mpa": 120.0,
             "dif_mpa": 30.0,
             "rst1_mpa": 0.0,
+            "long_passive_mpa": 100.0,
+            "reduced_long_mpa": 59.595959596,
+            "locked_in_mpa": 0.0,
         }],
         "concrete_corners": [
             {"point_no": 1, "ring": "Outer", "ring_point_no": 1,
@@ -556,6 +763,26 @@ def _results(inp: dict | None = None) -> dict:
         },
         "crack_code": "EN 1992-1-1:2005",
         "crack_member": None,
+        "accepted_states": {
+            "long_term": _elastic_state(80.0),
+            "instantaneous_combined": _elastic_state(95.0),
+        },
+        "superposition": {
+            "long_term_modular_ratio": 15.0,
+            "short_term_modular_ratio": 200.0 / 33.0,
+            "long_term_reduction_factor": 1.0 - (200.0 / 33.0) / 15.0,
+            "prestress_resultant": {"n": 0.0, "mx": 0.0, "my": 0.0},
+            "combined_target_before_neutralisation": {
+                "n": 29.797979798,
+                "mx": 91.424242424,
+                "my": 0.0,
+            },
+            "neutralising_resultant": {
+                "n": 29.797979798,
+                "mx": -3.575757576,
+                "my": 0.0,
+            },
+        },
     }
     shear_payload = {
         "res": shear_res,
@@ -667,6 +894,15 @@ def _results(inp: dict | None = None) -> dict:
             "model_2023": False,
         },
     }
+    for retained_name in (
+        "angle_selection",
+        "steel_resistance",
+        "strut_resistance",
+        "resistance_selection",
+        "cracking_resistance",
+        "longitudinal_reinforcement",
+    ):
+        torsion_payload[retained_name] = primary_torsion[retained_name]
     shear_util = shear_payload["links"]["util"]
     torsion_util = torsion_payload["util"]
     shear_fraction = (
@@ -694,7 +930,7 @@ def _results(inp: dict | None = None) -> dict:
         off_not_evaluated=None,
         theta_mode="utilisation",
     )
-    dkna_sum = combined.dkna_sum(
+    dkna_selection = combined.dkna_interaction_result(
         plastic["util"], shear_util, torsion_util,
         m_v_independent=False,
     )
@@ -705,8 +941,9 @@ def _results(inp: dict | None = None) -> dict:
         "r_v": shear_util,
         "r_t": torsion_util,
         "m_v_independent": False,
-        "dkna_sum": dkna_sum,
-        "dkna_ok": bool(dkna_sum <= 1.0),
+        "dkna_sum": dkna_selection.utilisation,
+        "dkna_ok": dkna_selection.ok,
+        "dkna_selection": asdict(dkna_selection),
         "outside_default_range": False,
         "crushing": interaction,
         "transverse": {
@@ -805,7 +1042,29 @@ def _results(inp: dict | None = None) -> dict:
     plastic_rows = case_analysis.case_records(inputs, "plastic")
     elastic_rows = case_analysis.case_records(inputs, "elastic")
     fatigue = fatigue_analysis.run_analysis(inputs)
+    material_properties = {
+        "concrete": {
+            "variant": "2005",
+            "characteristic_strength_mpa": inp["concrete"].fck,
+            "strength_factor": inp["concrete"].alpha_cc,
+            "partial_factor": inp["concrete"].gamma_c,
+            "eta_cc": inp.get("concrete_eta_cc"),
+            "k_tc": inp.get("concrete_k_tc"),
+            "design_strength_mpa": inp["concrete"].fcd,
+        },
+        "mild": [
+            {
+                "material_id": material_id,
+                "characteristic_yield_mpa": material.fytk,
+                "yield_factor": material.gamma_y,
+                "design_yield_mpa": capacity.design_yield(material),
+            }
+            for material_id, material in inp["mild_materials"].items()
+        ],
+        "prestress": [],
+    }
     out = {
+        "material_properties": material_properties,
         "plastic": plastic,
         "elastic": elastic,
         "fatigue": fatigue,
@@ -852,6 +1111,146 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             raise AssertionError(
                 f"inconsistent fixture {label}: {actual!r} != {expected!r}"
             )
+
+    retained_materials = out["material_properties"]
+    close(
+        "concrete design strength",
+        retained_materials["concrete"]["design_strength_mpa"],
+        inp["concrete"].fcd,
+    )
+    retained_mild = {
+        row["material_id"]: row for row in retained_materials["mild"]
+    }
+    for material_id, material in inp["mild_materials"].items():
+        close(
+            f"{material_id} design yield",
+            retained_mild[material_id]["design_yield_mpa"],
+            capacity.design_yield(material),
+        )
+
+    plastic_worked = out["plastic_cases"][1]["results"]["plastic"]
+    worked_index = plastic_worked.get("worked_point_index")
+    if worked_index != 0:
+        raise AssertionError("the governing plastic worked-point identity is missing")
+    point = plastic_worked["points"][worked_index]
+    close(
+        "plastic axial equilibrium",
+        point["axial_achieved"],
+        point["concrete_force"] + point["bar_force"] + point["tendon_force"],
+    )
+    close(
+        "plastic Mx equilibrium",
+        point["Mx"],
+        point["concrete_mx"] + point["bar_mx"] + point["tendon_mx"],
+    )
+    for state_kind in ("concrete_corner_states", "reinforcement_states"):
+        state = point[state_kind][0]
+        retained_plane_strain = (
+            point["strain_offset"]
+            + point["strain_gradient_x"] * state["x_mm"] / 1000.0
+            + point["strain_gradient_y"] * state["y_mm"] / 1000.0
+        )
+        close(
+            f"plastic {state_kind} strain plane",
+            state["section_strain_permille"] / 1000.0,
+            retained_plane_strain,
+        )
+        close(
+            f"plastic {state_kind} material strain sign",
+            state["strain_permille"],
+            -state["section_strain_permille"],
+        )
+    close(
+        "plastic reported concrete strain",
+        point["eps_c"] * 10.0,
+        point["concrete_corner_states"][0]["section_strain_permille"],
+    )
+    close(
+        "plastic reported tensile strain",
+        point["eps_s"] * 10.0,
+        point["reinforcement_states"][0]["strain_permille"],
+    )
+    selected_curvature = point["curvature_selection"]["curvature_per_m"]
+    curvature_candidate = next(
+        row for row in point["curvature_candidates"] if row["selected"]
+    )
+    close(
+        "plastic curvature candidate",
+        curvature_candidate["curvature_per_m"],
+        curvature_candidate["strain_limit"]
+        / curvature_candidate["distance_from_na_m"],
+    )
+    close("plastic curvature selection", selected_curvature, point["kappa"])
+
+    elastic_worked = out["elastic_cases"][1]["results"]["elastic"]
+    superposition = elastic_worked["superposition"]
+    close(
+        "elastic modular-ratio reduction",
+        superposition["long_term_reduction_factor"],
+        1.0
+        - superposition["short_term_modular_ratio"]
+        / superposition["long_term_modular_ratio"],
+    )
+    element = elastic_worked["elements"][0]
+    close(
+        "elastic reduced long-term stress",
+        element["reduced_long_mpa"],
+        element["long_passive_mpa"]
+        * superposition["long_term_reduction_factor"],
+    )
+    neutralising = superposition["neutralising_resultant"]
+    close(
+        "elastic neutralising axial force",
+        neutralising["n"],
+        element["reduced_long_mpa"] * element["area_mm2"] / 1000.0,
+    )
+    close(
+        "elastic neutralising Mx",
+        neutralising["mx"],
+        element["reduced_long_mpa"]
+        * element["area_mm2"]
+        * element["y_mm"]
+        / 1_000_000.0,
+    )
+    for name, state in elastic_worked["accepted_states"].items():
+        equilibrium = state["equilibrium"]
+        for resultant in ("n", "mx", "my"):
+            close(
+                f"elastic {name} {resultant} residual",
+                equilibrium["residual"][resultant],
+                equilibrium["internal"][resultant]
+                - equilibrium["target"][resultant],
+            )
+
+    crack = out["elastic_cases"][0]["results"]["elastic"]["crack"]
+    candidate = crack["governing_candidate"]
+    spacing = candidate["spacing_operands"]
+    mean = candidate["mean_strain_operands"]
+    close(
+        "crack effective reinforcement ratio",
+        candidate["rho_p_eff"],
+        candidate["as_eff"] / candidate["ac_eff"],
+    )
+    close(
+        "crack spacing Formula (7.11)",
+        spacing["selected_spacing"],
+        spacing["k3_used"] * spacing["cover"]
+        + spacing["k1"]
+        * spacing["k2"]
+        * spacing["k4"]
+        * spacing["diameter"]
+        / spacing["rho_p_eff"],
+    )
+    close(
+        "crack mean-strain formula candidate",
+        mean["formula_candidate"],
+        (mean["sigma_s"] - mean["concrete_tension_reduction"]) / mean["es"],
+    )
+    close(
+        "crack width",
+        crack["wk"],
+        spacing["selected_spacing"] * mean["selected_esm_ecm"],
+    )
 
     case = next(
         row for row in inp["plastic_cases"] if row["name"] == "PL-QA-1"
@@ -1091,15 +1490,18 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         )
 
 
-@functools.lru_cache(maxsize=1)
-def build_fixture_pdf() -> bytes:
-    """Build the report with stable time and the real figure-export path."""
+@functools.lru_cache(maxsize=2)
+def build_fixture_pdf(*, figures: bool = True) -> bytes:
+    """Build the report with stable time and an optional figure-export path."""
     original_datetime = sector_report.datetime.datetime
     sector_report.datetime.datetime = _FixedDateTime
     try:
         inp = _inputs()
         out = _results(inp)
         validate_fixture_engineering(inp, out)
+        out["worked_example_selection"] = (
+            result_presentation.worked_example_selection(inp, out)
+        )
         return sector_report.build_report(
             {
                 "proj_no": "QA-REFERENCE",
@@ -1111,20 +1513,54 @@ def build_fixture_pdf() -> bytes:
             inp,
             out,
             version=__version__,
-            figures=True,
+            figures=figures,
         )
     finally:
         sector_report.datetime.datetime = original_datetime
 
 
-def validate_pdf_content(pdf: bytes) -> str:
-    """Reject a report that lost figures or core engineering content."""
+def validate_worked_example_text(text: str) -> None:
+    """Reject missing or fail-closed governing textbook calculation chains."""
+    unavailable = re.search(
+        r"\bworked\b[\s\S]{0,180}?\bunavailable\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if unavailable:
+        raise AssertionError(
+            "the report contains an unavailable worked-example placeholder: "
+            + " ".join(unavailable.group(0).split())
+        )
+    flat_text = " ".join(text.split())
+    for expected in (
+        _EXPECTED_PLASTIC_WORKED_HEADING,
+        "Accepted strain plane",
+        "Ultimate-curvature candidates",
+        "Step 1 - accepted long-term state",
+        "Step 2 - neutralise the long-term concrete stress",
+        "Step 3 - accepted instantaneous combined state",
+        "Crack width worked - governing case",
+        "Formula (7.11) selected",
+    ):
+        if expected not in text and expected not in flat_text:
+            raise AssertionError(
+                f"the governing worked calculation is incomplete: {expected}"
+            )
+
+
+def validate_pdf_content(
+    pdf: bytes,
+    *,
+    expected_figure_count: int = _EXPECTED_FIGURE_COUNT,
+) -> str:
+    """Reject a report that lost expected figures or core engineering content."""
     reader, page_texts = preflight_pdf(pdf, min_pages=6)
     text = "\n".join(page_texts)
     if "figure unavailable" in text.lower():
         raise AssertionError("the report contains an unavailable-figure placeholder")
-    # Plain ``sqrt(...)`` and ``sum(...)`` are now intentional solver-owned
-    # symbolic trace expressions.  Continue rejecting actual LaTeX/layout leaks.
+    validate_worked_example_text(text)
+    # Plain ``sqrt(...)`` and ``sum(...)`` are intentional solver-owned symbolic
+    # relations. Continue rejecting actual LaTeX/layout leaks.
     for token in (
         "Cfrac", "Big", "sincos", "delta eps",
         "varepsilon", "qquadk", "quadf", "kN.m",
@@ -1150,9 +1586,9 @@ def validate_pdf_content(pdf: bytes) -> str:
         for reference in xobjects.get_object().values():
             if reference.get_object().get("/Subtype") == "/Image":
                 images += 1
-    if images != _EXPECTED_FIGURE_COUNT:
+    if images != expected_figure_count:
         raise AssertionError(
-            f"expected {_EXPECTED_FIGURE_COUNT} exported engineering figures, "
+            f"expected {expected_figure_count} exported engineering figures, "
             f"found {images}"
         )
 
@@ -1179,7 +1615,7 @@ def validate_pdf_content(pdf: bytes) -> str:
 
     governing_page = next(
         (page.extract_text() or "" for page in reader.pages
-         if "Governing case worked" in (page.extract_text() or "")),
+         if _EXPECTED_PLASTIC_WORKED_HEADING in (page.extract_text() or "")),
         "",
     )
     if "NA intercepts" not in governing_page:
@@ -1236,17 +1672,22 @@ def validate_pdf_content(pdf: bytes) -> str:
         "R2 M2",
         "Vx,Ed = 0",
         "Vy,Ed = 0",
-        "Plastic section capacity - PL-QA-1",
         "Plastic section capacity - PL-QA-2",
+        _EXPECTED_PLASTIC_WORKED_HEADING,
+        "Accepted strain plane",
+        "Ultimate-curvature candidates",
         "Longitudinal minimum reinforcement - PL-QA-1",
         "Shear/torsion link detailing - PL-QA-1",
         "Closed-link spacing",
         "Reinforcement clear spacing",
         "R1 - R2",
-        "Elastic section response and stresses - EL-QA-1",
         "Elastic section response and stresses - EL-QA-2",
-        "Cracking and crack width - EL-QA-1",
-        "Cracking threshold - EL-QA-2",
+        "Step 1 - accepted long-term state",
+        "Step 2 - neutralise the long-term concrete stress",
+        "Step 3 - accepted instantaneous combined state",
+        "Cracking threshold and governing crack width - EL-QA-1",
+        "Crack width worked - governing case",
+        "Formula (7.11) selected",
         "Grouped fatigue",
         "Road traffic",
         "FAT-QA-H",
@@ -1255,6 +1696,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Spectrum summary",
         "Reinforcement fatigue",
         "Concrete fatigue",
+        "Textbook calculation - governing reinforcement fatigue",
+        "Textbook calculation - governing concrete fatigue",
         "Bounded governing-fibre search",
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
@@ -1267,7 +1710,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Concrete tensile factor",
         "125.0 %",
         "245.000 MPa",
-        "Crack-width candidates",
+        "Candidate summary for governing crack example",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",
     ):
         if expected not in text and expected not in flat_text:

@@ -74,7 +74,9 @@ def test_complete_example_retains_results_without_trace_payloads(
     assert set(results) == {
         "plastic_cases", "plastic", "shear", "torsion", "combined",
         "minimum_reinforcement", "transverse_reinforcement", "elastic_cases",
-        "elastic", "clear_spacing", "fatigue",
+        "elastic", "clear_spacing", "fatigue", "material_properties",
+        "section_properties", "prestress_initial", "elastic_shared",
+        "worked_example_selection",
     }
     assert "calculation_traces" not in results["plastic_cases"][0]["results"]
     assert "calculation_traces" not in results["elastic_cases"][0]["results"]
@@ -266,11 +268,13 @@ def test_tables_only_report_contains_every_main_calculation_chapter(
     )
     for heading in (
         "Section and materials", "Basis of analysis", "Plastic section capacity",
-        "Elastic section response and stresses", "Cracking and crack width",
+        "Elastic section response and stresses",
+        "Cracking threshold and governing crack width - EL-COMPLETE",
         "Grouped fatigue", "Shear resistance", "Torsion (thin-walled tube)",
         "Combined bending + shear + torsion (M-V-T)", "minimum reinforcement",
         "Shear/torsion link detailing", "Reinforcement clear spacing",
     ):
         assert heading in text
+    assert text.count("Crack width worked - governing case") == 2
     assert "Independent bridge calculations" not in text
     assert "Calculation trace" not in text

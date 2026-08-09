@@ -1,7 +1,7 @@
 """Generate a QA-able PDF report of a Sector cross-section analysis.
 
 Modelled on the BriCoS report: a sectioned reportlab document with a numbered
-footer, every case summarised and each computed case reported in detail, and
+footer, every case summarised and governing calculations reported in detail, and
 every computed quantity tied to its formula and the selected
 ``EN 1992-1-1`` edition.
 
@@ -51,6 +51,7 @@ import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
 from sector import detailing
+from sector import fatigue as fatigue_core
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
 
@@ -553,6 +554,10 @@ class _EquationFlowable(KeepTogether):
         self._sector_equation_result_symbol = contract.result_symbol
         self._sector_equation_result_unit = contract.result_unit
         self._sector_equation_substitution_role = contract.substitution_role
+        self._sector_equation_publication_role = contract.publication_role
+        self._sector_equation_applicability_note_required = (
+            contract.applicability_note_required
+        )
         self._sector_equation_anchor = anchor
         self._sector_equation_number = number
         self._sector_equation_section = section
@@ -688,6 +693,27 @@ class ReportBuilder:
         self._publication_counter = PublicationCounter("0")
         self._publication_section_title = "Document control"
         self._publication_subsection_title = None
+        selection = self._base_out.get("worked_example_selection")
+        self._worked_example_selection = (
+            selection
+            if isinstance(selection, Mapping) and selection.get("schema") == 1
+            else {}
+        )
+        families = self._worked_example_selection.get("families")
+        self._selected_families = families if isinstance(families, Mapping) else {}
+        crack_examples = self._worked_example_selection.get("crack_examples")
+        self._selected_crack_examples = tuple(
+            item for item in crack_examples
+            if isinstance(item, Mapping)
+        ) if isinstance(crack_examples, (list, tuple)) else ()
+        threshold = self._worked_example_selection.get("cracking_threshold")
+        self._selected_cracking_threshold = (
+            threshold if isinstance(threshold, Mapping) else None
+        )
+        torsion_subchecks = self._worked_example_selection.get("torsion_subchecks")
+        self._selected_torsion_subchecks = (
+            torsion_subchecks if isinstance(torsion_subchecks, Mapping) else {}
+        )
 
     def _case_contexts(self, family):
         """Return ordered ``(case_input, case_results)`` report contexts."""
@@ -723,6 +749,21 @@ class ReportBuilder:
             )
         )
         return [(self._base_inp, self._base_out)] if active else []
+
+    @staticmethod
+    def _case_id(case_inp, family):
+        """Return the stable identity used by the retained selection contract."""
+        if "_report_case_actions" not in case_inp:
+            return "__single__"
+        return presentation.action_set(case_inp, family)["id"]
+
+    def _selected_family(self, family, case_inp):
+        selected = self._selected_families.get(family)
+        if not isinstance(selected, Mapping):
+            return None
+        return selected if selected.get("case_id") == self._case_id(
+            case_inp, "elastic" if family == "elastic" else "plastic"
+        ) else None
 
     def _result_values(self, key):
         family = "elastic" if key == "elastic" else "plastic"
@@ -983,8 +1024,8 @@ class ReportBuilder:
             ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
             ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 1.2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
+            ("TOPPADDING", (0, 0), (-1, -1), 0.8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.8),
         ]
         style.extend(context_style)
         fills = {
@@ -1054,6 +1095,28 @@ class ReportBuilder:
             else:
                 block.append(item)
         self.flow[start:] = [KeepTogether(block)]
+
+    def _keep_measured_calculation_from(self, start):
+        """Keep a bounded table/equation calculation together using real heights.
+
+        ``_EquationFlowable`` is itself a ``KeepTogether`` and therefore reports
+        ReportLab's deliberately artificial height when nested.  Flatten its
+        visible rows for this outer layout group, while retaining the sealed
+        equation objects as publication metadata on the group.
+        """
+        block = []
+        equations = []
+        for item in self.flow[start:]:
+            if isinstance(item, _EquationFlowable):
+                equations.append(item)
+                block.extend(item._content)
+            elif isinstance(item, KeepTogether):
+                block.extend(item._content)
+            else:
+                block.append(item)
+        group = KeepTogether(block)
+        group._sector_equations = tuple(equations)
+        self.flow[start:] = [group]
 
     def _formula(
         self,
@@ -1565,7 +1628,8 @@ class ReportBuilder:
             self.inp, self.out = self._base_inp, self._base_out
             self._clear_spacing()
         jobs = []
-        for case_inp, case_out in self._case_contexts("plastic"):
+        plastic_contexts = self._case_contexts("plastic")
+        for case_inp, case_out in plastic_contexts:
             case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
             for key, label, method in (
                 ("plastic", "Plastic capacity", "_plastic"),
@@ -1585,18 +1649,73 @@ class ReportBuilder:
                     and not case_out[key].get("biaxial")
                 ):
                     continue
+                if (
+                    self._selected_family(key, case_inp) is None
+                    and not self._needs_diagnostic_chapter(
+                        key, case_out[key]
+                    )
+                ):
+                    continue
                 jobs.append((
                     case_inp, case_out, f"{label} - {case_id}...", method, True
                 ))
+        for key, label, method in (
+            (
+                "interaction",
+                "Governing shear-torsion concrete-strut interaction",
+                "_torsion_interaction_example",
+            ),
+            (
+                "minimum_reinforcement",
+                "Governing shear-torsion minimum-reinforcement screen",
+                "_torsion_minimum_reinforcement_example",
+            ),
+        ):
+            selection = self._selected_torsion_subchecks.get(key)
+            if not isinstance(selection, Mapping):
+                continue
+            for case_inp, case_out in plastic_contexts:
+                if self._case_id(case_inp, "plastic") != selection.get("case_id"):
+                    continue
+                case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
+                jobs.append((
+                    case_inp,
+                    case_out,
+                    f"{label} - {case_id}...",
+                    method,
+                    True,
+                ))
+                break
         for case_inp, case_out in self._case_contexts("elastic"):
             case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
-            if "elastic" in case_out:
-                jobs.extend([
-                    (case_inp, case_out,
-                     f"Elastic stresses - {case_id}...", "_elastic", True),
-                    (case_inp, case_out,
-                     f"Cracking - {case_id}...", "_cracking", False),
-                ])
+            if (
+                "elastic" in case_out
+                and (
+                    self._selected_family("elastic", case_inp) is not None
+                    or self._needs_diagnostic_chapter(
+                        "elastic", case_out["elastic"]
+                    )
+                )
+            ):
+                jobs.append((
+                    case_inp, case_out,
+                    f"Elastic stresses - {case_id}...", "_elastic", True,
+                ))
+            if (
+                any(
+                    item.get("case_id") == self._case_id(case_inp, "elastic")
+                    for item in self._selected_crack_examples
+                )
+                or (
+                    isinstance(self._selected_cracking_threshold, Mapping)
+                    and self._selected_cracking_threshold.get("case_id")
+                    == self._case_id(case_inp, "elastic")
+                )
+            ):
+                jobs.append((
+                    case_inp, case_out,
+                    f"Cracking - {case_id}...", "_cracking", False,
+                ))
 
         try:
             for index, (case_inp, case_out, label, method, new_page) in enumerate(jobs):
@@ -1771,12 +1890,11 @@ class ReportBuilder:
                                  tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])])
         self._fig(fig, 150, 100)
         self._geometry_tables()
+        self._concrete_section_properties_block()
         # Materials are reported only when the section actually uses them: mild
         # steel when there are bars, prestress when there are tendons.
-        start = len(self.flow)
         self._h2("Concrete")
         self._concrete_block()
-        self._keep_from(start)
         if inp.get("bars") or inp.get("shear_on") or inp.get("torsion_on"):
             start = len(self.flow)
             self._h2("Reinforcement")
@@ -1787,6 +1905,7 @@ class ReportBuilder:
             self._h2("Prestressing steel")
             self._prestress_block()
             self._keep_from(start)
+            self._prestress_initial_block()
         # Loads and settings each start on a predictable, dedicated page. Their
         # data tables retain the universal split contract rather than entering one
         # combined KeepTogether block.
@@ -1822,8 +1941,12 @@ class ReportBuilder:
                     {
                         "id": f"{prefix}{index}", "x_mm": point[0] * _MM,
                         "y_mm": point[1] * _MM, "area_mm2": point[2],
-                        "diameter_mm": math.sqrt(4.0 * point[2] / math.pi),
-                        "size_mode": "Area", "material_id": "-",
+                        # Legacy tuple-only inputs do not retain the entered bar
+                        # diameter.  The report must not reconstruct one from
+                        # area and present it as calculation evidence.
+                        "diameter_mm": None,
+                        "size_mode": "Area (diameter not retained)",
+                        "material_id": "-",
                         "fatigue_detail_id": "",
                     }
                     for index, point in enumerate(points, 1)
@@ -1853,8 +1976,121 @@ class ReportBuilder:
         reinforcement_tables("Tendons", inp.get("tendons", []),
                              inp.get("tendon_elements", []), "P")
 
+    def _concrete_section_properties_block(self):
+        """Publish exact signed-ring section properties from retained results."""
+
+        properties = self._base_out.get("section_properties") or {}
+        rings = properties.get("rings") or []
+        net = properties.get("net_concrete") or {}
+        if not rings or not net:
+            return
+        self._h2("Concrete section properties")
+        self._small(
+            "The outer ring is positive and each clockwise void ring is negative. "
+            "The signed ring contributions therefore sum directly to the net "
+            "concrete section."
+        )
+        rows = [[
+            "Ring", "Role", "A", "S<sub>x</sub>", "S<sub>y</sub>",
+            "S<sub>xx</sub>", "S<sub>yy</sub>", "S<sub>xy</sub>",
+        ]]
+        for ring in rings:
+            rows.append([
+                ring["ring_id"], ring["role"], _fmt(ring["area_m2"], 6),
+                _fmt(ring["first_x_m3"], 6), _fmt(ring["first_y_m3"], 6),
+                _fmt(ring["second_xx_m4"], 6),
+                _fmt(ring["second_yy_m4"], 6),
+                _fmt(ring["product_xy_m4"], 6),
+            ])
+        rows.append([
+            "Net", "signed sum", _fmt(net["area_m2"], 6),
+            _fmt(net["first_x_m3"], 6), _fmt(net["first_y_m3"], 6),
+            _fmt(net["second_xx_m4"], 6),
+            _fmt(net["second_yy_m4"], 6),
+            _fmt(net["product_xy_m4"], 6),
+        ])
+        self._table(
+            rows,
+            [17 * mm, 26 * mm, 18 * mm, 20 * mm, 20 * mm,
+             22 * mm, 22 * mm, 22 * mm],
+            font=6.3,
+            keep=False,
+            repeat_cols=2,
+        )
+        area_terms = " + ".join(_fmt(row["area_m2"], 6) for row in rings)
+        self._formula(
+            "A<sub>c</sub> = &#931; A<sub>j</sub>",
+            equation_key="geometry.concrete.net-area",
+            ref="Sector exact signed polygon integration by Green's theorem.",
+            subst=f"= {area_terms}",
+            result=f"= {_fmt(net['area_m2'], 6)} m<super>2</super>",
+        )
+        self._formula(
+            "x<sub>c</sub> = S<sub>x</sub> / A<sub>c</sub>",
+            equation_key="geometry.concrete.centroid-x",
+            ref="Centroid definition for the retained signed polygon moments.",
+            subst=(f"= {_fmt(net['first_x_m3'], 6)} / "
+                   f"{_fmt(net['area_m2'], 6)}"),
+            result=f"= {_fmt(net['centroid_x_m'], 6)} m",
+            references=("geometry.concrete.net-area",),
+        )
+        self._formula(
+            "y<sub>c</sub> = S<sub>y</sub> / A<sub>c</sub>",
+            equation_key="geometry.concrete.centroid-y",
+            ref="Centroid definition for the retained signed polygon moments.",
+            subst=(f"= {_fmt(net['first_y_m3'], 6)} / "
+                   f"{_fmt(net['area_m2'], 6)}"),
+            result=f"= {_fmt(net['centroid_y_m'], 6)} m",
+            references=("geometry.concrete.net-area",),
+        )
+        self._formula(
+            "I<sub>x,c</sub> = S<sub>yy</sub> - A<sub>c</sub> "
+            "y<sub>c</sub><super>2</super>",
+            equation_key="geometry.concrete.centroidal-ix",
+            ref="Parallel-axis transfer of the retained origin moment.",
+            subst=(f"= {_fmt(net['second_yy_m4'], 6)} - "
+                   f"{_fmt(net['area_m2'], 6)} &#183; "
+                   f"{_fmt(net['centroid_y_m'], 6)}<super>2</super>"),
+            result=f"= {_fmt(net['ix_centroid_m4'], 6)} m<super>4</super>",
+            references=("geometry.concrete.net-area",
+                        "geometry.concrete.centroid-y"),
+        )
+        self._formula(
+            "I<sub>y,c</sub> = S<sub>xx</sub> - A<sub>c</sub> "
+            "x<sub>c</sub><super>2</super>",
+            equation_key="geometry.concrete.centroidal-iy",
+            ref="Parallel-axis transfer of the retained origin moment.",
+            subst=(f"= {_fmt(net['second_xx_m4'], 6)} - "
+                   f"{_fmt(net['area_m2'], 6)} &#183; "
+                   f"{_fmt(net['centroid_x_m'], 6)}<super>2</super>"),
+            result=f"= {_fmt(net['iy_centroid_m4'], 6)} m<super>4</super>",
+            references=("geometry.concrete.net-area",
+                        "geometry.concrete.centroid-x"),
+        )
+        self._formula(
+            "I<sub>xy,c</sub> = S<sub>xy</sub> - A<sub>c</sub> "
+            "x<sub>c</sub> y<sub>c</sub>",
+            equation_key="geometry.concrete.centroidal-ixy",
+            ref="Parallel-axis transfer of the retained origin product moment.",
+            subst=(f"= {_fmt(net['product_xy_m4'], 6)} - "
+                   f"{_fmt(net['area_m2'], 6)} &#183; "
+                   f"{_fmt(net['centroid_x_m'], 6)} &#183; "
+                   f"{_fmt(net['centroid_y_m'], 6)}"),
+            result=f"= {_fmt(net['ixy_centroid_m4'], 6)} m<super>4</super>",
+            references=("geometry.concrete.net-area",
+                        "geometry.concrete.centroid-x",
+                        "geometry.concrete.centroid-y"),
+        )
+
     def _concrete_block(self):
         c = self.inp["concrete"]
+        prepared = (
+            (self._base_out.get("material_properties") or {}).get("concrete")
+        )
+        fcd = (
+            prepared["design_strength_mpa"]
+            if prepared is not None else None
+        )
         preset = str(self.inp.get("concrete_preset", ""))
         is_2023 = "2023" in preset
         rows = [["Parameter", "Symbol", "Value"],
@@ -1878,10 +2114,19 @@ class ReportBuilder:
                  ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} permille"],
                  ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} permille"],
                  ["Exponent", "n", _fmt(c.n, 3)],
-                 ["Design strength", "f<sub>cd</sub>", f"{_fmt(c.fcd, 3)} MPa"],
         ])
+        if fcd is not None:
+            rows.append(
+                ["Design strength", "f<sub>cd</sub>", f"{_fmt(fcd, 3)} MPa"]
+            )
+        # Keep the material table with its numerical design-strength equation,
+        # while allowing the longer constitutive-law/figure material below to
+        # paginate independently.  Wrapping the complete Concrete subsection can
+        # exceed a page and lets ReportLab split the table from this equation.
+        definition_start = len(self.flow)
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
-        if is_2023:
+        applicability_note = None
+        if is_2023 and fcd is not None:
             self._formula(
                 "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
                 "f<sub>ck</sub> / gamma<sub>c</sub>",
@@ -1891,9 +2136,9 @@ class ReportBuilder:
                 subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
                       f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
                       f"{_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
-                result=f"= {_fmt(c.fcd, 3)} MPa")
+                result=f"= {_fmt(fcd, 3)} MPa")
             if math.isclose(float(self.inp.get("concrete_k_tc") or 0.0), 1.0):
-                self._small(
+                applicability_note = (
                     "<b>Applicability assumption:</b> k<sub>tc</sub> = 1.00 was "
                     "selected assuming t<sub>ref</sub> &#8804; 28 days for CR/CN "
                     "or &#8804; 56 days for CS and that design loading is not "
@@ -1901,11 +2146,11 @@ class ReportBuilder:
                     "governing National Annex states otherwise (5.1.6(1))."
                 )
             else:
-                self._small(
+                applicability_note = (
                     "k<sub>tc</sub> = 0.85 is the general / other-case value stated "
                     "in EN 1992-1-1:2023 5.1.6(1)."
                 )
-        else:
+        elif fcd is not None:
             self._formula(
                 "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / "
                 "gamma<sub>c</sub>",
@@ -1914,7 +2159,11 @@ class ReportBuilder:
                 ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
                 subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / "
                       f"{_fmt(c.gamma_c, 3)}",
-                result=f"= {_fmt(c.fcd, 3)} MPa")
+                result=f"= {_fmt(fcd, 3)} MPa")
+        if fcd is not None:
+            self._keep_measured_calculation_from(definition_start)
+        if applicability_note is not None:
+            self._small(applicability_note)
         if c.curve == 2:
             self._formula(
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
@@ -1961,6 +2210,13 @@ class ReportBuilder:
         self._small("Partial factors are the final effective user inputs; Sector "
                     "applies no hidden control-, construction- or consequence-"
                     "category multiplier.")
+        prepared = {
+            str(item.get("material_id")): item
+            for item in (
+                (self._base_out.get("material_properties") or {}).get("mild")
+                or []
+            )
+        }
         for material_index, item in enumerate(records):
             if self.figures and material_index:
                 self.flow.append(NotAtTopPageBreak())
@@ -1973,7 +2229,11 @@ class ReportBuilder:
             self._p(f"<b>{title}</b>")
             if item.get("description"):
                 self._small(_html_escape(item["description"]))
-            fyd = st.fytk / st.gamma_y if st.gamma_y else st.fytk
+            retained = prepared.get(str(material_id))
+            fyd = (
+                retained["design_yield_mpa"]
+                if retained is not None else None
+            )
             rows = [["Parameter", "Symbol", "Value"],
                     ["Preset identity", "-", _html_escape(
                         material_catalog.mild_preset_classification(
@@ -1995,17 +2255,23 @@ class ReportBuilder:
                     ["Ultimate partial factor", "gamma<sub>u</sub>", _fmt(st.gamma_u, 3)],
                     ["Modulus factor", "gamma<sub>E</sub>", _fmt(st.gamma_E, 3)],
                     ["Active in compression", "-",
-                     "yes" if st.active_in_compression else "no"],
-                    ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
+                     "yes" if st.active_in_compression else "no"]]
+            if fyd is not None:
+                rows.append(
+                    ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]
+                )
             self._table(rows, [60 * mm, 35 * mm, 50 * mm])
             source_ref = _steel_standard_reference(item.get("preset"))
-            self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
-                          equation_key=f"materials.steel.fyd-{material_index + 1}",
-                          ref=(source_ref or
-                               "User-defined or generic constitutive law; no "
-                               "normative curve source assigned."),
-                          subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
-                          result=f"= {_fmt(fyd, 3)} MPa")
+            if fyd is not None:
+                self._formula(
+                    "f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
+                    equation_key=f"materials.steel.fyd-{material_index + 1}",
+                    ref=(source_ref or
+                         "User-defined or generic constitutive law; no "
+                         "normative curve source assigned."),
+                    subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
+                    result=f"= {_fmt(fyd, 3)} MPa",
+                )
             if self.figures:
                 self._fig(viz.steel_curve_figure(
                     st, title=f"{material_id} - {item.get('name', '')}"
@@ -2035,6 +2301,13 @@ class ReportBuilder:
                             _html_escape(item.get("preset", "-")), count])
         self._table(summary, [18 * mm, 45 * mm, 78 * mm, 25 * mm],
                     font=7.0, keep=False, repeat_cols=3)
+        prepared = {
+            str(item.get("material_id")): item
+            for item in (
+                (self._base_out.get("material_properties") or {}).get("prestress")
+                or []
+            )
+        }
         for material_index, item in enumerate(records):
             if self.figures and material_index:
                 self.flow.append(NotAtTopPageBreak())
@@ -2050,16 +2323,15 @@ class ReportBuilder:
                     ["Initial prestrain", "eps<sub>p</sub><super>(0)</super>",
                      f"{_fmt(p.IS*1000, 3)} permille"]]
             if p.curve in (1, 2, 3, 4, 5):
-                characteristic_at_rupture = p.stress(
-                    p.rupture_strain, design=False
+                characteristic_at_rupture = (
+                    prepared.get(str(material_id), {}).get(
+                        "characteristic_stress_at_rupture_mpa"
+                    )
                 )
                 rows.extend([
                     ["Curve definition", "-", f"Built-in fixed curve {p.curve}"],
                     ["Curve source", "-", "Sector fixed polynomial; normative "
                      "source not assigned"],
-                    ["Characteristic stress at rupture strain",
-                     "sigma<sub>p</sub>(eps<sub>ut</sub>)",
-                     f"{_fmt(characteristic_at_rupture, 3)} MPa"],
                     ["Elastic-analysis modulus", "E<sub>p</sub>",
                      f"{_fmt(p.Es/1000, 1)} GPa"],
                     ["Fixed rupture strain", "eps<sub>ut</sub>",
@@ -2067,6 +2339,13 @@ class ReportBuilder:
                     ["Design factor on fixed workline", "gamma<sub>y</sub>",
                      _fmt(p.gamma_y, 3)],
                 ])
+                if characteristic_at_rupture is not None:
+                    rows.insert(
+                        3,
+                        ["Characteristic stress at rupture strain",
+                         "sigma<sub>p</sub>(eps<sub>ut</sub>)",
+                         f"{_fmt(characteristic_at_rupture, 3)} MPa"],
+                    )
             else:
                 rows.extend([
                     ["Proof strength", "f<sub>p0.1k</sub>",
@@ -2090,6 +2369,121 @@ class ReportBuilder:
                     p, title=f"{material_id} - {item.get('name', '')}"
                 ), 130, 80)
             self._keep_from(block_start)
+
+    def _prestress_initial_block(self):
+        """Publish the retained strain-to-resultant prestress calculation."""
+
+        payload = self._base_out.get("prestress_initial") or {}
+        elements = payload.get("elements") or []
+        if not elements:
+            return
+        self._h2("Initial prestress action")
+        state_rows = [[
+            "Tendon", "Material", "E<sub>p</sub>", "eps<sub>p,0</sub>",
+            "sigma<sub>p,0</sub>", "A<sub>p</sub>", "F<sub>p,0</sub>",
+        ]]
+        moment_rows = [[
+            "Tendon", "x (m)", "y (m)",
+            "M<sub>p,x,0</sub> (kNm)", "M<sub>p,y,0</sub> (kNm)",
+        ]]
+        for row in elements:
+            state_rows.append([
+                row["element_id"], row.get("material_id") or "-",
+                _fmt(row["modulus_mpa"], 1),
+                _fmt(row["initial_strain"], 6),
+                _fmt(row["locked_in_stress_mpa"], 3),
+                _fmt(row["area_mm2"], 1), _fmt(row["force_kn"], 3),
+            ])
+            moment_rows.append([
+                row["element_id"],
+                _fmt(row["x_m"], 4), _fmt(row["y_m"], 4),
+                _fmt(row["mx_knm"], 3), _fmt(row["my_knm"], 3),
+            ])
+        self._table(
+            state_rows,
+            [20 * mm, 22 * mm, 23 * mm, 24 * mm, 27 * mm, 22 * mm,
+             27 * mm],
+            font=6.8,
+            keep=False,
+            repeat_cols=2,
+        )
+        self._table(
+            moment_rows,
+            [25 * mm, 28 * mm, 28 * mm, 42 * mm, 42 * mm],
+            font=7.0,
+            keep=False,
+            repeat_cols=1,
+        )
+
+        def labelled(values, formatter):
+            return "; ".join(
+                f"{row['element_id']}: {formatter(row)}" for row in values
+            )
+
+        self._formula(
+            "sigma<sub>p,0,i</sub> = E<sub>p,i</sub> "
+            "eps<sub>p,0,i</sub>",
+            equation_key="prestress.initial-stress",
+            ref="Sector locked-in prestress initialisation from entered tendon strain.",
+            subst=labelled(
+                elements,
+                lambda row: (f"{_fmt(row['modulus_mpa'], 1)} &#183; "
+                             f"{_fmt(row['initial_strain'], 6)}"),
+            ),
+            result=("= " + labelled(
+                elements,
+                lambda row: _fmt(row["locked_in_stress_mpa"], 3),
+            ) + " MPa"),
+        )
+        self._formula(
+            "F<sub>p,0,i</sub> = sigma<sub>p,0,i</sub> "
+            "A<sub>p,i</sub> / 1000",
+            equation_key="prestress.element-force",
+            ref="Stress in MPa times area in mm2, converted to kN.",
+            subst=labelled(
+                elements,
+                lambda row: (f"{_fmt(row['locked_in_stress_mpa'], 3)} &#183; "
+                             f"{_fmt(row['area_mm2'], 1)} / 1000"),
+            ),
+            result=("= " + labelled(
+                elements, lambda row: _fmt(row["force_kn"], 3)
+            ) + " kN"),
+            references=("prestress.initial-stress",),
+        )
+        internal = payload["internal_resultant_origin"]
+        force_terms = " + ".join(_fmt(row["force_kn"], 3) for row in elements)
+        mx_terms = " + ".join(
+            f"{_fmt(row['force_kn'], 3)} &#183; {_fmt(row['y_m'], 4)}"
+            for row in elements
+        )
+        my_terms = " + ".join(
+            f"{_fmt(row['force_kn'], 3)} &#183; {_fmt(row['x_m'], 4)}"
+            for row in elements
+        )
+        self._formula(
+            "N<sub>p,0</sub> = &#931; F<sub>p,0,i</sub>",
+            equation_key="prestress.resultant-n",
+            ref="Tendon internal tensile-force resultant about the section origin.",
+            subst=f"= {force_terms}",
+            result=f"= {_fmt(internal['n_kn'], 3)} kN",
+            references=("prestress.element-force",),
+        )
+        self._formula(
+            "M<sub>p,x,0</sub> = &#931; F<sub>p,0,i</sub> y<sub>i</sub>",
+            equation_key="prestress.resultant-mx",
+            ref="Tendon internal moment resultant about the section x-axis.",
+            subst=f"= {mx_terms}",
+            result=f"= {_fmt(internal['mx_knm'], 3)} kNm",
+            references=("prestress.element-force",),
+        )
+        self._formula(
+            "M<sub>p,y,0</sub> = &#931; F<sub>p,0,i</sub> x<sub>i</sub>",
+            equation_key="prestress.resultant-my",
+            ref="Tendon internal moment resultant about the section y-axis.",
+            subst=f"= {my_terms}",
+            result=f"= {_fmt(internal['my_knm'], 3)} kNm",
+            references=("prestress.element-force",),
+        )
 
     def _loads_block(self):
         inp = self._base_inp
@@ -2397,39 +2791,23 @@ class ReportBuilder:
                  if inp.get("detailing_include_tendons") else "no"],
             ])
         elastic_results = self._result_values("elastic")
+        elastic_shared = self._base_out.get("elastic_shared") or {}
         if elastic_results:
             # Modular ratios are derived from the elastic moduli and creep, not entered;
             # document the inputs (Ec, phi) and the derived mild + prestress ratios.
-            if inp.get("conc_Ec") is not None:
+            if elastic_shared:
                 rows.append(["Concrete elastic modulus E<sub>c</sub>",
-                             f"{_fmt(inp.get('conc_Ec'), 3)} GPa"])
-            if inp.get("el_phi") is not None:
+                             f"{_fmt(elastic_shared.get('concrete_modulus_mpa'), 1)} MPa"])
+                rows.append(["Effective long-term modulus E<sub>c,eff</sub>",
+                             f"{_fmt(elastic_shared.get('effective_concrete_modulus_mpa'), 1)} MPa"])
                 rows.append(["Creep coefficient &#966; (long-term)",
-                             _fmt(inp.get("el_phi"), 3)])
-            ec_mpa = float(inp.get("conc_Ec") or 0.0) * 1000.0
-            phi = float(inp.get("el_phi") or 0.0)
-            material_pairs = []
-            material_pairs.extend(
-                (element.get("material_id"), material)
-                for element, material in zip(inp.get("bar_elements", []),
-                                             inp.get("bar_materials", []))
-            )
-            material_pairs.extend(
-                (element.get("material_id"), material)
-                for element, material in zip(inp.get("tendon_elements", []),
-                                             inp.get("tendon_materials", []))
-            )
-            if not material_pairs:
-                if inp.get("bars") and inp.get("steel") is not None:
-                    material_pairs.append(("M1", inp["steel"]))
-                if inp.get("tendons") and inp.get("prestress") is not None:
-                    material_pairs.append(("P1", inp["prestress"]))
-            for material_id, material in dict(material_pairs).items():
-                ns_v = material.Es / ec_mpa if ec_mpa > 0.0 else None
-                nl_v = ns_v * (1.0 + phi) if ns_v is not None else None
+                             _fmt(elastic_shared.get("creep_coefficient"), 3)])
+            for material in elastic_shared.get("materials") or []:
                 rows.append([
-                    f"{material_id} modular ratios n<sub>s</sub> / n<sub>l</sub>",
-                    f"{_fmt(ns_v, 3)} / {_fmt(nl_v, 3)}",
+                    f"{material.get('material_id')} modular ratios "
+                    "n<sub>s</sub> / n<sub>l</sub>",
+                    f"{_fmt(material.get('short_term'), 3)} / "
+                    f"{_fmt(material.get('long_term'), 3)}",
                 ])
             rows.append(["Mean tensile strength f<sub>ctm</sub>",
                          f"{_fmt(inp.get('sls_fctm'), 3)} MPa"])
@@ -2531,10 +2909,108 @@ class ReportBuilder:
                     ),
                 ])
         self._table(rows, [110 * mm, 55 * mm], keep=False)
+        if elastic_results and elastic_shared:
+            start = len(self.flow)
+            self._elastic_shared_calculation_block(elastic_shared)
+            self._keep_from(start)
         if fatigue_rows:
             self.flow.append(NotAtTopPageBreak())
             self._h2("Grouped fatigue settings")
             self._table(fatigue_rows, [110 * mm, 55 * mm], keep=False)
+
+    def _elastic_shared_calculation_block(self, payload):
+        """Publish effective modulus and per-material modular ratios."""
+
+        materials = payload.get("materials") or []
+        ec = payload["concrete_modulus_mpa"]
+        phi = payload["creep_coefficient"]
+        self._h2("Elastic material transformation")
+        self._formula(
+            "E<sub>c,eff</sub> = E<sub>c</sub> / (1 + phi)",
+            equation_key="elastic.concrete.effective-modulus",
+            ref="Sector transformed-section long-term modulus relation.",
+            subst=f"= {_fmt(ec, 1)} / (1 + {_fmt(phi, 3)})",
+            result=(f"= {_fmt(payload['effective_concrete_modulus_mpa'], 1)} "
+                    "MPa"),
+        )
+        if not materials:
+            return
+
+        def rows_text(formatter):
+            return "; ".join(
+                f"{row['material_id']}: {formatter(row)}" for row in materials
+            )
+
+        self._formula(
+            "n<sub>s,i</sub> = E<sub>i</sub> / E<sub>c</sub>",
+            equation_key="elastic.modular-ratio.short",
+            ref="Sector transformed-section short-term modular ratio.",
+            subst=rows_text(
+                lambda row: f"{_fmt(row['modulus_mpa'], 1)} / {_fmt(ec, 1)}"
+            ),
+            result=("= " + rows_text(
+                lambda row: _fmt(row["short_term"], 4)
+            )),
+        )
+        self._formula(
+            "n<sub>l,i</sub> = n<sub>s,i</sub> (1 + phi)",
+            equation_key="elastic.modular-ratio.long",
+            ref="Sector transformed-section long-term modular ratio.",
+            subst=rows_text(
+                lambda row: (f"{_fmt(row['short_term'], 4)} &#183; "
+                             f"(1 + {_fmt(phi, 3)})")
+            ),
+            result=("= " + rows_text(
+                lambda row: _fmt(row["long_term"], 4)
+            )),
+            references=("elastic.modular-ratio.short",),
+        )
+
+    def _needs_diagnostic_chapter(self, family, result):
+        """Keep an unrankable/invalid result's reason without a worked chain."""
+
+        if not isinstance(result, Mapping):
+            return False
+        if family in {"plastic", "elastic"}:
+            return result.get("converged") is False
+        if family == "torsion":
+            return result.get("valid") is False
+        if family in {"minimum_reinforcement", "transverse_reinforcement"}:
+            checks = tuple(result.get("checks") or ())
+            if not checks:
+                return bool(result.get("reason"))
+            return not any(
+                check.get("status") in {"PASS", "FAIL"}
+                and self._retained_utilisation_available(check.get("utilisation"))
+                for check in checks
+            )
+        if family == "shear":
+            directions = result.get("directions") or {}
+            items = tuple(directions.values()) or (result,)
+            return not any(
+                (
+                    (item.get("links") or {}).get("res") or {}
+                ).get("valid")
+                and self._retained_utilisation_available(
+                    (item.get("links") or {}).get("util")
+                )
+                or (
+                    not item.get("links")
+                    and (item.get("res") or {}).get("valid")
+                    and self._retained_utilisation_available(item.get("util"))
+                )
+                for item in items
+            )
+        return False
+
+    @staticmethod
+    def _retained_utilisation_available(value):
+        """Whether a stored assessment utilisation can be published."""
+        try:
+            metric = float(value)
+        except (TypeError, ValueError):
+            return False
+        return math.isfinite(metric) or metric == math.inf
 
     def _theory(self):
         self._h1("Basis of analysis")
@@ -2560,6 +3036,7 @@ class ReportBuilder:
                 "combined_method",
             )
         ]
+
         for catalogue_key in (
             "mild_material_catalog",
             "prestress_material_catalog",
@@ -2756,6 +3233,9 @@ class ReportBuilder:
 
     def _minimum_reinforcement(self):
         result = self.out["minimum_reinforcement"]
+        publish_worked = (
+            self._selected_family("minimum_reinforcement", self.inp) is not None
+        )
         direction = str(
             result.get("modelled_reinforcement_direction") or "longitudinal"
         ).capitalize()
@@ -2798,13 +3278,34 @@ class ReportBuilder:
         ), 150, 108)
 
         if checks and presentation.minimum_area_check(result, checks[0]):
-            self._formula(
-                "A<sub>s,min</sub> = max(0.26 f<sub>ctm</sub> / "
-                "f<sub>yk</sub>, 0.0013) b<sub>t</sub>d",
-                equation_key="detailing.minimum.area-2005",
-                ref=(f"{_html_escape(result.get('edition', '-'))} "
-                     "&#167;9.2.1.1(1), Formula (9.1N)"),
+            worked_check = max(
+                checks,
+                key=lambda item: (
+                    -math.inf if item.get("utilisation") is None
+                    else float(item["utilisation"])
+                ),
             )
+            if publish_worked:
+                self._formula(
+                    "A<sub>s,min</sub> = max(0.26 f<sub>ctm</sub> / "
+                    "f<sub>yk</sub>, 0.0013) b<sub>t</sub>d",
+                    equation_key="detailing.minimum.area-2005",
+                    ref=(f"{_html_escape(result.get('edition', '-'))} "
+                         "&#167;9.2.1.1(1), Formula (9.1N)"),
+                    subst=(
+                        "coefficient = max("
+                        f"{_fmt(worked_check.get('strength_coefficient'), 7)}, "
+                        f"{_fmt(worked_check.get('floor_coefficient'), 7)}) = "
+                        f"{_fmt(worked_check.get('selected_coefficient'), 7)}; "
+                        f"A<sub>s,min</sub> = {_fmt(worked_check.get('selected_coefficient'), 7)} "
+                        f"&#183; {_fmt(worked_check.get('bt_mm'), 3)} &#183; "
+                        f"{_fmt(worked_check.get('d_mm'), 3)}"
+                    ),
+                    result=(
+                        f"A<sub>s,min</sub> = {_fmt(worked_check.get('as_min_mm2'), 3)} "
+                        f"mm<super>2</super> ({worked_check.get('governing_coefficient', '-')})"
+                    ),
+                )
             rows = [[
                 "Axis", "Face", "A<sub>s,prov</sub>", "A<sub>s,min</sub>",
                 "Util.", "b<sub>t</sub>", "d", "f<sub>ctm</sub>",
@@ -2846,12 +3347,40 @@ class ReportBuilder:
                         "<b>Outcome:</b> " + _html_escape(check["reason"])
                     )
         elif checks and checks[0].get("type") == "pure tension":
-            self._formula(
-                "R<sub>nom</sub> = &#8721;(A<sub>s,i</sub> f<sub>yk,i</sub>) "
-                "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
-                equation_key="detailing.minimum.tension-2023",
-                ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+            worked_check = max(
+                checks,
+                key=lambda item: (
+                    -math.inf if item.get("utilisation") is None
+                    else float(item["utilisation"])
+                ),
             )
+            if publish_worked:
+                terms = worked_check.get("reinforcement_terms") or []
+                self._formula(
+                    "R<sub>nom</sub> = &#8721;(A<sub>s,i</sub> f<sub>yk,i</sub>) "
+                    "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
+                    equation_key="detailing.minimum.tension-2023",
+                    ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+                    subst=(
+                        "R<sub>cr</sub> = "
+                        f"{_fmt(worked_check.get('concrete_area_m2'), 6)} &#183; "
+                        f"{_fmt(worked_check.get('fctm_mpa'), 3)} &#183; 1000 = "
+                        f"{_fmt(worked_check.get('demand_kn'), 3)} kN; "
+                        "R<sub>nom</sub> terms = "
+                        + "; ".join(
+                            f"{_html_escape(str(term.get('bar_id', '-')))}: "
+                            f"{_fmt(term.get('area_mm2'), 3)} &#183; "
+                            f"{_fmt(term.get('fyk_mpa'), 3)} / 1000 = "
+                            f"{_fmt(term.get('resistance_kn'), 3)} kN"
+                            for term in terms
+                        )
+                    ),
+                    result=(
+                        f"R<sub>nom</sub> = {_fmt(worked_check.get('resistance_kn'), 3)} kN; "
+                        f"R<sub>cr</sub>/R<sub>nom</sub> = "
+                        f"{_fmt(worked_check.get('utilisation'), 5)}"
+                    ),
+                )
             rows = [[
                 "R<sub>cr</sub> (kN)", "R<sub>nom</sub> (kN)", "Utilisation",
                 "A<sub>s,prov</sub> (mm<super>2</super>)", "Bars", "Status",
@@ -2870,12 +3399,60 @@ class ReportBuilder:
             self._table(rows, [27 * mm, 27 * mm, 26 * mm, 35 * mm,
                                35 * mm, 20 * mm], font=7.0)
         elif checks:
-            self._formula(
-                "M<sub>R,nom</sub>(N<sub>Ed</sub>) &#8805; "
-                "M<sub>cr</sub>(N<sub>Ed</sub>)",
-                equation_key="detailing.minimum.bending-2023",
-                ref="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+            worked_check = max(
+                checks,
+                key=lambda item: (
+                    -math.inf if item.get("utilisation") is None
+                    else float(item["utilisation"])
+                ),
             )
+            if publish_worked:
+                self._formula(
+                    "lambda<sub>cr</sub> = (f<sub>ctm</sub> - "
+                    "sigma<sub>N,v</sub>) / sigma<sub>M,v</sub>",
+                    equation_key="detailing.minimum.cracking-factor-2023",
+                    ref="Sector vertex evaluation of EN 1992-1-1:2023 Formula (12.1)",
+                    subst=(
+                        f"= ({_fmt(worked_check.get('cracking_fctm_mpa'), 6)} - "
+                        f"{_fmt(worked_check.get('cracking_governing_axial_stress_mpa'), 6)}) / "
+                        f"{_fmt(worked_check.get('cracking_governing_bending_stress_mpa'), 6)}"
+                    ),
+                    result=(
+                        f"lambda<sub>cr</sub> = {_fmt(worked_check.get('cracking_factor'), 8)}; "
+                        f"M<sub>cr</sub> = {_fmt(worked_check.get('m_cr_knm'), 6)} kNm"
+                    ),
+                )
+                solution = worked_check.get("nominal_solution") or {}
+                selected_solution = solution.get("governing_point") or solution
+                if selected_solution.get("axial_residual_kn") is not None:
+                    self._formula(
+                        "Delta N = N<sub>int</sub> - N<sub>target</sub>",
+                        equation_key="detailing.minimum.nominal-equilibrium-2023",
+                        ref="Final retained nominal-section axial equilibrium.",
+                        subst=(
+                            f"= {_fmt(selected_solution.get('achieved_axial_kn'), 8)} - "
+                            f"{_fmt(selected_solution.get('requested_axial_kn'), 8)} kN"
+                        ),
+                        result=(
+                            f"Delta N = {_fmt(selected_solution.get('axial_residual_kn'), 9)} kN; "
+                            f"tolerance = {_fmt(selected_solution.get('axial_tolerance_kn'), 9)} kN; "
+                            f"iterations = {selected_solution.get('iterations', '-')}"
+                        ),
+                    )
+                self._formula(
+                    "M<sub>R,nom</sub>(N<sub>Ed</sub>) &#8805; "
+                    "M<sub>cr</sub>(N<sub>Ed</sub>)",
+                    equation_key="detailing.minimum.bending-2023",
+                    ref="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+                    subst=(
+                        f"{_fmt(worked_check.get('mr_nom_knm'), 6)} kNm "
+                        f"&#8805; {_fmt(worked_check.get('m_cr_knm'), 6)} kNm"
+                    ),
+                    result=(
+                        "M<sub>cr</sub>/M<sub>R,nom</sub> = "
+                        f"{_fmt(worked_check.get('utilisation'), 6)}"
+                    ),
+                )
             rows = [[
                 "M<sub>cr</sub> (kNm)", "M<sub>R,nom</sub> (kNm)",
                 "Utilisation", "N<sub>nom,t</sub> (kN)", "Axial eq.",
@@ -2905,11 +3482,20 @@ class ReportBuilder:
         elif result.get("reason"):
             self._small(_html_escape(result["reason"]))
 
+        if checks and not publish_worked:
+            self._small(
+                "The complete minimum-reinforcement worked example is published "
+                "only for the governing stored utilisation across all plastic cases."
+            )
+
         for limitation in result.get("limitations") or []:
             self._small("<b>Scope:</b> " + _html_escape(limitation))
 
     def _transverse_reinforcement(self):
         result = self.out["transverse_reinforcement"]
+        publish_worked = (
+            self._selected_family("transverse_reinforcement", self.inp) is not None
+        )
         self._case_heading("Shear/torsion link detailing", "plastic")
         status = str(result.get("status") or "NOT ASSESSED").upper()
         governing = result.get("governing") or {}
@@ -2944,7 +3530,13 @@ class ReportBuilder:
             f"s = {_fmt(result.get('spacing_mm'), 1)} mm; "
             f"f<sub>ywk</sub> = {_fmt(result.get('fywk_mpa'), 1)} MPa."
         )
-        if minimum:
+        minimum_operands_complete = all(
+            minimum.get(key) is not None
+            for key in (
+                "coefficient", "fck_mpa", "fywk_mpa", "base_ratio", "ratio"
+            )
+        )
+        if minimum and publish_worked and minimum_operands_complete:
             self._formula(
                 "&#961;<sub>w,min</sub> = "
                 f"{_fmt(minimum.get('coefficient'), 3)} "
@@ -2957,6 +3549,21 @@ class ReportBuilder:
                 ),
                 equation_key="detailing.links.minimum-ratio",
                 ref=_html_escape(minimum.get("clause") or "-"),
+                subst=(
+                    f"base = {_fmt(minimum.get('coefficient'), 4)} &#183; "
+                    f"&#8730;({_fmt(minimum.get('fck_mpa'), 3)}) / "
+                    f"{_fmt(minimum.get('fywk_mpa'), 3)} = "
+                    f"{_fmt(minimum.get('base_ratio'), 7)}"
+                    + (
+                        f"; selected = {_fmt(minimum.get('base_ratio'), 7)} &#183; "
+                        f"{_fmt(minimum.get('ductility_factor'), 3)}"
+                        if minimum.get("ductility_reduction_applied") else ""
+                    )
+                ),
+                result=(
+                    "rho<sub>w,min</sub> = "
+                    f"{_fmt(minimum.get('ratio'), 7)}"
+                ),
             )
 
         labels = {
@@ -3013,12 +3620,112 @@ class ReportBuilder:
                 keep=False,
                 repeat_cols=2,
             )
+        if publish_worked and governing:
+            kind = governing.get("kind")
+            if kind == "minimum_ratio" and governing.get("bw_mm") is not None:
+                self._formula(
+                    "rho<sub>w</sub> = n<sub>leg</sub>A<sub>leg</sub> / "
+                    "(s b<sub>w</sub>)",
+                    equation_key="detailing.links.provided-ratio",
+                    equation_variant="shear",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst=(
+                        f"= {governing.get('legs', '-')} &#183; "
+                        f"{_fmt(governing.get('leg_area_mm2'), 5)} / "
+                        f"({_fmt(governing.get('link_spacing_mm'), 3)} &#183; "
+                        f"{_fmt(governing.get('bw_mm'), 3)})"
+                    ),
+                    result=(
+                        f"rho<sub>w</sub> = {_fmt(governing.get('provided'), 7)}; "
+                        f"rho<sub>w,min</sub>/rho<sub>w</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "minimum_ratio" and governing.get("tef_mm") is not None:
+                self._formula(
+                    "rho<sub>w,T</sub> = A<sub>leg</sub> / "
+                    "(s t<sub>ef</sub>)",
+                    equation_key="detailing.links.provided-ratio",
+                    equation_variant="torsion",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst=(
+                        f"= {_fmt(governing.get('leg_area_mm2'), 5)} / "
+                        f"({_fmt(governing.get('link_spacing_mm'), 3)} &#183; "
+                        f"{_fmt(governing.get('tef_mm'), 3)})"
+                    ),
+                    result=(
+                        f"rho<sub>w,T</sub> = {_fmt(governing.get('provided'), 7)}; "
+                        f"rho<sub>w,min</sub>/rho<sub>w,T</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "longitudinal_spacing":
+                self._formula(
+                    "s<sub>l,max</sub> = 0.75d",
+                    equation_key="detailing.links.spacing-limit",
+                    equation_variant="longitudinal",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst=(
+                        f"= {_fmt(governing.get('spacing_factor'), 3)} &#183; "
+                        f"{_fmt(governing.get('d_mm'), 3)} mm"
+                    ),
+                    result=(
+                        f"s<sub>l,max</sub> = {_fmt(governing.get('limit'), 3)} mm; "
+                        f"s<sub>l</sub>/s<sub>l,max</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "transverse_leg_spacing":
+                limits = governing.get("spacing_limits_mm") or {}
+                self._formula(
+                    "s<sub>t,max</sub> = min(0.75d, 600 mm)",
+                    equation_key="detailing.links.spacing-limit",
+                    equation_variant="transverse",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst="; ".join(
+                        f"{_html_escape(str(label))} = {_fmt(value, 3)} mm"
+                        for label, value in limits.items()
+                    ),
+                    result=(
+                        f"s<sub>t,max</sub> = {_fmt(governing.get('limit'), 3)} mm "
+                        f"({governing.get('governing_limit', '-')}); "
+                        f"s<sub>t</sub>/s<sub>t,max</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "torsion_spacing":
+                limits = governing.get("spacing_limits_mm") or {}
+                self._formula(
+                    "s<sub>max</sub> = min(u<sub>k</sub>/8, "
+                    "section minimum dimension)",
+                    equation_key="detailing.links.spacing-limit",
+                    equation_variant="torsion",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst="; ".join(
+                        f"{_html_escape(str(label))} = {_fmt(value, 3)} mm"
+                        for label, value in limits.items()
+                    ),
+                    result=(
+                        f"s<sub>max</sub> = {_fmt(governing.get('limit'), 3)} mm "
+                        f"({governing.get('governing_limit', '-')}); "
+                        f"s/s<sub>max</sub> = {_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+        elif result.get("checks"):
+            self._small(
+                "The complete link-detailing worked example is published only "
+                "for the governing stored utilisation across all plastic cases."
+            )
         for check in result.get("checks") or []:
             details = []
             if check.get("spacing_source"):
                 details.append(
                     "spacing source: " + str(check["spacing_source"])
                 )
+                if check.get("spacing_source") == "gross-web upper-bound screen":
+                    details.append(
+                        "this upper-bound screen can prove PASS but cannot prove FAIL"
+                    )
             if check.get("governing_limit"):
                 details.append(
                     "governing limit: " + str(check["governing_limit"])
@@ -3059,14 +3766,41 @@ class ReportBuilder:
             spacing_pair=governing,
             title="Governing clear-spacing pair",
         ), 150, 108)
-        self._formula(
-            "c<sub>req</sub> = max(phi<sub>max</sub>, "
-            "D<sub>upper</sub> + 5 mm, 20 mm)",
-            equation_key="detailing.clear-spacing.requirement",
-            ref=(f"{_html_escape(result.get('edition', '-'))} "
-                 f"&#167;{_html_escape(result.get('clause', '-'))}"),
-        )
         if governing:
+            candidates = governing.get("required_candidates_mm") or {}
+            self._formula(
+                "r<sub>12</sub> = sqrt(Delta x<super>2</super> + "
+                "Delta y<super>2</super>);   c<sub>12</sub> = r<sub>12</sub> "
+                "- (phi<sub>1</sub> + phi<sub>2</sub>)/2",
+                equation_key="detailing.clear-spacing.distance",
+                ref="Sector section-plane pair geometry.",
+                subst=(
+                    f"r<sub>12</sub> = sqrt({_fmt(governing.get('dx_mm'), 3)}<super>2</super> + "
+                    f"{_fmt(governing.get('dy_mm'), 3)}<super>2</super>) = "
+                    f"{_fmt(governing.get('centre_distance_mm'), 3)} mm; "
+                    f"c<sub>12</sub> = {_fmt(governing.get('centre_distance_mm'), 3)} - "
+                    f"({_fmt(governing.get('phi_first_mm'), 3)} + "
+                    f"{_fmt(governing.get('phi_second_mm'), 3)})/2"
+                ),
+                result=f"c<sub>12</sub> = {_fmt(governing.get('clear_mm'), 3)} mm",
+            )
+            self._formula(
+                "c<sub>req</sub> = max(phi<sub>max</sub>, "
+                "D<sub>upper</sub> + 5 mm, 20 mm)",
+                equation_key="detailing.clear-spacing.requirement",
+                ref=(f"{_html_escape(result.get('edition', '-'))} "
+                     f"&#167;{_html_escape(result.get('clause', '-'))}"),
+                subst=(
+                    "= max("
+                    f"{_fmt(candidates.get('larger element diameter'), 3)}, "
+                    f"{_fmt(candidates.get('aggregate allowance'), 3)}, "
+                    f"{_fmt(candidates.get('absolute minimum'), 3)}) mm"
+                ),
+                result=(
+                    f"c<sub>req</sub> = {_fmt(governing.get('required_mm'), 3)} mm "
+                    f"({governing.get('governing_requirement', '-')})"
+                ),
+            )
             self._small(
                 "<b>Governing pair:</b> "
                 f"{_html_escape(governing.get('first_id', '?'))} - "
@@ -3259,35 +3993,41 @@ class ReportBuilder:
         self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever L, d<sub>x</sub> "
                     "and d<sub>y</sub> in mm; strain in %; kappa in 1/m; "
                     "F<sub>c</sub> in kN.")
-        # Governing case worked.
-        self._plastic_worked(pl)
+        if self._selected_family("plastic", self.inp) is not None:
+            self._plastic_worked(pl)
+        else:
+            self._small(
+                "The complete plastic worked example is published only for the "
+                "governing utilisation (or capacity extremum when no utilisation "
+                "is assessed) across all plastic cases."
+            )
 
     def _plastic_worked(self, pl):
-        # Show the state relevant to the check: when a utilisation was computed, the
-        # angle governing the applied load's direction (so the worked strain plane and
-        # equilibrium describe the section under that load); for a capacity-only run
-        # there is no applied direction, so fall back to the strongest envelope point.
-        gov_i = pl.get("util_gov")
         pts = pl["points"]
-        if gov_i is not None and 0 <= gov_i < len(pts):
-            gov = pts[gov_i]
-            heading = "Governing case worked (utilisation direction)"
-        else:
-            gov = max(pts, key=lambda p: math.hypot(p["Mx"], p["My"]))
-            heading = "Governing case worked (peak resultant moment)"
-        P = self.inp.get("P_pl", 0.0) or 0.0   # applied axial, tension-positive
-        Fc = gov["comp_force"]                  # concrete compression resultant (positive)
-        T = Fc + P                              # tension resultant (solver: Fc - T = -N)
+        worked_index = pl.get("worked_point_index")
+        if not isinstance(worked_index, int) or not 0 <= worked_index < len(pts):
+            self._h2("Worked plastic calculation unavailable")
+            self._small(
+                "The completed payload does not retain the selected worked-point "
+                "identity. Sector does not select or recalculate one in the report."
+            )
+            return
+        gov = pts[worked_index]
+        basis = str(pl.get("worked_point_basis") or "accepted solver state")
+        heading = f"Worked plastic calculation ({basis})"
+        state_rows = presentation.plastic_state_rows(gov)
         start = len(self.flow)
         self._h2(heading)
-        self._p(f"Neutral-axis angle = {_fmt(gov['V'],0)}&#176;. The extreme "
-                f"concrete fibre is at the ultimate strain; the curvature scales "
-                f"the strain plane to that limit.")
-        comp = (bool(self.inp.get("bars"))
-                and any(getattr(material, "active_in_compression", False)
-                        for material in (self.inp.get("bar_materials")
-                                         or [self.inp.get("steel")]))
-                and "eps_s_comp" in gov)
+        self._p(
+            f"Selected sweep point {worked_index + 1} of {len(pts)}: neutral-axis "
+            f"angle = {_fmt(gov['V'], 0)}&#176;. Internal axial forces use the "
+            "plastic solver's compression-positive convention; the entered "
+            "N<sub>Ed</sub> is tension-positive and is negated at the solver boundary."
+        )
+        comp = any(
+            row.get("element_type") == "Bar" and row.get("state") == "Compression"
+            for row in state_rows["elements"]
+        )
         steel_rows = ([["Most-tensile bar strain", "eps<sub>s,t</sub>",
                         f"{_fmt(gov['eps_s'], 3)} %"],
                        ["Most-compressed bar strain", "eps<sub>s,c</sub>",
@@ -3300,7 +4040,8 @@ class ReportBuilder:
                 ["Extreme concrete strain", "eps<sub>c</sub>", f"{_fmt(gov['eps_c'], 3)} %"],
                 *steel_rows,
                 ["Curvature", "kappa", f"{_fmt(gov['kappa'],4)} 1/m"],
-                ["Concrete compression resultant", "F<sub>c</sub>", f"{_fmt(Fc, 3)} kN"],
+                ["Compression resultant", "F<sub>comp</sub>",
+                 f"{_fmt(gov['comp_force'], 3)} kN"],
                 ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM, 3)} mm"],
                 ["Lever components", "d<sub>x</sub>, d<sub>y</sub>",
                  f"{_fmt(gov['dx']*_MM, 3)}, {_fmt(gov['dy']*_MM, 3)} mm"],
@@ -3308,17 +4049,193 @@ class ReportBuilder:
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
         self._keep_from(start)
-        self._h2("Axial equilibrium check")
-        self._formula("T - F<sub>c</sub> = N",
-                      equation_key="plastic.worked.axial-equilibrium",
-                      subst=f"{_fmt(T, 3)} - {_fmt(Fc, 3)} = {_fmt(T-Fc, 3)} kN",
-                      result=f"applied N = {_fmt(P, 3)} kN  (residual "
-                             f"{_fmt(abs(T - Fc - P),3)} kN)")
-        self._small("The tension resultant T = F<sub>c</sub> + N balances the "
-                    "section (N tension-positive); the moments above are the "
-                    "resultants about the origin.")
-        evidence = presentation.plastic_state_evidence(self.inp, gov)
-        concrete_rows = evidence["concrete"]
+        plane_values = (
+            gov.get("strain_offset"), gov.get("strain_gradient_x"),
+            gov.get("strain_gradient_y"),
+        )
+        reference_rows = state_rows["concrete"] or state_rows["elements"]
+        if all(value is not None for value in plane_values) and reference_rows:
+            reference = reference_rows[0]
+            self._h2("Accepted strain plane")
+            self._formula(
+                "eps<sub>sec</sub>(x,y) = eps<sub>0</sub> + "
+                "g<sub>x</sub>x + g<sub>y</sub>y",
+                equation_key="plastic.worked.strain-plane",
+                ref="Sector plane-section kinematics at the retained accepted state.",
+                subst=(
+                    f"= {_fmt(plane_values[0], 8)} + "
+                    f"{_fmt(plane_values[1], 8)} &#183; "
+                    f"{_fmt(reference['x_mm'] / _MM, 6)} + "
+                    f"{_fmt(plane_values[2], 8)} &#183; "
+                    f"{_fmt(reference['y_mm'] / _MM, 6)}"
+                ),
+                result=(
+                    f"eps<sub>sec</sub> = "
+                    f"{_fmt(reference['section_strain_permille'], 6)} permille "
+                    "(compression positive)"
+                ),
+            )
+
+        candidates = gov.get("curvature_candidates") or []
+        selected = gov.get("curvature_selection") or {}
+        if candidates and selected:
+            self._h2("Ultimate-curvature candidates")
+            mode_labels = {
+                "concrete_crushing": "Concrete crushing",
+                "bar_tension_rupture": "Bar tension rupture",
+                "bar_compression_rupture": "Bar compression rupture",
+                "tendon_tension_rupture": "Tendon tension rupture",
+            }
+            candidate_rows = [[
+                "Candidate", "Element", "Strain limit", "Distance to NA",
+                "Curvature", "Selected",
+            ]]
+            for candidate in candidates:
+                candidate_rows.append([
+                    mode_labels.get(candidate["mode"], candidate["mode"]),
+                    candidate.get("element_id") or "extreme concrete fibre",
+                    _fmt(candidate["strain_limit"] * 1000.0, 6),
+                    _fmt(candidate["distance_from_na_m"] * _MM, 4),
+                    _fmt(candidate["curvature_per_m"], 8),
+                    "yes" if candidate.get("selected") else "",
+                ])
+            self._table(
+                candidate_rows,
+                [37 * mm, 31 * mm, 27 * mm, 28 * mm, 28 * mm, 17 * mm],
+                font=6.7,
+                keep=False,
+            )
+            governing_candidate = next(
+                (candidate for candidate in candidates if candidate.get("selected")),
+                None,
+            )
+            if governing_candidate is not None:
+                self._formula(
+                    "kappa<sub>i</sub> = eps<sub>lim,i</sub> / d<sub>i</sub>",
+                    equation_key="plastic.worked.curvature-candidate",
+                    ref="Sector retained ultimate-strain candidate at the accepted depth.",
+                    subst=(
+                        f"= {_fmt(governing_candidate['strain_limit'], 9)} / "
+                        f"{_fmt(governing_candidate['distance_from_na_m'], 9)} m"
+                    ),
+                    result=(
+                        f"kappa<sub>i</sub> = "
+                        f"{_fmt(governing_candidate['curvature_per_m'], 9)} 1/m"
+                    ),
+                )
+                self._formula(
+                    "kappa<sub>u</sub> = min(kappa<sub>c</sub>, "
+                    "kappa<sub>s,i</sub>, kappa<sub>p,j</sub>)",
+                    equation_key="plastic.worked.curvature-selection",
+                    ref="Sector governing-curvature minimum; exact candidate operands above.",
+                    subst=("= min(" + ", ".join(
+                        _fmt(candidate["curvature_per_m"], 9)
+                        for candidate in candidates
+                    ) + ") 1/m"),
+                    result=(
+                        f"kappa<sub>u</sub> = "
+                        f"{_fmt(selected.get('curvature_per_m'), 9)} 1/m; "
+                        f"{mode_labels.get(selected.get('mode'), selected.get('mode'))}"
+                    ),
+                    references=("plastic.worked.curvature-candidate",),
+                )
+
+        search_keys = (
+            "search_lower_depth",
+            "search_upper_depth",
+            "search_lower_axial",
+            "search_upper_axial",
+            "search_iterations",
+            "compression_depth",
+            "axial_requested",
+            "axial_achieved",
+            "axial_residual",
+            "axial_tolerance",
+        )
+        if all(gov.get(key) is not None for key in search_keys):
+            self._h2("Compression-depth solution")
+            search_rows = [["Quantity", "Value"], [
+                "Initial depth bracket",
+                f"{_fmt(gov['search_lower_depth'] * _MM, 6)} to "
+                f"{_fmt(gov['search_upper_depth'] * _MM, 6)} mm",
+            ], [
+                "Axial resultants at initial bracket",
+                f"{_fmt(gov['search_lower_axial'], 6)} to "
+                f"{_fmt(gov['search_upper_axial'], 6)} kN (compression +)",
+            ], [
+                "Bisection iterations", str(gov["search_iterations"]),
+            ], [
+                "Accepted compression depth",
+                f"{_fmt(gov['compression_depth'] * _MM, 6)} mm",
+            ], [
+                "Requested / achieved internal N",
+                f"{_fmt(gov['axial_requested'], 6)} / "
+                f"{_fmt(gov['axial_achieved'], 6)} kN",
+            ], [
+                "Residual / tolerance",
+                f"{_fmt(gov['axial_residual'], 9)} / "
+                f"{_fmt(gov['axial_tolerance'], 9)} kN",
+            ], [
+                "Accepted state",
+                "yes" if gov.get("axial_reachable") and gov.get("converged") else "no",
+            ]]
+            self._table(search_rows, [75 * mm, 85 * mm], keep=False)
+            self._small(
+                "Only the initial bracket, accepted state and final residual are "
+                "shown; the internal bisection sequence and integration bands are "
+                "not published."
+            )
+        else:
+            self._h2("Compression-depth solution unavailable")
+            self._small(
+                "The completed payload does not contain the full accepted bracket, "
+                "depth and residual summary. Sector does not reconstruct those "
+                "solver values in the report."
+            )
+
+        resultant_keys = (
+            "concrete_force", "bar_force", "tendon_force",
+            "concrete_mx", "bar_mx", "tendon_mx",
+            "concrete_my", "bar_my", "tendon_my",
+            "axial_achieved", "axial_requested", "axial_residual", "Mx", "My",
+        )
+        if all(gov.get(key) is not None for key in resultant_keys):
+            self._h2("Accepted section resultants")
+            self._formula(
+                "N<sub>int</sub> = F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub>",
+                equation_key="plastic.worked.axial-equilibrium",
+                subst=(f"= {_fmt(gov['concrete_force'], 6)} + "
+                       f"{_fmt(gov['bar_force'], 6)} + "
+                       f"{_fmt(gov['tendon_force'], 6)} kN"),
+                result=(f"N<sub>int</sub> = {_fmt(gov['axial_achieved'], 6)} kN; "
+                        f"target = {_fmt(gov['axial_requested'], 6)} kN; "
+                        f"residual = {_fmt(gov['axial_residual'], 9)} kN"),
+            )
+            self._formula(
+                "M<sub>x</sub> = M<sub>c,x</sub> + M<sub>s,x</sub> + M<sub>p,x</sub>",
+                equation_key="plastic.worked.moment-x",
+                subst=(f"= {_fmt(gov['concrete_mx'], 6)} + "
+                       f"{_fmt(gov['bar_mx'], 6)} + "
+                       f"{_fmt(gov['tendon_mx'], 6)} kNm"),
+                result=f"M<sub>x</sub> = {_fmt(gov['Mx'], 6)} kNm",
+            )
+            self._formula(
+                "M<sub>y</sub> = M<sub>c,y</sub> + M<sub>s,y</sub> + M<sub>p,y</sub>",
+                equation_key="plastic.worked.moment-y",
+                subst=(f"= {_fmt(gov['concrete_my'], 6)} + "
+                       f"{_fmt(gov['bar_my'], 6)} + "
+                       f"{_fmt(gov['tendon_my'], 6)} kNm"),
+                result=f"M<sub>y</sub> = {_fmt(gov['My'], 6)} kNm",
+            )
+        else:
+            self._h2("Accepted section resultants unavailable")
+            self._small(
+                "The completed payload does not retain every concrete, mild-steel "
+                "and tendon resultant. Sector does not reconstruct material or "
+                "section response in the report."
+            )
+
+        concrete_rows = state_rows["concrete"]
         if concrete_rows:
             self._h2("Governing concrete corner response")
             rows = [[
@@ -3346,9 +4263,22 @@ class ReportBuilder:
                 "Coordinates in mm; strain in permille; design stress in MPa. "
                 "Strain and stress are tension-positive."
             )
-        element_rows = evidence["elements"]
+        element_rows = state_rows["elements"]
         if element_rows:
             self._h2("Governing reinforcement and tendon response")
+            worked_element = element_rows[0]
+            self._formula(
+                "F<sub>i</sub> = sigma<sub>i</sub>A<sub>i</sub>/1000",
+                equation_key="plastic.worked.element-force",
+                ref="Retained accepted material response and entered element area.",
+                subst=(
+                    f"= {_fmt(worked_element['stress_mpa'], 6)} MPa &#183; "
+                    f"{_fmt(worked_element['area_mm2'], 6)} mm<super>2</super> / 1000"
+                ),
+                result=(f"F<sub>{_html_escape(worked_element['element_id'])}</sub> = "
+                        f"{_fmt(worked_element['force_kn'], 6)} kN "
+                        "(tension positive)"),
+            )
             rows = [[
                 "Element", "Material", "State", "x", "y", "Area", "Strain",
                 "Design stress", "Force",
@@ -3381,23 +4311,29 @@ class ReportBuilder:
         # Section state at the governing angle (neutral axis + compression zone).
         if self.figures:
             inp = self.inp
-            hp = evidence["halfplane"]
+            hp = state_rows["halfplane"]
             na = viz.na_line_at(hp[0], hp[1], hp[2], inp.get("extent", 1.0))
             zones = viz.compression_zones(inp.get("outer", []), hp)
             bars = inp.get("bars", [])
             tendons = inp.get("tendons", [])
-            bar_colors = viz.halfplane_bar_colors(
-                bars, hp, kappa=gov["kappa"],
+            bar_states = [
+                row for row in element_rows if row.get("element_type") == "Bar"
+            ]
+            tendon_states = [
+                row for row in element_rows if row.get("element_type") == "Tendon"
+            ]
+            state_colour = lambda row: (
+                viz.BAR_TENSION
+                if row.get("strain_permille", 0.0) >= 0.0
+                else viz.BAR_COMPRESSION
             )
-            tendon_colors = viz.halfplane_bar_colors(
-                tendons,
-                hp,
-                kappa=gov["kappa"],
-                prestrain=(
-                    [material.IS for material in inp.get("tendon_materials", [])]
-                    if inp.get("tendon_materials") else
-                    float(getattr(inp.get("prestress"), "IS", 0.0))
-                ),
+            bar_colors = (
+                [state_colour(row) for row in bar_states]
+                if len(bar_states) == len(bars) else None
+            )
+            tendon_colors = (
+                [state_colour(row) for row in tendon_states]
+                if len(tendon_states) == len(tendons) else None
             )
             self._h2("Section state at the governing angle")
             self._fig(viz.section_figure(
@@ -3507,12 +4443,63 @@ class ReportBuilder:
     def _shear(self):
         aggregate = self.out["shear"]
         directions = aggregate.get("directions") or {}
+        selected = self._selected_family("shear", self.inp)
+        critical = selected is not None
         if not directions:
-            self._shear_direction(aggregate)
+            self._case_heading("Shear resistance", "plastic")
+            links = aggregate.get("links") or {}
+            resistance = (
+                (links.get("res") or {}).get("vrd")
+                if links else (aggregate.get("res") or {}).get("vrd_c")
+            )
+            utilisation = links.get("util") if links else aggregate.get("util")
+            component = aggregate.get("component") or (
+                "vy" if aggregate.get("axis") == "x" else "vx"
+            )
+            action = "V<sub>y,Ed</sub>" if component == "vy" else "V<sub>x,Ed</sub>"
+            self._table(
+                [
+                    ["Direction", "V<sub>Ed</sub>", "V<sub>Rd</sub>",
+                     "Utilisation", "Status", "Tension face"],
+                    [
+                        action,
+                        f"{_fmt(aggregate.get('signed_v_ed', aggregate.get('v_ed')), 3)} kN",
+                        f"{_fmt(resistance, 3)} kN",
+                        _pct(utilisation),
+                        aggregate.get("status", "NOT ASSESSED"),
+                        viz.tension_face_label(
+                            aggregate.get("tension_low", True),
+                            aggregate.get("axis"),
+                        ),
+                    ],
+                ],
+                [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm],
+            )
+            if links.get("out_of_limits") or aggregate.get("out_of_limits"):
+                self._small(
+                    "Warning: the retained compression-strut bounds are outside "
+                    "the selected method's default range. The actual entered "
+                    "bounds remain in the completed result."
+                )
+            if not critical:
+                self._small(
+                    "The complete shear worked example is published only for the "
+                    "governing retained utilisation across all plastic cases."
+                )
+                return
+            self._small(
+                "All calculated shear cases remain in the results overview. The "
+                "complete shear worked example is published only for the governing "
+                "retained utilisation across all plastic cases."
+            )
+            self._h2(f"Governing worked example: {action}")
+            self._shear_direction(
+                aggregate, include_case_heading=False, component=component
+            )
             return
 
         self._case_heading("Shear resistance", "plastic")
-        if aggregate.get("biaxial") and self.figures:
+        if critical and aggregate.get("biaxial") and self.figures:
             components = self.inp.get("shear_components") or {}
             self._fig(
                 viz.biaxial_shear_overview_figure(
@@ -3555,14 +4542,41 @@ class ReportBuilder:
                 "Generic cross-direction interaction is not calculated and no "
                 "aggregate shear verdict is issued."
             )
-        for component in ("vx", "vy"):
-            if component in directions:
-                label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
-                self._h2(f"{label} directional check")
-                self._shear_direction(
-                    directions[component], include_case_heading=False,
-                    component=component,
-                )
+        if any(
+            (item.get("links") or {}).get("out_of_limits")
+            or item.get("out_of_limits")
+            for item in directions.values()
+        ):
+            self._small(
+                "Warning: one or more directional compression-strut bands are "
+                "outside the selected method's default range. The actual entered "
+                "bounds remain in the completed results."
+            )
+        if not critical:
+            self._small(
+                "The complete shear worked example is published only for the "
+                "governing retained utilisation across all plastic cases."
+            )
+            return
+        self._small(
+            "All calculated shear cases and directions remain in the results "
+            "overview. The complete shear worked example is published only for "
+            "the governing retained utilisation across all plastic cases."
+        )
+        component = selected.get("component")
+        if not isinstance(component, str) or component not in directions:
+            self._h2("Worked shear calculation unavailable")
+            self._small(
+                "The completed payload does not retain the selected directional "
+                "result required by the governing worked-example contract."
+            )
+            return
+        label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
+        self._h2(f"Governing worked example: {label}")
+        self._shear_direction(
+            directions[component], include_case_heading=False,
+            component=component,
+        )
 
     def _shear_direction(self, sh, *, include_case_heading=True, component=None):
         res = sh["res"]
@@ -3773,6 +4787,17 @@ class ReportBuilder:
             self._small("Warning: the link resistance is zero -- check the leg count, "
                         "diameter and spacing (A<sub>sw</sub>/s must be &gt; 0).")
             return
+        retained_angle_fields = {
+            "cot", "tan", "theta_deg", "cot_min", "cot_max",
+            "cot_unconstrained", "angle_selection",
+        }
+        if not retained_angle_fields.issubset(lk):
+            self._small(
+                "Worked shear calculation unavailable: the completed payload does "
+                "not retain the accepted strut-angle operands. Sector does not "
+                "reconstruct them in the report."
+            )
+            return
         if links["out_of_limits"]:
             limit_ref = (
                 (links.get("angle_limits") or {}).get("clause")
@@ -3827,6 +4852,31 @@ class ReportBuilder:
                  f"{_fmt(lk['alpha_cw'], 3)}"]
             )
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        shared_angle = links.get("member_angle_selection") or {}
+        if shared_angle:
+            labels = tuple(shared_angle.get("objective_labels") or ())
+            governing = tuple(shared_angle.get("governing_objectives") or ())
+            self._small(
+                "Accepted common member-angle selection: cot theta = "
+                f"{_fmt(shared_angle.get('cot'), 4)} within "
+                f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
+                f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
+                f"{int(shared_angle.get('selected_index', 0)) + 1} of "
+                f"{int(shared_angle.get('samples', 0))}. "
+                "Governing retained objective(s): "
+                f"{_html_escape(', '.join(governing) or 'not identified')}. "
+                "The compact certificate covers "
+                f"{_html_escape(', '.join(labels) or 'the active checks')} and "
+                "does not contain an iteration history."
+            )
+        else:
+            self._small(
+                "Accepted resistance-angle selection: unconstrained cot theta = "
+                f"{_fmt(lk['cot_unconstrained'], 4)}, entered band "
+                f"[{_fmt(lk['cot_min'], 3)}, {_fmt(lk['cot_max'], 3)}], "
+                f"selected cot theta = {_fmt(lk['cot'], 4)} "
+                f"({_html_escape(lk['angle_selection'])})."
+            )
         self._fig(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                    links["dia"], links["s"]), 130, 80)
         if model_2023:
@@ -3843,7 +4893,7 @@ class ReportBuilder:
                 equation_key="shear.links.sigma-field",
                 ref="EN 1992-1-1:2023 Formula (8.44)",
                 subst=f"{_fmt(lk['tau_ed'], 3)} &#183; "
-                      f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) "
+                      f"({_fmt(lk['cot'], 3)} + {_fmt(lk['tan'], 3)}) "
                       f"&#8804; {_fmt(lk['nu'], 3)} &#183; {_fmt(lk['fcd'], 2)}",
                 result=f"sigma<sub>cd</sub> = {_fmt(lk['sigma_cd'], 3)} MPa; "
                        f"limit = {_fmt(lk['nu_fcd'], 3)} MPa")
@@ -3863,7 +4913,7 @@ class ReportBuilder:
                 references=("shear.links.sigma-field",),
                 subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / "
-                      f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) / 1000",
+                      f"({_fmt(lk['cot'], 3)} + {_fmt(lk['tan'], 3)}) / 1000",
                 result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
         else:
             self._formula(
@@ -3883,12 +4933,13 @@ class ReportBuilder:
                 subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
                       f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
                       f"{_fmt(lk['fcd'], 2)} / ({_fmt(lk['cot'], 3)} + "
-                      f"{_fmt(1.0 / lk['cot'], 3)}) / 1000",
+                      f"{_fmt(lk['tan'], 3)}) / 1000",
                 result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
         self._formula(
             "V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>)",
             equation_key="shear.links.vrd",
             references=("shear.links.vrds", "shear.links.vrdmax"),
+            subst=f"min({_fmt(lk['vrd_s'], 3)}, {_fmt(lk['vrd_max'], 3)})",
             result=f"V<sub>Rd</sub> = {_fmt(lk['vrd'], 3)} kN "
                    f"(governed by {lk['governs']})")
         util = links["util"]
@@ -4023,8 +5074,50 @@ class ReportBuilder:
     def _combined(self):
         aggregate = self.out["combined"]
         directions = aggregate.get("directions") or {}
+        selected = self._selected_family("combined", self.inp)
+        critical = selected is not None
         if not aggregate.get("biaxial") or not directions:
-            self._combined_direction(aggregate)
+            self._case_heading(
+                "Combined bending + shear + torsion (M-V-T)", "plastic"
+            )
+            status = (
+                "NOT ASSESSED" if not aggregate.get("valid")
+                else "PASS" if aggregate.get("dkna_ok") else "FAIL"
+            )
+            self._table(
+                [
+                    ["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
+                     "r<sub>T</sub>", "DK NA sum", "Status"],
+                    [
+                        "M+V+T",
+                        _pct(aggregate.get("r_m")),
+                        _pct(aggregate.get("r_v")),
+                        _pct(aggregate.get("r_t")),
+                        _pct(aggregate.get("dkna_sum")),
+                        status,
+                    ],
+                ],
+                [30 * mm, 25 * mm, 25 * mm, 25 * mm, 30 * mm, 35 * mm],
+            )
+            if aggregate.get("outside_default_range"):
+                self._small(
+                    "Warning: the retained shared compression-strut bounds are "
+                    "outside the selected method's default range."
+                )
+            if not critical:
+                self._small(
+                    "The complete combined M-V-T worked example is published only "
+                    "for the governing retained utilisation across all plastic cases."
+                )
+                return
+            self._small(
+                "All calculated combined-action cases remain in the results "
+                "overview. The complete combined M-V-T worked example is published "
+                "only for the governing retained utilisation across all plastic "
+                "cases."
+            )
+            self._h2("Governing combined worked example")
+            self._combined_direction(aggregate, include_case_heading=False)
             return
 
         self._case_heading(
@@ -4062,21 +5155,43 @@ class ReportBuilder:
              34 * mm, 18 * mm, 24 * mm],
             font=5.8,
         )
-        for component in ("vx", "vy"):
-            if component in directions:
-                block_start = len(self.flow)
-                label = "V<sub>x,Ed</sub> + T<sub>Ed</sub>" if component == "vx" \
-                    else "V<sub>y,Ed</sub> + T<sub>Ed</sub>"
-                self._h2(f"Directional screen: {label}")
-                self._combined_direction(
-                    directions[component], include_case_heading=False,
-                    component=component,
-                )
-                # A directional screen is a single auditable result.  Keep its
-                # heading, inputs and verdict together when the complete block
-                # fits on one page, instead of starting it at the foot of a page
-                # and continuing without context on the next one.
-                self._keep_from(block_start)
+        if any(
+            item.get("outside_default_range")
+            for item in directions.values()
+        ):
+            self._small(
+                "Warning: one or more retained shared compression-strut bands are "
+                "outside the selected method's default range."
+            )
+        if not critical:
+            self._small(
+                "The complete combined M-V-T worked example is published only for "
+                "the governing retained utilisation across all plastic cases."
+            )
+            return
+        self._small(
+            "All calculated combined-action cases and directions remain in the "
+            "results overview. The complete combined M-V-T worked example is "
+            "published only for the governing retained utilisation across all "
+            "plastic cases."
+        )
+        component = selected.get("component")
+        if not isinstance(component, str) or component not in directions:
+            self._h2("Worked combined calculation unavailable")
+            self._small(
+                "The completed payload does not retain the selected directional "
+                "result required by the governing worked-example contract."
+            )
+            return
+        block_start = len(self.flow)
+        label = "V<sub>x,Ed</sub> + T<sub>Ed</sub>" if component == "vx" \
+            else "V<sub>y,Ed</sub> + T<sub>Ed</sub>"
+        self._h2(f"Governing directional worked example: {label}")
+        self._combined_direction(
+            directions[component], include_case_heading=False,
+            component=component,
+        )
+        self._keep_from(block_start)
 
     def _combined_direction(self, c, *, include_case_heading=True, component=None):
         if include_case_heading:
@@ -4123,21 +5238,41 @@ class ReportBuilder:
             self._small("Warning: the shared compression-strut bounds fall outside "
                         "the selected method's default range. The actual values are "
                         "retained in the combined calculations.")
+        selection = c.get("dkna_selection")
+        if not isinstance(selection, dict):
+            self._h2("Worked combined calculation unavailable")
+            self._small(
+                "The completed payload does not retain the DK NA inclusion branch "
+                "and component sums. Sector does not reconstruct them in the report."
+            )
+            return
         verdict = _demand_resistance_verdict(c["dkna_ok"])
         if c["m_v_independent"]:
             expr = "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)"
             note = ("M and V checked separately (shear longitudinal steel provided); "
                     "N is folded into the bending utilisation.")
+            subst = (
+                f"max({_fmt(selection['m_plus_t'], 4)}, "
+                f"{_fmt(selection['v_plus_t'], 4)})"
+            )
         else:
             expr = "r<sub>M</sub> + r<sub>V</sub> + r<sub>T</sub>"
             note = "each action alone; N folded into the bending utilisation."
+            subst = (
+                f"{_fmt(selection['r_m'], 4)} + "
+                f"{_fmt(selection['r_v'], 4)} + "
+                f"{_fmt(selection['r_t'], 4)}"
+            )
         self._formula(
             expr,
             equation_key="combined.dk-na.sum",
-            note=note,
+            subst=subst,
+            note=(f"{note} Retained inclusion rule: "
+                  f"{_html_escape(selection['inclusion_rule'])}; governing chord: "
+                  f"{_html_escape(selection['governing_chord'])}."),
             result=(
                 "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
-                f"{_pct(c['dkna_sum'])}  ({verdict})"
+                f"{_pct(selection['utilisation'])}  ({verdict})"
             ),
         )
         self._h2("Physical resistance components")
@@ -4215,6 +5350,11 @@ class ReportBuilder:
                         "(6.3.2(2)), selected to minimise the governing utilisation.")
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
+            if cr is not None or tr is not None:
+                # Keep the complete governing chord derivation together. Without
+                # this semantic break, its final utilisation equation is commonly
+                # orphaned by the preceding strut/stirrup blocks.
+                self._page_break()
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             vv = _demand_resistance_verdict(lg["ok"])
             coverage = lg.get("off_not_evaluated")
@@ -4380,7 +5520,20 @@ class ReportBuilder:
     def _subtube_section(self, t):
         """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""
         subs = t["subtubes"]
-        c_tot = sum(s["stiffness"] for s in subs) or 1.0
+        distribution = t.get("torque_distribution") or {}
+        shares = distribution.get("shares") or ()
+        if (
+            not isinstance(distribution, dict)
+            or len(shares) != len(subs)
+            or any(not isinstance(share, dict) for share in shares)
+        ):
+            self._h2("Worked sub-tube calculation unavailable")
+            self._small(
+                "The completed payload does not retain the stiffness-proportional "
+                "torque shares for every sub-tube. Sector does not recreate that "
+                "distribution in the report."
+            )
+            return
         self._p("Compound section: modelled as component rectangles, each an equivalent "
                 "thin-walled tube. T<sub>Rd</sub> is the SUM of the sub-tube capacities "
                 "(6.3.1(3)) and the applied T<sub>Ed</sub> is split by uncracked "
@@ -4392,6 +5545,7 @@ class ReportBuilder:
                  "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
                  "T<sub>Rd,i</sub>", "util", "governs"]]
         for i, s in enumerate(subs):
+            share = shares[i]
             role = "web" if i == 0 else f"part {i + 1}"
             ut = ("inf" if not math.isfinite(s["util"])
                   else f"{_fmt(s['util'] * 100, 0)}%")
@@ -4399,8 +5553,9 @@ class ReportBuilder:
                          f"({_fmt(s['x_mm'], 0)}, {_fmt(s['y_mm'], 0)})<br/>"
                          f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
                          _fmt(s["tube"]["tef"], 1), _fmt(s["tube"]["Ak"] * 1e6, 0),
-                         f"{_fmt(s['stiffness'] / c_tot * 100, 0)}%",
-                         _fmt(s["t_ed"], 2), _fmt(s["trd"], 2), ut, s["governs"]])
+                         _pct(share.get("fraction")),
+                         _fmt(share.get("torque"), 2),
+                         _fmt(s["trd"], 2), ut, s["governs"]])
         self._table(rows, [16 * mm, 24 * mm, 14 * mm, 18 * mm, 13 * mm, 16 * mm,
                            16 * mm, 12 * mm, 25 * mm])
         # The torque is split by STIFFNESS, not capacity, so the governing check is the
@@ -4410,10 +5565,93 @@ class ReportBuilder:
         verdict = _demand_resistance_verdict(viz.util_ok(util))
         g = t.get("governing_sub")
         gov = ("web" if g == 0 else f"part {g + 1}") if g is not None else "-"
+        if not isinstance(g, int) or not 0 <= g < len(subs):
+            self._h2("Governing sub-tube calculation unavailable")
+            self._small(
+                "The completed payload does not retain the governing sub-tube "
+                "identity. Sector does not select one in the report."
+            )
+            return
+        governing = subs[g]
+        governing_share = shares[g]
+        steel = governing.get("steel_resistance") or {}
+        strut = governing.get("strut_resistance") or {}
+        resistance = governing.get("resistance_selection") or {}
+        required = (
+            "asw_over_s", "two_ak_m2", "fywd_mpa", "cot", "trd_s"
+        )
+        strut_required = (
+            "nu", "alpha_cw", "fcd_mpa", "ak_m2", "tef_mm",
+            "sin_cos", "trd_max",
+        )
+        if (
+            any(name not in steel for name in required)
+            or any(name not in strut for name in strut_required)
+            or any(name not in resistance for name in ("trd_s", "trd_max",
+                                                        "resistance", "governs"))
+        ):
+            self._h2("Governing sub-tube calculation unavailable")
+            self._small(
+                "The completed payload does not retain the governing sub-tube's "
+                "resistance operands. Sector does not recreate them in the report."
+            )
+            return
+        self._formula(
+            "lambda<sub>i</sub> = C<sub>i</sub> / &#8721; C<sub>j</sub>",
+            equation_key="torsion.subtube.stiffness-share",
+            ref="EN 1992-1-1 6.3.1(4), uncracked torsional-stiffness distribution.",
+            subst=(f"{_fmt(governing_share['stiffness'], 6)} / "
+                   f"{_fmt(distribution['positive_stiffness_sum'], 6)}"),
+            result=f"lambda<sub>{g + 1}</sub> = {_fmt(governing_share['fraction'], 6)}",
+        )
+        self._formula(
+            "T<sub>Ed,i</sub> = lambda<sub>i</sub> T<sub>Ed</sub>",
+            equation_key="torsion.subtube.torque-share",
+            references=("torsion.subtube.stiffness-share",),
+            subst=(f"{_fmt(governing_share['fraction'], 6)} &#183; "
+                   f"{_fmt(distribution['applied_torque'], 3)}"),
+            result=f"T<sub>Ed,{g + 1}</sub> = {_fmt(governing_share['torque'], 3)} kN&#183;m",
+        )
+        self._formula(
+            "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> "
+            "f<sub>ywd</sub> cot theta",
+            equation_key="torsion.resistance.steel",
+            ref="EN 1992-1-1 wall shear flow (6.27) and transverse equilibrium (6.8)",
+            subst=f"{_fmt(steel['asw_over_s'], 4)} &#183; "
+                  f"{_fmt(steel['two_ak_m2'], 4)} &#183; "
+                  f"{_fmt(steel['fywd_mpa'], 1)} &#183; {_fmt(steel['cot'], 3)}",
+            result=f"T<sub>Rd,s</sub> = {_fmt(steel['trd_s'], 3)} kN&#183;m",
+        )
+        self._formula(
+            "T<sub>Rd,max</sub> = 2 nu alpha<sub>cw</sub> f<sub>cd</sub> "
+            "A<sub>k</sub> t<sub>ef</sub> sin theta cos theta",
+            equation_key="torsion.resistance.crushing",
+            ref="EN 1992-1-1 (6.30)",
+            subst=f"2 &#183; {_fmt(strut['nu'], 3)} &#183; "
+                  f"{_fmt(strut['alpha_cw'], 3)} &#183; "
+                  f"{_fmt(strut['fcd_mpa'], 2)} &#183; {_fmt(strut['ak_m2'], 4)} "
+                  f"&#183; ({_fmt(strut['tef_mm'], 3)} / 1000) &#183; "
+                  f"{_fmt(strut['sin_cos'], 4)} &#183; 1000",
+            result=f"T<sub>Rd,max</sub> = {_fmt(strut['trd_max'], 3)} kN&#183;m",
+        )
+        self._formula(
+            "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
+            equation_key="torsion.resistance.governing",
+            references=("torsion.resistance.steel", "torsion.resistance.crushing"),
+            subst=f"min({_fmt(resistance['trd_s'], 3)}, "
+                  f"{_fmt(resistance['trd_max'], 3)})",
+            result=f"T<sub>Rd</sub> = {_fmt(resistance['resistance'], 3)} kN&#183;m "
+                   f"(governed by {resistance['governs']})",
+        )
         self._formula(
             "governing utilisation = max(T<sub>Ed,i</sub> / T<sub>Rd,i</sub>)",
             equation_key="torsion.subtube.governing-utilisation",
-            ref=f"worst sub-tube: {gov}", result=f"{util_txt}  ({verdict})")
+            references=("torsion.subtube.torque-share",
+                        "torsion.resistance.governing"),
+            ref=f"worst sub-tube: {gov}",
+            subst=(f"{_fmt(governing['t_ed'], 3)} / "
+                   f"{_fmt(governing['trd'], 3)}"),
+            result=f"{util_txt}  ({verdict})")
         self._small("The applied torque is split by stiffness, not capacity, so a "
                     "sub-tube can be overstressed even while T<sub>Ed</sub> &#8804; sum "
                     "T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}"
@@ -4424,7 +5662,119 @@ class ReportBuilder:
                     "bending steel; the combined V+T crushing pairs the shear with the "
                     "web sub-tube.")
         self._fig(viz.subtube_figure(subs), 150, 90)
-        self._crushing_interaction(t)
+
+    def _selected_torsion_subcheck(self, key):
+        selection = self._selected_torsion_subchecks.get(key)
+        if (
+            not isinstance(selection, Mapping)
+            or selection.get("case_id") != self._case_id(self.inp, "plastic")
+        ):
+            return None, None
+        torsion_result = self.out.get("torsion") or {}
+        component = selection.get("component")
+        if component is None:
+            item = torsion_result
+        elif isinstance(component, str):
+            item = (
+                torsion_result.get("directional_interactions") or {}
+            ).get(component) or {}
+        else:
+            return None, None
+        payload_key = (
+            "interaction" if key == "interaction" else "min_reinf"
+        )
+        return component, item.get(payload_key)
+
+    def _torsion_interaction_example(self):
+        component, interaction = self._selected_torsion_subcheck("interaction")
+        self._case_heading(
+            "Governing shear + torsion concrete-strut interaction", "plastic"
+        )
+        required = (
+            "valid", "value", "t_ed", "trd_max", "v_ed", "vrd_max",
+            "cot", "theta_deg",
+        )
+        if (
+            not isinstance(interaction, dict)
+            or not interaction.get("valid")
+            or any(key not in interaction or interaction[key] is None for key in required)
+        ):
+            self._small(
+                "<b>Worked calculation unavailable.</b> The retained governing "
+                "Formula 6.29 payload is incomplete; the report does not "
+                "reconstruct its operands."
+            )
+            return
+        direction = (
+            ""
+            if component is None
+            else " for " + ("Vx + T" if component == "vx" else "Vy + T")
+        )
+        self._small(
+            "All calculated V+T screens remain in the results overview. This is "
+            "the single largest retained Formula 6.29 utilisation across "
+            f"all plastic cases and directions{direction}."
+        )
+        self._crushing_interaction({"interaction": interaction})
+
+    def _torsion_minimum_reinforcement_example(self):
+        component, minimum = self._selected_torsion_subcheck(
+            "minimum_reinforcement"
+        )
+        self._case_heading(
+            "Governing shear + torsion minimum-reinforcement screen", "plastic"
+        )
+        required = (
+            "applicable", "value", "ok", "t_ed", "trd_c", "v_ed",
+            "vrd_c", "solid",
+        )
+        if (
+            not isinstance(minimum, dict)
+            or not minimum.get("applicable")
+            or any(key not in minimum or minimum[key] is None for key in required)
+        ):
+            self._small(
+                "<b>Worked calculation unavailable.</b> The retained governing "
+                "Formula 6.31 payload is incomplete; the report does not "
+                "reconstruct its operands."
+            )
+            return
+        direction = (
+            ""
+            if component is None
+            else " for " + ("Vx + T" if component == "vx" else "Vy + T")
+        )
+        self._small(
+            "All calculated Formula 6.31 screens remain in the results overview. "
+            "This is the single largest retained screen value across all "
+            f"plastic cases and directions{direction}."
+        )
+        self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
+        outcome = (
+            "minimum reinforcement suffices"
+            if minimum["ok"] else "designed reinforcement required"
+        )
+        self._formula(
+            "T<sub>Ed</sub>/T<sub>Rd,c</sub> + "
+            "V<sub>Ed</sub>/V<sub>Rd,c</sub>",
+            equation_key="torsion.minimum-reinforcement.screen",
+            ref="EN 1992-1-1 (6.31)",
+            subst=(
+                f"{_fmt(minimum['t_ed'], 3)}/{_fmt(minimum['trd_c'], 3)} + "
+                f"{_fmt(minimum['v_ed'], 3)}/{_fmt(minimum['vrd_c'], 3)}"
+            ),
+            result=f"{_fmt(minimum['value'], 3)}  ({outcome})",
+        )
+        solid_note = (
+            "Assumes an approximately solid rectangular section."
+            if minimum["solid"]
+            else "This section has a void: 6.31 is for solid sections, so it "
+            "does not strictly apply."
+        )
+        self._small(
+            "If &#8804; 1, only minimum shear + torsion reinforcement is required "
+            "(no designed stirrups for these actions). " + solid_note
+        )
 
     def _crushing_interaction(self, t):
         """Combined shear + torsion concrete crushing (6.29), if it was evaluated.
@@ -4465,6 +5815,7 @@ class ReportBuilder:
     def _torsion(self):
         t = self.out["torsion"]
         tube = t["tube"]
+        critical = self._selected_family("torsion", self.inp) is not None
         self._case_heading("Torsion (thin-walled tube)", "plastic")
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
@@ -4474,6 +5825,24 @@ class ReportBuilder:
                    "minimise the governing utilisation)."
                    if t.get("theta_mode") == "utilisation"
                    else "(auto-optimised for the torsion resistance)."))
+        status = (
+            "NOT ASSESSED" if not t.get("valid")
+            else _demand_resistance_verdict(viz.util_ok(t.get("util")))
+        )
+        self._table(
+            [
+                ["T<sub>Ed</sub>", "T<sub>Rd</sub>", "Utilisation",
+                 "Governing resistance", "Status"],
+                [
+                    f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
+                    f"{_fmt(t.get('trd'), 3)} kN&#183;m",
+                    _pct(t.get("util")),
+                    t.get("governs") or "-",
+                    status,
+                ],
+            ],
+            [31 * mm, 31 * mm, 31 * mm, 46 * mm, 31 * mm],
+        )
         directional = t.get("directional_interactions") or {}
         if directional:
             self._small(
@@ -4573,6 +5942,17 @@ class ReportBuilder:
                         "outside the selected method's default range 1..2.5 "
                         "(6.7N / 6.7a NA). The actual values are retained in the "
                         "torsion and dependent interaction calculations.")
+        if not critical:
+            self._small(
+                "The complete torsion worked example is published only for the "
+                "governing retained utilisation across all plastic cases."
+            )
+            return
+        self._small(
+            "All calculated torsion cases remain in the results overview. The "
+            "complete torsion worked example is published only for the governing "
+            "retained utilisation across all plastic cases."
+        )
         self._small(
             "Torsional cracking uses the actual direct input "
             "gamma<sub>ct</sub> = "
@@ -4585,6 +5965,31 @@ class ReportBuilder:
             self._h2("Sub-tubes (compound section, 6.3.1(3))")
             self._subtube_section(t)
             return
+        retained = {
+            name: t.get(name)
+            for name in (
+                "angle_selection",
+                "steel_resistance",
+                "strut_resistance",
+                "resistance_selection",
+                "cracking_resistance",
+                "longitudinal_reinforcement",
+            )
+        }
+        if any(not isinstance(value, dict) for value in retained.values()):
+            self._h2("Worked torsion calculation unavailable")
+            self._small(
+                "The completed payload does not retain every accepted torsion "
+                "formula operand and governing selection. Sector does not recreate "
+                "them in the report."
+            )
+            return
+        angle = retained["angle_selection"]
+        steel = retained["steel_resistance"]
+        strut = retained["strut_resistance"]
+        resistance = retained["resistance_selection"]
+        cracking = retained["cracking_resistance"]
+        longitudinal = retained["longitudinal_reinforcement"]
         tef_src = ("user input" if tube["tef_user"]
                    else ("A/u, capped at the wall" if tube["tef_capped"] else "A/u"))
         rows = [["Quantity", "Symbol", "Value"],
@@ -4605,6 +6010,26 @@ class ReportBuilder:
                  f"{_fmt(t.get('fctd'), 3)} MPa"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        shared_angle = t.get("member_angle_selection") or {}
+        if shared_angle:
+            self._small(
+                "Accepted common member-angle selection: cot theta = "
+                f"{_fmt(shared_angle.get('cot'), 4)} within "
+                f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
+                f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
+                f"{int(shared_angle.get('selected_index', 0)) + 1} of "
+                f"{int(shared_angle.get('samples', 0))}; governing retained "
+                "objective(s): "
+                f"{_html_escape(', '.join(shared_angle.get('governing_objectives') or ()) or 'not identified')}."
+            )
+        else:
+            self._small(
+                "Accepted torsion-resistance angle: unconstrained cot theta = "
+                f"{_fmt(angle.get('cot_unconstrained'), 4)}, entered band "
+                f"[{_fmt(angle.get('cot_min'), 3)}, {_fmt(angle.get('cot_max'), 3)}], "
+                f"selected cot theta = {_fmt(angle.get('cot'), 4)} "
+                f"({_html_escape(angle.get('selection'))})."
+            )
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
                                   tube["tef"], ak_m2=tube["Ak"]), 120, 100)
         if t.get("n_prestress"):
@@ -4622,25 +6047,29 @@ class ReportBuilder:
             "cot theta",
             equation_key="torsion.resistance.steel",
             ref="EN 1992-1-1 wall shear flow (6.27) and transverse equilibrium (6.8)",
-            subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
-                  f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
-            result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m")
+            subst=f"{_fmt(steel['asw_over_s'], 4)} &#183; "
+                  f"{_fmt(steel['two_ak_m2'], 4)} &#183; "
+                  f"{_fmt(steel['fywd_mpa'], 1)} &#183; {_fmt(steel['cot'], 3)}",
+            result=f"T<sub>Rd,s</sub> = {_fmt(steel['trd_s'], 3)} kN&#183;m")
         self._formula(
             "T<sub>Rd,max</sub> = 2 nu alpha<sub>cw</sub> f<sub>cd</sub> "
             "A<sub>k</sub> t<sub>ef</sub> sin theta cos theta",
             equation_key="torsion.resistance.crushing",
             ref="EN 1992-1-1 (6.30)",
-            subst=f"2 &#183; {_fmt(t['nu'], 3)} &#183; {_fmt(t['alpha_cw'], 3)} &#183; "
-                  f"{_fmt(t['fcd'], 2)} &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; "
-                  f"{_fmt(t['cot'] / (1.0 + t['cot'] ** 2), 4)} &#183; 1000",
-            result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN&#183;m")
+            subst=f"2 &#183; {_fmt(strut['nu'], 3)} &#183; "
+                  f"{_fmt(strut['alpha_cw'], 3)} &#183; "
+                  f"{_fmt(strut['fcd_mpa'], 2)} &#183; {_fmt(strut['ak_m2'], 4)} "
+                  f"&#183; ({_fmt(strut['tef_mm'], 3)} / 1000) &#183; "
+                  f"{_fmt(strut['sin_cos'], 4)} &#183; 1000",
+            result=f"T<sub>Rd,max</sub> = {_fmt(strut['trd_max'], 3)} kN&#183;m")
         self._formula(
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             equation_key="torsion.resistance.governing",
             references=("torsion.resistance.steel", "torsion.resistance.crushing"),
-            result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
-                   f"(governed by {t['governs']})")
+            subst=f"min({_fmt(resistance['trd_s'], 3)}, "
+                  f"{_fmt(resistance['trd_max'], 3)})",
+            result=f"T<sub>Rd</sub> = {_fmt(resistance['resistance'], 3)} kN&#183;m "
+                   f"(governed by {resistance['governs']})")
         self._formula(
             "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / gamma<sub>ct</sub>",
             equation_key="torsion.cracking.fctd",
@@ -4653,10 +6082,11 @@ class ReportBuilder:
             equation_key="torsion.cracking.resistance",
             references=("torsion.cracking.fctd",),
             ref="cracking (tau = f<sub>ctd</sub>)",
-            subst=f"2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; {_fmt(t['fctd'], 3)} "
+            subst=f"2 &#183; {_fmt(cracking['ak_m2'], 4)} &#183; "
+                  f"({_fmt(cracking['tef_mm'], 3)} / 1000) &#183; "
+                  f"{_fmt(cracking['fctd_mpa'], 3)} "
                   "&#183; 1000",
-            result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN&#183;m")
+            result=f"T<sub>Rd,c</sub> = {_fmt(cracking['trd_c'], 3)} kN&#183;m")
         util = t["util"]
         util_txt = _pct(util)
         verdict = _demand_resistance_verdict(viz.util_ok(util))
@@ -4670,36 +6100,287 @@ class ReportBuilder:
             "(2 A<sub>k</sub> f<sub>yd</sub>)",
             equation_key="torsion.longitudinal-steel",
             ref="EN 1992-1-1 (6.28)",
-            subst=f"{_fmt(t['t_ed'], 3)} &#183; {_fmt(tube['uk'], 4)} &#183; "
-                  f"{_fmt(t['cot'], 3)} / (2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(t['fyd_long'], 1)}) &#183; 1000",
-            result=f"&#8721;A<sub>sl</sub> = {_fmt(t['asl_req'], 0)} mm<sup>2</sup> "
+            subst=f"{_fmt(longitudinal['numerator'], 6)} / "
+                  f"{_fmt(longitudinal['denominator'], 6)} &#183; 1000",
+            result=f"&#8721;A<sub>sl</sub> = "
+                   f"{_fmt(longitudinal['asl_required_mm2'], 0)} mm<sup>2</sup> "
                    "(in addition to the bending steel)")
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
                     "MN&#183;m to kN&#183;m (resistances) and m<sup>2</sup> "
                     "to mm<sup>2</sup> "
                     "(A<sub>sl</sub>).")
-        # Biaxial runs report Eq. 6.31 per shear direction above. The standalone
-        # torsion payload has no shear companion and must not replace those screens.
-        mr = None if directional else t.get("min_reinf")
-        if mr is not None and mr.get("applicable"):
-            self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
-            vv = ("minimum reinforcement suffices" if mr["ok"]
-                  else "designed reinforcement required")
+
+    def _elastic_state_tables(self, title, state):
+        """Publish one retained Ec=1 state without repeating the elastic solve."""
+
+        self._h2(title)
+        plane = state["raw_stress_plane"]
+        self._table(
+            [["Coefficient", "Value", "Unit"],
+             ["sigma<sub>0</sub>", _fmt(plane["sigma0_kpa"], 9), "kN/m2"],
+             ["d sigma / dx", _fmt(plane["gradient_x_kpa_per_m"], 9), "kN/m3"],
+             ["d sigma / dy", _fmt(plane["gradient_y_kpa_per_m"], 9), "kN/m3"]],
+            [55 * mm, 60 * mm, 45 * mm],
+        )
+        equilibrium = state["equilibrium"]
+        matrix = equilibrium["matrix"]
+        matrix_rows = [[
+            "Resultant row", "sigma<sub>0</sub> coefficient",
+            "d sigma/dx coefficient", "d sigma/dy coefficient",
+        ]]
+        for label, row in zip(("N", "Mx", "My"), matrix):
+            matrix_rows.append([label, *[_fmt(value, 9) for value in row]])
+        self._table(
+            matrix_rows,
+            [31 * mm, 43 * mm, 43 * mm, 43 * mm],
+            font=7.0,
+            keep=False,
+        )
+        self._small(
+            "Final transformed equilibrium matrix J. For the N row the columns "
+            "have units m2, m3, m3; for the Mx/My rows they have units m3, m4, "
+            "m4. The raw plane uses kN/m2 and kN/m3, giving N in kN and moments "
+            "in kNm."
+        )
+        self._table(
+            [["Resultant", "Target", "Internal", "Residual", "Unit"],
+             ["N", _fmt(equilibrium["target"]["n"], 9),
+              _fmt(equilibrium["internal"]["n"], 9),
+              _fmt(equilibrium["residual"]["n"], 9), "kN"],
+             ["Mx", _fmt(equilibrium["target"]["mx"], 9),
+              _fmt(equilibrium["internal"]["mx"], 9),
+              _fmt(equilibrium["residual"]["mx"], 9), "kNm"],
+             ["My", _fmt(equilibrium["target"]["my"], 9),
+              _fmt(equilibrium["internal"]["my"], 9),
+              _fmt(equilibrium["residual"]["my"], 9), "kNm"]],
+            [29 * mm, 37 * mm, 37 * mm, 37 * mm, 20 * mm],
+            font=7.0,
+            keep=False,
+        )
+        tolerance = equilibrium.get("relative_tolerance")
+        self._small(
+            f"Accepted after {state.get('iterations', 0)} Newton iteration(s); "
+            f"normalised residual = {_fmt(equilibrium['normalised_residual'], 9)}"
+            + (f", tolerance = {_fmt(tolerance, 9)}." if tolerance is not None
+               else ". Direct uncracked linear solution; no Newton tolerance applies.")
+            + " The normalisation exactly preserves the solver's fixed numeric "
+              "[kN, kNm, kNm] maximum convention; it is not a physical-unit norm."
+        )
+        return plane, equilibrium, matrix
+
+    @staticmethod
+    def _matrix_substitution(row, plane):
+        return (
+            f"{_fmt(row[0], 9)} &#183; {_fmt(plane['sigma0_kpa'], 9)} + "
+            f"{_fmt(row[1], 9)} &#183; {_fmt(plane['gradient_x_kpa_per_m'], 9)} + "
+            f"{_fmt(row[2], 9)} &#183; {_fmt(plane['gradient_y_kpa_per_m'], 9)}"
+        )
+
+    def _elastic_worked(self, el):
+        """Publish the existing combined elastic calculation as a worked chain."""
+
+        states = el.get("accepted_states") or {}
+        superposition = el.get("superposition") or {}
+        if not states or not superposition:
+            self._h2("Worked elastic calculation unavailable")
+            self._small(
+                "The completed payload does not retain the accepted elastic states. "
+                "Sector does not repeat the solver in the report."
+            )
+            return
+
+        self._p(
+            "The elastic solver uses a raw reference-stress plane with E<sub>c</sub> "
+            "normalised to 1. Physical concrete strain is the retained reference "
+            "stress divided by the entered E<sub>c</sub>; eps0/kx/ky are therefore "
+            "not published as physical strain or curvature."
+        )
+
+        long_plane, long_eq, long_matrix = self._elastic_state_tables(
+            "Step 1 - accepted long-term state", states["long_term"]
+        )
+        self._formula(
+            "sigma<sub>ref</sub>(x,y) = sigma<sub>0</sub> + g<sub>x</sub>x + "
+            "g<sub>y</sub>y",
+            equation_key="elastic.long.stress-plane",
+            ref="Sector Ec=1 cracked-section stress-plane formulation.",
+            subst=(f"= {_fmt(long_plane['sigma0_kpa'], 9)} + "
+                   f"{_fmt(long_plane['gradient_x_kpa_per_m'], 9)}x + "
+                   f"{_fmt(long_plane['gradient_y_kpa_per_m'], 9)}y"),
+            result="Retained long-term reference-stress plane (x and y in m).",
+        )
+        self._formula(
+            "N<sub>int</sub> = J<sub>N</sub> q",
+            equation_key="elastic.long.equilibrium-n",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(long_matrix[0], long_plane),
+            result=(f"N<sub>int</sub> = {_fmt(long_eq['internal']['n'], 9)} kN; "
+                    f"target = {_fmt(long_eq['target']['n'], 9)} kN; "
+                    f"residual = {_fmt(long_eq['residual']['n'], 9)} kN"),
+        )
+        self._formula(
+            "M<sub>x,int</sub> = J<sub>Mx</sub> q",
+            equation_key="elastic.long.equilibrium-mx",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(long_matrix[1], long_plane),
+            result=(f"M<sub>x,int</sub> = {_fmt(long_eq['internal']['mx'], 9)} kNm; "
+                    f"target = {_fmt(long_eq['target']['mx'], 9)} kNm; "
+                    f"residual = {_fmt(long_eq['residual']['mx'], 9)} kNm"),
+        )
+        self._formula(
+            "M<sub>y,int</sub> = J<sub>My</sub> q",
+            equation_key="elastic.long.equilibrium-my",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(long_matrix[2], long_plane),
+            result=(f"M<sub>y,int</sub> = {_fmt(long_eq['internal']['my'], 9)} kNm; "
+                    f"target = {_fmt(long_eq['target']['my'], 9)} kNm; "
+                    f"residual = {_fmt(long_eq['residual']['my'], 9)} kNm"),
+        )
+
+        nl = superposition["long_term_modular_ratio"]
+        ns = superposition["short_term_modular_ratio"]
+        factor = superposition["long_term_reduction_factor"]
+        self._h2("Step 2 - neutralise the long-term concrete stress")
+        self._formula(
+            "r = 1 - n<sub>s</sub>/n<sub>l</sub>",
+            equation_key="elastic.combined.reduction-factor",
+            subst=f"= 1 - {_fmt(ns, 9)} / {_fmt(nl, 9)}",
+            result=f"r = {_fmt(factor, 9)}",
+        )
+        elements = el.get("elements") or []
+        if elements:
+            element = elements[0]
             self._formula(
-                "T<sub>Ed</sub>/T<sub>Rd,c</sub> + V<sub>Ed</sub>/V<sub>Rd,c</sub>",
-                equation_key="torsion.minimum-reinforcement.screen",
-                ref="EN 1992-1-1 (6.31)",
-                subst=f"{_fmt(mr['t_ed'], 3)}/{_fmt(mr['trd_c'], 3)} + "
-                      f"{_fmt(mr['v_ed'], 3)}/{_fmt(mr['vrd_c'], 3)}",
-                result=f"{_fmt(mr['value'], 3)}  ({vv})")
-            solid_note = ("Assumes an approximately solid rectangular section."
-                          if mr["solid"] else "This section has a void: 6.31 is for "
-                          "solid sections, so it does not strictly apply.")
-            self._small("If &#8804; 1, only minimum shear + torsion reinforcement is "
-                        "required (no designed stirrups for these actions). "
-                        + solid_note)
-        self._crushing_interaction(t)
+                "sigma<sub>s2,i</sub> = r sigma<sub>s1,passive,i</sub>",
+                equation_key="elastic.combined.reduced-long-stress",
+                references=("elastic.combined.reduction-factor",),
+                subst=(f"= {_fmt(factor, 9)} &#183; "
+                       f"{_fmt(element['long_passive_mpa'], 9)} MPa"),
+                result=(f"sigma<sub>s2,{_html_escape(element['element_id'])}</sub> = "
+                        f"{_fmt(element['reduced_long_mpa'], 9)} MPa"),
+            )
+        neutralising = superposition["neutralising_resultant"]
+        terms_n = " + ".join(
+            f"{_fmt(row['reduced_long_mpa'], 6)}&#183;{_fmt(row['area_mm2'], 3)}/1000"
+            for row in elements
+        ) or "0"
+        terms_mx = " + ".join(
+            f"{_fmt(row['reduced_long_mpa'], 6)}&#183;{_fmt(row['area_mm2'], 3)}"
+            f"&#183;{_fmt(row['y_mm'], 3)}/1000000"
+            for row in elements
+        ) or "0"
+        terms_my = " + ".join(
+            f"{_fmt(row['reduced_long_mpa'], 6)}&#183;{_fmt(row['area_mm2'], 3)}"
+            f"&#183;{_fmt(row['x_mm'], 3)}/1000000"
+            for row in elements
+        ) or "0"
+        self._formula(
+            "N<sub>neu</sub> = sum(sigma<sub>s2,i</sub>A<sub>i</sub>)",
+            equation_key="elastic.combined.neutralising-n",
+            subst="= " + terms_n,
+            result=f"N<sub>neu</sub> = {_fmt(neutralising['n'], 9)} kN",
+        )
+        self._formula(
+            "M<sub>neu,x</sub> = sum(sigma<sub>s2,i</sub>A<sub>i</sub>y<sub>i</sub>)",
+            equation_key="elastic.combined.neutralising-mx",
+            subst="= " + terms_mx,
+            result=f"M<sub>neu,x</sub> = {_fmt(neutralising['mx'], 9)} kNm",
+        )
+        self._formula(
+            "M<sub>neu,y</sub> = sum(sigma<sub>s2,i</sub>A<sub>i</sub>x<sub>i</sub>)",
+            equation_key="elastic.combined.neutralising-my",
+            subst="= " + terms_my,
+            result=f"M<sub>neu,y</sub> = {_fmt(neutralising['my'], 9)} kNm",
+        )
+
+        instant_plane, instant_eq, instant_matrix = self._elastic_state_tables(
+            "Step 3 - accepted instantaneous combined state",
+            states["instantaneous_combined"],
+        )
+        combined_target = superposition["combined_target_before_neutralisation"]
+        self._formula(
+            "N<sub>target</sub> = N<sub>comb</sub> - N<sub>neu</sub>",
+            equation_key="elastic.combined.target-n",
+            subst=(f"= {_fmt(combined_target['n'], 9)} - "
+                   f"{_fmt(neutralising['n'], 9)} kN"),
+            result=f"N<sub>target</sub> = {_fmt(instant_eq['target']['n'], 9)} kN",
+        )
+        self._formula(
+            "M<sub>x,target</sub> = M<sub>x,comb</sub> - M<sub>x,neu</sub>",
+            equation_key="elastic.combined.target-mx",
+            subst=(f"= {_fmt(combined_target['mx'], 9)} - "
+                   f"{_fmt(neutralising['mx'], 9)} kNm"),
+            result=(f"M<sub>x,target</sub> = "
+                    f"{_fmt(instant_eq['target']['mx'], 9)} kNm"),
+        )
+        self._formula(
+            "M<sub>y,target</sub> = M<sub>y,comb</sub> - M<sub>y,neu</sub>",
+            equation_key="elastic.combined.target-my",
+            subst=(f"= {_fmt(combined_target['my'], 9)} - "
+                   f"{_fmt(neutralising['my'], 9)} kNm"),
+            result=(f"M<sub>y,target</sub> = "
+                    f"{_fmt(instant_eq['target']['my'], 9)} kNm"),
+        )
+        self._formula(
+            "sigma<sub>ref</sub>(x,y) = sigma<sub>0</sub> + g<sub>x</sub>x + "
+            "g<sub>y</sub>y",
+            equation_key="elastic.instantaneous.stress-plane",
+            ref="Sector Ec=1 cracked-section stress-plane formulation.",
+            subst=(f"= {_fmt(instant_plane['sigma0_kpa'], 9)} + "
+                   f"{_fmt(instant_plane['gradient_x_kpa_per_m'], 9)}x + "
+                   f"{_fmt(instant_plane['gradient_y_kpa_per_m'], 9)}y"),
+            result="Retained instantaneous combined reference-stress plane (x and y in m).",
+        )
+        self._formula(
+            "N<sub>int</sub> = J<sub>N</sub> q",
+            equation_key="elastic.instantaneous.equilibrium-n",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(instant_matrix[0], instant_plane),
+            result=(f"N<sub>int</sub> = {_fmt(instant_eq['internal']['n'], 9)} kN; "
+                    f"target = {_fmt(instant_eq['target']['n'], 9)} kN; "
+                    f"residual = {_fmt(instant_eq['residual']['n'], 9)} kN"),
+        )
+        self._formula(
+            "M<sub>x,int</sub> = J<sub>Mx</sub> q",
+            equation_key="elastic.instantaneous.equilibrium-mx",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(instant_matrix[1], instant_plane),
+            result=(f"M<sub>x,int</sub> = {_fmt(instant_eq['internal']['mx'], 9)} kNm; "
+                    f"target = {_fmt(instant_eq['target']['mx'], 9)} kNm; "
+                    f"residual = {_fmt(instant_eq['residual']['mx'], 9)} kNm"),
+        )
+        self._formula(
+            "M<sub>y,int</sub> = J<sub>My</sub> q",
+            equation_key="elastic.instantaneous.equilibrium-my",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(instant_matrix[2], instant_plane),
+            result=(f"M<sub>y,int</sub> = {_fmt(instant_eq['internal']['my'], 9)} kNm; "
+                    f"target = {_fmt(instant_eq['target']['my'], 9)} kNm; "
+                    f"residual = {_fmt(instant_eq['residual']['my'], 9)} kNm"),
+        )
+
+        if elements:
+            element = elements[0]
+            self._h2("Step 4 - combine the retained element stresses")
+            self._formula(
+                "sigma<sub>total,i</sub> = sigma<sub>s2,i</sub> + "
+                "sigma<sub>RST1,i</sub> + sigma<sub>p0,i</sub>",
+                equation_key="elastic.combined.total-stress",
+                subst=(f"= {_fmt(element['reduced_long_mpa'], 9)} + "
+                       f"{_fmt(element['rst1_mpa'], 9)} + "
+                       f"{_fmt(element['locked_in_mpa'], 9)} MPa"),
+                result=(f"sigma<sub>total,{_html_escape(element['element_id'])}</sub> = "
+                        f"{_fmt(element['total_mpa'], 9)} MPa"),
+            )
+            self._formula(
+                "sigma<sub>DIF,i</sub> = sigma<sub>total,i</sub> - "
+                "sigma<sub>long,i</sub>",
+                equation_key="elastic.combined.difference-stress",
+                subst=(f"= {_fmt(element['total_mpa'], 9)} - "
+                       f"{_fmt(element['long_mpa'], 9)} MPa"),
+                result=(f"sigma<sub>DIF,{_html_escape(element['element_id'])}</sub> = "
+                        f"{_fmt(element['dif_mpa'], 9)} MPa"),
+            )
 
     def _elastic(self):
         el = self.out["elastic"]
@@ -4721,19 +6402,32 @@ class ReportBuilder:
                     f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm.")
         else:
             self._p(
-                "No verified cracked/uncracked classification is issued. "
+                "There is no verified cracking classification or "
+                "cracked/uncracked state. "
                 "Diagnostic neutral-axis intercepts: "
                 f"x<sub>na</sub> = {_fmt(el['na_x']*_MM, 3)} mm, "
                 f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm."
             )
-        ps = el.get("prestress")
-        if ps is not None:
-            # ps[0] is the tendon tension resultant; the prestress precompresses the
-            # section, so as an axial action (tension-positive) it is a compression.
+        ps = (
+            (self._base_out.get("prestress_initial") or {}).get(
+                "equivalent_action_origin"
+            )
+        )
+        if ps is not None and self.inp.get("tendons"):
             self._p(f"The tendon prestress is applied from its initial strain (so N "
                     f"is the external force only): equivalent prestress action "
-                    f"N = {_fmt(-ps[0], 3)} kN, M<sub>x</sub> = {_fmt(ps[1], 3)} kNm, "
-                    f"M<sub>y</sub> = {_fmt(ps[2], 3)} kNm (N tension-positive).")
+                    f"N = {_fmt(ps['n_kn'], 3)} kN, "
+                    f"M<sub>x</sub> = {_fmt(ps['mx_knm'], 3)} kNm, "
+                    f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kNm "
+                    "(N tension-positive; calculation shown in Section and "
+                    "materials).")
+        if self._selected_family("elastic", self.inp) is not None:
+            self._elastic_worked(el)
+        else:
+            self._small(
+                "The complete elastic worked example is published only for the "
+                "governing retained stress extremum across all elastic cases."
+            )
         checks = el.get("stress_outputs") or {}
         if checks:
             self._h2("Elastic stress outputs")
@@ -4875,50 +6569,81 @@ class ReportBuilder:
 
     def _cracking(self):
         el = self.out["elastic"]
+        case_id = self._case_id(self.inp, "elastic")
+        publish_threshold = (
+            isinstance(self._selected_cracking_threshold, Mapping)
+            and self._selected_cracking_threshold.get("case_id") == case_id
+        )
+        examples = [
+            item for item in self._selected_crack_examples
+            if item.get("case_id") == case_id
+        ]
+        publish_crack_width = bool(examples)
+        if publish_threshold and publish_crack_width:
+            heading = "Cracking threshold and governing crack width"
+        elif publish_crack_width:
+            heading = "Governing crack width"
+        else:
+            heading = "Cracking threshold"
         self._case_heading(
-            "Cracking and crack width" if el.get("show_cw")
-            else "Cracking threshold",
+            heading,
             "elastic",
         )
-        # Threshold.
-        if el.get("show_cw"):
-            self._h2("Cracking threshold")
-        lam = el.get("lambda_cr")
-        verdict = "cracked" if el.get("cracked") else "uncracked"
         valid = el.get("converged", True)
         crack_2023 = (
             el.get("crack_edition") == "2023"
             or "2023" in str(el.get("crack_code", ""))
         )
-        self._formula("lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
-                      equation_key="cracking.threshold",
-                      ref=("Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                           "(EN 1992-1-1:2023 &#167;9.2.1)"
-                           if crack_2023 else
-                           "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                           "(DS/EN 1992-1-1 &#167;7.1)"),
-                      subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
-                            f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa",
-                      result=(
-                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
-                          f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
-                          if valid else
-                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
-                          "no verified cracking classification"
-                      ))
-        if valid:
+        if publish_threshold:
+            if publish_crack_width:
+                self._h2("Governing cracking threshold")
+            lam = el.get("lambda_cr")
+            verdict = "cracked" if el.get("cracked") else "uncracked"
+            self._formula(
+                "lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
+                equation_key="cracking.threshold",
+                ref=(
+                    "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                    "(EN 1992-1-1:2023 &#167;9.2.1)"
+                    if crack_2023 else
+                    "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                    "(DS/EN 1992-1-1 &#167;7.1)"
+                ),
+                subst=(
+                    f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
+                    f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa"
+                ),
+                result=(
+                    f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
+                    f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
+                    if valid else
+                    f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
+                    "no verified cracking classification"
+                ),
+            )
             self._small(
-                "Governing of the long-term and total (long + short) actions: "
-                "cracking is triggered by the peak tension the section sees, and "
+                "Globally critical threshold across the elastic cases. "
+                "Cracking is triggered by the peak tension the section sees and "
                 "is irreversible."
             )
-        else:
-            self._small(
-                "Diagnostic value only: at least one elastic solve did not "
-                "converge, so no cracked/uncracked verdict is issued."
-            )
-        if not el.get("show_cw"):
-            self._small("Crack width was not requested for this run.")
+        if not publish_crack_width:
+            assessment = el.get("crack_output") or {}
+            status = assessment.get("calculation_state", "NOT CALCULATED")
+            if status == "NOT APPLICABLE" or (
+                el.get("crack") is None
+                and el.get("crack_short") is None
+                and el.get("crack_coarse") is None
+                and el.get("crack_short_coarse") is None
+            ):
+                self._small(
+                    f"Calculation state: {status}. No crack-width limit, "
+                    "exposure acceptance or action-set completeness criterion "
+                    "is applied."
+                )
+                self._small(
+                    "No crack width: section uncracked or no reinforcement "
+                    "in tension."
+                )
             return
         cl, cs = el.get("crack"), el.get("crack_short")
         clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
@@ -4942,17 +6667,31 @@ class ReportBuilder:
                         "in tension.")
             return
         self._crack_table(cl, cs, clc, csc)
-        # Work the case that actually governs (the larger crack width) over every
-        # reported load case and crack system.
-        if clc is not None or csc is not None:
-            cases = [(cl, "long-term (fine)"), (cs, "short-term (fine)"),
-                     (clc, "long-term (coarse)"), (csc, "short-term (coarse)")]
-        else:
-            cases = [(cl, "long-term"), (cs, "short-term")]
-        gov_case, gov_which = max(((c, w) for c, w in cases if c),
-                                  key=lambda cw: cw[0].get("wk", 0.0))
-        self._crack_worked(gov_case, gov_which)
-        self._crack_candidates(cases)
+        selected_cases = []
+        selected_worked = []
+        allowed_branches = {
+            "crack", "crack_short", "crack_coarse", "crack_short_coarse",
+        }
+        for item in examples:
+            branch = item.get("branch")
+            crack = (
+                el.get(branch)
+                if isinstance(branch, str) and branch in allowed_branches
+                else None
+            )
+            if isinstance(crack, Mapping):
+                selected = (crack, str(item.get("label") or ""))
+                selected_cases.append(selected)
+                selected_worked.append(selected)
+            else:
+                self._small(
+                    "<b>Worked calculation unavailable.</b> The retained "
+                    "worked-example selection references a missing or unsupported "
+                    "crack branch; no alternative branch is selected in the report."
+                )
+        self._crack_candidates(selected_cases)
+        for crack, label in selected_worked:
+            self._crack_worked(crack, label)
 
     def _crack_table(self, cl, cs, clc=None, csc=None):
         # The full crack-width breakdown for both load cases, matching the view.
@@ -5000,15 +6739,59 @@ class ReportBuilder:
             return
         self._h2(f"Crack width worked - governing case ({which})" if which
                  else "Crack width worked (governing element)")
+        missing = self._crack_worked_missing_operands(cw)
+        if missing:
+            self._small(
+                "<b>Worked calculation unavailable.</b> The selected retained "
+                "crack branch is incomplete (missing: "
+                + _html_escape(", ".join(missing))
+                + "). Sector does not substitute defaults or reconstruct "
+                "engineering operands in the report."
+            )
+            return
         self._small(f"Governing element (largest w<sub>k</sub>): "
                     f"{cw.get('element_id', 'element ' + str(cw.get('gov_bar','-')))}; "
                     f"clear cover c = {_fmt(cw.get('cover',0), 3)} mm.")
+        candidate = cw.get("governing_candidate") or {}
+        mean = candidate.get("mean_strain_operands") or {}
+        spacing = candidate.get("spacing_operands") or {}
         code = self.out["elastic"].get("crack_code")
-        if cw.get("edition") == "2023":
-            self._crack_worked_2023(cw, code)
-            return
         coarse = bool(cw.get("coarse"))
-        if cw.get("sr_max_geometric"):
+        if code:
+            if cw.get("edition") == "2023":
+                note = (
+                    f"Crack-width code: {code}. Refined control of cracking "
+                    "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
+                    "width to the calculated value, k<sub>1/r</sub> = (h-x)/"
+                    "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
+                    "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
+                    "/E<sub>s</sub>."
+                )
+            else:
+                note = f"Crack-width code: {code}. "
+                if "DK NA" in code:
+                    note += (
+                        "k<sub>3</sub> = 3.4&#183;(25/c)<super>2/3</super> "
+                        "(&#167;7.3.4(3)). "
+                    )
+                    if coarse:
+                        note += (
+                            "Coarse crack system (&#167;7.3.4(1)): "
+                            "A<sub>c,eff</sub> is the tension-face band whose "
+                            "centroid matches the tension reinforcement "
+                            "(figure 7.100 NA), and w<sub>k</sub> is halved."
+                        )
+                    else:
+                        note += (
+                            "The (h-x)/3 term in h<sub>c,ef</sub> applies to "
+                            "slabs and prestressed members only."
+                        )
+            self._small(note)
+        self._crack_effective_area_worked(cw, candidate)
+        if cw.get("edition") == "2023":
+            self._crack_worked_2023(cw, candidate)
+            return
+        if spacing.get("selected_candidate") == "formula-7.14":
             # Wide/isolated bars (spacing > 5(c+phi/2)): EC2 assigns the geometric
             # spacing 1.3(h-x) directly (Eq 7.14), so the (7.11) formula would not
             # reproduce the reported value.
@@ -5017,22 +6800,48 @@ class ReportBuilder:
                 equation_key="crack.2005.spacing",
                 equation_variant="geometric",
                 ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
-                note="bars not at close centres (spacing &gt; 5(c + phi/2))",
-                result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
+                note=(
+                    "bars not at close centres: selected because nearest spacing "
+                    f"{_fmt(spacing.get('nearest_neighbour_spacing'), 3)} mm "
+                    "exceeds 5(c + phi/2) = "
+                    f"{_fmt(spacing.get('close_spacing_limit'), 3)} mm"
+                ),
+                subst=(
+                    "= 1.3 &#183; "
+                    f"{_fmt(float(spacing.get('tension_zone_depth', 0.0)) * _MM, 3)} mm"
+                ),
+                result=(
+                    "s<sub>r,max</sub> = "
+                    f"{_fmt(spacing.get('selected_spacing'), 3)} mm"
+                ))
         else:
             self._formula(
                 "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
                 "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
                 equation_key="crack.2005.spacing",
                 equation_variant="reinforcement",
-                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)")
-        self._formula(
-            "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
-            "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
-            "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
-            "&gt;= 0.6&#183;sigma<sub>s</sub>/E<sub>s</sub>",
-            equation_key="crack.2005.mean-strain",
-            ref="Eq (7.9)")
+                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)",
+                note=(
+                    "bars at close centres: nearest spacing "
+                    f"{_fmt(spacing.get('nearest_neighbour_spacing'), 3)} mm "
+                    "; close-centre threshold 5(c + phi/2) = "
+                    f"{_fmt(spacing.get('close_spacing_limit'), 3)} mm; "
+                    "Formula (7.11) selected"
+                ),
+                subst=(
+                    f"= {_fmt(spacing.get('k3_used'), 4)} &#183; "
+                    f"{_fmt(spacing.get('cover'), 3)} + "
+                    f"{_fmt(spacing.get('k1'), 3)} &#183; "
+                    f"{_fmt(spacing.get('k2'), 3)} &#183; "
+                    f"{_fmt(spacing.get('k4'), 3)} &#183; "
+                    f"{_fmt(spacing.get('diameter'), 3)} / "
+                    f"{_fmt(spacing.get('rho_p_eff'), 6)}"
+                ),
+                result=(
+                    "s<sub>r,max</sub> = "
+                    f"{_fmt(spacing.get('selected_spacing'), 3)} mm"
+                ))
+        self._crack_mean_strain_worked(mean, edition="2005")
         self._formula(
             ("w<sub>k</sub> = &#189;&#183;s<sub>r,max</sub> &#183; "
              "(eps<sub>sm</sub> - eps<sub>cm</sub>)" if coarse else
@@ -5045,26 +6854,278 @@ class ReportBuilder:
                   + f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                     f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
-        if code:
-            note = f"Crack-width code: {code}. "
-            if "DK NA" in code:
-                note += ("k<sub>3</sub> = 3.4&#183;(25/c)<super>2/3</super> "
-                         "(&#167;7.3.4(3)). ")
-                if coarse:
-                    note += ("Coarse crack system (&#167;7.3.4(1)): A<sub>c,eff</sub> "
-                             "is the tension-face band whose centroid matches the "
-                             "tension reinforcement (figure 7.100 NA), and w<sub>k</sub> "
-                             "is halved.")
-                else:
-                    note += ("The (h-x)/3 term in h<sub>c,ef</sub> applies to slabs "
-                             "and prestressed members only.")
-            self._small(note)
+
+    @staticmethod
+    def _crack_worked_missing_operands(cw):
+        """Validate every operand required by the selected crack formula branch."""
+        missing = []
+
+        def require(mapping, prefix, keys):
+            if not isinstance(mapping, Mapping):
+                missing.append(prefix.rstrip("."))
+                return
+            missing.extend(
+                prefix + key for key in keys
+                if key not in mapping or mapping[key] is None
+            )
+
+        require(cw, "crack.", (
+            "cover", "sr_max", "esm_ecm", "wk", "governing_candidate",
+            "effective_area_operands", "edition",
+        ))
+        candidate = cw.get("governing_candidate") or {}
+        require(candidate, "candidate.", (
+            "as_eff", "ap_eff", "ac_eff", "rho_p_eff",
+            "mean_strain_operands", "spacing_operands",
+        ))
+        mean = candidate.get("mean_strain_operands") or {}
+        require(mean, "mean_strain.", (
+            "sigma_s", "concrete_tension_reduction", "es",
+            "formula_candidate", "lower_bound_factor",
+            "lower_bound_candidate", "selected_esm_ecm", "selected_candidate",
+        ))
+        spacing = candidate.get("spacing_operands") or {}
+        require(spacing, "spacing.", ("selected_candidate", "selected_spacing"))
+        area = cw.get("effective_area_operands") or {}
+        require(area, "effective_area.", ("record_kind", "ac_eff"))
+        edition = cw.get("edition")
+        if edition not in {"2004", "2005", "2023"}:
+            missing.append("crack.edition-supported")
+        if edition == "2023":
+            require(cw, "crack.", ("kw", "k1_r", "effective_reinforcement_2023"))
+            require(spacing, "spacing.", (
+                "flexural_factor_method", "cover_coefficient", "cover",
+                "flexural_factor", "bond_factor_kb", "diameter_ratio_divisor",
+                "diameter", "rho_p_eff", "formula_spacing",
+                "cap_tension_depth", "cap_spacing",
+            ))
+            if spacing.get("selected_candidate") not in {
+                "formula-9.15", "tension-zone-cap",
+            }:
+                missing.append("spacing.selected_candidate-supported")
+            reinforcement = cw.get("effective_reinforcement_2023") or {}
+            require(reinforcement, "effective_reinforcement.", (
+                "as_eff", "ap_eff_weighted", "ac_eff", "rho_p_eff",
+            ))
+        elif edition in {"2004", "2005"}:
+            require(spacing, "spacing.", (
+                "nearest_neighbour_spacing", "close_spacing_limit",
+            ))
+            spacing_candidate = spacing.get("selected_candidate")
+            if spacing_candidate == "formula-7.14":
+                require(spacing, "spacing.", ("tension_zone_depth",))
+            elif spacing_candidate == "formula-7.11":
+                require(spacing, "spacing.", (
+                    "k3_used", "cover", "k1", "k2", "k4", "diameter",
+                    "rho_p_eff",
+                ))
+            else:
+                missing.append("spacing.selected_candidate-supported")
+
+        area_keys = {
+            "CrackEffectiveArea2005Fine": (
+                "candidate_2_5_h_minus_d", "candidate_h_over_2",
+                "selected_hc_eff", "selected_candidate",
+            ),
+            "CrackEffectiveArea2005Coarse": (
+                "band_centroid_axis", "reinforcement_centroid_axis",
+                "centroid_gap", "selected_hc_eff",
+            ),
+            "CrackEffectiveArea2023Bending": (
+                "candidate_ay_plus_5phi", "candidate_10phi",
+                "candidate_3_5ay", "layer_spread", "candidate_h_minus_x",
+                "candidate_h_over_2", "selected_hc_eff",
+                "final_selected_candidate",
+            ),
+            "CrackEffectiveArea2023Direct": (
+                "width", "height", "inner_width", "inner_height",
+            ),
+        }
+        record_kind = area.get("record_kind")
+        if record_kind not in area_keys:
+            missing.append("effective_area.record_kind")
+        else:
+            require(area, "effective_area.", area_keys[record_kind])
+            if edition == "2023" and record_kind not in {
+                "CrackEffectiveArea2023Bending",
+                "CrackEffectiveArea2023Direct",
+            }:
+                missing.append("effective_area.record_kind-for-edition")
+            if edition in {"2004", "2005"}:
+                expected_kind = (
+                    "CrackEffectiveArea2005Coarse"
+                    if cw.get("coarse") else "CrackEffectiveArea2005Fine"
+                )
+                if record_kind != expected_kind:
+                    missing.append("effective_area.record_kind-for-system")
+        return tuple(dict.fromkeys(missing))
+
+    def _crack_effective_area_worked(self, cw, candidate):
+        """Publish retained effective-area and reinforcement-ratio operands."""
+
+        area = cw.get("effective_area_operands") or {}
+        kind = area.get("record_kind")
+        if kind == "CrackEffectiveArea2005Fine":
+            hx = area.get("candidate_h_minus_x_over_3")
+            candidates = (
+                f"2.5(h-d) = {_fmt(area.get('candidate_2_5_h_minus_d', 0) * _MM, 3)} mm; "
+                + (
+                    f"(h-x)/3 = {_fmt(hx * _MM, 3)} mm; "
+                    if hx is not None else "(h-x)/3 not applicable; "
+                )
+                + f"h/2 = {_fmt(area.get('candidate_h_over_2', 0) * _MM, 3)} mm"
+            )
+            self._formula(
+                "h<sub>c,eff</sub> = min[2.5(h-d), (h-x)/3, h/2]",
+                equation_key="crack.effective-area.2005",
+                equation_variant="fine",
+                ref="DS/EN 1992-1-1 &#167;7.3.2(3)",
+                subst=candidates,
+                result=(
+                    f"h<sub>c,eff</sub> = {_fmt(area.get('selected_hc_eff', 0) * _MM, 3)} mm "
+                    f"({area.get('selected_candidate', '-')}); "
+                    f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>"
+                ),
+            )
+        elif kind == "CrackEffectiveArea2005Coarse":
+            self._formula(
+                "s&#772;<sub>c,eff</sub> = s&#772;<sub>s,t</sub>",
+                equation_key="crack.effective-area.2005",
+                equation_variant="coarse",
+                ref="DS/EN 1992-1-1 DK NA Figure 7.100 NA",
+                subst=(
+                    f"s&#772;<sub>c,eff</sub> = {_fmt(area.get('band_centroid_axis'), 6)} m; "
+                    f"s&#772;<sub>s,t</sub> = {_fmt(area.get('reinforcement_centroid_axis'), 6)} m"
+                ),
+                result=(
+                    f"centroid gap = {_fmt(area.get('centroid_gap', 0) * _MM, 6)} mm; "
+                    f"h<sub>c,eff</sub> = {_fmt(area.get('selected_hc_eff', 0) * _MM, 3)} mm; "
+                    f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>"
+                ),
+            )
+        elif kind == "CrackEffectiveArea2023Bending":
+            self._formula(
+                "h<sub>c,eff</sub> = min[max(min(a<sub>y</sub>+5phi, 10phi, "
+                "3.5a<sub>y</sub>), Delta a<sub>y</sub>), h-x, h/2]",
+                equation_key="crack.effective-area.2023",
+                equation_variant="bending",
+                ref="EN 1992-1-1:2023 Figure 9.3",
+                subst=(
+                    f"a<sub>y</sub>+5phi = {_fmt(area.get('candidate_ay_plus_5phi', 0) * _MM, 3)} mm; "
+                    f"10phi = {_fmt(area.get('candidate_10phi', 0) * _MM, 3)} mm; "
+                    f"3.5a<sub>y</sub> = {_fmt(area.get('candidate_3_5ay', 0) * _MM, 3)} mm; "
+                    f"layer spread = {_fmt(area.get('layer_spread', 0) * _MM, 3)} mm; "
+                    f"h-x = {_fmt(area.get('candidate_h_minus_x', 0) * _MM, 3)} mm; "
+                    f"h/2 = {_fmt(area.get('candidate_h_over_2', 0) * _MM, 3)} mm"
+                ),
+                result=(
+                    f"h<sub>c,eff</sub> = {_fmt(area.get('selected_hc_eff', 0) * _MM, 3)} mm "
+                    f"({area.get('final_selected_candidate', '-')}); "
+                    f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>"
+                ),
+            )
+        elif kind == "CrackEffectiveArea2023Direct":
+            self._formula(
+                "A<sub>c,eff</sub> = bh - (b-c<sub>l</sub>-c<sub>r</sub>)"
+                "(h-c<sub>b</sub>-c<sub>t</sub>)",
+                equation_key="crack.effective-area.2023",
+                equation_variant="direct-tension",
+                ref="EN 1992-1-1:2023 Figure 9.3",
+                subst=(
+                    f"= {_fmt(area.get('width'), 6)} &#183; {_fmt(area.get('height'), 6)} - "
+                    f"{_fmt(area.get('inner_width'), 6)} &#183; {_fmt(area.get('inner_height'), 6)}"
+                ),
+                result=f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>",
+            )
+        else:
+            self._small(
+                "<b>Effective-area calculation unavailable.</b> No retained "
+                "effective-area operands were supplied; the report does not "
+                "reconstruct the section geometry."
+            )
+
+        if cw.get("edition") == "2023":
+            reinforcement = cw.get("effective_reinforcement_2023") or {}
+            if not reinforcement:
+                self._small(
+                    "<b>Effective reinforcement ratio unavailable.</b> The "
+                    "retained Formula (9.12) operands are missing."
+                )
+                return
+            self._formula(
+                "rho<sub>p,eff</sub> = (A<sub>s,eff</sub> + "
+                "sum xi<sub>1,j</sub>A<sub>p,j</sub>) / A<sub>c,eff</sub>",
+                equation_key="crack.effective-reinforcement.ratio",
+                equation_variant="2023",
+                ref="EN 1992-1-1:2023 Formula (9.12)",
+                subst=(
+                    f"= ({_fmt(reinforcement.get('as_eff'), 8)} + "
+                    f"{_fmt(reinforcement.get('ap_eff_weighted'), 8)}) / "
+                    f"{_fmt(reinforcement.get('ac_eff'), 8)}"
+                ),
+                result=f"rho<sub>p,eff</sub> = {_fmt(reinforcement.get('rho_p_eff'), 6)}",
+            )
+        else:
+            self._formula(
+                "rho<sub>p,eff</sub> = (A<sub>s,eff</sub> + "
+                "A<sub>p,eff</sub>) / A<sub>c,eff</sub>",
+                equation_key="crack.effective-reinforcement.ratio",
+                equation_variant="2005",
+                ref="DS/EN 1992-1-1 &#167;7.3.2",
+                subst=(
+                    f"= ({_fmt(candidate.get('as_eff'), 8)} + "
+                    f"{_fmt(candidate.get('ap_eff'), 8)}) / "
+                    f"{_fmt(candidate.get('ac_eff'), 8)}"
+                ),
+                result=f"rho<sub>p,eff</sub> = {_fmt(candidate.get('rho_p_eff'), 6)}",
+            )
+
+    def _crack_mean_strain_worked(self, mean, *, edition):
+        lower_label = "0.6" if edition == "2005" else "1 - k<sub>t</sub>"
+        symbolic = (
+            "eps<sub>sm</sub> - eps<sub>cm</sub> = max{[sigma<sub>s</sub> - "
+            "k<sub>t</sub>f<sub>ct,eff</sub>/rho<sub>p,eff</sub> "
+            "(1 + alpha<sub>e</sub>rho<sub>p,eff</sub>)]/E<sub>s</sub>, "
+            f"{lower_label} sigma<sub>s</sub>/E<sub>s</sub>}}"
+        )
+        subst = (
+            f"first candidate = ({_fmt(mean.get('sigma_s'), 3)} - "
+            f"{_fmt(mean.get('concrete_tension_reduction'), 3)}) / "
+            f"{_fmt(mean.get('es'), 1)} = "
+            f"{_fmt(mean.get('formula_candidate'), 8)}; "
+            f"lower bound = {_fmt(mean.get('lower_bound_factor'), 3)} &#183; "
+            f"{_fmt(mean.get('sigma_s'), 3)} / {_fmt(mean.get('es'), 1)} = "
+            f"{_fmt(mean.get('lower_bound_candidate'), 8)}"
+        )
+        result = (
+            "eps<sub>sm</sub> - eps<sub>cm</sub> = "
+            f"{_fmt(mean.get('selected_esm_ecm'), 8)} "
+            f"({mean.get('selected_candidate', '-')})"
+        )
+        if edition == "2005":
+            self._formula(
+                symbolic,
+                equation_key="crack.2005.mean-strain",
+                ref="DS/EN 1992-1-1 Formula (7.9)",
+                subst=subst,
+                result=result,
+            )
+        else:
+            self._formula(
+                symbolic,
+                equation_key="crack.2023.mean-strain",
+                ref="EN 1992-1-1:2023 Formula (9.11)",
+                subst=subst,
+                result=result,
+            )
 
     def _crack_candidates(self, cases):
         """Append the complete sorted per-element crack-width audit table."""
-        rows = [["Case", "#", "Element", "x", "y", "c", "phi",
-                 "sigma<sub>s</sub>", "A<sub>c,eff</sub>", "&#916;eps",
-                 "s<sub>r</sub>", "w<sub>k</sub>"]]
+        rows = [["Case<br/>(LT/ST)", "#<br/>(G/N)", "Element",
+                 "x<br/>(mm)", "y<br/>(mm)", "c<br/>(mm)",
+                 "phi<br/>(mm)", "sigma<sub>s</sub><br/>(MPa)",
+                 "A<sub>c,eff</sub><br/>(m<super>2</super>)", "&#916;eps",
+                 "s<sub>r</sub><br/>(mm)", "w<sub>k</sub><br/>(mm)"]]
         for case, label in cases:
             candidates = [] if not case else case.get("candidates", [])
             if not candidates:
@@ -5091,41 +7152,52 @@ class ReportBuilder:
                 ])
         if len(rows) == 1:
             return
-        # Keep the heading, compact table and legend together. ReportLab can place
-        # the block in remaining space when it fits, avoiding an unnecessary
-        # mostly-empty continuation page.
-        block_start = len(self.flow)
-        self._h2("Crack-width candidates - all checked cases")
+        # KeepWithNext on the heading keeps it with the table.  Do not wrap the
+        # whole heading/table/legend block in KeepTogether: after a full worked
+        # derivation that can push this compact summary onto an otherwise empty
+        # continuation page.
+        self._h2("Candidate summary for governing crack example")
         self._table(
             rows,
             _CRACK_CANDIDATE_COL_WIDTHS,
             font=5.4, keep=False, repeat_cols=3,
         )
-        self._small(
-            "LT = long-term; ST = short-term. Coordinates, c, phi and "
-            "s<sub>r</sub> in mm; sigma<sub>s</sub> in MPa; "
-            "A<sub>c,eff</sub> in m<super>2</super>; &#916;eps "
-            "dimensionless; w<sub>k</sub> in mm. G = governing; "
-            "N = within 10% of governing."
-        )
-        self._keep_from(block_start)
 
-    def _crack_worked_2023(self, cw, code):
+    def _crack_worked_2023(self, cw, candidate):
         """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
+        spacing = candidate["spacing_operands"]
+        mean = candidate["mean_strain_operands"]
+        cap = spacing.get("cap_spacing")
         self._formula(
             "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
             "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
             equation_key="crack.2023.spacing",
             ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
-            subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
-                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
-        self._formula(
-            "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
-            "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
-            "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
-            "&gt;= (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>/E<sub>s</sub>",
-            equation_key="crack.2023.mean-strain",
-            ref="Eq (9.11)")
+            note=(
+                f"k<sub>fl</sub> method: {spacing.get('flexural_factor_method', '-')}; "
+                f"selected: {spacing.get('selected_candidate', '-')}"
+            ),
+            subst=(
+                f"formula = {_fmt(spacing.get('cover_coefficient'), 3)} &#183; "
+                f"{_fmt(spacing.get('cover'), 3)} + "
+                f"({_fmt(spacing.get('flexural_factor'), 4)} &#183; "
+                f"{_fmt(spacing.get('bond_factor_kb'), 3)} / "
+                f"{_fmt(spacing.get('diameter_ratio_divisor'), 3)}) &#183; "
+                f"{_fmt(spacing.get('diameter'), 3)} / "
+                f"{_fmt(spacing.get('rho_p_eff'), 6)} = "
+                f"{_fmt(spacing.get('formula_spacing'), 3)} mm"
+                + (
+                    f"; cap = (1.3 / {_fmt(cw.get('kw'), 3)}) &#183; "
+                    f"{_fmt(float(spacing['cap_tension_depth']) * _MM, 3)} = "
+                    f"{_fmt(cap, 3)} mm"
+                    if cap is not None else "; no finite tension-zone cap"
+                )
+            ),
+            result=(
+                "s<sub>r,m,cal</sub> = "
+                f"{_fmt(spacing.get('selected_spacing'), 3)} mm"
+            ))
+        self._crack_mean_strain_worked(mean, edition="2023")
         self._formula(
             "w<sub>k,cal</sub> = k<sub>w</sub>&#183;k<sub>1/r</sub>&#183;"
             "s<sub>r,m,cal</sub>&#183;(eps<sub>sm</sub> - eps<sub>cm</sub>)",
@@ -5136,13 +7208,6 @@ class ReportBuilder:
                   f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
-        if code:
-            self._small(f"Crack-width code: {code}. Refined control of cracking "
-                        "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
-                        "width to the calculated value, k<sub>1/r</sub> = (h-x)/"
-                        "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
-                        "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
-                        "/E<sub>s</sub>.")
 
     def _fatigue(self):
         payload = self._base_out["fatigue"]
@@ -5340,13 +7405,40 @@ class ReportBuilder:
             self._base_inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
         )
         spectra = fatigue_presentation.items(payload, "spectra")
+        reinforcement_example = payload.get("governing_reinforcement_example")
+        concrete_example = payload.get("governing_concrete_example")
+        selected_spectrum_names = {
+            str(selection.get("spectrum_name"))
+            for selection in (reinforcement_example, concrete_example)
+            if isinstance(selection, Mapping) and selection.get("spectrum_name")
+        }
+        if checks.get("reinforcement") and not reinforcement_example:
+            self._small(
+                "<b>Worked example unavailable:</b> no converged governing "
+                "reinforcement fatigue result was retained."
+            )
+        if checks.get("concrete") and not concrete_example:
+            self._small(
+                "<b>Worked example unavailable:</b> no converged governing "
+                "concrete fatigue result was retained."
+            )
         for spectrum in spectra:
-            # Each independently assessed spectrum starts as a coherent report
-            # unit; do not strand its heading below the aggregate summary.
-            self.flow.append(NotAtTopPageBreak())
             spectrum_name = str(
                 fatigue_presentation.value(spectrum, "spectrum_name", "-")
             )
+            if spectrum_name not in selected_spectrum_names:
+                continue
+            publish_reinforcement = bool(
+                isinstance(reinforcement_example, Mapping)
+                and reinforcement_example.get("spectrum_name") == spectrum_name
+            )
+            publish_concrete = bool(
+                isinstance(concrete_example, Mapping)
+                and concrete_example.get("spectrum_name") == spectrum_name
+            )
+            # Only spectra containing a globally governing family example become
+            # detailed report units. Every other spectrum remains in the summary.
+            self.flow.append(NotAtTopPageBreak())
             spectrum_status = fatigue_presentation.result_status(spectrum)
             self._h2("Spectrum - " + _html_escape(spectrum_name))
             self._status_block(
@@ -5414,23 +7506,23 @@ class ReportBuilder:
             if state_rows:
                 self._h2("Elastic solver states")
                 rows = [[
-                    "Bin", "Status", "gamma<sub>Ff</sub>", "Bond method",
-                    "Max design &#916;sigma", "Max concrete compression",
+                    "Bin", "Description", "Cycles", "Status",
+                    "gamma<sub>Ff</sub>", "Bond method",
                 ]]
                 rows.extend([
                     [
                         _html_escape(row["bin"]),
+                        _html_escape(row["description"]),
+                        _fmt_sig(row["cycles"], 8),
                         row["status"],
                         _fmt(row["gamma_ff"], 3),
                         _html_escape(row["bond_method"]),
-                        f"{_fmt(row['max_design_stress_range_mpa'], 3)} MPa",
-                        f"{_fmt(row['max_concrete_compression_mpa'], 3)} MPa",
                     ]
                     for row in state_rows
                 ])
                 self._table(
                     rows,
-                    [22 * mm, 18 * mm, 22 * mm, 42 * mm, 31 * mm, 31 * mm],
+                    [22 * mm, 48 * mm, 23 * mm, 18 * mm, 22 * mm, 32 * mm],
                     font=6.4,
                     keep=False,
                 )
@@ -5438,7 +7530,7 @@ class ReportBuilder:
             reinforcement_rows = fatigue_presentation.reinforcement_rows(
                 spectrum
             )
-            if reinforcement_rows:
+            if reinforcement_rows and publish_reinforcement:
                 self._h2("Reinforcement fatigue")
                 rows = [[
                     "Element", "Type", "Detail", "phi", "Miner D",
@@ -5466,14 +7558,7 @@ class ReportBuilder:
                     keep=False,
                     repeat_cols=3,
                 )
-                governing_id = fatigue_presentation.value(
-                    spectrum, "governing_reinforcement_id"
-                )
-                if governing_id is None:
-                    governing_id = max(
-                        reinforcement_rows,
-                        key=lambda row: row["utilisation"] or -math.inf,
-                    )["element_id"]
+                governing_id = reinforcement_example.get("element_id")
                 result = fatigue_presentation.result_by_element(
                     spectrum, governing_id
                 )
@@ -5540,7 +7625,7 @@ class ReportBuilder:
                     )
                     rows = [[
                         "Bin", "Cycles", "Status", "Long stress",
-                        "Fatigue total", "Design total", "Elastic &#916;sigma",
+                        "Fatigue total", "Design total", "Design elastic &#916;sigma",
                         "Design &#916;sigma", "Bond factor / method",
                     ]]
                     rows.extend([
@@ -5551,7 +7636,7 @@ class ReportBuilder:
                             _fmt(row["stress_long_mpa"], 3),
                             _fmt(row["stress_total_mpa"], 3),
                             _fmt(row["stress_total_design_mpa"], 3),
-                            _fmt(row["stress_range_elastic_mpa"], 3),
+                            _fmt(row["design_stress_range_elastic_mpa"], 3),
                             _fmt(row["design_stress_range_mpa"], 3),
                             (
                                 f"{_fmt(row['bond_adjustment'], 3)}<br/>"
@@ -5569,8 +7654,9 @@ class ReportBuilder:
                     )
                     self._small(
                         "All stresses are in MPa. Fatigue total includes the bond "
-                        "transformation; elastic &#916;sigma is the raw solver "
-                        "range; design values include action-level "
+                        "transformation; design elastic &#916;sigma is the raw "
+                        "action-factored solver range before the bond correction; "
+                        "design values include action-level "
                         "gamma<sub>Ff</sub>."
                     )
                     rows = [[
@@ -5599,12 +7685,19 @@ class ReportBuilder:
                         font=5.4,
                         keep=False,
                     )
+                    self._fatigue_reinforcement_formulas(
+                        result,
+                        bin_rows,
+                        reinforcement_example,
+                        references.get("reinforcement"),
+                    )
 
             concrete_rows = fatigue_presentation.concrete_rows(spectrum)
-            if concrete_rows:
-                equivalent_method = any(
-                    row.get("equivalent_utilisation") is not None
-                    for row in concrete_rows
+            if concrete_rows and publish_concrete:
+                equivalent_method = (
+                    str(fatigue_presentation.value(
+                        spectrum, "concrete_method", ""
+                    )) == fatigue_core.CONCRETE_EQUIVALENT
                 )
                 self._h2("Concrete fatigue")
                 rows = [[
@@ -5645,26 +7738,16 @@ class ReportBuilder:
                     "Coordinates in mm; f<sub>cd,fat</sub> in MPa. The selected "
                     "criterion and stress are evaluated at the same fixed fibre."
                 )
-                governing_fibre = fatigue_presentation.value(
-                    spectrum, "governing_concrete_fibre"
-                )
+                governing_fibre = concrete_example.get("fibre_index")
                 result = fatigue_presentation.result_by_fibre(
                     spectrum, governing_fibre
                 )
                 if result is None:
-                    result = max(
-                        fatigue_presentation.items(spectrum, "concrete"),
-                        key=lambda item: (
-                            fatigue_presentation.evidence_number(
-                                fatigue_presentation.value(
-                                    item, "utilisation"
-                                )
-                            ) or -math.inf
-                        ),
+                    self._small(
+                        "<b>Worked example unavailable:</b> the retained global "
+                        "concrete-fibre identity is absent from this spectrum."
                     )
-                    governing_fibre = fatigue_presentation.value(
-                        result, "fibre_index"
-                    )
+                    continue
                 self._h2(
                     "Governing concrete fibre - "
                     + _html_escape(str(governing_fibre))
@@ -5835,6 +7918,13 @@ class ReportBuilder:
                     font=6.5,
                     keep=False,
                 )
+                self._fatigue_concrete_formulas(
+                    spectrum,
+                    result,
+                    bin_rows,
+                    concrete_example,
+                    references.get("concrete"),
+                )
                 if equivalent_method:
                     self._small(
                         "Concrete criterion: E<sub>cd,max</sub> + 0.43 "
@@ -5843,6 +7933,577 @@ class ReportBuilder:
                         "damage-equivalent amplitude for 10<super>6</super> "
                         "cycles; the entered cycle count is not used for concrete."
                     )
+
+    def _fatigue_reinforcement_formulas(
+        self, result, bin_rows, selection, reference
+    ):
+        """Publish one solver-retained governing reinforcement fatigue chain."""
+
+        selected_bin = next(
+            (
+                row for row in bin_rows
+                if row["bin"] == str(selection.get("bin_name") or "")
+            ),
+            None,
+        )
+        required = (
+            "stress_long_mpa",
+            "stress_total_design_mpa",
+            "stress_total_design_elastic_mpa",
+            "design_stress_range_elastic_mpa",
+            "bond_adjustment",
+            "design_stress_range_mpa",
+            "delta_sigma_rsk_mpa",
+            "delta_sigma_rd_mpa",
+            "sn_reference_cycles",
+            "sn_exponent",
+            "cycles_to_failure",
+            "cycles",
+            "damage",
+            "material_factor",
+        )
+        if selected_bin is None or any(
+            selected_bin.get(key) is None for key in required
+        ):
+            self._small(
+                "<b>Worked example unavailable:</b> the governing reinforcement "
+                "bin does not retain every required numerical operand."
+            )
+            return
+        yield_check = selected_bin.get("governing_yield_check")
+        characteristic = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(
+                yield_check, "characteristic_strength_mpa"
+            )
+        )
+        design_limit = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(yield_check, "design_limit_mpa")
+        )
+        yield_stress = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(yield_check, "stress_mpa")
+        )
+        yield_util = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(yield_check, "utilisation")
+        )
+        damage_total = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "damage")
+        )
+        yield_total = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "yield_utilisation")
+        )
+        utilisation = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "utilisation")
+        )
+        damages = [row.get("damage") for row in bin_rows]
+        if (
+            reference is None
+            or yield_check is None
+            or None in (
+                characteristic,
+                design_limit,
+                yield_stress,
+                yield_util,
+                damage_total,
+                yield_total,
+                utilisation,
+            )
+            or any(value is None for value in damages)
+        ):
+            self._small(
+                "<b>Worked example unavailable:</b> the governing reinforcement "
+                "result does not retain the complete criterion or source chain."
+            )
+            return
+        source = _html_escape(str(reference))
+        self._h2("Textbook calculation - governing reinforcement fatigue")
+        self._p(
+            "The globally governing reinforcement element and bin are used once "
+            "to demonstrate the S-N, Miner and yield/proof checks. All other "
+            "elements and spectra remain in the compact summaries above."
+        )
+        self._formula(
+            "Delta sigma<sub>Ed,el,i</sub> = "
+            "|sigma<sub>total,Ed,el,i</sub> - sigma<sub>long,i</sub>|; "
+            "Delta sigma<sub>Ed,i</sub> = eta<sub>b</sub> "
+            "Delta sigma<sub>Ed,el,i</sub>",
+            equation_key="fatigue.reinforcement.design-stress-range",
+            ref=source,
+            subst=(
+                f"|{_fmt(selected_bin['stress_total_design_elastic_mpa'], 6)} - "
+                f"{_fmt(selected_bin['stress_long_mpa'], 6)}| = "
+                f"{_fmt(selected_bin['design_stress_range_elastic_mpa'], 6)} MPa; "
+                f"{_fmt(selected_bin['bond_adjustment'], 6)} &#183; "
+                f"{_fmt(selected_bin['design_stress_range_elastic_mpa'], 6)} MPa"
+            ),
+            result=(
+                "Delta sigma<sub>Ed,i</sub> = "
+                f"{_fmt(selected_bin['design_stress_range_mpa'], 6)} MPa"
+            ),
+            note=_html_escape(selected_bin.get("bond_method") or ""),
+        )
+        material_factor = selected_bin["material_factor"]
+        self._formula(
+            "Delta sigma<sub>Rd</sub> = Delta sigma<sub>Rsk</sub> / "
+            "gamma<sub>s</sub>",
+            equation_key="fatigue.reinforcement.design-resistance-range",
+            ref=source,
+            subst=(
+                f"{_fmt(selected_bin['delta_sigma_rsk_mpa'], 6)} / "
+                f"{_fmt(material_factor, 6)} MPa"
+            ),
+            result=(
+                "Delta sigma<sub>Rd</sub> = "
+                f"{_fmt(selected_bin['delta_sigma_rd_mpa'], 6)} MPa"
+            ),
+        )
+        if (
+            selected_bin.get("sn_reference_ratio") is None
+            and selected_bin["design_stress_range_mpa"] == 0.0
+        ):
+            self._formula(
+                "Delta sigma<sub>Ed,i</sub> = 0 "
+                "implies N<sub>R,i</sub> = +infinity",
+                equation_key="fatigue.reinforcement.sn-life",
+                equation_variant="zero-range",
+                ref=source,
+                subst=(
+                    "Delta sigma<sub>Ed,i</sub> = "
+                    f"{_fmt(selected_bin['design_stress_range_mpa'], 6)} MPa"
+                ),
+                result=(
+                    "N<sub>R,i</sub> = "
+                    f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)} cycles"
+                ),
+                note=_html_escape(selected_bin.get("sn_branch") or ""),
+            )
+        elif selected_bin.get("sn_reference_ratio") is not None:
+            self._formula(
+                "N<sub>R,i</sub> = N<super>*</super> "
+                "(Delta sigma<sub>Rd</sub> / Delta sigma<sub>Ed,i</sub>)"
+                "<super>k</super>",
+                equation_key="fatigue.reinforcement.sn-life",
+                equation_variant="power-law",
+                ref=source,
+                subst=(
+                    f"{_fmt_sig(selected_bin['sn_reference_cycles'], 8)} &#183; "
+                    f"({_fmt(selected_bin['sn_reference_ratio'], 8)})"
+                    f"<super>{_fmt(selected_bin['sn_exponent'], 3)}</super>"
+                ),
+                result=(
+                    "N<sub>R,i</sub> = "
+                    f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)} cycles"
+                ),
+                note=_html_escape(selected_bin.get("sn_branch") or ""),
+            )
+        else:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing S-N branch "
+                "does not retain its reference ratio."
+            )
+            return
+        self._formula(
+            "D<sub>i</sub> = n<sub>i</sub> / N<sub>R,i</sub>",
+            equation_key="fatigue.reinforcement.bin-damage",
+            ref=source,
+            subst=(
+                f"{_fmt_sig(selected_bin['cycles'], 8)} / "
+                f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+            ),
+            result=f"D<sub>i</sub> = {_fmt_sig(selected_bin['damage'], 8)}",
+        )
+        self._formula(
+            "D = sum D<sub>i</sub>",
+            equation_key="fatigue.reinforcement.miner-sum",
+            ref=source,
+            subst=" + ".join(_fmt_sig(value, 8) for value in damages),
+            result=f"D = {_fmt_sig(damage_total, 8)}",
+        )
+        self._formula(
+            "sigma<sub>Rd</sub> = f<sub>yk/proof</sub> / gamma<sub>s</sub>",
+            equation_key="fatigue.reinforcement.yield-limit",
+            ref=source,
+            subst=(
+                f"{_fmt(characteristic, 6)} / {_fmt(material_factor, 6)} MPa"
+            ),
+            result=f"sigma<sub>Rd</sub> = {_fmt(design_limit, 6)} MPa",
+            note=_html_escape(
+                fatigue_presentation.value(yield_check, "branch", "")
+            ),
+        )
+        self._formula(
+            "u<sub>yield</sub> = |sigma<sub>Ed</sub>| / "
+            "sigma<sub>Rd</sub>",
+            equation_key="fatigue.reinforcement.yield-utilisation",
+            ref=source,
+            subst=(
+                f"|{_fmt(yield_stress, 6)}| / {_fmt(design_limit, 6)}"
+            ),
+            result=f"u<sub>yield</sub> = {_fmt(yield_util, 8)}",
+        )
+        self._formula(
+            "u = max(D, u<sub>yield</sub>)",
+            equation_key="fatigue.reinforcement.utilisation",
+            ref=source,
+            subst=(
+                f"max({_fmt_sig(damage_total, 8)}, "
+                f"{_fmt(yield_total, 8)})"
+            ),
+            result=(
+                "u = "
+                f"{_fmt(utilisation, 8)}"
+            ),
+            note=_html_escape(
+                fatigue_presentation.value(result, "governing_criterion", "")
+            ),
+        )
+
+    def _fatigue_concrete_formulas(
+        self, spectrum, result, bin_rows, selection, reference
+    ):
+        """Publish one solver-retained governing concrete fatigue chain."""
+
+        strength = fatigue_presentation.value(spectrum, "concrete_strength")
+        selected_bin = next(
+            (
+                row for row in bin_rows
+                if row["bin"] == str(selection.get("bin_name") or "")
+            ),
+            None,
+        )
+        if strength is None or selected_bin is None:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "strength or bin identity is absent."
+            )
+            return
+        if reference is None:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "calculation source is absent."
+            )
+            return
+        source = _html_escape(str(reference))
+        self._h2("Textbook calculation - governing concrete fatigue")
+        edition = str(fatigue_presentation.value(strength, "edition", ""))
+        strength_published = False
+        if edition == fatigue_core.EC2_2005:
+            required = (
+                "k1", "beta_cc_t0", "alpha_cc", "fck_mpa", "gamma_c",
+                "high_strength_reduction", "fcd_fat_mpa",
+            )
+            values = {
+                key: fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(strength, key)
+                )
+                for key in required
+            }
+            if all(value is not None for value in values.values()):
+                self._formula(
+                    "f<sub>cd,fat</sub> = k<sub>1</sub> beta<sub>cc</sub> "
+                    "alpha<sub>cc</sub> f<sub>ck</sub> / gamma<sub>c</sub> "
+                    "(1 - f<sub>ck</sub>/250)",
+                    equation_key="fatigue.concrete.strength",
+                    equation_variant="2005",
+                    ref=source,
+                    subst=(
+                        f"{_fmt(values['k1'], 6)} &#183; "
+                        f"{_fmt(values['beta_cc_t0'], 6)} &#183; "
+                        f"{_fmt(values['alpha_cc'], 6)} &#183; "
+                        f"{_fmt(values['fck_mpa'], 6)} / "
+                        f"{_fmt(values['gamma_c'], 6)} &#183; "
+                        f"(1 - {_fmt(values['fck_mpa'], 6)} / 250) = "
+                        f"{_fmt(values['k1'], 6)} &#183; "
+                        f"{_fmt(values['beta_cc_t0'], 6)} &#183; "
+                        f"{_fmt(values['alpha_cc'], 6)} &#183; "
+                        f"{_fmt(values['fck_mpa'], 6)} / "
+                        f"{_fmt(values['gamma_c'], 6)} &#183; "
+                        f"{_fmt(values['high_strength_reduction'], 6)} MPa"
+                    ),
+                    result=(
+                        "f<sub>cd,fat</sub> = "
+                        f"{_fmt(values['fcd_fat_mpa'], 6)} MPa"
+                    ),
+                )
+                strength_published = True
+        elif edition == fatigue_core.EC2_2023:
+            beta = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "beta_cc_t0")
+            )
+            fck = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "fck_mpa")
+            )
+            gamma_c = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "gamma_c")
+            )
+            eta_raw = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_raw")
+            )
+            eta_cap = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_cap")
+            )
+            eta = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc")
+            )
+            eta_fat_raw = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_fat_raw")
+            )
+            eta_fat_cap = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_fat_cap")
+            )
+            eta_fat = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_fat")
+            )
+            fcd_fat = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "fcd_fat_mpa")
+            )
+            if None not in (
+                beta,
+                fck,
+                gamma_c,
+                eta_raw,
+                eta_cap,
+                eta,
+                eta_fat_raw,
+                eta_fat_cap,
+                eta_fat,
+                fcd_fat,
+            ):
+                self._formula(
+                    "eta<sub>cc</sub> = min((40/f<sub>ck</sub>)"
+                    "<super>1/3</super>, 1.0)",
+                    equation_key="fatigue.concrete.eta-cc",
+                    ref=source,
+                    subst=(
+                        f"min((40 / {_fmt(fck, 6)})"
+                        f"<super>1/3</super>, {_fmt(eta_cap, 8)}) = "
+                        f"min({_fmt(eta_raw, 8)}, {_fmt(eta_cap, 8)})"
+                    ),
+                    result=f"eta<sub>cc</sub> = {_fmt(eta, 8)}",
+                )
+                self._formula(
+                    "eta<sub>cc,fat</sub> = min(0.85 eta<sub>cc</sub>, 0.8)",
+                    equation_key="fatigue.concrete.eta-cc-fat",
+                    ref=source,
+                    subst=(
+                        f"min(0.85 &#183; {_fmt(eta, 8)}, "
+                        f"{_fmt(eta_fat_cap, 8)}) = "
+                        f"min({_fmt(eta_fat_raw, 8)}, "
+                        f"{_fmt(eta_fat_cap, 8)})"
+                    ),
+                    result=f"eta<sub>cc,fat</sub> = {_fmt(eta_fat, 8)}",
+                )
+                self._formula(
+                    "f<sub>cd,fat</sub> = beta<sub>cc</sub> "
+                    "f<sub>ck</sub> eta<sub>cc,fat</sub> / gamma<sub>c</sub>",
+                    equation_key="fatigue.concrete.strength",
+                    equation_variant="2023",
+                    ref=source,
+                    subst=(
+                        f"{_fmt(beta, 8)} &#183; {_fmt(fck, 6)} / "
+                        f"{_fmt(gamma_c, 6)} &#183; {_fmt(eta_fat, 8)} MPa"
+                    ),
+                    result=f"f<sub>cd,fat</sub> = {_fmt(fcd_fat, 8)} MPa",
+                )
+                strength_published = True
+        if not strength_published:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "strength record is incomplete or uses an unsupported edition."
+            )
+            return
+        required = (
+            "compression_min_design_mpa",
+            "compression_max_design_mpa",
+            "e_cd_min",
+            "e_cd_max",
+        )
+        if any(selected_bin.get(key) is None for key in required):
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete bin "
+                "does not retain every normalized-stress operand."
+            )
+            return
+        fcd_fat = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "fcd_fat_mpa")
+        )
+        if fcd_fat is None:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "fatigue strength is absent from the selected fibre result."
+            )
+            return
+        self._formula(
+            "E<sub>cd,min/max</sub> = sigma<sub>c,min/max,Ed</sub> / "
+            "f<sub>cd,fat</sub>",
+            equation_key="fatigue.concrete.normalised-stress",
+            ref=source,
+            subst=(
+                f"{_fmt(selected_bin['compression_min_design_mpa'], 6)} / "
+                f"{_fmt(fcd_fat, 6)}; "
+                f"{_fmt(selected_bin['compression_max_design_mpa'], 6)} / "
+                f"{_fmt(fcd_fat, 6)}"
+            ),
+            result=(
+                f"E<sub>cd,min</sub> = {_fmt(selected_bin['e_cd_min'], 8)}; "
+                f"E<sub>cd,max</sub> = {_fmt(selected_bin['e_cd_max'], 8)}"
+            ),
+            note=(
+                _html_escape(selected_bin.get("compression_min_state") or "")
+                + " / "
+                + _html_escape(selected_bin.get("compression_max_state") or "")
+            ),
+        )
+        equivalent = selected_bin.get("equivalent_utilisation")
+        if equivalent is not None:
+            self._formula(
+                "u<sub>eq</sub> = E<sub>cd,max</sub> + 0.43 "
+                "sqrt(1 - E<sub>cd,min</sub>/E<sub>cd,max</sub>)",
+                equation_key="fatigue.concrete.equivalent",
+                ref=source,
+                subst=(
+                    f"{_fmt(selected_bin['e_cd_max'], 8)} + 0.43 sqrt(1 - "
+                    f"{_fmt(selected_bin['e_cd_min'], 8)} / "
+                    f"{_fmt(selected_bin['e_cd_max'], 8)})"
+                ),
+                result=f"u<sub>eq</sub> = {_fmt(equivalent, 8)}",
+            )
+        elif None not in (
+            selected_bin.get("life_coefficient"),
+            selected_bin.get("life_range_term"),
+            selected_bin.get("cycles_to_failure"),
+        ):
+            life_branch = str(selected_bin.get("life_branch") or "")
+            if life_branch == "variable compression":
+                self._formula(
+                    "log<sub>10</sub>N<sub>R,i</sub> = C "
+                    "(1 - E<sub>cd,max</sub>) / "
+                    "sqrt(1 - sigma<sub>c,min</sub>/sigma<sub>c,max</sub>)",
+                    equation_key="fatigue.concrete.life",
+                    equation_variant="variable-compression",
+                    ref=source,
+                    subst=(
+                        f"{_fmt(selected_bin['life_coefficient'], 6)} &#183; "
+                        f"(1 - {_fmt(selected_bin['e_cd_max'], 8)}) / "
+                        f"sqrt(1 - "
+                        f"{_fmt(selected_bin['compression_min_design_mpa'], 8)} / "
+                        f"{_fmt(selected_bin['compression_max_design_mpa'], 8)}) = "
+                        f"{_fmt(selected_bin['life_coefficient'], 6)} &#183; "
+                        f"(1 - {_fmt(selected_bin['e_cd_max'], 8)}) / "
+                        f"{_fmt(selected_bin['life_range_term'], 8)}"
+                    ),
+                    result=(
+                        f"log<sub>10</sub>N<sub>R,i</sub> = "
+                        f"{_fmt(selected_bin['log10_cycles_to_failure'], 8)}; "
+                        f"N<sub>R,i</sub> = "
+                        f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+                    ),
+                    note=_html_escape(life_branch),
+                )
+            elif life_branch in {"zero compression", "constant compression"}:
+                self._formula(
+                    (
+                        "sigma<sub>c,max</sub> = 0 implies "
+                        "N<sub>R,i</sub> = +infinity"
+                        if life_branch == "zero compression"
+                        else "sigma<sub>c,min</sub> = sigma<sub>c,max</sub> "
+                        "implies N<sub>R,i</sub> = +infinity"
+                    ),
+                    equation_key="fatigue.concrete.life",
+                    equation_variant=(
+                        "zero-compression"
+                        if life_branch == "zero compression"
+                        else "constant-compression"
+                    ),
+                    ref=source,
+                    subst=(
+                        f"sigma<sub>c,min</sub> = "
+                        f"{_fmt(selected_bin['compression_min_design_mpa'], 8)} MPa; "
+                        f"sigma<sub>c,max</sub> = "
+                        f"{_fmt(selected_bin['compression_max_design_mpa'], 8)} MPa"
+                    ),
+                    result=(
+                        "N<sub>R,i</sub> = "
+                        f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+                    ),
+                    note=_html_escape(life_branch),
+                )
+            else:
+                self._small(
+                    "<b>Worked example unavailable:</b> the governing concrete "
+                    "life branch is not recognised."
+                )
+                return
+            self._formula(
+                "D<sub>i</sub> = n<sub>i</sub> / N<sub>R,i</sub>",
+                equation_key="fatigue.concrete.bin-damage",
+                ref=source,
+                subst=(
+                    f"{_fmt_sig(selected_bin['cycles'], 8)} / "
+                    f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+                ),
+                result=f"D<sub>i</sub> = {_fmt_sig(selected_bin['damage'], 8)}",
+            )
+            damages = [row.get("damage") for row in bin_rows]
+            if all(value is not None for value in damages):
+                self._formula(
+                    "D = sum D<sub>i</sub>",
+                    equation_key="fatigue.concrete.miner-sum",
+                    ref=source,
+                    subst=" + ".join(_fmt_sig(value, 8) for value in damages),
+                    result=(
+                        "D = "
+                        f"{_fmt_sig(fatigue_presentation.value(result, 'damage'), 8)}"
+                    ),
+                )
+        stress_bin_name = str(
+            fatigue_presentation.value(result, "governing_stress_bin", "")
+        )
+        stress_bin = next(
+            (row for row in bin_rows if row["bin"] == stress_bin_name),
+            None,
+        )
+        if stress_bin is not None and stress_bin.get("e_cd_max") is not None:
+            self._formula(
+                "u<sub>sigma</sub> = E<sub>cd,max</sub>",
+                equation_key="fatigue.concrete.stress-utilisation",
+                ref=source,
+                subst=_fmt(stress_bin["e_cd_max"], 8),
+                result=(
+                    "u<sub>sigma</sub> = "
+                    f"{_fmt(fatigue_presentation.value(result, 'stress_utilisation'), 8)}"
+                ),
+            )
+        candidates = [
+            fatigue_presentation.evidence_number(
+                fatigue_presentation.value(result, "damage_utilisation")
+            ),
+            fatigue_presentation.evidence_number(
+                fatigue_presentation.value(result, "stress_utilisation")
+            ),
+            fatigue_presentation.evidence_number(
+                fatigue_presentation.value(result, "equivalent_utilisation")
+            ),
+        ]
+        search = fatigue_presentation.value(spectrum, "concrete_search")
+        if search is not None and bool(
+            fatigue_presentation.value(search, "converged", False)
+        ):
+            candidates.append(fatigue_presentation.evidence_number(
+                fatigue_presentation.value(search, "upper_damage")
+            ))
+        candidates = [value for value in candidates if value is not None]
+        if candidates:
+            self._formula(
+                "u = max(D, u<sub>sigma</sub>, u<sub>eq</sub>, "
+                "u<sub>bound</sub>)",
+                equation_key="fatigue.concrete.utilisation",
+                ref=source,
+                subst="max(" + ", ".join(
+                    _fmt_sig(value, 8) for value in candidates
+                ) + ")",
+                result=f"u = {_fmt_sig(selection.get('utilisation'), 8)}",
+                note=_html_escape(selection.get("criterion") or ""),
+            )
 
     def _appendix(self):
         self.flow.append(NotAtTopPageBreak())

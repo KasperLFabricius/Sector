@@ -35,6 +35,8 @@ these map to the tension-positive resultant targets the strain plane must meet.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -47,6 +49,153 @@ from .section import Section
 _DEFAULT_TOL = 1.0e-9
 
 
+@dataclass(frozen=True, slots=True)
+class ModularRatioMaterial:
+    """One material's short- and long-term modular ratios."""
+
+    material_id: str
+    material_family: str
+    modulus_mpa: float
+    short_term: float
+    long_term: float
+
+
+@dataclass(frozen=True, slots=True)
+class ModularRatioResult:
+    """Inputs and calculated ratios for one concrete reference modulus."""
+
+    concrete_modulus_mpa: float
+    creep_coefficient: float
+    effective_concrete_modulus_mpa: float
+    materials: tuple[ModularRatioMaterial, ...]
+
+
+def _positive_finite_modulus(value: float, label: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{label} must be a positive finite number")
+    return number
+
+
+def calculate_modular_ratios(
+    concrete_modulus_mpa: float,
+    creep_coefficient: float,
+    materials: Iterable[tuple[str, str, float]],
+) -> ModularRatioResult:
+    """Calculate ``n_s = E_i/E_c`` and ``n_l = n_s(1 + phi)``.
+
+    Material descriptors are ordered ``(material_id, material_family,
+    modulus_mpa)`` triples. Their order and identifiers are retained verbatim.
+    """
+
+    concrete_modulus = _positive_finite_modulus(
+        concrete_modulus_mpa, "concrete modulus"
+    )
+    creep = float(creep_coefficient)
+    if not math.isfinite(creep) or creep < 0.0:
+        raise ValueError("creep coefficient must be a non-negative finite number")
+
+    calculated: list[ModularRatioMaterial] = []
+    for material_id, material_family, modulus_mpa in materials:
+        modulus = _positive_finite_modulus(modulus_mpa, "material modulus")
+        short_term = modulus / concrete_modulus
+        calculated.append(
+            ModularRatioMaterial(
+                material_id=material_id,
+                material_family=material_family,
+                modulus_mpa=modulus,
+                short_term=short_term,
+                long_term=short_term * (1.0 + creep),
+            )
+        )
+    return ModularRatioResult(
+        concrete_modulus_mpa=concrete_modulus,
+        creep_coefficient=creep,
+        effective_concrete_modulus_mpa=concrete_modulus / (1.0 + creep),
+        materials=tuple(calculated),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ElasticResultant:
+    """One equilibrium vector in the solver's ``[N, Mx, My]`` convention.
+
+    ``axial_force`` has the force unit of the input actions; ``moment_x`` and
+    ``moment_y`` have the corresponding force-length unit.  Keeping the three
+    components named avoids presenting their heterogeneous units as one scalar
+    residual.
+    """
+
+    axial_force: float
+    moment_x: float
+    moment_y: float
+
+    @property
+    def values(self) -> tuple[float, float, float]:
+        return (self.axial_force, self.moment_x, self.moment_y)
+
+
+@dataclass(frozen=True, slots=True)
+class ElasticEquilibrium:
+    """Final, family-owned equilibrium state retained by an elastic solve.
+
+    ``equilibrium_matrix`` is the final transformed-section matrix whose rows
+    are ``[N, Mx, My]`` and whose columns multiply the raw Ec=1 stress-plane
+    coefficients ``[sigma0, dsigma/dx, dsigma/dy]``.  Only the accepted final
+    state is retained; this is not an iteration history.
+
+    ``residual_scale`` and ``normalised_residual`` preserve the existing
+    convergence rule exactly: the largest numeric component of ``[N, Mx, My]``
+    in the fixed input convention ``[kN, kNm, kNm]`` is compared after scaling
+    by ``max(1, max(abs(target)))``.  It is the solver's dimensionless numeric
+    criterion, not a physical norm that combines force and moment units.
+    ``relative_tolerance`` is ``None`` for the direct uncracked linear solve,
+    which does not use the cracked solver's iterative convergence test.
+    """
+
+    equilibrium_matrix: tuple[tuple[float, float, float], ...]
+    target: ElasticResultant
+    internal: ElasticResultant
+    residual: ElasticResultant
+    residual_scale: float
+    normalised_residual: float
+    relative_tolerance: float | None
+
+
+def _resultant(values: np.ndarray) -> ElasticResultant:
+    """Convert a three-component NumPy resultant to its immutable record."""
+    return ElasticResultant(
+        axial_force=float(values[0]),
+        moment_x=float(values[1]),
+        moment_y=float(values[2]),
+    )
+
+
+def _equilibrium_state(
+    target: np.ndarray,
+    internal: np.ndarray,
+    matrix: np.ndarray,
+    relative_tolerance: float | None,
+) -> ElasticEquilibrium:
+    """Build the compact final-state publication record for one solve."""
+    residual = internal - target
+    scale = max(1.0, float(np.abs(target).max()))
+    normalised = float(np.abs(residual).max()) / scale
+    return ElasticEquilibrium(
+        equilibrium_matrix=tuple(
+            (float(row[0]), float(row[1]), float(row[2])) for row in matrix
+        ),
+        target=_resultant(target),
+        internal=_resultant(internal),
+        residual=_resultant(residual),
+        residual_scale=scale,
+        normalised_residual=normalised,
+        relative_tolerance=(
+            None if relative_tolerance is None else float(relative_tolerance)
+        ),
+    )
+
+
 @dataclass
 class ElasticResult:
     """Outcome of an elastic cracked-section analysis for one load.
@@ -56,6 +205,9 @@ class ElasticResult:
     positive magnitude.
     """
 
+    # These legacy field names contain the raw Ec=1 stress-plane coefficients,
+    # not physical strain or curvature.  They remain for compatibility with the
+    # existing calculation families; use ``raw_stress_plane`` when publishing.
     eps0: float
     kx: float
     ky: float
@@ -67,6 +219,7 @@ class ElasticResult:
     na_y_intercept: float
     converged: bool
     iterations: int
+    equilibrium: ElasticEquilibrium
     # Peak concrete *tensile* stress and its location. Zero on a fully cracked
     # solve (concrete carries no tension there); the meaningful value comes from
     # an uncracked (Stage I) solve, where it drives the cracking check.
@@ -76,6 +229,12 @@ class ElasticResult:
 
     @property
     def strain_plane(self) -> tuple[float, float, float]:
+        """Compatibility alias for the raw Ec=1 stress plane."""
+        return (self.eps0, self.kx, self.ky)
+
+    @property
+    def raw_stress_plane(self) -> tuple[float, float, float]:
+        """Return ``(sigma0, dsigma/dx, dsigma/dy)`` for the Ec=1 solve."""
         return (self.eps0, self.kx, self.ky)
 
 
@@ -174,10 +333,11 @@ def _newton_solve(
     max_iter: int,
     tol: float,
     n_mult: np.ndarray | None = None,
-) -> tuple[np.ndarray, bool, int]:
+) -> tuple[np.ndarray, bool, int, np.ndarray, np.ndarray]:
     """Find the strain plane whose internal resultants equal ``target``.
 
-    Returns the strain plane ``u = [eps0, kx, ky]`` and convergence info. The
+    Returns the raw Ec=1 stress plane, convergence info, and the internal
+    resultant and transformed equilibrium matrix at that final plane. The
     initial guess is the uncracked linear solution; each iteration re-clips the
     compression zone, so the active (cracked) set settles in a few steps.
     """
@@ -193,20 +353,40 @@ def _newton_solve(
     scale = max(1.0, float(np.abs(target).max()))
     converged = False
     iterations = 0
+    final_state_evaluated = False
+    internal = np.zeros(3)
+    matrix = J0
     for iterations in range(1, max_iter + 1):
-        res, J = _resultants_and_jacobian(
+        internal, matrix = _resultants_and_jacobian(
             rings, bx, by, ba, u, n, displace_concrete, cracked=True, n_mult=n_mult,
         )
-        r = res - target
+        final_state_evaluated = True
+        r = internal - target
         if np.max(np.abs(r)) <= tol * scale:
             converged = True
             break
         try:
-            du = np.linalg.solve(J, -r)
+            du = np.linalg.solve(matrix, -r)
         except np.linalg.LinAlgError:
             break
         u = u + du
-    return u, converged, iterations
+        final_state_evaluated = False
+    # Retain the state at the plane actually returned.  On a max-iteration exit
+    # the final Newton update occurs after the loop's last equilibrium check, so
+    # one read-only evaluation is needed to keep the published state consistent.
+    if not final_state_evaluated:
+        internal, matrix = _resultants_and_jacobian(
+            rings,
+            bx,
+            by,
+            ba,
+            u,
+            n,
+            displace_concrete,
+            cracked=True,
+            n_mult=n_mult,
+        )
+    return u, converged, iterations, internal, matrix
 
 
 def _steel_resultant(
@@ -244,9 +424,10 @@ def _bar_stress(u: np.ndarray, bx: np.ndarray, by: np.ndarray, n: float,
 
 def _result_from_plane(
     section: Section, u: np.ndarray, bx: np.ndarray, by: np.ndarray, n: float,
-    converged: bool, iterations: int, n_mult: np.ndarray | None = None,
-) -> "ElasticResult":
-    """Assemble an :class:`ElasticResult` from a solved strain plane."""
+    converged: bool, iterations: int, equilibrium: ElasticEquilibrium,
+    n_mult: np.ndarray | None = None,
+) -> ElasticResult:
+    """Assemble an :class:`ElasticResult` from a solved raw stress plane."""
     eps0, kx, ky = float(u[0]), float(u[1]), float(u[2])
     bar_stress = _bar_stress(u, bx, by, n, n_mult)
 
@@ -266,7 +447,7 @@ def _result_from_plane(
     max_eps = float(eps_v.max())
     tie_t = 1.0e-9 * max(1.0, abs(max_eps))
     t_point = int(np.argmax(eps_v >= max_eps - tie_t))
-    max_tens = max_eps if max_eps > 0.0 else 0.0
+    max_tens = max(0.0, max_eps)
 
     # Neutral-axis intercepts; infinite when the gradient is parallel to an axis.
     grad = max(abs(kx), abs(ky))
@@ -285,6 +466,7 @@ def _result_from_plane(
         na_y_intercept=float(y_int),
         converged=converged,
         iterations=iterations,
+        equilibrium=equilibrium,
         max_concrete_tension=max_tens,
         max_concrete_tension_point=t_point,
         max_concrete_tension_xy=(float(verts[t_point, 0]), float(verts[t_point, 1])),
@@ -342,10 +524,21 @@ def solve_elastic(
     # target (the passive section then carries external load minus prestress).
     target = np.array([-float(P), -float(Mx), -float(My)], dtype=float)
     target = target - _prestress_resultant(prestress_stress, bx, by, ba)
-    u, converged, iterations = _newton_solve(
+    u, converged, iterations, internal, matrix = _newton_solve(
         rings, bx, by, ba, target, n, displace_concrete, max_iter, tol, n_mult=n_mult
     )
-    return _result_from_plane(section, u, bx, by, n, converged, iterations, n_mult=n_mult)
+    equilibrium = _equilibrium_state(target, internal, matrix, tol)
+    return _result_from_plane(
+        section,
+        u,
+        bx,
+        by,
+        n,
+        converged,
+        iterations,
+        equilibrium,
+        n_mult=n_mult,
+    )
 
 
 def solve_elastic_uncracked(
@@ -385,7 +578,19 @@ def solve_elastic_uncracked(
     except np.linalg.LinAlgError:
         u = np.zeros(3)
         converged = False
-    return _result_from_plane(section, u, bx, by, n, converged, iterations=0, n_mult=n_mult)
+    internal = J @ u
+    equilibrium = _equilibrium_state(target, internal, J, None)
+    return _result_from_plane(
+        section,
+        u,
+        bx,
+        by,
+        n,
+        converged,
+        iterations=0,
+        equilibrium=equilibrium,
+        n_mult=n_mult,
+    )
 
 
 @dataclass
@@ -481,6 +686,15 @@ class CombinedElasticResult:
     bar_stress_long: np.ndarray
     bar_stress_dif: np.ndarray
     bar_stress_rst1: np.ndarray
+    bar_stress_long_passive: np.ndarray
+    bar_stress_reduced_long: np.ndarray
+    bar_stress_locked_in: np.ndarray
+    long_term_modular_ratio: float
+    short_term_modular_ratio: float
+    long_term_reduction_factor: float
+    prestress_resultant: ElasticResultant
+    combined_target_before_neutralisation: ElasticResultant
+    neutralising_resultant: ElasticResultant
     max_concrete_compression: float
     max_concrete_point: int
     na_x_intercept: float
@@ -536,13 +750,34 @@ def solve_elastic_combined(
 
     # 1. Long-term state at nl (passive bar stresses; prestress applied via target).
     t_long = np.array([-float(P_long), -float(Mx_long), -float(My_long)]) - pre
-    u_long, c1, _ = _newton_solve(rings, bx, by, ba, t_long, nl, displace_concrete,
-                                  max_iter, tol, n_mult=n_mult)
-    long_res = _result_from_plane(section, u_long, bx, by, nl, c1, 0, n_mult=n_mult)
-    s1 = long_res.bar_stress
+    u_long, c1, i1, int_long, matrix_long = _newton_solve(
+        rings,
+        bx,
+        by,
+        ba,
+        t_long,
+        nl,
+        displace_concrete,
+        max_iter,
+        tol,
+        n_mult=n_mult,
+    )
+    long_res = _result_from_plane(
+        section,
+        u_long,
+        bx,
+        by,
+        nl,
+        c1,
+        i1,
+        _equilibrium_state(t_long, int_long, matrix_long, tol),
+        n_mult=n_mult,
+    )
+    s1_passive = long_res.bar_stress
 
     # 2. Reduced steel stress and its resultant (the neutralising force).
-    s2 = s1 * (1.0 - ns / nl) if s1.size else s1
+    reduction_factor = 1.0 - ns / nl
+    s2 = s1_passive * reduction_factor if s1_passive.size else s1_passive
     neu = _steel_resultant(s2, bx, by, ba)
 
     # 3. Instantaneous state: combined load minus the neutralising force, at ns.
@@ -551,18 +786,41 @@ def solve_elastic_combined(
          -(float(Mx_long) + float(Mx_short)),
          -(float(My_long) + float(My_short))]
     ) - pre
-    u_st, c2, _ = _newton_solve(rings, bx, by, ba, t_comb - neu, ns, displace_concrete,
-                                max_iter, tol, n_mult=n_mult)
-    st_res = _result_from_plane(section, u_st, bx, by, ns, c2, 0, n_mult=n_mult)
+    instantaneous_target = t_comb - neu
+    u_st, c2, i2, int_st, matrix_st = _newton_solve(
+        rings,
+        bx,
+        by,
+        ba,
+        instantaneous_target,
+        ns,
+        displace_concrete,
+        max_iter,
+        tol,
+        n_mult=n_mult,
+    )
+    st_res = _result_from_plane(
+        section,
+        u_st,
+        bx,
+        by,
+        ns,
+        c2,
+        i2,
+        _equilibrium_state(instantaneous_target, int_st, matrix_st, tol),
+        n_mult=n_mult,
+    )
     rst1 = st_res.bar_stress
 
     # 4. Combine. The locked-in prestress is added to the reported tendon stresses
     #    (physical stress = passive increment + Ep*IS); it cancels out of `dif`.
-    total = s2 + rst1 if s1.size else rst1
-    if prestress_stress is not None and s1.size:
-        ps = np.asarray(prestress_stress, dtype=float)
-        s1 = s1 + ps
-        total = total + ps
+    total = s2 + rst1 if s1_passive.size else rst1
+    s1 = s1_passive
+    locked_in = np.zeros_like(s1_passive)
+    if prestress_stress is not None and s1_passive.size:
+        locked_in = np.asarray(prestress_stress, dtype=float).copy()
+        s1 = s1 + locked_in
+        total = total + locked_in
     dif = total - s1 if s1.size else total
 
     return CombinedElasticResult(
@@ -572,6 +830,15 @@ def solve_elastic_combined(
         bar_stress_long=s1,
         bar_stress_dif=dif,
         bar_stress_rst1=rst1,
+        bar_stress_long_passive=s1_passive,
+        bar_stress_reduced_long=s2,
+        bar_stress_locked_in=locked_in,
+        long_term_modular_ratio=float(nl),
+        short_term_modular_ratio=float(ns),
+        long_term_reduction_factor=float(reduction_factor),
+        prestress_resultant=_resultant(pre),
+        combined_target_before_neutralisation=_resultant(t_comb),
+        neutralising_resultant=_resultant(neu),
         max_concrete_compression=st_res.max_concrete_compression,
         max_concrete_point=st_res.max_concrete_point,
         na_x_intercept=st_res.na_x_intercept,

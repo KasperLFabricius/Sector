@@ -52,6 +52,71 @@ def _assert_math_text_is_renderable(value):
     assert not _LEAKED_MATH_RE.search(plain_text), value
 
 
+def test_crack_result_adapter_preserves_textbook_operands_without_recalculation():
+    import sector_app
+    from sector.serviceability import (
+        CrackEffectiveArea2005Fine,
+        CrackMeanStrainOperands,
+        CrackSpacing2005Operands,
+        CrackWidthCandidate,
+        CrackWidthResult,
+    )
+
+    mean = CrackMeanStrainOperands(
+        sigma_s=200.0, kt=0.4, fctm=2.9, rho_p_eff=0.02,
+        alpha_e=6.0, es=200_000.0, concrete_tension_reduction=65.0,
+        formula_candidate=0.000675, lower_bound_factor=0.6,
+        lower_bound_candidate=0.0006, selected_candidate="formula-7.9",
+        selected_esm_ecm=0.000675,
+    )
+    spacing = CrackSpacing2005Operands(
+        cover=35.0, diameter=16.0, rho_p_eff=0.02,
+        k1=0.8, k2=0.5, k3_base=3.4, k3_used=3.4, k4=0.425,
+        nearest_neighbour_spacing=120.0, close_spacing_limit=215.0,
+        tension_zone_depth=0.2, formula_7_11=255.0,
+        geometric_7_14=260.0, selected_candidate="formula-7.11",
+        selected_spacing=255.0,
+    )
+    candidate = CrackWidthCandidate(
+        bar_index=0, x=0.0, y=-0.12, area=500.0,
+        wk=0.172125, sr_max=255.0, esm_ecm=0.000675,
+        sigma_s=200.0, rho_p_eff=0.02, ac_eff=0.025,
+        hc_ef=0.125, phi=16.0, cover=35.0,
+        as_eff=0.0005, mean_strain_operands=mean,
+        spacing_operands=spacing,
+    )
+    area = CrackEffectiveArea2005Fine(
+        section_depth=0.3, effective_depth=0.25,
+        tension_zone_depth=0.4, h_minus_d=0.05,
+        candidate_2_5_h_minus_d=0.125,
+        candidate_h_minus_x_over_3=0.13333333333333333,
+        candidate_h_over_2=0.15, selected_candidate="2.5(h-d)",
+        selected_hc_eff=0.125, band_limit=-0.025, ac_eff=0.025,
+    )
+    result = CrackWidthResult(
+        wk=candidate.wk, sr_max=candidate.sr_max,
+        esm_ecm=candidate.esm_ecm, sigma_s=candidate.sigma_s,
+        rho_p_eff=candidate.rho_p_eff, ac_eff=candidate.ac_eff,
+        hc_ef=candidate.hc_ef, phi=candidate.phi, cover=candidate.cover,
+        gov_bar=0, candidates=(candidate,), effective_area_operands=area,
+    )
+
+    payload = sector_app._crack_dict(result, ["R1"], [])
+    assert payload["element_id"] == "R1"
+    assert payload["governing_candidate"]["mean_strain_operands"] == {
+        **dataclasses.asdict(mean),
+        "record_kind": "CrackMeanStrainOperands",
+    }
+    assert payload["governing_candidate"]["spacing_operands"] == {
+        **dataclasses.asdict(spacing),
+        "record_kind": "CrackSpacing2005Operands",
+    }
+    assert payload["effective_area_operands"] == {
+        **dataclasses.asdict(area),
+        "record_kind": "CrackEffectiveArea2005Fine",
+    }
+
+
 def _fresh_qs(**state):
     """Start directly in Quick Section with optional pre-seeded widget state.
 
@@ -696,6 +761,158 @@ def test_calculate_elastic_produces_bar_stresses():
     res = at.session_state["results"]
     assert "elastic" in res
     assert len(res["elastic"]["total"]) > 0
+    shared_keys = {
+        "section_properties", "material_properties",
+        "prestress_initial", "elastic_shared",
+    }
+    assert shared_keys <= set(res)
+    assert res["section_properties"]["net_concrete"]["area_m2"] > 0.0
+    assert res["material_properties"]["concrete"]["design_strength_mpa"] > 0.0
+    assert res["elastic_shared"]["concrete_modulus_mpa"] > 0.0
+    assert res["elastic_shared"]["materials"]
+    for family in ("plastic_cases", "elastic_cases"):
+        for entry in res.get(family, []):
+            assert not shared_keys & set(entry.get("results") or {})
+
+
+def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
+    monkeypatch,
+):
+    """Named cases share one compact preparation result, never a trace."""
+
+    import importlib
+    import sector_app
+    from sector.materials import Concrete, MildSteel, Prestress
+    from sector.section import Section
+
+    case_analysis_core = importlib.import_module("case_analysis")
+    capacity_core = importlib.import_module("sector.capacity")
+    elastic_core = importlib.import_module("sector.elastic")
+    geometry_core = importlib.import_module("sector.geometry")
+
+    concrete = Concrete(fck=30.0, gamma_c=1.5, curve=2)
+    steel = MildSteel(
+        fytk=500.0, fyck=500.0, futk=550.0, eut=0.05,
+        gamma_y=1.15, curve=2,
+    )
+    prestress = Prestress(curve=1, IS=0.005, gamma_y=1.15)
+    inp = {
+        "mode": "Elastic",
+        "section": Section.from_polygon(
+            [(-0.10, -0.15), (0.10, -0.15),
+             (0.10, 0.15), (-0.10, 0.15)],
+            bars_xy_area_mm2=[(0.0, -0.12, 500.0)],
+        ),
+        "geometry_error": None, "void_error": None,
+        "steel_error": None, "material_error": None,
+        "outer": [(-0.10, -0.15), (0.10, -0.15),
+                  (0.10, 0.15), (-0.10, 0.15)],
+        "holes": [],
+        "bars": [(0.0, -0.12, 500.0)],
+        "bar_elements": [{"id": "R1", "material_id": "M1"}],
+        "bar_materials": [steel], "mild_materials": {"M1": steel},
+        "steel": steel, "capacity_steel_material_id": "M1",
+        "tendons": [(0.0, -0.10, 500.0)],
+        "tendon_elements": [{"id": "T1", "material_id": "P1"}],
+        "tendon_materials": [prestress],
+        "prestress_materials": {"P1": prestress},
+        "prestress": prestress,
+        "concrete": concrete, "concrete_preset": "EN 1992-1-1:2005",
+        "concrete_eta_cc": 1.0, "concrete_k_tc": 1.0,
+        "conc_Ec": 33.0, "el_phi": 1.5,
+        "plastic_cases": [], "elastic_cases": [],
+        "shear_on": False, "torsion_on": False,
+        "clear_spacing_on": False, "fatigue_on": False,
+    }
+    counts = {
+        "geometry": 0, "fcd": 0, "fyd": 0, "prestress_law": 0,
+        "prestress": 0, "ratios": 0,
+    }
+
+    def counted(name, function):
+        def wrapper(*args, **kwargs):
+            counts[name] += 1
+            return function(*args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(
+        geometry_core,
+        "area_moment_breakdown",
+        counted("geometry", geometry_core.area_moment_breakdown),
+    )
+    monkeypatch.setattr(
+        Concrete,
+        "fcd",
+        property(counted("fcd", Concrete.fcd.fget)),
+    )
+    monkeypatch.setattr(
+        capacity_core,
+        "design_yield",
+        counted("fyd", capacity_core.design_yield),
+    )
+    monkeypatch.setattr(
+        Prestress,
+        "stress",
+        counted("prestress_law", Prestress.stress),
+    )
+    monkeypatch.setattr(
+        capacity_core,
+        "locked_in_prestress_result",
+        counted("prestress", capacity_core.locked_in_prestress_result),
+    )
+    monkeypatch.setattr(
+        elastic_core,
+        "calculate_modular_ratios",
+        counted("ratios", elastic_core.calculate_modular_ratios),
+    )
+
+    calls = []
+
+    def fake_single(
+        case_inp,
+        *,
+        reuse_plastic=None,
+        reuse_elastic=None,
+        elastic_solver_inputs=None,
+        shared_results=None,
+    ):
+        calls.append((case_inp["case_id"], elastic_solver_inputs, shared_results))
+        return {"elastic": {"case_id": case_inp["case_id"]}}
+
+    def fake_cases(base, runner, **_kwargs):
+        first = runner(dict(base, case_id="EL-A"))
+        second = runner(dict(base, case_id="EL-B"))
+        return {
+            "elastic_cases": [
+                {"name": "EL-A", "results": first},
+                {"name": "EL-B", "results": second},
+            ],
+        }
+
+    monkeypatch.setattr(sector_app, "_run_single_analysis", fake_single)
+    monkeypatch.setattr(case_analysis_core, "run_case_tables", fake_cases)
+
+    result = sector_app.run_analysis(inp)
+    assert counts == {
+        "geometry": 1, "fcd": 1, "fyd": 1, "prestress_law": 1,
+        "prestress": 1, "ratios": 1,
+    }
+    assert calls[0][1] is calls[1][1]
+    assert calls[0][2] is calls[1][2]
+    shared_keys = {
+        "section_properties", "material_properties",
+        "prestress_initial", "elastic_shared",
+    }
+    assert shared_keys <= set(result)
+    assert result["worked_example_selection"] == {
+        "schema": 1,
+        "families": {},
+        "crack_examples": [],
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+    }
+    for entry in result["elastic_cases"]:
+        assert not shared_keys & set(entry["results"])
 
 
 def test_combined_elastic_reports_four_columns():
@@ -983,24 +1200,20 @@ def test_plastic_view_tolerates_a_pre_split_payload():
     assert not at.exception
 
 
-def test_plastic_bar_hover_reports_stress_strain_per_bar_and_varies_with_rotation():
-    # The plastic section hover reports each bar's design stress and strain at the
-    # selected rotation (tension-positive): a bar on the tension side reads a positive
-    # strain, one on the compression side negative, and the values change with the
-    # curvature (rotation).
-    from sector_app import _plastic_bar_hover
-    from sector.materials import MildSteel
-    steel = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, gamma_y=1.15,
-                      gamma_u=1.15, curve=3, Es=200000.0, ey0c=2.25)
-    hp = (0.0, 1.0, 0.0)                      # NA at y = 0, compression side y > 0
-    bars = [(0.0, -0.1), (0.0, 0.1)]          # tension bar (y<0), compression bar (y>0)
-    h = _plastic_bar_hover(bars, hp, kappa=0.05, material=steel)
-    assert "MPa" in h[0]
-    assert "= 0.500 %" in h[0]                # tension bar: +0.5 %
-    assert "= -0.500 %" in h[1]               # compression bar: -0.5 %
-    h2 = _plastic_bar_hover(bars, hp, kappa=0.10, material=steel)
-    assert h2[1] != h[1]                       # a different rotation -> different values
-    assert _plastic_bar_hover(bars, hp, 0.05, None) is None   # no material -> no hover
+def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law():
+    from sector_app import _plastic_state_hover
+
+    rows = [
+        {"stress_mpa": 500.0, "strain_permille": 5.0, "material_id": "M1"},
+        {"stress_mpa": -420.0, "strain_permille": -5.0, "material_id": "M2"},
+    ]
+    hover = _plastic_state_hover(rows)
+    assert "500.0 MPa" in hover[0]
+    assert "= 0.500 %" in hover[0]
+    assert "material M1" in hover[0]
+    assert "= -0.500 %" in hover[1]
+    assert "material M2" in hover[1]
+    assert _plastic_state_hover([]) is None
 
 
 def test_both_mode_runs_elastic_and_plastic():
@@ -1010,6 +1223,63 @@ def test_both_mode_runs_elastic_and_plastic():
     assert not at.exception
     res = at.session_state["results"]
     assert "plastic" in res and "elastic" in res
+
+
+def test_plastic_and_elastic_payloads_retain_one_textbook_ready_final_state():
+    at = _fresh()
+    at.run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
+    assert not at.exception
+
+    results = at.session_state["results"]
+    plastic = results["plastic"]
+    point = plastic["points"][plastic["worked_point_index"]]
+    assert point["concrete_corner_states"]
+    assert point["reinforcement_states"]
+    assert point["curvature_candidates"]
+    assert point["curvature_selection"]
+    for candidate in point["curvature_candidates"]:
+        assert candidate["curvature_per_m"] == pytest.approx(
+            candidate["strain_limit"] / candidate["distance_from_na_m"]
+        )
+    assert point["axial_achieved"] == pytest.approx(
+        point["concrete_force"] + point["bar_force"] + point["tendon_force"]
+    )
+    assert point["Mx"] == pytest.approx(
+        point["concrete_mx"] + point["bar_mx"] + point["tendon_mx"]
+    )
+    assert point["My"] == pytest.approx(
+        point["concrete_my"] + point["bar_my"] + point["tendon_my"]
+    )
+
+    elastic = results["elastic"]
+    assert set(elastic["accepted_states"]) == {
+        "long_term",
+        "instantaneous_combined",
+    }
+    for state in elastic["accepted_states"].values():
+        assert len(state["equilibrium"]["matrix"]) == 3
+        assert set(state["equilibrium"]["target"]) == {"n", "mx", "my"}
+        assert set(state["equilibrium"]["internal"]) == {"n", "mx", "my"}
+        assert set(state["equilibrium"]["residual"]) == {"n", "mx", "my"}
+    superposition = elastic["superposition"]
+    assert superposition["long_term_reduction_factor"] == pytest.approx(
+        1.0
+        - superposition["short_term_modular_ratio"]
+        / superposition["long_term_modular_ratio"]
+    )
+    for element in elastic["elements"]:
+        assert element["total_mpa"] == pytest.approx(
+            element["reduced_long_mpa"]
+            + element["rst1_mpa"]
+            + element["locked_in_mpa"]
+        )
+        assert element["dif_mpa"] == pytest.approx(
+            element["total_mpa"] - element["long_mpa"]
+        )
+
+    assert "calculation_evidence" not in results
+    assert "trace" not in results
 
 
 def test_plastic_and_elastic_use_independent_loads():

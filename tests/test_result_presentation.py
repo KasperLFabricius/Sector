@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import inspect
 import pathlib
 import sys
 
@@ -14,7 +15,92 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
-from sector.materials import Concrete, MildSteel  # noqa: E402
+
+
+def test_worked_example_selection_retains_named_cases_branches_and_directions():
+    out = {
+        "plastic_cases": [
+            {
+                "name": "PL-A",
+                "results": {
+                    "plastic": {"converged": True, "util": 0.7},
+                    "shear": {"directions": {
+                        "vx": {"res": {"valid": True}, "util": 0.8},
+                        "vy": {"res": {"valid": True}, "util": 0.8},
+                    }},
+                },
+            },
+            {
+                "name": "PL-B",
+                "results": {
+                    "plastic": {"converged": True, "util": 0.9},
+                    "shear": {"directions": {
+                        "vx": {"res": {"valid": True}, "util": 0.95},
+                    }},
+                },
+            },
+        ],
+        "elastic_cases": [
+            {
+                "name": "EL-A",
+                "results": {"elastic": {
+                    "converged": True, "max_conc": 10.0, "max_steel": 100.0,
+                    "lambda_cr": 0.9,
+                    "crack": {"wk": 0.2}, "crack_short": {"wk": 0.3},
+                }},
+            },
+            {
+                "name": "EL-B",
+                "results": {"elastic": {
+                    "converged": True, "max_conc": 12.0, "max_steel": 120.0,
+                    "lambda_cr": 0.7,
+                    "crack": {"wk": 0.4}, "crack_short": {"wk": 0.1},
+                }},
+            },
+        ],
+    }
+
+    selection = presentation.worked_example_selection({}, out)
+
+    assert selection["families"]["plastic"]["case_id"] == "PL-B"
+    assert selection["families"]["shear"] == {
+        "case_id": "PL-B", "component": "vx",
+    }
+    assert selection["families"]["elastic"]["case_id"] == "EL-B"
+    assert selection["cracking_threshold"]["case_id"] == "EL-B"
+    assert selection["crack_examples"] == [{
+        "case_id": "EL-B", "system": "governing", "branch": "crack",
+        "label": "long-term",
+    }]
+
+
+def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
+    interaction = {"valid": True, "value": math.inf}
+    minimum = {"applicable": True, "value": math.inf}
+    out = {"plastic_cases": [{
+        "name": "PL-INF",
+        "results": {"torsion": {
+            "valid": True,
+            "util": 0.5,
+            "directional_interactions": {
+                "vx": {"interaction": interaction, "min_reinf": minimum},
+                "vy": {
+                    "interaction": dict(interaction), "min_reinf": dict(minimum),
+                },
+            },
+        }},
+    }]}
+
+    selected = presentation.worked_example_selection({}, out)[
+        "torsion_subchecks"
+    ]
+
+    assert selected["interaction"] == {
+        "case_id": "PL-INF", "component": "vx",
+    }
+    assert selected["minimum_reinforcement"] == {
+        "case_id": "PL-INF", "component": "vx",
+    }
 
 
 def _plastic(**updates):
@@ -114,96 +200,64 @@ def test_vt_interaction_status_reports_mathematical_verdict(interaction, expecte
     assert presentation.interaction_assessment_status(interaction) == expected
 
 
-def test_plastic_state_evidence_is_tension_positive_and_uses_mm2_area():
-    steel = MildSteel(
-        fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    inp = {
-        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
-        "holes": [],
-        "bars": [(0.0, -0.05, 500.0), (0.0, 0.05, 400.0)],
-        "tendons": [],
-        "concrete": Concrete(fck=30.0, gamma_c=1.5),
-        "steel": steel,
-        "prestress": None,
-    }
-    point = {
-        "V": 90.0, "na_x": float("inf"), "na_y": 0.0, "kappa": 0.01,
-    }
-    evidence = presentation.plastic_state_evidence(inp, point)
-    assert len(evidence["concrete"]) == 4
-    tension, compression = evidence["elements"]
-    assert tension["state"] == "Tension" and tension["strain_permille"] > 0.0
-    assert compression["state"] == "Compression"
-    assert compression["strain_permille"] < 0.0
-    assert tension["force_kn"] == pytest.approx(
-        tension["stress_mpa"] * 500.0 / 1000.0)
-
-
-def test_plastic_state_evidence_uses_and_identifies_each_material():
-    low = MildSteel(
-        fytk=300.0, fyck=300.0, futk=300.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    high = MildSteel(
-        fytk=600.0, fyck=600.0, futk=600.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    inp = {
-        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
-        "holes": [],
-        "bars": [(0.0, -0.05, 500.0), (0.0, -0.05, 500.0)],
-        "tendons": [],
-        "concrete": Concrete(fck=30.0, gamma_c=1.5),
-        "steel": low,
-        "bar_materials": [low, high],
-        "prestress": None,
-        "bar_elements": [
-            {"id": "R1", "material_id": "M1"},
-            {"id": "R2", "material_id": "M2"},
-        ],
-        "mild_material_catalog": {
-            "items": [
-                {"id": "M1", "name": "Low strength"},
-                {"id": "M2", "name": "High strength"},
-            ]
-        },
-    }
-    point = {
-        "V": 90.0, "na_x": float("inf"), "na_y": 0.0, "kappa": 0.10,
-    }
-
-    rows = presentation.plastic_state_evidence(inp, point)["elements"]
-
-    assert [row["material_id"] for row in rows] == ["M1", "M2"]
-    assert [row["material_name"] for row in rows] == [
-        "Low strength", "High strength"
+def test_plastic_state_rows_returns_only_the_retained_solver_rows():
+    concrete_rows = [
+        {
+            "point_no": 1,
+            "ring": "Outer",
+            "strain_permille": -3.1,
+            "stress_mpa": -20.0,
+        }
     ]
-    assert rows[1]["stress_mpa"] > rows[0]["stress_mpa"]
-
-
-def test_plastic_state_evidence_rejects_incomplete_material_sequence():
-    steel = MildSteel(
-        fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    inp = {
-        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
-        "holes": [],
-        "bars": [(0.0, -0.05, 500.0), (0.0, 0.05, 500.0)],
-        "bar_materials": [steel],
-        "tendons": [],
-        "concrete": Concrete(fck=30.0, gamma_c=1.5),
-        "steel": steel,
-        "prestress": None,
+    reinforcement_rows = [
+        {
+            "element_type": "Bar",
+            "element_id": "R1",
+            "material_id": "M1",
+            "strain_permille": 2.5,
+            "stress_mpa": 500.0,
+            "force_kn": 250.0,
+        },
+        {
+            "element_type": "Tendon",
+            "element_id": "P1",
+            "material_id": "P1",
+            "strain_permille": 7.0,
+            "stress_mpa": 1_400.0,
+            "force_kn": 210.0,
+        },
+    ]
+    point = {
+        "V": 90.0,
+        "na_x": float("inf"),
+        "na_y": 0.0,
+        "concrete_corner_states": concrete_rows,
+        "reinforcement_states": reinforcement_rows,
     }
+    rows = presentation.plastic_state_rows(point)
 
-    with pytest.raises(ValueError, match="one material and prestrain"):
-        presentation.plastic_state_evidence(
-            inp, {"V": 90.0, "na_x": float("inf"), "na_y": 0.0,
-                  "kappa": 0.01}
-        )
+    assert rows["concrete"] == concrete_rows
+    assert rows["elements"] == reinforcement_rows
+    assert rows["concrete"] is not concrete_rows
+    assert rows["elements"] is not reinforcement_rows
+    assert rows["halfplane"] == pytest.approx((0.0, 1.0, 0.0))
+
+
+def test_plastic_state_rows_has_no_material_or_solver_input_boundary():
+    assert tuple(inspect.signature(presentation.plastic_state_rows).parameters) == (
+        "point",
+    )
+    source = inspect.getsource(presentation.plastic_state_rows)
+    assert ".stress(" not in source
+    assert "Concrete(" not in source
+    assert "MildSteel(" not in source
+    assert "Prestress(" not in source
+
+    rows = presentation.plastic_state_rows(
+        {"V": 0.0, "na_x": 0.0, "na_y": float("inf")}
+    )
+    assert rows["concrete"] == []
+    assert rows["elements"] == []
 
 
 def test_nm_boundary_rows_preserve_both_independent_axial_traces():
@@ -254,6 +308,8 @@ def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
                 "governing": "bar 1",
             },
         },
+        "lambda_cr": 0.82,
+        "cracked": True,
         "show_cw": False,
     }
     rows = presentation.result_summary_rows(
@@ -267,6 +323,11 @@ def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
     assert by_check["Reinforcement stress"]["status"] == "CALCULATED"
     assert by_check["Reinforcement stress"]["criterion"] == "Output only"
     assert by_check["Reinforcement stress"]["util"] is None
+    assert by_check["Cracking threshold/state"]["status"] == "CALCULATED"
+    assert by_check["Cracking threshold/state"]["result"] == (
+        "lambda_cr 0.820; cracked"
+    )
+    assert by_check["Cracking threshold/state"]["criterion"] == "Output only"
     assert presentation.overall_summary_status(rows) == "PASS"
 
 
@@ -295,6 +356,10 @@ def test_combined_summary_cannot_hide_subordinate_failure():
             "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
         },
         "chord_off": {"valid": True, "util": 0.55, "axis": "y"},
+        "governing_longitudinal": {
+            "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
+        },
+        "longitudinal_all_conditional": True,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -325,6 +390,15 @@ def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
             "valid": True, "util": 0.60, "axis": "x",
             "biaxial": True, "conditional": False,
         },
+        "governing_longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "biaxial": True, "conditional": False,
+        },
+        "longitudinal_fallback": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "biaxial": True, "conditional": False,
+        },
+        "longitudinal_all_conditional": False,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -378,6 +452,14 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
             "biaxial": False,
             "off_not_evaluated": "not_solved",
         },
+        "governing_longitudinal": {
+            "valid": True,
+            "util": 0.65,
+            "axis": "x",
+            "biaxial": False,
+            "off_not_evaluated": "not_solved",
+        },
+        "longitudinal_all_conditional": True,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -392,20 +474,24 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
 
 
 def test_combined_physical_components_uses_the_governing_longitudinal_face():
+    shear_axis = {
+        "valid": True, "util": 0.60, "axis": "x",
+        "tension_low": True, "biaxial": False, "conditional": True,
+    }
+    governing = {
+        "valid": True, "util": 0.85, "axis": "y",
+        "tension_low": False, "biaxial": True, "conditional": True,
+    }
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
             "u_crush": 0.40, "u_stirrup": 0.55,
             "shear_fraction": 0.20, "torsion_fraction": 0.35,
         },
-        "longitudinal": {
-            "valid": True, "util": 0.60, "axis": "x",
-            "tension_low": True, "biaxial": False,
-        },
-        "chord_off": {
-            "valid": True, "util": 0.85, "axis": "y",
-            "tension_low": False, "biaxial": True, "conditional": True,
-        },
+        "longitudinal": shear_axis,
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
 
     assert [item["label"] for item in components] == [
@@ -420,20 +506,25 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
 
 
 def test_combined_components_withhold_verdict_for_non_governing_fallback():
+    fallback = {
+        "valid": True, "util": 0.60, "axis": "x",
+        "tension_low": True, "biaxial": False, "conditional": False,
+    }
+    governing = {
+        "valid": True, "util": 0.85, "axis": "y",
+        "tension_low": False, "biaxial": True, "conditional": True,
+    }
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
             "u_crush": 0.40, "u_stirrup": 0.55,
             "shear_fraction": 0.20, "torsion_fraction": 0.35,
         },
-        "longitudinal": {
-            "valid": True, "util": 0.60, "axis": "x",
-            "tension_low": True, "biaxial": False, "conditional": False,
-        },
-        "chord_off": {
-            "valid": True, "util": 0.85, "axis": "y",
-            "tension_low": False, "biaxial": True, "conditional": True,
-        },
+        "longitudinal": fallback,
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_fallback": fallback,
+        "longitudinal_all_conditional": False,
     })
 
     longitudinal = components[2]
@@ -460,6 +551,9 @@ def test_combined_components_preserve_non_governing_face_fallback():
         },
         "longitudinal": exact_governing,
         "longitudinal_candidates": [fallback_face, exact_governing],
+        "governing_longitudinal": exact_governing,
+        "longitudinal_fallback": fallback_face,
+        "longitudinal_all_conditional": False,
     })
 
     longitudinal = components[2]
@@ -469,35 +563,69 @@ def test_combined_components_preserve_non_governing_face_fallback():
 
 
 def test_combined_physical_components_tolerates_missing_candidate_utilisation():
+    governing = {"valid": True, "util": 0.75, "axis": "y"}
     components = presentation.combined_physical_components({
         "transverse": None,
         "longitudinal": {"valid": True, "util": None, "axis": "x"},
-        "chord_off": {"valid": True, "util": 0.75, "axis": "y"},
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
     assert components[2]["util"] == pytest.approx(0.75)
 
 
 def test_combined_physical_components_withholds_off_axis_only_verdict():
+    governing = {"valid": True, "util": 0.75, "axis": "y"}
     components = presentation.combined_physical_components({
         "transverse": None,
         "longitudinal": None,
-        "chord_off": {"valid": True, "util": 0.75, "axis": "y"},
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
     assert components[2]["status"] == "NOT ASSESSED"
     assert "shear-axis" in components[2]["note"]
 
 
 def test_combined_physical_components_tolerates_missing_strut_angle():
+    governing = {"valid": True, "util": 0.60, "axis": "x"}
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": None,
             "u_crush": 0.40, "u_stirrup": 0.55,
             "shear_fraction": 0.20, "torsion_fraction": 0.35,
         },
-        "longitudinal": {"valid": True, "util": 0.60, "axis": "x"},
+        "longitudinal": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
     assert components[0]["status"] == "PASS"
     assert components[0]["note"] == "V-T crushing at the shared member angle"
+
+
+def test_combined_components_fail_closed_without_retained_governing_chord():
+    components = presentation.combined_physical_components({
+        "longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "tension_low": True, "conditional": True,
+        },
+        "chord_off": {
+            "valid": True, "util": 0.85, "axis": "y",
+            "tension_low": False, "conditional": True,
+        },
+        "longitudinal_all_conditional": True,
+    })
+
+    assert components[2]["status"] == "NOT ASSESSED"
+    assert components[2]["util"] is None
+
+
+def test_combined_component_formatter_does_not_reselect_governing_chords():
+    source = inspect.getsource(presentation.combined_physical_components)
+
+    assert "governing_longitudinal" in source
+    assert "max(" not in source
+    assert "candidate_util" not in source
 
 
 def test_shear_screening_does_not_fail_when_selected_links_pass():

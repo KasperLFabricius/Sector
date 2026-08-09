@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import ast
 import copy
+import inspect
+import io
 import math
 import pathlib
 import sys
+import textwrap
+from dataclasses import asdict
 from types import SimpleNamespace as NS
 
 import pytest
@@ -13,10 +18,19 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import sector_report  # noqa: E402
+import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import detailing  # noqa: E402
+import result_presentation  # noqa: E402
+import sector_report  # noqa: E402
+
+from sector import capacity, codes, detailing, geometry  # noqa: E402
+from sector import combined as combined_core  # noqa: E402
+from sector import elastic as elastic_core  # noqa: E402
+from sector import fatigue as fatigue_core  # noqa: E402
+from sector import plastic as plastic_core  # noqa: E402
+from sector import shear as shear_core  # noqa: E402
+from sector import torsion as torsion_core  # noqa: E402
 from sector.design_standards import (  # noqa: E402
     Capability,
     DesignBasisKey,
@@ -24,7 +38,25 @@ from sector.design_standards import (  # noqa: E402
     get_design_basis,
 )
 from sector.fatigue import CONCRETE_PROJECT_MINER  # noqa: E402
-from sector.materials import Concrete, MildSteel  # noqa: E402
+from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
+
+
+_build_report_from_completed_payload = sector_report.build_report
+
+
+def _build_report_with_selection(meta, inp, out, *args, **kwargs):
+    """Mirror run_analysis assembly for report unit-test payloads."""
+    completed = dict(out or {})
+    completed.setdefault(
+        "worked_example_selection",
+        result_presentation.worked_example_selection(inp, completed),
+    )
+    return _build_report_from_completed_payload(
+        meta, inp, completed, *args, **kwargs
+    )
+
+
+sector_report.build_report = _build_report_with_selection
 
 
 def _inp():
@@ -54,8 +86,8 @@ def _inp():
         "P_pl": 0.0, "Mx_pl": 100.0, "My_pl": 0.0,
         "P_el_l": 0.0, "Mx_el_l": 80.0, "My_el_l": 0.0,
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
-        "nl": 15.0, "ns": 6.0, "sls_fctm": 2.9, "sls_cw": True,
-        "conc_Ec": 33.0,
+        "nl": 15.0, "ns": 200.0 / 33.0, "el_phi": 1.475,
+        "sls_fctm": 2.9, "sls_cw": True, "conc_Ec": 33.0,
         "torsion_gamma_ct": 1.70,
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
@@ -64,16 +96,285 @@ def _inp():
 def _crack():
     # Units as returned by CrackWidthResult: wk/sr_max/phi/cover in mm; hc_ef in m;
     # ac_eff in m^2; esm_ecm dimensionless.
+    rho = 2.72 / 99.0
+    ac_eff = 0.0005 / rho
+    concrete_reduction = 0.4 * 2.9 / rho * (1.0 + 6.06 * rho)
+    mean_strain = 0.213 / 235.0
+    sigma_s = mean_strain * 200_000.0 + concrete_reduction
+    mean = {
+        "record_kind": "CrackMeanStrainOperands",
+        "sigma_s": sigma_s, "kt": 0.4, "fctm": 2.9,
+        "rho_p_eff": rho, "alpha_e": 6.06, "es": 200_000.0,
+        "concrete_tension_reduction": concrete_reduction,
+        "formula_candidate": mean_strain,
+        "lower_bound_factor": 0.6,
+        "lower_bound_candidate": 0.6 * sigma_s / 200_000.0,
+        "selected_candidate": "formula-7.9",
+        "selected_esm_ecm": mean_strain,
+    }
+    spacing = {
+        "record_kind": "CrackSpacing2005Operands",
+        "cover": 40.0, "diameter": 16.0, "rho_p_eff": rho,
+        "k1": 0.8, "k2": 0.5, "k3_base": 3.4, "k3_used": 3.4,
+        "k4": 0.425, "nearest_neighbour_spacing": 100.0,
+        "close_spacing_limit": 240.0, "tension_zone_depth": 0.15,
+        "formula_7_11": 235.0, "geometric_7_14": 195.0,
+        "selected_candidate": "formula-7.11", "selected_spacing": 235.0,
+    }
     candidate = {
         "element_type": "Bar", "element_no": 1, "element_id": "bar 1",
         "x_mm": 0.0, "y_mm": -120.0, "area_mm2": 500.0,
-        "wk": 0.213, "sr_max": 235.0, "esm_ecm": 8.4e-4,
-        "sigma_s": 215.0, "rho_p_eff": 0.04, "ac_eff": 0.0125,
+        "wk": 0.213, "sr_max": 235.0, "esm_ecm": mean_strain,
+        "sigma_s": sigma_s, "rho_p_eff": rho, "ac_eff": ac_eff,
         "hc_ef": 0.125, "phi": 16.0, "cover": 40.0,
         "coarse": False, "edition": "2004", "kw": 1.0,
         "k1_r": 1.0, "kfl": 1.0, "sr_max_geometric": False,
+        "as_eff": 0.0005, "ap_eff": 0.0,
+        "ap_eff_weighted": 0.0, "xi1": None,
+        "reinforcement_type": "mild", "bc_ef": 0.0,
+        "direct_tension": False, "scope": "dominant direction",
+        "direction_deg": 90.0, "equivalent_diameter": 25.231,
+        "diameter_source": "provided", "cover_source": "geometry",
+        "bond_coefficient": 0.8, "modular_ratio": 6.06,
+        "mean_strain_operands": mean,
+        "spacing_operands": spacing,
     }
-    return dict(candidate, gov_bar=1, candidates=[candidate])
+    effective_area = {
+        "record_kind": "CrackEffectiveArea2005Fine",
+        "section_depth": 0.3, "effective_depth": 0.25,
+        "tension_zone_depth": 0.4, "h_minus_d": 0.05,
+        "candidate_2_5_h_minus_d": 0.125,
+        "candidate_h_minus_x_over_3": 0.13333333333333333,
+        "candidate_h_over_2": 0.15,
+        "selected_candidate": "2.5(h-d)", "selected_hc_eff": 0.125,
+        "band_limit": -0.025, "ac_eff": ac_eff,
+    }
+    return dict(
+        candidate,
+        gov_bar=1,
+        effective_area_operands=effective_area,
+        effective_reinforcement_2023=None,
+        governing_rule="maximum-wk-then-lowest-bar-index",
+        governing_candidate=dict(candidate),
+        candidates=[candidate],
+    )
+
+
+def _wide_crack():
+    crack = copy.deepcopy(_crack())
+    spacing = crack["governing_candidate"]["spacing_operands"]
+    spacing.update({
+        "nearest_neighbour_spacing": math.inf,
+        "tension_zone_depth": 235.0 / 1.3 / 1000.0,
+        "geometric_7_14": 235.0,
+        "selected_candidate": "formula-7.14",
+        "selected_spacing": 235.0,
+    })
+    crack["governing_candidate"]["sr_max_geometric"] = True
+    crack["sr_max_geometric"] = True
+    crack["candidates"][0] = copy.deepcopy(crack["governing_candidate"])
+    return crack
+
+
+def _coarse_crack(*, wk=0.213):
+    crack = copy.deepcopy(_crack())
+    crack.update(coarse=True, wk=wk)
+    crack["governing_candidate"].update(coarse=True, wk=wk)
+    crack["candidates"][0].update(coarse=True, wk=wk)
+    crack["effective_area_operands"] = {
+        "record_kind": "CrackEffectiveArea2005Coarse",
+        "section_depth": 0.3, "compression_face_axis": -0.15,
+        "tension_face_axis": 0.15, "reinforcement_centroid_axis": 0.12,
+        "band_limit_axis": -0.005, "band_centroid_axis": 0.12,
+        "centroid_gap": 0.0, "selected_hc_eff": 0.155,
+        "ac_eff": crack["ac_eff"],
+        "selected_candidate": "centroid-matched-band",
+    }
+    return crack
+
+
+def _crack_2023():
+    crack = copy.deepcopy(_crack())
+    rho = crack["rho_p_eff"]
+    spacing_value = 1.5 * 40.0 + (0.77 * 0.9 / 7.2) * 16.0 / rho
+    mean_strain = 0.213 / (1.7 * 1.13 * spacing_value)
+    reduction = 0.4 * 2.9 / rho * (1.0 + 6.06 * rho)
+    sigma_s = mean_strain * 200_000.0 + reduction
+    mean = {
+        "record_kind": "CrackMeanStrainOperands",
+        "sigma_s": sigma_s, "kt": 0.4, "fctm": 2.9,
+        "rho_p_eff": rho, "alpha_e": 6.06, "es": 200_000.0,
+        "concrete_tension_reduction": reduction,
+        "formula_candidate": mean_strain, "lower_bound_factor": 0.6,
+        "lower_bound_candidate": 0.6 * sigma_s / 200_000.0,
+        "selected_candidate": "formula-9.11",
+        "selected_esm_ecm": mean_strain,
+    }
+    spacing = {
+        "record_kind": "CrackSpacing2023Operands",
+        "cover": 40.0, "diameter": 16.0, "rho_p_eff": rho,
+        "cover_coefficient": 1.5, "bond_coefficient_k1": 0.8,
+        "bond_factor_kb": 0.9, "flexural_factor_raw": 0.77,
+        "flexural_factor": 0.77, "flexural_factor_method": "formula-9.17",
+        "transformed_tension_depth": 0.2, "cap_tension_depth": 0.2,
+        "diameter_ratio_divisor": 7.2, "formula_spacing": spacing_value,
+        "cap_spacing": 1.3 / 1.7 * 0.2 * 1000.0,
+        "selected_candidate": "formula-9.15",
+        "selected_spacing": spacing_value,
+    }
+    candidate = crack["governing_candidate"]
+    candidate.update(
+        edition="2023", kw=1.7, k1_r=1.13, kfl=0.77,
+        wk=0.213, sr_max=spacing_value, esm_ecm=mean_strain,
+        sigma_s=sigma_s, mean_strain_operands=mean,
+        spacing_operands=spacing,
+    )
+    crack.update(candidate)
+    crack.update(
+        gov_bar=1,
+        effective_area_operands={
+            "record_kind": "CrackEffectiveArea2023Bending",
+            "section_depth": 0.3, "tension_zone_depth": 0.2,
+            "near_layer_depth": 0.025, "far_layer_depth": 0.025,
+            "near_layer_diameter": 16.0,
+            "candidate_ay_plus_5phi": 0.105,
+            "candidate_10phi": 0.16, "candidate_3_5ay": 0.0875,
+            "base_selected_candidate": "3.5ay", "base_height": 0.0875,
+            "layer_spread": 0.0, "height_before_section_caps": 0.0875,
+            "candidate_h_minus_x": 0.2, "candidate_h_over_2": 0.15,
+            "final_selected_candidate": "layer-band",
+            "selected_hc_eff": 0.0875, "band_limit": 0.0625,
+            "ac_eff": crack["ac_eff"],
+        },
+        effective_reinforcement_2023={
+            "record_kind": "EffectiveReinforcement2023",
+            "as_eff": 0.0005, "ap_eff": 0.0,
+            "ap_eff_weighted": 0.0, "rho_p_eff": rho,
+            "xi1_by_element": [None], "ac_eff": crack["ac_eff"],
+            "rho_numerator": 0.0005, "reference_mild_diameter": 16.0,
+            "elements": [],
+        },
+        governing_candidate=candidate,
+        candidates=[copy.deepcopy(candidate)],
+    )
+    return crack
+
+
+def _plastic_point():
+    return {
+        "V": 0.0,
+        "Mx": 100.0,
+        "My": 0.0,
+        "na_x": 0.0,
+        "na_y": 0.05,
+        "eps_c": 0.35,
+        "eps_s": 2.0,
+        "eps_s_comp": -0.1,
+        "eps_cable": 0.0,
+        "kappa": 0.02,
+        "comp_force": 250.0,
+        "lever": 0.2,
+        "dx": 0.0,
+        "dy": 0.2,
+        "converged": True,
+        "axial_requested": 0.0,
+        "axial_achieved": 0.0,
+        "axial_residual": 0.0,
+        "axial_tolerance": 1.0e-6,
+        "axial_reachable": True,
+        "compression_depth": 0.175,
+        "neutral_axis_offset": 0.0,
+        "strain_gradient_x": 0.0,
+        "strain_gradient_y": -0.02,
+        "strain_offset": 0.0,
+        "search_lower_depth": 0.01,
+        "search_upper_depth": 0.29,
+        "search_lower_axial": -45.0,
+        "search_upper_axial": 62.0,
+        "search_iterations": 8,
+        "concrete_force": 250.0,
+        "concrete_mx": 70.0,
+        "concrete_my": 0.0,
+        "bar_force": -250.0,
+        "bar_mx": 30.0,
+        "bar_my": 0.0,
+        "tendon_force": 0.0,
+        "tendon_mx": 0.0,
+        "tendon_my": 0.0,
+        "compression_mx": 70.0,
+        "compression_my": 0.0,
+        "tension_force": -250.0,
+        "tension_mx": 30.0,
+        "tension_my": 0.0,
+        "concrete_corner_states": [{
+            "point_no": 1,
+            "ring": "Outer",
+            "ring_point_no": 1,
+            "x_mm": -100.0,
+            "y_mm": -150.0,
+            "section_strain_permille": 3.0,
+            "strain_permille": -3.0,
+            "stress_mpa": -20.0,
+        }],
+        "reinforcement_states": [{
+            "element_type": "Bar",
+            "element_no": 1,
+            "element_id": "bar 1",
+            "material_id": "M1",
+            "material_name": "B500",
+            "state": "Tension",
+            "x_mm": 0.0,
+            "y_mm": -120.0,
+            "area_mm2": 500.0,
+            "section_strain_permille": -2.5,
+            "initial_strain_permille": 0.0,
+            "strain_permille": 2.5,
+            "stress_mpa": 500.0,
+            "force_kn": 250.0,
+            "internal_force_kn": -250.0,
+            "internal_mx_knm": 30.0,
+            "internal_my_knm": 0.0,
+        }],
+        "curvature_candidates": [{
+            "mode": "concrete_crushing",
+            "element_index": None,
+            "element_id": None,
+            "strain_limit": 0.0035,
+            "distance_from_na_m": 0.175,
+            "curvature_per_m": 0.02,
+            "selected": True,
+        }],
+        "curvature_selection": {
+            "mode": "concrete_crushing",
+            "element_index": None,
+            "curvature_per_m": 0.02,
+        },
+    }
+
+
+def _elastic_state(mx):
+    return {
+        "raw_stress_plane": {
+            "sigma0_kpa": 0.0,
+            "gradient_x_kpa_per_m": mx,
+            "gradient_y_kpa_per_m": 0.0,
+        },
+        "iterations": 4,
+        "converged": True,
+        "equilibrium": {
+            "matrix": [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            "target": {"n": 0.0, "mx": mx, "my": 0.0},
+            "internal": {"n": 0.0, "mx": mx, "my": 0.0},
+            "residual": {"n": 0.0, "mx": 0.0, "my": 0.0},
+            "residual_scale": abs(mx),
+            "normalised_residual": 0.0,
+            "relative_tolerance": 1.0e-8,
+        },
+    }
 
 
 def _out():
@@ -82,12 +383,11 @@ def _out():
                     "max_mx": 100.0, "max_my": 100.0, "min_mx": -100.0, "min_my": -100.0,
                     "util": 0.8, "closed": True,
                     "check_util": True, "applied": (80.0, 0.0), "converged": True,
-                    "points": [{"V": 0.0, "Mx": 100.0, "My": 0.0, "na_x": 0.0,
-                                "na_y": 0.05, "eps_c": 0.35, "eps_s": 2.0,
-                                "eps_s_comp": -0.1, "eps_cable": 0.0, "kappa": 0.02,
-                                "comp_force": 300.0, "lever": 0.2, "dx": 0.0,
-                                "dy": 0.2}]},
-        "elastic": {"total": [150.0], "long": [120.0], "dif": [30.0], "rst1": [0.0],
+                    "worked_point_index": 0,
+                    "worked_point_basis": "utilisation direction",
+                    "points": [_plastic_point()]},
+        "elastic": {"total": [150.0], "long": [120.0], "dif": [30.0],
+                    "rst1": [90.404040404],
                     "max_conc": 12.0, "max_conc_xy": (0.0, 0.15), "max_conc_point": 4,
                     "na_x": 0.0, "na_y": 0.04, "max_steel": 150.0, "max_steel_bar": 1,
                     "max_steel_element": "bar 1",
@@ -99,7 +399,10 @@ def _out():
                         "element_id": "bar 1", "x_mm": 0.0, "y_mm": -120.0,
                         "area_mm2": 500.0, "strain_permille": 0.75,
                         "total_mpa": 150.0, "long_mpa": 120.0,
-                        "dif_mpa": 30.0, "rst1_mpa": 0.0,
+                        "dif_mpa": 30.0, "rst1_mpa": 90.404040404,
+                        "long_passive_mpa": 100.0,
+                        "reduced_long_mpa": 59.595959596,
+                        "locked_in_mpa": 0.0,
                     }],
                     "concrete_corners": [
                         {"point_no": 1, "ring": "Outer", "ring_point_no": 1,
@@ -147,7 +450,66 @@ def _out():
                         "case": "Long-term", "governing": "bar 1",
                         "unit": "mm", "calculation_state": "CALCULATED",
                     },
-                    "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
+                    "crack_code": "EN 1992-1-1:2005", "crack_member": None,
+                    "accepted_states": {
+                        "long_term": _elastic_state(80.0),
+                        "instantaneous_combined": _elastic_state(95.0),
+                    },
+                    "superposition": {
+                        "long_term_modular_ratio": 15.0,
+                        "short_term_modular_ratio": 200.0 / 33.0,
+                        "long_term_reduction_factor": 1.0 - (200.0 / 33.0) / 15.0,
+                        "prestress_resultant": {"n": 0.0, "mx": 0.0, "my": 0.0},
+                        "combined_target_before_neutralisation": {
+                            "n": 29.797979798,
+                            "mx": 91.424242424,
+                            "my": 0.0,
+                        },
+                        "neutralising_resultant": {
+                            "n": 29.797979798,
+                            "mx": -3.575757576,
+                            "my": 0.0,
+                        },
+                    }},
+        "section_properties": {
+            "rings": [{
+                "ring_id": "outer", "role": "gross outline",
+                "area_m2": 0.06, "first_x_m3": 0.0, "first_y_m3": 0.0,
+                "second_xx_m4": 2.0e-4, "second_yy_m4": 4.5e-4,
+                "product_xy_m4": 0.0,
+            }],
+            "net_concrete": {
+                "area_m2": 0.06, "first_x_m3": 0.0, "first_y_m3": 0.0,
+                "second_xx_m4": 2.0e-4, "second_yy_m4": 4.5e-4,
+                "product_xy_m4": 0.0, "centroid_x_m": 0.0,
+                "centroid_y_m": 0.0, "ix_centroid_m4": 4.5e-4,
+                "iy_centroid_m4": 2.0e-4, "ixy_centroid_m4": 0.0,
+            },
+        },
+        "material_properties": {
+            "concrete": {"design_strength_mpa": 20.0},
+            "mild": [{"material_id": "-", "design_yield_mpa": 500.0 / 1.15}],
+            "prestress": [],
+        },
+        "prestress_initial": {
+            "elements": [],
+            "internal_resultant_origin": {"n_kn": 0.0, "mx_knm": 0.0,
+                                          "my_knm": 0.0},
+            "equivalent_action_origin": {"n_kn": 0.0, "mx_knm": 0.0,
+                                         "my_knm": 0.0},
+        },
+        "elastic_shared": {
+            "concrete_modulus_mpa": 33_000.0,
+            "effective_concrete_modulus_mpa": 33_000.0 / 2.475,
+            "creep_coefficient": 1.475,
+            "materials": [{
+                "material_id": "M1", "material_family": "mild",
+                "modulus_mpa": 200_000.0,
+                "short_term": 200_000.0 / 33_000.0,
+                "long_term": 15.0,
+            }],
+        },
+    }
 
 
 def _fatigue_report_fixture():
@@ -203,32 +565,82 @@ def _fatigue_report_fixture():
                     "n_short_ed_kn": -10.0,
                     "my_short_ed_knm": 30.0,
                 },
+                {
+                    "spectrum": "Traffic C",
+                    "name": "FAT-C1",
+                    "description": "Non-governing service traffic",
+                    "cycles": 1.0e5,
+                    "n_long_ed_kn": -150.0,
+                    "mx_long_ed_knm": 10.0,
+                    "n_short_ed_kn": 5.0,
+                    "mx_short_ed_knm": 12.0,
+                },
             ]),
     })
 
-    def spectrum(name, bin_name, utilisation):
+    def spectrum(
+        name,
+        bin_name,
+        reinforcement_utilisation,
+        concrete_utilisation,
+    ):
+        yield_limit_mpa = 500.0 / 1.15
+        governing_stress_mpa = yield_limit_mpa * reinforcement_utilisation
+        stress_long_mpa = governing_stress_mpa - 66.0
+        sn_reference_cycles = 2.0e6
+        sn_reference_ratio = 2.0
+        cycles_to_failure = 64.0e6
+        damage = 2.0e5 / cycles_to_failure
+        yield_long = NS(
+            state="long-term endpoint",
+            stress_mpa=stress_long_mpa,
+            branch="tension yield",
+            characteristic_strength_mpa=500.0,
+            design_limit_mpa=yield_limit_mpa,
+            utilisation=abs(stress_long_mpa) / yield_limit_mpa,
+        )
+        yield_total = NS(
+            state="design total endpoint",
+            stress_mpa=governing_stress_mpa,
+            branch="tension yield",
+            characteristic_strength_mpa=500.0,
+            design_limit_mpa=yield_limit_mpa,
+            utilisation=reinforcement_utilisation,
+        )
         steel_bin = NS(
             bin_name=bin_name,
             cycles=2.0e5,
             converged=True,
-            stress_long_mpa=105.0,
-            stress_total_mpa=165.0,
-            stress_total_design_mpa=171.0,
-            stress_total_elastic_mpa=165.0,
+            stress_long_mpa=stress_long_mpa,
+            stress_total_mpa=governing_stress_mpa / 1.10,
+            stress_total_design_mpa=governing_stress_mpa,
+            stress_total_elastic_mpa=governing_stress_mpa / 1.10,
             stress_range_mpa=60.0,
             stress_range_elastic_mpa=60.0,
             bond_adjustment=1.0,
             bond_method="Perfect bond",
             design_stress_range_mpa=66.0,
-            delta_sigma_rsk_mpa=160.0,
-            delta_sigma_rd_mpa=139.13,
+            delta_sigma_rsk_mpa=151.8,
+            delta_sigma_rd_mpa=132.0,
             sn_exponent=5.0,
-            cycles_to_failure=3.0e6,
-            log10_cycles_to_failure=6.47712,
-            damage=0.0666667,
-            governing_stress_mpa=171.0,
-            yield_limit_mpa=434.78,
-            yield_utilisation=0.3933,
+            cycles_to_failure=cycles_to_failure,
+            log10_cycles_to_failure=math.log10(cycles_to_failure),
+            damage=damage,
+            governing_stress_mpa=governing_stress_mpa,
+            yield_limit_mpa=yield_limit_mpa,
+            yield_utilisation=reinforcement_utilisation,
+            sn_reference_cycles=sn_reference_cycles,
+            sn_slope_1=5.0,
+            sn_slope_2=9.0,
+            sn_knee_stress_range_mpa=132.0,
+            sn_branch="upper S-N branch",
+            sn_reference_ratio=sn_reference_ratio,
+            material_factor=1.15,
+            stress_total_design_elastic_mpa=governing_stress_mpa,
+            design_stress_range_elastic_mpa=66.0,
+            yield_long_check=yield_long,
+            yield_design_total_check=yield_total,
+            governing_yield_check=yield_total,
         )
         steel = NS(
             element_id="R1",
@@ -236,57 +648,77 @@ def _fatigue_report_fixture():
             detail_id="F1",
             diameter_mm=25.23,
             bins=(steel_bin,),
-            damage=utilisation,
-            damage_utilisation=utilisation,
+            damage=damage,
+            damage_utilisation=damage,
             governing_damage_bin=bin_name,
-            yield_utilisation=0.3933,
+            yield_utilisation=reinforcement_utilisation,
             governing_yield_bin=bin_name,
-            utilisation=utilisation,
+            utilisation=reinforcement_utilisation,
             converged=True,
             passed=True,
+            governing_criterion="yield/proof stress",
+            governing_bin=bin_name,
         )
+        fcd_fat_mpa = 14.72
+        e_cd_min = 0.20
+        e_cd_max = concrete_utilisation
+        concrete_cycles_to_failure = 20.0e6
+        concrete_damage = 2.0e5 / concrete_cycles_to_failure
         concrete_bin = NS(
             bin_name=bin_name,
             cycles=2.0e5,
             converged=True,
-            compression_long_mpa=6.0,
-            compression_total_mpa=10.0,
-            compression_min_design_mpa=6.0,
-            compression_max_design_mpa=10.4,
-            stress_ratio=0.5769,
-            e_cd_min=0.25,
-            e_cd_max=0.433,
-            cycles_to_failure=2.0e7,
-            log10_cycles_to_failure=7.30103,
-            damage=0.01,
-            stress_utilisation=0.433,
+            compression_long_mpa=e_cd_min * fcd_fat_mpa / 1.10,
+            compression_total_mpa=e_cd_max * fcd_fat_mpa / 1.10,
+            compression_min_design_mpa=e_cd_min * fcd_fat_mpa,
+            compression_max_design_mpa=e_cd_max * fcd_fat_mpa,
+            stress_ratio=e_cd_min / e_cd_max,
+            e_cd_min=e_cd_min,
+            e_cd_max=e_cd_max,
+            cycles_to_failure=concrete_cycles_to_failure,
+            log10_cycles_to_failure=math.log10(concrete_cycles_to_failure),
+            damage=concrete_damage,
+            stress_utilisation=concrete_utilisation,
+            equivalent_utilisation=None,
+            life_branch="variable compression",
+            life_coefficient=14.0,
+            life_range_term=0.75,
+            compression_total_design_mpa=e_cd_max * fcd_fat_mpa,
+            compression_min_state="long-term endpoint",
+            compression_max_state="design total endpoint",
         )
         concrete = NS(
             fibre_index=4,
             x_m=0.1,
             y_m=-0.15,
             bins=(concrete_bin,),
-            fcd_fat_mpa=24.0,
-            damage=0.01,
-            damage_utilisation=0.01,
+            fcd_fat_mpa=fcd_fat_mpa,
+            damage=concrete_damage,
+            damage_utilisation=concrete_damage,
             governing_damage_bin=bin_name,
-            stress_utilisation=0.433,
+            stress_utilisation=concrete_utilisation,
             governing_stress_bin=bin_name,
-            utilisation=0.433,
+            utilisation=concrete_utilisation,
             converged=True,
             passed=True,
+            method=fatigue_core.CONCRETE_MINER,
+            equivalent_utilisation=None,
+            governing_equivalent_bin=None,
+            governing_criterion="compressive stress",
+            governing_bin=bin_name,
         )
         search = NS(
             x_m=0.1,
             y_m=-0.15,
-            damage=0.01,
-            upper_damage=0.011,
+            damage=max(concrete_utilisation - 0.002, 0.0),
+            upper_damage=max(concrete_utilisation - 0.001, 0.0),
             divisions=96,
             boxes_evaluated=128,
             points_evaluated=772,
             absolute_gap=0.001,
             relative_gap=0.10,
             converged=True,
+            method=fatigue_core.CONCRETE_MINER,
         )
         state = NS(
             name=bin_name,
@@ -296,23 +728,51 @@ def _fatigue_report_fixture():
             bond_method="Perfect bond",
             design_action_factor=1.10,
         )
+        concrete_strength = NS(
+            edition=fatigue_core.EC2_2023,
+            fck_mpa=30.0,
+            gamma_c=1.50,
+            beta_cc_t0=0.92,
+            base_strength_mpa=18.4,
+            alpha_cc=None,
+            k1=None,
+            high_strength_reduction=None,
+            eta_cc_raw=(40.0 / 30.0) ** (1.0 / 3.0),
+            eta_cc_cap=1.0,
+            eta_cc=1.0,
+            eta_cc_fat_raw=0.85,
+            eta_cc_fat_cap=0.8,
+            eta_cc_fat=0.8,
+            fcd_fat_mpa=fcd_fat_mpa,
+        )
+        if reinforcement_utilisation >= concrete_utilisation:
+            governing_domain = "reinforcement"
+            governing_criterion = "yield/proof stress"
+        else:
+            governing_domain = "concrete"
+            governing_criterion = "compressive stress"
         return NS(
             spectrum_name=name,
             bins=(state,),
             reinforcement=(steel,),
             concrete=(concrete,),
             concrete_search=search,
-            fcd_fat_mpa=24.0,
+            fcd_fat_mpa=fcd_fat_mpa,
             governing_reinforcement_id="R1",
             governing_concrete_fibre=4,
-            utilisation=utilisation,
+            utilisation=max(reinforcement_utilisation, concrete_utilisation),
             converged=True,
             passed=True,
+            concrete_method=fatigue_core.CONCRETE_MINER,
+            concrete_strength=concrete_strength,
+            governing_domain=governing_domain,
+            governing_criterion=governing_criterion,
         )
 
     spectra = (
-        spectrum("Traffic A", "FAT-A1", 0.55),
-        spectrum("Traffic B", "FAT-B1", 0.72),
+        spectrum("Traffic A", "FAT-A1", 0.82, 0.35),
+        spectrum("Traffic B", "FAT-B1", 0.55, 0.91),
+        spectrum("Traffic C", "FAT-C1", 0.41, 0.50),
     )
     basis = get_design_basis(DesignBasisKey.PUBLISHED_2023)
     reinforcement_binding = capability_binding(
@@ -396,7 +856,22 @@ def _fatigue_report_fixture():
         "elements": tuple(inp["bar_elements"]),
         "spectra": spectra,
         "governing_spectrum": "Traffic B",
-        "utilisation": 0.72,
+        "governing_reinforcement_example": {
+            "spectrum_name": "Traffic A",
+            "element_id": "R1",
+            "utilisation": 0.82,
+            "criterion": "yield/proof stress",
+            "bin_name": "FAT-A1",
+        },
+        "governing_concrete_example": {
+            "spectrum_name": "Traffic B",
+            "fibre_index": 4,
+            "utilisation": 0.91,
+            "criterion": "compressive stress",
+            "bin_name": "FAT-B1",
+            "search_upper_bound_governs": False,
+        },
+        "utilisation": 0.91,
         "converged": True,
         "passed": True,
     }
@@ -412,7 +887,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
 
     assert "Grouped fatigue" in text
     assert "REVIEW - Traffic B" in text
-    assert "Traffic A" in text and "Traffic B" in text
+    assert all(name in text for name in ("Traffic A", "Traffic B", "Traffic C"))
     assert "FAT-A1" in text and "FAT-B1" in text
     assert "Reinforcement fatigue" in text
     assert "Concrete fatigue" in text
@@ -421,7 +896,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "Fatigue total" in text
     assert "Bond factor / method" in text
     assert "bond transformation" in text
-    assert "raw solver range" in text
+    assert "raw action-factored solver range" in text
     assert "action-level" in text
     assert "Annex E.5" in text and "Formulae (E.7)-(E.8)" in text
     assert "published reference; project adoption required" in text
@@ -433,13 +908,162 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     compact = text.replace(" ", "")
     delta_sigma = chr(0x394) + chr(0x3C3)
     sigma = chr(0x3C3)
-    formula_start = compact.index(delta_sigma + "i=")
-    formula = compact[formula_start:formula_start + 90]
-    assert formula.startswith(delta_sigma + "i=|")
-    assert sigma + "(long)i|" in formula
+    eta = chr(0x3B7)
+    assert (
+        delta_sigma + "Ed,el,i=|" + sigma + "total,Ed,el,i-"
+        + sigma + "long,i|"
+    ) in compact
+    assert (
+        delta_sigma + "Ed,i=" + eta + "b" + delta_sigma + "Ed,el,i"
+    ) in compact
     assert "delta " + sigma not in text
     assert text.count(delta_sigma) >= 7
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
+
+
+def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
+    inp, out = _fatigue_report_fixture()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    # Every independently checked spectrum remains visible in compact evidence.
+    assert all(name in text for name in ("Traffic A", "Traffic B", "Traffic C"))
+    # Reinforcement and concrete intentionally govern in different spectra.
+    assert text.count(
+        "Textbook calculation - governing reinforcement fatigue"
+    ) == 1
+    assert text.count("Textbook calculation - governing concrete fatigue") == 1
+    assert "Spectrum - Traffic A" in text
+    assert "Spectrum - Traffic B" in text
+    assert "Spectrum - Traffic C" not in text
+    assert "Governing reinforcement element - R1" in text
+    assert "Governing concrete fibre - 4" in text
+
+
+def test_fatigue_worked_formulas_use_retained_operands(monkeypatch):
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    steel_bin = payload["spectra"][0].reinforcement[0].bins[0]
+    steel_bin.material_factor = 1.234567
+    steel_bin.sn_reference_ratio = 7.654321
+    concrete_strength = payload["spectra"][1].concrete_strength
+    concrete_strength.beta_cc_t0 = 0.923456
+    concrete_strength.eta_cc_fat = 0.712345
+    concrete_strength.fcd_fat_mpa = 16.54321
+    payload["spectra"][1].concrete[0].fcd_fat_mpa = 16.54321
+
+    calls = {}
+
+    def capture(_self, _expression, **kwargs):
+        key = kwargs.get("equation_key")
+        if key:
+            calls.setdefault(key, []).append(kwargs)
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture)
+    pdf = sector_report.build_report({}, inp, out, figures=False)
+
+    assert pdf.startswith(b"%PDF")
+    assert "1.234567" in calls[
+        "fatigue.reinforcement.design-resistance-range"
+    ][0]["subst"]
+    assert "7.654321" in calls["fatigue.reinforcement.sn-life"][0]["subst"]
+    assert "0.92345600" in calls[
+        "fatigue.concrete.strength"
+    ][0]["subst"]
+    assert "0.71234500" in calls["fatigue.concrete.strength"][0]["subst"]
+    assert "16.54321000" in calls["fatigue.concrete.strength"][0]["result"]
+
+
+def test_fatigue_worked_examples_fail_closed_when_operands_are_missing(
+    monkeypatch,
+):
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["spectra"][0].reinforcement[0].bins[0].material_factor = None
+    payload["spectra"][1].concrete[0].fcd_fat_mpa = None
+
+    calls = []
+
+    def capture(_self, _expression, **kwargs):
+        if kwargs.get("equation_key"):
+            calls.append(kwargs["equation_key"])
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture)
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert text.count("Worked example unavailable") >= 2
+    assert not any(key.startswith("fatigue.reinforcement.") for key in calls)
+    assert not any(
+        key in {
+            "fatigue.concrete.normalised-stress",
+            "fatigue.concrete.life",
+            "fatigue.concrete.bin-damage",
+            "fatigue.concrete.miner-sum",
+            "fatigue.concrete.equivalent",
+            "fatigue.concrete.stress-utilisation",
+            "fatigue.concrete.utilisation",
+        }
+        for key in calls
+    )
+
+
+def test_figures_off_fatigue_report_consumes_completed_payload_only(monkeypatch):
+    inp, out = _fatigue_report_fixture()
+
+    def poison(*_args, **_kwargs):
+        raise AssertionError("report attempted to recalculate completed fatigue")
+
+    for name in (
+        "steel_fatigue_life",
+        "concrete_fatigue_strength_result",
+        "concrete_fatigue_strength",
+        "concrete_fatigue_life",
+        "solve_fatigue_bin",
+        "analyse_fatigue_spectrum",
+    ):
+        monkeypatch.setattr(fatigue_core, name, poison)
+    monkeypatch.setattr(
+        fatigue_analysis, "_global_reinforcement_example", poison
+    )
+    monkeypatch.setattr(fatigue_analysis, "_global_concrete_example", poison)
+
+    pdf = sector_report.build_report({}, inp, out, figures=False)
+
+    assert pdf.startswith(b"%PDF")
+
+
+def test_fatigue_report_has_no_python_max_or_solver_selection_fallback():
+    methods = (
+        sector_report.ReportBuilder._fatigue,
+        sector_report.ReportBuilder._fatigue_reinforcement_formulas,
+        sector_report.ReportBuilder._fatigue_concrete_formulas,
+    )
+    source = "\n".join(textwrap.dedent(inspect.getsource(method)) for method in methods)
+    tree = ast.parse(source)
+
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "max"
+        for node in ast.walk(tree)
+    )
+    assert all(
+        forbidden not in source
+        for forbidden in (
+            "steel_fatigue_life(",
+            "concrete_fatigue_strength_result(",
+            "concrete_fatigue_strength(",
+            "concrete_fatigue_life(",
+            "solve_fatigue_bin(",
+            "analyse_fatigue_spectrum(",
+            "_global_reinforcement_example(",
+            "_global_concrete_example(",
+        )
+    )
 
 
 def test_report_includes_damage_equivalent_concrete_method_evidence():
@@ -707,7 +1331,7 @@ def test_report_outline_decodes_literal_engineering_token_case_id():
 
 def test_report_preserves_negative_infinite_concrete_log_life():
     inp, out = _fatigue_report_fixture()
-    concrete_bin = out["fatigue"]["spectra"][0].concrete[0].bins[0]
+    concrete_bin = out["fatigue"]["spectra"][1].concrete[0].bins[0]
     concrete_bin.log10_cycles_to_failure = -math.inf
 
     text = " ".join(_pdf_text(sector_report.build_report(
@@ -730,12 +1354,12 @@ def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):
     sector_report.build_report({}, inp, out, figures=True)
 
     assert sum(title.startswith("Fatigue utilisation") for title in titles) == 2
-    assert sum(title.startswith("S-N assessment") for title in titles) == 2
-    assert sum(title.startswith("Miner damage - R1") for title in titles) == 2
+    assert sum(title.startswith("S-N assessment") for title in titles) == 1
+    assert sum(title.startswith("Miner damage - R1") for title in titles) == 1
     assert sum(
         title.startswith("Miner damage - concrete fibre")
         for title in titles
-    ) == 2
+    ) == 1
 
 
 def test_report_pdf_generates():
@@ -745,6 +1369,254 @@ def test_report_pdf_generates():
     )
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 3000
+
+
+def test_report_shared_preparation_survives_poisoned_calculators(monkeypatch):
+    """A completed elastic payload is the report's only numerical authority."""
+
+    entry = material_catalog.default_entry(
+        "prestress", preset="Curve 1 (built-in)"
+    )
+    law = material_catalog.build_material(entry, "prestress")
+    inp = _inp()
+    inp.update({
+        "mode": "Elastic",
+        "tendons": [(0.0, -0.12, 5.0e-4)],
+        "tendon_elements": [{
+            "id": "T1", "x_mm": 0.0, "y_mm": -120.0,
+            "area_mm2": 500.0, "diameter_mm": 25.23,
+            "size_mode": "Area", "material_id": "P1",
+            "fatigue_detail_id": "",
+        }],
+        "prestress_material_catalog": {
+            "version": 1, "next_id": 2, "items": [entry],
+        },
+        "prestress_materials": {"P1": law},
+        "tendon_materials": [law],
+        "prestress": law,
+        "prestress_preset": entry["preset"],
+    })
+    locked_stress = law.Es * law.IS
+    force = locked_stress * 500.0 / 1000.0
+    out = _out()
+    out.pop("plastic")
+    out["material_properties"]["prestress"] = [{
+        "material_id": "P1",
+        "characteristic_stress_at_rupture_mpa": law.stress(
+            law.rupture_strain, design=False
+        ),
+    }]
+    out["prestress_initial"] = {
+        "elements": [{
+            "tendon_index": 0, "element_id": "T1", "material_id": "P1",
+            "initial_strain": law.IS, "modulus_mpa": law.Es,
+            "locked_in_stress_mpa": locked_stress, "area_mm2": 500.0,
+            "force_kn": force, "x_m": 0.0, "y_m": -0.12,
+            "mx_knm": force * -0.12, "my_knm": 0.0,
+        }],
+        "internal_resultant_origin": {
+            "n_kn": force, "mx_knm": force * -0.12, "my_knm": 0.0,
+        },
+        "equivalent_action_origin": {
+            "n_kn": -force, "mx_knm": force * -0.12, "my_knm": 0.0,
+        },
+    }
+    out["elastic_shared"]["materials"].append({
+        "material_id": "P1", "material_family": "prestress",
+        "modulus_mpa": law.Es, "short_term": law.Es / 33_000.0,
+        "long_term": law.Es / 33_000.0 * 2.475,
+    })
+
+    def poisoned(*_args, **_kwargs):
+        raise AssertionError("report reran an engineering calculator")
+
+    for module, names in (
+        (geometry, ("area_moment_breakdown", "area_moments",
+                    "area_moments_rings")),
+        (capacity, ("design_yield", "locked_in_prestress_result",
+                    "prestress_resultants")),
+        (elastic_core, ("calculate_modular_ratios",)),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, poisoned)
+    monkeypatch.setattr(Concrete, "fcd", property(poisoned))
+    monkeypatch.setattr(Concrete, "stress", poisoned)
+    monkeypatch.setattr(MildSteel, "stress", poisoned)
+    monkeypatch.setattr(Prestress, "stress", poisoned)
+
+    pdf = sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+    assert pdf[:4] == b"%PDF"
+    assert "Concrete section properties" in text
+    assert "Design strength" in text
+    assert "Initial prestress action" in text
+    assert "Elastic material transformation" in text
+
+
+def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )).split())
+
+    for heading in (
+        "Worked plastic calculation (utilisation direction)",
+        "Accepted strain plane",
+        "Ultimate-curvature candidates",
+        "Compression-depth solution",
+        "Accepted section resultants",
+        "Step 1 - accepted long-term state",
+        "Step 2 - neutralise the long-term concrete stress",
+        "Step 3 - accepted instantaneous combined state",
+        "Step 4 - combine the retained element stresses",
+    ):
+        assert heading in text
+    assert "0.003500000 / 0.175000000" in text
+    assert "Bisection iterations 8" in text
+    assert "250.000000 + -250.000000 + 0.000000 kN" in text
+    assert "100.000000000 MPa" in text
+    assert "59.595959596 MPa" in text
+    assert "internal bisection sequence and integration bands are not published" in (
+        text.casefold()
+    )
+    assert "raw reference-stress plane" in text
+    assert "not a physical-unit norm" in text
+
+
+def test_completed_textbook_report_never_calls_a_solver_or_material_law(monkeypatch):
+    def poisoned(*_args, **_kwargs):
+        raise AssertionError("report reran an engineering calculator")
+
+    for module, names in (
+        (plastic_core, (
+            "solve_plastic", "solve_interaction", "_curvature_at_depth",
+            "_accumulate", "_accumulate_at_depth",
+        )),
+        (elastic_core, (
+            "solve_elastic", "solve_elastic_uncracked", "solve_elastic_combined",
+            "transformed_properties", "_newton_solve",
+        )),
+        (shear_core, (
+            "vrd_c", "vrd_c_2023", "vrd_links", "vrd_links_2023",
+            "optimum_strut_angle",
+        )),
+        (torsion_core, (
+            "stiffness_distribution_result", "trd_s_result", "trd_max_result",
+            "trd_c_result", "asl_required_result", "select_torsion_resistance",
+        )),
+        (combined_core, (
+            "crushing_interaction_result", "governing_strut_result",
+            "dkna_interaction_result", "longitudinal_check",
+        )),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, poisoned)
+    monkeypatch.setattr(Concrete, "stress", poisoned)
+    monkeypatch.setattr(MildSteel, "stress", poisoned)
+    monkeypatch.setattr(Prestress, "stress", poisoned)
+
+    pdf = sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )
+    assert pdf[:4] == b"%PDF"
+
+
+def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
+    out = _out()
+    point = out["plastic"]["points"][0]
+    point.pop("search_lower_depth")
+    point.pop("concrete_mx")
+    out["elastic"].pop("accepted_states")
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Compression-depth solution unavailable" in text
+    assert "does not reconstruct those solver values" in text
+    assert "Accepted section resultants unavailable" in text
+    assert "does not reconstruct material or section response" in text
+    assert "Worked elastic calculation unavailable" in text
+    assert "does not repeat the solver in the report" in text
+
+
+def test_transverse_textbook_report_fails_closed_without_retained_operands():
+    out = _out()
+    shear = _shear_out()
+    shear["links"] = _links_out()
+    shear["links"]["res"].pop("tan")
+    torsion = _torsion_out()
+    torsion.pop("strut_resistance")
+    combined = _combined_out()
+    combined.pop("dkna_selection")
+    out.update(shear=shear, torsion=torsion, combined=combined)
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "does not retain the accepted strut-angle operands" in text
+    assert "does not retain every accepted torsion formula operand" in text
+    assert "does not retain the DK NA inclusion branch" in text
+    assert "EQ-SHEAR.LINKS.VRDS" not in text
+    assert "EQ-TORSION.RESISTANCE.GOVERNING" not in text
+    assert "EQ-COMBINED.DK-NA.SUM" not in text
+
+
+def test_textbook_report_methods_have_no_engineering_fallbacks():
+    source = "\n".join((
+        inspect.getsource(sector_report.ReportBuilder._plastic_worked),
+        inspect.getsource(sector_report.ReportBuilder._elastic_worked),
+        inspect.getsource(sector_report.ReportBuilder._shear),
+        inspect.getsource(sector_report.ReportBuilder._shear_direction),
+        inspect.getsource(sector_report.ReportBuilder._shear_links),
+        inspect.getsource(sector_report.ReportBuilder._torsion),
+        inspect.getsource(sector_report.ReportBuilder._subtube_section),
+        inspect.getsource(sector_report.ReportBuilder._combined),
+        inspect.getsource(sector_report.ReportBuilder._combined_direction),
+    ))
+    forbidden = (
+        ".stress(",
+        "solve_plastic(",
+        "solve_interaction(",
+        "_curvature_at_depth(",
+        "_accumulate(",
+        "solve_elastic(",
+        "solve_elastic_combined(",
+        "transformed_properties(",
+        "_newton_solve(",
+        "max(pts",
+        "1.0 / lk['cot']",
+        "t['cot'] / (1.0 + t['cot'] ** 2)",
+        "stiffness_distribution_result(",
+        "trd_s_result(",
+        "trd_max_result(",
+        "crushing_interaction_result(",
+        "dkna_interaction_result(",
+        "governing_strut_result(",
+    )
+    assert not [pattern for pattern in forbidden if pattern in source]
+
+
+def test_report_shared_blocks_have_no_engineering_fallbacks():
+    source = inspect.getsource(sector_report.ReportBuilder)
+    forbidden = (
+        "math.sqrt(4.0 * point[2] / math.pi)",
+        "c.fcd",
+        "st.fytk / st.gamma_y",
+        "p.stress(",
+        "material.Es / ec_mpa",
+        "ns_v * (1.0 + phi)",
+        "area_moment_breakdown(",
+        "area_moments(",
+        "area_moments_rings(",
+        "design_yield(",
+        "locked_in_prestress_result(",
+        "prestress_resultants(",
+        "calculate_modular_ratios(",
+    )
+    assert not [pattern for pattern in forbidden if pattern in source]
 
 
 def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
@@ -779,9 +1651,13 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
         "checks": [{
             "type": "minimum area", "status": "PASS", "axis": "xy",
             "face": "resultant tension zone",
-            "as_provided_mm2": 628.0, "as_min_mm2": 410.0,
-            "utilisation": 410.0 / 628.0, "bt_mm": 200.0,
+            "as_provided_mm2": 628.0, "as_min_mm2": 81.432,
+            "utilisation": 81.432 / 628.0, "bt_mm": 200.0,
             "d_mm": 270.0, "fctm_mpa": 2.9, "fyk_mpa": 500.0,
+            "strength_coefficient": 0.26 * 2.9 / 500.0,
+            "floor_coefficient": 0.0013,
+            "selected_coefficient": 0.26 * 2.9 / 500.0,
+            "governing_coefficient": "0.26 fctm / fyk",
             "bar_ids": ["R1", "R2"],
         }],
         "limitations": ["Prestressing tendons are not credited."],
@@ -793,6 +1669,14 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
             "status": "PASS", "first_id": "R1", "second_id": "R2",
             "first_kind": "bar", "second_kind": "bar", "clear_mm": 60.0,
             "required_mm": 21.0, "margin_mm": 39.0,
+            "dx_mm": 80.0, "dy_mm": 0.0, "centre_distance_mm": 80.0,
+            "phi_first_mm": 20.0, "phi_second_mm": 20.0,
+            "required_candidates_mm": {
+                "larger element diameter": 20.0,
+                "aggregate allowance": 21.0,
+                "absolute minimum": 20.0,
+            },
+            "governing_requirement": "aggregate allowance",
         },
         "pairs": [],
         "limitations": ["Pairwise edge-to-edge distance is checked."],
@@ -811,6 +1695,9 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "A s,min" in text or "As,min" in text
     assert "Reinforcement clear spacing" in text
     assert "R1 - R2" in text
+    assert "0.0015080" in text
+    assert "aggregate allowance" in text
+    assert "80.000" in text and "60.000 mm" in text
     assert "Lap / bundle ID" not in text
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
 
@@ -1022,9 +1909,15 @@ def test_report_traces_multiple_materials_to_element_assignments():
         "capacity_steel_material_id": second_id,
     })
 
-    txt = _pdf_text(sector_report.build_report(
-        {}, inp, _out(), figures=False,
-    ))
+    out = _out()
+    out["material_properties"]["mild"] = [
+        {
+            "material_id": material_id,
+            "design_yield_mpa": laws[material_id].fytk / laws[material_id].gamma_y,
+        }
+        for material_id in ("M1", second_id)
+    ]
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     flat = " ".join(txt.split())
 
     assert "M1 New reinforcement" in flat
@@ -1057,7 +1950,35 @@ def test_report_describes_built_in_prestress_without_false_zero_strengths():
         "prestress_preset": entry["preset"],
     })
 
-    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+    out = _out()
+    out["material_properties"]["prestress"] = [{
+        "material_id": "P1",
+        "characteristic_stress_at_rupture_mpa": law.stress(
+            law.rupture_strain, design=False
+        ),
+    }]
+    out["prestress_initial"] = {
+        "elements": [{
+            "tendon_index": 0, "element_id": "T1", "material_id": "P1",
+            "initial_strain": law.IS, "modulus_mpa": law.Es,
+            "locked_in_stress_mpa": law.Es * law.IS,
+            "area_mm2": 500.0, "force_kn": law.Es * law.IS * 500.0 / 1000.0,
+            "x_m": 0.0, "y_m": -0.12,
+            "mx_knm": law.Es * law.IS * 500.0 / 1000.0 * -0.12,
+            "my_knm": 0.0,
+        }],
+        "internal_resultant_origin": {
+            "n_kn": law.Es * law.IS * 500.0 / 1000.0,
+            "mx_knm": law.Es * law.IS * 500.0 / 1000.0 * -0.12,
+            "my_knm": 0.0,
+        },
+        "equivalent_action_origin": {
+            "n_kn": -law.Es * law.IS * 500.0 / 1000.0,
+            "mx_knm": law.Es * law.IS * 500.0 / 1000.0 * -0.12,
+            "my_knm": 0.0,
+        },
+    }
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     flat = " ".join(txt.split())
 
     assert "Built-in fixed curve 1" in flat
@@ -1095,8 +2016,13 @@ def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(prese
         "steel": law,
     })
 
+    out = _out()
+    out["material_properties"]["mild"] = [{
+        "material_id": "M1",
+        "design_yield_mpa": law.fytk / law.gamma_y,
+    }]
     flat = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, _out(), figures=False,
+        {}, inp, out, figures=False,
     )).split())
 
     assert "no normative curve source assigned" in flat
@@ -1206,15 +2132,493 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "Results overview - FAIL" not in flat
     assert all(case in flat for case in ("PL-01", "PL-02", "EL-01", "EL-02"))
     assert "Governing combination" in flat and "Frequent response" in flat
-    assert flat.count(". Plastic section capacity") == 2
-    assert flat.count(". Elastic section response and stresses") == 2
+    assert flat.count(". Plastic section capacity") == 1
+    assert flat.count(". Elastic section response and stresses") == 1
+    assert "Plastic section capacity - PL-01" not in flat
+    assert "Elastic section response and stresses - EL-01" not in flat
+    assert "Cracking threshold and governing crack width - EL-01" in flat
     assert "Plastic section capacity - PL-02" in flat
     assert "Elastic section response and stresses - EL-02" in flat
-    assert "Cracking threshold - EL-02" in flat
-    assert "Crack width was not requested for this run." in flat
+    assert "Cracking threshold - EL-02" not in flat
+    assert "Crack width was not requested for this run." not in flat
+    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
     assert "the project as a whole have no verdict" in flat
     assert "125.0 %" in flat
     assert "456.000 MPa" in flat
+    assert flat.count("Selected sweep point") == 1
+    assert flat.count("The elastic solver uses a raw reference-stress plane") == 1
+
+
+def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
+    inp = _inp()
+    rows = [
+        {
+            "name": "EL-01", "description": "Coarse governing",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 80.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 20.0, "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        },
+        {
+            "name": "EL-02", "description": "Fine governing",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 100.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 30.0, "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        },
+        {
+            "name": "EL-03", "description": "Non-governing",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 60.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 10.0, "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        },
+    ]
+    inp["elastic_cases"] = rows
+    first = copy.deepcopy(_out()["elastic"])
+    first.update(
+        crack=dict(_crack(), wk=0.20),
+        crack_short=dict(_crack(), wk=0.22),
+        crack_coarse=_coarse_crack(wk=0.31),
+        crack_short_coarse=_coarse_crack(wk=0.29),
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
+    second = copy.deepcopy(_out()["elastic"])
+    second.update(
+        crack=dict(_crack(), wk=0.34),
+        crack_short=dict(_crack(), wk=0.33),
+        crack_coarse=_coarse_crack(wk=0.24),
+        crack_short_coarse=_coarse_crack(wk=0.25),
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
+    third = copy.deepcopy(_out()["elastic"])
+    third.update(
+        crack=dict(_crack(), wk=0.10),
+        crack_short=dict(_crack(), wk=0.11),
+        crack_coarse=_coarse_crack(wk=0.12),
+        crack_short_coarse=_coarse_crack(wk=0.09),
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
+    out = _out()
+    out["elastic_cases"] = [
+        {"name": row["name"], "actions": row, "evaluated": True,
+         "results": {"elastic": result}}
+            for row, result in zip(rows, (first, second, third))
+    ]
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+    assert flat.count("Crack width worked - governing case") == 2
+    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
+    assert "governing case (long-term (fine))" in flat
+    assert "governing case (long-term (coarse))" in flat
+    assert "Candidate summary for governing crack example" in flat
+    assert "Case (LT/ST)" in flat
+    assert "EL-03" in flat
+    assert "Governing crack width - EL-03" not in flat
+    assert "Cracking threshold and governing crack width - EL-03" not in flat
+
+
+def test_worked_selectors_ignore_invalid_nonfinite_case_results():
+    inp = _inp()
+    plastic_rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 20.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 0.0,
+        }
+        for name, description in (
+            ("PL-INVALID", "Invalid plastic"),
+            ("PL-VALID", "Valid plastic"),
+            ("PL-INFINITE", "Valid infinite failure"),
+        )
+    ]
+    elastic_rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_long_ed_kn": 0.0,
+            "mx_long_ed_knm": 20.0,
+            "my_long_ed_knm": 0.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 5.0,
+            "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        }
+        for name, description in (
+            ("EL-INVALID", "Invalid elastic"),
+            ("EL-VALID", "Valid elastic"),
+        )
+    ]
+    inp["plastic_cases"] = plastic_rows
+    inp["elastic_cases"] = elastic_rows
+
+    invalid_plastic = copy.deepcopy(_out()["plastic"])
+    invalid_plastic.update(converged=False, util=math.inf, max_mx=math.inf)
+    valid_plastic = copy.deepcopy(_out()["plastic"])
+    valid_plastic.update(converged=True, util=0.7)
+    infinite_plastic = copy.deepcopy(_out()["plastic"])
+    infinite_plastic.update(converged=True, util=math.inf)
+
+    invalid_elastic = copy.deepcopy(_out()["elastic"])
+    invalid_elastic.update(
+        converged=False,
+        max_conc=math.inf,
+        max_steel=math.inf,
+        crack=dict(_crack(), wk=math.inf),
+        crack_short=None,
+    )
+    valid_elastic = copy.deepcopy(_out()["elastic"])
+    valid_elastic.update(
+        converged=True,
+        max_conc=18.0,
+        max_steel=220.0,
+        crack=dict(_crack(), wk=0.24),
+        crack_short=None,
+    )
+    invalid_case = {
+        "minimum_reinforcement": {
+            "status": "INVALID",
+            "checks": [{"status": "INVALID", "utilisation": math.inf}],
+        },
+        "transverse_reinforcement": {
+            "status": "INVALID",
+            "checks": [{"status": "INVALID", "utilisation": math.inf}],
+        },
+    }
+    finite_checks = {
+        "minimum_reinforcement": {
+            "status": "PASS",
+            "checks": [{"status": "PASS", "utilisation": 0.6}],
+        },
+        "transverse_reinforcement": {
+            "status": "PASS",
+            "checks": [{"status": "PASS", "utilisation": 0.8}],
+        },
+    }
+    infinite_checks = {
+        "minimum_reinforcement": {
+            "status": "FAIL",
+            "checks": [{"status": "FAIL", "utilisation": math.inf}],
+            "governing_utilisation": math.inf,
+        },
+        "transverse_reinforcement": {
+            "status": "FAIL",
+            "checks": [{"status": "FAIL", "utilisation": math.inf}],
+            "governing_utilisation": math.inf,
+        },
+    }
+    out = {
+        "plastic_cases": [
+            {
+                "actions": plastic_rows[0],
+                "evaluated": True,
+                "results": {"plastic": invalid_plastic, **invalid_case},
+            },
+            {
+                "actions": plastic_rows[1],
+                "evaluated": True,
+                "results": {"plastic": valid_plastic, **finite_checks},
+            },
+            {
+                "actions": plastic_rows[2],
+                "evaluated": True,
+                "results": {"plastic": infinite_plastic, **infinite_checks},
+            },
+        ],
+        "elastic_cases": [
+            {
+                "actions": elastic_rows[0],
+                "evaluated": True,
+                "results": {"elastic": invalid_elastic},
+            },
+            {
+                "actions": elastic_rows[1],
+                "evaluated": True,
+                "results": {"elastic": valid_elastic},
+            },
+        ],
+    }
+
+    selected = result_presentation.worked_example_selection(inp, out)
+
+    assert selected["families"]["plastic"]["case_id"] == "PL-INFINITE"
+    assert selected["families"]["elastic"]["case_id"] == "EL-VALID"
+    assert selected["families"]["minimum_reinforcement"]["case_id"] == (
+        "PL-INFINITE"
+    )
+    assert selected["families"]["transverse_reinforcement"]["case_id"] == (
+        "PL-INFINITE"
+    )
+    assert {item["case_id"] for item in selected["crack_examples"]} == {
+        "EL-VALID"
+    }
+
+
+def test_report_builder_consumes_selection_and_does_not_choose_candidates():
+    source = inspect.getsource(sector_report.ReportBuilder)
+
+    assert "def _select_critical" not in source
+    assert "def _critical_transverse_direction" not in source
+    assert "id(case_out)" not in source
+    assert "_transverse_metric" not in source
+    assert 'get("worked_example_selection")' in source
+
+
+def test_report_fails_closed_when_worked_example_selection_is_absent():
+    text = " ".join(_pdf_text(_build_report_from_completed_payload(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked plastic calculation" not in text
+    assert "Crack width worked - governing case" not in text
+
+
+@pytest.mark.parametrize(
+    "selection",
+    (
+        {"schema": 99, "families": {"plastic": {"case_id": "__single__"}}},
+        {"schema": 1, "families": ["plastic"], "crack_examples": "crack"},
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": ["crack"],
+            "cracking_threshold": ["elastic"],
+            "torsion_subchecks": ["torsion"],
+        },
+        {
+            "schema": 1,
+            "families": {
+                "plastic": ["PL-TEST"],
+                "shear": {"case_id": "__single__", "component": []},
+            },
+            "crack_examples": [{
+                "case_id": "__single__", "branch": [], "label": "invalid",
+            }],
+            "cracking_threshold": None,
+            "torsion_subchecks": {"interaction": ["__single__"]},
+        },
+    ),
+)
+def test_report_fails_closed_on_corrupt_worked_example_selection(selection):
+    out = _out()
+    out["worked_example_selection"] = selection
+
+    text = " ".join(_pdf_text(_build_report_from_completed_payload(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked plastic calculation" not in text
+    assert "Crack width worked - governing case" not in text
+
+
+def test_crack_worked_example_fails_closed_on_partial_selected_branch():
+    inp = _inp()
+    out = _out()
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
+    del out["elastic"]["crack"]["governing_candidate"][
+        "spacing_operands"
+    ]["k1"]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in text
+    assert "spacing.k1" in text
+    assert "EQ-CRACK.2005.SPACING" not in text
+
+
+def test_crack_worked_example_rejects_an_unknown_retained_formula_branch():
+    inp = _inp()
+    out = _out()
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
+    out["elastic"]["crack"]["governing_candidate"][
+        "spacing_operands"
+    ]["selected_candidate"] = "unknown-formula"
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in text
+    assert "spacing.selected_candidate-supported" in text
+    assert "EQ-CRACK.2005.SPACING" not in text
+
+
+def _tension_zone_cap_crack_2023():
+    crack = _crack_2023()
+    candidate = crack["governing_candidate"]
+    spacing = candidate["spacing_operands"]
+    cap_spacing = spacing["formula_spacing"] * 0.5
+    spacing.update({
+        "cap_tension_depth": cap_spacing * crack["kw"] / 1.3 / 1000.0,
+        "cap_spacing": cap_spacing,
+        "selected_candidate": "tension-zone-cap",
+        "selected_spacing": cap_spacing,
+    })
+    crack_width = crack["kw"] * crack["k1_r"] * cap_spacing * crack["esm_ecm"]
+    crack.update(sr_max=cap_spacing, wk=crack_width)
+    candidate.update(sr_max=cap_spacing, wk=crack_width)
+    crack["candidates"] = [copy.deepcopy(candidate)]
+    return crack
+
+
+def test_crack_2023_tension_zone_cap_is_a_supported_worked_branch():
+    inp = _inp()
+    out = _out()
+    crack = _tension_zone_cap_crack_2023()
+    out["elastic"].update(
+        crack=crack,
+        crack_short=None,
+        crack_code="EN 1992-1-1:2023",
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "selected: tension-zone-cap" in text
+    assert "EQ-CRACK.2023.SPACING" in text
+    assert "Worked calculation unavailable" not in text
+
+
+def test_crack_2023_tension_zone_cap_fails_closed_without_cap_depth():
+    inp = _inp()
+    out = _out()
+    crack = _tension_zone_cap_crack_2023()
+    del crack["governing_candidate"]["spacing_operands"]["cap_tension_depth"]
+    out["elastic"].update(
+        crack=crack,
+        crack_short=None,
+        crack_code="EN 1992-1-1:2023",
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in text
+    assert "spacing.cap_tension_depth" in text
+    assert "EQ-CRACK.2023.SPACING" not in text
+
+
+@pytest.mark.parametrize(
+    ("selection_key", "payload_key", "renderer", "formula"),
+    (
+        (
+            "interaction", "interaction", "_torsion_interaction_example",
+            "Formula 6.29",
+        ),
+        (
+            "minimum_reinforcement", "min_reinf",
+            "_torsion_minimum_reinforcement_example", "Formula 6.31",
+        ),
+    ),
+)
+def test_infinite_torsion_subcheck_with_partial_operands_is_unavailable(
+    selection_key, payload_key, renderer, formula,
+):
+    payload = (
+        {"valid": True, "value": math.inf}
+        if payload_key == "interaction"
+        else {"applicable": True, "value": math.inf}
+    )
+    out = {
+        "torsion": {payload_key: payload},
+        "worked_example_selection": {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [],
+            "cracking_threshold": None,
+            "torsion_subchecks": {
+                selection_key: {"case_id": "__single__", "component": None},
+            },
+        },
+    }
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), out, figures=False,
+    )
+
+    getattr(builder, renderer)()
+    text = " ".join(
+        item.getPlainText()
+        for item in builder.flow
+        if hasattr(item, "getPlainText")
+    )
+
+    assert "Worked calculation unavailable" in text
+    assert formula in text
+
+
+def test_report_publishes_one_globally_critical_cracking_threshold():
+    inp = _inp()
+    inp["mode"] = "Elastic"
+    rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_long_ed_kn": 0.0,
+            "mx_long_ed_knm": moment,
+            "my_long_ed_knm": 0.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 0.0,
+            "my_short_ed_knm": 0.0,
+            "calculate_crack_width": False,
+        }
+        for name, description, moment in (
+            ("EL-A", "Uncracked", 30.0),
+            ("EL-B", "Critical threshold", 80.0),
+            ("EL-C", "Intermediate", 50.0),
+        )
+    ]
+    inp["elastic_cases"] = rows
+    results = []
+    for lambda_cr, cracked in ((1.40, False), (0.80, True), (1.10, False)):
+        elastic = copy.deepcopy(_out()["elastic"])
+        elastic.update(
+            converged=True,
+            show_cw=False,
+            lambda_cr=lambda_cr,
+            cracked=cracked,
+            crack=None,
+            crack_short=None,
+            crack_coarse=None,
+            crack_short_coarse=None,
+        )
+        results.append(elastic)
+    out = {
+        "elastic_cases": [
+            {
+                "actions": row,
+                "evaluated": True,
+                "results": {"elastic": elastic},
+            }
+            for row, elastic in zip(rows, results)
+        ]
+    }
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert all(name in flat for name in ("EL-A", "EL-B", "EL-C"))
+    assert "Cracking threshold - EL-B" in flat
+    assert "Cracking threshold - EL-A" not in flat
+    assert "Cracking threshold - EL-C" not in flat
+    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
+    assert "lambda_cr 0.800; cracked" in flat
 
 
 def test_report_escapes_user_entered_action_provenance():
@@ -1270,7 +2674,7 @@ def test_report_includes_sls_outputs_strain_and_candidate_evidence():
     assert "Ixy" in txt
     assert "Reinforcement and tendon response" in txt
     assert "Concrete corner stress and strain" in txt
-    assert "Crack-width candidates" in txt
+    assert "Candidate summary for governing crack example" in txt
     assert "Crack-width element diameter" in txt
     assert "Element diameter" in txt
     assert "Bar diameter" not in txt
@@ -1348,6 +2752,20 @@ def test_report_crack_width_uses_millimetres_not_metres():
     assert "213.000" not in txt                        # wk not 1000x (would be 213 mm)
 
 
+def test_report_crack_example_publishes_every_retained_interim_selection():
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )).split())
+    assert "2.5(h-d)" in flat
+    assert "A c,eff" in flat or "Ac,eff" in flat
+    assert "first candidate" in flat
+    assert "lower bound" in flat
+    assert "formula-7.9" in flat
+    assert "close-centre threshold" in flat
+    assert "Formula (7.11) selected" in flat
+    assert "235.000 mm" in flat
+
+
 def test_report_reinforcement_areas_are_already_square_millimetres():
     inp = _inp()
     inp["bars"] = [(0.0, -0.12, 321.123)]
@@ -1392,8 +2810,8 @@ def test_report_wide_spacing_shows_geometric_formula():
     # example must render (7.14), not the (7.11) close-centre formula it can't
     # reproduce.
     out = _out()
-    out["elastic"]["crack"] = dict(_crack(), sr_max_geometric=True)
-    out["elastic"]["crack_short"] = dict(_crack(), sr_max_geometric=True)
+    out["elastic"]["crack"] = _wide_crack()
+    out["elastic"]["crack_short"] = _wide_crack()
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "(7.14)" in txt
     assert "close centres" in txt
@@ -1405,8 +2823,8 @@ def test_report_dk_na_shows_fine_and_coarse_columns():
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.20)
     out["elastic"]["crack_short"] = dict(_crack(), coarse=False, wk=0.25)
-    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True, wk=0.10)
-    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True, wk=0.12)
+    out["elastic"]["crack_coarse"] = _coarse_crack(wk=0.10)
+    out["elastic"]["crack_short_coarse"] = _coarse_crack(wk=0.12)
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
@@ -1419,8 +2837,8 @@ def test_report_shows_coarse_only_results():
     out = _out()
     out["elastic"]["crack"] = None
     out["elastic"]["crack_short"] = None
-    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True)
-    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_coarse"] = _coarse_crack()
+    out["elastic"]["crack_short_coarse"] = _coarse_crack()
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "No crack width" not in txt
@@ -1433,8 +2851,8 @@ def test_report_coarse_worked_shows_half_factor_when_it_governs():
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.10)
     out["elastic"]["crack_short"] = dict(_crack(), coarse=False, wk=0.10)
-    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True, wk=0.30)
-    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True, wk=0.30)
+    out["elastic"]["crack_coarse"] = _coarse_crack(wk=0.30)
+    out["elastic"]["crack_short_coarse"] = _coarse_crack(wk=0.30)
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert chr(0xBD) in txt            # the 1/2 glyph rendered in Eq (7.8)
@@ -1443,9 +2861,8 @@ def test_report_coarse_worked_shows_half_factor_when_it_governs():
 def test_report_ec2_2023_shows_refined_formula():
     # The EN 1992-1-1:2023 worked example shows the refined (9.8) formula with kw.
     out = _out()
-    out["elastic"]["crack"] = dict(_crack(), edition="2023", kw=1.7, k1_r=1.13, kfl=0.77)
-    out["elastic"]["crack_short"] = dict(_crack(), edition="2023", kw=1.7, k1_r=1.13,
-                                         kfl=0.77)
+    out["elastic"]["crack"] = _crack_2023()
+    out["elastic"]["crack_short"] = _crack_2023()
     out["elastic"]["crack_code"] = "EN 1992-1-1:2023"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "9.8" in txt and "9.2.3" in txt      # the 2023 clause and crack formula
@@ -1644,7 +3061,11 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
         ],
         "mixed": False, "limitations": [],
     }
-    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    out = {"material_properties": {
+        "concrete": {"design_strength_mpa": inp["concrete"].fcd},
+        "mild": [], "prestress": [],
+    }}
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     flat = " ".join(txt.split())
     assert "5.1.6" in txt and "5.3" in txt and "5.4" in txt
     assert "8.1.2" in txt and "8.4" in txt
@@ -1658,6 +3079,75 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert "published project-adoption basis" in flat
     assert "no Danish National Annex is applied" in flat
     assert "confinement enhancement is not included or assessed" in flat
+
+
+def test_concrete_table_and_design_strength_equation_share_one_layout_group():
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), _out(), figures=False,
+    )
+    builder._h1("Inputs")
+    builder._h2("Concrete")
+    builder._concrete_block()
+
+    matching_groups = []
+    for flowable in builder.flow:
+        if not isinstance(flowable, sector_report.KeepTogether):
+            continue
+        equation_keys = {
+            item._sector_equation_key
+            for item in getattr(flowable, "_sector_equations", ())
+        }
+        if "materials.concrete.fcd" in equation_keys:
+            matching_groups.append((flowable, equation_keys))
+
+    assert len(matching_groups) == 1
+    group, equation_keys = matching_groups[0]
+    assert any(
+        isinstance(item, sector_report._PaginatedReportTable)
+        for item in group._content
+    )
+    assert equation_keys == {"materials.concrete.fcd"}
+    assert not any(
+        isinstance(item, sector_report._EquationFlowable)
+        for item in group._content
+    )
+    assert any(
+        isinstance(item, sector_report._EquationFlowable)
+        and item._sector_equation_key == "materials.concrete.curve-2"
+        for item in builder.flow
+    )
+
+    # Put the bounded calculation near a page foot.  It must move as one measured
+    # unit instead of releasing the equation onto the following page.
+    import pypdf
+
+    paginated = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), _out(), figures=False,
+    )
+    paginated._h1("Inputs")
+    paginated.flow.append(sector_report.Spacer(1, 500))
+    paginated._h2("Concrete")
+    paginated._concrete_block()
+    pdf = io.BytesIO()
+    sector_report.SimpleDocTemplate(
+        pdf,
+        pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm,
+        rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm,
+        bottomMargin=20 * sector_report.mm,
+    ).build(list(paginated.flow))
+    pages = [page.extract_text() or "" for page in pypdf.PdfReader(pdf).pages]
+    table_pages = [
+        index for index, text in enumerate(pages)
+        if "Characteristic strength" in text
+    ]
+    equation_pages = [
+        index for index, text in enumerate(pages)
+        if "= 20.000 MPa" in text
+    ]
+    assert table_pages == equation_pages
+    assert table_pages and table_pages[0] > 0
 
 
 def test_report_prints_actual_custom_half_and_double_partial_factors():
@@ -1674,8 +3164,13 @@ def test_report_prints_actual_custom_half_and_double_partial_factors():
         curve=2,
     )
 
+    out = {"material_properties": {
+        "concrete": {"design_strength_mpa": inp["concrete"].fcd},
+        "mild": [{"material_id": "-", "design_yield_mpa": 250.0}],
+        "prestress": [],
+    }}
     text = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, {}, figures=False)
+        sector_report.build_report({}, inp, out, figures=False)
     ).split())
 
     assert "60.000 MPa" in text
@@ -1691,7 +3186,11 @@ def test_report_ec2_2023_k_tc_one_states_the_full_assumption():
     inp["concrete_eta_cc"] = 1.0
     inp["concrete_k_tc"] = 1.0
     inp["mild_preset"] = "DS/EN 1992-1-1:2023"
-    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    out = {"material_properties": {
+        "concrete": {"design_strength_mpa": inp["concrete"].fcd},
+        "mild": [], "prestress": [],
+    }}
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     assert "28 days" in txt and "56 days" in txt
     assert "at least 3 months" in txt
     assert "National" in txt and "Annex" in txt
@@ -1951,20 +3450,55 @@ def _torsion_out(interaction=False):
     tube = {"A": 0.18, "u": 1.8, "tef": 100.0, "Ak": 0.1, "uk": 1.4,
             "tef_auto": 100.0, "tef_capped": False, "tef_user": False,
             "hollow": False, "valid": True}
-    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4,
-           "trd_c": 26.435,
-           "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
+    angle = shear_core.optimum_strut_angle(
+        0.5236 * 416.67,
+        codes.EC2_2005_DKNA.torsion_nu(35.0) * 24.14 * 100.0,
+        1.0,
+        2.5,
+    )
+    steel = torsion_core.trd_s_result(0.1, 416.67, 0.5236, angle.cot)
+    strut = torsion_core.trd_max_result(
+        35.0, codes.EC2_2005_DKNA, 0.1, 100.0, 1.0, angle.cot,
+        fcd_mpa=24.14,
+    )
+    resistance = torsion_core.select_torsion_resistance(
+        steel.trd_s, strut.trd_max, asw_over_s=0.5236
+    )
+    cracking = torsion_core.trd_c_result(1.3218, 0.1, 100.0)
+    longitudinal = torsion_core.asl_required_result(
+        40.0, 1.4, 0.1, 416.67, angle.cot
+    )
+    out = {"tube": tube, "trd_s": steel.trd_s, "trd_max": strut.trd_max,
+           "trd": resistance.resistance, "trd_c": cracking.trd_c,
+           "cot": angle.cot, "theta_deg": angle.theta_deg,
+           "util": 40.0 / resistance.resistance,
+           "asl_req": longitudinal.asl_required_mm2,
            "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
            "nu": 0.3675, "alpha_cw": 1.0, "fctk_005": 2.247,
            "gamma_ct": 1.70, "fctd": 1.3218, "asw_t": 78.5,
            "asw_over_s": 0.5236, "dia": 10.0, "s": 150.0, "cot_min": 1.0,
            "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
-           "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
-           "cot_limit_hi": 2.5, "out_of_limits": False}
+           "governs": resistance.governs, "valid": True, "cot_limit_lo": 1.0,
+           "cot_limit_hi": 2.5, "out_of_limits": False,
+           "angle_selection": asdict(angle),
+           "steel_resistance": asdict(steel),
+           "strut_resistance": asdict(strut),
+           "resistance_selection": asdict(resistance),
+           "cracking_resistance": asdict(cracking),
+           "longitudinal_reinforcement": asdict(longitudinal)}
     if interaction:
-        out["interaction"] = dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
-                                  vrd_max=650.0, t_ed=40.0, v_ed=150.0,
-                                  value=40.0 / 88.7 + 150.0 / 650.0)
+        retained = combined_core.crushing_interaction_result(
+            40.0, 88.7, 150.0, 650.0
+        )
+        out["interaction"] = dict(
+            valid=True, cot=1.0, theta_deg=45.0,
+            trd_max=88.7, vrd_max=650.0,
+            t_ed=40.0, v_ed=150.0,
+            value=retained.utilisation,
+            torsion_ratio=retained.torsion_ratio,
+            shear_ratio=retained.shear_ratio,
+            ok=retained.ok,
+        )
     return out
 
 
@@ -1975,11 +3509,11 @@ def test_report_includes_torsion_section():
     assert "Torsion" in txt
     assert "6.30" in txt and "6.28" in txt          # the clause formulae
     assert "76.4" in txt                            # TRd
-    assert "26.435" in txt                          # TRd,c with gamma_ct = 1.70
+    assert "26.436" in txt                          # TRd,c with gamma_ct = 1.70
     assert "1.700" in txt                           # actual tensile factor provenance
     assert "fctd = fctk,0.05 /" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
-    assert "1176" in txt                            # required Asl
+    assert "1177" in txt                            # required Asl
     assert chr(0x2211) in txt                       # summation operator
     assert chr(0x00B7) in txt                       # centred multiplication/unit dot
     assert chr(0x00B0) in txt                       # degree symbol
@@ -2038,10 +3572,23 @@ def test_report_compound_torsion_requires_subdivision():
 
 
 def _subtube(b, h, tef, ak, c, ted, trd, util, gov, cx=0.0, cy=0.0):
-    return dict(tube={"tef": tef, "Ak": ak, "valid": True}, b_mm=b, h_mm=h,
-                x_mm=cx, y_mm=cy,
-                stiffness=c, t_ed=ted, trd=trd, util=util, governs=gov,
-                trd_s=trd, trd_max=trd + 5.0, trd_c=trd * 0.4, cot=1.75, nu=0.37)
+    steel = torsion_core.trd_s_result(ak, 416.67, 0.5236, 1.75)
+    strut = torsion_core.trd_max_result(
+        35.0, codes.EC2_2005_DKNA, ak, tef, 1.0, 1.75,
+        fcd_mpa=24.14,
+    )
+    resistance = torsion_core.select_torsion_resistance(
+        steel.trd_s, strut.trd_max, asw_over_s=0.5236
+    )
+    return dict(
+        tube={"tef": tef, "Ak": ak, "valid": True}, b_mm=b, h_mm=h,
+        x_mm=cx, y_mm=cy, stiffness=c, t_ed=ted,
+        trd=resistance.resistance, util=ted / resistance.resistance,
+        governs=resistance.governs, trd_s=steel.trd_s,
+        trd_max=strut.trd_max, trd_c=trd * 0.4, cot=1.75, nu=0.37,
+        steel_resistance=asdict(steel), strut_resistance=asdict(strut),
+        resistance_selection=asdict(resistance),
+    )
 
 
 def test_report_torsion_subdivided():
@@ -2053,11 +3600,25 @@ def test_report_torsion_subdivided():
                      "crushing (TRd,max)", 0.0, 300.0)]
     t["subdivided"] = True
     t["subtubes"] = subs
-    t["trd"] = 110.0
+    t["trd"] = sum(s["trd"] for s in subs)
     # P1: governing = the worst sub-tube (part 2 here), not the pooled TEd/sum(TRd).
     t["util"] = max(s["util"] for s in subs)
-    t["governing_sub"] = 1
+    t["governing_sub"] = max(range(len(subs)), key=lambda index: subs[index]["util"])
     t["asl_req"] = 1400.0
+    stiffness_sum = sum(s["stiffness"] for s in subs)
+    t["torque_distribution"] = {
+        "applied_torque": 40.0,
+        "positive_stiffness_sum": stiffness_sum,
+        "shares": tuple(
+            {
+                "index": index,
+                "stiffness": sub["stiffness"],
+                "fraction": sub["stiffness"] / stiffness_sum,
+                "torque": sub["t_ed"],
+            }
+            for index, sub in enumerate(subs)
+        ),
+    }
     out["torsion"] = t
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Sub-tubes" in txt                        # the compound-section heading
@@ -2106,14 +3667,218 @@ def test_report_torsion_shows_min_reinf_screen():
 
 
 def _combined_out(mv_independent=False):
-    return {"valid": True, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
-            "r_m": 0.6, "r_v": 0.4, "r_t": 0.3, "m_v_independent": mv_independent,
-            "dkna_sum": (max(0.9, 0.7) if mv_independent else 1.3),
-            "dkna_ok": (max(0.9, 0.7) if mv_independent else 1.3) <= 1.0,
-            "crushing": dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
-                             vrd_max=650.0, t_ed=40.0, v_ed=150.0,
-                             value=40.0 / 88.7 + 150.0 / 650.0),
-            "asl_torsion": 1176.0, "delta_ftd": 200.0, "links": True}
+    dkna = combined_core.dkna_interaction_result(
+        0.6, 0.4, 0.3, m_v_independent=mv_independent
+    )
+    crushing = combined_core.crushing_interaction_result(
+        40.0, 88.7, 150.0, 650.0
+    )
+    return {
+        "valid": True, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "r_m": 0.6, "r_v": 0.4, "r_t": 0.3,
+        "m_v_independent": mv_independent,
+        "dkna_sum": dkna.utilisation, "dkna_ok": dkna.ok,
+        "dkna_selection": asdict(dkna),
+        "crushing": dict(
+            valid=True, cot=1.0, theta_deg=45.0,
+            trd_max=88.7, vrd_max=650.0, t_ed=40.0, v_ed=150.0,
+            value=crushing.utilisation,
+            torsion_ratio=crushing.torsion_ratio,
+            shear_ratio=crushing.shear_ratio,
+            ok=crushing.ok,
+        ),
+        "asl_torsion": 1176.0, "delta_ftd": 200.0, "links": True,
+    }
+
+
+def _retain_combined_chords(payload, *candidates):
+    retained = [item for item in candidates if item is not None]
+    payload["longitudinal_candidates"] = retained
+    payload["governing_longitudinal"] = (
+        max(retained, key=lambda item: item["util"])
+        if retained else None
+    )
+    payload["longitudinal_fallback"] = next(
+        (item for item in retained if not item.get("conditional", True)),
+        None,
+    )
+    payload["longitudinal_all_conditional"] = bool(retained) and (
+        payload["longitudinal_fallback"] is None
+    )
+    return payload
+
+
+def test_report_publishes_only_governing_transverse_family_worked_examples():
+    inp = _inp()
+    rows = [
+        {
+            "name": "PL-LOW", "description": "Lower transverse actions",
+            "n_ed_kn": 0.0, "mx_ed_knm": 40.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 20.0, "vy_ed_kn": 30.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 20.0,
+        },
+        {
+            "name": "PL-GOV", "description": "Governing transverse actions",
+            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 30.0,
+            "vx_ed_kn": 45.0, "vy_ed_kn": 80.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 40.0,
+        },
+    ]
+    inp["plastic_cases"] = rows
+
+    shear_low = _shear_out()
+    shear_low.update(v_ed=30.0, signed_v_ed=30.0,
+                     util=30.0 / shear_low["res"]["vrd_c"])
+    vx = copy.deepcopy(_shear_out())
+    vx.update(component="vx", axis="y", signed_v_ed=45.0, v_ed=45.0,
+              util=45.0 / vx["res"]["vrd_c"], status="PASS")
+    vy = copy.deepcopy(_shear_out())
+    vy.update(component="vy", axis="x", signed_v_ed=80.0, v_ed=80.0,
+              util=80.0 / vy["res"]["vrd_c"], status="PASS")
+    shear_governing = dict(
+        vy, directions={"vx": vx, "vy": vy}, biaxial=True,
+        active_directions=["vx", "vy"],
+    )
+
+    torsion_low = _torsion_out()
+    torsion_low.update(t_ed=20.0, util=20.0 / torsion_low["trd"])
+    torsion_governing = _torsion_out()
+
+    def combined_with(r_m, r_v, r_t, component):
+        item = _combined_out()
+        selection = combined_core.dkna_interaction_result(
+            r_m, r_v, r_t, m_v_independent=False
+        )
+        item.update(
+            component=component,
+            r_m=r_m, r_v=r_v, r_t=r_t,
+            dkna_sum=selection.utilisation,
+            dkna_ok=selection.ok,
+            dkna_selection=asdict(selection),
+            governing_face="negative" if component == "vx" else "positive",
+            governing_cot=1.25 if component == "vx" else 1.75,
+        )
+        return item
+
+    combined_low = combined_with(0.10, 0.10, 0.10, "vy")
+    combined_vx = combined_with(0.15, 0.15, 0.10, "vx")
+    combined_vy = combined_with(0.60, 0.40, 0.30, "vy")
+    combined_governing = dict(
+        combined_vy,
+        directions={"vx": combined_vx, "vy": combined_vy},
+        biaxial=True,
+    )
+
+    out = {
+        "plastic_cases": [
+            {
+                "name": rows[0]["name"], "actions": rows[0], "evaluated": True,
+                "results": {
+                    "shear": shear_low,
+                    "torsion": torsion_low,
+                    "combined": combined_low,
+                },
+            },
+            {
+                "name": rows[1]["name"], "actions": rows[1], "evaluated": True,
+                "results": {
+                    "shear": shear_governing,
+                    "torsion": torsion_governing,
+                    "combined": combined_governing,
+                },
+            },
+        ]
+    }
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "PL-LOW" in flat and "PL-GOV" in flat
+    assert "Shear resistance - PL-LOW" not in flat
+    assert "Torsion (thin-walled tube) - PL-LOW" not in flat
+    assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in flat
+    assert flat.count("EQ-SHEAR.2005.VRDC") == 1
+    assert flat.count("EQ-TORSION.RESISTANCE.GOVERNING") == 1
+    assert flat.count("EQ-COMBINED.DK-NA.SUM") == 1
+    assert flat.count("The complete shear worked example is published only") == 1
+    assert flat.count("The complete torsion worked example is published only") == 1
+    assert flat.count("complete combined M-V-T worked example is published only") == 1
+    assert "Vx+T" in flat and "Vy+T" in flat
+
+
+def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
+    inp = _inp()
+    actions = [
+        {
+            "name": "PL-A", "description": "First",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 1.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 1.0,
+        },
+        {
+            "name": "PL-B", "description": "Second",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 2.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 2.0,
+        },
+        {
+            "name": "PL-INVALID", "description": "Invalid",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 3.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 3.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+
+    first = {
+        "shear": {
+            "res": {"valid": True}, "util": 0.99,
+            "links": {"res": {"valid": True}, "util": 0.40},
+        },
+        "torsion": {
+            "valid": True, "util": 0.40,
+            "min_reinf": {"applicable": True, "value": 9.0},
+            "interaction": {"valid": True, "value": 8.0},
+        },
+        "combined": {
+            "valid": True, "dkna_sum": 0.60,
+            "crushing": {"valid": True, "value": 7.0},
+        },
+    }
+    second = {
+        "shear": {
+            "res": {"valid": True}, "util": 0.85,
+            "links": {"res": {"valid": True}, "util": 0.80},
+        },
+        "torsion": {"valid": True, "util": 0.75},
+        "combined": {"valid": True, "dkna_sum": 0.90},
+    }
+    invalid = {
+        "shear": {
+            "res": {"valid": False}, "util": math.inf,
+            "links": {"res": {"valid": False}, "util": math.inf},
+        },
+        "torsion": {"valid": False, "util": math.inf},
+        "combined": {"valid": False, "dkna_sum": math.inf},
+    }
+    out = {
+        "plastic_cases": [
+            {"actions": actions[0], "results": first, "evaluated": True},
+            {"actions": actions[1], "results": second, "evaluated": True},
+            {"actions": actions[2], "results": invalid, "evaluated": True},
+        ]
+    }
+
+    selected = result_presentation.worked_example_selection(inp, out)
+
+    assert selected["families"]["shear"]["case_id"] == "PL-B"
+    assert selected["families"]["torsion"]["case_id"] == "PL-B"
+    assert selected["families"]["combined"]["case_id"] == "PL-B"
+    assert selected["torsion_subchecks"]["interaction"]["case_id"] == "PL-A"
+    assert selected["torsion_subchecks"]["minimum_reinforcement"][
+        "case_id"
+    ] == "PL-A"
 
 
 def test_report_includes_combined_section():
@@ -2159,7 +3924,7 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     assert "1.250" in txt and "1.750" in txt
 
 
-def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
+def test_report_keeps_only_governing_biaxial_combined_worked_block():
     import io
 
     out = _out()
@@ -2171,6 +3936,9 @@ def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
         vx,
         directions={"vx": vx, "vy": vy},
         biaxial=True,
+    )
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(_inp(), out)
     )
     builder = sector_report.ReportBuilder(
         io.BytesIO(), {}, _inp(), out, figures=False
@@ -2186,10 +3954,10 @@ def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
             for item in flowable._content
             if hasattr(item, "getPlainText")
         )
-        if "Directional screen:" in text:
+        if "Governing directional worked example:" in text:
             screen_blocks.append(text)
 
-    assert len(screen_blocks) == 2
+    assert len(screen_blocks) == 1
     assert all(f"{chr(0x2211)}(SEd/SRd)" in text for text in screen_blocks)
 
 
@@ -2202,6 +3970,7 @@ def test_report_combined_out_of_range_retains_values_and_verdicts():
         ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
         m_total=240.4, util=240.4 / 400.0, ok=True, capped=False,
     )
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "selected method's default range" in txt
@@ -2215,6 +3984,7 @@ def test_report_combined_longitudinal_check():
     c["longitudinal"] = dict(valid=True, axis="x", z=0.54, m_ed=100.0, m_rd=400.0,
                              ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
                              m_total=240.4, util=240.4 / 400.0, ok=True, capped=False)
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Longitudinal reinforcement" in txt
@@ -2232,6 +4002,7 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
                              util=105.0 / 300.0, ok=True, capped=False,
                              tension_low=True, off_util=0.03, biaxial=False,
                              m_off=90.0, conditional=False)
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "required x-axis negative face" in txt
@@ -2261,7 +4032,7 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback():
     )
     c["longitudinal"] = exact
     c["chord_off"] = off_axis
-    c["longitudinal_candidates"] = [fallback, exact, off_axis]
+    _retain_combined_chords(c, fallback, exact, off_axis)
     out["combined"] = c
 
     txt = " ".join(_pdf_text(sector_report.build_report(
@@ -2290,6 +4061,7 @@ def test_report_combined_longitudinal_conditional_mrd():
                              util=105.0 / 250.0, ok=True, capped=False,
                              tension_low=True, off_util=0.4, biaxial=True,
                              m_off=90.0, conditional=True, has_torsion=True)
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     # Collapse the PDF's line wrapping so multi-word phrases can be asserted.
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
@@ -2311,6 +4083,7 @@ def test_report_off_axis_skip_disclosed_uniaxially():
                              tension_low=True, off_util=0.0, biaxial=False,
                              m_off=0.0, conditional=True, has_torsion=True,
                              off_not_evaluated="subdivided")
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
@@ -2333,6 +4106,7 @@ def test_report_partial_torsion_face_coverage_disclosed():
                              tension_low=True, off_util=0.0, biaxial=False,
                              m_off=0.0, conditional=True, has_torsion=True,
                              gets_shift=True, off_not_evaluated="not_solved")
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
@@ -2357,6 +4131,7 @@ def test_report_off_axis_chord_block():
                           ftd_v=0.0, ftd_t=100.0, mv=0.0, mt=15.0, m_total=105.0,
                           util=105.0 / 180.0, ok=True, capped=False,
                           tension_low=True, m_off=20.0, conditional=True)
+    _retain_combined_chords(c, c["longitudinal"], c["chord_off"])
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
@@ -2401,8 +4176,13 @@ def test_report_skips_invalid_combined():
 
 def _links_out():
     return {"res": {"vrd_s": 540.0, "vrd_max": 648.9, "vrd": 540.0, "cot": 2.5,
+                    "tan": 0.4, "sin_cos": 2.5 / (1.0 + 2.5**2),
                     "theta_deg": 21.8, "z": 495.0, "fywd": 416.67, "nu1": 0.525,
                     "alpha_cw": 1.0, "sigma_cp": 0.0, "fcd": 24.14,
+                    "cot_min": 1.0, "cot_max": 2.5,
+                    "cot_unconstrained": 3.0,
+                    "angle_selection": "upper entered bound",
+                    "angle_a": 436.3, "angle_b": 3801.9,
                     "governs": "stirrups (VRd,s)", "valid": True},
             "util": 80.0 / 540.0, "asw": 157.08, "asw_over_s": 1.047, "legs": 2.0,
             "dia": 10.0, "s": 150.0, "fywk": 500.0, "cot_min": 1.0, "cot_max": 2.5,
@@ -2558,21 +4338,27 @@ def _combined_longitudinal(theta_mode):
     # Minimal combined block that renders only the M+V+T tension-chord note. Crushing
     # and transverse are omitted so the section reduces to the longitudinal paragraph,
     # whose wording is driven purely by theta_mode.
-    return {
-        "combined": {
-            "method": "EN 1992-1-1:2005",
-            "valid": True,
-            "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
-            "dkna_ok": True, "dkna_sum": 0.90, "m_v_independent": False,
-            "longitudinal": {
-                "valid": True, "ok": True, "axis": "x", "tension_low": True,
-                "m_ed": 100.0, "m_rd": 200.0, "mv": 20.0, "mt": 10.0,
-                "ftd_v": 40.0, "ftd_t": 15.0, "z": 0.25, "m_total": 130.0,
-                "util": 0.65, "biaxial": False, "capped": False,
-                "theta_mode": theta_mode,
-            },
-        }
+    dkna = combined_core.dkna_interaction_result(
+        0.50, 0.60, 0.30, m_v_independent=False
+    )
+    payload = {
+        "method": "EN 1992-1-1:2005",
+        "valid": True,
+        "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
+        "dkna_ok": dkna.ok,
+        "dkna_sum": dkna.utilisation,
+        "dkna_selection": asdict(dkna),
+        "m_v_independent": False,
+        "longitudinal": {
+            "valid": True, "ok": True, "axis": "x", "tension_low": True,
+            "m_ed": 100.0, "m_rd": 200.0, "mv": 20.0, "mt": 10.0,
+            "ftd_v": 40.0, "ftd_t": 15.0, "z": 0.25, "m_total": 130.0,
+            "util": 0.65, "biaxial": False, "capped": False,
+            "theta_mode": theta_mode,
+        },
     }
+    _retain_combined_chords(payload, payload["longitudinal"])
+    return {"combined": payload}
 
 
 def test_report_no_load_longitudinal_note_states_resistance_optimum():

@@ -8,14 +8,17 @@ tolerances rather than approximate convergence.
 from __future__ import annotations
 
 import math
+from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
 
 from sector.geometry import (
+    AreaMomentBreakdown,
     AreaMoments,
     _clip_pts,
     _poly_moments,
+    area_moment_breakdown,
     area_moments,
     area_moments_rings,
     clip_halfplane,
@@ -333,6 +336,66 @@ def test_rings_square_with_central_hole():
     assert m.syy == pytest.approx(expected_syy)
     assert m.sx == pytest.approx(0.0)
     assert m.sy == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# area_moment_breakdown -- report-ready final section properties
+# ---------------------------------------------------------------------------
+
+
+def test_area_moment_breakdown_preserves_signed_ring_contributions():
+    outer = _centered_rect(4.0, 6.0)  # area +24
+    hole = list(reversed(_centered_rect(2.0, 2.0)))  # area -4
+    rings = [outer, hole]
+
+    result = area_moment_breakdown(rings)
+
+    assert result.ring_moments == tuple(area_moments(ring) for ring in rings)
+    assert result.total == area_moments_rings(rings)
+    assert result.ring_moments[0].area == pytest.approx(24.0)
+    assert result.ring_moments[1].area == pytest.approx(-4.0)
+    assert result.total.area == pytest.approx(20.0)
+    assert result.centroid == pytest.approx((0.0, 0.0))
+    assert result.centroidal_sxx == pytest.approx(32.0 - 4.0 / 3.0)
+    assert result.centroidal_syy == pytest.approx(72.0 - 4.0 / 3.0)
+    assert result.centroidal_sxy == pytest.approx(0.0)
+
+
+def test_area_moment_breakdown_centroidal_properties_are_translation_invariant():
+    outer = [(0.0, 0.0), (5.0, 0.0), (5.0, 3.0), (0.0, 3.0)]
+    hole = [(1.0, 2.0), (2.0, 2.0), (2.0, 1.0), (1.0, 1.0)]  # CW
+    original = area_moment_breakdown([outer, hole])
+    dx, dy = 7.5, -3.25
+    translated_rings = [
+        [(x + dx, y + dy) for x, y in ring]
+        for ring in (outer, hole)
+    ]
+
+    translated = area_moment_breakdown(translated_rings)
+
+    assert translated.total.area == pytest.approx(original.total.area)
+    assert translated.centroid == pytest.approx(
+        (original.centroid[0] + dx, original.centroid[1] + dy)
+    )
+    assert translated.centroidal_sxx == pytest.approx(original.centroidal_sxx)
+    assert translated.centroidal_syy == pytest.approx(original.centroidal_syy)
+    assert translated.centroidal_sxy == pytest.approx(original.centroidal_sxy)
+
+
+def test_area_moment_breakdown_is_frozen_and_slotted():
+    result = area_moment_breakdown([_centered_rect(2.0, 3.0)])
+
+    assert isinstance(result, AreaMomentBreakdown)
+    assert not hasattr(result, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        setattr(result, "centroidal_sxx", 0.0)
+
+
+def test_area_moment_breakdown_rejects_zero_net_area():
+    ring = _centered_rect(2.0, 3.0)
+
+    with pytest.raises(ValueError, match="centroid undefined for a zero-area region"):
+        area_moment_breakdown([ring, list(reversed(ring))])
 
 
 # ---------------------------------------------------------------------------

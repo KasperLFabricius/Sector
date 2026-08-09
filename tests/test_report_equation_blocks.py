@@ -12,9 +12,8 @@ from reportlab.platypus import SimpleDocTemplate
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import report_equation_contract as contracts  # noqa: E402
-import sector_report  # noqa: E402
-
+import report_equation_contract as contracts
+import sector_report
 
 EM_DASH = chr(0x2014)
 DELTA = chr(0x0394)
@@ -72,7 +71,7 @@ def test_every_contract_publishes_one_complete_ordered_role_block(
     kwargs = {}
     if contract.substitution_role == "numerical":
         kwargs["subst"] = "2 x 3"
-    elif contract.substitution_role == "applicability-note":
+    if contract.applicability_note_required:
         kwargs["note"] = "This branch is selected by the retained method."
     if contract.expects_result:
         kwargs["result"] = "candidate publication value"
@@ -88,7 +87,7 @@ def test_every_contract_publishes_one_complete_ordered_role_block(
     expected_roles = ["identity", "symbolic-expression"]
     if contract.substitution_role == "numerical":
         expected_roles.append("numerical-substitution")
-    elif contract.substitution_role == "applicability-note":
+    if contract.applicability_note_required:
         expected_roles.append("applicability-note")
     if contract.expects_result:
         expected_roles.append("result")
@@ -158,12 +157,13 @@ def test_numerical_result_has_explicit_roles_canonical_identity_and_symbols():
     )
 
 
-def test_applicability_note_is_not_mislabelled_as_a_numerical_substitution():
+def test_applicability_note_is_distinct_from_the_numerical_substitution():
     builder = _builder()
     builder._h1("Combined")
     builder._formula(
         "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)",
         equation_key="combined.dk-na.sum",
+        subst="max(0.50 + 0.20, 0.40 + 0.20)",
         note="M and V are checked separately.",
         result="&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = 70.0% (PASS)",
     )
@@ -171,7 +171,7 @@ def test_applicability_note_is_not_mislabelled_as_a_numerical_substitution():
     text = equation.getPlainText()
 
     assert "Applicability / method note: M and V are checked separately." in text
-    assert "Numerical substitution:" not in text
+    assert "Numerical substitution: max(0.50 + 0.20, 0.40 + 0.20)" in text
     assert (
         f"Result {EM_DASH} {SUM}(SEd/SRd) "
         f"[dimensionless; displayed as %]: {SUM}(SEd/SRd) = 70.0% (PASS)"

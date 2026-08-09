@@ -78,7 +78,7 @@ CRACK_DIRECT_TENSION_SCOPE = (
 _UNIFORM_TENSION_REL_TOL = 1.0e-8
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class EffectiveReinforcement2023:
     """Auditable EN 1992-1-1:2023 Formula (9.12) reinforcement terms."""
 
@@ -87,6 +87,177 @@ class EffectiveReinforcement2023:
     ap_eff_weighted: float
     rho_p_eff: float
     xi1_by_element: tuple[Optional[float], ...]
+    ac_eff: float = 0.0
+    rho_numerator: float = 0.0
+    reference_mild_diameter: Optional[float] = None
+    elements: tuple["EffectiveReinforcementElement2023", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveReinforcementElement2023:
+    """One retained Formula (9.12) reinforcement contribution."""
+
+    element_index: int
+    in_effective_area: bool
+    reinforcement_type: str
+    area: float
+    diameter: float
+    bond_ratio_xi: Optional[float]
+    reference_mild_diameter: Optional[float]
+    xi1: Optional[float]
+    effective_area_contribution: float
+
+
+@dataclass(frozen=True, slots=True)
+class CrackEffectiveArea2005Fine:
+    """Retained EC2 7.3.2 effective-height minimum for bending."""
+
+    section_depth: float
+    effective_depth: float
+    tension_zone_depth: float
+    h_minus_d: float
+    candidate_2_5_h_minus_d: float
+    candidate_h_minus_x_over_3: Optional[float]
+    candidate_h_over_2: float
+    selected_candidate: str
+    selected_hc_eff: float
+    band_limit: float
+    ac_eff: float
+
+
+@dataclass(frozen=True, slots=True)
+class CrackEffectiveArea2005Coarse:
+    """Retained DK NA centroid-matched effective-area construction."""
+
+    section_depth: float
+    compression_face_axis: float
+    tension_face_axis: float
+    reinforcement_centroid_axis: float
+    band_limit_axis: float
+    band_centroid_axis: float
+    centroid_gap: float
+    selected_hc_eff: float
+    ac_eff: float
+    selected_candidate: str = "centroid-matched-band"
+
+
+@dataclass(frozen=True, slots=True)
+class CrackEffectiveArea2023Bending:
+    """Retained Figure 9.3 bending-band candidates and selected height."""
+
+    section_depth: float
+    tension_zone_depth: float
+    near_layer_depth: float
+    far_layer_depth: float
+    near_layer_diameter: float
+    candidate_ay_plus_5phi: float
+    candidate_10phi: float
+    candidate_3_5ay: float
+    base_selected_candidate: str
+    base_height: float
+    layer_spread: float
+    height_before_section_caps: float
+    candidate_h_minus_x: float
+    candidate_h_over_2: float
+    final_selected_candidate: str
+    selected_hc_eff: float
+    band_limit: float
+    ac_eff: float
+
+
+@dataclass(frozen=True, slots=True)
+class CrackDirectTensionFaceBand2023:
+    """One selected Figure 9.3 perimeter band in uniform direct tension."""
+
+    face: str
+    element_indices: tuple[int, ...]
+    layer_depth: float
+    layer_diameter: float
+    candidate_ay_plus_5phi: float
+    candidate_10phi: float
+    candidate_3_5ay: float
+    candidate_half_section: float
+    selected_candidate: str
+    selected_band: float
+
+
+@dataclass(frozen=True, slots=True)
+class CrackEffectiveArea2023Direct:
+    """Retained Figure 9.3 rectangular perimeter-area construction."""
+
+    width: float
+    height: float
+    face_bands: tuple[CrackDirectTensionFaceBand2023, ...]
+    left_band: float
+    right_band: float
+    bottom_band: float
+    top_band: float
+    inner_width: float
+    inner_height: float
+    selected_hc_eff: float
+    selected_bc_eff: float
+    ac_eff: float
+
+
+@dataclass(frozen=True, slots=True)
+class CrackMeanStrainOperands:
+    """Final per-element operands and competing bounds for mean strain."""
+
+    sigma_s: float
+    kt: float
+    fctm: float
+    rho_p_eff: float
+    alpha_e: float
+    es: float
+    concrete_tension_reduction: float
+    formula_candidate: float
+    lower_bound_factor: float
+    lower_bound_candidate: float
+    selected_candidate: str
+    selected_esm_ecm: float
+
+
+@dataclass(frozen=True, slots=True)
+class CrackSpacing2005Operands:
+    """Final per-element EC2 7.11/7.14 spacing branch operands."""
+
+    cover: float
+    diameter: float
+    rho_p_eff: float
+    k1: float
+    k2: float
+    k3_base: float
+    k3_used: float
+    k4: float
+    nearest_neighbour_spacing: float
+    close_spacing_limit: float
+    tension_zone_depth: float
+    formula_7_11: float
+    geometric_7_14: float
+    selected_candidate: str
+    selected_spacing: float
+
+
+@dataclass(frozen=True, slots=True)
+class CrackSpacing2023Operands:
+    """Final per-element EN 1992-1-1:2023 spacing and cap operands."""
+
+    cover: float
+    diameter: float
+    rho_p_eff: float
+    cover_coefficient: float
+    bond_coefficient_k1: float
+    bond_factor_kb: float
+    flexural_factor_raw: float
+    flexural_factor: float
+    flexural_factor_method: str
+    transformed_tension_depth: Optional[float]
+    cap_tension_depth: Optional[float]
+    diameter_ratio_divisor: float
+    formula_spacing: float
+    cap_spacing: Optional[float]
+    selected_candidate: str
+    selected_spacing: float
 
 
 @dataclass(frozen=True)
@@ -103,6 +274,7 @@ class _DirectTensionArea2023:
     right: float
     bottom: float
     top: float
+    face_bands: tuple[CrackDirectTensionFaceBand2023, ...]
 
 
 @dataclass(frozen=True)
@@ -158,6 +330,15 @@ class CrackWidthCandidate:
     direct_tension: bool = False
     scope: str = CRACK_SCOPE_DOMINANT_DIRECTION
     direction_deg: Optional[float] = None
+    equivalent_diameter: float = 0.0
+    diameter_source: str = ""
+    cover_source: str = ""
+    bond_coefficient: float = 0.0
+    modular_ratio: float = 0.0
+    mean_strain_operands: Optional[CrackMeanStrainOperands] = None
+    spacing_operands: Optional[
+        Union[CrackSpacing2005Operands, CrackSpacing2023Operands]
+    ] = None
 
 
 @dataclass
@@ -190,11 +371,31 @@ class CrackWidthResult:
     direct_tension: bool = False
     scope: str = CRACK_SCOPE_DOMINANT_DIRECTION
     direction_deg: Optional[float] = None
+    effective_area_operands: Optional[
+        Union[
+            CrackEffectiveArea2005Fine,
+            CrackEffectiveArea2005Coarse,
+            CrackEffectiveArea2023Bending,
+            CrackEffectiveArea2023Direct,
+        ]
+    ] = None
+    effective_reinforcement_2023: Optional[EffectiveReinforcement2023] = None
+    governing_rule: str = "maximum-wk-then-lowest-bar-index"
 
 
 def _governing_crack(
     candidates: list[CrackWidthCandidate],
     effective_xi1: Optional[Sequence[float]] = None,
+    *,
+    effective_area_operands: Optional[
+        Union[
+            CrackEffectiveArea2005Fine,
+            CrackEffectiveArea2005Coarse,
+            CrackEffectiveArea2023Bending,
+            CrackEffectiveArea2023Direct,
+        ]
+    ] = None,
+    effective_reinforcement_2023: Optional[EffectiveReinforcement2023] = None,
 ) -> Optional[CrackWidthResult]:
     """Return the largest-``wk`` candidate and retain the full sorted audit set."""
     if not candidates:
@@ -218,6 +419,8 @@ def _governing_crack(
         xi1_max=max(xi1_values) if xi1_values else None,
         bc_ef=c.bc_ef, direct_tension=c.direct_tension,
         scope=c.scope, direction_deg=c.direction_deg,
+        effective_area_operands=effective_area_operands,
+        effective_reinforcement_2023=effective_reinforcement_2023,
     )
 
 
@@ -396,6 +599,8 @@ def effective_reinforcement_ratio_2023(
     ap_eff = float(areas[prestress].sum())
 
     xi1_values = np.full(count, np.nan, dtype=float)
+    xi_values = np.full(count, np.nan, dtype=float)
+    reference_mild_diameter: Optional[float] = None
     weighted_ap = 0.0
     if prestress.any():
         if bond_ratio_xi is None:
@@ -427,6 +632,7 @@ def effective_reinforcement_ratio_2023(
             (count,),
         )
         tendon_xi = xi[prestress]
+        xi_values[prestress] = tendon_xi
         if (
             np.any(~np.isfinite(tendon_xi))
             or np.any(tendon_xi <= 0.0)
@@ -438,6 +644,7 @@ def effective_reinforcement_ratio_2023(
             )
         if mild.any():
             phi_s = float(diameters[mild].max())
+            reference_mild_diameter = phi_s
             xi1_values[prestress] = np.sqrt(
                 tendon_xi * phi_s / diameters[prestress]
             )
@@ -456,6 +663,34 @@ def effective_reinforcement_ratio_2023(
     numerator = as_eff + weighted_ap
     if numerator <= 0.0:
         raise ValueError("no effective crack-control reinforcement is present")
+    elements = tuple(
+        EffectiveReinforcementElement2023(
+            element_index=index,
+            in_effective_area=bool(in_area[index]),
+            reinforcement_type=str(kinds[index]),
+            area=float(areas[index]),
+            diameter=float(diameters[index]),
+            bond_ratio_xi=(
+                None if math.isnan(float(xi_values[index]))
+                else float(xi_values[index])
+            ),
+            reference_mild_diameter=reference_mild_diameter,
+            xi1=(
+                None if math.isnan(float(xi1_values[index]))
+                else float(xi1_values[index])
+            ),
+            effective_area_contribution=(
+                float(areas[index])
+                if mild[index]
+                else (
+                    float(areas[index] * xi1_values[index])
+                    if prestress[index]
+                    else 0.0
+                )
+            ),
+        )
+        for index in range(count)
+    )
     return EffectiveReinforcement2023(
         as_eff=as_eff,
         ap_eff=ap_eff,
@@ -465,6 +700,10 @@ def effective_reinforcement_ratio_2023(
             None if math.isnan(value) else float(value)
             for value in xi1_values
         ),
+        ac_eff=float(ac_eff_m2),
+        rho_numerator=numerator,
+        reference_mild_diameter=reference_mild_diameter,
+        elements=elements,
     )
 
 
@@ -566,7 +805,9 @@ def _direct_tension_area_2023(
         )
 
     normal_dimensions = (width, width, height, height)
+    face_names = ("left", "right", "bottom", "top")
     bands = np.zeros(4, dtype=float)
+    face_bands: list[CrackDirectTensionFaceBand2023] = []
     for face, indices in enumerate(assigned):
         if not indices.size:
             continue
@@ -580,14 +821,32 @@ def _direct_tension_area_2023(
         area_sum = float(ba[indices].sum())
         a_face = float(np.sum(ba[indices] * face_distances) / area_sum)
         phi_face = float(phi_arr[indices].max()) / 1000.0
-        bands[face] = min(
-            a_face + 5.0 * phi_face,
-            10.0 * phi_face,
-            3.5 * a_face,
-            0.5 * normal_dimensions[face],
+        band_candidates = (
+            ("ay+5phi", a_face + 5.0 * phi_face),
+            ("10phi", 10.0 * phi_face),
+            ("3.5ay", 3.5 * a_face),
+            ("half-section", 0.5 * normal_dimensions[face]),
         )
+        selected_name, selected_band = min(
+            band_candidates, key=lambda item: item[1]
+        )
+        bands[face] = selected_band
         if bands[face] <= 0.0:
             return "Calculated direct-tension effective band is not positive."
+        face_bands.append(
+            CrackDirectTensionFaceBand2023(
+                face=face_names[face],
+                element_indices=tuple(int(index) for index in indices),
+                layer_depth=a_face,
+                layer_diameter=phi_face * 1000.0,
+                candidate_ay_plus_5phi=band_candidates[0][1],
+                candidate_10phi=band_candidates[1][1],
+                candidate_3_5ay=band_candidates[2][1],
+                candidate_half_section=band_candidates[3][1],
+                selected_candidate=selected_name,
+                selected_band=selected_band,
+            )
+        )
 
     left, right, bottom, top = bands
     inner_width = max(width - left - right, 0.0)
@@ -615,6 +874,7 @@ def _direct_tension_area_2023(
         right=right,
         bottom=bottom,
         top=top,
+        face_bands=tuple(face_bands),
     )
 
 
@@ -709,6 +969,7 @@ def _crack_width(
     derived_phi = np.sqrt(4.0 * ba * 1.0e6 / math.pi)
     if bar_diameter is None:
         phi_arr = derived_phi
+        diameter_sources = np.full(bx.size, "equivalent-area", dtype=object)
     else:
         try:
             supplied_phi = np.broadcast_to(
@@ -718,16 +979,18 @@ def _crack_width(
             return _not_assessed(
                 f"Crack-width element diameters are invalid: {exc}."
             )
-        phi_arr = np.where(
-            np.isfinite(supplied_phi) & (supplied_phi > 0.0),
-            supplied_phi,
-            derived_phi,
+        supplied_valid = np.isfinite(supplied_phi) & (supplied_phi > 0.0)
+        phi_arr = np.where(supplied_valid, supplied_phi, derived_phi)
+        diameter_sources = np.where(
+            supplied_valid,
+            "provided",
+            "equivalent-area-fallback",
         )
 
     if edition == "2023":
         return _crack_width_2023(
             section, cracked_state, n, fctm, es_arr, cover, kt,
-            k1, phi_arr, n_mult=mult_arr,
+            k1, phi_arr, derived_phi, diameter_sources, n_mult=mult_arr,
             reinforcement_types=kinds, bond_ratio_xi=bond_ratio_xi,
         )
 
@@ -769,22 +1032,66 @@ def _crack_width(
         s_rc = float(np.sum(ba[tens] * s_bars[tens]) / np.sum(ba[tens]))
         c_lo = _centroid_matched_lo(rings, gx, gy, s_tface, s_cface, s_rc)
         hc_ef = s_tface - c_lo
-        ac_eff = _band_moments(rings, gx, gy, c_lo).area
+        band_moments = _band_moments(rings, gx, gy, c_lo)
+        ac_eff = band_moments.area
+        band_centroid = (
+            (band_moments.sx * gx + band_moments.sy * gy) / ac_eff
+            if ac_eff > 0.0
+            else math.nan
+        )
+        effective_area_operands: Union[
+            CrackEffectiveArea2005Fine,
+            CrackEffectiveArea2005Coarse,
+        ] = CrackEffectiveArea2005Coarse(
+            section_depth=h,
+            compression_face_axis=s_cface,
+            tension_face_axis=s_tface,
+            reinforcement_centroid_axis=s_rc,
+            band_limit_axis=c_lo,
+            band_centroid_axis=band_centroid,
+            centroid_gap=band_centroid - s_rc,
+            selected_hc_eff=hc_ef,
+            ac_eff=ac_eff,
+        )
     else:
         # EC2 hc,ef = min(2.5(h-d), (h-x)/3, h/2). The neutral-axis depth x is
         # measured from the compression face, so (h-x) = s_tface - s_na (the
         # tension-side depth), not h - s_na (which would only match when the
         # compression face is at s = 0). The (h-x)/3 limit can be dropped (DK NA
         # 7.3.2(3): it applies only to slabs and prestressed members).
-        if include_hx_term:
-            hc_ef = min(2.5 * (h - d), (s_tface - s_na) / 3.0, h / 2.0)
-        else:
-            hc_ef = min(2.5 * (h - d), h / 2.0)
+        candidate_2_5_h_minus_d = 2.5 * (h - d)
+        candidate_h_minus_x_over_3 = (
+            (s_tface - s_na) / 3.0 if include_hx_term else None
+        )
+        height_candidates = [
+            ("2.5(h-d)", candidate_2_5_h_minus_d),
+        ]
+        if candidate_h_minus_x_over_3 is not None:
+            height_candidates.append(
+                ("(h-x)/3", candidate_h_minus_x_over_3)
+            )
+        height_candidates.append(("h/2", h / 2.0))
+        selected_height_name, hc_ef = min(
+            height_candidates, key=lambda item: item[1]
+        )
         # Effective tension area: the concrete band of depth hc_ef at the tension
         # face, i.e. s >= s_tface - hc_ef. Clip each ring to that half-plane.
         c_lo = s_tface - hc_ef
         ac_eff = sum(area_moments(clip_halfplane(r, gx, gy, -c_lo)).area
                      for r in rings)
+        effective_area_operands = CrackEffectiveArea2005Fine(
+            section_depth=h,
+            effective_depth=d,
+            tension_zone_depth=s_tface - s_na,
+            h_minus_d=h - d,
+            candidate_2_5_h_minus_d=candidate_2_5_h_minus_d,
+            candidate_h_minus_x_over_3=candidate_h_minus_x_over_3,
+            candidate_h_over_2=h / 2.0,
+            selected_candidate=selected_height_name,
+            selected_hc_eff=hc_ef,
+            band_limit=c_lo,
+            ac_eff=ac_eff,
+        )
     if hc_ef <= 0.0 or ac_eff <= 0.0:
         return _not_assessed(
             "The 2005 effective tension area is not positive."
@@ -825,9 +1132,28 @@ def _crack_width(
             c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
                       * 1000.0 - phi / 2.0, 0.0)
         # EC2 (7.9): mean strain, with the 0.6 sigma_s/Es lower bound.
-        esm_ecm = max(
-            (sigma_s - kt * fctm / rho * (1.0 + alpha_e_i * rho)) / es_i,
-            0.6 * sigma_s / es_i,
+        concrete_tension_reduction = (
+            kt * fctm / rho * (1.0 + alpha_e_i * rho)
+        )
+        mean_formula = (sigma_s - concrete_tension_reduction) / es_i
+        mean_lower_bound = 0.6 * sigma_s / es_i
+        esm_ecm = max(mean_formula, mean_lower_bound)
+        mean_strain_operands = CrackMeanStrainOperands(
+            sigma_s=sigma_s,
+            kt=kt,
+            fctm=fctm,
+            rho_p_eff=rho,
+            alpha_e=alpha_e_i,
+            es=es_i,
+            concrete_tension_reduction=concrete_tension_reduction,
+            formula_candidate=mean_formula,
+            lower_bound_factor=0.6,
+            lower_bound_candidate=mean_lower_bound,
+            selected_candidate=(
+                "formula-7.9" if mean_formula >= mean_lower_bound
+                else "minimum-bound"
+            ),
+            selected_esm_ecm=esm_ecm,
         )
         # EC2 (7.11): maximum crack spacing (cover and phi in mm). Under the DK NA
         # (7.3.4(3)) the cover term coefficient is k3*(25/c)^(2/3) instead of k3.
@@ -845,11 +1171,34 @@ def _crack_width(
         neigh = band_tens.copy()
         neigh[i] = False
         nn = float(np.min(np.abs(w_bars[neigh] - w_bars[i]))) if neigh.any() else math.inf
-        geometric = nn * 1000.0 > 5.0 * (c_i + phi / 2.0)
+        nearest_spacing = nn * 1000.0
+        close_spacing_limit = 5.0 * (c_i + phi / 2.0)
+        spacing_7_11 = (
+            k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
+        )
+        spacing_7_14 = 1.3 * (s_tface - s_na) * 1000.0
+        geometric = nearest_spacing > close_spacing_limit
         if geometric:
-            sr_max = 1.3 * (s_tface - s_na) * 1000.0                       # (7.14)
+            sr_max = spacing_7_14                       # (7.14)
         else:
-            sr_max = k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho    # (7.11)
+            sr_max = spacing_7_11                       # (7.11)
+        spacing_operands = CrackSpacing2005Operands(
+            cover=c_i,
+            diameter=phi,
+            rho_p_eff=rho,
+            k1=float(k1_arr[i]),
+            k2=k2,
+            k3_base=k3,
+            k3_used=k3_i,
+            k4=k4,
+            nearest_neighbour_spacing=nearest_spacing,
+            close_spacing_limit=close_spacing_limit,
+            tension_zone_depth=s_tface - s_na,
+            formula_7_11=spacing_7_11,
+            geometric_7_14=spacing_7_14,
+            selected_candidate=("formula-7.14" if geometric else "formula-7.11"),
+            selected_spacing=sr_max,
+        )
         wk = wk_factor * sr_max * esm_ecm
         candidates.append(CrackWidthCandidate(
             bar_index=i, x=float(bx[i]), y=float(by[i]),
@@ -862,8 +1211,18 @@ def _crack_width(
             reinforcement_type=str(kinds[i]),
             scope=CRACK_SCOPE_DOMINANT_DIRECTION,
             direction_deg=direction_deg,
+            equivalent_diameter=float(derived_phi[i]),
+            diameter_source=str(diameter_sources[i]),
+            cover_source=("override" if cover is not None else "geometry"),
+            bond_coefficient=float(k1_arr[i]),
+            modular_ratio=alpha_e_i,
+            mean_strain_operands=mean_strain_operands,
+            spacing_operands=spacing_operands,
         ))
-    result = _governing_crack(candidates)
+    result = _governing_crack(
+        candidates,
+        effective_area_operands=effective_area_operands,
+    )
     if result is None:
         return _not_assessed(
             "No tension reinforcement candidate remains in the effective area."
@@ -884,6 +1243,8 @@ def _crack_width_2023_direct(
     kt: float,
     k1_arr: np.ndarray,
     phi_arr: np.ndarray,
+    derived_phi: np.ndarray,
+    diameter_sources: np.ndarray,
     mult_arr: np.ndarray,
     kinds: np.ndarray,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]],
@@ -891,10 +1252,29 @@ def _crack_width_2023_direct(
     """Uniform direct-tension implementation of 9.2.3 and Figure 9.3."""
 
     bx, by, ba = section.bar_arrays()
-    effective = _direct_tension_effective_area_2023(section, phi_arr)
+    effective = _direct_tension_area_2023(section, phi_arr)
     if isinstance(effective, str):
         return _not_assessed(effective)
-    in_area, ac_eff, hc_ef, bc_ef = effective
+    in_area = effective.in_area
+    ac_eff = effective.ac_eff
+    hc_ef = effective.hc_eff
+    bc_ef = effective.bc_eff
+    inner_width = max(effective.width - effective.left - effective.right, 0.0)
+    inner_height = max(effective.height - effective.bottom - effective.top, 0.0)
+    effective_area_operands = CrackEffectiveArea2023Direct(
+        width=effective.width,
+        height=effective.height,
+        face_bands=effective.face_bands,
+        left_band=effective.left,
+        right_band=effective.right,
+        bottom_band=effective.bottom,
+        top_band=effective.top,
+        inner_width=inner_width,
+        inner_height=inner_height,
+        selected_hc_eff=hc_ef,
+        selected_bc_eff=bc_ef,
+        ac_eff=ac_eff,
+    )
     try:
         rho_info = effective_reinforcement_ratio_2023(
             ba,
@@ -926,14 +1306,52 @@ def _crack_width_2023_direct(
                 - phi / 2.0,
                 0.0,
             )
-        esm_ecm = max(
-            (sigma_s - kt * fctm / rho * (1.0 + alpha_e_i * rho)) / es_i,
-            (1.0 - kt) * sigma_s / es_i,
+        concrete_tension_reduction = (
+            kt * fctm / rho * (1.0 + alpha_e_i * rho)
+        )
+        mean_formula = (sigma_s - concrete_tension_reduction) / es_i
+        lower_bound_factor = 1.0 - kt
+        mean_lower_bound = lower_bound_factor * sigma_s / es_i
+        esm_ecm = max(mean_formula, mean_lower_bound)
+        mean_strain_operands = CrackMeanStrainOperands(
+            sigma_s=sigma_s,
+            kt=kt,
+            fctm=fctm,
+            rho_p_eff=rho,
+            alpha_e=alpha_e_i,
+            es=es_i,
+            concrete_tension_reduction=concrete_tension_reduction,
+            formula_candidate=mean_formula,
+            lower_bound_factor=lower_bound_factor,
+            lower_bound_candidate=mean_lower_bound,
+            selected_candidate=(
+                "formula-9.11" if mean_formula >= mean_lower_bound
+                else "minimum-bound"
+            ),
+            selected_esm_ecm=esm_ecm,
         )
         kb = 0.9 if float(k1_arr[i]) <= 1.0 else 1.2
         # Formula (9.20): kfl = 1.00 for pure tension. In the uniform-tension
         # limit k1/r = 1.00 and the (h-x) cap tends to infinity.
         sr = 1.5 * c_i + kb / 7.2 * phi / rho
+        spacing_operands = CrackSpacing2023Operands(
+            cover=c_i,
+            diameter=phi,
+            rho_p_eff=rho,
+            cover_coefficient=1.5,
+            bond_coefficient_k1=float(k1_arr[i]),
+            bond_factor_kb=kb,
+            flexural_factor_raw=1.0,
+            flexural_factor=1.0,
+            flexural_factor_method="formula-9.20-direct-tension",
+            transformed_tension_depth=None,
+            cap_tension_depth=None,
+            diameter_ratio_divisor=7.2,
+            formula_spacing=sr,
+            cap_spacing=None,
+            selected_candidate="formula-9.15",
+            selected_spacing=sr,
+        )
         wk = _KW_2023 * sr * esm_ecm
         candidates.append(
             CrackWidthCandidate(
@@ -962,6 +1380,13 @@ def _crack_width_2023_direct(
                 bc_ef=bc_ef,
                 direct_tension=True,
                 scope=CRACK_SCOPE_DIRECT_TENSION,
+                equivalent_diameter=float(derived_phi[i]),
+                diameter_source=str(diameter_sources[i]),
+                cover_source=("override" if cover is not None else "geometry"),
+                bond_coefficient=float(k1_arr[i]),
+                modular_ratio=alpha_e_i,
+                mean_strain_operands=mean_strain_operands,
+                spacing_operands=spacing_operands,
             )
         )
     result = _governing_crack(
@@ -971,6 +1396,8 @@ def _crack_width_2023_direct(
             for index, value in enumerate(rho_info.xi1_by_element)
             if in_area[index] and value is not None
         ],
+        effective_area_operands=effective_area_operands,
+        effective_reinforcement_2023=rho_info,
     )
     if result is None:
         return _not_assessed(
@@ -990,6 +1417,8 @@ def _crack_width_2023(
     kt: float,
     k1: Union[float, Sequence[float]],
     bar_diameter: np.ndarray,
+    equivalent_diameter: np.ndarray,
+    diameter_sources: np.ndarray,
     n_mult: np.ndarray,
     *,
     reinforcement_types: np.ndarray,
@@ -1013,6 +1442,8 @@ def _crack_width_2023(
     es_arr = np.asarray(Es, dtype=float)
     mult_arr = np.asarray(n_mult, dtype=float)
     phi_arr = np.asarray(bar_diameter, dtype=float)
+    equivalent_phi_arr = np.asarray(equivalent_diameter, dtype=float)
+    diameter_source_arr = np.asarray(diameter_sources, dtype=object)
     kinds = np.asarray(reinforcement_types, dtype=object)
     try:
         k1_arr = np.broadcast_to(np.asarray(k1, dtype=float), (bx.size,))
@@ -1035,6 +1466,8 @@ def _crack_width_2023(
             kt,
             k1_arr,
             phi_arr,
+            equivalent_phi_arr,
+            diameter_source_arr,
             mult_arr,
             kinds,
             bond_ratio_xi,
@@ -1094,8 +1527,22 @@ def _crack_width_2023(
     phi_near_m = _phi(near) / 1000.0
     ay_near = float(ay[near])                    # near-face layer depth
     ay_far = float(ay[tens].max())              # deepest tension bars
-    base = min(ay_near + 5.0 * phi_near_m, 10.0 * phi_near_m, 3.5 * ay_near)
-    hc_ef = min(base + (ay_far - ay_near), hx, h / 2.0)
+    base_candidates = (
+        ("ay+5phi", ay_near + 5.0 * phi_near_m),
+        ("10phi", 10.0 * phi_near_m),
+        ("3.5ay", 3.5 * ay_near),
+    )
+    base_selected_name, base = min(base_candidates, key=lambda item: item[1])
+    layer_spread = ay_far - ay_near
+    height_before_section_caps = base + layer_spread
+    final_height_candidates = (
+        ("figure-9.3-layer-band", height_before_section_caps),
+        ("h-x", hx),
+        ("h/2", h / 2.0),
+    )
+    final_selected_name, hc_ef = min(
+        final_height_candidates, key=lambda item: item[1]
+    )
     if hc_ef <= 0.0:
         return _not_assessed(
             "The 2023 bending effective tension height is not positive."
@@ -1107,6 +1554,26 @@ def _crack_width_2023(
         return _not_assessed(
             "The 2023 bending effective tension area is not positive."
         )
+    effective_area_operands = CrackEffectiveArea2023Bending(
+        section_depth=h,
+        tension_zone_depth=hx,
+        near_layer_depth=ay_near,
+        far_layer_depth=ay_far,
+        near_layer_diameter=phi_near_m * 1000.0,
+        candidate_ay_plus_5phi=base_candidates[0][1],
+        candidate_10phi=base_candidates[1][1],
+        candidate_3_5ay=base_candidates[2][1],
+        base_selected_candidate=base_selected_name,
+        base_height=base,
+        layer_spread=layer_spread,
+        height_before_section_caps=height_before_section_caps,
+        candidate_h_minus_x=hx,
+        candidate_h_over_2=h / 2.0,
+        final_selected_candidate=final_selected_name,
+        selected_hc_eff=hc_ef,
+        band_limit=c_lo,
+        ac_eff=ac_eff,
+    )
     in_band = s_bars >= c_lo
     try:
         rho_info = effective_reinforcement_ratio_2023(
@@ -1128,10 +1595,12 @@ def _crack_width_2023(
     props = transformed_properties(section, n, cracked=False, n_mult=n_mult)
     h_minus_xg = s_tface - (props.cx * gx + props.cy * gy)
     if h_minus_xg > 1.0e-9:
-        kfl = 0.5 * (1.0 + (h_minus_xg - hc_ef) / h_minus_xg)
+        kfl_raw = 0.5 * (1.0 + (h_minus_xg - hc_ef) / h_minus_xg)
+        kfl_method = "formula-9.17"
     else:
-        kfl = (h - hc_ef) / h          # degenerate fallback
-    kfl = max(0.0, kfl)
+        kfl_raw = (h - hc_ef) / h          # degenerate fallback
+        kfl_method = "degenerate-section-fallback"
+    kfl = max(0.0, kfl_raw)
 
     sr_cap = 1.3 / _KW_2023 * hx * 1000.0   # (1.3/kw)*(h-x), m -> mm
     direction_deg = math.degrees(math.atan2(gy, gx)) % 180.0
@@ -1152,15 +1621,57 @@ def _crack_width_2023(
             c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
                       * 1000.0 - phi / 2.0, 0.0)
         # (9.11): mean strain; lower bound (1 - kt)*sigma_s/Es (was a fixed 0.6 in 2004).
-        esm_ecm = max(
-            (sigma_s - kt * fctm / rho * (1.0 + alpha_e_i * rho)) / es_i,
-            (1.0 - kt) * sigma_s / es_i,
+        concrete_tension_reduction = (
+            kt * fctm / rho * (1.0 + alpha_e_i * rho)
+        )
+        mean_formula = (sigma_s - concrete_tension_reduction) / es_i
+        lower_bound_factor = 1.0 - kt
+        mean_lower_bound = lower_bound_factor * sigma_s / es_i
+        esm_ecm = max(mean_formula, mean_lower_bound)
+        mean_strain_operands = CrackMeanStrainOperands(
+            sigma_s=sigma_s,
+            kt=kt,
+            fctm=fctm,
+            rho_p_eff=rho,
+            alpha_e=alpha_e_i,
+            es=es_i,
+            concrete_tension_reduction=concrete_tension_reduction,
+            formula_candidate=mean_formula,
+            lower_bound_factor=lower_bound_factor,
+            lower_bound_candidate=mean_lower_bound,
+            selected_candidate=(
+                "formula-9.11" if mean_formula >= mean_lower_bound
+                else "minimum-bound"
+            ),
+            selected_esm_ecm=esm_ecm,
         )
         # (9.18) bond factor: good bond (ribbed, k1<=1.0) -> 0.9, poor (plain) -> 1.2.
         kb = 0.9 if float(k1_arr[i]) <= 1.0 else 1.2
         # (9.15) mean crack spacing = 1.5c + (kfl*kb/7.2)*(phi/rho), capped at
         # (1.3/kw)*(h-x). Cover and phi in mm.
-        sr = min(1.5 * c_i + kfl * kb / 7.2 * phi / rho, sr_cap)
+        spacing_formula = 1.5 * c_i + kfl * kb / 7.2 * phi / rho
+        sr = min(spacing_formula, sr_cap)
+        spacing_operands = CrackSpacing2023Operands(
+            cover=c_i,
+            diameter=phi,
+            rho_p_eff=rho,
+            cover_coefficient=1.5,
+            bond_coefficient_k1=float(k1_arr[i]),
+            bond_factor_kb=kb,
+            flexural_factor_raw=kfl_raw,
+            flexural_factor=kfl,
+            flexural_factor_method=kfl_method,
+            transformed_tension_depth=h_minus_xg,
+            cap_tension_depth=hx,
+            diameter_ratio_divisor=7.2,
+            formula_spacing=spacing_formula,
+            cap_spacing=sr_cap,
+            selected_candidate=(
+                "formula-9.15" if spacing_formula <= sr_cap
+                else "tension-zone-cap"
+            ),
+            selected_spacing=sr,
+        )
         k1r = hx / denom               # (9.9) curvature factor, >= 1
         wk = _KW_2023 * k1r * sr * esm_ecm
         candidates.append(CrackWidthCandidate(
@@ -1175,6 +1686,13 @@ def _crack_width_2023(
             reinforcement_type=str(kinds[i]),
             scope=CRACK_SCOPE_DOMINANT_DIRECTION,
             direction_deg=direction_deg,
+            equivalent_diameter=float(equivalent_phi_arr[i]),
+            diameter_source=str(diameter_source_arr[i]),
+            cover_source=("override" if cover is not None else "geometry"),
+            bond_coefficient=float(k1_arr[i]),
+            modular_ratio=alpha_e_i,
+            mean_strain_operands=mean_strain_operands,
+            spacing_operands=spacing_operands,
         ))
     result = _governing_crack(
         candidates,
@@ -1183,6 +1701,8 @@ def _crack_width_2023(
             for index, value in enumerate(rho_info.xi1_by_element)
             if in_band[index] and value is not None
         ],
+        effective_area_operands=effective_area_operands,
+        effective_reinforcement_2023=rho_info,
     )
     if result is None:
         return _not_assessed(

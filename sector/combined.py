@@ -26,6 +26,59 @@ from dataclasses import dataclass
 import numpy as np
 
 
+@dataclass(frozen=True, slots=True)
+class CrushingInteractionResult:
+    """Retained component ratios and result of Expression (6.29)."""
+
+    t_ed: float
+    trd_max: float
+    torsion_ratio: float
+    v_ed: float
+    vrd_max: float
+    shear_ratio: float
+    utilisation: float
+    ok: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GoverningStrutResult:
+    """Compact accepted state of the existing common-angle minimax scan.
+
+    No angle array or per-step history is retained.  ``selected_index`` identifies
+    the accepted point in the declared uniform band; component indices identify the
+    checks governing at that point.
+    """
+
+    cot: float
+    theta_deg: float
+    utilisation: float
+    cot_min: float
+    cot_max: float
+    samples: int
+    step: float
+    selected_index: int
+    objective_count: int
+    governing_component_indices: tuple[int, ...]
+    runner_up_utilisation: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class DknaInteractionResult:
+    """Retained DK NA component ratios, inclusion rule and governing chord."""
+
+    r_m: float
+    r_v: float
+    r_t: float
+    m_plus_t: float
+    v_plus_t: float
+    all_sum: float
+    m_v_independent: bool
+    inclusion_rule: str
+    governing_chord: str
+    utilisation: float
+    ok: bool
+
+
 def ratio(demand: float, resistance: float) -> float:
     """Utilisation ``demand / resistance``; ``inf`` when a demand has no resistance."""
     if resistance > 0.0:
@@ -33,10 +86,79 @@ def ratio(demand: float, resistance: float) -> float:
     return math.inf if demand > 0.0 else 0.0
 
 
+def crushing_interaction_result(
+    t_ed: float, trd_max: float, v_ed: float, vrd_max: float
+) -> CrushingInteractionResult:
+    """Return the two retained component ratios and final interaction result."""
+
+    torsion_ratio = ratio(t_ed, trd_max)
+    shear_ratio = ratio(v_ed, vrd_max)
+    utilisation = torsion_ratio + shear_ratio
+    return CrushingInteractionResult(
+        t_ed=t_ed,
+        trd_max=trd_max,
+        torsion_ratio=torsion_ratio,
+        v_ed=v_ed,
+        vrd_max=vrd_max,
+        shear_ratio=shear_ratio,
+        utilisation=utilisation,
+        ok=utilisation <= 1.0 + 1e-9,
+    )
+
+
 def crushing_interaction(t_ed: float, trd_max: float, v_ed: float,
                          vrd_max: float) -> float:
     """EN 1992-1-1 (6.29): ``TEd/TRd,max + VEd/VRd,max``."""
-    return ratio(t_ed, trd_max) + ratio(v_ed, vrd_max)
+    return crushing_interaction_result(t_ed, trd_max, v_ed, vrd_max).utilisation
+
+
+def governing_strut_result(
+    utils, cot_min: float, cot_max: float, n: int = 1501
+) -> GoverningStrutResult:
+    """Return the accepted common angle without retaining the raw angle scan."""
+
+    lo, hi = min(cot_min, cot_max), max(cot_min, cot_max)
+    samples = max(int(n), 2)
+    step = (hi - lo) / (samples - 1)
+    if not utils:
+        return GoverningStrutResult(
+            cot=lo,
+            theta_deg=math.degrees(math.atan2(1.0, lo)),
+            utilisation=0.0,
+            cot_min=lo,
+            cot_max=hi,
+            samples=samples,
+            step=step,
+            selected_index=0,
+            objective_count=0,
+            governing_component_indices=(),
+            runner_up_utilisation=None,
+        )
+    best = None
+    for i in range(samples):
+        cot = lo + step * i
+        vals = tuple(u(cot) for u in utils)
+        worst = max(vals)
+        key = (worst, sum(vals), cot)
+        if best is None or key < best[0]:
+            best = (key, i, cot, worst, vals)
+    _key, selected_index, cot, worst, vals = best
+    governing = tuple(i for i, value in enumerate(vals) if value == worst)
+    below_worst = sorted((value for value in vals if value < worst), reverse=True)
+    runner_up = below_worst[0] if below_worst else None
+    return GoverningStrutResult(
+        cot=cot,
+        theta_deg=math.degrees(math.atan2(1.0, cot)),
+        utilisation=worst,
+        cot_min=lo,
+        cot_max=hi,
+        samples=samples,
+        step=step,
+        selected_index=selected_index,
+        objective_count=len(utils),
+        governing_component_indices=governing,
+        runner_up_utilisation=runner_up,
+    )
 
 
 def governing_strut_cot(utils, cot_min: float, cot_max: float, n: int = 1501):
@@ -53,18 +175,8 @@ def governing_strut_cot(utils, cot_min: float, cot_max: float, n: int = 1501):
     ``cot`` (less longitudinal steel demand). Returns ``(cot, governing_util)``;
     with no callables the band's low edge is returned with utilisation 0.
     """
-    lo, hi = min(cot_min, cot_max), max(cot_min, cot_max)
-    if not utils:
-        return lo, 0.0
-    best = None
-    for i in range(max(int(n), 2)):
-        cot = lo + (hi - lo) * i / (max(int(n), 2) - 1)
-        vals = [u(cot) for u in utils]
-        worst = max(vals)
-        key = (worst, sum(vals), cot)
-        if best is None or key < best[0]:
-            best = (key, cot, worst)
-    return best[1], best[2]
+    result = governing_strut_result(utils, cot_min, cot_max, n)
+    return result.cot, result.utilisation
 
 
 def chord_applied_moment(m_signed: float, tension_low: bool) -> float:
@@ -115,6 +227,7 @@ def longitudinal_check(
     """
     mv_uncapped = ftd_v * z
     mt = ftd_t * z / 2.0
+    shear_headroom = max(m_rd - m_ed, 0.0)
     if m_rd <= 0.0:
         # No bending capacity about this axis remains -- the coexisting off-axis
         # moment exhausts the M-M envelope on this face. The 6.2.3(7) cap would
@@ -126,9 +239,12 @@ def longitudinal_check(
         return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,
                     mv=mv_uncapped, mt=mt, m_total=demand, util=util,
                     ok=util <= 1.0 + 1e-9, capped=False,
-                    cap_shear_force=cap_shear_force)
+                    cap_shear_force=cap_shear_force,
+                    mv_uncapped=mv_uncapped, shear_headroom=shear_headroom,
+                    shear_term_selection="zero-capacity uncapped demand",
+                    status="PASS" if util <= 1.0 + 1e-9 else "FAIL")
     mv = (
-        min(mv_uncapped, max(m_rd - m_ed, 0.0))
+        min(mv_uncapped, shear_headroom)
         if cap_shear_force else mv_uncapped
     )
     m_total = m_ed + mv + mt
@@ -137,7 +253,49 @@ def longitudinal_check(
                 mv=mv, mt=mt, m_total=m_total, util=util,
                 ok=util <= 1.0 + 1e-9,
                 capped=cap_shear_force and mv_uncapped > mv + 1e-9,
-                cap_shear_force=cap_shear_force)
+                cap_shear_force=cap_shear_force,
+                mv_uncapped=mv_uncapped, shear_headroom=shear_headroom,
+                shear_term_selection=(
+                    "capacity headroom cap"
+                    if cap_shear_force and mv_uncapped > mv + 1e-9
+                    else "uncapped"
+                ),
+                status="PASS" if util <= 1.0 + 1e-9 else "FAIL")
+
+
+def dkna_interaction_result(
+    r_m: float, r_v: float, r_t: float, *, m_v_independent: bool
+) -> DknaInteractionResult:
+    """Return the retained component sums and final DK NA inclusion branch."""
+
+    m_plus_t = r_m + r_t
+    v_plus_t = r_v + r_t
+    all_sum = r_m + r_v + r_t
+    if m_v_independent:
+        if m_plus_t >= v_plus_t:
+            utilisation = m_plus_t
+            governing = "M+T"
+        else:
+            utilisation = v_plus_t
+            governing = "V+T"
+        inclusion_rule = "M and V assessed independently; torsion included in both"
+    else:
+        utilisation = all_sum
+        governing = "M+V+T"
+        inclusion_rule = "M, V and T summed"
+    return DknaInteractionResult(
+        r_m=r_m,
+        r_v=r_v,
+        r_t=r_t,
+        m_plus_t=m_plus_t,
+        v_plus_t=v_plus_t,
+        all_sum=all_sum,
+        m_v_independent=m_v_independent,
+        inclusion_rule=inclusion_rule,
+        governing_chord=governing,
+        utilisation=utilisation,
+        ok=utilisation <= 1.0 + 1e-9,
+    )
 
 
 def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> float:
@@ -149,9 +307,9 @@ def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> fl
     together -- the governing of ``(r_m + r_t)`` and ``(r_v + r_t)`` is returned --
     otherwise all three are summed.
     """
-    if m_v_independent:
-        return max(r_m + r_t, r_v + r_t)
-    return r_m + r_v + r_t
+    return dkna_interaction_result(
+        r_m, r_v, r_t, m_v_independent=m_v_independent
+    ).utilisation
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,6 +7,7 @@ engineering solvers.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import math
 
 import case_analysis
@@ -16,10 +17,282 @@ import viz
 from sector import detailing
 from sector.design_standards import get_design_basis
 
-_MM = 1000.0
 _DEGREE = chr(0x00B0)
 _THETA = chr(0x03B8)
 _RHO = chr(0x03C1)
+
+_SINGLE_CASE_ID = "__single__"
+
+
+def _publication_metric(value, *, allow_positive_infinity=False):
+    """Return one eligible retained publication-ranking metric."""
+    if value is None:
+        return None
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isfinite(metric):
+        return metric
+    if allow_positive_infinity and metric == math.inf:
+        return metric
+    return None
+
+
+def _publication_cases(out, family):
+    """Return ordered named-case result payloads for one analysis family."""
+    entries = (out or {}).get(f"{family}_cases")
+    if entries is None:
+        return [(_SINGLE_CASE_ID, out or {})]
+    cases = []
+    for entry in entries:
+        name = str(entry.get("name") or (entry.get("actions") or {}).get("name") or "")
+        if name:
+            cases.append((name, entry.get("results") or {}))
+    return cases
+
+
+def _transverse_metric(family, result):
+    """Rank an already-computed shear, torsion or combined result."""
+    def shear_metric(item):
+        links = item.get("links") or {}
+        if links:
+            if not (links.get("res") or {}).get("valid"):
+                return None
+            return _publication_metric(
+                links.get("util"), allow_positive_infinity=True
+            )
+        if not (item.get("res") or {}).get("valid"):
+            return None
+        return _publication_metric(item.get("util"), allow_positive_infinity=True)
+
+    def combined_metric(item):
+        if not item.get("valid"):
+            return None
+        return _publication_metric(
+            item.get("dkna_sum"), allow_positive_infinity=True
+        )
+
+    directions = result.get("directions") or {}
+    if family in {"shear", "combined"}:
+        items = [directions[key] for key in ("vx", "vy") if key in directions]
+        if not items:
+            items = [result]
+        extractor = shear_metric if family == "shear" else combined_metric
+        values = [metric for item in items if (metric := extractor(item)) is not None]
+    else:
+        metric = (
+            _publication_metric(result.get("util"), allow_positive_infinity=True)
+            if result.get("valid") else None
+        )
+        values = [] if metric is None else [metric]
+    return max(values) if values else None
+
+
+def _transverse_direction(family, result):
+    """Return the retained governing direction, with first-direction tie-break."""
+    best = None
+    for order, component in enumerate(("vx", "vy")):
+        item = (result.get("directions") or {}).get(component)
+        if not item:
+            continue
+        metric = _transverse_metric(family, item)
+        if metric is None:
+            continue
+        score = (metric, -order)
+        if best is None or score > best[0]:
+            best = (score, component)
+    return None if best is None else best[1]
+
+
+def _worked_family_selection(out, family):
+    """Select one named case and any required direction for a worked family."""
+    context_family = "plastic" if family in {"shear", "torsion", "combined"} else family
+    best = None
+    for order, (case_id, case_out) in enumerate(_publication_cases(out, context_family)):
+        result = case_out.get(family)
+        if not result:
+            continue
+        direction = None
+        if family == "plastic":
+            if not result.get("converged"):
+                continue
+            utilisation = _publication_metric(
+                result.get("util"), allow_positive_infinity=True
+            )
+            if utilisation is not None:
+                score = (2, utilisation, -order)
+            else:
+                values = [
+                    metric
+                    for name in ("max_mx", "min_mx", "max_my", "min_my")
+                    if (metric := _publication_metric(result.get(name))) is not None
+                ]
+                if not values:
+                    continue
+                score = (1, max(abs(value) for value in values), -order)
+        elif family in {"shear", "torsion", "combined"}:
+            metric = _transverse_metric(family, result)
+            if metric is None:
+                continue
+            score = (2, metric, -order)
+            if family in {"shear", "combined"} and result.get("directions"):
+                direction = _transverse_direction(family, result)
+                if direction is None:
+                    continue
+        else:
+            if not result.get("converged"):
+                continue
+            values = [
+                metric
+                for name in ("max_conc", "max_steel")
+                if (metric := _publication_metric(result.get(name))) is not None
+            ]
+            if not values:
+                continue
+            score = (1, max(abs(value) for value in values), -order)
+        if best is None or score > best[0]:
+            best = (score, {"case_id": case_id, "component": direction})
+    return None if best is None else best[1]
+
+
+def _worked_check_selection(out, key):
+    """Select one named detailing case from retained check utilisations."""
+    best = None
+    for order, (case_id, case_out) in enumerate(_publication_cases(out, "plastic")):
+        result = case_out.get(key)
+        if not result:
+            continue
+        values = [
+            metric
+            for check in result.get("checks") or ()
+            if check.get("status") in {"PASS", "FAIL"}
+            and (metric := _publication_metric(
+                check.get("utilisation"), allow_positive_infinity=True
+            )) is not None
+        ]
+        stored = _publication_metric(
+            result.get("governing_utilisation"), allow_positive_infinity=True
+        )
+        if result.get("status") in {"PASS", "FAIL"} and stored is not None:
+            values.append(stored)
+        if not values:
+            continue
+        score = (max(values), -order)
+        if best is None or score > best[0]:
+            best = (score, {"case_id": case_id})
+    return None if best is None else best[1]
+
+
+def _worked_crack_selection(out):
+    """Select the global ordinary or fine/coarse crack-width branches."""
+    cases = _publication_cases(out, "elastic")
+    has_coarse = any(
+        (case_out.get("elastic") or {}).get(key) is not None
+        for _, case_out in cases
+        for key in ("crack_coarse", "crack_short_coarse")
+    )
+    systems = (
+        (
+            ("fine", (("crack", "long-term (fine)"),
+                      ("crack_short", "short-term (fine)"))),
+            ("coarse", (("crack_coarse", "long-term (coarse)"),
+                        ("crack_short_coarse", "short-term (coarse)"))),
+        )
+        if has_coarse else
+        (("governing", (("crack", "long-term"),
+                        ("crack_short", "short-term"))),)
+    )
+    selected = []
+    for system, branches in systems:
+        best = None
+        for case_order, (case_id, case_out) in enumerate(cases):
+            elastic = case_out.get("elastic") or {}
+            if not elastic.get("converged"):
+                continue
+            for branch_order, (branch, label) in enumerate(branches):
+                crack = elastic.get(branch)
+                value = _publication_metric((crack or {}).get("wk"))
+                if value is None or value < 0.0:
+                    continue
+                score = (value, -case_order, -branch_order)
+                if best is None or score > best[0]:
+                    best = (score, {
+                        "case_id": case_id,
+                        "system": system,
+                        "branch": branch,
+                        "label": label,
+                    })
+        if best is not None:
+            selected.append(best[1])
+    return selected
+
+
+def _cracking_threshold_selection(out):
+    best = None
+    for order, (case_id, case_out) in enumerate(_publication_cases(out, "elastic")):
+        elastic = case_out.get("elastic") or {}
+        value = _publication_metric(elastic.get("lambda_cr"))
+        if not elastic.get("converged") or value is None or value < 0.0:
+            continue
+        score = (-value, -order)
+        if best is None or score > best[0]:
+            best = (score, {"case_id": case_id})
+    return None if best is None else best[1]
+
+
+def _torsion_subcheck_selection(out):
+    """Select each valid retained torsion subcheck, accepting governing +inf."""
+    selected = {}
+    for case_order, (case_id, case_out) in enumerate(_publication_cases(out, "plastic")):
+        torsion = case_out.get("torsion") or {}
+        directional = torsion.get("directional_interactions") or {}
+        items = [(key, directional[key]) for key in ("vx", "vy") if key in directional]
+        if not items:
+            items = [(None, torsion)]
+        for direction_order, (component, item) in enumerate(items):
+            for key, payload_key, eligible in (
+                ("interaction", "interaction", lambda value: value.get("valid")),
+                ("minimum_reinforcement", "min_reinf",
+                 lambda value: value.get("applicable")),
+            ):
+                payload = item.get(payload_key) or {}
+                value = _publication_metric(
+                    payload.get("value"), allow_positive_infinity=True
+                )
+                if not eligible(payload) or value is None:
+                    continue
+                score = (value, -case_order, -direction_order)
+                if key not in selected or score > selected[key][0]:
+                    selected[key] = (score, {
+                        "case_id": case_id,
+                        "component": component,
+                    })
+    return {key: item[1] for key, item in selected.items()}
+
+
+def worked_example_selection(inp, out):
+    """Build the bounded, family-specific worked-example publication contract.
+
+    This is called once after analysis assembly. It selects identities only and
+    never changes or recomputes an engineering result.
+    """
+    del inp  # reserved for future publication options; results own all rankings
+    families = {
+        family: _worked_family_selection(out, family)
+        for family in ("plastic", "elastic", "shear", "torsion", "combined")
+    }
+    families.update({
+        key: _worked_check_selection(out, key)
+        for key in ("minimum_reinforcement", "transverse_reinforcement")
+    })
+    return {
+        "schema": 1,
+        "families": {key: value for key, value in families.items() if value is not None},
+        "crack_examples": _worked_crack_selection(out),
+        "cracking_threshold": _cracking_threshold_selection(out),
+        "torsion_subchecks": _torsion_subcheck_selection(out),
+    }
 
 
 def plastic_action_assessment(pl):
@@ -90,116 +363,20 @@ def plastic_assessment_text(assessment):
     return " | ".join(parts)
 
 
-def plastic_state_evidence(inp, point):
-    """Build concrete-corner and reinforcement evidence at one plastic state.
+def plastic_state_rows(point):
+    """Return retained rows for one accepted plastic state.
 
-    Strain and stress are tension-positive. Reinforcement force is derived only
-    for presentation from the solver-consistent material law:
-    ``F [kN] = sigma [MPa] * A [mm2] / 1000``.
+    The calculation family has already evaluated every material response.  This
+    helper only exposes those immutable rows and reconstructs the neutral-axis
+    line used for drawing; it never calls a material law or repeats a solver.
     """
-    hp = viz.plastic_halfplane(
-        point["V"], point["na_x"], point["na_y"],
-    )
-    a, b, c = hp
-    kappa = float(point["kappa"])
 
-    concrete_rows = []
-    point_no = 0
-    rings = [("Outer", inp.get("outer") or [])]
-    rings.extend(
-        (f"Hole {index}", ring)
-        for index, ring in enumerate(inp.get("holes") or [], start=1)
-    )
-    concrete = inp.get("concrete")
-    for ring_name, ring in rings:
-        for ring_point_no, vertex in enumerate(ring, start=1):
-            point_no += 1
-            x, y = float(vertex[0]), float(vertex[1])
-            strain = -kappa * (a * x + b * y + c)
-            stress = concrete.stress(strain, design=True) if concrete is not None else 0.0
-            concrete_rows.append({
-                "point_no": point_no,
-                "ring": ring_name,
-                "ring_point_no": ring_point_no,
-                "x_mm": x * _MM,
-                "y_mm": y * _MM,
-                "strain_permille": strain * _MM,
-                "stress_mpa": stress,
-            })
-
-    element_rows = []
-
-    def append_elements(points, element_type, material, prestrain=0.0, ids=None,
-                        material_ids=None, material_names=None):
-        points = list(points or [])
-        if material is None:
-            return
-        materials = (list(material) if isinstance(material, (list, tuple))
-                     else [material] * len(points))
-        prestrains = (list(prestrain) if isinstance(prestrain, (list, tuple))
-                      else [prestrain] * len(points))
-        if len(materials) != len(points) or len(prestrains) != len(points):
-            raise ValueError("one material and prestrain are required per element")
-        for element_no, (element, law, initial) in enumerate(
-                zip(points, materials, prestrains), start=1):
-            x, y = float(element[0]), float(element[1])
-            area = float(element[2]) if len(element) > 2 else 0.0
-            strain = initial - kappa * (a * x + b * y + c)
-            stress = law.stress(strain, design=True)
-            state = ("Tension" if strain > 1e-12 else
-                     "Compression" if strain < -1e-12 else "Neutral")
-            element_rows.append({
-                "element_type": element_type,
-                "element_no": element_no,
-                "element_id": (str(ids[element_no - 1])
-                               if ids and element_no <= len(ids)
-                               else f"{element_type.lower()} {element_no}"),
-                "material_id": (str(material_ids[element_no - 1])
-                                if material_ids and element_no <= len(material_ids)
-                                else None),
-                "material_name": (str(material_names[element_no - 1])
-                                  if material_names and element_no <= len(material_names)
-                                  else None),
-                "state": state,
-                "x_mm": x * _MM,
-                "y_mm": y * _MM,
-                "area_mm2": area,
-                "strain_permille": strain * _MM,
-                "stress_mpa": stress,
-                "force_kn": stress * area / _MM,
-            })
-
-    bar_ids = [item.get("id") for item in inp.get("bar_elements", [])]
-    tendon_ids = [item.get("id") for item in inp.get("tendon_elements", [])]
-    bar_material_ids = [item.get("material_id")
-                        for item in inp.get("bar_elements", [])]
-    tendon_material_ids = [item.get("material_id")
-                           for item in inp.get("tendon_elements", [])]
-    mild_names = {item.get("id"): item.get("name") for item in
-                  (inp.get("mild_material_catalog") or {}).get("items", [])}
-    prestress_names = {item.get("id"): item.get("name") for item in
-                       (inp.get("prestress_material_catalog") or {}).get("items", [])}
-    append_elements(
-        inp.get("bars"), "Bar", inp.get("bar_materials") or inp.get("steel"),
-        ids=bar_ids, material_ids=bar_material_ids,
-        material_names=[mild_names.get(value) for value in bar_material_ids],
-    )
-    prestress = inp.get("prestress")
-    append_elements(
-        inp.get("tendons"),
-        "Tendon",
-        inp.get("tendon_materials") or prestress,
-        ([material.IS for material in inp.get("tendon_materials", [])]
-         if inp.get("tendon_materials") else
-         float(getattr(prestress, "IS", 0.0)) if prestress is not None else 0.0),
-        ids=tendon_ids,
-        material_ids=tendon_material_ids,
-        material_names=[prestress_names.get(value) for value in tendon_material_ids],
-    )
     return {
-        "halfplane": hp,
-        "concrete": concrete_rows,
-        "elements": element_rows,
+        "halfplane": viz.plastic_halfplane(
+            point["V"], point["na_x"], point["na_y"],
+        ),
+        "concrete": list(point.get("concrete_corner_states") or ()),
+        "elements": list(point.get("reinforcement_states") or ()),
     }
 
 
@@ -360,14 +537,10 @@ def required_chord_candidates(payload):
 
 
 def required_chord_fallback(payload):
-    """Return the first required face using a pure-axis fallback, if any."""
-    return next(
-        (
-            item for item in required_chord_candidates(payload)
-            if not item.get("conditional", True)
-        ),
-        None,
-    )
+    """Return the retained required face using a pure-axis fallback, if any."""
+    payload = payload or {}
+    fallback = payload.get("longitudinal_fallback")
+    return fallback if isinstance(fallback, dict) else None
 
 
 def combined_physical_components(combined):
@@ -442,31 +615,14 @@ def combined_physical_components(combined):
     longitudinal = combined.get("longitudinal")
     chord_off = combined.get("chord_off")
 
-    def candidate_util(item):
-        value = item.get("util")
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            return -math.inf
-        return -math.inf if math.isnan(value) else value
-
-    candidates = required_chord_candidates(combined)
-    governing = (
-        max(candidates, key=candidate_util)
-        if candidates else None
-    )
-    required_candidates = candidates
+    governing = combined.get("governing_longitudinal")
+    if not isinstance(governing, dict) or not governing.get("valid"):
+        governing = None
     coverage = (
         longitudinal.get("off_not_evaluated")
         if longitudinal is not None else None
     )
-    conditional = bool(
-        governing is not None
-        and all(
-            item.get("conditional", True)
-            for item in required_candidates
-        )
-    )
+    conditional = bool(combined.get("longitudinal_all_conditional"))
     main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
     long_valid = governing is not None and main_valid
     long_util = governing.get("util") if governing is not None else None
@@ -485,13 +641,7 @@ def combined_physical_components(combined):
         )
     elif not conditional:
         long_status = "NOT ASSESSED"
-        fallback = next(
-            (
-                item for item in required_candidates
-                if not item.get("conditional", True)
-            ),
-            {},
-        )
+        fallback = required_chord_fallback(combined) or {}
         face = "negative" if fallback.get("tension_low", True) else "positive"
         long_note = (
             f"Required {fallback.get('axis', '?')}-axis {face} face uses "
@@ -653,6 +803,32 @@ def result_summary_rows(inp, results, *, stale=False):
                     None, "Elastic Results",
                     output.get("governing") or output.get("quantity") or "", inp,
                 ))
+        try:
+            lambda_cr = float(elastic.get("lambda_cr"))
+        except (TypeError, ValueError):
+            lambda_cr = None
+        if lambda_cr is not None and not math.isfinite(lambda_cr):
+            lambda_cr = None
+        if not converged:
+            cracking_status = "INVALID"
+            cracking_result = "-"
+            cracking_note = "Solver did not converge"
+        elif lambda_cr is None:
+            cracking_status = "NOT CALCULATED"
+            cracking_result = "-"
+            cracking_note = "No cracking-threshold result returned"
+        else:
+            cracking_status = "CALCULATED"
+            cracking_state = (
+                "cracked" if elastic.get("cracked") else "uncracked"
+            )
+            cracking_result = f"lambda_cr {lambda_cr:.3f}; {cracking_state}"
+            cracking_note = "Stage-I cracking threshold/state"
+        rows.append(_summary_row(
+            "Cracking threshold/state", "elastic", cracking_status,
+            cracking_result, "Output only", None, "Elastic Results",
+            cracking_note, inp,
+        ))
         if elastic.get("show_cw") or inp.get("sls_cw"):
             output = elastic.get("crack_output") or {}
             status = (

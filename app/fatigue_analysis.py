@@ -1117,6 +1117,125 @@ def analysis_signature(inp: Mapping) -> tuple:
     )
 
 
+def _worked_example_metric(value: object) -> float | None:
+    """Return an eligible retained utilisation for publication selection."""
+
+    try:
+        metric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(metric) or metric == -math.inf or metric < 0.0:
+        return None
+    return metric
+
+
+def _global_reinforcement_example(results: Sequence[object]) -> dict | None:
+    """Select one authoritative reinforcement example across all spectra."""
+
+    best = None
+    for spectrum_order, spectrum in enumerate(results):
+        states = tuple(getattr(spectrum, "bins", ()) or ())
+        if not states or not all(
+            bool(getattr(state, "converged", False)) for state in states
+        ):
+            continue
+        element_id = getattr(spectrum, "governing_reinforcement_id", None)
+        if element_id is None:
+            continue
+        selected = next(
+            (
+                item
+                for item in tuple(getattr(spectrum, "reinforcement", ()) or ())
+                if getattr(item, "element_id", None) == element_id
+            ),
+            None,
+        )
+        if selected is None or not bool(getattr(selected, "converged", False)):
+            continue
+        metric = _worked_example_metric(getattr(selected, "utilisation", None))
+        if metric is None:
+            continue
+        score = (metric, -spectrum_order)
+        if best is None or score > best[0]:
+            best = (score, spectrum, selected)
+    if best is None:
+        return None
+    score, spectrum, selected = best
+    return {
+        "spectrum_name": str(getattr(spectrum, "spectrum_name")),
+        "element_id": str(getattr(selected, "element_id")),
+        "utilisation": score[0],
+        "criterion": str(getattr(selected, "governing_criterion", "")),
+        "bin_name": str(getattr(selected, "governing_bin", "")),
+    }
+
+
+def _global_concrete_example(results: Sequence[object]) -> dict | None:
+    """Select one authoritative concrete example across all spectra."""
+
+    best = None
+    for spectrum_order, spectrum in enumerate(results):
+        states = tuple(getattr(spectrum, "bins", ()) or ())
+        if not states or not all(
+            bool(getattr(state, "converged", False)) for state in states
+        ):
+            continue
+        fibre_index = getattr(spectrum, "governing_concrete_fibre", None)
+        if fibre_index is None:
+            continue
+        selected = next(
+            (
+                item
+                for item in tuple(getattr(spectrum, "concrete", ()) or ())
+                if getattr(item, "fibre_index", None) == fibre_index
+            ),
+            None,
+        )
+        if selected is None or not bool(getattr(selected, "converged", False)):
+            continue
+        fixed_metric = _worked_example_metric(
+            getattr(selected, "utilisation", None)
+        )
+        if fixed_metric is None:
+            continue
+        search = getattr(spectrum, "concrete_search", None)
+        if search is not None and not bool(getattr(search, "converged", False)):
+            continue
+        search_metric = (
+            _worked_example_metric(getattr(search, "upper_damage", None))
+            if search is not None else None
+        )
+        if search is not None and search_metric is None:
+            continue
+        search_governs = bool(
+            search_metric is not None and search_metric > fixed_metric
+        )
+        metric = search_metric if search_governs else fixed_metric
+        score = (metric, -spectrum_order)
+        if best is None or score > best[0]:
+            best = (score, spectrum, selected, search_governs)
+    if best is None:
+        return None
+    score, spectrum, selected, search_governs = best
+    method = str(getattr(spectrum, "concrete_method", ""))
+    if search_governs:
+        criterion = (
+            "Equivalent amplitude upper bound"
+            if method == CONCRETE_EQUIVALENT
+            else "Miner damage upper bound"
+        )
+    else:
+        criterion = str(getattr(selected, "governing_criterion", ""))
+    return {
+        "spectrum_name": str(getattr(spectrum, "spectrum_name")),
+        "fibre_index": int(getattr(selected, "fibre_index")),
+        "utilisation": score[0],
+        "criterion": criterion,
+        "bin_name": str(getattr(selected, "governing_bin", "")),
+        "search_upper_bound_governs": search_governs,
+    }
+
+
 def run_analysis(
     inp: Mapping,
     *,
@@ -1145,6 +1264,8 @@ def run_analysis(
         prestress_stress=prepared.prestress_stress,
     ))
     governing = max(results, key=lambda result: result.utilisation)
+    governing_reinforcement_example = _global_reinforcement_example(results)
+    governing_concrete_example = _global_concrete_example(results)
     references = calculation_references(
         prepared.basis_key,
         prepared.concrete_method or CONCRETE_MINER,
@@ -1224,6 +1345,8 @@ def run_analysis(
         "elements": prepared.element_records,
         "spectra": results,
         "governing_spectrum": governing.spectrum_name,
+        "governing_reinforcement_example": governing_reinforcement_example,
+        "governing_concrete_example": governing_concrete_example,
         "utilisation": governing.utilisation,
         "converged": all(result.converged for result in results),
         "passed": all(result.passed for result in results),

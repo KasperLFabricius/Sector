@@ -5,8 +5,8 @@
 Sector 0.93 will be a robust source/application release with an additional
 unsigned portable Windows application. The programme corrects input behaviour,
 removes component-mapped bridge calculations that Sector cannot support
-honestly, expands crack-control calculations, completes numerical calculation
-evidence, and redesigns the user interface, manual and reports for efficient
+honestly, expands crack-control calculations, completes numerical substitutions,
+and redesigns the user interface, manual and reports for efficient
 engineering review.
 
 This is an implementation and publication programme. It does not make Sector a
@@ -30,8 +30,8 @@ slices stay planned.
 | Order | Slice | Depends on | Status |
 |---|---|---|---|
 | 1 | PR-01 - Programme, decisions and acceptance freeze | v0.92 baseline | Merged |
-| 2 | PR-02 - Bridge scope reset, schema 24 and design-standard registry | PR-01 | In progress |
-| 3 | PR-03 - Textbook calculation evidence and complete substitutions | PR-02 | Planned |
+| 2 | PR-02 - Bridge scope reset, schema 24 and design-standard registry | PR-01 | Merged |
+| 3 | PR-03 - Textbook worked calculations and complete substitutions | PR-02 | In progress |
 | 4 | PR-04 - Input correctness, reusable IDs and mathematical table guides | PR-02 | Planned |
 | 5 | PR-05 - Stateful input tabs and explicit modelled direction | PR-04 | Planned |
 | 6 | PR-06 - Optional crack criterion and DK/NA heightened check | PR-03, PR-04, PR-05 | Planned |
@@ -187,7 +187,7 @@ licensed visual formula, reconciliation against the symbol definitions and
 dimensions, and an independently calculated benchmark before code review. OCR
 text must never be copied directly into the solver.
 
-### 2.6 Textbook calculation evidence and numerical substitution
+### 2.6 Textbook worked calculations and numerical substitution
 
 Sector already owns a strong equation-contract spine. The report has 62 known
 equation contracts and the manual has a fail-closed inventory of 32 Part-C
@@ -206,25 +206,35 @@ or introduce rounding disagreement.
 Crack spacing is the example that exposed the defect, not the scope boundary.
 The required outcome applies to geometry properties, elastic and cracked
 section response, plastic resistance/envelopes, shear, torsion, interaction,
-detailing, fatigue, ordinary crack width, heightened crack control and every
-other calculation family published by Sector. A reader must not need prior
+detailing, fatigue, ordinary crack width and every other existing calculation
+family published by Sector. A reader must not need prior
 experience with the formula sequence to understand how Sector moved from the
 input values to the reported result.
 
-The v0.93 evidence model therefore records immutable typed steps at calculation
-time. Each step contains:
+PR-03 is a publication-completeness change for calculations Sector already
+performs. It must not revive the calculation-trace programme retired after the
+previous PR-08. There is no new cross-family trace/evidence data contract,
+trace payload, trace view, switch, appendix, generic calculation DAG, parallel
+calculation engine, persisted calculation history or raw iteration log.
 
-- stable calculation and equation identity;
-- selected branch and applicability facts;
-- full-precision named operands with units;
-- symbolic expression identity;
-- numerical substitution values;
-- full-precision result with unit;
-- standard/clause source; and
-- warnings or limiting/capping decision.
+The existing calculation result remains the authority. Where a solver currently
+discards a meaningful interim value, the owning family result is extended with
+the smallest explicit named field or family-specific immutable record needed to
+publish that value. Report code may select, order, round and format those retained
+fields; it may not rerun a material law, reconstruct an operand from rounded text,
+repeat a search or choose a governing branch. Dict-heavy families may be made
+more explicit within their existing result boundary, but do not feed a second
+generic tracing subsystem.
 
-The Standard and Audit reports then present each requested calculation in a
-consistent textbook sequence:
+Every calculated case remains visible in the consolidated result summaries, but
+the report publishes a complete textbook derivation only for the globally
+governing or extremal result in each calculation family. This prevents repeated
+load cases from turning the report into many copies of the same method. The
+first-generation DK/NA crack-width route is the deliberate exception: it
+publishes one globally governing fine-system example and one globally governing
+coarse-system example because they are distinct calculation branches. PR-07B
+later applies density profiles without changing this selection rule or the
+following sequence for each selected worked example:
 
 1. **Question.** State the quantity/check being calculated and, where one
    exists, the criterion being tested.
@@ -240,49 +250,53 @@ consistent textbook sequence:
 6. **Interim result.** State the value, unit and sufficient precision for the
    following step. If a min/max/cap governs, show every candidate and the chosen
    value.
-7. **Numerical solution evidence.** For iterative or search-based methods, show
-   the equation/state being solved, domain or initial bracket, tolerances,
-   refinement/convergence rule, accepted solution, residual and governing
-   physical branch. Do not print thousands of internal trials unless they are
-   necessary to diagnose a failure.
+7. **Numerical solution summary.** For iterative or search-based methods, show
+   the equation or method, declared range/tolerance or selection rule, accepted
+   engineering state and final residual or gap where already retained or needed
+   to establish validity. Do not add iteration/evaluation telemetry solely for
+   publication, and never retain or print the internal trial history.
 8. **Final result and criterion.** Show demand/result, resistance/limit where
    present, ratio or margin, controlled status and governing case.
 9. **Interpretation and scope.** Explain in plain engineering language what the
    result means and what Sector has not assessed, without adding a global
    compliance conclusion.
 
-Brief reports intentionally summarize rather than reproduce the whole chain,
-but state that derivations are omitted by the selected profile. Standard and
-Audit must both be independently followable from start to finish; Audit adds
-full precision, branch metadata, hashes and non-governing evidence.
+The default report must be independently followable from start to finish. Its
+overview identifies every calculated case and the selected governing cases;
+the complete chains then teach each implemented method once. PR-07B later lets
+Brief summarize the derivation and Audit add precision or wider compact result
+tables without duplicating full non-governing derivations or changing any
+calculation result.
 
 The initial family inventory freezes the minimum migration boundary:
 
-| Calculation family | Current publication strength | Missing student-readable evidence required in v0.93 |
+| Calculation family | Current publication strength | Missing student-readable content required in v0.93 |
 |---|---|---|
 | Materials, geometry and prestress | Material tables and selected design-strength substitutions exist. | Workline evaluations; prestress strain/stress/force; transformed area, first/second moments, centroid, modular ratios and effective geometry, all linked to source inputs. |
-| Plastic resistance and envelopes | Result/envelope/strain/resultant tables exist; axial equilibrium is substituted. | Strain plane, limit-curvature candidates, neutral-axis/root solution, concrete/steel force and moment sums, axial residual/tolerance, angular sweep, ray intersection/interpolation and governing-point selection. |
-| Elastic and cracked response | Stress, property and element tables exist. | Modular ratios, transformed matrix/centroid, equivalent prestress actions, strain-plane/resultant equations, matrix condition, cracked active zone, iteration tolerance/residual and long/short/difference state chain. |
-| Ordinary and heightened crack control | Cracking/final width substitutions and rich candidate tables exist. | Stage-I threshold chain, effective area/ratio, selected reinforcement/prestress, cover/equivalent diameter, all coefficients and candidates, spacing/strain branches, caps, tie rationale, width comparison and complete Formula 7.100 NA chain. |
-| Shear | Most 2005/2023 resistance equations already substitute. | Effective geometry/steel derivations, explicit numerical governing min/max, per-face provenance and cotangent search bounds, candidates, objective and tie rule. |
-| Torsion | Main steel/crushing/cracking/utilisation substitutions exist. | Effective torsion geometry, stiffness torque distribution, complete subtube chains, numerical governing selections and cotangent search evidence. |
+| Plastic resistance and envelopes | Result/envelope/strain/resultant tables exist; axial equilibrium is substituted. | Strain plane, governing curvature, accepted neutral-axis state, concrete/steel force and moment sums, axial residual/tolerance and governing-point selection. |
+| Elastic and cracked response | Stress, property and element tables exist. | Modular ratios, transformed matrix/centroid, equivalent prestress actions, strain-plane/resultant equations, final equilibrium residual, cracked active zone and long/short/difference state chain. |
+| Ordinary crack control | Cracking/final width substitutions and rich candidate tables exist. | Stage-I threshold chain, effective area/ratio, selected reinforcement/prestress, cover/equivalent diameter, all coefficients and candidates, spacing/strain branches, caps and governing choice. PR-06 separately adds the optional comparison and heightened Formula 7.100 NA calculation in this same worked-example style. |
+| Shear | Most 2005/2023 resistance equations already substitute. | Effective geometry/steel derivations, explicit numerical governing min/max, per-face provenance, permitted cotangent range, selected angle and selection rule. |
+| Torsion | Main steel/crushing/cracking/utilisation substitutions exist. | Effective torsion geometry, stiffness torque distribution, complete subtube chains, numerical governing selections, permitted cotangent range and selected angle. |
 | Combined M-V-T | Main interaction/chord expressions substitute. | Component source-node references, inclusion/zero rules, all component ratios, Danish-sum substitution and independent direction/face/angle selections. |
 | Minimum reinforcement and detailing | Result tables and mostly symbolic equations exist. | All 2005/2023 area/resistance candidates, link ratio, transverse spacing, clear-spacing max candidates, selected bars/area/direction/tension face and deterministic governing-pair selection. |
-| Fatigue | Typed bin/life/fibre-search result hierarchy and detailed tables exist. | Numerical Miner chains, S-N branch/exponent/life/damage per governing bin, concrete fatigue strength/normalized stress/life, sums/criteria and bounded fibre-search termination/selection evidence. |
+| Fatigue | Typed bin/life/fibre-search result hierarchy and detailed tables exist. | Numerical Miner chains, S-N branch/exponent/life/damage per governing bin, concrete fatigue strength/normalized stress/life, sums/criteria and the compact governing fibre/selection already retained by the calculation result. |
 | Bridge-specific publication | Current component-mapped tables contain equations/results without full substitutions. | Remove the mapped workflows under PR-02. Any retained mapping-free calculation must satisfy the same chain contract; no effort is spent expanding a calculation being removed. |
 
-For numerical searches, Standard shows the governing solution and compact
-near-governing candidates; Audit adds the bounded candidate/search summary.
-Neither profile publishes raw debug iterations. The result model records enough
-evidence to prove convergence and deterministic selection without turning the
-report into an implementation log.
+For numerical searches, the current report shows the governing solution and a
+compact summary of the method, declared range/tolerance or selection rule,
+accepted state and final residual or gap where those facts already exist or are
+needed to explain validity. PR-03 does not add iteration/evaluation counters for
+publication. Raw debug iterations, full angle arrays, integration bands and
+branch-and-bound box histories are not retained or published.
 
-The report is a consumer of this evidence, not a second calculator. At minimum,
+The report is a consumer of existing calculation results, not a second
+calculator. At minimum,
 both crack editions publish effective tension area, reinforcement ratio, each
 spacing term, raw and limited spacing where relevant, mean steel/concrete strain
 terms, tension stiffening, final spacing, final strain difference, crack width
-and optional comparison. Formula 7.100 NA publishes its complete dependency
-chain in the same way.
+without an optional comparison until PR-06 supplies one. Formula 7.100 NA is
+implemented and published later under PR-06, using the same reading sequence.
 
 The inventory audit covers every calculation chapter, not only the currently
 known omissions in crack control, detailing, links, shear and torsion. Basis
@@ -429,7 +443,8 @@ The crack chapter must distinguish:
 
 A worked example is not a screenshot of a final number. It states the section,
 materials, actions, edition and assumptions, then publishes the complete
-calculation chain using the same evidence objects as the Audit report. At least
+calculation chain using the same existing calculation result fields as the Audit
+report. At least
 one ordinary crack example per edition and one DK heightened example are
 included. Expected values carry tolerances and independent source notes.
 
@@ -490,7 +505,7 @@ The reference report supplies concrete failure cases for the redesign:
 | 3-4 and 27 | Internal `EQ-*` keys and text equations are visible to ordinary readers. | Show user-facing publication numbers/titles; retain internal keys only as Audit metadata. |
 | 27 and 35 | Approximately 5 and 7 percent ink coverage follows over-broad keep-together rules. | Keep equation/substitution/result together but permit notation/prose to continue normally. |
 | 42 | The report honestly states that crack width was calculated without a criterion. | Preserve the distinction using the controlled `CALCULATED - ACCEPTANCE NOT ASSESSED` state. |
-| 43 | Crack spacing and mean-strain equations omit numerical substitution. | Publish every operand, substitution and interim result from typed solver evidence. |
+| 43 | Crack spacing and mean-strain equations omit numerical substitution. | Retain the missing values in the existing crack result and publish every operand, substitution and interim result. |
 | 49-54 | Fatigue detail is useful for audit but excessive for ordinary review. | Brief shows governing status; Standard shows spectrum/governing element; Audit retains bins and damage chains. |
 | 55 | Component-mapped bridge checks remain visible. | Remove them completely under PR-02. |
 | 56 | The QA appendix is a continuous bullet wall. | Replace it with a structured basis register: standard, edition, clause, option/NDP, assumption, limitation and affected result. |
@@ -714,13 +729,15 @@ Acceptance:
 Tests: project I/O, bridge absence, result freshness, registry, app smoke,
 report/manual absence, version identity and directly affected static checks.
 
-### PR-03 - Textbook calculation evidence and complete substitutions
+### PR-03 - Textbook worked calculations and complete substitutions
+
+Acceptance record: [PR-03 textbook-publication acceptance](pr03_v093_textbook_calculation_publication_acceptance.md).
 
 Scope:
 
-- introduce a typed solver-owned calculation-step evidence model;
 - inventory every published calculation family from inputs to result;
-- retain every operand and selected branch needed for exact calculation traces;
+- extend only the existing family results where a meaningful interim operand or
+  selected branch is currently discarded;
 - classify equations as theory relations or live calculation steps;
 - require substitution/result/unit for every live step;
 - complete both crack-spacing and mean-strain chains; and
@@ -730,20 +747,27 @@ Scope:
 Acceptance:
 
 - the report performs no engineering recomputation;
+- optional constitutive-law figures may sample the selected law solely to draw
+  the curve; plot samples never become calculation evidence or report operands;
 - independent benchmarks reproduce each intermediate at full precision;
 - rounding happens only at publication;
-- missing or mismatched evidence fails closed;
+- a missing required result field or substitution fails closed;
 - every live equation contract has substitution, result and source; and
-- every Standard/Audit calculation follows the nine-part textbook sequence and
-  can be followed by a reader who has not previously used the formula;
-- iterative/search methods publish convergence and governing-state evidence
+- every globally governing/extremal worked example in the current default report
+  follows the nine-part textbook sequence and can be followed by a reader who
+  has not previously used the formula;
+- every non-governing case remains available in compact summaries but does not
+  repeat the full derivation; DK/NA crack width publishes exactly the globally
+  governing fine and coarse branches; PR-07B must preserve this density rule;
+- iterative/search methods publish a compact existing-result summary
   without flooding the report with implementation noise; and
 - existing final results remain numerically unchanged unless a separately
   documented defect is found and independently verified.
 
-Tests: calculation-family completeness matrix; directly affected solver tests;
+Tests: calculation-family publication inventory; directly affected solver tests;
 equation-contract and identity inventories; independent end-to-end worked
-examples; report block tests; and focused rendered report/pedagogical review.
+examples; report block tests; trace-retirement guards; and focused rendered
+report/pedagogical review.
 
 ### PR-04 - Input correctness, reusable IDs and mathematical table guides
 

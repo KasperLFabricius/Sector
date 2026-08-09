@@ -142,7 +142,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Bulk assignments",
         "Governing",
         "PDF report",
-        "Every computed case",
+        "All calculated cases remain in compact summaries",
         "current project schema version 24",
         "in-development Sector v0.93 line",
         "Released Sector 0.92 projects used schema version 23",

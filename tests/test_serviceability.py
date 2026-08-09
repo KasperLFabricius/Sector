@@ -19,6 +19,12 @@ from sector.codes import ecm, fctm
 from sector.elastic import solve_elastic, transformed_properties
 from sector.section import Section
 from sector.serviceability import (
+    CrackEffectiveArea2005Coarse,
+    CrackEffectiveArea2005Fine,
+    CrackEffectiveArea2023Bending,
+    CrackMeanStrainOperands,
+    CrackSpacing2005Operands,
+    CrackSpacing2023Operands,
     analyse_cracking,
     cracking_factor,
     tension_stiffening_zeta,
@@ -112,6 +118,175 @@ def test_rectangular_beam_matches_hand_calc():
     assert c.esm_ecm == pytest.approx(8.38e-4, rel=0.01)
     assert c.sr_max == pytest.approx(235.7, rel=0.01)
     assert c.wk == pytest.approx(0.1975, rel=0.02)
+
+
+def test_2005_crack_result_retains_every_operand_of_the_worked_chain():
+    result = analyse_cracking(
+        beam_section(),
+        0.0,
+        150.0,
+        0.0,
+        6.0,
+        fctm=fctm(30.0),
+        Es=200_000.0,
+        beta=0.5,
+        kt=0.4,
+        cover=37.5,
+        bar_diameter=25.0,
+    )
+    crack = result.crack
+    assert crack is not None
+    area = crack.effective_area_operands
+    assert isinstance(area, CrackEffectiveArea2005Fine)
+    assert area.selected_hc_eff == pytest.approx(crack.hc_ef)
+    assert area.ac_eff == pytest.approx(crack.ac_eff)
+    candidates = [
+        ("2.5(h-d)", area.candidate_2_5_h_minus_d),
+        ("(h-x)/3", area.candidate_h_minus_x_over_3),
+        ("h/2", area.candidate_h_over_2),
+    ]
+    usable = [(name, value) for name, value in candidates if value is not None]
+    assert area.selected_candidate == min(usable, key=lambda item: item[1])[0]
+    assert area.selected_hc_eff == pytest.approx(
+        min(value for _name, value in usable)
+    )
+
+    candidate = crack.candidates[0]
+    mean = candidate.mean_strain_operands
+    spacing = candidate.spacing_operands
+    assert isinstance(mean, CrackMeanStrainOperands)
+    assert isinstance(spacing, CrackSpacing2005Operands)
+    assert mean.concrete_tension_reduction == pytest.approx(
+        mean.kt * mean.fctm / mean.rho_p_eff
+        * (1.0 + mean.alpha_e * mean.rho_p_eff)
+    )
+    assert mean.formula_candidate == pytest.approx(
+        (mean.sigma_s - mean.concrete_tension_reduction) / mean.es
+    )
+    assert mean.lower_bound_candidate == pytest.approx(
+        mean.lower_bound_factor * mean.sigma_s / mean.es
+    )
+    assert mean.selected_esm_ecm == pytest.approx(
+        max(mean.formula_candidate, mean.lower_bound_candidate)
+    )
+    assert candidate.esm_ecm == pytest.approx(mean.selected_esm_ecm)
+    assert spacing.formula_7_11 == pytest.approx(
+        spacing.k3_used * spacing.cover
+        + spacing.k1 * spacing.k2 * spacing.k4
+        * spacing.diameter / spacing.rho_p_eff
+    )
+    selected_spacing = (
+        spacing.geometric_7_14
+        if spacing.nearest_neighbour_spacing > spacing.close_spacing_limit
+        else spacing.formula_7_11
+    )
+    assert spacing.selected_spacing == pytest.approx(selected_spacing)
+    assert candidate.sr_max == pytest.approx(spacing.selected_spacing)
+    assert candidate.wk == pytest.approx(
+        candidate.sr_max * candidate.esm_ecm
+    )
+    assert candidate.diameter_source == "provided"
+    assert candidate.cover_source == "override"
+    assert crack.governing_rule == "maximum-wk-then-lowest-bar-index"
+
+
+def test_2023_crack_result_retains_effective_area_spacing_and_strain_branches():
+    result = analyse_cracking(
+        beam_section(),
+        0.0,
+        150.0,
+        0.0,
+        6.0,
+        fctm=fctm(30.0),
+        Es=200_000.0,
+        beta=0.5,
+        kt=0.4,
+        bar_diameter=16.0,
+        edition="2023",
+    )
+    crack = result.crack
+    assert crack is not None
+    area = crack.effective_area_operands
+    reinforcement = crack.effective_reinforcement_2023
+    assert isinstance(area, CrackEffectiveArea2023Bending)
+    assert reinforcement is not None
+    assert area.base_height == pytest.approx(min(
+        area.candidate_ay_plus_5phi,
+        area.candidate_10phi,
+        area.candidate_3_5ay,
+    ))
+    assert area.height_before_section_caps == pytest.approx(
+        area.base_height + area.layer_spread
+    )
+    assert area.selected_hc_eff == pytest.approx(min(
+        area.height_before_section_caps,
+        area.candidate_h_minus_x,
+        area.candidate_h_over_2,
+    ))
+    assert area.selected_hc_eff == pytest.approx(crack.hc_ef)
+    assert reinforcement.rho_numerator == pytest.approx(
+        reinforcement.as_eff + reinforcement.ap_eff_weighted
+    )
+    assert reinforcement.rho_p_eff == pytest.approx(
+        reinforcement.rho_numerator / reinforcement.ac_eff
+    )
+    assert sum(
+        element.effective_area_contribution
+        for element in reinforcement.elements
+    ) == pytest.approx(reinforcement.rho_numerator)
+
+    candidate = crack.candidates[0]
+    mean = candidate.mean_strain_operands
+    spacing = candidate.spacing_operands
+    assert isinstance(mean, CrackMeanStrainOperands)
+    assert isinstance(spacing, CrackSpacing2023Operands)
+    assert mean.selected_esm_ecm == pytest.approx(max(
+        mean.formula_candidate,
+        mean.lower_bound_candidate,
+    ))
+    assert spacing.formula_spacing == pytest.approx(
+        spacing.cover_coefficient * spacing.cover
+        + spacing.flexural_factor * spacing.bond_factor_kb
+        / spacing.diameter_ratio_divisor
+        * spacing.diameter / spacing.rho_p_eff
+    )
+    assert spacing.cap_spacing is not None
+    assert spacing.selected_spacing == pytest.approx(min(
+        spacing.formula_spacing,
+        spacing.cap_spacing,
+    ))
+    assert candidate.sr_max == pytest.approx(spacing.selected_spacing)
+    assert candidate.wk == pytest.approx(
+        candidate.kw * candidate.k1_r
+        * candidate.sr_max * candidate.esm_ecm
+    )
+    assert candidate.modular_ratio == pytest.approx(6.0)
+    assert candidate.bond_coefficient == pytest.approx(0.8)
+
+
+def test_coarse_crack_effective_area_retains_the_centroid_match():
+    crack = analyse_cracking(
+        beam_section(),
+        0.0,
+        150.0,
+        0.0,
+        6.0,
+        fctm=fctm(30.0),
+        bar_diameter=25.0,
+        coarse=True,
+    ).crack
+    assert crack is not None
+    area = crack.effective_area_operands
+    assert isinstance(area, CrackEffectiveArea2005Coarse)
+    assert area.band_limit_axis == pytest.approx(
+        area.tension_face_axis - area.selected_hc_eff
+    )
+    assert area.band_centroid_axis == pytest.approx(
+        area.reinforcement_centroid_axis,
+        abs=1.0e-8,
+    )
+    assert area.centroid_gap == pytest.approx(0.0, abs=1.0e-8)
+    assert area.ac_eff == pytest.approx(crack.ac_eff)
 
 
 def test_crack_width_retains_sorted_per_bar_candidates():

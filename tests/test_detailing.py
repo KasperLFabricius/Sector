@@ -80,6 +80,17 @@ def test_2005_formula_reports_face_inputs_and_area_ratio():
     assert row["bar_ids"] == ["R1", "R2"]
     assert row["as_min_mm2"] == pytest.approx(expected)
     assert row["utilisation"] == pytest.approx(expected / 982.0)
+    assert row["strength_coefficient"] == pytest.approx(0.26 * 2.9 / 500.0)
+    assert row["floor_coefficient"] == pytest.approx(0.0013)
+    assert row["selected_coefficient"] == pytest.approx(0.26 * 2.9 / 500.0)
+    assert row["governing_coefficient"] == "0.26 fctm / fyk"
+    assert row["tension_zone_area_mm2"] == pytest.approx(300.0 * 300.0)
+    assert row["bt_mm"] == pytest.approx(
+        row["tension_zone_area_mm2"] / row["tension_zone_depth_mm"]
+    )
+    assert row["d_mm"] == pytest.approx(
+        (row["bar_level_m"] - row["compression_extreme_m"]) * 1000.0
+    )
 
 
 def test_origin_moment_transfer_uses_tension_positive_axial_sign():
@@ -212,6 +223,26 @@ def test_2023_rectangle_cracking_moment_is_independently_reproduced():
     assert result["status"] == "PASS"
     assert result["checks"][0]["m_cr_knm"] == pytest.approx(52.2)
     assert result["checks"][0]["mr_nom_knm"] > 52.2
+    check = result["checks"][0]
+    assert check["cracking_branch"] == (
+        "scaled bending reaches the concrete tensile strength"
+    )
+    assert check["cracking_factor"] == pytest.approx(
+        (
+            check["cracking_fctm_mpa"]
+            - check["cracking_governing_axial_stress_mpa"]
+        )
+        / check["cracking_governing_bending_stress_mpa"]
+    )
+    solution = check["nominal_solution"]
+    assert solution["method"] == "fixed-angle nominal x-axis capacity"
+    assert solution["neutral_axis_angle_deg"] == pytest.approx(90.0)
+    assert solution["converged"] is True
+    assert solution["achieved_axial_kn"] == pytest.approx(0.0, abs=1.0e-4)
+    assert solution["axial_residual_kn"] == pytest.approx(
+        solution["achieved_axial_kn"] - solution["requested_axial_kn"]
+    )
+    assert solution["search_depth_range_m"] is not None
 
 
 def test_2023_pure_tension_uses_formula_12_2_force_equilibrium():
@@ -230,6 +261,16 @@ def test_2023_pure_tension_uses_formula_12_2_force_equilibrium():
     assert result["clause"] == "12.2(2)(b), Formula (12.2)"
     assert check["demand_kn"] == pytest.approx(0.18 * 2.9 * 1000.0)
     assert check["resistance_kn"] == pytest.approx(1964.0 * 500.0 / 1000.0)
+    assert result["concrete_area_m2"] == pytest.approx(0.18)
+    assert result["compression_limit_kn"] == pytest.approx(
+        0.5 * result["concrete_area_m2"] * result["fcd_mpa"] * 1000.0
+    )
+    assert [term["bar_id"] for term in check["reinforcement_terms"]] == [
+        "R1", "R2", "R3", "R4"
+    ]
+    assert sum(
+        term["resistance_kn"] for term in check["reinforcement_terms"]
+    ) == pytest.approx(check["resistance_kn"])
 
 
 def test_2023_high_compression_is_outside_formula_12_1_scope():
@@ -322,6 +363,14 @@ def test_clear_spacing_uses_largest_code_term_and_pair_margin():
     assert pair["required_mm"] == 25.0
     assert pair["margin_mm"] == pytest.approx(0.0)
     assert pair["centre_distance_mm"] == pytest.approx(45.0)
+    assert pair["dx_mm"] == pytest.approx(45.0)
+    assert pair["dy_mm"] == pytest.approx(0.0)
+    assert pair["required_candidates_mm"] == pytest.approx({
+        "larger element diameter": 20.0,
+        "aggregate allowance": 25.0,
+        "absolute minimum": 20.0,
+    })
+    assert pair["governing_requirement"] == "aggregate allowance"
 
 
 def test_clear_spacing_shortfall_fails_without_legacy_exception_fields():
@@ -382,6 +431,10 @@ def test_minimum_transverse_ratio_uses_dk_na_and_explicit_2023_reduction():
     assert dk["ratio"] == pytest.approx(0.063 * math.sqrt(30.0) / 500.0)
     assert en["ratio"] == pytest.approx(0.08 * math.sqrt(30.0) / 500.0)
     assert class_c["ratio"] == pytest.approx(en["ratio"] * 0.80)
+    assert class_c["base_ratio"] == pytest.approx(
+        class_c["coefficient"] * math.sqrt(class_c["fck_mpa"])
+        / class_c["fywk_mpa"]
+    )
     assert class_c["ductility_reduction_applied"] is True
 
 
@@ -407,6 +460,30 @@ def test_secondary_slab_cut_does_not_apply_primary_direction_minimum_formula():
     assert "orthogonal primary reinforcement" in result["reason"]
 
 
+def test_minimum_reinforcement_retains_the_modelled_direction_for_each_cut():
+    section, elements, materials = _rectangle()
+    common = dict(
+        section=section,
+        elements=elements,
+        materials=materials,
+        concrete=Concrete(30.0, gamma_c=1.5),
+        edition=detailing.EC2_2005,
+        fctm_mpa=2.9,
+        n_ed_tension_kn=0.0,
+        mx_ed_knm=100.0,
+        my_ed_knm=0.0,
+        member_type=detailing.MEMBER_BEAM,
+    )
+    transverse_cut = detailing.minimum_reinforcement(
+        **common, cut_direction=detailing.CUT_TRANSVERSE
+    )
+    longitudinal_cut = detailing.minimum_reinforcement(
+        **common, cut_direction=detailing.CUT_LONGITUDINAL
+    )
+    assert transverse_cut["modelled_reinforcement_direction"] == "longitudinal"
+    assert longitudinal_cut["modelled_reinforcement_direction"] == "transverse"
+
+
 def test_transverse_detailing_checks_shear_ratio_and_both_spacings():
     result = detailing.transverse_reinforcement(
         edition=detailing.EC2_2005_DKNA,
@@ -427,8 +504,17 @@ def test_transverse_detailing_checks_shear_ratio_and_both_spacings():
     assert checks["minimum_ratio"]["provided"] == pytest.approx(
         2.0 * math.pi * 10.0 ** 2 / 4.0 / (150.0 * 300.0)
     )
+    assert result["leg_area_mm2"] == pytest.approx(math.pi * 10.0 ** 2 / 4.0)
+    assert checks["minimum_ratio"]["leg_area_mm2"] == pytest.approx(
+        result["leg_area_mm2"]
+    )
+    assert checks["minimum_ratio"]["link_spacing_mm"] == pytest.approx(150.0)
     assert checks["longitudinal_spacing"]["limit"] == pytest.approx(412.5)
     assert checks["transverse_leg_spacing"]["provided"] == pytest.approx(300.0)
+    assert checks["transverse_leg_spacing"]["spacing_limits_mm"] == pytest.approx(
+        {"0.75 d": 412.5, "600 mm": 600.0}
+    )
+    assert checks["transverse_leg_spacing"]["governing_limit"] == "0.75 d"
     assert (
         checks["transverse_leg_spacing"]["spacing_source"]
         == "gross-web upper-bound screen"

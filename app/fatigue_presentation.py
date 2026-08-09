@@ -106,60 +106,20 @@ def spectrum_by_name(payload, spectrum_name):
     )
 
 
-def _max_result(records):
-    def sort_key(record):
-        number = evidence_number(value(record, "utilisation"))
-        return number is not None, number if number is not None else -math.inf
-
-    return max(
-        records,
-        key=sort_key,
-        default=None,
-    )
-
-
 def governing_criterion(spectrum):
-    """Describe the component controlling a spectrum utilisation."""
+    """Describe the solver-retained component controlling a spectrum."""
 
-    candidates = []
-    reinforcement = _max_result(items(spectrum, "reinforcement"))
-    if reinforcement is not None:
-        util = evidence_number(value(reinforcement, "utilisation"))
-        damage = evidence_number(value(reinforcement, "damage_utilisation"))
-        stress = evidence_number(value(reinforcement, "yield_utilisation"))
-        criterion = (
-            "Miner damage"
-            if damage is not None and (stress is None or damage >= stress)
-            else "yield/proof stress"
-        )
-        candidates.append((
-            util,
-            f"{value(reinforcement, 'element_id', '-')} - {criterion}",
-        ))
-
-    concrete = _max_result(items(spectrum, "concrete"))
-    if concrete is not None:
-        util = evidence_number(value(concrete, "utilisation"))
-        damage = evidence_number(value(concrete, "damage_utilisation"))
-        stress = evidence_number(value(concrete, "stress_utilisation"))
-        criterion = (
-            "Miner damage"
-            if damage is not None and (stress is None or damage >= stress)
-            else "compressive stress"
-        )
-        candidates.append((
-            util,
-            f"concrete fibre {value(concrete, 'fibre_index', '-')} - "
-            f"{criterion}",
-        ))
-
-    search = value(spectrum, "concrete_search")
-    upper = evidence_number(value(search, "upper_damage")) if search else None
-    if upper is not None:
-        candidates.append((upper, "concrete bounded damage search"))
-
-    finite = [candidate for candidate in candidates if candidate[0] is not None]
-    return max(finite, key=lambda candidate: candidate[0])[1] if finite else "-"
+    domain = str(value(spectrum, "governing_domain", "") or "")
+    criterion = str(value(spectrum, "governing_criterion", "") or "")
+    if domain == "reinforcement":
+        element_id = value(spectrum, "governing_reinforcement_id", "-")
+        return f"{element_id} - {criterion or '-'}"
+    if domain == "concrete":
+        fibre = value(spectrum, "governing_concrete_fibre", "-")
+        return f"concrete fibre {fibre} - {criterion or '-'}"
+    if domain == "concrete search":
+        return criterion or "concrete bounded search"
+    return "-"
 
 
 def spectrum_rows(payload):
@@ -192,26 +152,29 @@ def reinforcement_rows(spectrum):
 
     rows = []
     for result in items(spectrum, "reinforcement"):
-        damage = evidence_number(value(result, "damage_utilisation"))
-        stress = evidence_number(value(result, "yield_utilisation"))
         rows.append({
             "element_id": str(value(result, "element_id", "-")),
             "kind": str(value(result, "kind", "-")),
             "detail_id": str(value(result, "detail_id", "-")),
             "diameter_mm": evidence_number(value(result, "diameter_mm")),
             "damage": evidence_number(value(result, "damage")),
-            "damage_utilisation": damage,
+            "damage_utilisation": evidence_number(
+                value(result, "damage_utilisation")
+            ),
             "governing_damage_bin": str(
                 value(result, "governing_damage_bin", "-")
             ),
-            "yield_utilisation": stress,
+            "yield_utilisation": evidence_number(
+                value(result, "yield_utilisation")
+            ),
             "governing_yield_bin": str(
                 value(result, "governing_yield_bin", "-")
             ),
-            "governing": (
-                "Miner damage"
-                if damage is not None and (stress is None or damage >= stress)
-                else "yield/proof stress"
+            "governing": str(
+                value(result, "governing_criterion", "-") or "-"
+            ),
+            "governing_bin": str(
+                value(result, "governing_bin", "-") or "-"
             ),
             "utilisation": evidence_number(value(result, "utilisation")),
             "status": result_status(result),
@@ -268,6 +231,32 @@ def reinforcement_bin_rows(result):
             "yield_utilisation": evidence_number(
                 value(item, "yield_utilisation")
             ),
+            "sn_reference_cycles": evidence_number(
+                value(item, "sn_reference_cycles")
+            ),
+            "sn_slope_1": evidence_number(value(item, "sn_slope_1")),
+            "sn_slope_2": evidence_number(value(item, "sn_slope_2")),
+            "sn_knee_stress_range_mpa": evidence_number(
+                value(item, "sn_knee_stress_range_mpa")
+            ),
+            "sn_branch": str(value(item, "sn_branch", "") or ""),
+            "sn_reference_ratio": evidence_number(
+                value(item, "sn_reference_ratio")
+            ),
+            "material_factor": evidence_number(
+                value(item, "material_factor")
+            ),
+            "stress_total_design_elastic_mpa": evidence_number(
+                value(item, "stress_total_design_elastic_mpa")
+            ),
+            "design_stress_range_elastic_mpa": evidence_number(
+                value(item, "design_stress_range_elastic_mpa")
+            ),
+            "yield_long_check": value(item, "yield_long_check"),
+            "yield_design_total_check": value(
+                item, "yield_design_total_check"
+            ),
+            "governing_yield_check": value(item, "governing_yield_check"),
         })
     return rows
 
@@ -295,8 +284,6 @@ def concrete_rows(spectrum):
             and math.isclose(x_m, search_x, abs_tol=1.0e-12)
             and math.isclose(y_m, search_y, abs_tol=1.0e-12)
         )
-        damage = evidence_number(value(result, "damage_utilisation"))
-        stress = evidence_number(value(result, "stress_utilisation"))
         rows.append({
             "fibre_index": value(result, "fibre_index", "-"),
             "source": "Adaptive search" if is_search else "Section vertex",
@@ -304,11 +291,15 @@ def concrete_rows(spectrum):
             "y_mm": None if y_m is None else y_m * 1000.0,
             "fcd_fat_mpa": evidence_number(value(result, "fcd_fat_mpa")),
             "damage": evidence_number(value(result, "damage")),
-            "damage_utilisation": damage,
+            "damage_utilisation": evidence_number(
+                value(result, "damage_utilisation")
+            ),
             "governing_damage_bin": str(
                 value(result, "governing_damage_bin", "-")
             ),
-            "stress_utilisation": stress,
+            "stress_utilisation": evidence_number(
+                value(result, "stress_utilisation")
+            ),
             "method": method,
             "equivalent_utilisation": equivalent,
             "governing_equivalent_bin": str(
@@ -317,15 +308,11 @@ def concrete_rows(spectrum):
             "governing_stress_bin": str(
                 value(result, "governing_stress_bin", "-")
             ),
-            "governing": (
-                "Equivalent amplitude"
-                if equivalent is not None
-                and (stress is None or equivalent >= stress)
-                else (
-                    "Miner damage"
-                    if damage is not None and (stress is None or damage >= stress)
-                    else "compressive stress"
-                )
+            "governing": str(
+                value(result, "governing_criterion", "-") or "-"
+            ),
+            "governing_bin": str(
+                value(result, "governing_bin", "-") or "-"
             ),
             "utilisation": evidence_number(value(result, "utilisation")),
             "status": result_status(result),
@@ -372,35 +359,31 @@ def concrete_bin_rows(result):
             "equivalent_utilisation": evidence_number(
                 value(item, "equivalent_utilisation")
             ),
+            "life_branch": str(value(item, "life_branch", "") or ""),
+            "life_coefficient": evidence_number(
+                value(item, "life_coefficient")
+            ),
+            "life_range_term": evidence_number(
+                value(item, "life_range_term")
+            ),
+            "compression_total_design_mpa": evidence_number(
+                value(item, "compression_total_design_mpa")
+            ),
+            "compression_min_state": str(
+                value(item, "compression_min_state", "") or ""
+            ),
+            "compression_max_state": str(
+                value(item, "compression_max_state", "") or ""
+            ),
         })
     return rows
 
 
 def spectrum_bin_rows(spectrum):
-    """Return solver-state evidence for every grouped-spectrum bin."""
+    """Return retained solver-state identity for every grouped-spectrum bin."""
 
-    reinforcement = items(spectrum, "reinforcement")
-    concrete = items(spectrum, "concrete")
     rows = []
     for index, state in enumerate(items(spectrum, "bins")):
-        steel_ranges = [
-            evidence_number(value(element_bin, "design_stress_range_mpa"))
-            for element in reinforcement
-            for element_bin in items(element, "bins")
-            if str(value(element_bin, "bin_name", ""))
-            == str(value(state, "name", ""))
-        ]
-        concrete_stresses = [
-            evidence_number(value(fibre_bin, "compression_max_design_mpa"))
-            for fibre in concrete
-            for fibre_bin in items(fibre, "bins")
-            if str(value(fibre_bin, "bin_name", ""))
-            == str(value(state, "name", ""))
-        ]
-        steel_ranges = [number for number in steel_ranges if number is not None]
-        concrete_stresses = [
-            number for number in concrete_stresses if number is not None
-        ]
         rows.append({
             "index": index + 1,
             "bin": str(value(state, "name", "-")),
@@ -411,12 +394,6 @@ def spectrum_bin_rows(spectrum):
             ),
             "gamma_ff": evidence_number(value(state, "design_action_factor")),
             "bond_method": str(value(state, "bond_method", "-")),
-            "max_design_stress_range_mpa": (
-                max(steel_ranges, default=None)
-            ),
-            "max_concrete_compression_mpa": (
-                max(concrete_stresses, default=None)
-            ),
         })
     return rows
 

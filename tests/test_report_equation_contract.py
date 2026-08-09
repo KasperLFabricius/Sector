@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import ast
 import collections
-from dataclasses import FrozenInstanceError
 import io
 import pathlib
 import sys
+from dataclasses import FrozenInstanceError
 
 import pytest
-
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import report_equation_contract as contracts  # noqa: E402
-import sector_report  # noqa: E402
-
+import report_equation_contract as contracts
+import sector_report
 
 EXPECTED_CONTRACT_KEYS = {
     ("basis.detailing.transverse-ratios", None),
@@ -33,20 +31,94 @@ EXPECTED_CONTRACT_KEYS = {
     ("crack.2005.spacing", "geometric"),
     ("crack.2005.spacing", "reinforcement"),
     ("crack.2005.width", None),
+    ("crack.effective-area.2005", "coarse"),
+    ("crack.effective-area.2005", "fine"),
+    ("crack.effective-area.2023", "bending"),
+    ("crack.effective-area.2023", "direct-tension"),
+    ("crack.effective-reinforcement.ratio", "2005"),
+    ("crack.effective-reinforcement.ratio", "2023"),
     ("crack.2023.mean-strain", None),
     ("crack.2023.spacing", None),
     ("crack.2023.width", None),
     ("cracking.threshold", None),
+    ("detailing.clear-spacing.distance", None),
     ("detailing.clear-spacing.requirement", None),
     ("detailing.links.minimum-ratio", None),
+    ("detailing.links.provided-ratio", "shear"),
+    ("detailing.links.provided-ratio", "torsion"),
+    ("detailing.links.spacing-limit", "longitudinal"),
+    ("detailing.links.spacing-limit", "torsion"),
+    ("detailing.links.spacing-limit", "transverse"),
     ("detailing.minimum.area-2005", None),
     ("detailing.minimum.bending-2023", None),
+    ("detailing.minimum.cracking-factor-2023", None),
+    ("detailing.minimum.nominal-equilibrium-2023", None),
     ("detailing.minimum.tension-2023", None),
+    ("elastic.combined.difference-stress", None),
+    ("elastic.combined.neutralising-mx", None),
+    ("elastic.combined.neutralising-my", None),
+    ("elastic.combined.neutralising-n", None),
+    ("elastic.combined.reduced-long-stress", None),
+    ("elastic.combined.reduction-factor", None),
+    ("elastic.combined.target-mx", None),
+    ("elastic.combined.target-my", None),
+    ("elastic.combined.target-n", None),
+    ("elastic.combined.total-stress", None),
+    ("elastic.concrete.effective-modulus", None),
+    ("elastic.instantaneous.equilibrium-mx", None),
+    ("elastic.instantaneous.equilibrium-my", None),
+    ("elastic.instantaneous.equilibrium-n", None),
+    ("elastic.instantaneous.stress-plane", None),
+    ("elastic.long.equilibrium-mx", None),
+    ("elastic.long.equilibrium-my", None),
+    ("elastic.long.equilibrium-n", None),
+    ("elastic.long.stress-plane", None),
+    ("elastic.modular-ratio.long", None),
+    ("elastic.modular-ratio.short", None),
+    ("fatigue.concrete.bin-damage", None),
+    ("fatigue.concrete.equivalent", None),
+    ("fatigue.concrete.eta-cc", None),
+    ("fatigue.concrete.eta-cc-fat", None),
+    ("fatigue.concrete.life", "constant-compression"),
+    ("fatigue.concrete.life", "variable-compression"),
+    ("fatigue.concrete.life", "zero-compression"),
+    ("fatigue.concrete.miner-sum", None),
+    ("fatigue.concrete.normalised-stress", None),
+    ("fatigue.concrete.strength", "2005"),
+    ("fatigue.concrete.strength", "2023"),
+    ("fatigue.concrete.stress-utilisation", None),
+    ("fatigue.concrete.utilisation", None),
+    ("fatigue.reinforcement.bin-damage", None),
+    ("fatigue.reinforcement.design-resistance-range", None),
+    ("fatigue.reinforcement.design-stress-range", None),
+    ("fatigue.reinforcement.miner-sum", None),
+    ("fatigue.reinforcement.sn-life", "power-law"),
+    ("fatigue.reinforcement.sn-life", "zero-range"),
+    ("fatigue.reinforcement.utilisation", None),
+    ("fatigue.reinforcement.yield-limit", None),
+    ("fatigue.reinforcement.yield-utilisation", None),
+    ("geometry.concrete.centroid-x", None),
+    ("geometry.concrete.centroid-y", None),
+    ("geometry.concrete.centroidal-ix", None),
+    ("geometry.concrete.centroidal-ixy", None),
+    ("geometry.concrete.centroidal-iy", None),
+    ("geometry.concrete.net-area", None),
     ("materials.concrete.curve-2", None),
     ("materials.concrete.fcd", "2005"),
     ("materials.concrete.fcd", "2023"),
     ("materials.steel.fyd-N", None),
     ("plastic.worked.axial-equilibrium", None),
+    ("plastic.worked.curvature-candidate", None),
+    ("plastic.worked.curvature-selection", None),
+    ("plastic.worked.element-force", None),
+    ("plastic.worked.moment-x", None),
+    ("plastic.worked.moment-y", None),
+    ("plastic.worked.strain-plane", None),
+    ("prestress.element-force", None),
+    ("prestress.initial-stress", None),
+    ("prestress.resultant-mx", None),
+    ("prestress.resultant-my", None),
+    ("prestress.resultant-n", None),
     ("shear.2005.stress-basic", None),
     ("shear.2005.stress-minimum", None),
     ("shear.2005.utilisation", None),
@@ -79,8 +151,24 @@ EXPECTED_CONTRACT_KEYS = {
     ("torsion.resistance.steel", None),
     ("torsion.shear.crushing-interaction", None),
     ("torsion.subtube.governing-utilisation", None),
+    ("torsion.subtube.stiffness-share", None),
+    ("torsion.subtube.torque-share", None),
     ("torsion.utilisation", None),
 }
+
+THEORY_ONLY_EQUATIONS = {
+    ("basis.detailing.transverse-ratios", None),
+    ("basis.fatigue.concrete-miner", None),
+    ("basis.fatigue.reinforcement-miner", None),
+    ("basis.fatigue.stress-range", None),
+    ("basis.plastic.equilibrium", None),
+    ("basis.plastic.governing-curvature", None),
+    ("materials.concrete.curve-2", None),
+}
+
+# This is an executable PR-03 work list, not a permanent allowance. Each family
+# slice removes its entries by publishing a numerical substitution and result.
+EXISTING_LIVE_EQUATION_GAPS = set()
 
 
 def _formula_calls():
@@ -125,7 +213,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 61
+    assert len(calls) == 139
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -136,13 +224,16 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 62
+    assert len(catalogue_pairs) == 138
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
 
 def test_every_contract_is_complete_immutable_and_role_pinned():
     items = contracts.equation_contract_items()
+    publication_role_counts = collections.Counter(
+        contract.publication_role for _key, contract in items
+    )
     role_counts = collections.Counter(
         contract.substitution_role for _key, contract in items
     )
@@ -150,12 +241,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 42,
-        "none": 18,
-        "applicability-note": 2,
+        "numerical": 131,
+        "none": 7,
     }
-    # One extra contract is the second runtime branch of shear.chord.demand.
-    assert result_counts == {True: 46, False: 16}
+    assert publication_role_counts == {"calculation": 131, "theory": 7}
+    # Conditional call sites expand to every exact runtime variant in the catalogue.
+    assert result_counts == {True: 131, False: 7}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key
@@ -172,9 +263,33 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
             assert contract.result_unit and contract.result_unit.strip(), key
         else:
             assert contract.result_unit is None, key
+        if contract.publication_role == "theory":
+            assert not contract.expects_result, key
+            assert not contract.expects_substitution, key
+            assert not contract.applicability_note_required, key
 
     with pytest.raises(FrozenInstanceError):
         items[0][1].result_unit = "changed"
+
+
+def test_theory_and_existing_live_equation_gap_inventory_are_exact():
+    items = contracts.equation_contract_items()
+    theory = {
+        key for key, contract in items if contract.publication_role == "theory"
+    }
+    incomplete_calculations = {
+        key
+        for key, contract in items
+        if contract.publication_role == "calculation"
+        and (
+            contract.substitution_role != "numerical"
+            or not contract.expects_result
+        )
+    }
+
+    assert theory == THEORY_ONLY_EQUATIONS
+    assert incomplete_calculations == EXISTING_LIVE_EQUATION_GAPS
+    assert not theory & incomplete_calculations
 
 
 def test_dynamic_material_identity_and_variant_selection_are_exact():
@@ -198,8 +313,10 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
     geometric = contracts.equation_contract(
         "crack.2005.spacing", "geometric"
     )
-    assert combined.substitution_role == "applicability-note"
-    assert geometric.substitution_role == "applicability-note"
+    assert combined.substitution_role == "numerical"
+    assert geometric.substitution_role == "numerical"
+    assert combined.applicability_note_required
+    assert geometric.applicability_note_required
 
     crack = contracts.equation_contract("crack.2023.width")
     definitions = {symbol.markup: symbol.meaning for symbol in crack.symbols}
@@ -207,6 +324,42 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
     assert "w<sub>k,cal</sub>" in definitions
     assert "w<sub>k</sub>" in definitions
     assert "equal to w<sub>k,cal</sub>" in definitions["w<sub>k</sub>"]
+
+
+def test_fatigue_contracts_are_exact_numerical_worked_blocks():
+    fatigue = {
+        identity: contract
+        for identity, contract in contracts.equation_contract_items()
+        if identity[0].startswith("fatigue.")
+    }
+    expected = {
+        identity for identity in EXPECTED_CONTRACT_KEYS
+        if identity[0].startswith("fatigue.")
+    }
+    assert set(fatigue) == expected
+    assert len(fatigue) == 22
+    assert all(
+        contract.publication_role == "calculation"
+        and contract.substitution_role == "numerical"
+        and contract.expects_result
+        for contract in fatigue.values()
+    )
+    assert {
+        identity
+        for identity, contract in fatigue.items()
+        if contract.applicability_note_required
+    } == {
+        ("fatigue.reinforcement.design-stress-range", None),
+        ("fatigue.reinforcement.sn-life", "power-law"),
+        ("fatigue.reinforcement.sn-life", "zero-range"),
+        ("fatigue.reinforcement.yield-limit", None),
+        ("fatigue.reinforcement.utilisation", None),
+        ("fatigue.concrete.normalised-stress", None),
+        ("fatigue.concrete.life", "constant-compression"),
+        ("fatigue.concrete.life", "variable-compression"),
+        ("fatigue.concrete.life", "zero-compression"),
+        ("fatigue.concrete.utilisation", None),
+    }
 
 
 @pytest.mark.parametrize(
@@ -262,17 +415,64 @@ def test_contract_metadata_reaches_the_equation_flowable_unchanged():
     assert equation._sector_equation_result_symbol == "f<sub>cd</sub>"
     assert equation._sector_equation_result_unit == "MPa"
     assert equation._sector_equation_substitution_role == "numerical"
+    assert equation._sector_equation_publication_role == "calculation"
+    assert not equation._sector_equation_applicability_note_required
 
     builder._h2("Applicability")
     builder._formula(
         "max(rM + rT, rV + rT)",
         equation_key="combined.dk-na.sum",
+        subst="max(0.4 + 0.2, 0.3 + 0.2)",
         note="M and V are checked separately.",
         result="sum(S<sub>Ed</sub>/S<sub>Rd</sub>) = 0.70",
     )
     note_equation = builder.flow[-1]
-    assert note_equation._sector_equation_substitution_role == "applicability-note"
+    assert note_equation._sector_equation_substitution_role == "numerical"
+    assert note_equation._sector_equation_applicability_note_required
     assert "M and V are checked separately." in note_equation.getPlainText()
+
+
+def test_numerical_substitution_and_applicability_note_are_independent():
+    builder = _builder()
+    builder._h1("Independent publication rows")
+    contract = contracts.EquationContract(
+        symbols=(
+            contracts.EquationSymbol("x", "input", "kN"),
+            contracts.EquationSymbol("y", "result", "kN"),
+        ),
+        result_symbol="y",
+        result_unit="kN",
+        substitution_role="numerical",
+        publication_role="calculation",
+        applicability_note_required=True,
+    )
+    builder._formula(
+        "y = 2x",
+        equation_key="test.numerical-with-note",
+        equation_spec=contract,
+        subst="= 2 x 3 kN",
+        note="This branch applies because the declared condition is true.",
+        result="y = 6 kN",
+    )
+    equation = builder.flow[-1]
+    assert equation._sector_equation_substitution_role == "numerical"
+    assert equation._sector_equation_applicability_note_required
+    roles = equation._sector_equation_roles
+    assert "symbolic-expression" in roles
+    assert "numerical-substitution" in roles
+    assert "applicability-note" in roles
+    assert "result" in roles
+    assert roles.index("numerical-substitution") < roles.index("applicability-note")
+    assert roles.index("applicability-note") < roles.index("result")
+
+    with pytest.raises(ValueError, match="requires an applicability note"):
+        builder._formula(
+            "y = 2x",
+            equation_key="test.numerical-with-note",
+            equation_spec=contract,
+            subst="= 2 x 3 kN",
+            result="y = 6 kN",
+        )
 
 
 def test_explicit_test_contract_cannot_mask_a_variant_or_wrong_type():
