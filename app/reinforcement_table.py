@@ -13,6 +13,8 @@ from collections.abc import Iterable, Mapping
 
 import pandas as pd
 
+from app import table_field_definitions as table_fields
+
 
 ELEMENT_ID = "ID"
 X = "x (mm)"
@@ -42,7 +44,6 @@ INDEPENDENT_MODE = "Independent"
 SIZE_MODES = (AREA_MODE, DIAMETER_MODE, INDEPENDENT_MODE)
 
 KINDS = ("bar", "tendon")
-
 
 def _kind(kind: str) -> str:
     value = str(kind).strip().lower()
@@ -294,14 +295,24 @@ def point_grid_specs(
 ) -> list[dict]:
     """Plain component column metadata for the mixed reinforcement grid."""
     kind = _kind(kind)
+    table_key = (
+        table_fields.BARS_TABLE_KEY
+        if kind == "bar"
+        else table_fields.TENDONS_TABLE_KEY
+    )
+    help_text = {
+        field: table_fields.field_definition(table_key, field).help
+        for field in COLUMNS
+    }
     material_options = [str(value).strip() for value in (material_ids or [])
                         if str(value).strip()]
     material_spec = (
         {"field": MATERIAL_ID, "title": "Material ID", "type": "select",
-         "options": material_options, "preserve_unknown": True, "width": 108}
+         "options": material_options, "preserve_unknown": True, "width": 108,
+         "help": help_text[MATERIAL_ID]}
         if material_options
         else {"field": MATERIAL_ID, "title": "Material ID", "type": "text",
-              "width": 108}
+              "width": 108, "help": help_text[MATERIAL_ID]}
     )
     fatigue_options = [
         str(value).strip()
@@ -317,6 +328,7 @@ def point_grid_specs(
             "preserve_unknown": True,
             "allow_blank": True,
             "width": 128,
+            "help": help_text[FATIGUE_DETAIL_ID],
         }
         if fatigue_options
         else {
@@ -324,19 +336,24 @@ def point_grid_specs(
             "title": "Fatigue detail ID",
             "type": "text",
             "width": 128,
+            "help": help_text[FATIGUE_DETAIL_ID],
         }
     )
     return [
         {"field": ELEMENT_ID, "title": "ID", "type": "id", "width": 64,
          "editable": False, "paste": False},
-        {"field": X, "title": "x (mm)", "type": "number", "width": 88},
-        {"field": Y, "title": "y (mm)", "type": "number", "width": 88},
+        {"field": X, "title": "x (mm)", "type": "number", "width": 88,
+         "help": help_text[X]},
+        {"field": Y, "title": "y (mm)", "type": "number", "width": 88,
+         "help": help_text[Y]},
         {"field": SIZE_MODE, "title": "Size basis", "type": "select",
-         "options": list(SIZE_MODES), "width": 112},
+         "options": list(SIZE_MODES), "width": 112,
+         "help": help_text[SIZE_MODE]},
         {"field": AREA, "title": "Area (mm2)", "type": "number", "width": 108,
-         "derived_role": "area"},
+         "derived_role": "area", "help": help_text[AREA]},
         {"field": DIAMETER, "title": "Diameter (mm)", "type": "number",
-         "width": 124, "derived_role": "diameter"},
+         "width": 124, "derived_role": "diameter",
+         "help": help_text[DIAMETER]},
         material_spec,
         fatigue_spec,
     ]

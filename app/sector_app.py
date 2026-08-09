@@ -56,6 +56,7 @@ project_io = deferred_module("project_io")
 rebar_table = deferred_module("reinforcement_table")
 presentation = deferred_module("result_presentation")
 session_state_migrations = deferred_module("session_state_migrations")
+table_fields = deferred_module("app.table_field_definitions")
 viz = deferred_module("viz")
 
 capacity = deferred_module("sector.capacity")
@@ -752,13 +753,71 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     return pre, updated
 
 
+def _assigned_ids_in_base_table(table_key, column):
+    """Return durable grid assignments before catalogues are normalized."""
+
+    value = st.session_state.get(table_key)
+    if value is None:
+        return ()
+    try:
+        frame = value if isinstance(value, pd.DataFrame) else pd.DataFrame(value)
+    except (TypeError, ValueError):
+        return ()
+    if column not in frame:
+        return ()
+    return tuple(
+        text
+        for raw in frame[column].tolist()
+        if (text := str(raw).strip()) and text.casefold() != "nan"
+    )
+
+
 def _ensure_material_catalog_state():
     """Seed and canonicalise both catalogues before section grids are mounted."""
     st.session_state.setdefault("_material_catalog_revision", 0)
     revision = int(st.session_state["_material_catalog_revision"])
+    capacity_material_id = rebar_table.text_cell(
+        st.session_state.get("capacity_steel_material_id")
+    )
+    capacity_material_ids = (
+        (capacity_material_id,)
+        if capacity_material_id
+        and (
+            st.session_state.get("shear_on")
+            or st.session_state.get("torsion_on")
+        )
+        else ()
+    )
+    reservations = {
+        "mild": (
+            *_assigned_ids_in_base_table(
+                "bars_base", rebar_table.MATERIAL_ID
+            ),
+            *capacity_material_ids,
+        ),
+        "prestress": _assigned_ids_in_base_table(
+            "tendons_base", rebar_table.MATERIAL_ID
+        ),
+    }
     for kind in mat_catalog.KINDS:
         key = mat_catalog.catalog_key(kind)
-        st.session_state[key] = mat_catalog.ensure_catalog(st.session_state, kind)
+        st.session_state[key] = mat_catalog.ensure_catalog(
+            st.session_state, kind, reserved_ids=reservations[kind]
+        )
+    available_mild_ids = mat_catalog.material_ids(
+        st.session_state[mat_catalog.MILD_CATALOG_KEY], "mild"
+    )
+    if (
+        capacity_material_ids
+        and capacity_material_id not in available_mild_ids
+    ):
+        st.session_state[
+            "_capacity_steel_unresolved_material_id"
+        ] = capacity_material_id
+    else:
+        st.session_state.pop(
+            "_capacity_steel_unresolved_material_id", None
+        )
 
     # M1/P1 retain the historical widget keys. This keeps keyboard habits and
     # existing integrations stable, while the revision gate ensures a loaded
@@ -793,7 +852,10 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
                             locked=False):
     """Edit one catalogue and return it with the selected material preview law."""
     key = mat_catalog.catalog_key(kind)
-    catalogue = mat_catalog.normalise_catalog(st.session_state[key], kind)
+    reserved_ids = (*assigned_ids, *protected_ids)
+    catalogue = mat_catalog.normalise_catalog(
+        st.session_state[key], kind, reserved_ids=reserved_ids
+    )
     items = catalogue["items"]
     ids = [item["id"] for item in items]
     labels = {item["id"]: mat_catalog.entry_label(item) for item in items}
@@ -830,14 +892,16 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
     if add_clicked or duplicate_clicked or delete_clicked:
         _snapshot_completed_input_state()
         if add_clicked:
-            catalogue, selected = mat_catalog.add_entry(catalogue, kind)
+            catalogue, selected = mat_catalog.add_entry(
+                catalogue, kind, reserved_ids=reserved_ids
+            )
         elif duplicate_clicked:
             catalogue, selected = mat_catalog.duplicate_entry(
-                catalogue, kind, selected
+                catalogue, kind, selected, reserved_ids=reserved_ids
             )
         else:
             catalogue = mat_catalog.delete_entry(
-                catalogue, kind, selected, assigned_ids=assigned_ids
+                catalogue, kind, selected, assigned_ids=reserved_ids
             )
             selected = catalogue["items"][0]["id"]
             if kind == "mild" and st.session_state.get(
@@ -894,8 +958,16 @@ def _ensure_fatigue_catalog_state():
 
     st.session_state.setdefault("_fatigue_catalog_revision", 0)
     key = fatigue_inputs.DETAIL_CATALOG_KEY
+    assigned_ids = (
+        *_assigned_ids_in_base_table(
+            "bars_base", rebar_table.FATIGUE_DETAIL_ID
+        ),
+        *_assigned_ids_in_base_table(
+            "tendons_base", rebar_table.FATIGUE_DETAIL_ID
+        ),
+    )
     st.session_state[key] = fatigue_inputs.normalise_catalog(
-        st.session_state.get(key)
+        st.session_state.get(key), assigned_ids=assigned_ids
     )
 
 
@@ -940,7 +1012,9 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
     """Edit named/custom S-N details and return the canonical catalogue."""
 
     key = fatigue_inputs.DETAIL_CATALOG_KEY
-    catalogue = fatigue_inputs.normalise_catalog(st.session_state.get(key))
+    catalogue = fatigue_inputs.normalise_catalog(
+        st.session_state.get(key), assigned_ids=assigned_ids
+    )
     items = catalogue["items"]
     ids = [item["id"] for item in items]
     labels = {item["id"]: fatigue_inputs.entry_label(item) for item in items}
@@ -992,16 +1066,19 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
             catalogue, selected = fatigue_inputs.add_entry(
                 catalogue,
                 preset=_fatigue_preset_for(edition, fatigue_inputs.MILD),
+                assigned_ids=assigned_ids,
             )
         elif add_tendon:
             catalogue, selected = fatigue_inputs.add_entry(
                 catalogue,
                 preset=_fatigue_preset_for(edition, fatigue_inputs.PRESTRESS),
+                assigned_ids=assigned_ids,
             )
         elif duplicate:
             catalogue, selected = fatigue_inputs.duplicate_entry(
                 catalogue,
                 selected,
+                assigned_ids=assigned_ids,
             )
         else:
             catalogue = fatigue_inputs.delete_entry(
@@ -1299,6 +1376,60 @@ _POINT_TABLE_LABELS = {
     "tendons_base": "Tendon points",
 }
 
+
+def _table_field_guide(box, table_key):
+    """Publish one compact mathematical guide immediately above an editor."""
+
+    if not bool(getattr(box, "open", True)):
+        return
+
+    definitions = table_fields.table_fields(table_key)
+    title = table_fields.TABLE_TITLES[table_key]
+    guide = box.expander(f"{title} - field guide", expanded=False)
+    if table_key in {
+        load_cases.PLASTIC_TABLE_KEY,
+        load_cases.ELASTIC_TABLE_KEY,
+        fatigue_inputs.SPECTRUM_TABLE_KEY,
+    }:
+        guide.caption(
+            "Load-action and fatigue numeric fields accept a dot or comma. "
+            "Blank action cells are zero; a malformed nonblank value is retained "
+            "and must be corrected."
+        )
+    else:
+        guide.caption(
+            "Use the field-specific required, optional, and default rules below."
+        )
+    rows = [
+        "| Notation / field | Meaning and sign | Input rule / source |",
+        "|---|---|---|",
+    ]
+    for definition in definitions:
+        notation = (
+            definition.label
+            if definition.math_symbol == "-"
+            else f"${definition.math_symbol}$ - {definition.label}"
+        )
+        unit = table_fields.latex_unit(definition.unit)
+        if unit:
+            notation += f" [${unit}$]"
+        meaning = " ".join(
+            part.strip()
+            for part in (
+                definition.definition,
+                definition.sign,
+            )
+            if part.strip()
+        ).replace("|", "\\|")
+        rule = (
+            f"{table_fields.input_rule(definition)}. "
+            f"Source: {definition.source}."
+        ).replace("|", "\\|")
+        rows.append(
+            f"| {notation} | {meaning} | {rule} |"
+        )
+    guide.markdown("\n".join(rows))
+
 _BULK_ALL = "All elements"
 _BULK_SELECTED = "Selected elements"
 _BULK_NO_CHANGE = "__sector_no_change__"
@@ -1377,7 +1508,16 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     fatigue_ids = _grid_fatigue_detail_ids(kind)
     specs = (
         rebar_table.point_grid_specs(kind, material_ids, fatigue_ids)
-        if kind else None
+        if kind
+        else [
+            {
+                "field": column,
+                "title": column,
+                "type": "number",
+                "help": table_fields.field_definition(base_key, column).help,
+            }
+            for column in cols
+        ]
     )
     options = (
         rebar_table.point_grid_options(kind, material_ids, fatigue_ids)
@@ -1678,71 +1818,71 @@ def _reseed_case_table(key, value):
 
 def _case_column_config(key):
     """Readable engineering labels and strict types for one load-case editor."""
+    def definition(column):
+        return table_fields.field_definition(key, column)
+
     text = {
         load_cases.NAME: st.column_config.TextColumn(
-            "Name *", help="Required and unique across both case tables.",
+            "Name *", help=definition(load_cases.NAME).help,
             required=True, pinned=True, width="small",
         ),
         load_cases.DESCRIPTION: st.column_config.TextColumn(
-            "Description", help="Project-defined combination or case description.",
+            "Description", help=definition(load_cases.DESCRIPTION).help,
             pinned=True, width="medium",
         ),
     }
 
-    def force(label, help_text):
-        return st.column_config.NumberColumn(
-            label, help=help_text, format="%.3f", required=True,
-            min_value=-100000.0, max_value=100000.0, step=10.0,
+    def force(column, label):
+        field = definition(column)
+        return st.column_config.TextColumn(
+            label,
+            help=(
+                f"{field.help} Enter a dot or comma decimal; blank means zero."
+            ),
+            required=False,
+            default="0",
             width="small",
         )
 
     if key == load_cases.PLASTIC_TABLE_KEY:
         return {
             **text,
-            "n_ed_kn": force("N_Ed [kN]", "Axial force; tension is positive."),
-            "mx_ed_knm": force("Mx_Ed [kNm]", "Moment about the x-axis."),
-            "my_ed_knm": force("My_Ed [kNm]", "Moment about the y-axis."),
-            "vx_ed_kn": force(
-                "Vx_Ed [kN]",
-                "Signed shear along x; pairs with My. Zero skips Vx for this case.",
-            ),
-            "vy_ed_kn": force(
-                "Vy_Ed [kN]",
-                "Signed shear along y; pairs with Mx. Zero skips Vy for this case.",
-            ),
+            "n_ed_kn": force("n_ed_kn", "N_Ed [kN]"),
+            "mx_ed_knm": force("mx_ed_knm", "Mx_Ed [kNm]"),
+            "my_ed_knm": force("my_ed_knm", "My_Ed [kNm]"),
+            "vx_ed_kn": force("vx_ed_kn", "Vx_Ed [kN]"),
+            "vy_ed_kn": force("vy_ed_kn", "Vy_Ed [kN]"),
             "vx_face": st.column_config.SelectboxColumn(
                 "Vx face",
-                help="Auto uses centroid-adjusted My. Negative = left (-x); positive = right (+x).",
+                help=definition("vx_face").help,
                 options=list(load_cases.FACE_OPTIONS), default=load_cases.FACE_AUTO,
                 required=True, width="small",
             ),
             "vy_face": st.column_config.SelectboxColumn(
                 "Vy face",
-                help="Auto uses centroid-adjusted Mx. Negative = bottom (-y); positive = top (+y).",
+                help=definition("vy_face").help,
                 options=list(load_cases.FACE_OPTIONS), default=load_cases.FACE_AUTO,
                 required=True, width="small",
             ),
-            "t_ed_knm": force(
-                "T_Ed [kNm]", "Signed torsion action; zero skips torsion for this case."
-            ),
+            "t_ed_knm": force("t_ed_knm", "T_Ed [kNm]"),
             "check_minimum_reinforcement": st.column_config.CheckboxColumn(
                 "Min. reinforcement",
-                help="Assess minimum reinforcement in the modelled section direction.",
+                help=definition("check_minimum_reinforcement").help,
                 default=False,
                 width="small",
             ),
         }
     return {
         **text,
-        "n_long_ed_kn": force("N_Ed,long [kN]", "Sustained axial force; tension is positive."),
-        "mx_long_ed_knm": force("Mx_Ed,long [kNm]", "Sustained moment about x."),
-        "my_long_ed_knm": force("My_Ed,long [kNm]", "Sustained moment about y."),
-        "n_short_ed_kn": force("N_Ed,short [kN]", "Instantaneous axial-force part."),
-        "mx_short_ed_knm": force("Mx_Ed,short [kNm]", "Instantaneous moment part about x."),
-        "my_short_ed_knm": force("My_Ed,short [kNm]", "Instantaneous moment part about y."),
+        "n_long_ed_kn": force("n_long_ed_kn", "N_Ed,long [kN]"),
+        "mx_long_ed_knm": force("mx_long_ed_knm", "Mx_Ed,long [kNm]"),
+        "my_long_ed_knm": force("my_long_ed_knm", "My_Ed,long [kNm]"),
+        "n_short_ed_kn": force("n_short_ed_kn", "N_Ed,short [kN]"),
+        "mx_short_ed_knm": force("mx_short_ed_knm", "Mx_Ed,short [kNm]"),
+        "my_short_ed_knm": force("my_short_ed_knm", "My_Ed,short [kNm]"),
         "calculate_crack_width": st.column_config.CheckboxColumn(
             "Calculate crack width",
-            help="Run the selected numerical crack-width method for this action.",
+            help=definition("calculate_crack_width").help,
             default=False, width="small",
         ),
     }
@@ -1767,8 +1907,9 @@ def _case_table_editor(box, key):
             st.session_state.get(key), key
         )
     seed = load_cases.normalise_table(st.session_state[seed_key], key)
+    editor_seed = load_cases.editor_table(seed, key)
     edited = box.data_editor(
-        seed,
+        editor_seed,
         key=editor_key,
         **_input_widget_kwargs(
             editor_key,
@@ -1801,6 +1942,7 @@ def _load_case_editors(box):
         "for cases with the design situation required by the chosen detailing "
         "method. Paste rectangular ranges directly."
     )
+    _table_field_guide(box, load_cases.PLASTIC_TABLE_KEY)
     plastic = _case_table_editor(box, load_cases.PLASTIC_TABLE_KEY)
     box.markdown("**Elastic cases**")
     box.caption(
@@ -1808,6 +1950,7 @@ def _load_case_editors(box):
         "Stresses are always reported. Crack width is an optional calculation "
         "for each user-defined action; no combination completeness is inferred."
     )
+    _table_field_guide(box, load_cases.ELASTIC_TABLE_KEY)
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
     return {
         load_cases.PLASTIC_TABLE_KEY: plastic,
@@ -1824,74 +1967,62 @@ _NON_REPLAYABLE_INPUT_EVENT_KEYS = frozenset({
 
 def _fatigue_spectrum_column_config():
     """Engineering labels and strict types for the grouped-spectrum editor."""
+    def definition(column):
+        return table_fields.field_definition(
+            fatigue_inputs.SPECTRUM_TABLE_KEY, column
+        )
 
-    def action(label, help_text):
-        return st.column_config.NumberColumn(
+    def action(column, label):
+        field = definition(column)
+        return st.column_config.TextColumn(
             label,
-            help=help_text,
-            format="%.3f",
-            required=True,
-            default=0.0,
-            min_value=-100000.0,
-            max_value=100000.0,
-            step=10.0,
+            help=(
+                f"{field.help} Enter a dot or comma decimal; blank means zero."
+            ),
+            required=False,
+            default="0",
             width="small",
         )
 
     return {
         fatigue_inputs.SPECTRUM: st.column_config.TextColumn(
             "Spectrum *",
-            help="Bins with the same spectrum name are accumulated together.",
+            help=definition(fatigue_inputs.SPECTRUM).help,
             required=True,
             pinned=True,
             width="small",
         ),
         fatigue_inputs.NAME: st.column_config.TextColumn(
             "Bin name *",
-            help="Required and unique across every load table.",
+            help=definition(fatigue_inputs.NAME).help,
             required=True,
             pinned=True,
             width="small",
         ),
         fatigue_inputs.DESCRIPTION: st.column_config.TextColumn(
             "Description",
-            help="Project-defined load-bin description.",
+            help=definition(fatigue_inputs.DESCRIPTION).help,
             pinned=True,
             width="medium",
         ),
-        fatigue_inputs.CYCLES: st.column_config.NumberColumn(
+        fatigue_inputs.CYCLES: st.column_config.TextColumn(
             "Cycles n_i *",
-            help="Number of cycles represented by this bin.",
-            format="%.0f",
+            help=(
+                f"{definition(fatigue_inputs.CYCLES).help} Enter a dot or "
+                "comma decimal."
+            ),
             required=True,
-            min_value=1.0,
-            max_value=1.0e15,
-            step=1000.0,
             width="small",
         ),
-        "n_long_ed_kn": action(
-            "N_Ed,long [kN]",
-            "Sustained/basic axial force; tension is positive.",
-        ),
-        "mx_long_ed_knm": action(
-            "Mx_Ed,long [kNm]",
-            "Sustained/basic moment about the x-axis.",
-        ),
-        "my_long_ed_knm": action(
-            "My_Ed,long [kNm]",
-            "Sustained/basic moment about the y-axis.",
-        ),
-        "n_short_ed_kn": action(
-            f"{_DELTA}N_Ed [kN]",
-            "Cyclic axial-force increment added to N_Ed,long.",
-        ),
+        "n_long_ed_kn": action("n_long_ed_kn", "N_Ed,long [kN]"),
+        "mx_long_ed_knm": action("mx_long_ed_knm", "Mx_Ed,long [kNm]"),
+        "my_long_ed_knm": action("my_long_ed_knm", "My_Ed,long [kNm]"),
+        "n_short_ed_kn": action("n_short_ed_kn", f"{_DELTA}N_Ed [kN]"),
         "mx_short_ed_knm": action(
-            f"{_DELTA}Mx_Ed [kNm]",
-            "Cyclic x-moment increment added to Mx_Ed,long.",
+            "mx_short_ed_knm", f"{_DELTA}Mx_Ed [kNm]"
         ),
         "my_short_ed_knm": action(
-            f"{_DELTA}My_Ed [kNm]",
-            "Cyclic y-moment increment added to My_Ed,long.",
+            "my_short_ed_knm", f"{_DELTA}My_Ed [kNm]"
         ),
     }
 
@@ -1911,8 +2042,10 @@ def _fatigue_spectrum_editor(box):
             st.session_state[key]
         )
     seed = fatigue_inputs.normalise_spectrum_table(st.session_state[seed_key])
+    _table_field_guide(box, fatigue_inputs.SPECTRUM_TABLE_KEY)
+    editor_seed = fatigue_inputs.editor_spectrum_table(seed)
     edited = box.data_editor(
-        seed,
+        editor_seed,
         key=_FATIGUE_EDITOR_KEY,
         **_input_widget_kwargs(
             _FATIGUE_EDITOR_KEY,
@@ -3316,6 +3449,14 @@ def build_inputs(host=st):
         st.session_state[mat_catalog.PRESTRESS_CATALOG_KEY], "prestress"
     )
     mild_material_ids = mat_catalog.material_ids(mild_catalogue, "mild")
+    unresolved_capacity_material_id = rebar_table.text_cell(
+        st.session_state.get("_capacity_steel_unresolved_material_id")
+    )
+    if (
+        unresolved_capacity_material_id
+        and unresolved_capacity_material_id not in mild_material_ids
+    ):
+        mild_material_ids.append(unresolved_capacity_material_id)
     mat_catalog.material_ids(prestress_catalogue, "prestress")
     app_run_probe.stop_phase(st.session_state, normalization_token)
 
@@ -4129,7 +4270,8 @@ def build_inputs(host=st):
         disabled=not (shear_on or torsion_on),
         format_func=lambda value: next(
             (mat_catalog.entry_label(item) for item in mild_catalogue["items"]
-             if item["id"] == value), value
+             if item["id"] == value),
+            f"{value} - undefined (select a material)",
         ),
         help=r"Material law supplying $\gamma_s$ and the longitudinal design yield "
              "for shear/torsion member checks. Element-level bending and stress "
@@ -4324,6 +4466,7 @@ def build_inputs(host=st):
                 "Independent; derived cells are shaded. Paste x/y/area or all "
                 "editable columns.")
     sec.markdown("_Concrete corners_")
+    _table_field_guide(sec, table_fields.CONCRETE_CORNERS_TABLE_KEY)
     outer_mm = _point_editor(sec, "corners_base", "ed_corners", _CORNER_COLS, 1)
     outer = _pts_to_m(outer_mm)
     if len(outer) < 3:
@@ -4335,6 +4478,7 @@ def build_inputs(host=st):
     sec.markdown("_Concrete voids_")
     sec.caption("Several voids share this table, each separated by a blank row "
                 "(each void needs 3 or more corners).")
+    _table_field_guide(sec, table_fields.CONCRETE_VOIDS_TABLE_KEY)
     # The buttons act on the grid's current rows (its last reported value) so typing
     # a void and then adding/removing one does not discard the in-progress corners.
     void_now = _current_table("hole_base", "ed_hole", _CORNER_COLS)
@@ -4354,6 +4498,7 @@ def build_inputs(host=st):
     holes_mm = _void_editor(sec, "hole_base", "ed_hole", len(outer) + 1)
     holes = [_pts_to_m(ring) for ring in holes_mm]
     sec.markdown("_Reinforcing bars_")
+    _table_field_guide(sec, table_fields.BARS_TABLE_KEY)
     _bar_frame, bar_elements, bars_mm = _reinforcement_editor(
         sec, "bars_base", "ed_bars",
     )
@@ -4365,6 +4510,7 @@ def build_inputs(host=st):
     # Tendons are always definable; they only enter the analysis and the report when
     # at least one is present (a section with no tendons is simply not prestressed).
     sec.markdown("_Tendons_")
+    _table_field_guide(sec, table_fields.TENDONS_TABLE_KEY)
     _tendon_frame, tendon_elements, tendons_mm = _reinforcement_editor(
         sec, "tendons_base", "ed_tendons",
     )
@@ -4405,13 +4551,29 @@ def build_inputs(host=st):
         [item["material_id"] for item in tendon_elements],
         prestress_catalogue, "prestress",
     )
+    invalid_capacity_materials = (
+        mat_catalog.invalid_assignments(
+            [capacity_steel_material_id], mild_catalogue, "mild"
+        )
+        if (shear_on or torsion_on)
+        else []
+    )
     material_assignment_error = None
-    if invalid_bar_materials or invalid_tendon_materials:
+    if (
+        invalid_bar_materials
+        or invalid_tendon_materials
+        or invalid_capacity_materials
+    ):
         parts = []
         if invalid_bar_materials:
             parts.append("bar material " + ", ".join(invalid_bar_materials))
         if invalid_tendon_materials:
             parts.append("tendon material " + ", ".join(invalid_tendon_materials))
+        if invalid_capacity_materials:
+            parts.append(
+                "member-check material "
+                + ", ".join(invalid_capacity_materials)
+            )
         material_assignment_error = (
             "Undefined material assignment(s): " + "; ".join(parts) + "."
         )

@@ -379,6 +379,7 @@ function createPointGridInstance(parentElement) {
     state.columnSpecs.forEach(spec => {
       const isNumber = spec.type === "number"
       const isId = spec.type === "id" || spec.field === state.idColumn
+      const help = typeof spec.help === "string" ? spec.help.trim() : ""
       const definition = {
         title: spec.title || spec.field,
         field: spec.field,
@@ -403,6 +404,7 @@ function createPointGridInstance(parentElement) {
           ? "pg-id"
           : spec.derived_role ? `pg-${spec.derived_role}` : "",
       }
+      if (help) definition.headerTooltip = help
       if (isNumber) {
         definition.editor = "number"
         definition.editorParams = { selectContents: true }

@@ -43,6 +43,8 @@ _COMPONENT_JS = (
 )
 _COMPONENT_RENDERERS = WeakKeyDictionary()
 
+_FORMATTED_HELP_MARKERS = ("<", ">", "$", "\\")
+
 
 def _component(**kwargs):
     """Register and mount the grid in the active Streamlit runtime.
@@ -66,6 +68,25 @@ def _component(**kwargs):
     return renderer(**kwargs)
 
 
+def _plain_help(value, field: str) -> str | None:
+    """Return compact plain text for a column-header tooltip.
+
+    Tabulator accepts rich content for header tooltips, but Sector's table help is
+    deliberately a small accessible-text contract.  Reject markup/math delimiters
+    at the Python boundary so no HTML or LaTeX can reach the frontend tooltip.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"column help for {field!r} must be text")
+    help_text = " ".join(value.split())
+    if not help_text:
+        return None
+    if any(marker in help_text for marker in _FORMATTED_HELP_MARKERS):
+        raise ValueError(f"column help for {field!r} must be plain text")
+    return help_text
+
+
 def _normalise_specs(columns, column_specs=None) -> list[dict]:
     """Return strict, ordered frontend metadata for every persisted column."""
     cols = list(columns)
@@ -81,6 +102,11 @@ def _normalise_specs(columns, column_specs=None) -> list[dict]:
         spec["field"] = column
         spec.setdefault("title", column)
         spec.setdefault("type", "number")
+        help_text = _plain_help(spec.get("help"), column)
+        if help_text is None:
+            spec.pop("help", None)
+        else:
+            spec["help"] = help_text
         specs.append(spec)
     return specs
 

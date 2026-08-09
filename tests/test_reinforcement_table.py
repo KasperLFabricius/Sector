@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import reinforcement_table as rt  # noqa: E402
+from app import table_field_definitions as fields  # noqa: E402
 
 
 def test_legacy_rows_get_deterministic_stable_ids_and_defaults():
@@ -168,6 +169,25 @@ def test_grid_metadata_marks_id_immutable_and_size_fields_as_derived_pair():
     assert options["id_prefix"] == "R"
     assert options["compact_paste_fields"] == [rt.X, rt.Y, rt.AREA]
     assert options["default_values"][rt.MATERIAL_ID] == "M1"
+
+
+def test_grid_editable_columns_have_plain_accessible_help():
+    specs = rt.point_grid_specs("bar", ["M1"], ["F1"])
+    editable = [spec for spec in specs if spec.get("editable", True)]
+
+    assert {spec["field"] for spec in editable} == set(rt.COLUMNS) - {
+        rt.ELEMENT_ID
+    }
+    for spec in editable:
+        help_text = spec["help"]
+        assert isinstance(help_text, str) and help_text.strip()
+        assert not any(marker in help_text for marker in ("<", ">", "$", "\\"))
+        assert help_text == fields.field_definition(
+            fields.BARS_TABLE_KEY, spec["field"]
+        ).help
+    assert "square millimetres" in next(
+        spec["help"] for spec in editable if spec["field"] == rt.AREA
+    )
 
 
 def test_grid_material_assignment_is_limited_to_catalogue_ids():

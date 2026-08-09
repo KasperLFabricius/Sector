@@ -13,6 +13,16 @@ from collections.abc import Mapping
 
 import pandas as pd
 
+from app.table_field_definitions import (
+    DecimalParseError,
+    decimal_is_blank,
+    decimal_issue_ledger,
+    field_definition,
+    invalid_decimal_sentinel,
+    is_invalid_decimal_sentinel,
+    parse_decimal,
+    set_decimal_issue_ledger,
+)
 
 PLASTIC_TABLE_KEY = "plastic_cases_base"
 ELASTIC_TABLE_KEY = "elastic_cases_base"
@@ -99,19 +109,38 @@ def _text(value) -> str:
     return str(value).strip()
 
 
-def _number(value) -> float:
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return 0.0
+def _issue_text(value) -> str:
+    """Short retained source text for one malformed numeric cell."""
+
+    text = str(value).strip()
+    return text[:160] or type(value).__name__
+
+
+def _number(
+    value,
+    *,
+    blank,
+    prior_issue: str | None = None,
+) -> tuple[float, str | None]:
+    """Return a canonical number and optional malformed-source ledger entry."""
+
+    if prior_issue and is_invalid_decimal_sentinel(value):
+        return invalid_decimal_sentinel(), prior_issue
+    if decimal_is_blank(value):
+        try:
+            number = parse_decimal(value, blank=blank)
+        except DecimalParseError:
+            # No load-case numeric field is currently required, but fail closed
+            # if a future registry field adopts that policy.
+            return math.nan, None
+        return float(number), None
     try:
-        if pd.isna(value):
-            return 0.0
-    except (TypeError, ValueError):
-        pass
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return math.nan
-    return number if math.isfinite(number) else math.nan
+        number = parse_decimal(value, blank=blank)
+    except DecimalParseError:
+        return invalid_decimal_sentinel(), _issue_text(value)
+    if number is None:  # pragma: no cover - no nullable load actions today
+        return math.nan, None
+    return float(number), None
 
 
 def _flag(value) -> bool:
@@ -165,22 +194,26 @@ def normalise_table(value, key: str) -> pd.DataFrame:
     """Coerce a table-like value to the canonical columns and dtypes.
 
     Unknown columns are discarded. Blank force cells become zero; invalid
-    nonblank values remain NaN so :func:`validation_errors` can reject them before
-    calculation. Canonical frames retain NaN sentinels across repeated validation.
+    nonblank values remain invalid so :func:`validation_errors` can reject them
+    before calculation.  A canonical frame carries an attrs ledger plus a tagged
+    NaN sentinel: repeated validation retains malformed text, while replacing the
+    cell with an ordinary editor NaN is a genuine clear and therefore becomes zero.
     """
     key = _kind(key)
     if value is None:
         return empty_table(key)
-    if (
+    canonical_source = bool(
         isinstance(value, pd.DataFrame)
         and value.attrs.get("sector_load_case_table") == key
         and tuple(value.columns) == TABLE_COLUMNS[key]
-    ):
-        return value.copy(deep=True).reset_index(drop=True)
+    )
     try:
         frame = value.copy(deep=True) if isinstance(value, pd.DataFrame) else pd.DataFrame(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} is not tabular") from exc
+    frame = frame.reset_index(drop=True)
+    prior_issues = decimal_issue_ledger(frame.attrs) if canonical_source else {}
+    issues: dict[tuple[int, str], str] = {}
     result = pd.DataFrame(index=frame.index)
     for column in TEXT_COLUMNS[key]:
         default = FACE_AUTO if column in PLASTIC_FACE_COLUMNS else ""
@@ -193,13 +226,47 @@ def normalise_table(value, key: str) -> pd.DataFrame:
         result[column] = source.map(mapper).astype("string")
     for column in NUMERIC_COLUMNS[key]:
         source = frame[column] if column in frame else pd.Series(0.0, index=frame.index)
-        result[column] = source.map(_number).astype("float64")
+        blank = field_definition(key, column).blank
+        values = []
+        for position, value_at_position in enumerate(source.tolist()):
+            number, issue = _number(
+                value_at_position,
+                blank=blank,
+                prior_issue=prior_issues.get((position, column)),
+            )
+            values.append(number)
+            if issue is not None:
+                issues[(position, column)] = issue
+        result[column] = pd.Series(values, index=frame.index, dtype="float64")
     for column in FLAG_COLUMNS[key]:
         source = frame[column] if column in frame else pd.Series(False, index=frame.index)
         result[column] = source.map(_flag).astype("bool")
     result = result.loc[:, TABLE_COLUMNS[key]].reset_index(drop=True)
     result.attrs["sector_load_case_table"] = key
+    set_decimal_issue_ledger(result.attrs, issues)
     return result
+
+
+def editor_table(value, key: str) -> pd.DataFrame:
+    """Project canonical actions into lossless text-backed editor columns."""
+
+    key = _kind(key)
+    frame = normalise_table(value, key)
+    display = frame.copy(deep=True)
+    issues = decimal_issue_ledger(frame.attrs)
+    for column in NUMERIC_COLUMNS[key]:
+        values = []
+        for position, value_at_position in enumerate(frame[column].tolist()):
+            issue = issues.get((position, column))
+            if issue is not None:
+                values.append(issue)
+                continue
+            number = float(value_at_position)
+            values.append(repr(number) if math.isfinite(number) else "")
+        display[column] = pd.Series(
+            values, index=display.index, dtype="string"
+        )
+    return display
 
 
 def _row_is_blank(row: Mapping, key: str) -> bool:
@@ -225,7 +292,18 @@ def active_table(value, key: str) -> pd.DataFrame:
     """Return canonical nonblank rows, retaining their user-facing order."""
     frame = normalise_table(value, key)
     keep = [not _row_is_blank(row, key) for row in frame.to_dict("records")]
-    return frame.loc[keep].reset_index(drop=True)
+    positions = [position for position, retained in enumerate(keep) if retained]
+    active = frame.loc[keep].reset_index(drop=True)
+    old_issues = decimal_issue_ledger(frame.attrs)
+    new_issues = {
+        (new_position, column): old_issues[(old_position, column)]
+        for new_position, old_position in enumerate(positions)
+        for column in NUMERIC_COLUMNS[key]
+        if (old_position, column) in old_issues
+    }
+    active.attrs["sector_load_case_table"] = key
+    set_decimal_issue_ledger(active.attrs, new_issues)
+    return active
 
 
 def table_records(value, key: str) -> list[dict]:

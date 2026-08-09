@@ -24,6 +24,8 @@ import numpy as np
 import pandas as pd
 import reinforcement_table as rebar_table
 
+from app.table_field_definitions import decimal_issue_ledger
+
 from sector import __version__ as sector_version
 from sector import capacity, design_standards, geometry
 from sector.build_info import source_revision
@@ -204,6 +206,17 @@ def _normalise_table(value, key: str) -> pd.DataFrame:
 
 def _table_to_obj(value, key: str) -> dict:
     frame = _normalise_table(value, key)
+    issues = decimal_issue_ledger(frame.attrs)
+    if issues:
+        (row, column), entered = min(issues.items())
+        raise ValueError(
+            f"{key} row {row + 1}: {column} contains malformed decimal "
+            f"input {entered!r}"
+        )
+    if key in CASE_TABLE_KEYS:
+        load_cases.table_records(frame, key)
+    elif key == fatigue_inputs.SPECTRUM_TABLE_KEY:
+        fatigue_inputs.spectrum_records(frame)
     columns = [str(column) for column in frame.columns]
     rows = [
         [_cell(cell) for cell in row]
@@ -305,7 +318,32 @@ def _validate_geometry(tables: Mapping) -> None:
         raise ValueError(f"invalid project section geometry: {exc}") from exc
 
 
-def _canonical_scalars(scalars: Mapping) -> dict:
+def _assigned_catalog_ids(
+    tables: Mapping,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Return material/fatigue assignments from all reinforcement rows."""
+
+    bars = rebar_table.normalise_table(tables.get("bars_base"), "bar")
+    tendons = rebar_table.normalise_table(
+        tables.get("tendons_base"), "tendon"
+    )
+
+    def values(frame: pd.DataFrame, column: str) -> tuple[str, ...]:
+        return tuple(
+            text
+            for value in frame[column].tolist()
+            if (text := rebar_table.text_cell(value))
+        )
+
+    return (
+        values(bars, rebar_table.MATERIAL_ID),
+        values(tendons, rebar_table.MATERIAL_ID),
+        values(bars, rebar_table.FATIGUE_DETAIL_ID),
+        values(tendons, rebar_table.FATIGUE_DETAIL_ID),
+    )
+
+
+def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
     payload = {
         key: _json_value(scalars[key])
         for key in SCALAR_KEYS
@@ -313,18 +351,64 @@ def _canonical_scalars(scalars: Mapping) -> dict:
     }
     for key in _POSITIVE_FACTOR_KEYS.intersection(payload):
         payload[key] = _positive_real(payload[key], key)
-    for kind in ("mild", "prestress"):
+    mild_ids, prestress_ids, bar_fatigue_ids, tendon_fatigue_ids = (
+        _assigned_catalog_ids(tables)
+    )
+    capacity_material_id = rebar_table.text_cell(
+        payload.get("capacity_steel_material_id")
+    )
+    if (
+        capacity_material_id
+        and (payload.get("shear_on") or payload.get("torsion_on"))
+    ):
+        mild_ids = (*mild_ids, capacity_material_id)
+    for kind, assigned_ids in (
+        ("mild", mild_ids),
+        ("prestress", prestress_ids),
+    ):
         key = material_catalog.catalog_key(kind)
         if key in payload:
             payload[key] = material_catalog.normalise_catalog(
                 payload[key],
                 kind,
+                reserved_ids=assigned_ids,
             )
+            invalid = material_catalog.invalid_assignments(
+                assigned_ids, payload[key], kind
+            )
+            if invalid:
+                raise ValueError(
+                    f"undefined {kind} material assignment(s): "
+                    + ", ".join(invalid)
+                )
+        elif assigned_ids:
+            raise ValueError(f"{key} is required by material assignments")
     if fatigue_inputs.DETAIL_CATALOG_KEY in payload:
         payload[fatigue_inputs.DETAIL_CATALOG_KEY] = (
             fatigue_inputs.normalise_catalog(
-                payload[fatigue_inputs.DETAIL_CATALOG_KEY]
+                payload[fatigue_inputs.DETAIL_CATALOG_KEY],
+                assigned_ids=bar_fatigue_ids + tendon_fatigue_ids,
             )
+        )
+        invalid_bar = fatigue_inputs.invalid_assignments(
+            bar_fatigue_ids,
+            payload[fatigue_inputs.DETAIL_CATALOG_KEY],
+            fatigue_inputs.MILD,
+        )
+        invalid_tendon = fatigue_inputs.invalid_assignments(
+            tendon_fatigue_ids,
+            payload[fatigue_inputs.DETAIL_CATALOG_KEY],
+            fatigue_inputs.PRESTRESS,
+        )
+        if invalid_bar or invalid_tendon:
+            raise ValueError(
+                "undefined fatigue-detail assignment(s): "
+                + ", ".join((*invalid_bar, *invalid_tendon))
+            )
+    elif bar_fatigue_ids or tendon_fatigue_ids:
+        raise ValueError(
+            f"{fatigue_inputs.DETAIL_CATALOG_KEY} is required by fatigue "
+            "assignments"
         )
     if fatigue_inputs.BASIS_KEY in payload:
         payload[fatigue_inputs.BASIS_KEY] = fatigue_inputs.normalise_basis(
@@ -358,7 +442,7 @@ def _canonical_inputs(tables: Mapping, scalars: Mapping) -> dict:
             key: _table_to_obj(tables.get(key), key)
             for key in PROJECT_TABLE_KEYS
         },
-        "scalars": _canonical_scalars(scalars),
+        "scalars": _canonical_scalars(scalars, tables),
     }
 
 
@@ -648,6 +732,6 @@ def parse_project(text: str):
             "unknown current-schema inputs: "
             + ", ".join(sorted(unknown_scalars))
         )
-    scalars = _canonical_scalars(raw_scalars)
+    scalars = _canonical_scalars(raw_scalars, tables)
     _validate_geometry(tables)
     return tables, scalars

@@ -19,7 +19,12 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "app"))
 
 import point_grid as point_grid_module  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
-from point_grid import _component_records, _rows_to_df, _versioned_rows  # noqa: E402
+from point_grid import (  # noqa: E402
+    _component_records,
+    _normalise_specs,
+    _rows_to_df,
+    _versioned_rows,
+)
 
 _CORNERS = ["x (mm)", "y (mm)"]
 _REBAR = ["x (mm)", "y (mm)", "area (mm2)"]
@@ -125,6 +130,50 @@ def test_point_grid_sends_only_strict_json_to_streamlit(monkeypatch):
     json.dumps({"data": captured["data"], "default": captured["default"]},
                allow_nan=False)
     assert np.isnan(result.iloc[1]["x (mm)"])
+
+
+def test_geometry_help_is_plain_text_and_reaches_the_component_payload(
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_component(**kwargs):
+        captured.update(kwargs)
+        return kwargs["default"]
+
+    monkeypatch.setattr(point_grid_module, "_component", fake_component)
+    point_grid_module.point_grid(
+        pd.DataFrame({"x (mm)": [10.0], "y (mm)": [20.0]}),
+        _CORNERS,
+        key="geometry-help",
+        column_specs=[
+            {
+                "field": "x (mm)",
+                "help": "Point x coordinate from the section origin.",
+            },
+            {
+                "field": "y (mm)",
+                "help": "Point y coordinate from the section origin.",
+            },
+        ],
+    )
+
+    specs = captured["data"]["column_specs"]
+    assert [spec["field"] for spec in specs] == _CORNERS
+    assert specs[0]["help"].startswith("Point x coordinate")
+    assert specs[1]["help"].startswith("Point y coordinate")
+    for spec in specs:
+        assert not any(marker in spec["help"] for marker in ("<", ">", "$", "\\"))
+    json.dumps(captured["data"], allow_nan=False)
+
+
+@pytest.mark.parametrize("formatted_help", ["<b>x</b>", "$x$", r"\(x\)"])
+def test_column_help_rejects_html_and_latex(formatted_help):
+    with pytest.raises(ValueError, match="must be plain text"):
+        _normalise_specs(
+            ["x (mm)"],
+            [{"field": "x (mm)", "help": formatted_help}],
+        )
 
 
 def test_point_grid_sends_persistent_id_and_derivation_contract(monkeypatch):
@@ -353,6 +402,8 @@ def test_frontend_uses_only_components_v2_state_api():
     assert 'setAttribute("data-size-mode", value)' in renderer
     assert "pg-${spec.derived_role}" in renderer
     assert "spec.type === \"select\"" in renderer
+    assert "definition.headerTooltip = help" in renderer
+    assert 'typeof spec.help === "string"' in renderer
     assert "st.components.v2.component" in wrapper
     for banned in (
         "components.v1",

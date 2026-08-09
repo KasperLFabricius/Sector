@@ -24,8 +24,18 @@ from collections.abc import Mapping, Sequence
 
 import pandas as pd
 
+from app.table_field_definitions import (
+    BlankPolicy,
+    DecimalParseError,
+    decimal_is_blank,
+    decimal_issue_ledger,
+    field_definition,
+    invalid_decimal_sentinel,
+    is_invalid_decimal_sentinel,
+    parse_decimal,
+    set_decimal_issue_ledger,
+)
 from sector.design_standards import DesignBasisKey
-
 
 VERSION = 2
 
@@ -282,19 +292,36 @@ def _matches_named_preset(entry: Mapping, preset: str) -> bool:
     return True
 
 
-def _number(value) -> float:
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return 0.0
+def _issue_text(value) -> str:
+    """Short retained source text for one malformed spectrum cell."""
+
+    text = str(value).strip()
+    return text[:160] or type(value).__name__
+
+
+def _number(
+    value,
+    *,
+    blank: BlankPolicy,
+    prior_issue: str | None = None,
+) -> tuple[float, str | None]:
+    """Return a canonical number and optional malformed-source ledger entry."""
+
+    if prior_issue and is_invalid_decimal_sentinel(value):
+        return invalid_decimal_sentinel(), prior_issue
+    if decimal_is_blank(value):
+        try:
+            number = parse_decimal(value, blank=blank)
+        except DecimalParseError:
+            # Required blanks use an ordinary NaN. Unlike the tagged malformed
+            # sentinel, an editor clear can therefore be identified reliably.
+            return math.nan, None
+        return (math.nan if number is None else float(number)), None
     try:
-        if pd.isna(value):
-            return 0.0
-    except (TypeError, ValueError):
-        pass
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return math.nan
-    return number if math.isfinite(number) else math.nan
+        number = parse_decimal(value, blank=blank)
+    except DecimalParseError:
+        return invalid_decimal_sentinel(), _issue_text(value)
+    return (math.nan if number is None else float(number)), None
 
 
 def _source_items(value) -> list[Mapping]:
@@ -426,40 +453,70 @@ def _normalise_entry(raw: Mapping, detail_id: str) -> dict:
     return out
 
 
-def normalise_catalog(value) -> dict:
-    """Return a canonical catalogue with stable, unique ``F<number>`` IDs."""
+def normalise_catalog(
+    value,
+    *,
+    assigned_ids: Sequence[str] = (),
+) -> dict:
+    """Return a canonical catalogue with stable, reusable ``F<number>`` IDs.
+
+    Existing valid item IDs retain their identity. Repaired and future IDs use
+    the lowest positive suffix that is absent from both the catalogue and the
+    supplied assignments; a stale persisted ``next_id`` is never authoritative.
+    """
     source = _source_items(value)
     if not source:
         # ``None`` means a new, not-yet-initialised catalogue. Explicit empty or
         # malformed catalogues are rejected by ``_source_items`` above.
-        return default_catalog()
+        if not assigned_ids:
+            return default_catalog()
+        pattern = re.compile(r"^F([1-9][0-9]*)$")
+        reserved = {
+            text
+            for value_at_position in assigned_ids
+            if (text := str(value_at_position).strip())
+            and pattern.fullmatch(text)
+        }
+        number = 1
+        while f"F{number}" in reserved:
+            number += 1
+        item_id = f"F{number}"
+        next_number = 1
+        while f"F{next_number}" in reserved or next_number == number:
+            next_number += 1
+        return {
+            "version": VERSION,
+            "next_id": next_number,
+            "items": [default_entry(detail_id=item_id)],
+        }
     for position, raw in enumerate(source, start=1):
         _validate_raw_entry(raw, position)
     pattern = re.compile(r"^F([1-9][0-9]*)$")
-    valid_numbers = [
-        int(match.group(1))
+    valid_ids = {
+        match.group(0)
         for item in source
         if (match := pattern.fullmatch(_text(item.get("id"))))
-    ]
-    next_number = max(valid_numbers, default=0) + 1
+    }
+    reserved = {
+        text
+        for value_at_position in assigned_ids
+        if (text := str(value_at_position).strip()) and pattern.fullmatch(text)
+    }
+    unavailable = valid_ids | reserved
     used: set[str] = set()
     items = []
     for raw in source:
         detail_id = _text(raw.get("id"))
         if not pattern.fullmatch(detail_id) or detail_id in used:
-            while f"F{next_number}" in used:
-                next_number += 1
-            detail_id = f"F{next_number}"
-            next_number += 1
+            number = 1
+            while f"F{number}" in unavailable or f"F{number}" in used:
+                number += 1
+            detail_id = f"F{number}"
+            unavailable.add(detail_id)
         used.add(detail_id)
         items.append(_normalise_entry(raw, detail_id))
-    requested_next = value.get("next_id") if isinstance(value, Mapping) else None
-    try:
-        requested_next = int(requested_next)
-    except (TypeError, ValueError):
-        requested_next = 1
-    next_number = max(next_number, requested_next, 1)
-    while f"F{next_number}" in used:
+    next_number = 1
+    while f"F{next_number}" in used or f"F{next_number}" in reserved:
         next_number += 1
     return {"version": VERSION, "next_id": next_number, "items": items}
 
@@ -507,24 +564,44 @@ def invalid_assignments(
     })
 
 
-def _next_id(catalog) -> tuple[dict, str, int]:
-    canonical = normalise_catalog(catalog)
-    used = set(detail_ids(canonical))
-    number = int(canonical["next_id"])
+def _next_id(
+    catalog,
+    *,
+    assigned_ids: Sequence[str] = (),
+) -> tuple[dict, str, int]:
+    canonical = normalise_catalog(catalog, assigned_ids=assigned_ids)
+    used = set(detail_ids(canonical)) | {
+        str(value).strip() for value in assigned_ids if str(value).strip()
+    }
+    number = 1
     while f"F{number}" in used:
         number += 1
     return canonical, f"F{number}", number + 1
 
 
-def add_entry(catalog, *, preset: str = DEFAULT_PRESET) -> tuple[dict, str]:
-    canonical, detail_id, next_number = _next_id(catalog)
+def add_entry(
+    catalog,
+    *,
+    preset: str = DEFAULT_PRESET,
+    assigned_ids: Sequence[str] = (),
+) -> tuple[dict, str]:
+    canonical, detail_id, _next_number = _next_id(
+        catalog, assigned_ids=assigned_ids
+    )
     canonical["items"].append(default_entry(detail_id=detail_id, preset=preset))
-    canonical["next_id"] = next_number
+    canonical = normalise_catalog(canonical, assigned_ids=assigned_ids)
     return canonical, detail_id
 
 
-def duplicate_entry(catalog, detail_id: str) -> tuple[dict, str]:
-    canonical, new_id, next_number = _next_id(catalog)
+def duplicate_entry(
+    catalog,
+    detail_id: str,
+    *,
+    assigned_ids: Sequence[str] = (),
+) -> tuple[dict, str]:
+    canonical, new_id, _next_number = _next_id(
+        catalog, assigned_ids=assigned_ids
+    )
     source = next(
         (item for item in canonical["items"] if item["id"] == detail_id),
         None,
@@ -535,7 +612,7 @@ def duplicate_entry(catalog, detail_id: str) -> tuple[dict, str]:
     item["id"] = new_id
     item["name"] = f"{source['name']} copy"
     canonical["items"].append(item)
-    canonical["next_id"] = next_number
+    canonical = normalise_catalog(canonical, assigned_ids=assigned_ids)
     return canonical, new_id
 
 
@@ -545,7 +622,7 @@ def delete_entry(
     *,
     assigned_ids: Sequence[str] = (),
 ) -> dict:
-    canonical = normalise_catalog(catalog)
+    canonical = normalise_catalog(catalog, assigned_ids=assigned_ids)
     if len(canonical["items"]) <= 1:
         raise ValueError("at least one fatigue detail must remain")
     if detail_id in {str(value).strip() for value in assigned_ids}:
@@ -553,8 +630,9 @@ def delete_entry(
     kept = [item for item in canonical["items"] if item["id"] != detail_id]
     if len(kept) == len(canonical["items"]):
         raise KeyError(detail_id)
-    canonical["items"] = kept
-    return canonical
+    return normalise_catalog(
+        {"version": VERSION, "items": kept}, assigned_ids=assigned_ids
+    )
 
 
 def replace_entry(catalog, entry: Mapping) -> dict:
@@ -696,12 +774,11 @@ def empty_spectrum_table() -> pd.DataFrame:
 def normalise_spectrum_table(value) -> pd.DataFrame:
     if value is None:
         return empty_spectrum_table()
-    if (
+    canonical_source = bool(
         isinstance(value, pd.DataFrame)
         and value.attrs.get("sector_fatigue_spectrum") == VERSION
         and tuple(value.columns) == SPECTRUM_COLUMNS
-    ):
-        return value.copy(deep=True).reset_index(drop=True)
+    )
     try:
         frame = (
             value.copy(deep=True)
@@ -710,19 +787,64 @@ def normalise_spectrum_table(value) -> pd.DataFrame:
         )
     except (TypeError, ValueError) as exc:
         raise ValueError("fatigue spectrum is not tabular") from exc
+    frame = frame.reset_index(drop=True)
+    prior_issues = decimal_issue_ledger(frame.attrs) if canonical_source else {}
+    issues: dict[tuple[int, str], str] = {}
     result = pd.DataFrame(index=frame.index)
     for column in SPECTRUM_TEXT:
         source = frame[column] if column in frame else pd.Series("", index=frame.index)
         result[column] = source.map(_text).astype("string")
     for column in SPECTRUM_NUMERIC:
-        source = frame[column] if column in frame else pd.Series(0.0, index=frame.index)
-        result[column] = source.map(_number).astype("float64")
+        blank = field_definition(SPECTRUM_TABLE_KEY, column).blank
+        missing = None if blank is BlankPolicy.REQUIRED else 0.0
+        source = (
+            frame[column]
+            if column in frame
+            else pd.Series(missing, index=frame.index)
+        )
+        values = []
+        for position, value_at_position in enumerate(source.tolist()):
+            number, issue = _number(
+                value_at_position,
+                blank=blank,
+                prior_issue=prior_issues.get((position, column)),
+            )
+            values.append(number)
+            if issue is not None:
+                issues[(position, column)] = issue
+        result[column] = pd.Series(values, index=frame.index, dtype="float64")
     result = result.loc[:, SPECTRUM_COLUMNS].reset_index(drop=True)
     result.attrs["sector_fatigue_spectrum"] = VERSION
+    set_decimal_issue_ledger(result.attrs, issues)
     return result
 
 
-def _blank_spectrum_row(row: Mapping) -> bool:
+def editor_spectrum_table(value) -> pd.DataFrame:
+    """Project canonical numeric cells to strings before native editing."""
+
+    frame = normalise_spectrum_table(value)
+    display = frame.copy(deep=True)
+    issues = decimal_issue_ledger(frame.attrs)
+    for column in SPECTRUM_NUMERIC:
+        values = []
+        for position, value_at_position in enumerate(frame[column].tolist()):
+            issue = issues.get((position, column))
+            if issue is not None:
+                values.append(issue)
+                continue
+            number = float(value_at_position)
+            values.append(repr(number) if math.isfinite(number) else "")
+        display[column] = pd.Series(
+            values, index=display.index, dtype="string"
+        )
+    return display
+
+
+def _blank_spectrum_row(
+    row: Mapping,
+    position: int,
+    issues: Mapping[tuple[int, str], str],
+) -> bool:
     def finite_zero(value) -> bool:
         try:
             number = float(value)
@@ -730,19 +852,37 @@ def _blank_spectrum_row(row: Mapping) -> bool:
             return False
         return math.isfinite(number) and number == 0.0
 
+    if any(row_number == position for row_number, _column in issues):
+        return False
+    try:
+        cycles_blank = decimal_is_blank(row.get(CYCLES))
+    except (TypeError, ValueError):
+        cycles_blank = False
     return bool(
         not any(_text(row.get(column)) for column in SPECTRUM_TEXT)
-        and all(finite_zero(row.get(column)) for column in SPECTRUM_NUMERIC)
+        and cycles_blank
+        and all(finite_zero(row.get(column)) for column in ACTION_COLUMNS)
     )
 
 
 def active_spectrum_table(value) -> pd.DataFrame:
     frame = normalise_spectrum_table(value)
+    issues = decimal_issue_ledger(frame.attrs)
     keep = [
-        not _blank_spectrum_row(row)
-        for row in frame.to_dict("records")
+        not _blank_spectrum_row(row, position, issues)
+        for position, row in enumerate(frame.to_dict("records"))
     ]
-    return frame.loc[keep].reset_index(drop=True)
+    positions = [position for position, retained in enumerate(keep) if retained]
+    active = frame.loc[keep].reset_index(drop=True)
+    new_issues = {
+        (new_position, column): issues[(old_position, column)]
+        for new_position, old_position in enumerate(positions)
+        for column in SPECTRUM_NUMERIC
+        if (old_position, column) in issues
+    }
+    active.attrs["sector_fatigue_spectrum"] = VERSION
+    set_decimal_issue_ledger(active.attrs, new_issues)
+    return active
 
 
 def spectrum_records(value) -> list[dict]:
@@ -784,6 +924,7 @@ def spectrum_errors(
     require_rows: bool = False,
 ) -> list[str]:
     frame = active_spectrum_table(value)
+    issues = decimal_issue_ledger(frame.attrs)
     errors = []
     if require_rows and frame.empty:
         return ["At least one fatigue spectrum bin is required"]
@@ -820,7 +961,13 @@ def spectrum_errors(
             else:
                 seen.add(folded)
         cycles = float(row[CYCLES])
-        if not math.isfinite(cycles) or cycles <= 0.0:
+        if (index, CYCLES) in issues:
+            errors.append(
+                f"Fatigue row {number}: cycles must be a finite number"
+            )
+        elif math.isnan(cycles):
+            errors.append(f"Fatigue row {number}: cycles is required")
+        elif not math.isfinite(cycles) or cycles <= 0.0:
             errors.append(f"Fatigue row {number}: cycles must be greater than zero")
         for column in ACTION_COLUMNS:
             if not math.isfinite(float(row[column])):

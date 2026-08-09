@@ -69,14 +69,14 @@ def test_bent_bar_factor_uses_mandrel_ratio_and_cannot_exceed_straight_bar():
     assert fi.bend_reduction_factor(entry, 16.0) == 1.0
 
 
-def test_catalogue_ids_are_stable_and_never_reused():
+def test_catalogue_ids_are_stable_and_lowest_unused_id_is_reused():
     catalogue, second = fi.add_entry(fi.default_catalog())
     catalogue, third = fi.duplicate_entry(catalogue, "F1")
     catalogue = fi.delete_entry(catalogue, second)
-    catalogue, fourth = fi.add_entry(catalogue)
+    catalogue, reused = fi.add_entry(catalogue)
 
-    assert (second, third, fourth) == ("F2", "F3", "F4")
-    assert fi.detail_ids(catalogue) == ["F1", "F3", "F4"]
+    assert (second, third, reused) == ("F2", "F3", "F2")
+    assert fi.detail_ids(catalogue) == ["F1", "F3", "F2"]
 
 
 def test_catalogue_delete_rejects_last_or_assigned_detail():
@@ -98,10 +98,10 @@ def test_catalogue_repairs_duplicate_ids_and_checks_assignment_kind():
     }
     catalogue = fi.normalise_catalog(raw)
 
-    assert fi.detail_ids(catalogue) == ["F4", "F5", "F6"]
+    assert fi.detail_ids(catalogue) == ["F4", "F1", "F2"]
     assert fi.invalid_assignments(["", "F4"], catalogue, fi.MILD) == []
-    assert fi.invalid_assignments(["F5"], catalogue, fi.MILD) == ["F5"]
-    assert fi.invalid_assignments(["F5"], catalogue, fi.PRESTRESS) == []
+    assert fi.invalid_assignments(["F1"], catalogue, fi.MILD) == ["F1"]
+    assert fi.invalid_assignments(["F1"], catalogue, fi.PRESTRESS) == []
 
 
 def test_catalogue_validation_requires_positive_curve_data_and_mandrel():
@@ -251,7 +251,7 @@ def test_blank_spectrum_rows_are_ignored_but_invalid_active_values_are_retained(
     assert len(active) == 1
     assert math.isnan(active.loc[0, "cycles"])
     assert fi.spectrum_errors(active) == [
-        "Fatigue row 1: cycles must be greater than zero"
+        "Fatigue row 1: cycles must be a finite number"
     ]
     with pytest.raises(ValueError, match="cycles must be finite"):
         fi.spectrum_records(active)
@@ -266,7 +266,7 @@ def test_invalid_numeric_only_row_is_not_silently_discarded():
     assert fi.spectrum_errors(active) == [
         "Fatigue row 1: Spectrum is required",
         "Fatigue row 1: Name is required",
-        "Fatigue row 1: cycles must be greater than zero",
+        "Fatigue row 1: cycles must be a finite number",
     ]
 
 
@@ -303,8 +303,10 @@ def test_spectrum_case_collisions_are_reported_and_never_split_damage_groups():
     groups = fi.spectrum_groups(rows)
 
     assert errors == [
-        "Fatigue row 2: Spectrum 'traffic' differs only by case from "
-        "'Traffic'; use one spelling"
+        (
+            "Fatigue row 2: Spectrum 'traffic' differs only by case from "
+            "'Traffic'; use one spelling"
+        )
     ]
     assert list(groups) == ["Traffic"]
     assert [row["name"] for row in groups["Traffic"]] == ["FAT-01", "FAT-02"]

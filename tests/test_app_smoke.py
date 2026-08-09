@@ -2556,6 +2556,61 @@ def test_catalogue_revisions_preserve_every_live_reinforcement_cell():
             assert actual[key] == value
 
 
+def test_startup_catalogue_repair_reserves_incomplete_row_assignments():
+    import fatigue_inputs
+    import material_catalog
+    import reinforcement_table as rebar_table
+
+    at = _fresh()
+    at.session_state["pts_init"] = True
+    at.session_state["bars_base"] = rebar_table.normalise_table(
+        [{
+            rebar_table.X: 0.0,
+            rebar_table.Y: 0.0,
+            rebar_table.SIZE_MODE: rebar_table.AREA_MODE,
+            rebar_table.AREA: None,
+            rebar_table.MATERIAL_ID: "M2",
+            rebar_table.FATIGUE_DETAIL_ID: "F2",
+        }],
+        "bar",
+    )
+    at.session_state[material_catalog.MILD_CATALOG_KEY] = {
+        "items": [
+            {**material_catalog.default_entry("mild"), "id": "bad"}
+        ]
+    }
+    at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY] = {
+        "items": [
+            {**fatigue_inputs.default_entry(), "id": "bad"}
+        ]
+    }
+    at.session_state["shear_on"] = True
+    at.session_state["capacity_steel_material_id"] = "M3"
+
+    at.run()
+
+    assert not at.exception
+    assert material_catalog.material_ids(
+        at.session_state[material_catalog.MILD_CATALOG_KEY], "mild"
+    ) == ["M1"]
+    assert fatigue_inputs.detail_ids(
+        at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY]
+    ) == ["F1"]
+    assert at.session_state["bars_base"].loc[0, rebar_table.MATERIAL_ID] == "M2"
+    assert (
+        at.session_state["bars_base"].loc[0, rebar_table.FATIGUE_DETAIL_ID]
+        == "F2"
+    )
+    assert at.session_state["capacity_steel_material_id"] == "M3"
+    assert at.session_state[
+        "_capacity_steel_unresolved_material_id"
+    ] == "M3"
+    assert at.selectbox(key="capacity_steel_material_id").value == "M3"
+    assert "member-check material M3" in at.session_state[
+        "_latest_inputs"
+    ]["material_error"]
+
+
 def test_bulk_reinforcement_assignment_updates_all_and_selected_rows():
     from pandas.testing import assert_frame_equal
 
@@ -3766,6 +3821,9 @@ def test_results_views_render_after_calculate():
 
 
 def test_native_load_case_editors_use_consistent_ed_columns():
+    import fatigue_inputs
+    import load_cases
+
     at = _fresh()
     at.run()
     _goto_input_tab(at, "Loads")
@@ -3783,6 +3841,17 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
         "calculate_crack_width",
     ]
+    for editor_key, action_columns in (
+        ("plastic_cases_editor", load_cases.PLASTIC_NUMERIC),
+        ("elastic_cases_editor", load_cases.ELASTIC_NUMERIC),
+    ):
+        column_config = json.loads(
+            _widget(at.dataframe, editor_key).proto.columns
+        )
+        for key in action_columns:
+            assert column_config[key]["required"] is False
+            assert column_config[key]["default"] == "0"
+            assert column_config[key]["type_config"]["type"] == "text"
     _goto_input_tab(at, "Analysis settings")
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_input_tab(at, "Loads")
@@ -3798,6 +3867,26 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         label = column_config[key]["label"]
         assert label.startswith(chr(0x394))
         assert "Delta" not in label and "$" not in label and "\\" not in label
+    for key in fatigue_inputs.ACTION_COLUMNS:
+        assert column_config[key]["required"] is False
+        assert column_config[key]["default"] == "0"
+        assert column_config[key]["type_config"]["type"] == "text"
+    assert column_config[fatigue_inputs.CYCLES]["required"] is True
+    assert column_config[fatigue_inputs.CYCLES]["type_config"]["type"] == "text"
+    load_guide_labels = {item.label for item in at.expander}
+    assert {
+        "Plastic and capacity cases - field guide",
+        "Elastic cases - field guide",
+        "Grouped fatigue spectrum - field guide",
+    }.issubset(load_guide_labels)
+    guide_tables = [
+        item.value
+        for item in at.markdown
+        if "| Notation / field | Meaning and sign | Input rule / source |"
+        in str(item.value)
+    ]
+    assert len(guide_tables) == 3
+    assert all(value.count("$") % 2 == 0 for value in guide_tables)
     rendered_keys = {
         widget.key
         for widgets in (at.number_input, at.text_input, at.checkbox)
@@ -3808,6 +3897,14 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "el_long_P", "el_long_Mx", "el_long_My",
         "el_short_P", "el_short_Mx", "el_short_My", "sls_cw",
     })
+    _goto_input_tab(at, "Section")
+    section_guide_labels = {item.label for item in at.expander}
+    assert {
+        "Concrete corner points - field guide",
+        "Concrete void points - field guide",
+        "Reinforcing bars - field guide",
+        "Prestressing tendons - field guide",
+    }.issubset(section_guide_labels)
 
 
 def test_fatigue_editor_submits_sparse_new_rows_with_zero_action_defaults():
@@ -3822,8 +3919,9 @@ def test_fatigue_editor_submits_sparse_new_rows_with_zero_action_defaults():
     editor = _widget(at.dataframe, "fatigue_spectrum_editor")
     column_config = json.loads(editor.proto.columns)
     for key in fatigue_inputs.ACTION_COLUMNS:
-        assert column_config[key]["required"] is True
-        assert column_config[key]["default"] == pytest.approx(0.0)
+        assert column_config[key]["required"] is False
+        assert column_config[key]["default"] == "0"
+        assert column_config[key]["type_config"]["type"] == "text"
 
     # Regression for the observed one-bin Train spectrum: the engineer only
     # enters the non-zero cyclic moment. Streamlit must still be able to submit
