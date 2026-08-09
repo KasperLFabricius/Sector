@@ -68,13 +68,12 @@ __all__ = (
     "validate_worked_example_text",
 )
 
-# Geometry, concrete law, steel law, two plastic interactions, two plastic
-# states, two elastic states, two elastic strain profiles, one derived shear
-# geometry, one shear-truss figure, one torsion-tube figure, two V-T interaction
-# figures, one minimum-reinforcement figure, one clear-spacing figure and four
-# grouped-fatigue figures. An intentional fixture change must update this
+# Geometry, concrete law, two steel laws, clear-spacing and minimum-reinforcement
+# geometry, derived shear geometry, shear truss, torsion tube, two V-T interaction
+# figures, one plastic interaction and state, one elastic state and strain profile,
+# and four grouped-fatigue figures. An intentional fixture change must update this
 # explicit contract.
-_EXPECTED_FIGURE_COUNT = 16
+_EXPECTED_FIGURE_COUNT = 19
 _REPORT_CROPS = (
     RasterCrop(
         "report overview",
