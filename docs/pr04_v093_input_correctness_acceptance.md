@@ -140,7 +140,7 @@ Acceptance requires:
 
 The final local affected-surface gate on the rebased candidate produced:
 
-- 197 passed: complete field-registry, load-case, fatigue-input,
+- 202 passed: complete field-registry, load-case, fatigue-input,
   material-catalogue, reinforcement-table, point-grid and project-I/O suites;
 - 14 passed: directly affected Streamlit catalogue/editor lifecycle nodes and
   the complete lazy-startup suite;
@@ -157,6 +157,15 @@ ordinary prose containing `ambiguous` was treated as the standalone leaked
 math token `Big`. The guard now uses explicit alphabetic token boundaries,
 retains the original standalone-command rejection and passes the full rendered
 manual check.
+
+Independent final review also found that the current-schema reader normalized
+case and fatigue tables without applying the same strict decimal validation as
+the writer. The reader and writer now share one canonical table validator, and
+coherently rehashed malformed Plastic, Elastic and fatigue payloads all fail at
+ingress. The published reinforcement-point ID rule was also corrected to match
+its existing monotonic stable-ID allocator; unlike reusable M/P/F catalogue
+identities, point IDs advance above the highest retained suffix and do not fill
+deleted gaps.
 
 No local browser, JavaScript runtime or real Windows package build was launched.
 GitHub must record the exact candidate revision/tree and pass the complete

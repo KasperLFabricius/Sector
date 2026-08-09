@@ -325,7 +325,8 @@ def _reinforcement_fields(kind: str) -> tuple[FieldDefinition, ...]:
             "ID", f"{noun.capitalize()} ID", f"Stable identifier for this {noun}.",
             "i", "-", "Stable row identity used by calculations and reports.",
             "Identifiers carry no physical sign.", BlankPolicy.DEFAULT,
-            "Sector generated", f"lowest unused {prefix} number",
+            "Sector generated",
+            f"next {prefix} number above the highest retained suffix",
         ),
         *_XY_FIELDS,
         _field(

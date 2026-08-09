@@ -204,6 +204,40 @@ def test_project_dump_rejects_malformed_nonblank_decimal_without_json_null(
         project_io.dump_project(tables, scalars)
 
 
+@pytest.mark.parametrize(
+    ("table_key", "column", "entered"),
+    [
+        (load_cases.PLASTIC_TABLE_KEY, "n_ed_kn", "12abc"),
+        (load_cases.ELASTIC_TABLE_KEY, "mx_short_ed_knm", True),
+        (fatigue_inputs.SPECTRUM_TABLE_KEY, "cycles", "10 cycles"),
+    ],
+)
+def test_project_parse_rejects_hash_valid_malformed_nonblank_decimal(
+    table_key,
+    column,
+    entered,
+):
+    tables, scalars = _current_project()
+    if table_key == fatigue_inputs.SPECTRUM_TABLE_KEY:
+        tables[table_key] = fatigue_inputs.normalise_spectrum_table(
+            [{"spectrum": "Traffic", "name": "Bin 1", "cycles": 10.0}]
+        )
+    data = json.loads(project_io.dump_project(tables, scalars))
+    encoded = data["tables"][table_key]
+    encoded["rows"][0][encoded["columns"].index(column)] = entered
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{re.escape(table_key)} row 1: {re.escape(column)} contains "
+        r"malformed decimal input",
+    ):
+        project_io.parse_project(json.dumps(data))
+
+
 def test_project_dump_allows_a_wholly_blank_fatigue_editor_row():
     tables, scalars = _current_project()
     tables[fatigue_inputs.SPECTRUM_TABLE_KEY] = (

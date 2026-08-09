@@ -80,6 +80,22 @@ def test_field_definitions_are_frozen_slotted_and_encode_blank_semantics():
 
 
 @pytest.mark.parametrize(
+    ("table_key", "prefix"),
+    (("bars_base", "R"), ("tendons_base", "P")),
+)
+def test_reinforcement_id_blank_rule_matches_monotonic_allocator(
+    table_key,
+    prefix,
+):
+    identity = fields.field_definition(table_key, reinforcement_table.ELEMENT_ID)
+
+    assert identity.default == (
+        f"next {prefix} number above the highest retained suffix"
+    )
+    assert "lowest unused" not in fields.input_rule(identity).casefold()
+
+
+@pytest.mark.parametrize(
     ("entered", "expected"),
     [
         ("1.25", 1.25),

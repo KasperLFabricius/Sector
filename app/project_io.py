@@ -25,7 +25,6 @@ import pandas as pd
 import reinforcement_table as rebar_table
 
 from app.table_field_definitions import decimal_issue_ledger
-
 from sector import __version__ as sector_version
 from sector import capacity, design_standards, geometry
 from sector.build_info import source_revision
@@ -204,8 +203,9 @@ def _normalise_table(value, key: str) -> pd.DataFrame:
     return frame.astype("float64") if len(frame.columns) else frame
 
 
-def _table_to_obj(value, key: str) -> dict:
-    frame = _normalise_table(value, key)
+def _validate_canonical_table(frame: pd.DataFrame, key: str) -> None:
+    """Reject a canonical table that cannot round-trip without data loss."""
+
     issues = decimal_issue_ledger(frame.attrs)
     if issues:
         (row, column), entered = min(issues.items())
@@ -217,6 +217,11 @@ def _table_to_obj(value, key: str) -> dict:
         load_cases.table_records(frame, key)
     elif key == fatigue_inputs.SPECTRUM_TABLE_KEY:
         fatigue_inputs.spectrum_records(frame)
+
+
+def _table_to_obj(value, key: str) -> dict:
+    frame = _normalise_table(value, key)
+    _validate_canonical_table(frame, key)
     columns = [str(column) for column in frame.columns]
     rows = [
         [_cell(cell) for cell in row]
@@ -243,7 +248,9 @@ def _obj_to_table(value, key: str) -> pd.DataFrame:
         frame = pd.DataFrame(rows, columns=columns)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} table rows are not tabular") from exc
-    return _normalise_table(frame, key)
+    canonical = _normalise_table(frame, key)
+    _validate_canonical_table(canonical, key)
+    return canonical
 
 
 def _geometry_points(frame: pd.DataFrame, label: str) -> list[tuple[float, float]]:
