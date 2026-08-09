@@ -20,9 +20,11 @@ from __future__ import annotations
 import copy
 import math
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 import pandas as pd
+
+from sector.design_standards import DesignBasisKey
 
 
 VERSION = 2
@@ -47,7 +49,9 @@ STRESS_MODELS = (
 EC2_2005 = "DS/EN 1992-1-1:2005"
 EC2_2005_DKNA = "DS/EN 1992-1-1:2005 + DK NA:2024"
 EC2_2023 = "DS/EN 1992-1-1:2023"
-EDITIONS = (EC2_2005, EC2_2005_DKNA, EC2_2023)
+# These three values are internal solver/preset provenance tokens. Persisted
+# fatigue selectors use stable registry keys, never these display strings.
+EDITIONS = tuple(key.value for key in DesignBasisKey)
 
 PRESET_2005_BARS = "EC2:2005 - straight reinforcing bars"
 PRESET_2005_BENT_BARS = "EC2:2005 - bent reinforcing bars"

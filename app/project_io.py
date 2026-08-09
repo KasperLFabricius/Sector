@@ -2,8 +2,10 @@
 
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
-Sector 0.92 intentionally supports only current schema version 23 and carries
-no legacy compliance or cover-calculator migration.
+Released Sector 0.92 projects used schema 23. The in-development Sector 0.93
+line accepts only current schema version 24 and carries no legacy project
+migration. Retired component-mapped bridge inputs are deliberately absent from
+the schema.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
-import bridge_inputs
 import fatigue_inputs
 import load_cases
 import material_catalog
@@ -24,20 +25,22 @@ import pandas as pd
 import reinforcement_table as rebar_table
 
 from sector import __version__ as sector_version
-from sector import bridge, capacity, geometry
+from sector import capacity, design_standards, geometry
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 23
+VERSION = 24
+
+V23_UNSUPPORTED_MESSAGE = (
+    "Sector project schema 23 is retired; Sector 0.93 accepts only current "
+    "schema 24. Recreate and verify the project in Sector 0.93."
+)
 
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
 REINFORCEMENT_TABLE_KEYS = {"bars_base": "bar", "tendons_base": "tendon"}
 CASE_TABLE_KEYS = list(load_cases.CASE_TABLE_KEYS)
 FATIGUE_TABLE_KEYS = [fatigue_inputs.SPECTRUM_TABLE_KEY]
-BRIDGE_TABLE_KEYS = list(bridge_inputs.TABLE_KEYS)
-PROJECT_TABLE_KEYS = (
-    TABLE_KEYS + CASE_TABLE_KEYS + FATIGUE_TABLE_KEYS + BRIDGE_TABLE_KEYS
-)
+PROJECT_TABLE_KEYS = TABLE_KEYS + CASE_TABLE_KEYS + FATIGUE_TABLE_KEYS
 
 FATIGUE_SCALAR_KEYS = (
     fatigue_inputs.DETAIL_CATALOG_KEY,
@@ -89,7 +92,6 @@ SCALAR_KEYS = [
     "pl_interaction", "el_phi",
     "sls_cw", "sls_phi", "sls_bond", "sls_tendon_xi",
     "sls_code", "sls_member",
-    "bridge_standard",
     # Fatigue.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
     "fatigue_check_concrete", "fatigue_concrete_method",
@@ -185,8 +187,6 @@ def _normalise_table(value, key: str) -> pd.DataFrame:
         return load_cases.normalise_table(value, key)
     if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
         return fatigue_inputs.normalise_spectrum_table(value)
-    if key in BRIDGE_TABLE_KEYS:
-        return bridge_inputs.normalise_table(value, key)
     kind = REINFORCEMENT_TABLE_KEYS.get(key)
     if kind:
         return rebar_table.normalise_table(value, kind)
@@ -205,19 +205,10 @@ def _normalise_table(value, key: str) -> pd.DataFrame:
 def _table_to_obj(value, key: str) -> dict:
     frame = _normalise_table(value, key)
     columns = [str(column) for column in frame.columns]
-    if key in BRIDGE_TABLE_KEYS:
-        rows = [
-            [
-                bridge_inputs.project_cell(cell, key, column)
-                for column, cell in zip(columns, row)
-            ]
-            for row in frame.itertuples(index=False, name=None)
-        ]
-    else:
-        rows = [
-            [_cell(cell) for cell in row]
-            for row in frame.itertuples(index=False, name=None)
-        ]
+    rows = [
+        [_cell(cell) for cell in row]
+        for row in frame.itertuples(index=False, name=None)
+    ]
     return {
         "columns": columns,
         "rows": rows,
@@ -235,18 +226,6 @@ def _obj_to_table(value, key: str) -> pd.DataFrame:
         or not isinstance(rows, list)
     ):
         raise ValueError(f"{key} table columns/rows are malformed")
-    if key in BRIDGE_TABLE_KEYS:
-        if len(set(columns)) != len(columns):
-            raise ValueError(f"{key} contains duplicate columns")
-        if any(
-            not isinstance(row, list) or len(row) != len(columns)
-            for row in rows
-        ):
-            raise ValueError(f"{key} table rows are not tabular")
-        return bridge_inputs.normalise_table(
-            [dict(zip(columns, row)) for row in rows],
-            key,
-        )
     try:
         frame = pd.DataFrame(rows, columns=columns)
     except (TypeError, ValueError) as exc:
@@ -351,9 +330,12 @@ def _canonical_scalars(scalars: Mapping) -> dict:
         payload[fatigue_inputs.BASIS_KEY] = fatigue_inputs.normalise_basis(
             payload[fatigue_inputs.BASIS_KEY]
         )
-    standard = payload.get("bridge_standard")
-    if standard is not None and standard not in bridge.METHODS:
-        raise ValueError(f"unknown bridge_standard: {standard}")
+    if "fatigue_edition" in payload:
+        payload["fatigue_edition"] = (
+            design_standards.parse_design_basis_key(
+                payload["fatigue_edition"]
+            ).value
+        )
     method_resolvers = (
         ("shear_method", capacity.selected_shear_code),
         ("torsion_method", capacity.selected_torsion_code),
@@ -587,6 +569,8 @@ def _decode(text: str) -> dict:
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError("not a Sector project file")
     version = data.get("version")
+    if version == 23:
+        raise ValueError(V23_UNSUPPORTED_MESSAGE)
     if version != VERSION:
         raise ValueError(
             f"unsupported Sector project schema {version!r}; "

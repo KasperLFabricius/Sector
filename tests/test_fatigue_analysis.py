@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pathlib
-from types import SimpleNamespace
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -16,6 +16,12 @@ import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
+
+from sector.design_standards import (  # noqa: E402
+    Capability,
+    DesignBasisKey,
+    capability_binding,
+)
 from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 from sector.section import Section  # noqa: E402
 
@@ -91,7 +97,7 @@ def _base(**overrides):
     })
     value = {
         "fatigue_on": True,
-        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_edition": DesignBasisKey.PUBLISHED_2023.value,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": fatigue_analysis.CONCRETE_MINER,
@@ -201,6 +207,10 @@ def test_prepare_maps_signs_materials_details_and_full_factors_once():
     assert prepared.concrete.k1 == 1.0
     assert prepared.gamma_s == 1.32
     assert prepared.gamma_ff == 1.10
+    assert prepared.basis_key is DesignBasisKey.PUBLISHED_2023
+    assert prepared.solver_edition == fatigue_inputs.EC2_2023
+    assert "project adoption required" in prepared.basis_label
+    assert "no Danish National Annex" in prepared.basis_disclosure
 
 
 def test_bent_bar_reduction_is_resolved_per_element_diameter():
@@ -244,7 +254,9 @@ def test_concrete_parameters_follow_the_selected_edition():
     assert prepared_2023.concrete.alpha_cc == 1.0
     assert prepared_2023.concrete.k1 == 1.0
 
-    old = _base(fatigue_edition=fatigue_inputs.EC2_2005_DKNA)
+    old = _base(
+        fatigue_edition=DesignBasisKey.FIRST_GEN_DK_NA_2024.value
+    )
     old.pop("fatigue_concrete_k1")
     old["concrete"] = SimpleNamespace(fck=40.0)
     errors = fatigue_analysis.validation_errors(old)
@@ -255,10 +267,40 @@ def test_concrete_parameters_follow_the_selected_edition():
         in errors
     )
     references = fatigue_analysis.calculation_references(
-        fatigue_inputs.EC2_2005_DKNA
+        DesignBasisKey.FIRST_GEN_DK_NA_2024
     )
     assert "DS/EN 1992-2:2005" in references["concrete"]
-    assert "DK NA:2024 explicit input factors" in references["reinforcement"]
+    binding = capability_binding(
+        DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        Capability.REINFORCEMENT_FATIGUE,
+    )
+    assert "User-supplied factors govern" in binding.disclosure
+    assert "no hidden DK-specific fatigue equation or factor" in (
+        binding.disclosure
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid_basis",
+    [
+        fatigue_inputs.EC2_2005,
+        fatigue_inputs.EC2_2005_DKNA,
+        fatigue_inputs.EC2_2023,
+        DesignBasisKey.PUBLISHED_2023.value + " ",
+        "something containing 2023",
+    ],
+)
+def test_fatigue_basis_dispatch_rejects_labels_whitespace_and_substrings(
+        invalid_basis):
+    inp = _base(fatigue_edition=invalid_basis)
+
+    errors = fatigue_analysis.validation_errors(inp)
+
+    assert any("registered basis keys" in error for error in errors)
+    with pytest.raises(ValueError, match="registered basis keys"):
+        fatigue_analysis.prepare(inp)
+    with pytest.raises(ValueError, match="registered basis keys"):
+        fatigue_analysis.calculation_references(invalid_basis)
 
 
 def test_standard_detail_presets_must_match_the_selected_fatigue_edition():
@@ -273,11 +315,14 @@ def test_standard_detail_presets_must_match_the_selected_fatigue_edition():
 
     assert any(
         "R1: fatigue detail 'F1' uses DS/EN 1992-1-1:2005 resistance "
-        "with DS/EN 1992-1-1:2023" in error
+        "with DS/EN 1992-1-1:2023 - published reference; project adoption "
+        "required" in error
         for error in errors
     )
 
-    old = _base(fatigue_edition=fatigue_inputs.EC2_2005_DKNA)
+    old = _base(
+        fatigue_edition=DesignBasisKey.FIRST_GEN_DK_NA_2024.value
+    )
     old_catalogue = old[fatigue_inputs.DETAIL_CATALOG_KEY]
     old_catalogue["items"] = [
         fatigue_inputs.apply_preset(
@@ -442,6 +487,17 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
     )
     assert "Annex E.5" in result["calculation_references"]["reinforcement"]
     assert "E.7" in result["calculation_references"]["concrete"]
+    assert calls["kwargs"]["fatigue_edition"] == fatigue_inputs.EC2_2023
+    assert result["basis_key"] == DesignBasisKey.PUBLISHED_2023.value
+    assert result["edition"] == result["basis_label"]
+    assert "project adoption required" in result["basis_label"]
+    assert "no Danish National Annex" in result["basis_disclosure"]
+    assert result["capability_bindings"]["reinforcement"]["capability"] == (
+        Capability.REINFORCEMENT_FATIGUE.value
+    )
+    assert result["capability_bindings"]["concrete"]["capability"] == (
+        Capability.CONCRETE_FATIGUE_DAMAGE_SUM.value
+    )
 
 
 def test_equivalent_concrete_method_is_mapped_and_referenced_explicitly():
@@ -470,7 +526,7 @@ def test_project_concrete_miner_is_uncited_and_validates_its_c_value():
     )
     prepared = fatigue_analysis.prepare(inp)
     references = fatigue_analysis.calculation_references(
-        prepared.edition,
+        prepared.basis_key,
         prepared.concrete_method,
     )
     assert references["concrete"] == (
@@ -481,6 +537,22 @@ def test_project_concrete_miner_is_uncited_and_validates_its_c_value():
         == warning
         for warning in fatigue_analysis.validation_warnings(inp)
     )
+    result = fatigue_analysis.run_analysis(
+        inp,
+        engine=lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                spectrum_name="Traffic A",
+                utilisation=0.5,
+                converged=True,
+                passed=True,
+            ),
+        ),
+    )
+    assert result["calculation_references"]["concrete"] == (
+        "Project-defined concrete Miner S-N relation (uncited)"
+    )
+    assert "concrete" not in result["capability_bindings"]
+    assert "Formula 6.106" not in str(result["capability_bindings"])
 
     invalid = dict(inp)
     invalid["fatigue_concrete_c"] = -1.0
@@ -549,6 +621,10 @@ def test_invalid_result_preserves_missing_assignments_without_running_fatigue():
     assert payload["passed"] is False
     assert payload["spectra"] == ()
     assert payload["utilisation"] is None
+    assert payload["basis_key"] == DesignBasisKey.PUBLISHED_2023.value
+    assert payload["edition"] == payload["basis_label"]
+    assert payload["solver_edition"] == fatigue_inputs.EC2_2023
+    assert payload["capability_bindings"] == {}
     assert "R1: fatigue detail ID is required" in payload["errors"]
     assert "P1: fatigue detail ID is required" in payload["errors"]
     assert inp["bar_elements"][0]["fatigue_detail_id"] == ""

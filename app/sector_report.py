@@ -18,6 +18,7 @@ not depend on a Greek-capable font.
 from __future__ import annotations
 
 import atexit
+from collections.abc import Mapping
 import datetime
 import html as html_lib
 import io
@@ -1611,10 +1612,6 @@ class ReportBuilder:
             self._tick(0.88, "Grouped fatigue...")
             self.flow.append(NotAtTopPageBreak())
             self._fatigue()
-        if self._base_out.get("bridge") is not None:
-            self._tick(0.9, "Independent bridge calculations...")
-            self.flow.append(NotAtTopPageBreak())
-            self._bridge()
         if self.qa_appendix:
             self._appendix()
         self._tick(0.92, "Writing PDF...")
@@ -1733,22 +1730,6 @@ class ReportBuilder:
             labels.append(
                 f"grouped fatigue ({count} spectrum"
                 f"{'s' if count != 1 else ''})"
-            )
-        bridge_payload = self._base_out.get("bridge") or {}
-        bridge_calculations = bridge_payload.get("calculations") or {}
-        bridge_failures = tuple(bridge_payload.get("failures") or ())
-        if bridge_calculations or bridge_failures:
-            failure_suffix = (
-                f", {len(bridge_failures)} failure"
-                f"{'s' if len(bridge_failures) != 1 else ''}"
-                if bridge_failures
-                else ""
-            )
-            labels.append(
-                "independent bridge calculations ("
-                f"{len(bridge_calculations)} method"
-                f"{'s' if len(bridge_calculations) != 1 else ''}"
-                f"{failure_suffix})"
             )
         ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
@@ -2563,6 +2544,44 @@ class ReportBuilder:
         transverse_results = self._result_values("transverse_reinforcement")
         fatigue = self._base_out.get("fatigue")
         fatigue_errors = tuple((fatigue or {}).get("errors") or ())
+        basis_values = [
+            self.inp.get(key)
+            for key in (
+                "design_basis_key",
+                "concrete_preset",
+                "mild_preset",
+                "prestress_preset",
+                "pre_preset",
+                "sls_code",
+                "fatigue_edition",
+                "detailing_edition",
+                "shear_method",
+                "torsion_method",
+                "combined_method",
+            )
+        ]
+        for catalogue_key in (
+            "mild_material_catalog",
+            "prestress_material_catalog",
+        ):
+            basis_values.extend(
+                item.get("preset")
+                for item in (self.inp.get(catalogue_key) or {}).get("items", [])
+            )
+        if fatigue is not None:
+            basis_values.extend((
+                fatigue.get("basis_key"),
+                fatigue.get("basis_label"),
+                fatigue.get("edition"),
+            ))
+        if any("2023" in str(value) for value in basis_values if value is not None):
+            self._p(
+                "<b>2023 basis limitation.</b> DS/EN 1992-1-1:2023 is "
+                "reported as a published project-adoption basis. Project "
+                "adoption remains the engineer's responsibility; no Danish "
+                "National Annex is applied. The 2023 confinement enhancement "
+                "is not included or assessed."
+            )
         if plastic_results:
             material_2023 = "2023" in str(self.inp.get("concrete_preset", ""))
             steel_presets = [
@@ -5125,132 +5144,6 @@ class ReportBuilder:
                         "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
                         "/E<sub>s</sub>.")
 
-    def _bridge(self):
-        """Independent retained bridge kernels with their actual row inputs."""
-        payload = self._base_out.get("bridge") or {}
-        self._h1("Independent bridge calculations")
-        self._p(
-            "<b>Selected method family:</b> "
-            + _html_escape(str(payload.get("selected_standard") or "-"))
-            + ". These are separate numerical methods; generic bridge-code "
-            "coverage and generic cross-method interaction are not calculated."
-        )
-        failures = tuple(payload.get("failures") or ())
-        for failure in failures:
-            family = str(failure.get("family") or "bridge").replace("_", " ")
-            state = str(failure.get("state") or "INVALID")
-            code = str(failure.get("code") or "INVALID_INPUT")
-            message = str(
-                failure.get("message") or "Calculation unavailable"
-            )
-            self._small(
-                f"<b>{_html_escape(family)}:</b> "
-                f"{_html_escape(state)} ({_html_escape(code)}) - "
-                f"{_html_escape(message)}"
-            )
-        calculations = payload.get("calculations") or {}
-        if not calculations:
-            if not failures:
-                self._small("No bridge calculation rows were supplied.")
-            return
-
-        brittle = calculations.get("brittle_method_b")
-        if brittle:
-            self._h2("Optional brittle Method B")
-            self._small(
-                f"<b>Equation:</b> {_html_escape(brittle.get('equation', '-'))}; "
-                f"<b>reference:</b> {_html_escape(brittle.get('source', '-'))}."
-            )
-            if brittle.get("warning"):
-                self._small("<b>Warning:</b> " + _html_escape(brittle["warning"]))
-            rows = [[
-                "Region", "Mrep (kNm)", "zs (m)", "fyk (MPa)",
-                "As,req (mm2)", "As,prov (mm2)", "Util.", "Status",
-            ]]
-            rows.extend([
-                [
-                    _html_escape(row["region_id"]),
-                    _fmt(row["m_rep_knm"], 3),
-                    _fmt(row["z_s_m"], 3),
-                    _fmt(row["f_yk_mpa"], 2),
-                    _fmt(row["as_required_mm2"], 1),
-                    _fmt(row["as_provided_mm2"], 1),
-                    _pct(row["utilisation"]),
-                    row["status"],
-                ]
-                for row in brittle["rows"]
-            ])
-            self._table(
-                rows,
-                [23 * mm, 21 * mm, 17 * mm, 20 * mm, 23 * mm, 23 * mm,
-                 18 * mm, 18 * mm],
-                font=6.7,
-            )
-
-        walls = calculations.get("box_walls")
-        if walls:
-            self._h2("Box-wall shear and torsion")
-            self._small(
-                f"<b>Equation:</b> {_html_escape(walls.get('equation', '-'))}; "
-                f"<b>reference:</b> {_html_escape(walls.get('source', '-'))}."
-            )
-            for warning in walls.get("warnings") or ():
-                self._small("<b>Warning:</b> " + _html_escape(str(warning)))
-            rows = [[
-                "Wall", "cot(theta)", "VEd", "VRd,max", "TEd,eq",
-                "TRd,max,eq", "Util.", "Status",
-            ]]
-            rows.extend([
-                [
-                    _html_escape(row["wall_id"]),
-                    _fmt(row["cot_theta"], 3),
-                    _fmt(row["v_ed_kn"], 2),
-                    _fmt(row["v_rd_max_kn"], 2),
-                    _fmt(row["t_ed_equivalent_kn"], 2),
-                    _fmt(row["t_rd_max_equivalent_kn"], 2),
-                    _pct(row["utilisation"]),
-                    row["status"],
-                ]
-                for row in walls["rows"]
-            ])
-            self._table(
-                rows,
-                [22 * mm, 19 * mm, 20 * mm, 22 * mm, 21 * mm, 25 * mm,
-                 19 * mm, 18 * mm],
-                font=6.7,
-            )
-
-        minimum = calculations.get("minimum_crack_reinforcement")
-        if minimum:
-            self._h2("Web/flange minimum crack reinforcement")
-            self._small(
-                f"<b>Equation:</b> {_html_escape(minimum.get('equation', '-'))}; "
-                f"<b>reference:</b> {_html_escape(minimum.get('source', '-'))}."
-            )
-            rows = [[
-                "Component", "Act (mm2)", "fct,eff used", "sigma_s",
-                "As,req", "As,prov", "Util.", "Status",
-            ]]
-            rows.extend([
-                [
-                    _html_escape(row["component"].capitalize()),
-                    _fmt(row["act_mm2"], 1),
-                    _fmt(row["fct_eff_used_mpa"], 3),
-                    _fmt(row["sigma_s_mpa"], 2),
-                    _fmt(row["as_required_mm2"], 1),
-                    _fmt(row["as_provided_mm2"], 1),
-                    _pct(row["utilisation"]),
-                    row["status"],
-                ]
-                for row in minimum["rows"]
-            ])
-            self._table(
-                rows,
-                [24 * mm, 23 * mm, 23 * mm, 20 * mm, 20 * mm, 20 * mm,
-                 18 * mm, 18 * mm],
-                font=6.7,
-            )
-
     def _fatigue(self):
         payload = self._base_out["fatigue"]
         status = fatigue_presentation.overall_status(payload)
@@ -5281,7 +5174,8 @@ class ReportBuilder:
             if checks.get(key)
         ) or "-"
         self._small(
-            f"<b>Edition:</b> {_html_escape(str(payload.get('edition') or '-'))}; "
+            "<b>Design basis:</b> "
+            f"{_html_escape(str(payload.get('basis_label') or payload.get('edition') or '-'))}; "
             f"<b>checks:</b> {check_text}. Each spectrum is independent."
         )
         warnings = tuple(payload.get("warnings") or ())
@@ -5302,6 +5196,17 @@ class ReportBuilder:
         concrete_parameters = payload.get("concrete_parameters") or {}
         basis_rows = [
             ["Item", "Value"],
+            ["Design-basis key",
+             _html_escape(str(payload.get("basis_key") or "-"))],
+            ["Design basis", _html_escape(str(
+                payload.get("basis_label") or payload.get("edition") or "-"
+            ))],
+            ["Basis disclosure", _html_escape(str(
+                payload.get("basis_disclosure") or "-"
+            ))],
+            ["Solver edition", _html_escape(str(
+                payload.get("solver_edition") or "-"
+            ))],
             ["Method", _html_escape(str(basis.get("method") or "-"))],
             ["Method reference",
              _html_escape(str(payload.get("method_reference") or "-"))],
@@ -5334,19 +5239,40 @@ class ReportBuilder:
         self._table(basis_rows, [52 * mm, 113 * mm], keep=False)
 
         references = payload.get("calculation_references") or {}
-        if references:
-            self._h2("Calculation references")
+        bindings = payload.get("capability_bindings") or {}
+        if references or bindings:
+            self._h2("Calculation sources and capability scope")
+            evidence_keys = tuple(dict.fromkeys((*references, *bindings)))
+            evidence_rows = [[
+                "Check", "Registered capability", "Source", "Scope disclosure",
+            ]]
+            for key in evidence_keys:
+                binding = bindings.get(key)
+                if isinstance(binding, Mapping):
+                    capability = str(binding.get("capability") or "-")
+                    source = str(
+                        binding.get("source") or references.get(key) or "-"
+                    )
+                    disclosure = str(binding.get("disclosure") or "-")
+                else:
+                    capability = "Project-defined / uncited"
+                    source = "Project-defined / uncited"
+                    method_note = str(references.get(key) or "").strip()
+                    disclosure = (
+                        "No registered standard capability is claimed for this "
+                        "project-defined relation."
+                        + (f" Method note: {method_note}." if method_note else "")
+                    )
+                evidence_rows.append([
+                    str(key).capitalize(),
+                    _html_escape(capability),
+                    _html_escape(source),
+                    _html_escape(disclosure),
+                ])
             self._table(
-                [["Check", "Reference"]]
-                + [
-                    [
-                        key.capitalize(),
-                        _html_escape(str(reference)),
-                    ]
-                    for key, reference in references.items()
-                ],
-                [35 * mm, 130 * mm],
-                font=7.2,
+                evidence_rows,
+                [21 * mm, 42 * mm, 47 * mm, 55 * mm],
+                font=6.3,
                 keep=False,
             )
         details = payload.get("fatigue_detail_basis") or ()

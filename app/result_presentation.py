@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import math
 
-import fatigue_presentation
-
 import case_analysis
+import fatigue_presentation
 import viz
+
 from sector import detailing
+from sector.design_standards import get_design_basis
 
 _MM = 1000.0
 _DEGREE = chr(0x00B0)
@@ -516,6 +517,13 @@ def combined_physical_components(combined):
     return [concrete, stirrup, longitudinal_component]
 
 
+def _registered_fatigue_basis_label(value):
+    try:
+        return get_design_basis(value).label
+    except ValueError:
+        return None
+
+
 def fatigue_summary_rows(inp, results, *, stale=False):
     """Return one conservative aggregate row for an enabled fatigue analysis."""
 
@@ -525,7 +533,9 @@ def fatigue_summary_rows(inp, results, *, stale=False):
         return []
     fatigue = results.get("fatigue")
     basis = inp.get("fatigue_basis") or {}
-    edition = str(inp.get("fatigue_edition") or "-")
+    edition = _registered_fatigue_basis_label(
+        inp.get("fatigue_edition")
+    ) or "-"
     case = "-"
     status = "NOT RUN"
     result_text = "-"
@@ -535,7 +545,12 @@ def fatigue_summary_rows(inp, results, *, stale=False):
         # The result payload owns the basis that was actually calculated. This
         # remains true when the live inputs have since changed and the row is stale.
         basis = fatigue.get("basis") or basis
-        edition = str(fatigue.get("edition") or edition)
+        edition = str(
+            fatigue.get("basis_label")
+            or fatigue.get("edition")
+            or _registered_fatigue_basis_label(fatigue.get("basis_key"))
+            or edition
+        )
         case = str(fatigue.get("governing_spectrum") or "-")
         try:
             util = float(fatigue.get("utilisation"))

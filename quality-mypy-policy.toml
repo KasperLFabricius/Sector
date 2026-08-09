@@ -8,6 +8,7 @@ files = [
     "app/bridge_analysis.py",
     "app/manual_equation_contract.py",
     "app/manual_equation_publication.py",
+    "sector/design_standards.py",
 ]
 
 [sector_policy]
@@ -18,5 +19,5 @@ id = "mypy-imported-module-debt"
 setting = "follow_imports"
 value = "silent"
 owner = "PR-13 F-012 type-gate owner"
-reason = "The ratchet owns four accepted typed boundaries without importing unrelated legacy type errors."
+reason = "The ratchet owns retained decommission markers and typed publication/standards boundaries without importing unrelated legacy type errors."
 exit_condition = "Remove after imported modules pass strict mypy and follow_imports can be strengthened to normal."

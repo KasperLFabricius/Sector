@@ -32,11 +32,15 @@ calculation: application/source version, actual inputs, selected
 method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
-Sector 0.92 is released as source/application code. By explicit owner decision
-for PR-07, retained for this release, project persistence supports only current
-schema version 23. Earlier app/project/schema versions and their compliance,
-cover-calculator or authority metadata are deliberately unsupported; they are
-not migrated or carried forward.
+Sector 0.92 was released as source/application code with current-only project
+schema 23. The in-development v0.93 line supports only current schema 24 and
+rejects schema 23 rather than migrating or silently dropping inputs. Earlier
+app/project/schema versions and their compliance, cover-calculator or authority
+metadata remain deliberately unsupported and are not carried forward.
+
+Sector does not infer semantic bridge regions, walls, webs or flanges. A
+calculation that cites a bridge source remains bounded to its implemented
+equation and entered section actions; it is not a complete bridge check.
 
 This contract is an acceptance criterion for every product change. A QA finding
 cannot expand Sector's product identity without explicit owner direction.

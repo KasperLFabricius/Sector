@@ -14,11 +14,16 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report  # noqa: E402
-import bridge_analysis  # noqa: E402
-import bridge_inputs  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import bridge, detailing  # noqa: E402
+from sector import detailing  # noqa: E402
+from sector.design_standards import (  # noqa: E402
+    Capability,
+    DesignBasisKey,
+    capability_binding,
+    get_design_basis,
+)
+from sector.fatigue import CONCRETE_PROJECT_MINER  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -150,7 +155,7 @@ def _fatigue_report_fixture():
     inp.update({
         "mode": "",
         "fatigue_on": True,
-        "fatigue_edition": fatigue_inputs.EC2_2023,
+        "fatigue_edition": DesignBasisKey.PUBLISHED_2023.value,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
@@ -309,8 +314,21 @@ def _fatigue_report_fixture():
         spectrum("Traffic A", "FAT-A1", 0.55),
         spectrum("Traffic B", "FAT-B1", 0.72),
     )
+    basis = get_design_basis(DesignBasisKey.PUBLISHED_2023)
+    reinforcement_binding = capability_binding(
+        basis.key,
+        Capability.REINFORCEMENT_FATIGUE,
+    )
+    concrete_binding = capability_binding(
+        basis.key,
+        Capability.CONCRETE_FATIGUE_DAMAGE_SUM,
+    )
     payload = {
-        "edition": fatigue_inputs.EC2_2023,
+        "basis_key": basis.key.value,
+        "basis_label": basis.label,
+        "basis_disclosure": basis.disclosure,
+        "edition": basis.label,
+        "solver_edition": fatigue_inputs.EC2_2023,
         "checks": {"reinforcement": True, "concrete": True},
         "concrete_method": "Explicit Palmgren-Miner spectrum",
         "basis": inp[fatigue_inputs.BASIS_KEY],
@@ -318,10 +336,20 @@ def _fatigue_report_fixture():
             fatigue_inputs.METHOD_GROUPED
         ],
         "calculation_references": {
-            "reinforcement": (
-                "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2"
-            ),
-            "concrete": "DS/EN 1992-1-1:2023, Annex E.7-E.8",
+            "reinforcement": reinforcement_binding.source,
+            "concrete": concrete_binding.source,
+        },
+        "capability_bindings": {
+            "reinforcement": {
+                "capability": reinforcement_binding.capability.value,
+                "source": reinforcement_binding.source,
+                "disclosure": reinforcement_binding.disclosure,
+            },
+            "concrete": {
+                "capability": concrete_binding.capability.value,
+                "source": concrete_binding.source,
+                "disclosure": concrete_binding.disclosure,
+            },
         },
         "warnings": ("Cycle-count method requires project review",),
         "partial_factors": {
@@ -395,7 +423,11 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "bond transformation" in text
     assert "raw solver range" in text
     assert "action-level" in text
-    assert "Annex E.5" in text and "Annex E.7-E.8" in text
+    assert "Annex E.5" in text and "Formulae (E.7)-(E.8)" in text
+    assert "published reference; project adoption required" in text
+    assert "no Danish National Annex is applied" in text
+    assert "reinforcement_fatigue" in text
+    assert "concrete_fatigue_damage_sum" in text
     assert "different spectrum names are not combined" in text
     assert "Torsion and shear fatigue are not assessed" in text
     compact = text.replace(" ", "")
@@ -417,9 +449,16 @@ def test_report_includes_damage_equivalent_concrete_method_evidence():
     inp["fatigue_concrete_method"] = method
     payload["concrete_method"] = method
     payload["concrete_parameters"]["method"] = method
-    payload["calculation_references"]["concrete"] = (
-        "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
+    equivalent_binding = capability_binding(
+        DesignBasisKey.PUBLISHED_2023,
+        Capability.CONCRETE_FATIGUE_EQUIVALENT,
     )
+    payload["calculation_references"]["concrete"] = equivalent_binding.source
+    payload["capability_bindings"]["concrete"] = {
+        "capability": equivalent_binding.capability.value,
+        "source": equivalent_binding.source,
+        "disclosure": equivalent_binding.disclosure,
+    }
     for spectrum in payload["spectra"]:
         spectrum.concrete_method = method
         for result in spectrum.concrete:
@@ -449,6 +488,84 @@ def test_report_includes_damage_equivalent_concrete_method_evidence():
     assert "cycle count is not used for concrete" in text
 
 
+def test_report_discloses_first_generation_formula_6106_bounded_scope():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    basis = get_design_basis(DesignBasisKey.FIRST_GEN_DK_NA_2024)
+    reinforcement_binding = capability_binding(
+        basis.key,
+        Capability.REINFORCEMENT_FATIGUE,
+    )
+    concrete_binding = capability_binding(
+        basis.key,
+        Capability.CONCRETE_FATIGUE_DAMAGE_SUM,
+    )
+    inp["fatigue_edition"] = basis.key.value
+    payload.update({
+        "basis_key": basis.key.value,
+        "basis_label": basis.label,
+        "basis_disclosure": basis.disclosure,
+        "edition": basis.label,
+        "solver_edition": concrete_binding.solver_edition,
+        "calculation_references": {
+            "reinforcement": reinforcement_binding.source,
+            "concrete": concrete_binding.source,
+        },
+        "capability_bindings": {
+            "reinforcement": {
+                "capability": reinforcement_binding.capability.value,
+                "source": reinforcement_binding.source,
+                "disclosure": reinforcement_binding.disclosure,
+            },
+            "concrete": {
+                "capability": concrete_binding.capability.value,
+                "source": concrete_binding.source,
+                "disclosure": concrete_binding.disclosure,
+            },
+        },
+    })
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert basis.label in text
+    assert basis.disclosure in text
+    assert "DS/EN 1992-2:2005/AC:2008 Formula 6.106" in text
+    assert "Bridge-source calculation using a user-supplied" in text
+    assert "section-action spectrum" in text
+    assert "traffic models, dynamic effects, lane/track concurrence" in text
+    assert "complete bridge-fatigue compliance are not assessed" in text
+    assert "User-supplied factors govern" in text
+    assert "no hidden DK-specific fatigue equation or factor" in text
+
+
+def test_report_marks_project_defined_concrete_miner_as_uncited():
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    inp["fatigue_concrete_method"] = CONCRETE_PROJECT_MINER
+    payload["concrete_method"] = CONCRETE_PROJECT_MINER
+    payload["concrete_parameters"]["method"] = CONCRETE_PROJECT_MINER
+    payload["calculation_references"]["concrete"] = (
+        "Project-defined concrete Miner S-N relation (uncited)"
+    )
+    del payload["capability_bindings"]["concrete"]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert CONCRETE_PROJECT_MINER in text
+    assert "Project-defined / uncited" in text
+    assert (
+        "No registered standard capability is claimed for this "
+        "project-defined relation"
+    ) in text
+    assert "Project-defined concrete Miner S-N relation (uncited)" in text
+    assert Capability.CONCRETE_FATIGUE_DAMAGE_SUM.value not in text
+    assert "Formula 6.106" not in text
+
+
 def test_report_fatigue_chapter_uses_the_engine_failure_state():
     inp, out = _fatigue_report_fixture()
     payload = out["fatigue"]
@@ -469,6 +586,7 @@ def test_report_fatigue_chapter_uses_the_engine_failure_state():
 
 def test_report_records_invalid_fatigue_without_suppressing_other_results():
     inp, out = _fatigue_report_fixture()
+    basis = get_design_basis(DesignBasisKey.PUBLISHED_2023)
     out["fatigue"] = {
         "valid": False,
         "converged": False,
@@ -478,9 +596,15 @@ def test_report_records_invalid_fatigue_without_suppressing_other_results():
             "At least one fatigue spectrum bin is required",
         ),
         "warnings": (),
-        "edition": fatigue_inputs.EC2_2023,
+        "basis_key": basis.key.value,
+        "basis_label": basis.label,
+        "basis_disclosure": basis.disclosure,
+        "edition": basis.label,
+        "solver_edition": fatigue_inputs.EC2_2023,
         "checks": {"reinforcement": True, "concrete": True},
         "basis": inp[fatigue_inputs.BASIS_KEY],
+        "calculation_references": {},
+        "capability_bindings": {},
         "partial_factors": {
             "gamma_c": 1.50,
             "gamma_s": 1.15,
@@ -1521,6 +1645,7 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
         "mixed": False, "limitations": [],
     }
     txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    flat = " ".join(txt.split())
     assert "5.1.6" in txt and "5.3" in txt and "5.4" in txt
     assert "8.1.2" in txt and "8.4" in txt
     assert "0.85" in txt
@@ -1530,6 +1655,9 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert chr(0x3B7) in txt  # eta_cc uses the Greek symbol
     assert "Curve 3 Eurocode design preset" in " ".join(txt.split())
     assert "3.15" not in txt
+    assert "published project-adoption basis" in flat
+    assert "no Danish National Annex is applied" in flat
+    assert "confinement enhancement is not included or assessed" in flat
 
 
 def test_report_prints_actual_custom_half_and_double_partial_factors():
@@ -1616,115 +1744,14 @@ def test_report_ignores_removed_authority_approval_and_cover_calculator_metadata
         assert marker not in text
 
 
-def test_report_publishes_retained_bridge_kernels_without_coverage_aggregate():
+def test_report_ignores_stale_bridge_and_trace_payloads():
     inp = _inp()
-    inp.update({
-        "bridge_standard": bridge.EN1992_2_DK_NA,
-        bridge_inputs.BRITTLE_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "region_id": "bottom",
-                "m_rep_knm": 1000.0,
-                "z_s_m": 0.8,
-                "f_yk_mpa": 500.0,
-                "as_provided_mm2": 3000.0,
-            }],
-            bridge_inputs.BRITTLE_TABLE_KEY,
-        ),
-        bridge_inputs.BOX_WALL_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "wall_id": "left",
-                "cot_theta": 0.5,
-                "v_ed_kn": 200.0,
-                "v_rd_max_kn": 500.0,
-                "t_ed_equivalent_kn": 50.0,
-                "t_rd_max_equivalent_kn": 250.0,
-            }],
-            bridge_inputs.BOX_WALL_TABLE_KEY,
-        ),
-        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "component": "web",
-                "act_mm2": 100000.0,
-                "k_c": 0.4,
-                "k": 0.8,
-                "fct_eff_mpa": 3.0,
-                "sigma_s_mpa": 200.0,
-                "as_provided_mm2": 600.0,
-                "restrained_shrinkage": False,
-            }],
-            bridge_inputs.MINIMUM_CRACK_TABLE_KEY,
-        ),
-    })
     out = _out()
-    out["bridge"] = bridge_analysis.run(inp)
-
-    text = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "Independent bridge calculations" in text
-    assert "Optional brittle Method B" in text
-    assert "Box-wall shear and torsion" in text
-    assert "Web/flange minimum crack reinforcement" in text
-    assert "0.500" in text
-    assert "actual values were retained" in text
-    assert (
-        "generic bridge-code coverage and generic cross-method interaction "
-        "are not calculated"
-    ) in text
-    assert "approval" not in text.casefold()
-
-
-def test_report_publishes_typed_bridge_failure_and_valid_sibling():
-    inp = _inp()
-    inp.update({
-        "bridge_standard": bridge.COMPONENT_METHODS,
-        bridge_inputs.BRITTLE_TABLE_KEY: [{
-            "region_id": "bottom",
-            "m_rep_knm": 1.0,
-            "z_s_m": 1.0e-200,
-            "f_yk_mpa": 1.0e-200,
-            "as_provided_mm2": 1.0,
-        }],
-        bridge_inputs.BOX_WALL_TABLE_KEY: [{
-            "wall_id": "left",
-            "cot_theta": 1.5,
-            "v_ed_kn": 20.0,
-            "v_rd_max_kn": 100.0,
-            "t_ed_equivalent_kn": 10.0,
-            "t_rd_max_equivalent_kn": 100.0,
-        }],
-        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: None,
-    })
-    out = _out()
-    out["bridge"] = bridge_analysis.run(inp)
-
-    text = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
-    ).split())
-
-    assert "brittle method b: INVALID (NUMERICAL_FAILURE)" in text
-    assert "bottom: As,min cannot be represented as a finite result" in text
-    assert "Box-wall shear and torsion" in text
-    assert "Optional brittle Method B" not in text
-    assert "Util." in text
-
-
-def test_report_ignores_stale_trace_payload_and_has_no_trace_chapter():
-    inp = _inp()
-    inp.update({
-        "bridge_standard": bridge.EN1992_2_BASE,
-        bridge_inputs.BRITTLE_TABLE_KEY: [{
-            "region_id": "bottom",
-            "m_rep_knm": 1000.0,
-            "z_s_m": 0.8,
-            "f_yk_mpa": 500.0,
-            "as_provided_mm2": 2600.0,
-        }],
-        bridge_inputs.BOX_WALL_TABLE_KEY: None,
-        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: None,
-    })
-    out = {"bridge": bridge_analysis.run(inp)}
+    out["bridge"] = {
+        "selected_standard": "OBSOLETE-BRIDGE-STANDARD",
+        "calculations": {"brittle_method_b": object()},
+        "failures": [{"message": "OBSOLETE-BRIDGE-FAILURE"}],
+    }
     out["calculation_traces"] = {
         "bundles": [{"untrusted": object()}],
         "errors": [{"message": "must remain inert"}],
@@ -1733,11 +1760,15 @@ def test_report_ignores_stale_trace_payload_and_has_no_trace_chapter():
         sector_report.build_report({}, inp, out, figures=False)
     ).split())
 
-    assert "Independent bridge calculations" in text
-    assert "Optional brittle Method B" in text
-    assert "6.1(109)-(110)" in text
-    assert "Calculation trace" not in text
-    assert "must remain inert" not in text
+    for removed in (
+        "Independent bridge calculations",
+        "Optional brittle Method B",
+        "OBSOLETE-BRIDGE-STANDARD",
+        "OBSOLETE-BRIDGE-FAILURE",
+        "Calculation trace",
+        "must remain inert",
+    ):
+        assert removed not in text
 
 
 def test_report_handles_uncracked_section():

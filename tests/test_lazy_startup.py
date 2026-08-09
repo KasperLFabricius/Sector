@@ -70,6 +70,7 @@ EXPECTED_MODULES = (
     "capacity",
     "codes",
     "combined",
+    "design_standards",
     "detailing",
     "elastic",
     "fatigue",
@@ -290,8 +291,6 @@ def test_app_deferred_contract_and_fatigue_method_identity_are_pinned():
     source = SECTOR_APP.read_text(encoding="utf-8")
     tree = ast.parse(source)
     eager_names = {
-        "bridge_analysis",
-        "bridge_inputs",
         "case_analysis",
         "fatigue_analysis",
         "fatigue_inputs",
@@ -301,6 +300,7 @@ def test_app_deferred_contract_and_fatigue_method_identity_are_pinned():
         "project_io",
         "reinforcement_table",
         "result_presentation",
+        "session_state_migrations",
         "viz",
     }
     imported = {

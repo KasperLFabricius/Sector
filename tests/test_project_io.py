@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import pathlib
+import re
 import sys
 
 import numpy as np
@@ -12,41 +13,12 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import bridge_inputs
 import fatigue_inputs
 import load_cases
 import project_io
 import reinforcement_table
 
-from sector import bridge, capacity, codes
-
-_BRIDGE_PROJECT_ROWS = {
-    bridge_inputs.BRITTLE_TABLE_KEY: {
-        "region_id": "R1",
-        "m_rep_knm": 100.0,
-        "z_s_m": 0.5,
-        "f_yk_mpa": 500.0,
-        "as_provided_mm2": 500.0,
-    },
-    bridge_inputs.BOX_WALL_TABLE_KEY: {
-        "wall_id": "W1",
-        "cot_theta": 1.5,
-        "v_ed_kn": 50.0,
-        "v_rd_max_kn": 100.0,
-        "t_ed_equivalent_kn": 10.0,
-        "t_rd_max_equivalent_kn": 100.0,
-    },
-    bridge_inputs.MINIMUM_CRACK_TABLE_KEY: {
-        "component": "web",
-        "act_mm2": 1000.0,
-        "k_c": 0.4,
-        "k": 0.8,
-        "fct_eff_mpa": 3.0,
-        "sigma_s_mpa": 200.0,
-        "as_provided_mm2": 100.0,
-        "restrained_shrinkage": False,
-    },
-}
+from sector import capacity, codes, design_standards
 
 
 @pytest.mark.parametrize(
@@ -129,14 +101,14 @@ def _current_project():
             fatigue_inputs.empty_spectrum_table()
         ),
     }
-    for key in bridge_inputs.TABLE_KEYS:
-        tables[key] = bridge_inputs.empty_table(key)
     scalars = {
         "mode": "Both",
         "conc_gamma_c": 0.5,
         "mild_gamma_y": 2.0,
         "torsion_gamma_ct": 2.0,
-        "bridge_standard": "Independent component calculations",
+        "fatigue_edition": (
+            design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
+        ),
         "rep_proj_no": "P-001",
     }
     return tables, scalars
@@ -161,6 +133,9 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert loaded_scalars["conc_gamma_c"] == pytest.approx(0.5)
     assert loaded_scalars["mild_gamma_y"] == pytest.approx(2.0)
     assert loaded_scalars["torsion_gamma_ct"] == pytest.approx(2.0)
+    assert loaded_scalars["fatigue_edition"] == (
+        design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
+    )
     assert (
         loaded_tables[load_cases.PLASTIC_TABLE_KEY].loc[0, "name"]
         == "Only characteristic action"
@@ -250,136 +225,6 @@ def test_current_loader_rejects_coherently_rehashed_unsupported_method(
         project_io.parse_project(json.dumps(data))
 
 
-@pytest.mark.parametrize(
-    ("table_key", "column"),
-    [
-        (table_key, column)
-        for table_key in bridge_inputs.TABLE_KEYS
-        for column in bridge_inputs.NUMERIC_COLUMNS[table_key]
-    ],
-)
-@pytest.mark.parametrize(
-    "invalid",
-    [
-        "not numeric",
-        True,
-        float("inf"),
-        float("-inf"),
-        10 ** 4000,
-        complex(1.0, -2.0),
-        np.complex64(1.0 - 2.0j),
-    ],
-)
-def test_current_project_round_trips_every_invalid_bridge_numeric_cell(
-    table_key,
-    column,
-    invalid,
-):
-    tables, scalars = _current_project()
-    row = dict(_BRIDGE_PROJECT_ROWS[table_key])
-    row[column] = invalid
-    tables[table_key] = [row]
-    expected = bridge_inputs.table_signature([row], table_key)
-
-    first = project_io.dump_project(tables, scalars)
-    loaded, loaded_scalars = project_io.parse_project(first)
-    second = project_io.dump_project(loaded, loaded_scalars)
-    reloaded, _ = project_io.parse_project(second)
-
-    assert project_io.project_provenance(first)["input_hash_valid"] is True
-    assert project_io.project_provenance(second)["input_hash_valid"] is True
-    assert bridge_inputs.table_signature(loaded[table_key], table_key) == expected
-    assert bridge_inputs.table_signature(reloaded[table_key], table_key) == expected
-    with pytest.raises(
-        bridge.BridgeInputError,
-        match=f"{column} must be finite numeric",
-    ):
-        bridge_inputs.records(reloaded[table_key], table_key)
-
-
-@pytest.mark.parametrize(
-    "invalid",
-    [
-        "yes",
-        1,
-        0.0,
-        float("inf"),
-        10 ** 4000,
-        complex(1.0, -2.0),
-    ],
-)
-def test_current_project_round_trips_invalid_bridge_boolean_identity(invalid):
-    table_key = bridge_inputs.MINIMUM_CRACK_TABLE_KEY
-    tables, scalars = _current_project()
-    row = dict(_BRIDGE_PROJECT_ROWS[table_key])
-    row["restrained_shrinkage"] = invalid
-    tables[table_key] = [row]
-    expected = bridge_inputs.table_signature([row], table_key)
-
-    text = project_io.dump_project(tables, scalars)
-    loaded, _ = project_io.parse_project(text)
-
-    assert project_io.project_provenance(text)["input_hash_valid"] is True
-    assert bridge_inputs.table_signature(loaded[table_key], table_key) == expected
-    with pytest.raises(
-        bridge.BridgeInputError,
-        match="restrained_shrinkage must be Boolean",
-    ):
-        bridge_inputs.records(loaded[table_key], table_key)
-
-
-def test_current_project_keeps_scalar_pandas_bridge_blanks_inert():
-    tables, scalars = _current_project()
-    for table_key in bridge_inputs.TABLE_KEYS:
-        tables[table_key] = [{
-            column: pd.NA
-            for column in bridge_inputs.TABLE_COLUMNS[table_key]
-        }]
-
-    text = project_io.dump_project(tables, scalars)
-    loaded, _ = project_io.parse_project(text)
-
-    assert project_io.project_provenance(text)["input_hash_valid"] is True
-    for table_key in bridge_inputs.TABLE_KEYS:
-        assert bridge_inputs.records(loaded[table_key], table_key) == []
-
-
-def test_bridge_project_loader_rejects_duplicate_columns_before_mapping():
-    key = bridge_inputs.BRITTLE_TABLE_KEY
-    with pytest.raises(ValueError, match="contains duplicate columns"):
-        project_io._obj_to_table({
-            "columns": ["region_id", "region_id"],
-            "rows": [["R1", "R2"]],
-        }, key)
-
-
-@pytest.mark.parametrize("row", [["R1"], "R1", {"region_id": "R1"}])
-def test_bridge_project_loader_rejects_wrong_row_cardinality(row):
-    key = bridge_inputs.BRITTLE_TABLE_KEY
-    with pytest.raises(ValueError, match="rows are not tabular"):
-        project_io._obj_to_table({
-            "columns": list(bridge_inputs.TABLE_COLUMNS[key]),
-            "rows": [row],
-        }, key)
-
-
-def test_encoded_invalid_bridge_identity_is_covered_by_the_project_hash():
-    table_key = bridge_inputs.BOX_WALL_TABLE_KEY
-    tables, scalars = _current_project()
-    row = dict(_BRIDGE_PROJECT_ROWS[table_key])
-    row["cot_theta"] = float("inf")
-    tables[table_key] = [row]
-    data = json.loads(project_io.dump_project(tables, scalars))
-    column = data["tables"][table_key]["columns"].index("cot_theta")
-    cell = data["tables"][table_key]["rows"][0][column]
-    cell["__sector_bridge_invalid_cell_v1__"]["representation"] = (
-        "negative_infinity"
-    )
-
-    with pytest.raises(ValueError, match="hash mismatch"):
-        project_io.parse_project(json.dumps(data))
-
-
 def test_corrupt_current_input_is_rejected_by_hash():
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
@@ -389,12 +234,137 @@ def test_corrupt_current_input_is_rejected_by_hash():
         project_io.parse_project(json.dumps(data))
 
 
-def test_older_schema_is_explicitly_unsupported():
+def test_schema_23_fails_first_with_the_exact_current_only_message():
+    text = json.dumps({
+        "format": project_io.FORMAT,
+        "version": 23,
+        "tables": "deliberately malformed",
+        "scalars": None,
+    })
+
+    for reader in (project_io.project_provenance, project_io.parse_project):
+        with pytest.raises(ValueError) as caught:
+            reader(text)
+        assert str(caught.value) == project_io.V23_UNSUPPORTED_MESSAGE
+
+
+def test_noncurrent_non_v23_schema_uses_the_generic_current_only_message():
+    text = json.dumps({"format": project_io.FORMAT, "version": 22})
+
+    with pytest.raises(
+        ValueError,
+        match=r"unsupported Sector project schema 22; only current schema 24",
+    ):
+        project_io.parse_project(text)
+
+
+def test_schema_24_serialization_contains_no_retired_bridge_inputs():
+    tables, scalars = _current_project()
+    tables.update({
+        "bridge_brittle_base": {"retired": True},
+        "bridge_box_walls_base": {"retired": True},
+        "bridge_minimum_crack_base": {"retired": True},
+    })
+    scalars["bridge_standard"] = "retired"
+
+    data = json.loads(project_io.dump_project(tables, scalars))
+
+    assert data["version"] == 24
+    assert set(data["tables"]) == set(project_io.PROJECT_TABLE_KEYS)
+    assert not {
+        "bridge_brittle_base",
+        "bridge_box_walls_base",
+        "bridge_minimum_crack_base",
+    }.intersection(data["tables"])
+    assert "bridge_standard" not in data["scalars"]
+    assert not hasattr(project_io, "BRIDGE_TABLE_KEYS")
+
+
+@pytest.mark.parametrize(
+    "retired_table",
+    (
+        "bridge_brittle_base",
+        "bridge_box_walls_base",
+        "bridge_minimum_crack_base",
+    ),
+)
+def test_rehashed_schema_24_rejects_each_retired_table_as_unknown(
+    retired_table,
+):
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
-    data["version"] = project_io.VERSION - 1
+    data["tables"][retired_table] = {"columns": [], "rows": []}
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
 
-    with pytest.raises(ValueError, match="only current schema"):
+    with pytest.raises(
+        ValueError,
+        match=rf"^unknown current-schema tables: {re.escape(retired_table)}$",
+    ):
+        project_io.parse_project(json.dumps(data))
+
+
+def test_rehashed_schema_24_rejects_retired_bridge_scalar_as_unknown():
+    tables, scalars = _current_project()
+    data = json.loads(project_io.dump_project(tables, scalars))
+    data["scalars"]["bridge_standard"] = "retired"
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(
+        ValueError,
+        match=r"^unknown current-schema inputs: bridge_standard$",
+    ):
+        project_io.parse_project(json.dumps(data))
+
+
+@pytest.mark.parametrize("basis_key", tuple(design_standards.DesignBasisKey))
+def test_fatigue_edition_round_trips_only_as_a_registered_basis_key(basis_key):
+    tables, scalars = _current_project()
+    scalars["fatigue_edition"] = basis_key.value
+
+    text = project_io.dump_project(tables, scalars)
+    _, loaded = project_io.parse_project(text)
+
+    assert loaded["fatigue_edition"] == basis_key.value
+    assert json.loads(text)["scalars"]["fatigue_edition"] == basis_key.value
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        "DS/EN 1992-1-1:2005",
+        "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "DS/EN 1992-1-1:2023",
+        "ec2_1_1_2023_published ",
+        "",
+        None,
+    ),
+)
+def test_fatigue_edition_rejects_labels_legacy_tokens_and_near_matches(
+    invalid,
+):
+    tables, scalars = _current_project()
+    scalars["fatigue_edition"] = invalid
+
+    with pytest.raises(ValueError, match="registered basis keys"):
+        project_io.dump_project(tables, scalars)
+
+
+def test_rehashed_schema_24_rejects_an_unregistered_fatigue_edition():
+    tables, scalars = _current_project()
+    data = json.loads(project_io.dump_project(tables, scalars))
+    data["scalars"]["fatigue_edition"] = "DS/EN 1992-1-1:2023"
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(ValueError, match="registered basis keys"):
         project_io.parse_project(json.dumps(data))
 
 
@@ -410,6 +380,8 @@ def test_obsolete_compliance_and_approval_inputs_are_not_in_schema():
         "sls_crack_limit",
         "check_stress",
         "multidirectional_interaction",
+        "bridge_standard",
+        "design_basis",
     }
     joined = "\n".join(project_io.SCALAR_KEYS)
     assert not any(name in joined for name in forbidden)

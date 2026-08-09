@@ -24,7 +24,7 @@ import sector_report  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "6c37b3894bf5fce41aabc1dc6b4176e1e3269113ffe1b01af4806cb6e8a01c01"
+    "3f5787cc5987c9d9d7a097a3b3cffd362f2d293a558d4d91353d5fb22b39cb6f"
 )
 
 
@@ -47,6 +47,10 @@ def calculated_example():
 def test_reference_download_is_current_schema_complete_and_identity_stable():
     text = reproducible_example.project_json()
     tables, scalars = project_io.parse_project(text)
+    assert reproducible_example.PROJECT_NAME == "Sector_v093_complete_reference.json"
+    assert reproducible_example.CHECK_NAME == (
+        "Sector_v093_complete_reference_check.md"
+    )
     assert set(tables) == set(project_io.PROJECT_TABLE_KEYS)
     assert reproducible_example.input_sha256() == EXPECTED_INPUT_SHA256
     assert project_io.input_sha256(tables, scalars) == EXPECTED_INPUT_SHA256
@@ -59,10 +63,6 @@ def test_reference_download_is_current_schema_complete_and_identity_stable():
     assert len(tables["plastic_cases_base"]) == 1
     assert len(tables["elastic_cases_base"]) == 1
     assert len(tables["fatigue_spectrum_base"]) == 2
-    assert sum(len(tables[key]) for key in (
-        "bridge_brittle_base", "bridge_box_walls_base",
-        "bridge_minimum_crack_base",
-    )) == 3
 
 
 def test_complete_example_retains_results_without_trace_payloads(
@@ -74,7 +74,7 @@ def test_complete_example_retains_results_without_trace_payloads(
     assert set(results) == {
         "plastic_cases", "plastic", "shear", "torsion", "combined",
         "minimum_reinforcement", "transverse_reinforcement", "elastic_cases",
-        "elastic", "clear_spacing", "fatigue", "bridge",
+        "elastic", "clear_spacing", "fatigue",
     }
     assert "calculation_traces" not in results["plastic_cases"][0]["results"]
     assert "calculation_traces" not in results["elastic_cases"][0]["results"]
@@ -191,7 +191,7 @@ def test_member_and_detailing_outputs_match_independent_equations(
     assert results["minimum_reinforcement"]["status"] == "PASS"
 
 
-def test_fatigue_and_bridge_outputs_match_independent_equations(
+def test_fatigue_outputs_match_independent_equations(
     calculated_example,
 ):
     results = calculated_example.session_state.filtered_state["results"]
@@ -217,35 +217,12 @@ def test_fatigue_and_bridge_outputs_match_independent_equations(
     assert spectrum.concrete_search.converged is False
     assert results["fatigue"]["passed"] is False
 
-    expected_bridge = oracle.bridge()
-    calculations = results["bridge"]["calculations"]
-    brittle = calculations["brittle_method_b"]["rows"][0]
-    wall = calculations["box_walls"]["rows"][0]
-    crack = calculations["minimum_crack_reinforcement"]["rows"][0]
-    assert brittle["as_required_mm2"] == pytest.approx(
-        expected_bridge["brittle_required_mm2"]
-    )
-    assert brittle["utilisation"] == pytest.approx(
-        expected_bridge["brittle_utilisation"]
-    )
-    assert wall["utilisation"] == pytest.approx(
-        expected_bridge["box_wall_utilisation"]
-    )
-    assert crack["as_required_mm2"] == pytest.approx(
-        expected_bridge["crack_required_mm2"]
-    )
-    assert crack["utilisation"] == pytest.approx(
-        expected_bridge["crack_utilisation"]
-    )
-
-
 def test_checking_pack_is_separate_and_covers_every_main_family():
     pack = reproducible_example.checking_pack()
     assert EXPECTED_INPUT_SHA256 in pack
     for text in (
         "Plastic capacity and applied ray", "Cracked elastic and crack width",
-        "Detailing and member resistance", "Fatigue",
-        "Independent bridge kernels", "Report completeness",
+        "Detailing and member resistance", "Fatigue", "Report completeness",
         "explicit equations", "genuine demand/resistance verdicts",
     ):
         assert text in pack
@@ -293,7 +270,7 @@ def test_tables_only_report_contains_every_main_calculation_chapter(
         "Grouped fatigue", "Shear resistance", "Torsion (thin-walled tube)",
         "Combined bending + shear + torsion (M-V-T)", "minimum reinforcement",
         "Shear/torsion link detailing", "Reinforcement clear spacing",
-        "Independent bridge calculations",
     ):
         assert heading in text
+    assert "Independent bridge calculations" not in text
     assert "Calculation trace" not in text

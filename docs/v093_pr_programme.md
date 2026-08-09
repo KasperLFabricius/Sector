@@ -29,8 +29,8 @@ slices stay planned.
 
 | Order | Slice | Depends on | Status |
 |---|---|---|---|
-| 1 | PR-01 - Programme, decisions and acceptance freeze | v0.92 baseline | In progress |
-| 2 | PR-02 - Bridge scope reset, schema 24 and design-standard registry | PR-01 | Planned |
+| 1 | PR-01 - Programme, decisions and acceptance freeze | v0.92 baseline | Merged |
+| 2 | PR-02 - Bridge scope reset, schema 24 and design-standard registry | PR-01 | In progress |
 | 3 | PR-03 - Textbook calculation evidence and complete substitutions | PR-02 | Planned |
 | 4 | PR-04 - Input correctness, reusable IDs and mathematical table guides | PR-02 | Planned |
 | 5 | PR-05 - Stateful input tabs and explicit modelled direction | PR-04 | Planned |
@@ -681,6 +681,8 @@ Acceptance:
 Tests: documentation/ASCII/link guards and identity tests only.
 
 ### PR-02 - Bridge scope reset, schema 24 and design-standard registry
+
+Acceptance record: [PR-02 bridge-scope and standards-registry acceptance](pr02_v093_bridge_scope_registry_acceptance.md).
 
 Scope:
 
