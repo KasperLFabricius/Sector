@@ -66,6 +66,13 @@ be rebound, deleted or orphaned merely because a catalogue payload is missing,
 duplicated or malformed. Only a genuinely unassigned deleted identifier is
 reusable.
 
+Quick Section initializes the material catalogues before it writes generated
+elements. Generated bars and tendons use the selected live catalogue entry, or
+the first live entry when the selection is unavailable; they do not assume that
+`M1` or `P1` still exists. This preserves the reservation boundary during a
+cold-start builder flow and after a first-suffix catalogue entry was legitimately
+deleted.
+
 ## Mathematical guides and publication references
 
 The registry covers the seven editable table families: concrete corners,
@@ -126,6 +133,9 @@ Acceptance requires:
   field-addressed error until corrected;
 - deleting an unassigned `M2`, `P2` or `F2` makes that identifier the next
   eligible allocation, while every active assignment remains protected;
+- a cold-start Quick Section apply creates resolved material assignments, and a
+  catalogue without `M1` or `P1` remains valid by assigning generated elements
+  to its selected or first live entry;
 - all seven editable table families are covered by complete, stable registry
   metadata and consume that metadata on their applicable UI surfaces;
 - manual and report input references derive from the same registry and remain
@@ -142,12 +152,15 @@ The final local affected-surface gate on the rebased candidate produced:
 
 - 202 passed: complete field-registry, load-case, fatigue-input,
   material-catalogue, reinforcement-table, point-grid and project-I/O suites;
-- 14 passed: directly affected Streamlit catalogue/editor lifecycle nodes and
-  the complete lazy-startup suite;
-- 52 passed: complete semantic manual and publication-object suites;
+- 21 passed serially and again with the CI-equivalent four-worker mode: every
+  Streamlit node that failed on the first remote candidate plus the cold-start
+  and deleted-first-suffix Quick Section regressions;
+- 41 passed with four workers: the broader Quick Section, catalogue, prestress,
+  tendon, circular-section and box-girder AppTest surface;
+- 68 passed: complete manual, manual-equation, manual-rendered and
+  publication-object suites plus the reproducible-example manual-download
+  regression;
 - 141 passed: complete browser-free semantic report suite;
-- 2 passed: browser-free PDFium manual render and standalone leaked-math-token
-  boundary regression;
 - 190 passed: programme-document, ASCII and product-version guards; and
 - Ruff policy, strict owned-mypy policy, focused import/style checks and
   `git diff --check` passed.
@@ -166,6 +179,16 @@ ingress. The published reinforcement-point ID rule was also corrected to match
 its existing monotonic stable-ID allocator; unlike reusable M/P/F catalogue
 identities, point IDs advance above the highest retained suffix and do not fill
 deleted gaps.
+
+The first exact-head remote gate then exposed two deterministic acceptance
+gaps. The Manual B6-2 wording correction had not refreshed its fail-closed table
+content identity; the identity now matches the reviewed table and all 68
+manual/publication regressions pass. Quick Section could also be opened before
+the first Inputs build, so generated `M1`/`P1` assignments were mistaken for
+orphans while missing catalogues were initialized as `M2`/`P2`. Catalogue
+initialization now precedes generated assignments and the builder binds them to
+an actual live material ID. All 19 affected remote nodes pass locally in both
+serial and CI-equivalent four-worker execution.
 
 No local browser, JavaScript runtime or real Windows package build was launched.
 GitHub must record the exact candidate revision/tree and pass the complete

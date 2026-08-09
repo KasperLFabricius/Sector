@@ -1334,9 +1334,28 @@ def _corners_df(pts):
         columns=_CORNER_COLS).astype("float64")
 
 
-def _rebar_df(pts, kind="bar", *, size_mode=rebar_table.AREA_MODE):
+def _rebar_df(
+    pts,
+    kind="bar",
+    *,
+    size_mode=rebar_table.AREA_MODE,
+    material_id=None,
+):
     """Canonical stable-ID table from ``(x, y, area)`` mm/mm2 points."""
-    return rebar_table.table_from_points(pts, kind, size_mode=size_mode)
+    frame = rebar_table.table_from_points(pts, kind, size_mode=size_mode)
+    if material_id is not None and not frame.empty:
+        frame[rebar_table.MATERIAL_ID] = str(material_id)
+    return frame
+
+
+def _quick_section_material_id(kind):
+    """Return the selected, or first available, material for generated points."""
+    catalogue = st.session_state[mat_catalog.catalog_key(kind)]
+    available = mat_catalog.material_ids(catalogue, kind)
+    selected = rebar_table.text_cell(
+        st.session_state.get(f"_{kind}_catalog_selected")
+    )
+    return selected if selected in available else available[0]
 
 
 def _to_number(v):
@@ -3316,16 +3335,26 @@ def _quick_section_viewport():
         st.rerun()
     if apply:
         _discard_clear_recovery()
+        # Quick Section can be the first surface opened in a fresh session. Seed
+        # the catalogues before its generated M/P assignments exist; otherwise the
+        # orphan-ID reservation guard quite correctly avoids M1/P1 and creates
+        # M2/P2, leaving the new points unresolved. Existing catalogues keep their
+        # stable IDs, and generated points use the selected (or first) live entry.
+        _ensure_material_catalog_state()
+        mild_material_id = _quick_section_material_id("mild")
+        prestress_material_id = _quick_section_material_id("prestress")
         qs_hole = [(float(p[0]), float(p[1])) for p in holes[0]] if holes else []
         _reseed_table("corners_base", "ed_corners", _corners_df(_pts_to_mm(
             [(float(p[0]), float(p[1])) for p in outer])))
         _reseed_table("hole_base", "ed_hole", _corners_df(_pts_to_mm(qs_hole)))
         _reseed_table("bars_base", "ed_bars", _rebar_df(_pts_to_mm(
             [(float(p[0]), float(p[1]), float(p[2])) for p in bars]),
-            "bar", size_mode=rebar_table.DIAMETER_MODE))
+            "bar", size_mode=rebar_table.DIAMETER_MODE,
+            material_id=mild_material_id))
         _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
             [(float(p[0]), float(p[1]), float(p[2])) for p in tendons]),
-            "tendon", size_mode=rebar_table.AREA_MODE))
+            "tendon", size_mode=rebar_table.AREA_MODE,
+            material_id=prestress_material_id))
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"

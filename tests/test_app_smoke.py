@@ -1365,6 +1365,48 @@ def test_circular_shape_calculates():
     assert "plastic" in at.session_state["results"]
 
 
+def test_quick_section_seeds_catalogues_before_generated_assignments():
+    at = _fresh_qs()
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 2))
+
+    assert [item["id"] for item in at.session_state[
+        "mild_material_catalog"]["items"]] == ["M1"]
+    assert [item["id"] for item in at.session_state[
+        "prestress_material_catalog"]["items"]] == ["P1"]
+    assert set(at.session_state["bars_base"]["material ID"]) == {"M1"}
+    assert set(at.session_state["tendons_base"]["material ID"]) == {"P1"}
+    assert at.session_state["_latest_inputs"]["material_error"] is None
+
+
+def test_quick_section_uses_live_catalogue_ids_after_first_suffix_is_deleted():
+    import material_catalog
+
+    mild, _ = material_catalog.add_entry(
+        material_catalog.default_catalog("mild"), "mild"
+    )
+    mild = material_catalog.delete_entry(mild, "mild", "M1")
+    prestress, _ = material_catalog.add_entry(
+        material_catalog.default_catalog("prestress"), "prestress"
+    )
+    prestress = material_catalog.delete_entry(prestress, "prestress", "P1")
+
+    at = _fresh_qs(
+        mild_material_catalog=mild,
+        prestress_material_catalog=prestress,
+        _mild_catalog_selected="M2",
+        _prestress_catalog_selected="P2",
+    )
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 2))
+
+    assert set(at.session_state["bars_base"]["material ID"]) == {"M2"}
+    assert set(at.session_state["tendons_base"]["material ID"]) == {"P2"}
+    assert [item["id"] for item in at.session_state[
+        "mild_material_catalog"]["items"]] == ["M2"]
+    assert [item["id"] for item in at.session_state[
+        "prestress_material_catalog"]["items"]] == ["P2"]
+    assert at.session_state["_latest_inputs"]["material_error"] is None
+
+
 def test_builder_does_not_touch_points_until_applied():
     # The point tables drive the analysis; the Quick Section builder only writes to
     # them on Apply. Opening it, changing a dimension and pressing Back changes
