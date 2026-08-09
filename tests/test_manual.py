@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import manual  # noqa: E402
 import viz  # noqa: E402
+from app import table_field_definitions as table_fields  # noqa: E402
 from sector.codes import fctm  # noqa: E402
 from sector.plastic import plastic_capacity_at_angle  # noqa: E402
 from sector.section import Section  # noqa: E402
@@ -369,6 +370,56 @@ def test_manual_documents_native_case_tables_results_and_report():
         "one global fine-system and one global coarse-system example",
         "separate governing reinforcement and concrete examples",
         "Default report + QA appendix",
+    ):
+        assert expected in text
+
+
+def test_manual_editable_table_matrix_is_generated_from_shared_registry():
+    headers = ["Editable table", "Fields / notation", "Blank / default"]
+    matrix_blocks = [
+        block for block in manual.manual_blocks()
+        if block[0] == "table" and block[1] == headers
+    ]
+
+    assert len(matrix_blocks) == 1
+    rows = matrix_blocks[0][2]
+    assert rows == manual.editable_table_reference_rows()
+    assert len(rows) == len(table_fields.TABLE_KEYS) == 7
+    assert [row[0] for row in rows] == [
+        table_fields.TABLE_TITLES[key] for key in table_fields.TABLE_KEYS
+    ]
+    for key, row in zip(table_fields.TABLE_KEYS, rows, strict=True):
+        for definition in table_fields.table_fields(key):
+            assert definition.label in row[1]
+            if definition.math_symbol != "-":
+                assert f"${definition.math_symbol}$" in row[1]
+            if definition.unit != "-":
+                assert (
+                    f"[${table_fields.latex_unit(definition.unit)}$]" in row[1]
+                )
+                assert f"[{definition.unit}]" not in row[1]
+            input_rule = table_fields.input_rule(definition)
+            if input_rule == "Blank = False":
+                input_rule = "Blank = off"
+            elif input_rule == "Blank = True":
+                input_rule = "Blank = on"
+            assert f"{input_rule}:" in row[2]
+    assert manual._latex_to_rl(table_fields.latex_unit("mm^2")) == (
+        "mm<super>2</super>"
+    )
+
+
+def test_manual_documents_decimal_blank_and_precision_contracts():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+
+    for expected in (
+        "Plastic/capacity and Elastic action fields, and grouped-fatigue numeric",
+        "accept either a dot or comma as the decimal separator",
+        "Blank ordinary action cells are normalised to canonical zero",
+        "Optional-null fields remain absent rather than becoming zero",
+        "required identity and cycle fields must be entered",
+        "retains the entered numeric precision internally",
+        "display rounding does not change the calculation value",
     ):
         assert expected in text
 

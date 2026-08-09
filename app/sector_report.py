@@ -43,6 +43,7 @@ import case_analysis
 import fatigue_inputs
 import fatigue_presentation
 import material_catalog
+from app import table_field_definitions as table_fields
 from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
 import publication_theme
@@ -79,6 +80,9 @@ _CRACK_CANDIDATE_COL_WIDTHS = tuple(
 _EQUATION_KEY_RE = re.compile(
     r"^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
 )
+_INPUT_TABLE_SUBSCRIPT_RE = re.compile(r"_\{([A-Za-z0-9,]+)\}")
+_INPUT_TABLE_SIMPLE_SUBSCRIPT_RE = re.compile(r"_([A-Za-z0-9]+)")
+_INPUT_TABLE_RAW_TEX_RE = re.compile(r"[\\{}$^]")
 _DERIVED_EQUATION_SOURCE = (
     "Derived relation; no separate normative source assigned."
 )
@@ -193,6 +197,28 @@ def _equation_math(s):
     return _EQUATION_MATH_RE.sub(
         lambda match: _EQUATION_MATH_TOKENS[match.group(1)], _greek(s)
     )
+
+
+def _input_table_symbol(table_key, field_key):
+    """Return one registered input symbol as trusted ReportLab markup.
+
+    Editable-table symbols use a deliberately small LaTeX subset. Convert that
+    subset here rather than duplicating the symbols in the report, and fail
+    closed if a future registry entry introduces unsupported TeX.
+    """
+
+    definition = table_fields.field_definition(table_key, field_key)
+    symbol = definition.math_symbol.strip()
+    if symbol == "-":
+        return _html_escape(definition.label)
+    symbol = symbol.replace(r"\Delta", "&#916;").replace(r"\phi", "&#966;")
+    symbol = _INPUT_TABLE_SUBSCRIPT_RE.sub(r"<sub>\1</sub>", symbol)
+    symbol = _INPUT_TABLE_SIMPLE_SUBSCRIPT_RE.sub(r"<sub>\1</sub>", symbol)
+    if _INPUT_TABLE_RAW_TEX_RE.search(symbol):
+        raise ValueError(
+            f"unsupported input-table mathematics for {table_key}.{field_key}"
+        )
+    return normalize_trusted_markup(symbol)
 
 
 def _numerical_table_text(markup, evidence):
@@ -2488,6 +2514,11 @@ class ReportBuilder:
     def _loads_block(self):
         inp = self._base_inp
         out = self._base_out
+        self._small(
+            "Load-table input accepts a dot or comma as the decimal separator; "
+            "blank action cells canonicalize to zero; calculations retain the "
+            "parsed numeric precision."
+        )
         if "plastic_cases" in inp or "elastic_cases" in inp:
             plastic = (
                 case_analysis.case_records(inp, "plastic")
@@ -2495,11 +2526,16 @@ class ReportBuilder:
             )
             if plastic:
                 self._small("<b>Plastic / capacity cases</b>")
+                table_key = table_fields.PLASTIC_CASES_TABLE_KEY
                 rows = [[
-                    "Case", "Description", "N<sub>Ed</sub>",
-                    "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
-                    "V<sub>x,Ed</sub>", "V<sub>y,Ed</sub>",
-                    "T<sub>Ed</sub>", "Faces", "Min. reinf.",
+                    "Case", "Description",
+                    _input_table_symbol(table_key, "n_ed_kn"),
+                    _input_table_symbol(table_key, "mx_ed_knm"),
+                    _input_table_symbol(table_key, "my_ed_knm"),
+                    _input_table_symbol(table_key, "vx_ed_kn"),
+                    _input_table_symbol(table_key, "vy_ed_kn"),
+                    _input_table_symbol(table_key, "t_ed_knm"),
+                    "Faces", "Min. reinf.",
                 ]]
                 rows.extend([
                     [
@@ -2577,11 +2613,15 @@ class ReportBuilder:
             )
             if fatigue_rows:
                 self._small("<b>Grouped fatigue spectra</b>")
+                table_key = table_fields.FATIGUE_SPECTRUM_TABLE_KEY
                 rows = [[
                     "Spectrum", "Bin", "Description", "Cycles",
-                    "N<sub>long,Ed</sub>", "M<sub>x,long,Ed</sub>",
-                    "M<sub>y,long,Ed</sub>", "N<sub>short,Ed</sub>",
-                    "M<sub>x,short,Ed</sub>", "M<sub>y,short,Ed</sub>",
+                    _input_table_symbol(table_key, "n_long_ed_kn"),
+                    _input_table_symbol(table_key, "mx_long_ed_knm"),
+                    _input_table_symbol(table_key, "my_long_ed_knm"),
+                    _input_table_symbol(table_key, "n_short_ed_kn"),
+                    _input_table_symbol(table_key, "mx_short_ed_knm"),
+                    _input_table_symbol(table_key, "my_short_ed_knm"),
                 ]]
                 rows.extend([
                     [
@@ -7470,11 +7510,15 @@ class ReportBuilder:
             ]
             if selected_inputs:
                 self._h2("Entered spectrum actions")
+                table_key = table_fields.FATIGUE_SPECTRUM_TABLE_KEY
                 rows = [[
-                    "Bin", "Description", "Cycles", "N<sub>long,Ed</sub>",
-                    "M<sub>x,long,Ed</sub>", "M<sub>y,long,Ed</sub>",
-                    "N<sub>short,Ed</sub>", "M<sub>x,short,Ed</sub>",
-                    "M<sub>y,short,Ed</sub>",
+                    "Bin", "Description", "Cycles",
+                    _input_table_symbol(table_key, "n_long_ed_kn"),
+                    _input_table_symbol(table_key, "mx_long_ed_knm"),
+                    _input_table_symbol(table_key, "my_long_ed_knm"),
+                    _input_table_symbol(table_key, "n_short_ed_kn"),
+                    _input_table_symbol(table_key, "mx_short_ed_knm"),
+                    _input_table_symbol(table_key, "my_short_ed_knm"),
                 ]]
                 rows.extend([
                     [
