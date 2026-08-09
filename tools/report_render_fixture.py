@@ -74,6 +74,9 @@ __all__ = (
 # and four grouped-fatigue figures. An intentional fixture change must update this
 # explicit contract.
 _EXPECTED_FIGURE_COUNT = 19
+_EXPECTED_PLASTIC_WORKED_HEADING = (
+    "Worked plastic calculation (utilisation direction)"
+)
 _REPORT_CROPS = (
     RasterCrop(
         "report overview",
@@ -1530,7 +1533,7 @@ def validate_worked_example_text(text: str) -> None:
         )
     flat_text = " ".join(text.split())
     for expected in (
-        "Worked plastic calculation (utilisation direction)",
+        _EXPECTED_PLASTIC_WORKED_HEADING,
         "Accepted strain plane",
         "Ultimate-curvature candidates",
         "Step 1 - accepted long-term state",
@@ -1612,7 +1615,7 @@ def validate_pdf_content(
 
     governing_page = next(
         (page.extract_text() or "" for page in reader.pages
-         if "Governing case worked" in (page.extract_text() or "")),
+         if _EXPECTED_PLASTIC_WORKED_HEADING in (page.extract_text() or "")),
         "",
     )
     if "NA intercepts" not in governing_page:
@@ -1670,7 +1673,7 @@ def validate_pdf_content(
         "Vx,Ed = 0",
         "Vy,Ed = 0",
         "Plastic section capacity - PL-QA-2",
-        "Worked plastic calculation (utilisation direction)",
+        _EXPECTED_PLASTIC_WORKED_HEADING,
         "Accepted strain plane",
         "Ultimate-curvature candidates",
         "Longitudinal minimum reinforcement - PL-QA-1",

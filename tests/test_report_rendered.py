@@ -8,6 +8,7 @@ import pypdf
 import pytest
 
 from tools.report_render_fixture import (
+    _EXPECTED_PLASTIC_WORKED_HEADING,
     _inputs,
     _results,
     build_fixture_pdf,
@@ -71,8 +72,16 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     """Check the textbook payload and PDF text without launching a browser."""
     pdf = build_fixture_pdf(figures=False)
     reader = pypdf.PdfReader(io.BytesIO(pdf))
-    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    text = "\n".join(page_texts)
     validate_worked_example_text(text)
+    heading_pages = [
+        page_text
+        for page_text in page_texts
+        if _EXPECTED_PLASTIC_WORKED_HEADING in page_text
+    ]
+    assert len(heading_pages) == 1
+    assert "NA intercepts" in heading_pages[0]
 
 
 def test_worked_example_text_rejects_any_unavailable_placeholder():
