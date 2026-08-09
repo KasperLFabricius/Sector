@@ -52,6 +52,71 @@ def _assert_math_text_is_renderable(value):
     assert not _LEAKED_MATH_RE.search(plain_text), value
 
 
+def test_crack_result_adapter_preserves_textbook_operands_without_recalculation():
+    import sector_app
+    from sector.serviceability import (
+        CrackEffectiveArea2005Fine,
+        CrackMeanStrainOperands,
+        CrackSpacing2005Operands,
+        CrackWidthCandidate,
+        CrackWidthResult,
+    )
+
+    mean = CrackMeanStrainOperands(
+        sigma_s=200.0, kt=0.4, fctm=2.9, rho_p_eff=0.02,
+        alpha_e=6.0, es=200_000.0, concrete_tension_reduction=65.0,
+        formula_candidate=0.000675, lower_bound_factor=0.6,
+        lower_bound_candidate=0.0006, selected_candidate="formula-7.9",
+        selected_esm_ecm=0.000675,
+    )
+    spacing = CrackSpacing2005Operands(
+        cover=35.0, diameter=16.0, rho_p_eff=0.02,
+        k1=0.8, k2=0.5, k3_base=3.4, k3_used=3.4, k4=0.425,
+        nearest_neighbour_spacing=120.0, close_spacing_limit=215.0,
+        tension_zone_depth=0.2, formula_7_11=255.0,
+        geometric_7_14=260.0, selected_candidate="formula-7.11",
+        selected_spacing=255.0,
+    )
+    candidate = CrackWidthCandidate(
+        bar_index=0, x=0.0, y=-0.12, area=500.0,
+        wk=0.172125, sr_max=255.0, esm_ecm=0.000675,
+        sigma_s=200.0, rho_p_eff=0.02, ac_eff=0.025,
+        hc_ef=0.125, phi=16.0, cover=35.0,
+        as_eff=0.0005, mean_strain_operands=mean,
+        spacing_operands=spacing,
+    )
+    area = CrackEffectiveArea2005Fine(
+        section_depth=0.3, effective_depth=0.25,
+        tension_zone_depth=0.4, h_minus_d=0.05,
+        candidate_2_5_h_minus_d=0.125,
+        candidate_h_minus_x_over_3=0.13333333333333333,
+        candidate_h_over_2=0.15, selected_candidate="2.5(h-d)",
+        selected_hc_eff=0.125, band_limit=-0.025, ac_eff=0.025,
+    )
+    result = CrackWidthResult(
+        wk=candidate.wk, sr_max=candidate.sr_max,
+        esm_ecm=candidate.esm_ecm, sigma_s=candidate.sigma_s,
+        rho_p_eff=candidate.rho_p_eff, ac_eff=candidate.ac_eff,
+        hc_ef=candidate.hc_ef, phi=candidate.phi, cover=candidate.cover,
+        gov_bar=0, candidates=(candidate,), effective_area_operands=area,
+    )
+
+    payload = sector_app._crack_dict(result, ["R1"], [])
+    assert payload["element_id"] == "R1"
+    assert payload["governing_candidate"]["mean_strain_operands"] == {
+        **dataclasses.asdict(mean),
+        "record_kind": "CrackMeanStrainOperands",
+    }
+    assert payload["governing_candidate"]["spacing_operands"] == {
+        **dataclasses.asdict(spacing),
+        "record_kind": "CrackSpacing2005Operands",
+    }
+    assert payload["effective_area_operands"] == {
+        **dataclasses.asdict(area),
+        "record_kind": "CrackEffectiveArea2005Fine",
+    }
+
+
 def _fresh_qs(**state):
     """Start directly in Quick Section with optional pre-seeded widget state.
 

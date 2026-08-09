@@ -33,14 +33,28 @@ EXPECTED_CONTRACT_KEYS = {
     ("crack.2005.spacing", "geometric"),
     ("crack.2005.spacing", "reinforcement"),
     ("crack.2005.width", None),
+    ("crack.effective-area.2005", "coarse"),
+    ("crack.effective-area.2005", "fine"),
+    ("crack.effective-area.2023", "bending"),
+    ("crack.effective-area.2023", "direct-tension"),
+    ("crack.effective-reinforcement.ratio", "2005"),
+    ("crack.effective-reinforcement.ratio", "2023"),
     ("crack.2023.mean-strain", None),
     ("crack.2023.spacing", None),
     ("crack.2023.width", None),
     ("cracking.threshold", None),
+    ("detailing.clear-spacing.distance", None),
     ("detailing.clear-spacing.requirement", None),
     ("detailing.links.minimum-ratio", None),
+    ("detailing.links.provided-ratio", "shear"),
+    ("detailing.links.provided-ratio", "torsion"),
+    ("detailing.links.spacing-limit", "longitudinal"),
+    ("detailing.links.spacing-limit", "torsion"),
+    ("detailing.links.spacing-limit", "transverse"),
     ("detailing.minimum.area-2005", None),
     ("detailing.minimum.bending-2023", None),
+    ("detailing.minimum.cracking-factor-2023", None),
+    ("detailing.minimum.nominal-equilibrium-2023", None),
     ("detailing.minimum.tension-2023", None),
     ("elastic.combined.difference-stress", None),
     ("elastic.combined.neutralising-mx", None),
@@ -134,16 +148,6 @@ THEORY_ONLY_EQUATIONS = {
 # slice removes its entries by publishing a numerical substitution and result.
 EXISTING_LIVE_EQUATION_GAPS = {
     ("combined.dk-na.sum", None),
-    ("crack.2005.mean-strain", None),
-    ("crack.2005.spacing", "geometric"),
-    ("crack.2005.spacing", "reinforcement"),
-    ("crack.2023.mean-strain", None),
-    ("crack.2023.spacing", None),
-    ("detailing.clear-spacing.requirement", None),
-    ("detailing.links.minimum-ratio", None),
-    ("detailing.minimum.area-2005", None),
-    ("detailing.minimum.bending-2023", None),
-    ("detailing.minimum.tension-2023", None),
     ("shear.links.vrd", None),
     ("torsion.resistance.governing", None),
     ("torsion.subtube.governing-utilisation", None),
@@ -192,7 +196,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 99
+    assert len(calls) == 113
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -203,7 +207,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 100
+    assert len(catalogue_pairs) == 114
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -220,12 +224,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 80,
-        "none": 20,
+        "numerical": 103,
+        "none": 11,
     }
-    assert publication_role_counts == {"calculation": 93, "theory": 7}
+    assert publication_role_counts == {"calculation": 107, "theory": 7}
     # One extra contract is the second runtime branch of shear.chord.demand.
-    assert result_counts == {True: 84, False: 16}
+    assert result_counts == {True: 107, False: 7}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key
@@ -293,7 +297,7 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
         "crack.2005.spacing", "geometric"
     )
     assert combined.substitution_role == "none"
-    assert geometric.substitution_role == "none"
+    assert geometric.substitution_role == "numerical"
     assert combined.applicability_note_required
     assert geometric.applicability_note_required
 

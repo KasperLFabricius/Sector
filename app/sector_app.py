@@ -5390,6 +5390,15 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
     tendon_ids = list(tendon_ids or [])
     n_bars = len(bar_ids)
 
+    def retained_record(value):
+        """Serialize one family-owned retained record without deriving values."""
+
+        if value is None:
+            return None
+        row = dataclasses.asdict(value)
+        row["record_kind"] = type(value).__name__
+        return row
+
     def element(index):
         if index < n_bars:
             number = index + 1
@@ -5412,9 +5421,37 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
             hc_ef=c.hc_ef, phi=c.phi, cover=c.cover, coarse=c.coarse,
             edition=c.edition, kw=c.kw, k1_r=c.k1_r, kfl=c.kfl,
             sr_max_geometric=c.sr_max_geometric,
+            as_eff=c.as_eff, ap_eff=c.ap_eff,
+            ap_eff_weighted=c.ap_eff_weighted, xi1=c.xi1,
+            reinforcement_type=c.reinforcement_type, bc_ef=c.bc_ef,
+            direct_tension=c.direct_tension, scope=c.scope,
+            direction_deg=c.direction_deg,
+            equivalent_diameter=c.equivalent_diameter,
+            diameter_source=c.diameter_source,
+            cover_source=c.cover_source,
+            bond_coefficient=c.bond_coefficient,
+            modular_ratio=c.modular_ratio,
+            mean_strain_operands=retained_record(c.mean_strain_operands),
+            spacing_operands=retained_record(c.spacing_operands),
         )
 
     kind, number, element_id = element(cw.gov_bar)
+    governing_candidate = (
+        candidate(cw.candidates[0]) if cw.candidates else None
+    )
+    effective_reinforcement = retained_record(
+        cw.effective_reinforcement_2023
+    )
+    if effective_reinforcement is not None:
+        for row in effective_reinforcement.get("elements", []):
+            element_kind, element_number, retained_id = element(
+                int(row["element_index"])
+            )
+            row.update(
+                element_type=element_kind,
+                element_no=element_number,
+                element_id=retained_id,
+            )
     return dict(
         wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm,
         sigma_s=cw.sigma_s, rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff,
@@ -5423,6 +5460,15 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
         element_id=element_id, coarse=cw.coarse,
         edition=cw.edition, kw=cw.kw, k1_r=cw.k1_r, kfl=cw.kfl,
         sr_max_geometric=cw.sr_max_geometric,
+        as_eff=cw.as_eff, ap_eff=cw.ap_eff,
+        ap_eff_weighted=cw.ap_eff_weighted,
+        xi1_min=cw.xi1_min, xi1_max=cw.xi1_max,
+        bc_ef=cw.bc_ef, direct_tension=cw.direct_tension,
+        scope=cw.scope, direction_deg=cw.direction_deg,
+        effective_area_operands=retained_record(cw.effective_area_operands),
+        effective_reinforcement_2023=effective_reinforcement,
+        governing_rule=cw.governing_rule,
+        governing_candidate=governing_candidate,
         candidates=[candidate(c) for c in cw.candidates],
     )
 

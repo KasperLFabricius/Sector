@@ -244,14 +244,16 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("A<sub>leg</sub>", "area of one effective closed-link leg", "mm2"),
         ("t<sub>ef</sub>", "effective torsion-wall thickness", "mm"),
     ),
-    ("detailing.minimum.area-2005", None): _calculation_relation(
+    ("detailing.minimum.area-2005", None): _result(
+        "A<sub>s,min</sub>", "mm2",
         ("A<sub>s,min</sub>", "required minimum longitudinal reinforcement", "mm2"),
         ("f<sub>ctm</sub>", "mean concrete tensile strength", "MPa"),
         ("f<sub>yk</sub>", "characteristic reinforcement yield strength", "MPa"),
         ("b<sub>t</sub>", "mean width of the tension zone", "mm"),
         ("d", "effective depth", "mm"),
     ),
-    ("detailing.minimum.tension-2023", None): _calculation_relation(
+    ("detailing.minimum.tension-2023", None): _result(
+        "R<sub>nom</sub>", "kN",
         ("R<sub>nom</sub>", "nominal reinforcement tensile resistance", "kN"),
         ("A<sub>s,i</sub>", "area of reinforcement element i", "mm2"),
         ("f<sub>yk,i</sub>", "characteristic yield strength of element i", "MPa"),
@@ -259,17 +261,79 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("A<sub>c</sub>", "gross concrete area", "mm2"),
         ("f<sub>ctm</sub>", "mean concrete tensile strength", "MPa"),
     ),
-    ("detailing.minimum.bending-2023", None): _calculation_relation(
+    ("detailing.minimum.cracking-factor-2023", None): _result(
+        "lambda<sub>cr</sub>", "dimensionless",
+        ("lambda<sub>cr</sub>", "factor from the entered bending action to first cracking"),
+        ("f<sub>ctm</sub>", "mean concrete tensile strength", "MPa"),
+        ("sigma<sub>N,v</sub>", "axial stress at the governing concrete vertex", "MPa"),
+        ("sigma<sub>M,v</sub>", "entered bending-action stress at that vertex", "MPa"),
+        ("M<sub>cr</sub>", "resulting cracking moment", "kNm"),
+    ),
+    ("detailing.minimum.nominal-equilibrium-2023", None): _result(
+        "Delta N", "kN",
+        ("Delta N", "retained final nominal-section axial residual", "kN"),
+        ("N<sub>int</sub>", "retained internal nominal axial force", "kN"),
+        ("N<sub>target</sub>", "requested nominal axial force", "kN"),
+    ),
+    ("detailing.minimum.bending-2023", None): _result(
+        "M<sub>cr</sub>/M<sub>R,nom</sub>", "dimensionless",
         ("M<sub>R,nom</sub>", "nominal bending resistance", "kNm"),
         ("M<sub>cr</sub>", "cracking moment", "kNm"),
+        ("M<sub>cr</sub>/M<sub>R,nom</sub>", "minimum-reinforcement utilisation"),
         ("N<sub>Ed</sub>", "applied design axial force", "kN"),
     ),
-    ("detailing.links.minimum-ratio", None): _calculation_relation(
+    ("detailing.links.minimum-ratio", None): _result(
+        "rho<sub>w,min</sub>", "dimensionless",
         ("rho<sub>w,min</sub>", "minimum shear-link ratio"),
         ("f<sub>ck</sub>", "characteristic concrete compressive strength", "MPa"),
         ("f<sub>ywk</sub>", "characteristic link yield strength", "MPa"),
     ),
-    ("detailing.clear-spacing.requirement", None): _calculation_relation(
+    ("detailing.links.provided-ratio", "shear"): _result(
+        "rho<sub>w</sub>", "dimensionless",
+        ("rho<sub>w</sub>", "provided vertical shear-link ratio"),
+        ("n<sub>leg</sub>", "number of effective vertical link legs"),
+        ("A<sub>leg</sub>", "area of one link leg", "mm2"),
+        ("s", "longitudinal link spacing", "mm"),
+        ("b<sub>w</sub>", "effective web breadth", "mm"),
+        ("rho<sub>w,min</sub>", "minimum link ratio"),
+    ),
+    ("detailing.links.provided-ratio", "torsion"): _result(
+        "rho<sub>w,T</sub>", "dimensionless",
+        ("rho<sub>w,T</sub>", "provided closed torsion-link ratio"),
+        ("A<sub>leg</sub>", "area of one closed-link leg", "mm2"),
+        ("s", "longitudinal link spacing", "mm"),
+        ("t<sub>ef</sub>", "effective torsion wall thickness", "mm"),
+        ("rho<sub>w,min</sub>", "minimum link ratio"),
+    ),
+    ("detailing.links.spacing-limit", "longitudinal"): _result(
+        "s<sub>l,max</sub>", "mm",
+        ("s<sub>l,max</sub>", "maximum longitudinal shear-link spacing", "mm"),
+        ("d", "effective depth", "mm"),
+        ("s<sub>l</sub>", "provided longitudinal link spacing", "mm"),
+    ),
+    ("detailing.links.spacing-limit", "transverse"): _result(
+        "s<sub>t,max</sub>", "mm",
+        ("s<sub>t,max</sub>", "maximum transverse distance between link legs", "mm"),
+        ("d", "effective depth", "mm"),
+        ("s<sub>t</sub>", "provided transverse distance between legs", "mm"),
+    ),
+    ("detailing.links.spacing-limit", "torsion"): _result(
+        "s<sub>max</sub>", "mm",
+        ("s<sub>max</sub>", "maximum longitudinal closed-link spacing", "mm"),
+        ("u<sub>k</sub>", "torsion centre-line perimeter", "mm"),
+        ("s", "provided longitudinal link spacing", "mm"),
+    ),
+    ("detailing.clear-spacing.distance", None): _result(
+        "c<sub>12</sub>", "mm",
+        ("r<sub>12</sub>", "centre-to-centre distance of the pair", "mm"),
+        ("Delta x", "x-coordinate difference", "mm"),
+        ("Delta y", "y-coordinate difference", "mm"),
+        ("phi<sub>1</sub>", "first element detailing diameter", "mm"),
+        ("phi<sub>2</sub>", "second element detailing diameter", "mm"),
+        ("c<sub>12</sub>", "clear edge-to-edge distance", "mm"),
+    ),
+    ("detailing.clear-spacing.requirement", None): _result(
+        "c<sub>req</sub>", "mm",
         ("c<sub>req</sub>", "required clear reinforcement spacing", "mm"),
         ("phi<sub>max</sub>", "larger detailing diameter of the pair", "mm"),
         ("D<sub>upper</sub>", "upper aggregate size", "mm"),
@@ -755,15 +819,64 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("f<sub>ct,eff</sub>", "effective concrete tensile strength", "MPa"),
         ("sigma<sub>ct,I</sub>", "Stage-I extreme tensile stress", "MPa"),
     ),
+    ("crack.effective-area.2005", "fine"): _result(
+        "h<sub>c,eff</sub>", "mm",
+        ("h<sub>c,eff</sub>", "selected effective tension-zone height", "mm"),
+        ("h", "section depth in the modelled crack direction", "mm"),
+        ("d", "effective reinforcement depth", "mm"),
+        ("x", "neutral-axis depth", "mm"),
+        ("A<sub>c,eff</sub>", "effective concrete tension area", "m2"),
+    ),
+    ("crack.effective-area.2005", "coarse"): _result(
+        "A<sub>c,eff</sub>", "m2",
+        ("A<sub>c,eff</sub>", "centroid-matched effective concrete area", "m2"),
+        ("s&#772;<sub>c,eff</sub>", "effective-area centroid axis", "m"),
+        ("s&#772;<sub>s,t</sub>", "tension-reinforcement centroid axis", "m"),
+        ("h<sub>c,eff</sub>", "selected effective tension-zone height", "mm"),
+    ),
+    ("crack.effective-area.2023", "bending"): _result(
+        "h<sub>c,eff</sub>", "mm",
+        ("h<sub>c,eff</sub>", "selected effective tension-zone height", "mm"),
+        ("a<sub>y</sub>", "near-layer depth from the tension face", "mm"),
+        ("phi", "near-layer reinforcement diameter", "mm"),
+        ("Delta a<sub>y</sub>", "reinforcement-layer spread", "mm"),
+        ("h-x", "tension-zone depth", "mm"),
+        ("A<sub>c,eff</sub>", "effective concrete tension area", "m2"),
+    ),
+    ("crack.effective-area.2023", "direct-tension"): _result(
+        "A<sub>c,eff</sub>", "m2",
+        ("A<sub>c,eff</sub>", "union of the four effective perimeter bands", "m2"),
+        ("b", "rectangular section width", "m"),
+        ("h", "rectangular section height", "m"),
+        ("c<sub>l</sub>", "left effective band", "m"),
+        ("c<sub>r</sub>", "right effective band", "m"),
+        ("c<sub>b</sub>", "bottom effective band", "m"),
+        ("c<sub>t</sub>", "top effective band", "m"),
+    ),
+    ("crack.effective-reinforcement.ratio", "2005"): _result(
+        "rho<sub>p,eff</sub>", "dimensionless",
+        ("rho<sub>p,eff</sub>", "effective reinforcement ratio"),
+        ("A<sub>s,eff</sub>", "mild reinforcement in the effective area", "m2"),
+        ("A<sub>p,eff</sub>", "prestressing reinforcement in the effective area", "m2"),
+        ("A<sub>c,eff</sub>", "effective concrete tension area", "m2"),
+    ),
+    ("crack.effective-reinforcement.ratio", "2023"): _result(
+        "rho<sub>p,eff</sub>", "dimensionless",
+        ("rho<sub>p,eff</sub>", "effective reinforcement ratio"),
+        ("A<sub>s,eff</sub>", "mild reinforcement in the effective area", "m2"),
+        ("xi<sub>1,j</sub>", "bond-weighting factor for tendon j"),
+        ("A<sub>p,j</sub>", "prestressing reinforcement area j", "m2"),
+        ("A<sub>c,eff</sub>", "effective concrete tension area", "m2"),
+    ),
     ("crack.2005.spacing", "geometric"): _result(
         "s<sub>r,max</sub>", "mm",
         ("s<sub>r,max</sub>", "maximum crack spacing", "mm"),
         ("h", "section depth in the crack direction", "mm"),
         ("x", "neutral-axis depth", "mm"),
-        substitution_role="none",
         applicability_note_required=True,
     ),
-    ("crack.2005.spacing", "reinforcement"): _calculation_relation(
+    ("crack.2005.spacing", "reinforcement"): _result(
+        "s<sub>r,max</sub>", "mm",
         ("s<sub>r,max</sub>", "maximum crack spacing", "mm"),
         ("k<sub>1</sub>", "bond coefficient"),
         ("k<sub>2</sub>", "strain-distribution coefficient"),
@@ -772,8 +885,10 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("c", "clear cover", "mm"),
         ("phi", "bar diameter", "mm"),
         ("rho<sub>p,eff</sub>", "effective reinforcement ratio"),
+        applicability_note_required=True,
     ),
-    ("crack.2005.mean-strain", None): _calculation_relation(
+    ("crack.2005.mean-strain", None): _result(
+        "eps<sub>sm</sub>-eps<sub>cm</sub>", "dimensionless",
         ("eps<sub>sm</sub>-eps<sub>cm</sub>", "mean reinforcement/concrete strain difference"),
         ("sigma<sub>s</sub>", "reinforcement stress", "MPa"),
         ("k<sub>t</sub>", "load-duration factor"),
@@ -788,8 +903,8 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("s<sub>r,max</sub>", "maximum crack spacing", "mm"),
         ("eps<sub>sm</sub>-eps<sub>cm</sub>", "mean reinforcement/concrete strain difference"),
     ),
-    ("crack.2023.spacing", None): EquationContract(
-        _symbols(
+    ("crack.2023.spacing", None): _result(
+            "s<sub>r,m,cal</sub>", "mm",
             ("s<sub>r,m,cal</sub>", "calculated mean crack spacing", "mm"),
             ("c", "clear cover", "mm"),
             ("k<sub>fl</sub>", "flexural coefficient"),
@@ -798,11 +913,10 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
             ("rho<sub>p,eff</sub>", "effective reinforcement ratio"),
             ("k<sub>w</sub>", "crack-width factor"),
             ("h-x", "tension-zone depth", "mm"),
-        ),
-        substitution_role="numerical",
-        publication_role="calculation",
+            applicability_note_required=True,
     ),
-    ("crack.2023.mean-strain", None): _calculation_relation(
+    ("crack.2023.mean-strain", None): _result(
+        "eps<sub>sm</sub>-eps<sub>cm</sub>", "dimensionless",
         ("eps<sub>sm</sub>-eps<sub>cm</sub>", "mean reinforcement/concrete strain difference"),
         ("sigma<sub>s</sub>", "reinforcement stress", "MPa"),
         ("k<sub>t</sub>", "load-duration factor"),
@@ -824,9 +938,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 100:
+    if len(_CONTRACTS) != 114:
         raise RuntimeError(
-            f"Expected 100 report equation contracts, got {len(_CONTRACTS)}."
+            f"Expected 114 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):

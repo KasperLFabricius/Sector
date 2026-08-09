@@ -692,6 +692,17 @@ class ReportBuilder:
         self._publication_counter = PublicationCounter("0")
         self._publication_section_title = "Document control"
         self._publication_subsection_title = None
+        self._critical_worked_case_ids = {
+            "plastic": self._select_critical_worked_case("plastic"),
+            "elastic": self._select_critical_worked_case("elastic"),
+            "minimum_reinforcement": self._select_critical_check_case(
+                "minimum_reinforcement"
+            ),
+            "transverse_reinforcement": self._select_critical_check_case(
+                "transverse_reinforcement"
+            ),
+        }
+        self._critical_crack_examples = self._select_critical_crack_examples()
 
     def _case_contexts(self, family):
         """Return ordered ``(case_input, case_results)`` report contexts."""
@@ -2843,6 +2854,106 @@ class ReportBuilder:
             references=("elastic.modular-ratio.short",),
         )
 
+    def _select_critical_crack_examples(self):
+        """Select only the governing stored crack examples for publication."""
+
+        contexts = self._case_contexts("elastic")
+        has_coarse = any(
+            (case_out.get("elastic") or {}).get(key) is not None
+            for _, case_out in contexts
+            for key in ("crack_coarse", "crack_short_coarse")
+        )
+        systems = (
+            (
+                ("fine", (
+                    ("crack", "long-term (fine)"),
+                    ("crack_short", "short-term (fine)"),
+                )),
+                ("coarse", (
+                    ("crack_coarse", "long-term (coarse)"),
+                    ("crack_short_coarse", "short-term (coarse)"),
+                )),
+            )
+            if has_coarse
+            else (("governing", (
+                ("crack", "long-term"),
+                ("crack_short", "short-term"),
+            )),)
+        )
+        selected = {}
+        for system, keys in systems:
+            best = None
+            for context_index, (_, case_out) in enumerate(contexts):
+                elastic = case_out.get("elastic") or {}
+                for key_index, (key, label) in enumerate(keys):
+                    crack = elastic.get(key)
+                    if crack is None:
+                        continue
+                    rank = (
+                        float(crack.get("wk") or 0.0),
+                        -context_index,
+                        -key_index,
+                    )
+                    if best is None or rank > best[0]:
+                        best = (rank, case_out, crack, label)
+            if best is None:
+                continue
+            _, case_out, crack, label = best
+            selected.setdefault(id(case_out), []).append(
+                (system, crack, label)
+            )
+        return selected
+
+    def _select_critical_worked_case(self, family):
+        """Return the result-map identity selected for one complete worked chain."""
+
+        best = None
+        for order, (_, case_out) in enumerate(self._case_contexts(family)):
+            result = case_out.get(family)
+            if not result:
+                continue
+            if family == "plastic":
+                utilisation = result.get("util")
+                if utilisation is not None and math.isfinite(float(utilisation)):
+                    score = (2, float(utilisation), -order)
+                else:
+                    capacity_extreme = max(
+                        abs(float(result.get(name) or 0.0))
+                        for name in ("max_mx", "min_mx", "max_my", "min_my")
+                    )
+                    score = (1, capacity_extreme, -order)
+            else:
+                stress_extreme = max(
+                    abs(float(result.get(name) or 0.0))
+                    for name in ("max_conc", "max_steel")
+                )
+                score = (1, stress_extreme, -order)
+            if best is None or score > best[0]:
+                best = (score, id(case_out))
+        return None if best is None else best[1]
+
+    def _select_critical_check_case(self, key):
+        """Select one stored plastic-case result by its greatest utilisation."""
+
+        best = None
+        for order, (_, case_out) in enumerate(self._case_contexts("plastic")):
+            result = case_out.get(key)
+            if not result:
+                continue
+            values = [
+                float(check["utilisation"])
+                for check in result.get("checks") or []
+                if check.get("utilisation") is not None
+                and math.isfinite(float(check["utilisation"]))
+            ]
+            stored = result.get("governing_utilisation")
+            if stored is not None and math.isfinite(float(stored)):
+                values.append(float(stored))
+            score = (max(values) if values else -math.inf, -order)
+            if best is None or score > best[0]:
+                best = (score, id(case_out))
+        return None if best is None else best[1]
+
     def _theory(self):
         self._h1("Basis of analysis")
         plastic_results = self._result_values("plastic")
@@ -2867,6 +2978,7 @@ class ReportBuilder:
                 "combined_method",
             )
         ]
+
         for catalogue_key in (
             "mild_material_catalog",
             "prestress_material_catalog",
@@ -3063,6 +3175,10 @@ class ReportBuilder:
 
     def _minimum_reinforcement(self):
         result = self.out["minimum_reinforcement"]
+        publish_worked = (
+            self._critical_worked_case_ids["minimum_reinforcement"]
+            == id(self.out)
+        )
         direction = str(
             result.get("modelled_reinforcement_direction") or "longitudinal"
         ).capitalize()
@@ -3105,13 +3221,34 @@ class ReportBuilder:
         ), 150, 108)
 
         if checks and presentation.minimum_area_check(result, checks[0]):
-            self._formula(
-                "A<sub>s,min</sub> = max(0.26 f<sub>ctm</sub> / "
-                "f<sub>yk</sub>, 0.0013) b<sub>t</sub>d",
-                equation_key="detailing.minimum.area-2005",
-                ref=(f"{_html_escape(result.get('edition', '-'))} "
-                     "&#167;9.2.1.1(1), Formula (9.1N)"),
+            worked_check = max(
+                checks,
+                key=lambda item: (
+                    -math.inf if item.get("utilisation") is None
+                    else float(item["utilisation"])
+                ),
             )
+            if publish_worked:
+                self._formula(
+                    "A<sub>s,min</sub> = max(0.26 f<sub>ctm</sub> / "
+                    "f<sub>yk</sub>, 0.0013) b<sub>t</sub>d",
+                    equation_key="detailing.minimum.area-2005",
+                    ref=(f"{_html_escape(result.get('edition', '-'))} "
+                         "&#167;9.2.1.1(1), Formula (9.1N)"),
+                    subst=(
+                        "coefficient = max("
+                        f"{_fmt(worked_check.get('strength_coefficient'), 7)}, "
+                        f"{_fmt(worked_check.get('floor_coefficient'), 7)}) = "
+                        f"{_fmt(worked_check.get('selected_coefficient'), 7)}; "
+                        f"A<sub>s,min</sub> = {_fmt(worked_check.get('selected_coefficient'), 7)} "
+                        f"&#183; {_fmt(worked_check.get('bt_mm'), 3)} &#183; "
+                        f"{_fmt(worked_check.get('d_mm'), 3)}"
+                    ),
+                    result=(
+                        f"A<sub>s,min</sub> = {_fmt(worked_check.get('as_min_mm2'), 3)} "
+                        f"mm<super>2</super> ({worked_check.get('governing_coefficient', '-')})"
+                    ),
+                )
             rows = [[
                 "Axis", "Face", "A<sub>s,prov</sub>", "A<sub>s,min</sub>",
                 "Util.", "b<sub>t</sub>", "d", "f<sub>ctm</sub>",
@@ -3153,12 +3290,40 @@ class ReportBuilder:
                         "<b>Outcome:</b> " + _html_escape(check["reason"])
                     )
         elif checks and checks[0].get("type") == "pure tension":
-            self._formula(
-                "R<sub>nom</sub> = &#8721;(A<sub>s,i</sub> f<sub>yk,i</sub>) "
-                "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
-                equation_key="detailing.minimum.tension-2023",
-                ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+            worked_check = max(
+                checks,
+                key=lambda item: (
+                    -math.inf if item.get("utilisation") is None
+                    else float(item["utilisation"])
+                ),
             )
+            if publish_worked:
+                terms = worked_check.get("reinforcement_terms") or []
+                self._formula(
+                    "R<sub>nom</sub> = &#8721;(A<sub>s,i</sub> f<sub>yk,i</sub>) "
+                    "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
+                    equation_key="detailing.minimum.tension-2023",
+                    ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+                    subst=(
+                        "R<sub>cr</sub> = "
+                        f"{_fmt(worked_check.get('concrete_area_m2'), 6)} &#183; "
+                        f"{_fmt(worked_check.get('fctm_mpa'), 3)} &#183; 1000 = "
+                        f"{_fmt(worked_check.get('demand_kn'), 3)} kN; "
+                        "R<sub>nom</sub> terms = "
+                        + "; ".join(
+                            f"{_html_escape(str(term.get('bar_id', '-')))}: "
+                            f"{_fmt(term.get('area_mm2'), 3)} &#183; "
+                            f"{_fmt(term.get('fyk_mpa'), 3)} / 1000 = "
+                            f"{_fmt(term.get('resistance_kn'), 3)} kN"
+                            for term in terms
+                        )
+                    ),
+                    result=(
+                        f"R<sub>nom</sub> = {_fmt(worked_check.get('resistance_kn'), 3)} kN; "
+                        f"R<sub>cr</sub>/R<sub>nom</sub> = "
+                        f"{_fmt(worked_check.get('utilisation'), 5)}"
+                    ),
+                )
             rows = [[
                 "R<sub>cr</sub> (kN)", "R<sub>nom</sub> (kN)", "Utilisation",
                 "A<sub>s,prov</sub> (mm<super>2</super>)", "Bars", "Status",
@@ -3177,12 +3342,60 @@ class ReportBuilder:
             self._table(rows, [27 * mm, 27 * mm, 26 * mm, 35 * mm,
                                35 * mm, 20 * mm], font=7.0)
         elif checks:
-            self._formula(
-                "M<sub>R,nom</sub>(N<sub>Ed</sub>) &#8805; "
-                "M<sub>cr</sub>(N<sub>Ed</sub>)",
-                equation_key="detailing.minimum.bending-2023",
-                ref="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+            worked_check = max(
+                checks,
+                key=lambda item: (
+                    -math.inf if item.get("utilisation") is None
+                    else float(item["utilisation"])
+                ),
             )
+            if publish_worked:
+                self._formula(
+                    "lambda<sub>cr</sub> = (f<sub>ctm</sub> - "
+                    "sigma<sub>N,v</sub>) / sigma<sub>M,v</sub>",
+                    equation_key="detailing.minimum.cracking-factor-2023",
+                    ref="Sector vertex evaluation of EN 1992-1-1:2023 Formula (12.1)",
+                    subst=(
+                        f"= ({_fmt(worked_check.get('cracking_fctm_mpa'), 6)} - "
+                        f"{_fmt(worked_check.get('cracking_governing_axial_stress_mpa'), 6)}) / "
+                        f"{_fmt(worked_check.get('cracking_governing_bending_stress_mpa'), 6)}"
+                    ),
+                    result=(
+                        f"lambda<sub>cr</sub> = {_fmt(worked_check.get('cracking_factor'), 8)}; "
+                        f"M<sub>cr</sub> = {_fmt(worked_check.get('m_cr_knm'), 6)} kNm"
+                    ),
+                )
+                solution = worked_check.get("nominal_solution") or {}
+                selected_solution = solution.get("governing_point") or solution
+                if selected_solution.get("axial_residual_kn") is not None:
+                    self._formula(
+                        "Delta N = N<sub>int</sub> - N<sub>target</sub>",
+                        equation_key="detailing.minimum.nominal-equilibrium-2023",
+                        ref="Final retained nominal-section axial equilibrium.",
+                        subst=(
+                            f"= {_fmt(selected_solution.get('achieved_axial_kn'), 8)} - "
+                            f"{_fmt(selected_solution.get('requested_axial_kn'), 8)} kN"
+                        ),
+                        result=(
+                            f"Delta N = {_fmt(selected_solution.get('axial_residual_kn'), 9)} kN; "
+                            f"tolerance = {_fmt(selected_solution.get('axial_tolerance_kn'), 9)} kN; "
+                            f"iterations = {selected_solution.get('iterations', '-')}"
+                        ),
+                    )
+                self._formula(
+                    "M<sub>R,nom</sub>(N<sub>Ed</sub>) &#8805; "
+                    "M<sub>cr</sub>(N<sub>Ed</sub>)",
+                    equation_key="detailing.minimum.bending-2023",
+                    ref="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+                    subst=(
+                        f"{_fmt(worked_check.get('mr_nom_knm'), 6)} kNm "
+                        f"&#8805; {_fmt(worked_check.get('m_cr_knm'), 6)} kNm"
+                    ),
+                    result=(
+                        "M<sub>cr</sub>/M<sub>R,nom</sub> = "
+                        f"{_fmt(worked_check.get('utilisation'), 6)}"
+                    ),
+                )
             rows = [[
                 "M<sub>cr</sub> (kNm)", "M<sub>R,nom</sub> (kNm)",
                 "Utilisation", "N<sub>nom,t</sub> (kN)", "Axial eq.",
@@ -3212,11 +3425,21 @@ class ReportBuilder:
         elif result.get("reason"):
             self._small(_html_escape(result["reason"]))
 
+        if checks and not publish_worked:
+            self._small(
+                "The complete minimum-reinforcement worked example is published "
+                "only for the governing stored utilisation across all plastic cases."
+            )
+
         for limitation in result.get("limitations") or []:
             self._small("<b>Scope:</b> " + _html_escape(limitation))
 
     def _transverse_reinforcement(self):
         result = self.out["transverse_reinforcement"]
+        publish_worked = (
+            self._critical_worked_case_ids["transverse_reinforcement"]
+            == id(self.out)
+        )
         self._case_heading("Shear/torsion link detailing", "plastic")
         status = str(result.get("status") or "NOT ASSESSED").upper()
         governing = result.get("governing") or {}
@@ -3251,7 +3474,13 @@ class ReportBuilder:
             f"s = {_fmt(result.get('spacing_mm'), 1)} mm; "
             f"f<sub>ywk</sub> = {_fmt(result.get('fywk_mpa'), 1)} MPa."
         )
-        if minimum:
+        minimum_operands_complete = all(
+            minimum.get(key) is not None
+            for key in (
+                "coefficient", "fck_mpa", "fywk_mpa", "base_ratio", "ratio"
+            )
+        )
+        if minimum and publish_worked and minimum_operands_complete:
             self._formula(
                 "&#961;<sub>w,min</sub> = "
                 f"{_fmt(minimum.get('coefficient'), 3)} "
@@ -3264,6 +3493,21 @@ class ReportBuilder:
                 ),
                 equation_key="detailing.links.minimum-ratio",
                 ref=_html_escape(minimum.get("clause") or "-"),
+                subst=(
+                    f"base = {_fmt(minimum.get('coefficient'), 4)} &#183; "
+                    f"&#8730;({_fmt(minimum.get('fck_mpa'), 3)}) / "
+                    f"{_fmt(minimum.get('fywk_mpa'), 3)} = "
+                    f"{_fmt(minimum.get('base_ratio'), 7)}"
+                    + (
+                        f"; selected = {_fmt(minimum.get('base_ratio'), 7)} &#183; "
+                        f"{_fmt(minimum.get('ductility_factor'), 3)}"
+                        if minimum.get("ductility_reduction_applied") else ""
+                    )
+                ),
+                result=(
+                    "rho<sub>w,min</sub> = "
+                    f"{_fmt(minimum.get('ratio'), 7)}"
+                ),
             )
 
         labels = {
@@ -3320,12 +3564,112 @@ class ReportBuilder:
                 keep=False,
                 repeat_cols=2,
             )
+        if publish_worked and governing:
+            kind = governing.get("kind")
+            if kind == "minimum_ratio" and governing.get("bw_mm") is not None:
+                self._formula(
+                    "rho<sub>w</sub> = n<sub>leg</sub>A<sub>leg</sub> / "
+                    "(s b<sub>w</sub>)",
+                    equation_key="detailing.links.provided-ratio",
+                    equation_variant="shear",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst=(
+                        f"= {governing.get('legs', '-')} &#183; "
+                        f"{_fmt(governing.get('leg_area_mm2'), 5)} / "
+                        f"({_fmt(governing.get('link_spacing_mm'), 3)} &#183; "
+                        f"{_fmt(governing.get('bw_mm'), 3)})"
+                    ),
+                    result=(
+                        f"rho<sub>w</sub> = {_fmt(governing.get('provided'), 7)}; "
+                        f"rho<sub>w,min</sub>/rho<sub>w</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "minimum_ratio" and governing.get("tef_mm") is not None:
+                self._formula(
+                    "rho<sub>w,T</sub> = A<sub>leg</sub> / "
+                    "(s t<sub>ef</sub>)",
+                    equation_key="detailing.links.provided-ratio",
+                    equation_variant="torsion",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst=(
+                        f"= {_fmt(governing.get('leg_area_mm2'), 5)} / "
+                        f"({_fmt(governing.get('link_spacing_mm'), 3)} &#183; "
+                        f"{_fmt(governing.get('tef_mm'), 3)})"
+                    ),
+                    result=(
+                        f"rho<sub>w,T</sub> = {_fmt(governing.get('provided'), 7)}; "
+                        f"rho<sub>w,min</sub>/rho<sub>w,T</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "longitudinal_spacing":
+                self._formula(
+                    "s<sub>l,max</sub> = 0.75d",
+                    equation_key="detailing.links.spacing-limit",
+                    equation_variant="longitudinal",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst=(
+                        f"= {_fmt(governing.get('spacing_factor'), 3)} &#183; "
+                        f"{_fmt(governing.get('d_mm'), 3)} mm"
+                    ),
+                    result=(
+                        f"s<sub>l,max</sub> = {_fmt(governing.get('limit'), 3)} mm; "
+                        f"s<sub>l</sub>/s<sub>l,max</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "transverse_leg_spacing":
+                limits = governing.get("spacing_limits_mm") or {}
+                self._formula(
+                    "s<sub>t,max</sub> = min(0.75d, 600 mm)",
+                    equation_key="detailing.links.spacing-limit",
+                    equation_variant="transverse",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst="; ".join(
+                        f"{_html_escape(str(label))} = {_fmt(value, 3)} mm"
+                        for label, value in limits.items()
+                    ),
+                    result=(
+                        f"s<sub>t,max</sub> = {_fmt(governing.get('limit'), 3)} mm "
+                        f"({governing.get('governing_limit', '-')}); "
+                        f"s<sub>t</sub>/s<sub>t,max</sub> = "
+                        f"{_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+            elif kind == "torsion_spacing":
+                limits = governing.get("spacing_limits_mm") or {}
+                self._formula(
+                    "s<sub>max</sub> = min(u<sub>k</sub>/8, "
+                    "section minimum dimension)",
+                    equation_key="detailing.links.spacing-limit",
+                    equation_variant="torsion",
+                    ref=_html_escape(governing.get("clause") or "-"),
+                    subst="; ".join(
+                        f"{_html_escape(str(label))} = {_fmt(value, 3)} mm"
+                        for label, value in limits.items()
+                    ),
+                    result=(
+                        f"s<sub>max</sub> = {_fmt(governing.get('limit'), 3)} mm "
+                        f"({governing.get('governing_limit', '-')}); "
+                        f"s/s<sub>max</sub> = {_fmt(governing.get('utilisation'), 6)}"
+                    ),
+                )
+        elif result.get("checks"):
+            self._small(
+                "The complete link-detailing worked example is published only "
+                "for the governing stored utilisation across all plastic cases."
+            )
         for check in result.get("checks") or []:
             details = []
             if check.get("spacing_source"):
                 details.append(
                     "spacing source: " + str(check["spacing_source"])
                 )
+                if check.get("spacing_source") == "gross-web upper-bound screen":
+                    details.append(
+                        "this upper-bound screen can prove PASS but cannot prove FAIL"
+                    )
             if check.get("governing_limit"):
                 details.append(
                     "governing limit: " + str(check["governing_limit"])
@@ -3366,14 +3710,41 @@ class ReportBuilder:
             spacing_pair=governing,
             title="Governing clear-spacing pair",
         ), 150, 108)
-        self._formula(
-            "c<sub>req</sub> = max(phi<sub>max</sub>, "
-            "D<sub>upper</sub> + 5 mm, 20 mm)",
-            equation_key="detailing.clear-spacing.requirement",
-            ref=(f"{_html_escape(result.get('edition', '-'))} "
-                 f"&#167;{_html_escape(result.get('clause', '-'))}"),
-        )
         if governing:
+            candidates = governing.get("required_candidates_mm") or {}
+            self._formula(
+                "r<sub>12</sub> = sqrt(Delta x<super>2</super> + "
+                "Delta y<super>2</super>);   c<sub>12</sub> = r<sub>12</sub> "
+                "- (phi<sub>1</sub> + phi<sub>2</sub>)/2",
+                equation_key="detailing.clear-spacing.distance",
+                ref="Sector section-plane pair geometry.",
+                subst=(
+                    f"r<sub>12</sub> = sqrt({_fmt(governing.get('dx_mm'), 3)}<super>2</super> + "
+                    f"{_fmt(governing.get('dy_mm'), 3)}<super>2</super>) = "
+                    f"{_fmt(governing.get('centre_distance_mm'), 3)} mm; "
+                    f"c<sub>12</sub> = {_fmt(governing.get('centre_distance_mm'), 3)} - "
+                    f"({_fmt(governing.get('phi_first_mm'), 3)} + "
+                    f"{_fmt(governing.get('phi_second_mm'), 3)})/2"
+                ),
+                result=f"c<sub>12</sub> = {_fmt(governing.get('clear_mm'), 3)} mm",
+            )
+            self._formula(
+                "c<sub>req</sub> = max(phi<sub>max</sub>, "
+                "D<sub>upper</sub> + 5 mm, 20 mm)",
+                equation_key="detailing.clear-spacing.requirement",
+                ref=(f"{_html_escape(result.get('edition', '-'))} "
+                     f"&#167;{_html_escape(result.get('clause', '-'))}"),
+                subst=(
+                    "= max("
+                    f"{_fmt(candidates.get('larger element diameter'), 3)}, "
+                    f"{_fmt(candidates.get('aggregate allowance'), 3)}, "
+                    f"{_fmt(candidates.get('absolute minimum'), 3)}) mm"
+                ),
+                result=(
+                    f"c<sub>req</sub> = {_fmt(governing.get('required_mm'), 3)} mm "
+                    f"({governing.get('governing_requirement', '-')})"
+                ),
+            )
             self._small(
                 "<b>Governing pair:</b> "
                 f"{_html_escape(governing.get('first_id', '?'))} - "
@@ -3566,8 +3937,14 @@ class ReportBuilder:
         self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever L, d<sub>x</sub> "
                     "and d<sub>y</sub> in mm; strain in %; kappa in 1/m; "
                     "F<sub>c</sub> in kN.")
-        # Governing case worked.
-        self._plastic_worked(pl)
+        if self._critical_worked_case_ids["plastic"] == id(self.out):
+            self._plastic_worked(pl)
+        else:
+            self._small(
+                "The complete plastic worked example is published only for the "
+                "governing utilisation (or capacity extremum when no utilisation "
+                "is assessed) across all plastic cases."
+            )
 
     def _plastic_worked(self, pl):
         pts = pl["points"]
@@ -5211,7 +5588,7 @@ class ReportBuilder:
         plane = state["raw_stress_plane"]
         self._table(
             [["Coefficient", "Value", "Unit"],
-             ["sigma0", _fmt(plane["sigma0_kpa"], 9), "kN/m2"],
+             ["sigma<sub>0</sub>", _fmt(plane["sigma0_kpa"], 9), "kN/m2"],
              ["d sigma / dx", _fmt(plane["gradient_x_kpa_per_m"], 9), "kN/m3"],
              ["d sigma / dy", _fmt(plane["gradient_y_kpa_per_m"], 9), "kN/m3"]],
             [55 * mm, 60 * mm, 45 * mm],
@@ -5219,8 +5596,8 @@ class ReportBuilder:
         equilibrium = state["equilibrium"]
         matrix = equilibrium["matrix"]
         matrix_rows = [[
-            "Resultant row", "sigma0 coefficient", "d sigma/dx coefficient",
-            "d sigma/dy coefficient",
+            "Resultant row", "sigma<sub>0</sub> coefficient",
+            "d sigma/dx coefficient", "d sigma/dy coefficient",
         ]]
         for label, row in zip(("N", "Mx", "My"), matrix):
             matrix_rows.append([label, *[_fmt(value, 9) for value in row]])
@@ -5514,7 +5891,13 @@ class ReportBuilder:
                     f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kNm "
                     "(N tension-positive; calculation shown in Section and "
                     "materials).")
-        self._elastic_worked(el)
+        if self._critical_worked_case_ids["elastic"] == id(self.out):
+            self._elastic_worked(el)
+        else:
+            self._small(
+                "The complete elastic worked example is published only for the "
+                "governing retained stress extremum across all elastic cases."
+            )
         checks = el.get("stress_outputs") or {}
         if checks:
             self._h2("Elastic stress outputs")
@@ -5723,17 +6106,19 @@ class ReportBuilder:
                         "in tension.")
             return
         self._crack_table(cl, cs, clc, csc)
-        # Work the case that actually governs (the larger crack width) over every
-        # reported load case and crack system.
-        if clc is not None or csc is not None:
-            cases = [(cl, "long-term (fine)"), (cs, "short-term (fine)"),
-                     (clc, "long-term (coarse)"), (csc, "short-term (coarse)")]
-        else:
-            cases = [(cl, "long-term"), (cs, "short-term")]
-        gov_case, gov_which = max(((c, w) for c, w in cases if c),
-                                  key=lambda cw: cw[0].get("wk", 0.0))
-        self._crack_worked(gov_case, gov_which)
-        self._crack_candidates(cases)
+        examples = self._critical_crack_examples.get(id(self.out), [])
+        if not examples:
+            self._small(
+                "The complete numerical worked example is published only for "
+                "the governing crack-width extremum across all elastic cases."
+            )
+            return
+        selected_cases = []
+        for _system, crack, label in examples:
+            selected_cases.append((crack, label))
+        self._crack_candidates(selected_cases)
+        for _system, crack, label in examples:
+            self._crack_worked(crack, label)
 
     def _crack_table(self, cl, cs, clc=None, csc=None):
         # The full crack-width breakdown for both load cases, matching the view.
@@ -5784,12 +6169,53 @@ class ReportBuilder:
         self._small(f"Governing element (largest w<sub>k</sub>): "
                     f"{cw.get('element_id', 'element ' + str(cw.get('gov_bar','-')))}; "
                     f"clear cover c = {_fmt(cw.get('cover',0), 3)} mm.")
-        code = self.out["elastic"].get("crack_code")
-        if cw.get("edition") == "2023":
-            self._crack_worked_2023(cw, code)
+        candidate = cw.get("governing_candidate") or {}
+        mean = candidate.get("mean_strain_operands") or {}
+        spacing = candidate.get("spacing_operands") or {}
+        if not candidate or not mean or not spacing:
+            self._small(
+                "<b>Worked calculation unavailable.</b> The completed result "
+                "does not contain the retained interim operands required for a "
+                "numerical example. Sector does not recreate them in the report."
+            )
             return
+        code = self.out["elastic"].get("crack_code")
         coarse = bool(cw.get("coarse"))
-        if cw.get("sr_max_geometric"):
+        if code:
+            if cw.get("edition") == "2023":
+                note = (
+                    f"Crack-width code: {code}. Refined control of cracking "
+                    "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
+                    "width to the calculated value, k<sub>1/r</sub> = (h-x)/"
+                    "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
+                    "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
+                    "/E<sub>s</sub>."
+                )
+            else:
+                note = f"Crack-width code: {code}. "
+                if "DK NA" in code:
+                    note += (
+                        "k<sub>3</sub> = 3.4&#183;(25/c)<super>2/3</super> "
+                        "(&#167;7.3.4(3)). "
+                    )
+                    if coarse:
+                        note += (
+                            "Coarse crack system (&#167;7.3.4(1)): "
+                            "A<sub>c,eff</sub> is the tension-face band whose "
+                            "centroid matches the tension reinforcement "
+                            "(figure 7.100 NA), and w<sub>k</sub> is halved."
+                        )
+                    else:
+                        note += (
+                            "The (h-x)/3 term in h<sub>c,ef</sub> applies to "
+                            "slabs and prestressed members only."
+                        )
+            self._small(note)
+        self._crack_effective_area_worked(cw, candidate)
+        if cw.get("edition") == "2023":
+            self._crack_worked_2023(cw, candidate)
+            return
+        if spacing.get("selected_candidate") == "formula-7.14":
             # Wide/isolated bars (spacing > 5(c+phi/2)): EC2 assigns the geometric
             # spacing 1.3(h-x) directly (Eq 7.14), so the (7.11) formula would not
             # reproduce the reported value.
@@ -5798,22 +6224,48 @@ class ReportBuilder:
                 equation_key="crack.2005.spacing",
                 equation_variant="geometric",
                 ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.14)",
-                note="bars not at close centres (spacing &gt; 5(c + phi/2))",
-                result=f"s<sub>r,max</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
+                note=(
+                    "bars not at close centres: selected because nearest spacing "
+                    f"{_fmt(spacing.get('nearest_neighbour_spacing'), 3)} mm "
+                    "exceeds 5(c + phi/2) = "
+                    f"{_fmt(spacing.get('close_spacing_limit'), 3)} mm"
+                ),
+                subst=(
+                    "= 1.3 &#183; "
+                    f"{_fmt(float(spacing.get('tension_zone_depth', 0.0)) * _MM, 3)} mm"
+                ),
+                result=(
+                    "s<sub>r,max</sub> = "
+                    f"{_fmt(spacing.get('selected_spacing'), 3)} mm"
+                ))
         else:
             self._formula(
                 "s<sub>r,max</sub> = k<sub>3</sub>&#183;c + "
                 "k<sub>1</sub>&#183;k<sub>2</sub>&#183;k<sub>4</sub>&#183;phi / rho<sub>p,eff</sub>",
                 equation_key="crack.2005.spacing",
                 equation_variant="reinforcement",
-                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)")
-        self._formula(
-            "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
-            "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
-            "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
-            "&gt;= 0.6&#183;sigma<sub>s</sub>/E<sub>s</sub>",
-            equation_key="crack.2005.mean-strain",
-            ref="Eq (7.9)")
+                ref="DS/EN 1992-1-1 &#167;7.3.4, Eq (7.11)",
+                note=(
+                    "bars at close centres: nearest spacing "
+                    f"{_fmt(spacing.get('nearest_neighbour_spacing'), 3)} mm "
+                    "; close-centre threshold 5(c + phi/2) = "
+                    f"{_fmt(spacing.get('close_spacing_limit'), 3)} mm; "
+                    "Formula (7.11) selected"
+                ),
+                subst=(
+                    f"= {_fmt(spacing.get('k3_used'), 4)} &#183; "
+                    f"{_fmt(spacing.get('cover'), 3)} + "
+                    f"{_fmt(spacing.get('k1'), 3)} &#183; "
+                    f"{_fmt(spacing.get('k2'), 3)} &#183; "
+                    f"{_fmt(spacing.get('k4'), 3)} &#183; "
+                    f"{_fmt(spacing.get('diameter'), 3)} / "
+                    f"{_fmt(spacing.get('rho_p_eff'), 6)}"
+                ),
+                result=(
+                    "s<sub>r,max</sub> = "
+                    f"{_fmt(spacing.get('selected_spacing'), 3)} mm"
+                ))
+        self._crack_mean_strain_worked(mean, edition="2005")
         self._formula(
             ("w<sub>k</sub> = &#189;&#183;s<sub>r,max</sub> &#183; "
              "(eps<sub>sm</sub> - eps<sub>cm</sub>)" if coarse else
@@ -5826,26 +6278,173 @@ class ReportBuilder:
                   + f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                     f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
-        if code:
-            note = f"Crack-width code: {code}. "
-            if "DK NA" in code:
-                note += ("k<sub>3</sub> = 3.4&#183;(25/c)<super>2/3</super> "
-                         "(&#167;7.3.4(3)). ")
-                if coarse:
-                    note += ("Coarse crack system (&#167;7.3.4(1)): A<sub>c,eff</sub> "
-                             "is the tension-face band whose centroid matches the "
-                             "tension reinforcement (figure 7.100 NA), and w<sub>k</sub> "
-                             "is halved.")
-                else:
-                    note += ("The (h-x)/3 term in h<sub>c,ef</sub> applies to slabs "
-                             "and prestressed members only.")
-            self._small(note)
+
+    def _crack_effective_area_worked(self, cw, candidate):
+        """Publish retained effective-area and reinforcement-ratio operands."""
+
+        area = cw.get("effective_area_operands") or {}
+        kind = area.get("record_kind")
+        if kind == "CrackEffectiveArea2005Fine":
+            hx = area.get("candidate_h_minus_x_over_3")
+            candidates = (
+                f"2.5(h-d) = {_fmt(area.get('candidate_2_5_h_minus_d', 0) * _MM, 3)} mm; "
+                + (
+                    f"(h-x)/3 = {_fmt(hx * _MM, 3)} mm; "
+                    if hx is not None else "(h-x)/3 not applicable; "
+                )
+                + f"h/2 = {_fmt(area.get('candidate_h_over_2', 0) * _MM, 3)} mm"
+            )
+            self._formula(
+                "h<sub>c,eff</sub> = min[2.5(h-d), (h-x)/3, h/2]",
+                equation_key="crack.effective-area.2005",
+                equation_variant="fine",
+                ref="DS/EN 1992-1-1 &#167;7.3.2(3)",
+                subst=candidates,
+                result=(
+                    f"h<sub>c,eff</sub> = {_fmt(area.get('selected_hc_eff', 0) * _MM, 3)} mm "
+                    f"({area.get('selected_candidate', '-')}); "
+                    f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>"
+                ),
+            )
+        elif kind == "CrackEffectiveArea2005Coarse":
+            self._formula(
+                "s&#772;<sub>c,eff</sub> = s&#772;<sub>s,t</sub>",
+                equation_key="crack.effective-area.2005",
+                equation_variant="coarse",
+                ref="DS/EN 1992-1-1 DK NA Figure 7.100 NA",
+                subst=(
+                    f"s&#772;<sub>c,eff</sub> = {_fmt(area.get('band_centroid_axis'), 6)} m; "
+                    f"s&#772;<sub>s,t</sub> = {_fmt(area.get('reinforcement_centroid_axis'), 6)} m"
+                ),
+                result=(
+                    f"centroid gap = {_fmt(area.get('centroid_gap', 0) * _MM, 6)} mm; "
+                    f"h<sub>c,eff</sub> = {_fmt(area.get('selected_hc_eff', 0) * _MM, 3)} mm; "
+                    f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>"
+                ),
+            )
+        elif kind == "CrackEffectiveArea2023Bending":
+            self._formula(
+                "h<sub>c,eff</sub> = min[max(min(a<sub>y</sub>+5phi, 10phi, "
+                "3.5a<sub>y</sub>), Delta a<sub>y</sub>), h-x, h/2]",
+                equation_key="crack.effective-area.2023",
+                equation_variant="bending",
+                ref="EN 1992-1-1:2023 Figure 9.3",
+                subst=(
+                    f"a<sub>y</sub>+5phi = {_fmt(area.get('candidate_ay_plus_5phi', 0) * _MM, 3)} mm; "
+                    f"10phi = {_fmt(area.get('candidate_10phi', 0) * _MM, 3)} mm; "
+                    f"3.5a<sub>y</sub> = {_fmt(area.get('candidate_3_5ay', 0) * _MM, 3)} mm; "
+                    f"layer spread = {_fmt(area.get('layer_spread', 0) * _MM, 3)} mm; "
+                    f"h-x = {_fmt(area.get('candidate_h_minus_x', 0) * _MM, 3)} mm; "
+                    f"h/2 = {_fmt(area.get('candidate_h_over_2', 0) * _MM, 3)} mm"
+                ),
+                result=(
+                    f"h<sub>c,eff</sub> = {_fmt(area.get('selected_hc_eff', 0) * _MM, 3)} mm "
+                    f"({area.get('final_selected_candidate', '-')}); "
+                    f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>"
+                ),
+            )
+        elif kind == "CrackEffectiveArea2023Direct":
+            self._formula(
+                "A<sub>c,eff</sub> = bh - (b-c<sub>l</sub>-c<sub>r</sub>)"
+                "(h-c<sub>b</sub>-c<sub>t</sub>)",
+                equation_key="crack.effective-area.2023",
+                equation_variant="direct-tension",
+                ref="EN 1992-1-1:2023 Figure 9.3",
+                subst=(
+                    f"= {_fmt(area.get('width'), 6)} &#183; {_fmt(area.get('height'), 6)} - "
+                    f"{_fmt(area.get('inner_width'), 6)} &#183; {_fmt(area.get('inner_height'), 6)}"
+                ),
+                result=f"A<sub>c,eff</sub> = {_fmt(area.get('ac_eff'), 6)} m<super>2</super>",
+            )
+        else:
+            self._small(
+                "<b>Effective-area calculation unavailable.</b> No retained "
+                "effective-area operands were supplied; the report does not "
+                "reconstruct the section geometry."
+            )
+
+        if cw.get("edition") == "2023":
+            reinforcement = cw.get("effective_reinforcement_2023") or {}
+            if not reinforcement:
+                self._small(
+                    "<b>Effective reinforcement ratio unavailable.</b> The "
+                    "retained Formula (9.12) operands are missing."
+                )
+                return
+            self._formula(
+                "rho<sub>p,eff</sub> = (A<sub>s,eff</sub> + "
+                "sum xi<sub>1,j</sub>A<sub>p,j</sub>) / A<sub>c,eff</sub>",
+                equation_key="crack.effective-reinforcement.ratio",
+                equation_variant="2023",
+                ref="EN 1992-1-1:2023 Formula (9.12)",
+                subst=(
+                    f"= ({_fmt(reinforcement.get('as_eff'), 8)} + "
+                    f"{_fmt(reinforcement.get('ap_eff_weighted'), 8)}) / "
+                    f"{_fmt(reinforcement.get('ac_eff'), 8)}"
+                ),
+                result=f"rho<sub>p,eff</sub> = {_fmt(reinforcement.get('rho_p_eff'), 6)}",
+            )
+        else:
+            self._formula(
+                "rho<sub>p,eff</sub> = (A<sub>s,eff</sub> + "
+                "A<sub>p,eff</sub>) / A<sub>c,eff</sub>",
+                equation_key="crack.effective-reinforcement.ratio",
+                equation_variant="2005",
+                ref="DS/EN 1992-1-1 &#167;7.3.2",
+                subst=(
+                    f"= ({_fmt(candidate.get('as_eff'), 8)} + "
+                    f"{_fmt(candidate.get('ap_eff'), 8)}) / "
+                    f"{_fmt(candidate.get('ac_eff'), 8)}"
+                ),
+                result=f"rho<sub>p,eff</sub> = {_fmt(candidate.get('rho_p_eff'), 6)}",
+            )
+
+    def _crack_mean_strain_worked(self, mean, *, edition):
+        lower_label = "0.6" if edition == "2005" else "1 - k<sub>t</sub>"
+        symbolic = (
+            "eps<sub>sm</sub> - eps<sub>cm</sub> = max{[sigma<sub>s</sub> - "
+            "k<sub>t</sub>f<sub>ct,eff</sub>/rho<sub>p,eff</sub> "
+            "(1 + alpha<sub>e</sub>rho<sub>p,eff</sub>)]/E<sub>s</sub>, "
+            f"{lower_label} sigma<sub>s</sub>/E<sub>s</sub>}}"
+        )
+        subst = (
+            f"first candidate = ({_fmt(mean.get('sigma_s'), 3)} - "
+            f"{_fmt(mean.get('concrete_tension_reduction'), 3)}) / "
+            f"{_fmt(mean.get('es'), 1)} = "
+            f"{_fmt(mean.get('formula_candidate'), 8)}; "
+            f"lower bound = {_fmt(mean.get('lower_bound_factor'), 3)} &#183; "
+            f"{_fmt(mean.get('sigma_s'), 3)} / {_fmt(mean.get('es'), 1)} = "
+            f"{_fmt(mean.get('lower_bound_candidate'), 8)}"
+        )
+        result = (
+            "eps<sub>sm</sub> - eps<sub>cm</sub> = "
+            f"{_fmt(mean.get('selected_esm_ecm'), 8)} "
+            f"({mean.get('selected_candidate', '-')})"
+        )
+        if edition == "2005":
+            self._formula(
+                symbolic,
+                equation_key="crack.2005.mean-strain",
+                ref="DS/EN 1992-1-1 Formula (7.9)",
+                subst=subst,
+                result=result,
+            )
+        else:
+            self._formula(
+                symbolic,
+                equation_key="crack.2023.mean-strain",
+                ref="EN 1992-1-1:2023 Formula (9.11)",
+                subst=subst,
+                result=result,
+            )
 
     def _crack_candidates(self, cases):
         """Append the complete sorted per-element crack-width audit table."""
-        rows = [["Case", "#", "Element", "x", "y", "c", "phi",
-                 "sigma<sub>s</sub>", "A<sub>c,eff</sub>", "&#916;eps",
-                 "s<sub>r</sub>", "w<sub>k</sub>"]]
+        rows = [["Case<br/>(LT/ST)", "#<br/>(G/N)", "Element",
+                 "x<br/>(mm)", "y<br/>(mm)", "c<br/>(mm)",
+                 "phi<br/>(mm)", "sigma<sub>s</sub><br/>(MPa)",
+                 "A<sub>c,eff</sub><br/>(m<super>2</super>)", "&#916;eps",
+                 "s<sub>r</sub><br/>(mm)", "w<sub>k</sub><br/>(mm)"]]
         for case, label in cases:
             candidates = [] if not case else case.get("candidates", [])
             if not candidates:
@@ -5872,41 +6471,52 @@ class ReportBuilder:
                 ])
         if len(rows) == 1:
             return
-        # Keep the heading, compact table and legend together. ReportLab can place
-        # the block in remaining space when it fits, avoiding an unnecessary
-        # mostly-empty continuation page.
-        block_start = len(self.flow)
-        self._h2("Crack-width candidates - all checked cases")
+        # KeepWithNext on the heading keeps it with the table.  Do not wrap the
+        # whole heading/table/legend block in KeepTogether: after a full worked
+        # derivation that can push this compact summary onto an otherwise empty
+        # continuation page.
+        self._h2("Candidate summary for governing crack example")
         self._table(
             rows,
             _CRACK_CANDIDATE_COL_WIDTHS,
             font=5.4, keep=False, repeat_cols=3,
         )
-        self._small(
-            "LT = long-term; ST = short-term. Coordinates, c, phi and "
-            "s<sub>r</sub> in mm; sigma<sub>s</sub> in MPa; "
-            "A<sub>c,eff</sub> in m<super>2</super>; &#916;eps "
-            "dimensionless; w<sub>k</sub> in mm. G = governing; "
-            "N = within 10% of governing."
-        )
-        self._keep_from(block_start)
 
-    def _crack_worked_2023(self, cw, code):
+    def _crack_worked_2023(self, cw, candidate):
         """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
+        spacing = candidate["spacing_operands"]
+        mean = candidate["mean_strain_operands"]
+        cap = spacing.get("cap_spacing")
         self._formula(
             "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
             "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
             equation_key="crack.2023.spacing",
             ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
-            subst=f"k<sub>fl</sub> = {_fmt(cw.get('kfl',1),3)}; "
-                  f"s<sub>r,m,cal</sub> = {_fmt(cw.get('sr_max',0), 3)} mm")
-        self._formula(
-            "eps<sub>sm</sub> - eps<sub>cm</sub> = [ sigma<sub>s</sub> - "
-            "k<sub>t</sub>&#183;f<sub>ct,eff</sub>/rho<sub>p,eff</sub>&#183;"
-            "(1 + alpha<sub>e</sub>&#183;rho<sub>p,eff</sub>) ] / E<sub>s</sub> "
-            "&gt;= (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>/E<sub>s</sub>",
-            equation_key="crack.2023.mean-strain",
-            ref="Eq (9.11)")
+            note=(
+                f"k<sub>fl</sub> method: {spacing.get('flexural_factor_method', '-')}; "
+                f"selected: {spacing.get('selected_candidate', '-')}"
+            ),
+            subst=(
+                f"formula = {_fmt(spacing.get('cover_coefficient'), 3)} &#183; "
+                f"{_fmt(spacing.get('cover'), 3)} + "
+                f"({_fmt(spacing.get('flexural_factor'), 4)} &#183; "
+                f"{_fmt(spacing.get('bond_factor_kb'), 3)} / "
+                f"{_fmt(spacing.get('diameter_ratio_divisor'), 3)}) &#183; "
+                f"{_fmt(spacing.get('diameter'), 3)} / "
+                f"{_fmt(spacing.get('rho_p_eff'), 6)} = "
+                f"{_fmt(spacing.get('formula_spacing'), 3)} mm"
+                + (
+                    f"; cap = (1.3 / {_fmt(cw.get('kw'), 3)}) &#183; "
+                    f"{_fmt(float(spacing.get('cap_tension_depth', 0)) * _MM, 3)} = "
+                    f"{_fmt(cap, 3)} mm"
+                    if cap is not None else "; no finite tension-zone cap"
+                )
+            ),
+            result=(
+                "s<sub>r,m,cal</sub> = "
+                f"{_fmt(spacing.get('selected_spacing'), 3)} mm"
+            ))
+        self._crack_mean_strain_worked(mean, edition="2023")
         self._formula(
             "w<sub>k,cal</sub> = k<sub>w</sub>&#183;k<sub>1/r</sub>&#183;"
             "s<sub>r,m,cal</sub>&#183;(eps<sub>sm</sub> - eps<sub>cm</sub>)",
@@ -5917,13 +6527,6 @@ class ReportBuilder:
                   f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
-        if code:
-            self._small(f"Crack-width code: {code}. Refined control of cracking "
-                        "(&#167;9.2.3): k<sub>w</sub> = 1.7 converts the mean crack "
-                        "width to the calculated value, k<sub>1/r</sub> = (h-x)/"
-                        "(h-a<sub>y</sub>-x) accounts for curvature, and the mean "
-                        "strain lower bound is (1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>"
-                        "/E<sub>s</sub>.")
 
     def _fatigue(self):
         payload = self._base_out["fatigue"]

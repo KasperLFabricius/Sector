@@ -71,16 +71,168 @@ def _inp():
 def _crack():
     # Units as returned by CrackWidthResult: wk/sr_max/phi/cover in mm; hc_ef in m;
     # ac_eff in m^2; esm_ecm dimensionless.
+    rho = 2.72 / 99.0
+    ac_eff = 0.0005 / rho
+    concrete_reduction = 0.4 * 2.9 / rho * (1.0 + 6.06 * rho)
+    mean_strain = 0.213 / 235.0
+    sigma_s = mean_strain * 200_000.0 + concrete_reduction
+    mean = {
+        "record_kind": "CrackMeanStrainOperands",
+        "sigma_s": sigma_s, "kt": 0.4, "fctm": 2.9,
+        "rho_p_eff": rho, "alpha_e": 6.06, "es": 200_000.0,
+        "concrete_tension_reduction": concrete_reduction,
+        "formula_candidate": mean_strain,
+        "lower_bound_factor": 0.6,
+        "lower_bound_candidate": 0.6 * sigma_s / 200_000.0,
+        "selected_candidate": "formula-7.9",
+        "selected_esm_ecm": mean_strain,
+    }
+    spacing = {
+        "record_kind": "CrackSpacing2005Operands",
+        "cover": 40.0, "diameter": 16.0, "rho_p_eff": rho,
+        "k1": 0.8, "k2": 0.5, "k3_base": 3.4, "k3_used": 3.4,
+        "k4": 0.425, "nearest_neighbour_spacing": 100.0,
+        "close_spacing_limit": 240.0, "tension_zone_depth": 0.15,
+        "formula_7_11": 235.0, "geometric_7_14": 195.0,
+        "selected_candidate": "formula-7.11", "selected_spacing": 235.0,
+    }
     candidate = {
         "element_type": "Bar", "element_no": 1, "element_id": "bar 1",
         "x_mm": 0.0, "y_mm": -120.0, "area_mm2": 500.0,
-        "wk": 0.213, "sr_max": 235.0, "esm_ecm": 8.4e-4,
-        "sigma_s": 215.0, "rho_p_eff": 0.04, "ac_eff": 0.0125,
+        "wk": 0.213, "sr_max": 235.0, "esm_ecm": mean_strain,
+        "sigma_s": sigma_s, "rho_p_eff": rho, "ac_eff": ac_eff,
         "hc_ef": 0.125, "phi": 16.0, "cover": 40.0,
         "coarse": False, "edition": "2004", "kw": 1.0,
         "k1_r": 1.0, "kfl": 1.0, "sr_max_geometric": False,
+        "as_eff": 0.0005, "ap_eff": 0.0,
+        "ap_eff_weighted": 0.0, "xi1": None,
+        "reinforcement_type": "mild", "bc_ef": 0.0,
+        "direct_tension": False, "scope": "dominant direction",
+        "direction_deg": 90.0, "equivalent_diameter": 25.231,
+        "diameter_source": "provided", "cover_source": "geometry",
+        "bond_coefficient": 0.8, "modular_ratio": 6.06,
+        "mean_strain_operands": mean,
+        "spacing_operands": spacing,
     }
-    return dict(candidate, gov_bar=1, candidates=[candidate])
+    effective_area = {
+        "record_kind": "CrackEffectiveArea2005Fine",
+        "section_depth": 0.3, "effective_depth": 0.25,
+        "tension_zone_depth": 0.4, "h_minus_d": 0.05,
+        "candidate_2_5_h_minus_d": 0.125,
+        "candidate_h_minus_x_over_3": 0.13333333333333333,
+        "candidate_h_over_2": 0.15,
+        "selected_candidate": "2.5(h-d)", "selected_hc_eff": 0.125,
+        "band_limit": -0.025, "ac_eff": ac_eff,
+    }
+    return dict(
+        candidate,
+        gov_bar=1,
+        effective_area_operands=effective_area,
+        effective_reinforcement_2023=None,
+        governing_rule="maximum-wk-then-lowest-bar-index",
+        governing_candidate=dict(candidate),
+        candidates=[candidate],
+    )
+
+
+def _wide_crack():
+    crack = copy.deepcopy(_crack())
+    spacing = crack["governing_candidate"]["spacing_operands"]
+    spacing.update({
+        "nearest_neighbour_spacing": math.inf,
+        "tension_zone_depth": 235.0 / 1.3 / 1000.0,
+        "geometric_7_14": 235.0,
+        "selected_candidate": "formula-7.14",
+        "selected_spacing": 235.0,
+    })
+    crack["governing_candidate"]["sr_max_geometric"] = True
+    crack["sr_max_geometric"] = True
+    crack["candidates"][0] = copy.deepcopy(crack["governing_candidate"])
+    return crack
+
+
+def _coarse_crack(*, wk=0.213):
+    crack = copy.deepcopy(_crack())
+    crack.update(coarse=True, wk=wk)
+    crack["governing_candidate"].update(coarse=True, wk=wk)
+    crack["candidates"][0].update(coarse=True, wk=wk)
+    crack["effective_area_operands"] = {
+        "record_kind": "CrackEffectiveArea2005Coarse",
+        "section_depth": 0.3, "compression_face_axis": -0.15,
+        "tension_face_axis": 0.15, "reinforcement_centroid_axis": 0.12,
+        "band_limit_axis": -0.005, "band_centroid_axis": 0.12,
+        "centroid_gap": 0.0, "selected_hc_eff": 0.155,
+        "ac_eff": crack["ac_eff"],
+        "selected_candidate": "centroid-matched-band",
+    }
+    return crack
+
+
+def _crack_2023():
+    crack = copy.deepcopy(_crack())
+    rho = crack["rho_p_eff"]
+    spacing_value = 1.5 * 40.0 + (0.77 * 0.9 / 7.2) * 16.0 / rho
+    mean_strain = 0.213 / (1.7 * 1.13 * spacing_value)
+    reduction = 0.4 * 2.9 / rho * (1.0 + 6.06 * rho)
+    sigma_s = mean_strain * 200_000.0 + reduction
+    mean = {
+        "record_kind": "CrackMeanStrainOperands",
+        "sigma_s": sigma_s, "kt": 0.4, "fctm": 2.9,
+        "rho_p_eff": rho, "alpha_e": 6.06, "es": 200_000.0,
+        "concrete_tension_reduction": reduction,
+        "formula_candidate": mean_strain, "lower_bound_factor": 0.6,
+        "lower_bound_candidate": 0.6 * sigma_s / 200_000.0,
+        "selected_candidate": "formula-9.11",
+        "selected_esm_ecm": mean_strain,
+    }
+    spacing = {
+        "record_kind": "CrackSpacing2023Operands",
+        "cover": 40.0, "diameter": 16.0, "rho_p_eff": rho,
+        "cover_coefficient": 1.5, "bond_coefficient_k1": 0.8,
+        "bond_factor_kb": 0.9, "flexural_factor_raw": 0.77,
+        "flexural_factor": 0.77, "flexural_factor_method": "formula-9.17",
+        "transformed_tension_depth": 0.2, "cap_tension_depth": 0.2,
+        "diameter_ratio_divisor": 7.2, "formula_spacing": spacing_value,
+        "cap_spacing": 1.3 / 1.7 * 0.2 * 1000.0,
+        "selected_candidate": "formula-9.15",
+        "selected_spacing": spacing_value,
+    }
+    candidate = crack["governing_candidate"]
+    candidate.update(
+        edition="2023", kw=1.7, k1_r=1.13, kfl=0.77,
+        wk=0.213, sr_max=spacing_value, esm_ecm=mean_strain,
+        sigma_s=sigma_s, mean_strain_operands=mean,
+        spacing_operands=spacing,
+    )
+    crack.update(candidate)
+    crack.update(
+        gov_bar=1,
+        effective_area_operands={
+            "record_kind": "CrackEffectiveArea2023Bending",
+            "section_depth": 0.3, "tension_zone_depth": 0.2,
+            "near_layer_depth": 0.025, "far_layer_depth": 0.025,
+            "near_layer_diameter": 16.0,
+            "candidate_ay_plus_5phi": 0.105,
+            "candidate_10phi": 0.16, "candidate_3_5ay": 0.0875,
+            "base_selected_candidate": "3.5ay", "base_height": 0.0875,
+            "layer_spread": 0.0, "height_before_section_caps": 0.0875,
+            "candidate_h_minus_x": 0.2, "candidate_h_over_2": 0.15,
+            "final_selected_candidate": "layer-band",
+            "selected_hc_eff": 0.0875, "band_limit": 0.0625,
+            "ac_eff": crack["ac_eff"],
+        },
+        effective_reinforcement_2023={
+            "record_kind": "EffectiveReinforcement2023",
+            "as_eff": 0.0005, "ap_eff": 0.0,
+            "ap_eff_weighted": 0.0, "rho_p_eff": rho,
+            "xi1_by_element": [None], "ac_eff": crack["ac_eff"],
+            "rho_numerator": 0.0005, "reference_mild_diameter": 16.0,
+            "elements": [],
+        },
+        governing_candidate=candidate,
+        candidates=[copy.deepcopy(candidate)],
+    )
+    return crack
 
 
 def _plastic_point():
@@ -1162,9 +1314,13 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
         "checks": [{
             "type": "minimum area", "status": "PASS", "axis": "xy",
             "face": "resultant tension zone",
-            "as_provided_mm2": 628.0, "as_min_mm2": 410.0,
-            "utilisation": 410.0 / 628.0, "bt_mm": 200.0,
+            "as_provided_mm2": 628.0, "as_min_mm2": 81.432,
+            "utilisation": 81.432 / 628.0, "bt_mm": 200.0,
             "d_mm": 270.0, "fctm_mpa": 2.9, "fyk_mpa": 500.0,
+            "strength_coefficient": 0.26 * 2.9 / 500.0,
+            "floor_coefficient": 0.0013,
+            "selected_coefficient": 0.26 * 2.9 / 500.0,
+            "governing_coefficient": "0.26 fctm / fyk",
             "bar_ids": ["R1", "R2"],
         }],
         "limitations": ["Prestressing tendons are not credited."],
@@ -1176,6 +1332,14 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
             "status": "PASS", "first_id": "R1", "second_id": "R2",
             "first_kind": "bar", "second_kind": "bar", "clear_mm": 60.0,
             "required_mm": 21.0, "margin_mm": 39.0,
+            "dx_mm": 80.0, "dy_mm": 0.0, "centre_distance_mm": 80.0,
+            "phi_first_mm": 20.0, "phi_second_mm": 20.0,
+            "required_candidates_mm": {
+                "larger element diameter": 20.0,
+                "aggregate allowance": 21.0,
+                "absolute minimum": 20.0,
+            },
+            "governing_requirement": "aggregate allowance",
         },
         "pairs": [],
         "limitations": ["Pairwise edge-to-edge distance is checked."],
@@ -1194,6 +1358,9 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "A s,min" in text or "As,min" in text
     assert "Reinforcement clear spacing" in text
     assert "R1 - R2" in text
+    assert "0.0015080" in text
+    assert "aggregate allowance" in text
+    assert "80.000" in text and "60.000 mm" in text
     assert "Lap / bundle ID" not in text
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
 
@@ -1637,6 +1804,59 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "the project as a whole have no verdict" in flat
     assert "125.0 %" in flat
     assert "456.000 MPa" in flat
+    assert flat.count("Selected sweep point") == 1
+    assert flat.count("The elastic solver uses a raw reference-stress plane") == 1
+
+
+def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
+    inp = _inp()
+    rows = [
+        {
+            "name": "EL-01", "description": "Coarse governing",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 80.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 20.0, "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        },
+        {
+            "name": "EL-02", "description": "Fine governing",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 100.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 30.0, "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        },
+    ]
+    inp["elastic_cases"] = rows
+    first = copy.deepcopy(_out()["elastic"])
+    first.update(
+        crack=dict(_crack(), wk=0.20),
+        crack_short=dict(_crack(), wk=0.22),
+        crack_coarse=_coarse_crack(wk=0.31),
+        crack_short_coarse=_coarse_crack(wk=0.29),
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
+    second = copy.deepcopy(_out()["elastic"])
+    second.update(
+        crack=dict(_crack(), wk=0.34),
+        crack_short=dict(_crack(), wk=0.33),
+        crack_coarse=_coarse_crack(wk=0.24),
+        crack_short_coarse=_coarse_crack(wk=0.25),
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
+    out = _out()
+    out["elastic_cases"] = [
+        {"name": row["name"], "actions": row, "evaluated": True,
+         "results": {"elastic": result}}
+        for row, result in zip(rows, (first, second))
+    ]
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+    assert flat.count("Crack width worked - governing case") == 2
+    assert "governing case (long-term (fine))" in flat
+    assert "governing case (long-term (coarse))" in flat
+    assert "Candidate summary for governing crack example" in flat
+    assert "Case (LT/ST)" in flat
 
 
 def test_report_escapes_user_entered_action_provenance():
@@ -1692,7 +1912,7 @@ def test_report_includes_sls_outputs_strain_and_candidate_evidence():
     assert "Ixy" in txt
     assert "Reinforcement and tendon response" in txt
     assert "Concrete corner stress and strain" in txt
-    assert "Crack-width candidates" in txt
+    assert "Candidate summary for governing crack example" in txt
     assert "Crack-width element diameter" in txt
     assert "Element diameter" in txt
     assert "Bar diameter" not in txt
@@ -1770,6 +1990,20 @@ def test_report_crack_width_uses_millimetres_not_metres():
     assert "213.000" not in txt                        # wk not 1000x (would be 213 mm)
 
 
+def test_report_crack_example_publishes_every_retained_interim_selection():
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )).split())
+    assert "2.5(h-d)" in flat
+    assert "A c,eff" in flat or "Ac,eff" in flat
+    assert "first candidate" in flat
+    assert "lower bound" in flat
+    assert "formula-7.9" in flat
+    assert "close-centre threshold" in flat
+    assert "Formula (7.11) selected" in flat
+    assert "235.000 mm" in flat
+
+
 def test_report_reinforcement_areas_are_already_square_millimetres():
     inp = _inp()
     inp["bars"] = [(0.0, -0.12, 321.123)]
@@ -1814,8 +2048,8 @@ def test_report_wide_spacing_shows_geometric_formula():
     # example must render (7.14), not the (7.11) close-centre formula it can't
     # reproduce.
     out = _out()
-    out["elastic"]["crack"] = dict(_crack(), sr_max_geometric=True)
-    out["elastic"]["crack_short"] = dict(_crack(), sr_max_geometric=True)
+    out["elastic"]["crack"] = _wide_crack()
+    out["elastic"]["crack_short"] = _wide_crack()
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "(7.14)" in txt
     assert "close centres" in txt
@@ -1827,8 +2061,8 @@ def test_report_dk_na_shows_fine_and_coarse_columns():
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.20)
     out["elastic"]["crack_short"] = dict(_crack(), coarse=False, wk=0.25)
-    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True, wk=0.10)
-    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True, wk=0.12)
+    out["elastic"]["crack_coarse"] = _coarse_crack(wk=0.10)
+    out["elastic"]["crack_short_coarse"] = _coarse_crack(wk=0.12)
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
@@ -1841,8 +2075,8 @@ def test_report_shows_coarse_only_results():
     out = _out()
     out["elastic"]["crack"] = None
     out["elastic"]["crack_short"] = None
-    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True)
-    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True)
+    out["elastic"]["crack_coarse"] = _coarse_crack()
+    out["elastic"]["crack_short_coarse"] = _coarse_crack()
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "No crack width" not in txt
@@ -1855,8 +2089,8 @@ def test_report_coarse_worked_shows_half_factor_when_it_governs():
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), coarse=False, wk=0.10)
     out["elastic"]["crack_short"] = dict(_crack(), coarse=False, wk=0.10)
-    out["elastic"]["crack_coarse"] = dict(_crack(), coarse=True, wk=0.30)
-    out["elastic"]["crack_short_coarse"] = dict(_crack(), coarse=True, wk=0.30)
+    out["elastic"]["crack_coarse"] = _coarse_crack(wk=0.30)
+    out["elastic"]["crack_short_coarse"] = _coarse_crack(wk=0.30)
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert chr(0xBD) in txt            # the 1/2 glyph rendered in Eq (7.8)
@@ -1865,9 +2099,8 @@ def test_report_coarse_worked_shows_half_factor_when_it_governs():
 def test_report_ec2_2023_shows_refined_formula():
     # The EN 1992-1-1:2023 worked example shows the refined (9.8) formula with kw.
     out = _out()
-    out["elastic"]["crack"] = dict(_crack(), edition="2023", kw=1.7, k1_r=1.13, kfl=0.77)
-    out["elastic"]["crack_short"] = dict(_crack(), edition="2023", kw=1.7, k1_r=1.13,
-                                         kfl=0.77)
+    out["elastic"]["crack"] = _crack_2023()
+    out["elastic"]["crack_short"] = _crack_2023()
     out["elastic"]["crack_code"] = "EN 1992-1-1:2023"
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "9.8" in txt and "9.2.3" in txt      # the 2023 clause and crack formula

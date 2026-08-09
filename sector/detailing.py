@@ -263,6 +263,8 @@ def _resultant_tension_zone(
         "fyk_values_mpa": [float(materials[index].fytk) for index in indices],
         "as_provided_mm2": area,
         "bar_level_m": bar_level,
+        "compression_extreme_m": compression_extreme,
+        "tension_zone_area_mm2": clipped_area * 1.0e6,
         "bt_mm": bt_mm,
         "tension_zone_depth_mm": tension_depth * 1000.0,
         "d_mm": d_mm,
@@ -313,8 +315,26 @@ def minimum_reinforcement_2005(
             and fyk > 0.0
             and fctm_mpa > 0.0
         )
+        strength_coefficient = (
+            0.26 * float(fctm_mpa) / fyk if fyk > 0.0 else None
+        )
+        floor_coefficient = 0.0013
+        selected_coefficient = (
+            max(strength_coefficient, floor_coefficient)
+            if strength_coefficient is not None
+            else None
+        )
+        governing_coefficient = (
+            None
+            if strength_coefficient is None
+            else (
+                "0.26 fctm / fyk"
+                if strength_coefficient >= floor_coefficient
+                else "0.0013"
+            )
+        )
         as_min = (
-            max(0.26 * float(fctm_mpa) / fyk, 0.0013)
+            float(selected_coefficient)
             * float(zone["bt_mm"])
             * float(zone["d_mm"])
             if valid
@@ -353,9 +373,16 @@ def minimum_reinforcement_2005(
             "utilisation": utilisation if math.isfinite(utilisation) else None,
             "bt_mm": zone.get("bt_mm"),
             "tension_zone_depth_mm": zone.get("tension_zone_depth_mm"),
+            "tension_zone_area_mm2": zone.get("tension_zone_area_mm2"),
+            "bar_level_m": zone.get("bar_level_m"),
+            "compression_extreme_m": zone.get("compression_extreme_m"),
             "d_mm": zone.get("d_mm"),
             "fctm_mpa": float(fctm_mpa),
             "fyk_mpa": fyk if fyk > 0.0 else None,
+            "strength_coefficient": strength_coefficient,
+            "floor_coefficient": floor_coefficient,
+            "selected_coefficient": selected_coefficient,
+            "governing_coefficient": governing_coefficient,
             "bar_ids": zone.get("bar_ids") or [],
             "material_ids": zone.get("material_ids") or [],
             "tension_direction": zone.get("tension_direction"),
@@ -448,20 +475,34 @@ def _cracking_action(
     limit = float(fctm_mpa) * 1000.0
     if float(np.max(sigma_n)) >= limit - _TOL:
         factor = 0.0
+        governing_index = int(np.argmax(sigma_n))
+        branch = "axial action reaches the concrete tensile strength"
     else:
         candidates = [
-            (limit - float(base)) / float(delta)
-            for base, delta in zip(sigma_n, sigma_m)
+            (index, (limit - float(base)) / float(delta))
+            for index, (base, delta) in enumerate(zip(sigma_n, sigma_m))
             if delta > _TOL and (limit - float(base)) >= -_TOL
         ]
         if not candidates:
             return {"valid": False, "reason": "moment direction creates no tension"}
-        factor = max(min(candidates), 0.0)
+        governing_index, candidate_factor = min(
+            candidates, key=lambda item: item[1]
+        )
+        factor = max(candidate_factor, 0.0)
+        branch = "scaled bending reaches the concrete tensile strength"
     mx_cr = factor * float(mx_centroid_knm)
     my_cr = factor * float(my_centroid_knm)
+    governing_vertex = vertices[governing_index]
     return {
         "valid": True,
+        "branch": branch,
         "factor": factor,
+        "fctm_mpa": float(fctm_mpa),
+        "governing_vertex_index": governing_index,
+        "governing_vertex_x_m": float(governing_vertex[0]),
+        "governing_vertex_y_m": float(governing_vertex[1]),
+        "governing_axial_stress_mpa": float(sigma_n[governing_index]) / 1000.0,
+        "governing_bending_stress_mpa": float(sigma_m[governing_index]) / 1000.0,
         "mx_cr_knm": mx_cr,
         "my_cr_knm": my_cr,
         "m_cr_knm": math.hypot(mx_cr, my_cr),
@@ -492,6 +533,83 @@ def _origin_inside_polygon(points: Sequence[tuple[float, float]]) -> bool:
     return inside
 
 
+def _optional_float(value) -> float | None:
+    """Return one finite solver value without fabricating a missing diagnostic."""
+
+    if value is None:
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _nominal_point_solution(point, *, method: str) -> dict:
+    """Freeze the accepted final state of one detailing-owned plastic solve."""
+
+    lower_depth = _optional_float(getattr(point, "search_lower_depth", None))
+    upper_depth = _optional_float(getattr(point, "search_upper_depth", None))
+    lower_axial = _optional_float(getattr(point, "search_lower_axial", None))
+    upper_axial = _optional_float(getattr(point, "search_upper_axial", None))
+    return {
+        "method": method,
+        "neutral_axis_angle_deg": float(point.V),
+        "converged": bool(point.converged),
+        "requested_axial_kn": _optional_float(
+            getattr(point, "axial_requested", None)
+        ),
+        "achieved_axial_kn": float(point.axial),
+        "axial_residual_kn": _optional_float(
+            getattr(point, "axial_residual", None)
+        ),
+        "axial_tolerance_kn": _optional_float(
+            getattr(point, "axial_tolerance", None)
+        ),
+        "axial_reachable": getattr(point, "axial_reachable", None),
+        "compression_depth_m": _optional_float(
+            getattr(point, "compression_depth", None)
+        ),
+        "curvature_per_m": float(point.curvature),
+        "iterations": getattr(point, "search_iterations", None),
+        "search_depth_range_m": (
+            (lower_depth, upper_depth)
+            if lower_depth is not None and upper_depth is not None
+            else None
+        ),
+        "search_axial_range_kn": (
+            (lower_axial, upper_axial)
+            if lower_axial is not None and upper_axial is not None
+            else None
+        ),
+        "capacity_mx_knm": float(point.Mx),
+        "capacity_my_knm": float(point.My),
+    }
+
+
+def _nominal_envelope_solution(points, *, governing_index: int | None = None) -> dict:
+    """Freeze the bounded final summary of the existing 15-degree sweep."""
+
+    selected = (
+        points[governing_index]
+        if governing_index is not None and 0 <= governing_index < len(points)
+        else None
+    )
+    return {
+        "method": "plastic nominal axial-moment envelope",
+        "angle_start_deg": 0.0,
+        "angle_end_deg": 345.0,
+        "angle_increment_deg": 15.0,
+        "accepted_point_count": len(points),
+        "all_points_converged": all(point.converged for point in points),
+        "governing_point_index": governing_index,
+        "governing_point": (
+            _nominal_point_solution(
+                selected, method="selected nominal envelope point"
+            )
+            if selected is not None
+            else None
+        ),
+    }
+
+
 def _nominal_capacity_utilisation(
     section: Section,
     concrete,
@@ -504,9 +622,17 @@ def _nominal_capacity_utilisation(
     if len(materials) != len(section.bars):
         raise ValueError("one material is required per bar")
     characteristic = [_characteristic_plateau(material) for material in materials]
+    nominal_reinforcement_terms = [
+        {
+            "element_index": index,
+            "area_mm2": bar.area * 1.0e6,
+            "fyk_mpa": float(material.fytk),
+            "resistance_kn": bar.area * float(material.fytk) * 1000.0,
+        }
+        for index, (bar, material) in enumerate(zip(section.bars, materials))
+    ]
     nominal_axial_resistance_kn = sum(
-        bar.area * float(material.fytk) * 1000.0
-        for bar, material in zip(section.bars, materials)
+        term["resistance_kn"] for term in nominal_reinforcement_terms
     )
     if (
         float(n_ed_tension_kn) > nominal_axial_resistance_kn + _TOL
@@ -518,6 +644,8 @@ def _nominal_capacity_utilisation(
             "mr_nom_knm": 0.0,
             "axial_feasible": False,
             "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+            "nominal_reinforcement_terms": nominal_reinforcement_terms,
+            "model": "nominal axial resistance pre-screen",
             "reason": "nominal reinforcement tension resistance is below NEd,min",
         }
     if not section.bars:
@@ -527,6 +655,8 @@ def _nominal_capacity_utilisation(
             "mr_nom_knm": 0.0,
             "axial_feasible": False,
             "nominal_axial_resistance_kn": 0.0,
+            "nominal_reinforcement_terms": nominal_reinforcement_terms,
+            "model": "nominal axial resistance pre-screen",
             "reason": "no ordinary reinforcement",
         }
     reference = characteristic[0]
@@ -551,6 +681,8 @@ def _nominal_capacity_utilisation(
                 "mr_nom_knm": None,
                 "axial_feasible": None,
                 "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+                "nominal_reinforcement_terms": nominal_reinforcement_terms,
+                "nominal_solution": _nominal_envelope_solution(points),
                 "reason": "nominal axial-moment envelope did not converge",
             }
         polygon = [(float(point.Mx), float(point.My)) for point in points]
@@ -561,7 +693,9 @@ def _nominal_capacity_utilisation(
             "mr_nom_knm": 0.0,
             "axial_feasible": axial_feasible,
             "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+            "nominal_reinforcement_terms": nominal_reinforcement_terms,
             "model": "zero cracking moment; nominal axial-moment envelope",
+            "nominal_solution": _nominal_envelope_solution(points),
             "reason": (
                 None
                 if axial_feasible
@@ -585,6 +719,11 @@ def _nominal_capacity_utilisation(
             "utilisation": util,
             "mr_nom_knm": resistance,
             "model": "uniaxial x",
+            "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+            "nominal_reinforcement_terms": nominal_reinforcement_terms,
+            "nominal_solution": _nominal_point_solution(
+                point, method="fixed-angle nominal x-axis capacity"
+            ),
         }
     if abs(mx) <= _TOL:
         angle = _face_angle("y", my > 0.0)
@@ -603,6 +742,11 @@ def _nominal_capacity_utilisation(
             "utilisation": util,
             "mr_nom_knm": resistance,
             "model": "uniaxial y",
+            "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+            "nominal_reinforcement_terms": nominal_reinforcement_terms,
+            "nominal_solution": _nominal_point_solution(
+                point, method="fixed-angle nominal y-axis capacity"
+            ),
         }
     points = solve_plastic(
         section,
@@ -615,7 +759,15 @@ def _nominal_capacity_utilisation(
         bar_materials=characteristic,
     )
     if not all(point.converged for point in points):
-        return {"valid": False, "utilisation": None, "mr_nom_knm": None}
+        return {
+            "valid": False,
+            "utilisation": None,
+            "mr_nom_knm": None,
+            "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+            "nominal_reinforcement_terms": nominal_reinforcement_terms,
+            "nominal_solution": _nominal_envelope_solution(points),
+            "reason": "nominal biaxial envelope did not converge",
+        }
     util, governing = _module("combined").radial_util(
         [point.Mx for point in points],
         [point.My for point in points],
@@ -629,6 +781,13 @@ def _nominal_capacity_utilisation(
         "mr_nom_knm": resistance,
         "model": "biaxial 15-degree envelope",
         "governing": governing,
+        "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+        "nominal_reinforcement_terms": nominal_reinforcement_terms,
+        "radial_demand_knm": math.hypot(mx, my),
+        "radial_resistance_knm": resistance,
+        "nominal_solution": _nominal_envelope_solution(
+            points, governing_index=governing
+        ),
     }
 
 
@@ -654,6 +813,13 @@ def minimum_reinforcement_2023(
     area_m2 = centred.gross_area
     compression_kn = max(-float(n_ed_tension_kn), 0.0)
     compression_limit_kn = 0.5 * area_m2 * float(concrete.fcd) * 1000.0
+    scope_operands = {
+        "concrete_area_m2": area_m2,
+        "fcd_mpa": float(concrete.fcd),
+        "compression_action_kn": compression_kn,
+        "compression_limit_factor": 0.5,
+        "compression_limit_kn": compression_limit_kn,
+    }
     limitations = [
         "Prestressing tendons are not credited; bonded-tendon contribution requires a separate review.",
         "The nominal resistance uses the entered design concrete law and limits every mild bar to its characteristic fyk.",
@@ -667,7 +833,7 @@ def minimum_reinforcement_2023(
             "n_ed_tension_kn": float(n_ed_tension_kn),
             "mx_ed_centroid_knm": mx_c,
             "my_ed_centroid_knm": my_c,
-            "compression_limit_kn": compression_limit_kn,
+            **scope_operands,
             "reason": "compressive NEd is not less than 0.5 Ac fcd",
             "checks": [],
             "limitations": limitations,
@@ -683,14 +849,24 @@ def minimum_reinforcement_2023(
                 "n_ed_tension_kn": float(n_ed_tension_kn),
                 "mx_ed_centroid_knm": mx_c,
                 "my_ed_centroid_knm": my_c,
+                **scope_operands,
                 "reason": "case is compression-only and brittle tensile failure is excluded",
                 "checks": [],
                 "limitations": limitations,
             }
         demand_kn = area_m2 * float(fctm_mpa) * 1000.0
+        reinforcement_terms = [
+            {
+                "element_index": index,
+                "bar_id": str(elements[index].get("id") or index + 1),
+                "area_mm2": bar.area * 1.0e6,
+                "fyk_mpa": float(material.fytk),
+                "resistance_kn": bar.area * float(material.fytk) * 1000.0,
+            }
+            for index, (bar, material) in enumerate(zip(centred.bars, materials))
+        ]
         resistance_kn = sum(
-            bar.area * float(material.fytk) * 1000.0
-            for bar, material in zip(centred.bars, materials)
+            term["resistance_kn"] for term in reinforcement_terms
         )
         util = demand_kn / resistance_kn if resistance_kn > 0.0 else math.inf
         check = {
@@ -699,6 +875,9 @@ def minimum_reinforcement_2023(
             "demand_kn": demand_kn,
             "resistance_kn": resistance_kn,
             "utilisation": util if math.isfinite(util) else None,
+            "concrete_area_m2": area_m2,
+            "fctm_mpa": float(fctm_mpa),
+            "reinforcement_terms": reinforcement_terms,
             "as_provided_mm2": sum(bar.area for bar in centred.bars) * 1.0e6,
             "bar_ids": [str(item.get("id") or index + 1)
                         for index, item in enumerate(elements)],
@@ -710,6 +889,7 @@ def minimum_reinforcement_2023(
             "n_ed_tension_kn": float(n_ed_tension_kn),
             "mx_ed_centroid_knm": mx_c,
             "my_ed_centroid_knm": my_c,
+            **scope_operands,
             "checks": [check],
             "reason": None,
             "limitations": limitations,
@@ -730,6 +910,7 @@ def minimum_reinforcement_2023(
             "n_ed_tension_kn": float(n_ed_tension_kn),
             "mx_ed_centroid_knm": mx_c,
             "my_ed_centroid_knm": my_c,
+            **scope_operands,
             "checks": [],
             "reason": cracking.get("reason"),
             "limitations": limitations,
@@ -756,12 +937,32 @@ def minimum_reinforcement_2023(
         "my_cr_knm": cracking["my_cr_knm"],
         "mr_nom_knm": capacity.get("mr_nom_knm"),
         "cracking_factor": cracking["factor"],
+        "cracking_branch": cracking["branch"],
+        "cracking_fctm_mpa": cracking["fctm_mpa"],
+        "cracking_governing_vertex_index": cracking[
+            "governing_vertex_index"
+        ],
+        "cracking_governing_vertex_x_m": cracking["governing_vertex_x_m"],
+        "cracking_governing_vertex_y_m": cracking["governing_vertex_y_m"],
+        "cracking_governing_axial_stress_mpa": cracking[
+            "governing_axial_stress_mpa"
+        ],
+        "cracking_governing_bending_stress_mpa": cracking[
+            "governing_bending_stress_mpa"
+        ],
         "axial_peak_tension_mpa": cracking["axial_peak_tension_mpa"],
         "model": capacity.get("model"),
         "axial_feasible": capacity.get("axial_feasible"),
         "nominal_axial_resistance_kn": capacity.get(
             "nominal_axial_resistance_kn"
         ),
+        "nominal_reinforcement_terms": capacity.get(
+            "nominal_reinforcement_terms"
+        ),
+        "nominal_solution": capacity.get("nominal_solution"),
+        "nominal_governing_point_index": capacity.get("governing"),
+        "radial_demand_knm": capacity.get("radial_demand_knm"),
+        "radial_resistance_knm": capacity.get("radial_resistance_knm"),
         "reason": capacity.get("reason"),
         "as_provided_mm2": sum(bar.area for bar in centred.bars) * 1.0e6,
         "bar_ids": [str(item.get("id") or index + 1)
@@ -774,7 +975,7 @@ def minimum_reinforcement_2023(
         "n_ed_tension_kn": float(n_ed_tension_kn),
         "mx_ed_centroid_knm": mx_c,
         "my_ed_centroid_knm": my_c,
-        "compression_limit_kn": compression_limit_kn,
+        **scope_operands,
         "checks": [check],
         "reason": (
             capacity.get("reason")
@@ -924,7 +1125,15 @@ def clear_spacing(
             phi_1 = float(first["diameter_mm"])
             phi_2 = float(second["diameter_mm"])
             clear = centre - 0.5 * (phi_1 + phi_2)
-            required = max(max(phi_1, phi_2), float(d_upper_mm) + 5.0, 20.0)
+            required_candidates = {
+                "larger element diameter": max(phi_1, phi_2),
+                "aggregate allowance": float(d_upper_mm) + 5.0,
+                "absolute minimum": 20.0,
+            }
+            governing_requirement = max(
+                required_candidates, key=required_candidates.get
+            )
+            required = required_candidates[governing_requirement]
             if clear + _TOL >= required:
                 pair_status = "PASS"
             else:
@@ -938,9 +1147,13 @@ def clear_spacing(
                 "clear_mm": clear,
                 "required_mm": required,
                 "margin_mm": clear - required,
+                "dx_mm": dx,
+                "dy_mm": dy,
                 "centre_distance_mm": centre,
                 "phi_first_mm": phi_1,
                 "phi_second_mm": phi_2,
+                "required_candidates_mm": required_candidates,
+                "governing_requirement": governing_requirement,
             })
     if not pairs:
         status = "NOT ASSESSED"
@@ -999,10 +1212,14 @@ def minimum_transverse_ratio(
     reduction_applied = bool(apply_ductility_reduction and edition == EC2_2023)
     if reduction_applied:
         reduction = {"A": 1.0, "B": 0.90, "C": 0.80}[ductility]
-    ratio = coefficient * math.sqrt(fck) / fywk * reduction
+    base_ratio = coefficient * math.sqrt(fck) / fywk
+    ratio = base_ratio * reduction
     return {
         "ratio": ratio,
+        "base_ratio": base_ratio,
         "coefficient": coefficient,
+        "fck_mpa": fck,
+        "fywk_mpa": fywk,
         "ductility_class": ductility,
         "ductility_factor": reduction,
         "ductility_reduction_applied": reduction_applied,
@@ -1297,6 +1514,8 @@ def transverse_reinforcement(
                 bw_mm=bw,
                 d_mm=depth if depth_valid else None,
                 legs=legs,
+                leg_area_mm2=leg_area,
+                link_spacing_mm=values["spacing"],
             ))
         else:
             checks.append(_not_assessed_check(
@@ -1318,6 +1537,7 @@ def transverse_reinforcement(
                 provided_label="s_l",
                 limit_label="s_l,max",
                 d_mm=depth,
+                spacing_factor=0.75,
             ))
         else:
             checks.append(_not_assessed_check(
@@ -1347,15 +1567,33 @@ def transverse_reinforcement(
                 "enter the maximum transverse distance between legs or define "
                 "at least two effective legs"
             )
+        if depth_valid and member == MEMBER_SLAB:
+            transverse_spacing_limits = {"1.5 d": 1.5 * depth}
+        elif depth_valid:
+            transverse_spacing_limits = {
+                "0.75 d": 0.75 * depth,
+                "600 mm": 600.0,
+            }
+        else:
+            transverse_spacing_limits = {}
+        transverse_spacing_limit = (
+            min(transverse_spacing_limits.values())
+            if transverse_spacing_limits
+            else None
+        )
+        governing_transverse_limit = (
+            min(
+                transverse_spacing_limits,
+                key=lambda label: transverse_spacing_limits[label],
+            )
+            if transverse_spacing_limits
+            else None
+        )
         transverse_check = _spacing_check(
             scope,
             "transverse_leg_spacing",
             transverse_spacing,
-            (
-                1.5 * depth
-                if depth_valid and member == MEMBER_SLAB
-                else min(0.75 * depth, 600.0) if depth_valid else None
-            ),
+            transverse_spacing_limit,
             shear_clause,
             reason=(
                 spacing_reason
@@ -1369,6 +1607,8 @@ def transverse_reinforcement(
                 direction.get("measurement_axis") or ""
             ).lower() or None,
             d_mm=depth,
+            spacing_limits_mm=transverse_spacing_limits,
+            governing_limit=governing_transverse_limit,
         )
         if (
             source == "gross-web upper-bound screen"
@@ -1452,6 +1692,8 @@ def transverse_reinforcement(
             provided_label="rho_w,T",
             limit_label="rho_w,min",
             tef_mm=tef,
+            leg_area_mm2=leg_area,
+            link_spacing_mm=values["spacing"],
         ))
         spacing_limits = {
             "u_k/8": uk / 8.0,
@@ -1520,7 +1762,9 @@ def transverse_reinforcement(
         ),
         "reason": reason,
         "minimum_ratio": minimum,
+        "fck_mpa": values["fck"],
         "diameter_mm": values["diameter"],
+        "leg_area_mm2": leg_area,
         "spacing_mm": values["spacing"],
         "fywk_mpa": values["fywk"],
         "limitations": limitations,
