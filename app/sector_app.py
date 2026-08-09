@@ -5001,6 +5001,197 @@ def _props_dict(p):
     return dict(area=p.area, cx=p.cx, cy=p.cy, Ix=p.Ix, Iy=p.Iy, Ixy=p.Ixy)
 
 
+def _area_moments_dict(value):
+    """Flatten one authoritative polygon-moment result for publication."""
+
+    return dict(
+        area_m2=value.area,
+        first_x_m3=value.sx,
+        first_y_m3=value.sy,
+        second_xx_m4=value.sxx,
+        second_yy_m4=value.syy,
+        product_xy_m4=value.sxy,
+    )
+
+
+def _section_and_material_results(inp):
+    """Prepare shared existing calculations once for human-readable output.
+
+    These are compact final-state breakdowns, not a trace or a second solver.
+    Every numerical value comes from an existing family kernel/property and is
+    shared by all named action cases in the current run.
+    """
+
+    # Use the section's established integration orientation: outer positive,
+    # voids negative, independent of the user's vertex-entry direction.
+    rings = inp["section"].integration_rings()
+    moments = geometry.area_moment_breakdown(rings)
+    section_properties = dict(
+        rings=[
+            dict(
+                ring_id=("outer" if index == 0 else f"void {index}"),
+                role=("gross outline" if index == 0 else "void deduction"),
+                **_area_moments_dict(value),
+            )
+            for index, value in enumerate(moments.ring_moments)
+        ],
+        net_concrete=dict(
+            **_area_moments_dict(moments.total),
+            centroid_x_m=moments.centroid[0],
+            centroid_y_m=moments.centroid[1],
+            ix_centroid_m4=moments.centroidal_syy,
+            iy_centroid_m4=moments.centroidal_sxx,
+            ixy_centroid_m4=moments.centroidal_sxy,
+        ),
+    )
+
+    concrete = inp["concrete"]
+    mild_ids = list(dict.fromkeys(
+        [item.get("material_id") for item in inp.get("bar_elements", [])]
+        + ([inp.get("capacity_steel_material_id")]
+           if inp.get("shear_on") or inp.get("torsion_on") else [])
+    ))
+    mild_ids = [value for value in mild_ids if value]
+    mild_laws = inp.get("mild_materials") or {}
+    if not mild_ids and (inp.get("bars") or inp.get("shear_on")
+                         or inp.get("torsion_on")):
+        mild_ids = ["-"]
+        mild_laws = {"-": inp["steel"]}
+    mild = []
+    for material_id in mild_ids:
+        material = mild_laws.get(material_id)
+        if material is None:
+            continue
+        mild.append(dict(
+            material_id=material_id,
+            characteristic_yield_mpa=material.fytk,
+            yield_factor=material.gamma_y,
+            design_yield_mpa=capacity.design_yield(material),
+        ))
+
+    prestress_ids = list(dict.fromkeys(
+        item.get("material_id") for item in inp.get("tendon_elements", [])
+    ))
+    prestress_ids = [value for value in prestress_ids if value]
+    prestress_laws = inp.get("prestress_materials") or {}
+    if not prestress_ids and inp.get("tendons") and inp.get("prestress") is not None:
+        prestress_ids = ["-"]
+        prestress_laws = {"-": inp["prestress"]}
+    prestress_materials = []
+    for material_id in prestress_ids:
+        material = prestress_laws.get(material_id)
+        if material is None:
+            continue
+        prestress_materials.append(dict(
+            material_id=material_id,
+            curve=material.curve,
+            rupture_strain=material.rupture_strain,
+            characteristic_stress_at_rupture_mpa=(
+                material.stress(material.rupture_strain, design=False)
+                if material.curve in (1, 2, 3, 4, 5) else None
+            ),
+        ))
+    material_properties = dict(
+        concrete=dict(
+            variant=("2023" if "2023" in str(inp.get("concrete_preset", ""))
+                     else "2005"),
+            characteristic_strength_mpa=concrete.fck,
+            strength_factor=concrete.alpha_cc,
+            partial_factor=concrete.gamma_c,
+            eta_cc=inp.get("concrete_eta_cc"),
+            k_tc=inp.get("concrete_k_tc"),
+            design_strength_mpa=concrete.fcd,
+        ),
+        mild=mild,
+        prestress=prestress_materials,
+    )
+
+    prestress = capacity.locked_in_prestress_result(inp)
+    tendon_elements = list(inp.get("tendon_elements") or [])
+    prestress_rows = []
+    for value in prestress.tendons:
+        row = dataclasses.asdict(value)
+        row["material_id"] = (
+            tendon_elements[value.tendon_index].get("material_id")
+            if value.tendon_index < len(tendon_elements) else None
+        )
+        prestress_rows.append(row)
+    prestress_initial = dict(
+        elements=prestress_rows,
+        internal_resultant_origin=dict(
+            n_kn=prestress.total_n_kn,
+            mx_knm=prestress.total_mx_knm,
+            my_knm=prestress.total_my_knm,
+        ),
+        equivalent_action_origin=dict(
+            n_kn=-prestress.total_n_kn,
+            mx_knm=prestress.total_mx_knm,
+            my_knm=prestress.total_my_knm,
+        ),
+    )
+
+    descriptors = []
+    seen = set()
+    for family, elements, materials in (
+        ("mild", inp.get("bar_elements", []), inp.get("bar_materials", [])),
+        ("prestress", inp.get("tendon_elements", []),
+         inp.get("tendon_materials", [])),
+    ):
+        for element, material in zip(elements, materials):
+            material_id = str(element.get("material_id") or "-")
+            identity = (family, material_id)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            descriptors.append((material_id, family, material.Es))
+    if not descriptors:
+        if inp.get("bars") and inp.get("steel") is not None:
+            descriptors.append(("M1", "mild", inp["steel"].Es))
+        if inp.get("tendons") and inp.get("prestress") is not None:
+            descriptors.append(("P1", "prestress", inp["prestress"].Es))
+    ratios = elastic_core.calculate_modular_ratios(
+        float(inp["conc_Ec"]) * 1000.0,
+        float(inp.get("el_phi") or 0.0),
+        descriptors,
+    )
+    elastic_shared = dict(
+        concrete_modulus_mpa=ratios.concrete_modulus_mpa,
+        effective_concrete_modulus_mpa=ratios.effective_concrete_modulus_mpa,
+        creep_coefficient=ratios.creep_coefficient,
+        materials=[dataclasses.asdict(value) for value in ratios.materials],
+    )
+    return dict(
+        section_properties=section_properties,
+        material_properties=material_properties,
+        prestress_initial=prestress_initial,
+        elastic_shared=elastic_shared,
+    )
+
+
+def _elastic_solver_inputs(inp, shared_results):
+    """Prepare existing per-element elastic inputs once for every named case."""
+
+    all_laws = list(inp.get("bar_materials") or
+                    [inp["steel"]] * len(inp.get("bars", [])))
+    all_laws.extend(inp.get("tendon_materials") or [])
+    n_mult = (
+        np.asarray(
+            [material.Es / STEEL_REFERENCE_MODULUS for material in all_laws],
+            dtype=float,
+        )
+        if all_laws else None
+    )
+    prestress_rows = shared_results["prestress_initial"]["elements"]
+    prestress_stress = None
+    if prestress_rows:
+        prestress_stress = np.asarray(
+            [0.0] * len(inp.get("bars", []))
+            + [row["locked_in_stress_mpa"] * 1000.0 for row in prestress_rows],
+            dtype=float,
+        )
+    return n_mult, prestress_stress
+
+
 def _crack_dict(cw, bar_ids=None, tendon_ids=None):
     """Flatten a CrackWidthResult (or None) for the results payload."""
     if cw is None:
@@ -5074,7 +5265,14 @@ def _tube_torsion(*args, **kwargs):
     return capacity.tube_torsion(*args, **kwargs)
 
 
-def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
+def _run_single_analysis(
+    inp,
+    *,
+    reuse_plastic=None,
+    reuse_elastic=None,
+    elastic_solver_inputs=None,
+    shared_results=None,
+):
     """Run one Plastic/Elastic action pair and return the results payload.
 
     ``reuse_plastic`` / ``reuse_elastic`` let the caller pass a previously computed
@@ -5088,6 +5286,10 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         return out                          # invalid section -> nothing to run
+    if shared_results is None:
+        shared_results = _section_and_material_results(inp)
+    if elastic_solver_inputs is None:
+        elastic_solver_inputs = _elastic_solver_inputs(inp, shared_results)
     if inp["mode"] in ("Plastic", "Both") and reuse_plastic is not None:
         out["plastic"] = reuse_plastic
     elif inp["mode"] in ("Plastic", "Both"):
@@ -5206,25 +5408,20 @@ def _run_single_analysis(inp, *, reuse_plastic=None, reuse_elastic=None):
                         [inp["steel"]] * len(inp["bars"]))
         tendon_laws = list(inp.get("tendon_materials") or [])
         all_laws = bar_laws + tendon_laws
-        n_mult = (np.asarray(
-            [material.Es / STEEL_REFERENCE_MODULUS for material in all_laws],
-            dtype=float,
-        ) if all_laws else None)
-        prestress_stress = pre_resultant = None
+        n_mult, prestress_stress = elastic_solver_inputs
+        pre_resultant = None
         if inp["tendons"]:
             sec = section_core.Section.from_polygon(
                 corners=inp["outer"],
                 bars_xy_area_mm2=list(inp["bars"]) + list(inp["tendons"]),
                 holes=inp["holes"],
             )
-            nb = len(inp["bars"])
-            sig_ps = [material.Es * material.IS * 1000.0
-                      for material in tendon_laws]
-            prestress_stress = np.asarray([0.0] * nb + sig_ps, dtype=float)
-            bx, by, ba = sec.bar_arrays()
-            f = prestress_stress * ba               # kN per tendon
-            pre_resultant = (float(f.sum()), float((f * by).sum()),
-                             float((f * bx).sum()))   # N, Mx, My (kN, kNm)
+            internal = shared_results["prestress_initial"][
+                "internal_resultant_origin"
+            ]
+            pre_resultant = (
+                internal["n_kn"], internal["mx_knm"], internal["my_knm"]
+            )
         r = solve_elastic_combined(sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"],
                                    inp["nl"], p_el_s, inp["Mx_el_s"],
                                    inp["My_el_s"], inp["ns"],
@@ -5520,11 +5717,15 @@ def run_analysis(
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         return {}
+    shared_results = _section_and_material_results(inp)
+    elastic_solver_inputs = _elastic_solver_inputs(inp, shared_results)
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
         result = _run_single_analysis(
             inp,
             reuse_plastic=reuse_plastic,
             reuse_elastic=reuse_elastic,
+            elastic_solver_inputs=elastic_solver_inputs,
+            shared_results=shared_results,
         )
         if inp.get("clear_spacing_on"):
             result["clear_spacing"] = detailing.clear_spacing(
@@ -5540,10 +5741,16 @@ def run_analysis(
                 if reuse_fatigue is not None
                 else _run_fatigue_or_invalid(inp)
             )
+        result.update(shared_results)
         return result
 
     def _runner(case_inp, *, reuse_plastic=None):
-        return _run_single_analysis(case_inp, reuse_plastic=reuse_plastic)
+        return _run_single_analysis(
+            case_inp,
+            reuse_plastic=reuse_plastic,
+            elastic_solver_inputs=elastic_solver_inputs,
+            shared_results=shared_results,
+        )
 
     result = case_analysis.run_case_tables(
         inp,
@@ -5566,6 +5773,7 @@ def run_analysis(
             if reuse_fatigue is not None
             else _run_fatigue_or_invalid(inp)
         )
+    result.update(shared_results)
     return result
 
 

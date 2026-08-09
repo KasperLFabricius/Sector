@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import math
 import pathlib
 import sys
@@ -16,7 +17,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import detailing  # noqa: E402
+from sector import capacity, detailing, elastic as elastic_core, geometry  # noqa: E402
 from sector.design_standards import (  # noqa: E402
     Capability,
     DesignBasisKey,
@@ -24,7 +25,7 @@ from sector.design_standards import (  # noqa: E402
     get_design_basis,
 )
 from sector.fatigue import CONCRETE_PROJECT_MINER  # noqa: E402
-from sector.materials import Concrete, MildSteel  # noqa: E402
+from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 
 
 def _inp():
@@ -54,8 +55,8 @@ def _inp():
         "P_pl": 0.0, "Mx_pl": 100.0, "My_pl": 0.0,
         "P_el_l": 0.0, "Mx_el_l": 80.0, "My_el_l": 0.0,
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
-        "nl": 15.0, "ns": 6.0, "sls_fctm": 2.9, "sls_cw": True,
-        "conc_Ec": 33.0,
+        "nl": 15.0, "ns": 200.0 / 33.0, "el_phi": 1.475,
+        "sls_fctm": 2.9, "sls_cw": True, "conc_Ec": 33.0,
         "torsion_gamma_ct": 1.70,
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
@@ -147,7 +148,46 @@ def _out():
                         "case": "Long-term", "governing": "bar 1",
                         "unit": "mm", "calculation_state": "CALCULATED",
                     },
-                    "crack_code": "EN 1992-1-1:2005", "crack_member": None}}
+                    "crack_code": "EN 1992-1-1:2005", "crack_member": None},
+        "section_properties": {
+            "rings": [{
+                "ring_id": "outer", "role": "gross outline",
+                "area_m2": 0.06, "first_x_m3": 0.0, "first_y_m3": 0.0,
+                "second_xx_m4": 2.0e-4, "second_yy_m4": 4.5e-4,
+                "product_xy_m4": 0.0,
+            }],
+            "net_concrete": {
+                "area_m2": 0.06, "first_x_m3": 0.0, "first_y_m3": 0.0,
+                "second_xx_m4": 2.0e-4, "second_yy_m4": 4.5e-4,
+                "product_xy_m4": 0.0, "centroid_x_m": 0.0,
+                "centroid_y_m": 0.0, "ix_centroid_m4": 4.5e-4,
+                "iy_centroid_m4": 2.0e-4, "ixy_centroid_m4": 0.0,
+            },
+        },
+        "material_properties": {
+            "concrete": {"design_strength_mpa": 20.0},
+            "mild": [{"material_id": "-", "design_yield_mpa": 500.0 / 1.15}],
+            "prestress": [],
+        },
+        "prestress_initial": {
+            "elements": [],
+            "internal_resultant_origin": {"n_kn": 0.0, "mx_knm": 0.0,
+                                          "my_knm": 0.0},
+            "equivalent_action_origin": {"n_kn": 0.0, "mx_knm": 0.0,
+                                         "my_knm": 0.0},
+        },
+        "elastic_shared": {
+            "concrete_modulus_mpa": 33_000.0,
+            "effective_concrete_modulus_mpa": 33_000.0 / 2.475,
+            "creep_coefficient": 1.475,
+            "materials": [{
+                "material_id": "M1", "material_family": "mild",
+                "modulus_mpa": 200_000.0,
+                "short_term": 200_000.0 / 33_000.0,
+                "long_term": 15.0,
+            }],
+        },
+    }
 
 
 def _fatigue_report_fixture():
@@ -747,6 +787,110 @@ def test_report_pdf_generates():
     assert len(pdf) > 3000
 
 
+def test_report_shared_preparation_survives_poisoned_calculators(monkeypatch):
+    """A completed elastic payload is the report's only numerical authority."""
+
+    entry = material_catalog.default_entry(
+        "prestress", preset="Curve 1 (built-in)"
+    )
+    law = material_catalog.build_material(entry, "prestress")
+    inp = _inp()
+    inp.update({
+        "mode": "Elastic",
+        "tendons": [(0.0, -0.12, 5.0e-4)],
+        "tendon_elements": [{
+            "id": "T1", "x_mm": 0.0, "y_mm": -120.0,
+            "area_mm2": 500.0, "diameter_mm": 25.23,
+            "size_mode": "Area", "material_id": "P1",
+            "fatigue_detail_id": "",
+        }],
+        "prestress_material_catalog": {
+            "version": 1, "next_id": 2, "items": [entry],
+        },
+        "prestress_materials": {"P1": law},
+        "tendon_materials": [law],
+        "prestress": law,
+        "prestress_preset": entry["preset"],
+    })
+    locked_stress = law.Es * law.IS
+    force = locked_stress * 500.0 / 1000.0
+    out = _out()
+    out.pop("plastic")
+    out["material_properties"]["prestress"] = [{
+        "material_id": "P1",
+        "characteristic_stress_at_rupture_mpa": law.stress(
+            law.rupture_strain, design=False
+        ),
+    }]
+    out["prestress_initial"] = {
+        "elements": [{
+            "tendon_index": 0, "element_id": "T1", "material_id": "P1",
+            "initial_strain": law.IS, "modulus_mpa": law.Es,
+            "locked_in_stress_mpa": locked_stress, "area_mm2": 500.0,
+            "force_kn": force, "x_m": 0.0, "y_m": -0.12,
+            "mx_knm": force * -0.12, "my_knm": 0.0,
+        }],
+        "internal_resultant_origin": {
+            "n_kn": force, "mx_knm": force * -0.12, "my_knm": 0.0,
+        },
+        "equivalent_action_origin": {
+            "n_kn": -force, "mx_knm": force * -0.12, "my_knm": 0.0,
+        },
+    }
+    out["elastic_shared"]["materials"].append({
+        "material_id": "P1", "material_family": "prestress",
+        "modulus_mpa": law.Es, "short_term": law.Es / 33_000.0,
+        "long_term": law.Es / 33_000.0 * 2.475,
+    })
+
+    def poisoned(*_args, **_kwargs):
+        raise AssertionError("report reran an engineering calculator")
+
+    for module, names in (
+        (geometry, ("area_moment_breakdown", "area_moments",
+                    "area_moments_rings")),
+        (capacity, ("design_yield", "locked_in_prestress_result",
+                    "prestress_resultants")),
+        (elastic_core, ("calculate_modular_ratios",)),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, poisoned)
+    monkeypatch.setattr(Concrete, "fcd", property(poisoned))
+    monkeypatch.setattr(Concrete, "stress", poisoned)
+    monkeypatch.setattr(MildSteel, "stress", poisoned)
+    monkeypatch.setattr(Prestress, "stress", poisoned)
+
+    pdf = sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+    assert pdf[:4] == b"%PDF"
+    assert "Concrete section properties" in text
+    assert "Design strength" in text
+    assert "Initial prestress action" in text
+    assert "Elastic material transformation" in text
+
+
+def test_report_shared_blocks_have_no_engineering_fallbacks():
+    source = inspect.getsource(sector_report.ReportBuilder)
+    forbidden = (
+        "math.sqrt(4.0 * point[2] / math.pi)",
+        "c.fcd",
+        "st.fytk / st.gamma_y",
+        "p.stress(",
+        "material.Es / ec_mpa",
+        "ns_v * (1.0 + phi)",
+        "area_moment_breakdown(",
+        "area_moments(",
+        "area_moments_rings(",
+        "design_yield(",
+        "locked_in_prestress_result(",
+        "prestress_resultants(",
+        "calculate_modular_ratios(",
+    )
+    assert not [pattern for pattern in forbidden if pattern in source]
+
+
 def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     inp = _inp()
     inp.update({
@@ -1022,9 +1166,15 @@ def test_report_traces_multiple_materials_to_element_assignments():
         "capacity_steel_material_id": second_id,
     })
 
-    txt = _pdf_text(sector_report.build_report(
-        {}, inp, _out(), figures=False,
-    ))
+    out = _out()
+    out["material_properties"]["mild"] = [
+        {
+            "material_id": material_id,
+            "design_yield_mpa": laws[material_id].fytk / laws[material_id].gamma_y,
+        }
+        for material_id in ("M1", second_id)
+    ]
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     flat = " ".join(txt.split())
 
     assert "M1 New reinforcement" in flat
@@ -1057,7 +1207,35 @@ def test_report_describes_built_in_prestress_without_false_zero_strengths():
         "prestress_preset": entry["preset"],
     })
 
-    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+    out = _out()
+    out["material_properties"]["prestress"] = [{
+        "material_id": "P1",
+        "characteristic_stress_at_rupture_mpa": law.stress(
+            law.rupture_strain, design=False
+        ),
+    }]
+    out["prestress_initial"] = {
+        "elements": [{
+            "tendon_index": 0, "element_id": "T1", "material_id": "P1",
+            "initial_strain": law.IS, "modulus_mpa": law.Es,
+            "locked_in_stress_mpa": law.Es * law.IS,
+            "area_mm2": 500.0, "force_kn": law.Es * law.IS * 500.0 / 1000.0,
+            "x_m": 0.0, "y_m": -0.12,
+            "mx_knm": law.Es * law.IS * 500.0 / 1000.0 * -0.12,
+            "my_knm": 0.0,
+        }],
+        "internal_resultant_origin": {
+            "n_kn": law.Es * law.IS * 500.0 / 1000.0,
+            "mx_knm": law.Es * law.IS * 500.0 / 1000.0 * -0.12,
+            "my_knm": 0.0,
+        },
+        "equivalent_action_origin": {
+            "n_kn": -law.Es * law.IS * 500.0 / 1000.0,
+            "mx_knm": law.Es * law.IS * 500.0 / 1000.0 * -0.12,
+            "my_knm": 0.0,
+        },
+    }
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     flat = " ".join(txt.split())
 
     assert "Built-in fixed curve 1" in flat
@@ -1095,8 +1273,13 @@ def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(prese
         "steel": law,
     })
 
+    out = _out()
+    out["material_properties"]["mild"] = [{
+        "material_id": "M1",
+        "design_yield_mpa": law.fytk / law.gamma_y,
+    }]
     flat = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, _out(), figures=False,
+        {}, inp, out, figures=False,
     )).split())
 
     assert "no normative curve source assigned" in flat
@@ -1644,7 +1827,11 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
         ],
         "mixed": False, "limitations": [],
     }
-    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    out = {"material_properties": {
+        "concrete": {"design_strength_mpa": inp["concrete"].fcd},
+        "mild": [], "prestress": [],
+    }}
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     flat = " ".join(txt.split())
     assert "5.1.6" in txt and "5.3" in txt and "5.4" in txt
     assert "8.1.2" in txt and "8.4" in txt
@@ -1674,8 +1861,13 @@ def test_report_prints_actual_custom_half_and_double_partial_factors():
         curve=2,
     )
 
+    out = {"material_properties": {
+        "concrete": {"design_strength_mpa": inp["concrete"].fcd},
+        "mild": [{"material_id": "-", "design_yield_mpa": 250.0}],
+        "prestress": [],
+    }}
     text = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, {}, figures=False)
+        sector_report.build_report({}, inp, out, figures=False)
     ).split())
 
     assert "60.000 MPa" in text
@@ -1691,7 +1883,11 @@ def test_report_ec2_2023_k_tc_one_states_the_full_assumption():
     inp["concrete_eta_cc"] = 1.0
     inp["concrete_k_tc"] = 1.0
     inp["mild_preset"] = "DS/EN 1992-1-1:2023"
-    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    out = {"material_properties": {
+        "concrete": {"design_strength_mpa": inp["concrete"].fcd},
+        "mild": [], "prestress": [],
+    }}
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     assert "28 days" in txt and "56 days" in txt
     assert "at least 3 months" in txt
     assert "National" in txt and "Annex" in txt

@@ -737,6 +737,8 @@ Scope:
 Acceptance:
 
 - the report performs no engineering recomputation;
+- optional constitutive-law figures may sample the selected law solely to draw
+  the curve; plot samples never become calculation evidence or report operands;
 - independent benchmarks reproduce each intermediate at full precision;
 - rounding happens only at publication;
 - a missing required result field or substitution fails closed;

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
 
@@ -36,6 +37,46 @@ class CapacityMethodError(CapacityInputError):
 
 class CapacityResultError(ArithmeticError):
     """A retained low-level solver violated its published result contract."""
+
+
+@dataclass(frozen=True, slots=True)
+class LockedInPrestressTendon:
+    """One tendon's locked-in elastic prestress contribution.
+
+    ``tendon_index`` is the zero-based solver index. Coordinates are in metres,
+    area in mm2, strain is dimensionless, modulus and stress are in MPa, force
+    is in kN, and moment contributions are in kNm.
+    """
+
+    tendon_index: int
+    element_id: str
+    initial_strain: float
+    modulus_mpa: float
+    locked_in_stress_mpa: float
+    area_mm2: float
+    force_kn: float
+    x_m: float
+    y_m: float
+    mx_knm: float
+    my_knm: float
+
+
+@dataclass(frozen=True, slots=True)
+class LockedInPrestressResult:
+    """Locked-in tendon forces and their resultants about a declared origin."""
+
+    origin_x_m: float
+    origin_y_m: float
+    tendons: tuple[LockedInPrestressTendon, ...]
+    total_n_kn: float
+    total_mx_knm: float
+    total_my_knm: float
+
+    @property
+    def resultants(self) -> tuple[float, float, float]:
+        """Return the historical ``(N, Mx, My)`` tuple in kN/kNm."""
+
+        return self.total_n_kn, self.total_mx_knm, self.total_my_knm
 
 
 def plastic_capacity_at_angle(*args, **kwargs):
@@ -214,24 +255,86 @@ def design_yield(material):
     return material.fytk / gamma_y if gamma_y > 0.0 else material.fytk
 
 
-def prestress_resultants(inp, cx=0.0, cy=0.0):
-    """Return locked-in tendon ``(P, Mx, My)`` about ``(cx, cy)`` in kN/kNm."""
+def _tendon_element_id(elements: object, index: int) -> str:
+    """Return retained UI identity without making it a solver prerequisite."""
+
+    fallback = f"tendon {index + 1}"
+    if not isinstance(elements, (list, tuple)) or index >= len(elements):
+        return fallback
+    element = elements[index]
+    if not isinstance(element, Mapping):
+        return fallback
+    element_id = element.get("id")
+    if type(element_id) is not str or not element_id.strip():
+        return fallback
+    return element_id.strip()
+
+
+def locked_in_prestress_result(
+    inp,
+    cx=0.0,
+    cy=0.0,
+) -> LockedInPrestressResult:
+    """Retain the existing locked-in tendon calculation for publication.
+
+    The calculation is unchanged: ``sigma_p0 = E_p * IS``,
+    ``P_i = sigma_p0 * A_i``, ``Mx_i = P_i * (y_i - cy)`` and
+    ``My_i = P_i * (x_i - cx)``. Only the accepted per-tendon terms and totals
+    are retained; there is no solver history or generic trace representation.
+    """
+
     prestress = inp.get("prestress")
     tendons = inp.get("tendons")
     materials = inp.get("tendon_materials")
     if not tendons or (prestress is None and not materials):
-        return 0.0, 0.0, 0.0
+        return LockedInPrestressResult(
+            origin_x_m=cx,
+            origin_y_m=cy,
+            tendons=(),
+            total_n_kn=0.0,
+            total_mx_knm=0.0,
+            total_my_knm=0.0,
+        )
     materials = materials or [prestress] * len(tendons)
     if len(materials) != len(tendons):
         raise ValueError("one prestressing material is required per tendon")
-    forces = [material.Es * material.IS * 1000.0 * tendon[2] / 1.0e6
-              for material, tendon in zip(materials, tendons)]
-    axial = sum(forces)
-    mx = sum(force * (tendon[1] - cy)
-             for force, tendon in zip(forces, tendons))
-    my = sum(force * (tendon[0] - cx)
-             for force, tendon in zip(forces, tendons))
-    return axial, mx, my
+    forces = [
+        material.Es * material.IS * 1000.0 * tendon[2] / 1.0e6
+        for material, tendon in zip(materials, tendons)
+    ]
+    element_records = inp.get("tendon_elements")
+    states = tuple(
+        LockedInPrestressTendon(
+            tendon_index=index,
+            element_id=_tendon_element_id(element_records, index),
+            initial_strain=material.IS,
+            modulus_mpa=material.Es,
+            locked_in_stress_mpa=material.Es * material.IS,
+            area_mm2=tendon[2],
+            force_kn=force,
+            x_m=tendon[0],
+            y_m=tendon[1],
+            mx_knm=force * (tendon[1] - cy),
+            my_knm=force * (tendon[0] - cx),
+        )
+        for index, (material, tendon, force) in enumerate(
+            zip(materials, tendons, forces)
+        )
+    )
+    return LockedInPrestressResult(
+        origin_x_m=cx,
+        origin_y_m=cy,
+        tendons=states,
+        total_n_kn=sum(forces),
+        total_mx_knm=sum(state.mx_knm for state in states),
+        total_my_knm=sum(state.my_knm for state in states),
+    )
+
+
+def prestress_resultants(inp, cx=0.0, cy=0.0):
+    """Return locked-in tendon ``(P, Mx, My)`` about ``(cx, cy)`` in kN/kNm."""
+
+    return locked_in_prestress_result(inp, cx, cy).resultants
 
 
 def prestress_axial(inp):

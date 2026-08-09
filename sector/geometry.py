@@ -89,6 +89,28 @@ class AreaMoments:
         return (self.sx / self.area, self.sy / self.area)
 
 
+@dataclass(frozen=True, slots=True)
+class AreaMomentBreakdown:
+    """Final section properties needed to publish the geometry calculation.
+
+    ``ring_moments`` retains the signed contribution from each input ring in
+    input order, while ``total`` is the authoritative net result from
+    :func:`area_moments_rings`.  The centroidal fields use the same monomial
+    naming as :class:`AreaMoments` and are transferred from the global origin
+    with the parallel-axis relations.
+
+    This is deliberately a compact final-state result.  It does not retain
+    polygon edges or any calculation history.
+    """
+
+    ring_moments: tuple[AreaMoments, ...]
+    total: AreaMoments
+    centroid: tuple[float, float]
+    centroidal_sxx: float
+    centroidal_syy: float
+    centroidal_sxy: float
+
+
 def _as_array(verts: Vertices) -> np.ndarray:
     arr = np.asarray(verts, dtype=float)
     if arr.size == 0:
@@ -693,6 +715,28 @@ def area_moments_rings(rings: Iterable[Vertices]) -> AreaMoments:
     for ring in rings:
         total = total + area_moments(ring)
     return total
+
+
+def area_moment_breakdown(rings: Iterable[Vertices]) -> AreaMomentBreakdown:
+    """Return signed ring contributions and final net section properties.
+
+    The established :func:`area_moments` and :func:`area_moments_rings`
+    kernels remain the only source of polygon moments.  A zero-net-area set of
+    rings has no defined centroid and therefore raises :class:`ValueError`,
+    consistently with :attr:`AreaMoments.centroid`.
+    """
+    ring_list = tuple(rings)
+    ring_moments = tuple(area_moments(ring) for ring in ring_list)
+    total = area_moments_rings(ring_list)
+    cx, cy = total.centroid
+    return AreaMomentBreakdown(
+        ring_moments=ring_moments,
+        total=total,
+        centroid=(cx, cy),
+        centroidal_sxx=total.sxx - total.area * cx * cx,
+        centroidal_syy=total.syy - total.area * cy * cy,
+        centroidal_sxy=total.sxy - total.area * cx * cy,
+    )
 
 
 def _segment_distance(px, py, ax, ay, bx, by) -> float:

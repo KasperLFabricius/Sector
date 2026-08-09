@@ -74,6 +74,12 @@ derive an omitted operand from rounded values or choose a governing candidate.
 If a required value is absent, publication fails closed or states that the
 calculation is not available; it does not invent the value.
 
+Optional constitutive-law figures are a narrowly bounded presentation exception:
+they may sample the already selected law only to draw its curve. Those plot
+samples are not calculation results, numerical evidence or a substitute for a
+retained worked-calculation value. Figures may not select a branch, change a
+result or supply an operand to report text or equations.
+
 ## Textbook publication sequence
 
 For every enabled existing calculation the report presents, as applicable:

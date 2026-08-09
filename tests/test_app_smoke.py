@@ -696,6 +696,151 @@ def test_calculate_elastic_produces_bar_stresses():
     res = at.session_state["results"]
     assert "elastic" in res
     assert len(res["elastic"]["total"]) > 0
+    shared_keys = {
+        "section_properties", "material_properties",
+        "prestress_initial", "elastic_shared",
+    }
+    assert shared_keys <= set(res)
+    assert res["section_properties"]["net_concrete"]["area_m2"] > 0.0
+    assert res["material_properties"]["concrete"]["design_strength_mpa"] > 0.0
+    assert res["elastic_shared"]["concrete_modulus_mpa"] > 0.0
+    assert res["elastic_shared"]["materials"]
+    for family in ("plastic_cases", "elastic_cases"):
+        for entry in res.get(family, []):
+            assert not shared_keys & set(entry.get("results") or {})
+
+
+def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
+    monkeypatch,
+):
+    """Named cases share one compact preparation result, never a trace."""
+
+    import importlib
+    import sector_app
+    from sector.materials import Concrete, MildSteel, Prestress
+    from sector.section import Section
+
+    case_analysis_core = importlib.import_module("case_analysis")
+    capacity_core = importlib.import_module("sector.capacity")
+    elastic_core = importlib.import_module("sector.elastic")
+    geometry_core = importlib.import_module("sector.geometry")
+
+    concrete = Concrete(fck=30.0, gamma_c=1.5, curve=2)
+    steel = MildSteel(
+        fytk=500.0, fyck=500.0, futk=550.0, eut=0.05,
+        gamma_y=1.15, curve=2,
+    )
+    prestress = Prestress(curve=1, IS=0.005, gamma_y=1.15)
+    inp = {
+        "mode": "Elastic",
+        "section": Section.from_polygon(
+            [(-0.10, -0.15), (0.10, -0.15),
+             (0.10, 0.15), (-0.10, 0.15)],
+            bars_xy_area_mm2=[(0.0, -0.12, 500.0)],
+        ),
+        "geometry_error": None, "void_error": None,
+        "steel_error": None, "material_error": None,
+        "outer": [(-0.10, -0.15), (0.10, -0.15),
+                  (0.10, 0.15), (-0.10, 0.15)],
+        "holes": [],
+        "bars": [(0.0, -0.12, 500.0)],
+        "bar_elements": [{"id": "R1", "material_id": "M1"}],
+        "bar_materials": [steel], "mild_materials": {"M1": steel},
+        "steel": steel, "capacity_steel_material_id": "M1",
+        "tendons": [(0.0, -0.10, 500.0)],
+        "tendon_elements": [{"id": "T1", "material_id": "P1"}],
+        "tendon_materials": [prestress],
+        "prestress_materials": {"P1": prestress},
+        "prestress": prestress,
+        "concrete": concrete, "concrete_preset": "EN 1992-1-1:2005",
+        "concrete_eta_cc": 1.0, "concrete_k_tc": 1.0,
+        "conc_Ec": 33.0, "el_phi": 1.5,
+        "plastic_cases": [], "elastic_cases": [],
+        "shear_on": False, "torsion_on": False,
+        "clear_spacing_on": False, "fatigue_on": False,
+    }
+    counts = {
+        "geometry": 0, "fcd": 0, "fyd": 0, "prestress_law": 0,
+        "prestress": 0, "ratios": 0,
+    }
+
+    def counted(name, function):
+        def wrapper(*args, **kwargs):
+            counts[name] += 1
+            return function(*args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(
+        geometry_core,
+        "area_moment_breakdown",
+        counted("geometry", geometry_core.area_moment_breakdown),
+    )
+    monkeypatch.setattr(
+        Concrete,
+        "fcd",
+        property(counted("fcd", Concrete.fcd.fget)),
+    )
+    monkeypatch.setattr(
+        capacity_core,
+        "design_yield",
+        counted("fyd", capacity_core.design_yield),
+    )
+    monkeypatch.setattr(
+        Prestress,
+        "stress",
+        counted("prestress_law", Prestress.stress),
+    )
+    monkeypatch.setattr(
+        capacity_core,
+        "locked_in_prestress_result",
+        counted("prestress", capacity_core.locked_in_prestress_result),
+    )
+    monkeypatch.setattr(
+        elastic_core,
+        "calculate_modular_ratios",
+        counted("ratios", elastic_core.calculate_modular_ratios),
+    )
+
+    calls = []
+
+    def fake_single(
+        case_inp,
+        *,
+        reuse_plastic=None,
+        reuse_elastic=None,
+        elastic_solver_inputs=None,
+        shared_results=None,
+    ):
+        calls.append((case_inp["case_id"], elastic_solver_inputs, shared_results))
+        return {"elastic": {"case_id": case_inp["case_id"]}}
+
+    def fake_cases(base, runner, **_kwargs):
+        first = runner(dict(base, case_id="EL-A"))
+        second = runner(dict(base, case_id="EL-B"))
+        return {
+            "elastic_cases": [
+                {"name": "EL-A", "results": first},
+                {"name": "EL-B", "results": second},
+            ],
+        }
+
+    monkeypatch.setattr(sector_app, "_run_single_analysis", fake_single)
+    monkeypatch.setattr(case_analysis_core, "run_case_tables", fake_cases)
+
+    result = sector_app.run_analysis(inp)
+    assert counts == {
+        "geometry": 1, "fcd": 1, "fyd": 1, "prestress_law": 1,
+        "prestress": 1, "ratios": 1,
+    }
+    assert calls[0][1] is calls[1][1]
+    assert calls[0][2] is calls[1][2]
+    shared_keys = {
+        "section_properties", "material_properties",
+        "prestress_initial", "elastic_shared",
+    }
+    assert shared_keys <= set(result)
+    for entry in result["elastic_cases"]:
+        assert not shared_keys & set(entry["results"])
 
 
 def test_combined_elastic_reports_four_columns():

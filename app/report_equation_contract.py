@@ -113,6 +113,92 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("f<sub>ytk</sub>", "characteristic reinforcement strength", "MPa"),
         ("gamma<sub>y</sub>", "partial factor for reinforcement strength"),
     ),
+    ("geometry.concrete.net-area", None): _result(
+        "A<sub>c</sub>", "m2",
+        ("A<sub>c</sub>", "net concrete area", "m2"),
+        ("A<sub>j</sub>", "signed area contribution of ring j", "m2"),
+    ),
+    ("geometry.concrete.centroid-x", None): _result(
+        "x<sub>c</sub>", "m",
+        ("x<sub>c</sub>", "net concrete centroid x-coordinate", "m"),
+        ("S<sub>x</sub>", "first moment integral of x", "m3"),
+        ("A<sub>c</sub>", "net concrete area", "m2"),
+    ),
+    ("geometry.concrete.centroid-y", None): _result(
+        "y<sub>c</sub>", "m",
+        ("y<sub>c</sub>", "net concrete centroid y-coordinate", "m"),
+        ("S<sub>y</sub>", "first moment integral of y", "m3"),
+        ("A<sub>c</sub>", "net concrete area", "m2"),
+    ),
+    ("geometry.concrete.centroidal-ix", None): _result(
+        "I<sub>x,c</sub>", "m4",
+        ("I<sub>x,c</sub>", "centroidal second moment about x", "m4"),
+        ("S<sub>yy</sub>", "origin second-moment integral of y squared", "m4"),
+        ("A<sub>c</sub>", "net concrete area", "m2"),
+        ("y<sub>c</sub>", "net concrete centroid y-coordinate", "m"),
+    ),
+    ("geometry.concrete.centroidal-iy", None): _result(
+        "I<sub>y,c</sub>", "m4",
+        ("I<sub>y,c</sub>", "centroidal second moment about y", "m4"),
+        ("S<sub>xx</sub>", "origin second-moment integral of x squared", "m4"),
+        ("A<sub>c</sub>", "net concrete area", "m2"),
+        ("x<sub>c</sub>", "net concrete centroid x-coordinate", "m"),
+    ),
+    ("geometry.concrete.centroidal-ixy", None): _result(
+        "I<sub>xy,c</sub>", "m4",
+        ("I<sub>xy,c</sub>", "centroidal product moment", "m4"),
+        ("S<sub>xy</sub>", "origin product-moment integral", "m4"),
+        ("A<sub>c</sub>", "net concrete area", "m2"),
+        ("x<sub>c</sub>", "net concrete centroid x-coordinate", "m"),
+        ("y<sub>c</sub>", "net concrete centroid y-coordinate", "m"),
+    ),
+    ("elastic.concrete.effective-modulus", None): _result(
+        "E<sub>c,eff</sub>", "MPa",
+        ("E<sub>c,eff</sub>", "effective long-term concrete modulus", "MPa"),
+        ("E<sub>c</sub>", "entered concrete elastic modulus", "MPa"),
+        ("phi", "entered creep coefficient"),
+    ),
+    ("elastic.modular-ratio.short", None): _result(
+        "n<sub>s,i</sub>", "dimensionless",
+        ("n<sub>s,i</sub>", "short-term modular ratio for material i"),
+        ("E<sub>i</sub>", "material-i elastic modulus", "MPa"),
+        ("E<sub>c</sub>", "entered concrete elastic modulus", "MPa"),
+    ),
+    ("elastic.modular-ratio.long", None): _result(
+        "n<sub>l,i</sub>", "dimensionless",
+        ("n<sub>l,i</sub>", "long-term modular ratio for material i"),
+        ("n<sub>s,i</sub>", "short-term modular ratio for material i"),
+        ("phi", "entered creep coefficient"),
+    ),
+    ("prestress.initial-stress", None): _result(
+        "sigma<sub>p,0,i</sub>", "MPa",
+        ("sigma<sub>p,0,i</sub>", "locked-in initial stress of tendon i", "MPa"),
+        ("E<sub>p,i</sub>", "elastic modulus of tendon i", "MPa"),
+        ("eps<sub>p,0,i</sub>", "entered initial strain of tendon i"),
+    ),
+    ("prestress.element-force", None): _result(
+        "F<sub>p,0,i</sub>", "kN",
+        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("sigma<sub>p,0,i</sub>", "locked-in initial stress of tendon i", "MPa"),
+        ("A<sub>p,i</sub>", "area of tendon i", "mm2"),
+    ),
+    ("prestress.resultant-n", None): _result(
+        "N<sub>p,0</sub>", "kN",
+        ("N<sub>p,0</sub>", "locked-in tendon tensile resultant", "kN"),
+        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+    ),
+    ("prestress.resultant-mx", None): _result(
+        "M<sub>p,x,0</sub>", "kNm",
+        ("M<sub>p,x,0</sub>", "locked-in tendon moment resultant about x", "kNm"),
+        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("y<sub>i</sub>", "tendon-i y-coordinate about the declared origin", "m"),
+    ),
+    ("prestress.resultant-my", None): _result(
+        "M<sub>p,y,0</sub>", "kNm",
+        ("M<sub>p,y,0</sub>", "locked-in tendon moment resultant about y", "kNm"),
+        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("x<sub>i</sub>", "tendon-i x-coordinate about the declared origin", "m"),
+    ),
     ("basis.plastic.governing-curvature", None): _relation(
         ("kappa<sub>u</sub>", "governing ultimate curvature", "1/mm"),
         ("eps<sub>cu2</sub>", "ultimate concrete compressive strain"),
@@ -558,8 +644,8 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 62:
-        raise RuntimeError(f"Expected 62 report equation contracts, got {len(_CONTRACTS)}.")
+    if len(_CONTRACTS) != 76:
+        raise RuntimeError(f"Expected 76 report equation contracts, got {len(_CONTRACTS)}.")
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):
             raise RuntimeError(f"Invalid equation-contract key: {key!r}.")

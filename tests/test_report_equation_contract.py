@@ -42,11 +42,25 @@ EXPECTED_CONTRACT_KEYS = {
     ("detailing.minimum.area-2005", None),
     ("detailing.minimum.bending-2023", None),
     ("detailing.minimum.tension-2023", None),
+    ("elastic.concrete.effective-modulus", None),
+    ("elastic.modular-ratio.long", None),
+    ("elastic.modular-ratio.short", None),
+    ("geometry.concrete.centroid-x", None),
+    ("geometry.concrete.centroid-y", None),
+    ("geometry.concrete.centroidal-ix", None),
+    ("geometry.concrete.centroidal-ixy", None),
+    ("geometry.concrete.centroidal-iy", None),
+    ("geometry.concrete.net-area", None),
     ("materials.concrete.curve-2", None),
     ("materials.concrete.fcd", "2005"),
     ("materials.concrete.fcd", "2023"),
     ("materials.steel.fyd-N", None),
     ("plastic.worked.axial-equilibrium", None),
+    ("prestress.element-force", None),
+    ("prestress.initial-stress", None),
+    ("prestress.resultant-mx", None),
+    ("prestress.resultant-my", None),
+    ("prestress.resultant-n", None),
     ("shear.2005.stress-basic", None),
     ("shear.2005.stress-minimum", None),
     ("shear.2005.utilisation", None),
@@ -154,7 +168,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 61
+    assert len(calls) == 75
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -165,7 +179,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 62
+    assert len(catalogue_pairs) == 76
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -182,12 +196,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 42,
+        "numerical": 56,
         "none": 20,
     }
-    assert publication_role_counts == {"calculation": 55, "theory": 7}
+    assert publication_role_counts == {"calculation": 69, "theory": 7}
     # One extra contract is the second runtime branch of shear.chord.demand.
-    assert result_counts == {True: 46, False: 16}
+    assert result_counts == {True: 60, False: 16}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key

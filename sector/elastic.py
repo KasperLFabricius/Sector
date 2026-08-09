@@ -35,6 +35,8 @@ these map to the tension-positive resultant targets the strain plane must meet.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -45,6 +47,73 @@ from .section import Section
 # Treat |value| below this (in the load-consistent stress*area sense) as zero
 # when deciding convergence of the resultant residual.
 _DEFAULT_TOL = 1.0e-9
+
+
+@dataclass(frozen=True, slots=True)
+class ModularRatioMaterial:
+    """One material's short- and long-term modular ratios."""
+
+    material_id: str
+    material_family: str
+    modulus_mpa: float
+    short_term: float
+    long_term: float
+
+
+@dataclass(frozen=True, slots=True)
+class ModularRatioResult:
+    """Inputs and calculated ratios for one concrete reference modulus."""
+
+    concrete_modulus_mpa: float
+    creep_coefficient: float
+    effective_concrete_modulus_mpa: float
+    materials: tuple[ModularRatioMaterial, ...]
+
+
+def _positive_finite_modulus(value: float, label: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError(f"{label} must be a positive finite number")
+    return number
+
+
+def calculate_modular_ratios(
+    concrete_modulus_mpa: float,
+    creep_coefficient: float,
+    materials: Iterable[tuple[str, str, float]],
+) -> ModularRatioResult:
+    """Calculate ``n_s = E_i/E_c`` and ``n_l = n_s(1 + phi)``.
+
+    Material descriptors are ordered ``(material_id, material_family,
+    modulus_mpa)`` triples. Their order and identifiers are retained verbatim.
+    """
+
+    concrete_modulus = _positive_finite_modulus(
+        concrete_modulus_mpa, "concrete modulus"
+    )
+    creep = float(creep_coefficient)
+    if not math.isfinite(creep) or creep < 0.0:
+        raise ValueError("creep coefficient must be a non-negative finite number")
+
+    calculated: list[ModularRatioMaterial] = []
+    for material_id, material_family, modulus_mpa in materials:
+        modulus = _positive_finite_modulus(modulus_mpa, "material modulus")
+        short_term = modulus / concrete_modulus
+        calculated.append(
+            ModularRatioMaterial(
+                material_id=material_id,
+                material_family=material_family,
+                modulus_mpa=modulus,
+                short_term=short_term,
+                long_term=short_term * (1.0 + creep),
+            )
+        )
+    return ModularRatioResult(
+        concrete_modulus_mpa=concrete_modulus,
+        creep_coefficient=creep,
+        effective_concrete_modulus_mpa=concrete_modulus / (1.0 + creep),
+        materials=tuple(calculated),
+    )
 
 
 @dataclass

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import math
 import pathlib
 from types import SimpleNamespace
@@ -83,6 +84,99 @@ def test_capacity_module_has_no_ui_dependency():
         if isinstance(node, ast.ImportFrom)
     )
     assert not any(name == "streamlit" or name.startswith("streamlit.") for name in imports)
+
+
+def _prestress_law(*, modulus_mpa=200_000.0, initial_strain=0.005):
+    return SimpleNamespace(Es=modulus_mpa, IS=initial_strain)
+
+
+def test_locked_in_prestress_result_retains_exact_tendon_terms_and_totals():
+    first = _prestress_law()
+    second = _prestress_law(modulus_mpa=180_000.0, initial_strain=0.003)
+    inp = {
+        "prestress": first,
+        "tendons": [(0.0, -0.40, 1000.0), (0.10, -0.20, 500.0)],
+        "tendon_materials": [first, second],
+        "tendon_elements": [{"id": "PT-A"}, {"id": "PT-B"}],
+    }
+
+    result = capacity.locked_in_prestress_result(inp, cx=0.02, cy=-0.05)
+    forces = (
+        first.Es * first.IS * 1000.0 * 1000.0 / 1.0e6,
+        second.Es * second.IS * 1000.0 * 500.0 / 1.0e6,
+    )
+
+    assert dataclasses.is_dataclass(result)
+    assert not hasattr(result, "__dict__")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.total_n_kn = 0.0
+    assert result.origin_x_m == 0.02
+    assert result.origin_y_m == -0.05
+    assert [(row.tendon_index, row.element_id) for row in result.tendons] == [
+        (0, "PT-A"),
+        (1, "PT-B"),
+    ]
+    assert result.tendons[0].initial_strain == first.IS
+    assert result.tendons[0].modulus_mpa == first.Es
+    assert result.tendons[0].locked_in_stress_mpa == first.Es * first.IS
+    assert result.tendons[0].area_mm2 == 1000.0
+    assert result.tendons[0].x_m == 0.0
+    assert result.tendons[0].y_m == -0.40
+    assert [row.force_kn for row in result.tendons] == pytest.approx(forces)
+    assert result.total_n_kn == sum(row.force_kn for row in result.tendons)
+    assert result.total_mx_knm == sum(row.mx_knm for row in result.tendons)
+    assert result.total_my_knm == sum(row.my_knm for row in result.tendons)
+    assert capacity.prestress_resultants(inp, 0.02, -0.05) == result.resultants
+
+
+@pytest.mark.parametrize(
+    "inp",
+    [
+        {"prestress": _prestress_law(), "tendons": []},
+        {
+            "prestress": None,
+            "tendons": [(0.0, -0.40, 1000.0)],
+            "tendon_materials": [],
+        },
+    ],
+)
+def test_locked_in_prestress_result_preserves_empty_state(inp):
+    result = capacity.locked_in_prestress_result(inp, cx=0.12, cy=-0.34)
+
+    assert result.origin_x_m == 0.12
+    assert result.origin_y_m == -0.34
+    assert result.tendons == ()
+    assert result.resultants == (0.0, 0.0, 0.0)
+    assert capacity.prestress_resultants(inp, 0.12, -0.34) == result.resultants
+
+
+def test_locked_in_prestress_result_translates_moments_with_origin():
+    material = _prestress_law()
+    inp = {
+        "prestress": material,
+        "tendons": [(-0.15, -0.30, 750.0), (0.20, 0.10, 500.0)],
+    }
+    at_zero = capacity.locked_in_prestress_result(inp)
+    shifted = capacity.locked_in_prestress_result(inp, cx=0.04, cy=-0.07)
+
+    assert [row.element_id for row in shifted.tendons] == [
+        "tendon 1",
+        "tendon 2",
+    ]
+    assert shifted.total_n_kn == at_zero.total_n_kn
+    assert shifted.total_mx_knm == pytest.approx(
+        at_zero.total_mx_knm - shifted.total_n_kn * shifted.origin_y_m
+    )
+    assert shifted.total_my_knm == pytest.approx(
+        at_zero.total_my_knm - shifted.total_n_kn * shifted.origin_x_m
+    )
+    for original, translated in zip(at_zero.tendons, shifted.tendons):
+        assert translated.mx_knm == pytest.approx(
+            original.mx_knm - original.force_kn * shifted.origin_y_m
+        )
+        assert translated.my_knm == pytest.approx(
+            original.my_knm - original.force_kn * shifted.origin_x_m
+        )
 
 
 def test_capacity_method_registries_preserve_exact_identity_and_order():

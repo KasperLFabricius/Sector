@@ -1775,6 +1775,7 @@ class ReportBuilder:
                                  tendon_ids=[item.get("id") for item in inp.get("tendon_elements", [])])
         self._fig(fig, 150, 100)
         self._geometry_tables()
+        self._concrete_section_properties_block()
         # Materials are reported only when the section actually uses them: mild
         # steel when there are bars, prestress when there are tendons.
         start = len(self.flow)
@@ -1791,6 +1792,7 @@ class ReportBuilder:
             self._h2("Prestressing steel")
             self._prestress_block()
             self._keep_from(start)
+            self._prestress_initial_block()
         # Loads and settings each start on a predictable, dedicated page. Their
         # data tables retain the universal split contract rather than entering one
         # combined KeepTogether block.
@@ -1826,8 +1828,12 @@ class ReportBuilder:
                     {
                         "id": f"{prefix}{index}", "x_mm": point[0] * _MM,
                         "y_mm": point[1] * _MM, "area_mm2": point[2],
-                        "diameter_mm": math.sqrt(4.0 * point[2] / math.pi),
-                        "size_mode": "Area", "material_id": "-",
+                        # Legacy tuple-only inputs do not retain the entered bar
+                        # diameter.  The report must not reconstruct one from
+                        # area and present it as calculation evidence.
+                        "diameter_mm": None,
+                        "size_mode": "Area (diameter not retained)",
+                        "material_id": "-",
                         "fatigue_detail_id": "",
                     }
                     for index, point in enumerate(points, 1)
@@ -1857,8 +1863,121 @@ class ReportBuilder:
         reinforcement_tables("Tendons", inp.get("tendons", []),
                              inp.get("tendon_elements", []), "P")
 
+    def _concrete_section_properties_block(self):
+        """Publish exact signed-ring section properties from retained results."""
+
+        properties = self._base_out.get("section_properties") or {}
+        rings = properties.get("rings") or []
+        net = properties.get("net_concrete") or {}
+        if not rings or not net:
+            return
+        self._h2("Concrete section properties")
+        self._small(
+            "The outer ring is positive and each clockwise void ring is negative. "
+            "The signed ring contributions therefore sum directly to the net "
+            "concrete section."
+        )
+        rows = [[
+            "Ring", "Role", "A", "S<sub>x</sub>", "S<sub>y</sub>",
+            "S<sub>xx</sub>", "S<sub>yy</sub>", "S<sub>xy</sub>",
+        ]]
+        for ring in rings:
+            rows.append([
+                ring["ring_id"], ring["role"], _fmt(ring["area_m2"], 6),
+                _fmt(ring["first_x_m3"], 6), _fmt(ring["first_y_m3"], 6),
+                _fmt(ring["second_xx_m4"], 6),
+                _fmt(ring["second_yy_m4"], 6),
+                _fmt(ring["product_xy_m4"], 6),
+            ])
+        rows.append([
+            "Net", "signed sum", _fmt(net["area_m2"], 6),
+            _fmt(net["first_x_m3"], 6), _fmt(net["first_y_m3"], 6),
+            _fmt(net["second_xx_m4"], 6),
+            _fmt(net["second_yy_m4"], 6),
+            _fmt(net["product_xy_m4"], 6),
+        ])
+        self._table(
+            rows,
+            [17 * mm, 26 * mm, 18 * mm, 20 * mm, 20 * mm,
+             22 * mm, 22 * mm, 22 * mm],
+            font=6.3,
+            keep=False,
+            repeat_cols=2,
+        )
+        area_terms = " + ".join(_fmt(row["area_m2"], 6) for row in rings)
+        self._formula(
+            "A<sub>c</sub> = &#931; A<sub>j</sub>",
+            equation_key="geometry.concrete.net-area",
+            ref="Sector exact signed polygon integration by Green's theorem.",
+            subst=f"= {area_terms}",
+            result=f"= {_fmt(net['area_m2'], 6)} m<super>2</super>",
+        )
+        self._formula(
+            "x<sub>c</sub> = S<sub>x</sub> / A<sub>c</sub>",
+            equation_key="geometry.concrete.centroid-x",
+            ref="Centroid definition for the retained signed polygon moments.",
+            subst=(f"= {_fmt(net['first_x_m3'], 6)} / "
+                   f"{_fmt(net['area_m2'], 6)}"),
+            result=f"= {_fmt(net['centroid_x_m'], 6)} m",
+            references=("geometry.concrete.net-area",),
+        )
+        self._formula(
+            "y<sub>c</sub> = S<sub>y</sub> / A<sub>c</sub>",
+            equation_key="geometry.concrete.centroid-y",
+            ref="Centroid definition for the retained signed polygon moments.",
+            subst=(f"= {_fmt(net['first_y_m3'], 6)} / "
+                   f"{_fmt(net['area_m2'], 6)}"),
+            result=f"= {_fmt(net['centroid_y_m'], 6)} m",
+            references=("geometry.concrete.net-area",),
+        )
+        self._formula(
+            "I<sub>x,c</sub> = S<sub>yy</sub> - A<sub>c</sub> "
+            "y<sub>c</sub><super>2</super>",
+            equation_key="geometry.concrete.centroidal-ix",
+            ref="Parallel-axis transfer of the retained origin moment.",
+            subst=(f"= {_fmt(net['second_yy_m4'], 6)} - "
+                   f"{_fmt(net['area_m2'], 6)} &#183; "
+                   f"{_fmt(net['centroid_y_m'], 6)}<super>2</super>"),
+            result=f"= {_fmt(net['ix_centroid_m4'], 6)} m<super>4</super>",
+            references=("geometry.concrete.net-area",
+                        "geometry.concrete.centroid-y"),
+        )
+        self._formula(
+            "I<sub>y,c</sub> = S<sub>xx</sub> - A<sub>c</sub> "
+            "x<sub>c</sub><super>2</super>",
+            equation_key="geometry.concrete.centroidal-iy",
+            ref="Parallel-axis transfer of the retained origin moment.",
+            subst=(f"= {_fmt(net['second_xx_m4'], 6)} - "
+                   f"{_fmt(net['area_m2'], 6)} &#183; "
+                   f"{_fmt(net['centroid_x_m'], 6)}<super>2</super>"),
+            result=f"= {_fmt(net['iy_centroid_m4'], 6)} m<super>4</super>",
+            references=("geometry.concrete.net-area",
+                        "geometry.concrete.centroid-x"),
+        )
+        self._formula(
+            "I<sub>xy,c</sub> = S<sub>xy</sub> - A<sub>c</sub> "
+            "x<sub>c</sub> y<sub>c</sub>",
+            equation_key="geometry.concrete.centroidal-ixy",
+            ref="Parallel-axis transfer of the retained origin product moment.",
+            subst=(f"= {_fmt(net['product_xy_m4'], 6)} - "
+                   f"{_fmt(net['area_m2'], 6)} &#183; "
+                   f"{_fmt(net['centroid_x_m'], 6)} &#183; "
+                   f"{_fmt(net['centroid_y_m'], 6)}"),
+            result=f"= {_fmt(net['ixy_centroid_m4'], 6)} m<super>4</super>",
+            references=("geometry.concrete.net-area",
+                        "geometry.concrete.centroid-x",
+                        "geometry.concrete.centroid-y"),
+        )
+
     def _concrete_block(self):
         c = self.inp["concrete"]
+        prepared = (
+            (self._base_out.get("material_properties") or {}).get("concrete")
+        )
+        fcd = (
+            prepared["design_strength_mpa"]
+            if prepared is not None else None
+        )
         preset = str(self.inp.get("concrete_preset", ""))
         is_2023 = "2023" in preset
         rows = [["Parameter", "Symbol", "Value"],
@@ -1882,10 +2001,13 @@ class ReportBuilder:
                  ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} permille"],
                  ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} permille"],
                  ["Exponent", "n", _fmt(c.n, 3)],
-                 ["Design strength", "f<sub>cd</sub>", f"{_fmt(c.fcd, 3)} MPa"],
         ])
+        if fcd is not None:
+            rows.append(
+                ["Design strength", "f<sub>cd</sub>", f"{_fmt(fcd, 3)} MPa"]
+            )
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
-        if is_2023:
+        if is_2023 and fcd is not None:
             self._formula(
                 "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
                 "f<sub>ck</sub> / gamma<sub>c</sub>",
@@ -1895,7 +2017,7 @@ class ReportBuilder:
                 subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
                       f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
                       f"{_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
-                result=f"= {_fmt(c.fcd, 3)} MPa")
+                result=f"= {_fmt(fcd, 3)} MPa")
             if math.isclose(float(self.inp.get("concrete_k_tc") or 0.0), 1.0):
                 self._small(
                     "<b>Applicability assumption:</b> k<sub>tc</sub> = 1.00 was "
@@ -1909,7 +2031,7 @@ class ReportBuilder:
                     "k<sub>tc</sub> = 0.85 is the general / other-case value stated "
                     "in EN 1992-1-1:2023 5.1.6(1)."
                 )
-        else:
+        elif fcd is not None:
             self._formula(
                 "f<sub>cd</sub> = alpha<sub>cc</sub> &#183; f<sub>ck</sub> / "
                 "gamma<sub>c</sub>",
@@ -1918,7 +2040,7 @@ class ReportBuilder:
                 ref="DS/EN 1992-1-1 &#167;3.1.6, Eq (3.15)",
                 subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / "
                       f"{_fmt(c.gamma_c, 3)}",
-                result=f"= {_fmt(c.fcd, 3)} MPa")
+                result=f"= {_fmt(fcd, 3)} MPa")
         if c.curve == 2:
             self._formula(
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
@@ -1965,6 +2087,13 @@ class ReportBuilder:
         self._small("Partial factors are the final effective user inputs; Sector "
                     "applies no hidden control-, construction- or consequence-"
                     "category multiplier.")
+        prepared = {
+            str(item.get("material_id")): item
+            for item in (
+                (self._base_out.get("material_properties") or {}).get("mild")
+                or []
+            )
+        }
         for material_index, item in enumerate(records):
             if self.figures and material_index:
                 self.flow.append(NotAtTopPageBreak())
@@ -1977,7 +2106,11 @@ class ReportBuilder:
             self._p(f"<b>{title}</b>")
             if item.get("description"):
                 self._small(_html_escape(item["description"]))
-            fyd = st.fytk / st.gamma_y if st.gamma_y else st.fytk
+            retained = prepared.get(str(material_id))
+            fyd = (
+                retained["design_yield_mpa"]
+                if retained is not None else None
+            )
             rows = [["Parameter", "Symbol", "Value"],
                     ["Preset identity", "-", _html_escape(
                         material_catalog.mild_preset_classification(
@@ -1999,17 +2132,23 @@ class ReportBuilder:
                     ["Ultimate partial factor", "gamma<sub>u</sub>", _fmt(st.gamma_u, 3)],
                     ["Modulus factor", "gamma<sub>E</sub>", _fmt(st.gamma_E, 3)],
                     ["Active in compression", "-",
-                     "yes" if st.active_in_compression else "no"],
-                    ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]]
+                     "yes" if st.active_in_compression else "no"]]
+            if fyd is not None:
+                rows.append(
+                    ["Design yield", "f<sub>yd</sub>", f"{_fmt(fyd, 3)} MPa"]
+                )
             self._table(rows, [60 * mm, 35 * mm, 50 * mm])
             source_ref = _steel_standard_reference(item.get("preset"))
-            self._formula("f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
-                          equation_key=f"materials.steel.fyd-{material_index + 1}",
-                          ref=(source_ref or
-                               "User-defined or generic constitutive law; no "
-                               "normative curve source assigned."),
-                          subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
-                          result=f"= {_fmt(fyd, 3)} MPa")
+            if fyd is not None:
+                self._formula(
+                    "f<sub>yd</sub> = f<sub>ytk</sub> / gamma<sub>y</sub>",
+                    equation_key=f"materials.steel.fyd-{material_index + 1}",
+                    ref=(source_ref or
+                         "User-defined or generic constitutive law; no "
+                         "normative curve source assigned."),
+                    subst=f"= {_fmt(st.fytk, 3)} / {_fmt(st.gamma_y, 3)}",
+                    result=f"= {_fmt(fyd, 3)} MPa",
+                )
             if self.figures:
                 self._fig(viz.steel_curve_figure(
                     st, title=f"{material_id} - {item.get('name', '')}"
@@ -2039,6 +2178,13 @@ class ReportBuilder:
                             _html_escape(item.get("preset", "-")), count])
         self._table(summary, [18 * mm, 45 * mm, 78 * mm, 25 * mm],
                     font=7.0, keep=False, repeat_cols=3)
+        prepared = {
+            str(item.get("material_id")): item
+            for item in (
+                (self._base_out.get("material_properties") or {}).get("prestress")
+                or []
+            )
+        }
         for material_index, item in enumerate(records):
             if self.figures and material_index:
                 self.flow.append(NotAtTopPageBreak())
@@ -2054,16 +2200,15 @@ class ReportBuilder:
                     ["Initial prestrain", "eps<sub>p</sub><super>(0)</super>",
                      f"{_fmt(p.IS*1000, 3)} permille"]]
             if p.curve in (1, 2, 3, 4, 5):
-                characteristic_at_rupture = p.stress(
-                    p.rupture_strain, design=False
+                characteristic_at_rupture = (
+                    prepared.get(str(material_id), {}).get(
+                        "characteristic_stress_at_rupture_mpa"
+                    )
                 )
                 rows.extend([
                     ["Curve definition", "-", f"Built-in fixed curve {p.curve}"],
                     ["Curve source", "-", "Sector fixed polynomial; normative "
                      "source not assigned"],
-                    ["Characteristic stress at rupture strain",
-                     "sigma<sub>p</sub>(eps<sub>ut</sub>)",
-                     f"{_fmt(characteristic_at_rupture, 3)} MPa"],
                     ["Elastic-analysis modulus", "E<sub>p</sub>",
                      f"{_fmt(p.Es/1000, 1)} GPa"],
                     ["Fixed rupture strain", "eps<sub>ut</sub>",
@@ -2071,6 +2216,13 @@ class ReportBuilder:
                     ["Design factor on fixed workline", "gamma<sub>y</sub>",
                      _fmt(p.gamma_y, 3)],
                 ])
+                if characteristic_at_rupture is not None:
+                    rows.insert(
+                        3,
+                        ["Characteristic stress at rupture strain",
+                         "sigma<sub>p</sub>(eps<sub>ut</sub>)",
+                         f"{_fmt(characteristic_at_rupture, 3)} MPa"],
+                    )
             else:
                 rows.extend([
                     ["Proof strength", "f<sub>p0.1k</sub>",
@@ -2094,6 +2246,121 @@ class ReportBuilder:
                     p, title=f"{material_id} - {item.get('name', '')}"
                 ), 130, 80)
             self._keep_from(block_start)
+
+    def _prestress_initial_block(self):
+        """Publish the retained strain-to-resultant prestress calculation."""
+
+        payload = self._base_out.get("prestress_initial") or {}
+        elements = payload.get("elements") or []
+        if not elements:
+            return
+        self._h2("Initial prestress action")
+        state_rows = [[
+            "Tendon", "Material", "E<sub>p</sub>", "eps<sub>p,0</sub>",
+            "sigma<sub>p,0</sub>", "A<sub>p</sub>", "F<sub>p,0</sub>",
+        ]]
+        moment_rows = [[
+            "Tendon", "x (m)", "y (m)",
+            "M<sub>p,x,0</sub> (kNm)", "M<sub>p,y,0</sub> (kNm)",
+        ]]
+        for row in elements:
+            state_rows.append([
+                row["element_id"], row.get("material_id") or "-",
+                _fmt(row["modulus_mpa"], 1),
+                _fmt(row["initial_strain"], 6),
+                _fmt(row["locked_in_stress_mpa"], 3),
+                _fmt(row["area_mm2"], 1), _fmt(row["force_kn"], 3),
+            ])
+            moment_rows.append([
+                row["element_id"],
+                _fmt(row["x_m"], 4), _fmt(row["y_m"], 4),
+                _fmt(row["mx_knm"], 3), _fmt(row["my_knm"], 3),
+            ])
+        self._table(
+            state_rows,
+            [20 * mm, 22 * mm, 23 * mm, 24 * mm, 27 * mm, 22 * mm,
+             27 * mm],
+            font=6.8,
+            keep=False,
+            repeat_cols=2,
+        )
+        self._table(
+            moment_rows,
+            [25 * mm, 28 * mm, 28 * mm, 42 * mm, 42 * mm],
+            font=7.0,
+            keep=False,
+            repeat_cols=1,
+        )
+
+        def labelled(values, formatter):
+            return "; ".join(
+                f"{row['element_id']}: {formatter(row)}" for row in values
+            )
+
+        self._formula(
+            "sigma<sub>p,0,i</sub> = E<sub>p,i</sub> "
+            "eps<sub>p,0,i</sub>",
+            equation_key="prestress.initial-stress",
+            ref="Sector locked-in prestress initialisation from entered tendon strain.",
+            subst=labelled(
+                elements,
+                lambda row: (f"{_fmt(row['modulus_mpa'], 1)} &#183; "
+                             f"{_fmt(row['initial_strain'], 6)}"),
+            ),
+            result=("= " + labelled(
+                elements,
+                lambda row: _fmt(row["locked_in_stress_mpa"], 3),
+            ) + " MPa"),
+        )
+        self._formula(
+            "F<sub>p,0,i</sub> = sigma<sub>p,0,i</sub> "
+            "A<sub>p,i</sub> / 1000",
+            equation_key="prestress.element-force",
+            ref="Stress in MPa times area in mm2, converted to kN.",
+            subst=labelled(
+                elements,
+                lambda row: (f"{_fmt(row['locked_in_stress_mpa'], 3)} &#183; "
+                             f"{_fmt(row['area_mm2'], 1)} / 1000"),
+            ),
+            result=("= " + labelled(
+                elements, lambda row: _fmt(row["force_kn"], 3)
+            ) + " kN"),
+            references=("prestress.initial-stress",),
+        )
+        internal = payload["internal_resultant_origin"]
+        force_terms = " + ".join(_fmt(row["force_kn"], 3) for row in elements)
+        mx_terms = " + ".join(
+            f"{_fmt(row['force_kn'], 3)} &#183; {_fmt(row['y_m'], 4)}"
+            for row in elements
+        )
+        my_terms = " + ".join(
+            f"{_fmt(row['force_kn'], 3)} &#183; {_fmt(row['x_m'], 4)}"
+            for row in elements
+        )
+        self._formula(
+            "N<sub>p,0</sub> = &#931; F<sub>p,0,i</sub>",
+            equation_key="prestress.resultant-n",
+            ref="Tendon internal tensile-force resultant about the section origin.",
+            subst=f"= {force_terms}",
+            result=f"= {_fmt(internal['n_kn'], 3)} kN",
+            references=("prestress.element-force",),
+        )
+        self._formula(
+            "M<sub>p,x,0</sub> = &#931; F<sub>p,0,i</sub> y<sub>i</sub>",
+            equation_key="prestress.resultant-mx",
+            ref="Tendon internal moment resultant about the section x-axis.",
+            subst=f"= {mx_terms}",
+            result=f"= {_fmt(internal['mx_knm'], 3)} kNm",
+            references=("prestress.element-force",),
+        )
+        self._formula(
+            "M<sub>p,y,0</sub> = &#931; F<sub>p,0,i</sub> x<sub>i</sub>",
+            equation_key="prestress.resultant-my",
+            ref="Tendon internal moment resultant about the section y-axis.",
+            subst=f"= {my_terms}",
+            result=f"= {_fmt(internal['my_knm'], 3)} kNm",
+            references=("prestress.element-force",),
+        )
 
     def _loads_block(self):
         inp = self._base_inp
@@ -2401,39 +2668,23 @@ class ReportBuilder:
                  if inp.get("detailing_include_tendons") else "no"],
             ])
         elastic_results = self._result_values("elastic")
+        elastic_shared = self._base_out.get("elastic_shared") or {}
         if elastic_results:
             # Modular ratios are derived from the elastic moduli and creep, not entered;
             # document the inputs (Ec, phi) and the derived mild + prestress ratios.
-            if inp.get("conc_Ec") is not None:
+            if elastic_shared:
                 rows.append(["Concrete elastic modulus E<sub>c</sub>",
-                             f"{_fmt(inp.get('conc_Ec'), 3)} GPa"])
-            if inp.get("el_phi") is not None:
+                             f"{_fmt(elastic_shared.get('concrete_modulus_mpa'), 1)} MPa"])
+                rows.append(["Effective long-term modulus E<sub>c,eff</sub>",
+                             f"{_fmt(elastic_shared.get('effective_concrete_modulus_mpa'), 1)} MPa"])
                 rows.append(["Creep coefficient &#966; (long-term)",
-                             _fmt(inp.get("el_phi"), 3)])
-            ec_mpa = float(inp.get("conc_Ec") or 0.0) * 1000.0
-            phi = float(inp.get("el_phi") or 0.0)
-            material_pairs = []
-            material_pairs.extend(
-                (element.get("material_id"), material)
-                for element, material in zip(inp.get("bar_elements", []),
-                                             inp.get("bar_materials", []))
-            )
-            material_pairs.extend(
-                (element.get("material_id"), material)
-                for element, material in zip(inp.get("tendon_elements", []),
-                                             inp.get("tendon_materials", []))
-            )
-            if not material_pairs:
-                if inp.get("bars") and inp.get("steel") is not None:
-                    material_pairs.append(("M1", inp["steel"]))
-                if inp.get("tendons") and inp.get("prestress") is not None:
-                    material_pairs.append(("P1", inp["prestress"]))
-            for material_id, material in dict(material_pairs).items():
-                ns_v = material.Es / ec_mpa if ec_mpa > 0.0 else None
-                nl_v = ns_v * (1.0 + phi) if ns_v is not None else None
+                             _fmt(elastic_shared.get("creep_coefficient"), 3)])
+            for material in elastic_shared.get("materials") or []:
                 rows.append([
-                    f"{material_id} modular ratios n<sub>s</sub> / n<sub>l</sub>",
-                    f"{_fmt(ns_v, 3)} / {_fmt(nl_v, 3)}",
+                    f"{material.get('material_id')} modular ratios "
+                    "n<sub>s</sub> / n<sub>l</sub>",
+                    f"{_fmt(material.get('short_term'), 3)} / "
+                    f"{_fmt(material.get('long_term'), 3)}",
                 ])
             rows.append(["Mean tensile strength f<sub>ctm</sub>",
                          f"{_fmt(inp.get('sls_fctm'), 3)} MPa"])
@@ -2535,10 +2786,62 @@ class ReportBuilder:
                     ),
                 ])
         self._table(rows, [110 * mm, 55 * mm], keep=False)
+        if elastic_results and elastic_shared:
+            start = len(self.flow)
+            self._elastic_shared_calculation_block(elastic_shared)
+            self._keep_from(start)
         if fatigue_rows:
             self.flow.append(NotAtTopPageBreak())
             self._h2("Grouped fatigue settings")
             self._table(fatigue_rows, [110 * mm, 55 * mm], keep=False)
+
+    def _elastic_shared_calculation_block(self, payload):
+        """Publish effective modulus and per-material modular ratios."""
+
+        materials = payload.get("materials") or []
+        ec = payload["concrete_modulus_mpa"]
+        phi = payload["creep_coefficient"]
+        self._h2("Elastic material transformation")
+        self._formula(
+            "E<sub>c,eff</sub> = E<sub>c</sub> / (1 + phi)",
+            equation_key="elastic.concrete.effective-modulus",
+            ref="Sector transformed-section long-term modulus relation.",
+            subst=f"= {_fmt(ec, 1)} / (1 + {_fmt(phi, 3)})",
+            result=(f"= {_fmt(payload['effective_concrete_modulus_mpa'], 1)} "
+                    "MPa"),
+        )
+        if not materials:
+            return
+
+        def rows_text(formatter):
+            return "; ".join(
+                f"{row['material_id']}: {formatter(row)}" for row in materials
+            )
+
+        self._formula(
+            "n<sub>s,i</sub> = E<sub>i</sub> / E<sub>c</sub>",
+            equation_key="elastic.modular-ratio.short",
+            ref="Sector transformed-section short-term modular ratio.",
+            subst=rows_text(
+                lambda row: f"{_fmt(row['modulus_mpa'], 1)} / {_fmt(ec, 1)}"
+            ),
+            result=("= " + rows_text(
+                lambda row: _fmt(row["short_term"], 4)
+            )),
+        )
+        self._formula(
+            "n<sub>l,i</sub> = n<sub>s,i</sub> (1 + phi)",
+            equation_key="elastic.modular-ratio.long",
+            ref="Sector transformed-section long-term modular ratio.",
+            subst=rows_text(
+                lambda row: (f"{_fmt(row['short_term'], 4)} &#183; "
+                             f"(1 + {_fmt(phi, 3)})")
+            ),
+            result=("= " + rows_text(
+                lambda row: _fmt(row["long_term"], 4)
+            )),
+            references=("elastic.modular-ratio.short",),
+        )
 
     def _theory(self):
         self._h1("Basis of analysis")
@@ -4730,14 +5033,19 @@ class ReportBuilder:
                 f"x<sub>na</sub> = {_fmt(el['na_x']*_MM, 3)} mm, "
                 f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm."
             )
-        ps = el.get("prestress")
-        if ps is not None:
-            # ps[0] is the tendon tension resultant; the prestress precompresses the
-            # section, so as an axial action (tension-positive) it is a compression.
+        ps = (
+            (self._base_out.get("prestress_initial") or {}).get(
+                "equivalent_action_origin"
+            )
+        )
+        if ps is not None and self.inp.get("tendons"):
             self._p(f"The tendon prestress is applied from its initial strain (so N "
                     f"is the external force only): equivalent prestress action "
-                    f"N = {_fmt(-ps[0], 3)} kN, M<sub>x</sub> = {_fmt(ps[1], 3)} kNm, "
-                    f"M<sub>y</sub> = {_fmt(ps[2], 3)} kNm (N tension-positive).")
+                    f"N = {_fmt(ps['n_kn'], 3)} kN, "
+                    f"M<sub>x</sub> = {_fmt(ps['mx_knm'], 3)} kNm, "
+                    f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kNm "
+                    "(N tension-positive; calculation shown in Section and "
+                    "materials).")
         checks = el.get("stress_outputs") or {}
         if checks:
             self._h2("Elastic stress outputs")

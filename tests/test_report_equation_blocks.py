@@ -72,7 +72,7 @@ def test_every_contract_publishes_one_complete_ordered_role_block(
     kwargs = {}
     if contract.substitution_role == "numerical":
         kwargs["subst"] = "2 x 3"
-    elif contract.substitution_role == "applicability-note":
+    if contract.applicability_note_required:
         kwargs["note"] = "This branch is selected by the retained method."
     if contract.expects_result:
         kwargs["result"] = "candidate publication value"
@@ -88,7 +88,7 @@ def test_every_contract_publishes_one_complete_ordered_role_block(
     expected_roles = ["identity", "symbolic-expression"]
     if contract.substitution_role == "numerical":
         expected_roles.append("numerical-substitution")
-    elif contract.substitution_role == "applicability-note":
+    if contract.applicability_note_required:
         expected_roles.append("applicability-note")
     if contract.expects_result:
         expected_roles.append("result")
