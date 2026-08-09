@@ -3570,31 +3570,31 @@ class ReportBuilder:
         self._plastic_worked(pl)
 
     def _plastic_worked(self, pl):
-        # Show the state relevant to the check: when a utilisation was computed, the
-        # angle governing the applied load's direction (so the worked strain plane and
-        # equilibrium describe the section under that load); for a capacity-only run
-        # there is no applied direction, so fall back to the strongest envelope point.
-        gov_i = pl.get("util_gov")
         pts = pl["points"]
-        if gov_i is not None and 0 <= gov_i < len(pts):
-            gov = pts[gov_i]
-            heading = "Governing case worked (utilisation direction)"
-        else:
-            gov = max(pts, key=lambda p: math.hypot(p["Mx"], p["My"]))
-            heading = "Governing case worked (peak resultant moment)"
-        P = self.inp.get("P_pl", 0.0) or 0.0   # applied axial, tension-positive
-        Fc = gov["comp_force"]                  # concrete compression resultant (positive)
-        T = Fc + P                              # tension resultant (solver: Fc - T = -N)
+        worked_index = pl.get("worked_point_index")
+        if not isinstance(worked_index, int) or not 0 <= worked_index < len(pts):
+            self._h2("Worked plastic calculation unavailable")
+            self._small(
+                "The completed payload does not retain the selected worked-point "
+                "identity. Sector does not select or recalculate one in the report."
+            )
+            return
+        gov = pts[worked_index]
+        basis = str(pl.get("worked_point_basis") or "accepted solver state")
+        heading = f"Worked plastic calculation ({basis})"
+        state_rows = presentation.plastic_state_rows(gov)
         start = len(self.flow)
         self._h2(heading)
-        self._p(f"Neutral-axis angle = {_fmt(gov['V'],0)}&#176;. The extreme "
-                f"concrete fibre is at the ultimate strain; the curvature scales "
-                f"the strain plane to that limit.")
-        comp = (bool(self.inp.get("bars"))
-                and any(getattr(material, "active_in_compression", False)
-                        for material in (self.inp.get("bar_materials")
-                                         or [self.inp.get("steel")]))
-                and "eps_s_comp" in gov)
+        self._p(
+            f"Selected sweep point {worked_index + 1} of {len(pts)}: neutral-axis "
+            f"angle = {_fmt(gov['V'], 0)}&#176;. Internal axial forces use the "
+            "plastic solver's compression-positive convention; the entered "
+            "N<sub>Ed</sub> is tension-positive and is negated at the solver boundary."
+        )
+        comp = any(
+            row.get("element_type") == "Bar" and row.get("state") == "Compression"
+            for row in state_rows["elements"]
+        )
         steel_rows = ([["Most-tensile bar strain", "eps<sub>s,t</sub>",
                         f"{_fmt(gov['eps_s'], 3)} %"],
                        ["Most-compressed bar strain", "eps<sub>s,c</sub>",
@@ -3607,7 +3607,8 @@ class ReportBuilder:
                 ["Extreme concrete strain", "eps<sub>c</sub>", f"{_fmt(gov['eps_c'], 3)} %"],
                 *steel_rows,
                 ["Curvature", "kappa", f"{_fmt(gov['kappa'],4)} 1/m"],
-                ["Concrete compression resultant", "F<sub>c</sub>", f"{_fmt(Fc, 3)} kN"],
+                ["Compression resultant", "F<sub>comp</sub>",
+                 f"{_fmt(gov['comp_force'], 3)} kN"],
                 ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM, 3)} mm"],
                 ["Lever components", "d<sub>x</sub>, d<sub>y</sub>",
                  f"{_fmt(gov['dx']*_MM, 3)}, {_fmt(gov['dy']*_MM, 3)} mm"],
@@ -3615,17 +3616,193 @@ class ReportBuilder:
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
         self._keep_from(start)
-        self._h2("Axial equilibrium check")
-        self._formula("T - F<sub>c</sub> = N",
-                      equation_key="plastic.worked.axial-equilibrium",
-                      subst=f"{_fmt(T, 3)} - {_fmt(Fc, 3)} = {_fmt(T-Fc, 3)} kN",
-                      result=f"applied N = {_fmt(P, 3)} kN  (residual "
-                             f"{_fmt(abs(T - Fc - P),3)} kN)")
-        self._small("The tension resultant T = F<sub>c</sub> + N balances the "
-                    "section (N tension-positive); the moments above are the "
-                    "resultants about the origin.")
-        evidence = presentation.plastic_state_evidence(self.inp, gov)
-        concrete_rows = evidence["concrete"]
+        plane_values = (
+            gov.get("strain_offset"), gov.get("strain_gradient_x"),
+            gov.get("strain_gradient_y"),
+        )
+        reference_rows = state_rows["concrete"] or state_rows["elements"]
+        if all(value is not None for value in plane_values) and reference_rows:
+            reference = reference_rows[0]
+            self._h2("Accepted strain plane")
+            self._formula(
+                "eps<sub>sec</sub>(x,y) = eps<sub>0</sub> + "
+                "g<sub>x</sub>x + g<sub>y</sub>y",
+                equation_key="plastic.worked.strain-plane",
+                ref="Sector plane-section kinematics at the retained accepted state.",
+                subst=(
+                    f"= {_fmt(plane_values[0], 8)} + "
+                    f"{_fmt(plane_values[1], 8)} &#183; "
+                    f"{_fmt(reference['x_mm'] / _MM, 6)} + "
+                    f"{_fmt(plane_values[2], 8)} &#183; "
+                    f"{_fmt(reference['y_mm'] / _MM, 6)}"
+                ),
+                result=(
+                    f"eps<sub>sec</sub> = "
+                    f"{_fmt(reference['section_strain_permille'], 6)} permille "
+                    "(compression positive)"
+                ),
+            )
+
+        candidates = gov.get("curvature_candidates") or []
+        selected = gov.get("curvature_selection") or {}
+        if candidates and selected:
+            self._h2("Ultimate-curvature candidates")
+            mode_labels = {
+                "concrete_crushing": "Concrete crushing",
+                "bar_tension_rupture": "Bar tension rupture",
+                "bar_compression_rupture": "Bar compression rupture",
+                "tendon_tension_rupture": "Tendon tension rupture",
+            }
+            candidate_rows = [[
+                "Candidate", "Element", "Strain limit", "Distance to NA",
+                "Curvature", "Selected",
+            ]]
+            for candidate in candidates:
+                candidate_rows.append([
+                    mode_labels.get(candidate["mode"], candidate["mode"]),
+                    candidate.get("element_id") or "extreme concrete fibre",
+                    _fmt(candidate["strain_limit"] * 1000.0, 6),
+                    _fmt(candidate["distance_from_na_m"] * _MM, 4),
+                    _fmt(candidate["curvature_per_m"], 8),
+                    "yes" if candidate.get("selected") else "",
+                ])
+            self._table(
+                candidate_rows,
+                [37 * mm, 31 * mm, 27 * mm, 28 * mm, 28 * mm, 17 * mm],
+                font=6.7,
+                keep=False,
+            )
+            governing_candidate = next(
+                (candidate for candidate in candidates if candidate.get("selected")),
+                None,
+            )
+            if governing_candidate is not None:
+                self._formula(
+                    "kappa<sub>i</sub> = eps<sub>lim,i</sub> / d<sub>i</sub>",
+                    equation_key="plastic.worked.curvature-candidate",
+                    ref="Sector retained ultimate-strain candidate at the accepted depth.",
+                    subst=(
+                        f"= {_fmt(governing_candidate['strain_limit'], 9)} / "
+                        f"{_fmt(governing_candidate['distance_from_na_m'], 9)} m"
+                    ),
+                    result=(
+                        f"kappa<sub>i</sub> = "
+                        f"{_fmt(governing_candidate['curvature_per_m'], 9)} 1/m"
+                    ),
+                )
+                self._formula(
+                    "kappa<sub>u</sub> = min(kappa<sub>c</sub>, "
+                    "kappa<sub>s,i</sub>, kappa<sub>p,j</sub>)",
+                    equation_key="plastic.worked.curvature-selection",
+                    ref="Sector governing-curvature minimum; exact candidate operands above.",
+                    subst=("= min(" + ", ".join(
+                        _fmt(candidate["curvature_per_m"], 9)
+                        for candidate in candidates
+                    ) + ") 1/m"),
+                    result=(
+                        f"kappa<sub>u</sub> = "
+                        f"{_fmt(selected.get('curvature_per_m'), 9)} 1/m; "
+                        f"{mode_labels.get(selected.get('mode'), selected.get('mode'))}"
+                    ),
+                    references=("plastic.worked.curvature-candidate",),
+                )
+
+        search_keys = (
+            "search_lower_depth",
+            "search_upper_depth",
+            "search_lower_axial",
+            "search_upper_axial",
+            "search_iterations",
+            "compression_depth",
+            "axial_requested",
+            "axial_achieved",
+            "axial_residual",
+            "axial_tolerance",
+        )
+        if all(gov.get(key) is not None for key in search_keys):
+            self._h2("Compression-depth solution")
+            search_rows = [["Quantity", "Value"], [
+                "Initial depth bracket",
+                f"{_fmt(gov['search_lower_depth'] * _MM, 6)} to "
+                f"{_fmt(gov['search_upper_depth'] * _MM, 6)} mm",
+            ], [
+                "Axial resultants at initial bracket",
+                f"{_fmt(gov['search_lower_axial'], 6)} to "
+                f"{_fmt(gov['search_upper_axial'], 6)} kN (compression +)",
+            ], [
+                "Bisection iterations", str(gov["search_iterations"]),
+            ], [
+                "Accepted compression depth",
+                f"{_fmt(gov['compression_depth'] * _MM, 6)} mm",
+            ], [
+                "Requested / achieved internal N",
+                f"{_fmt(gov['axial_requested'], 6)} / "
+                f"{_fmt(gov['axial_achieved'], 6)} kN",
+            ], [
+                "Residual / tolerance",
+                f"{_fmt(gov['axial_residual'], 9)} / "
+                f"{_fmt(gov['axial_tolerance'], 9)} kN",
+            ], [
+                "Accepted state",
+                "yes" if gov.get("axial_reachable") and gov.get("converged") else "no",
+            ]]
+            self._table(search_rows, [75 * mm, 85 * mm], keep=False)
+            self._small(
+                "Only the initial bracket, accepted state and final residual are "
+                "shown; the internal bisection sequence and integration bands are "
+                "not published."
+            )
+        else:
+            self._h2("Compression-depth solution unavailable")
+            self._small(
+                "The completed payload does not contain the full accepted bracket, "
+                "depth and residual summary. Sector does not reconstruct those "
+                "solver values in the report."
+            )
+
+        resultant_keys = (
+            "concrete_force", "bar_force", "tendon_force",
+            "concrete_mx", "bar_mx", "tendon_mx",
+            "concrete_my", "bar_my", "tendon_my",
+            "axial_achieved", "axial_requested", "axial_residual", "Mx", "My",
+        )
+        if all(gov.get(key) is not None for key in resultant_keys):
+            self._h2("Accepted section resultants")
+            self._formula(
+                "N<sub>int</sub> = F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub>",
+                equation_key="plastic.worked.axial-equilibrium",
+                subst=(f"= {_fmt(gov['concrete_force'], 6)} + "
+                       f"{_fmt(gov['bar_force'], 6)} + "
+                       f"{_fmt(gov['tendon_force'], 6)} kN"),
+                result=(f"N<sub>int</sub> = {_fmt(gov['axial_achieved'], 6)} kN; "
+                        f"target = {_fmt(gov['axial_requested'], 6)} kN; "
+                        f"residual = {_fmt(gov['axial_residual'], 9)} kN"),
+            )
+            self._formula(
+                "M<sub>x</sub> = M<sub>c,x</sub> + M<sub>s,x</sub> + M<sub>p,x</sub>",
+                equation_key="plastic.worked.moment-x",
+                subst=(f"= {_fmt(gov['concrete_mx'], 6)} + "
+                       f"{_fmt(gov['bar_mx'], 6)} + "
+                       f"{_fmt(gov['tendon_mx'], 6)} kNm"),
+                result=f"M<sub>x</sub> = {_fmt(gov['Mx'], 6)} kNm",
+            )
+            self._formula(
+                "M<sub>y</sub> = M<sub>c,y</sub> + M<sub>s,y</sub> + M<sub>p,y</sub>",
+                equation_key="plastic.worked.moment-y",
+                subst=(f"= {_fmt(gov['concrete_my'], 6)} + "
+                       f"{_fmt(gov['bar_my'], 6)} + "
+                       f"{_fmt(gov['tendon_my'], 6)} kNm"),
+                result=f"M<sub>y</sub> = {_fmt(gov['My'], 6)} kNm",
+            )
+        else:
+            self._h2("Accepted section resultants unavailable")
+            self._small(
+                "The completed payload does not retain every concrete, mild-steel "
+                "and tendon resultant. Sector does not reconstruct material or "
+                "section response in the report."
+            )
+
+        concrete_rows = state_rows["concrete"]
         if concrete_rows:
             self._h2("Governing concrete corner response")
             rows = [[
@@ -3653,9 +3830,22 @@ class ReportBuilder:
                 "Coordinates in mm; strain in permille; design stress in MPa. "
                 "Strain and stress are tension-positive."
             )
-        element_rows = evidence["elements"]
+        element_rows = state_rows["elements"]
         if element_rows:
             self._h2("Governing reinforcement and tendon response")
+            worked_element = element_rows[0]
+            self._formula(
+                "F<sub>i</sub> = sigma<sub>i</sub>A<sub>i</sub>/1000",
+                equation_key="plastic.worked.element-force",
+                ref="Retained accepted material response and entered element area.",
+                subst=(
+                    f"= {_fmt(worked_element['stress_mpa'], 6)} MPa &#183; "
+                    f"{_fmt(worked_element['area_mm2'], 6)} mm<super>2</super> / 1000"
+                ),
+                result=(f"F<sub>{_html_escape(worked_element['element_id'])}</sub> = "
+                        f"{_fmt(worked_element['force_kn'], 6)} kN "
+                        "(tension positive)"),
+            )
             rows = [[
                 "Element", "Material", "State", "x", "y", "Area", "Strain",
                 "Design stress", "Force",
@@ -3688,23 +3878,29 @@ class ReportBuilder:
         # Section state at the governing angle (neutral axis + compression zone).
         if self.figures:
             inp = self.inp
-            hp = evidence["halfplane"]
+            hp = state_rows["halfplane"]
             na = viz.na_line_at(hp[0], hp[1], hp[2], inp.get("extent", 1.0))
             zones = viz.compression_zones(inp.get("outer", []), hp)
             bars = inp.get("bars", [])
             tendons = inp.get("tendons", [])
-            bar_colors = viz.halfplane_bar_colors(
-                bars, hp, kappa=gov["kappa"],
+            bar_states = [
+                row for row in element_rows if row.get("element_type") == "Bar"
+            ]
+            tendon_states = [
+                row for row in element_rows if row.get("element_type") == "Tendon"
+            ]
+            state_colour = lambda row: (
+                viz.BAR_TENSION
+                if row.get("strain_permille", 0.0) >= 0.0
+                else viz.BAR_COMPRESSION
             )
-            tendon_colors = viz.halfplane_bar_colors(
-                tendons,
-                hp,
-                kappa=gov["kappa"],
-                prestrain=(
-                    [material.IS for material in inp.get("tendon_materials", [])]
-                    if inp.get("tendon_materials") else
-                    float(getattr(inp.get("prestress"), "IS", 0.0))
-                ),
+            bar_colors = (
+                [state_colour(row) for row in bar_states]
+                if len(bar_states) == len(bars) else None
+            )
+            tendon_colors = (
+                [state_colour(row) for row in tendon_states]
+                if len(tendon_states) == len(tendons) else None
             )
             self._h2("Section state at the governing angle")
             self._fig(viz.section_figure(
@@ -5008,6 +5204,278 @@ class ReportBuilder:
                         + solid_note)
         self._crushing_interaction(t)
 
+    def _elastic_state_tables(self, title, state):
+        """Publish one retained Ec=1 state without repeating the elastic solve."""
+
+        self._h2(title)
+        plane = state["raw_stress_plane"]
+        self._table(
+            [["Coefficient", "Value", "Unit"],
+             ["sigma0", _fmt(plane["sigma0_kpa"], 9), "kN/m2"],
+             ["d sigma / dx", _fmt(plane["gradient_x_kpa_per_m"], 9), "kN/m3"],
+             ["d sigma / dy", _fmt(plane["gradient_y_kpa_per_m"], 9), "kN/m3"]],
+            [55 * mm, 60 * mm, 45 * mm],
+        )
+        equilibrium = state["equilibrium"]
+        matrix = equilibrium["matrix"]
+        matrix_rows = [[
+            "Resultant row", "sigma0 coefficient", "d sigma/dx coefficient",
+            "d sigma/dy coefficient",
+        ]]
+        for label, row in zip(("N", "Mx", "My"), matrix):
+            matrix_rows.append([label, *[_fmt(value, 9) for value in row]])
+        self._table(
+            matrix_rows,
+            [31 * mm, 43 * mm, 43 * mm, 43 * mm],
+            font=7.0,
+            keep=False,
+        )
+        self._small(
+            "Final transformed equilibrium matrix J. For the N row the columns "
+            "have units m2, m3, m3; for the Mx/My rows they have units m3, m4, "
+            "m4. The raw plane uses kN/m2 and kN/m3, giving N in kN and moments "
+            "in kNm."
+        )
+        self._table(
+            [["Resultant", "Target", "Internal", "Residual", "Unit"],
+             ["N", _fmt(equilibrium["target"]["n"], 9),
+              _fmt(equilibrium["internal"]["n"], 9),
+              _fmt(equilibrium["residual"]["n"], 9), "kN"],
+             ["Mx", _fmt(equilibrium["target"]["mx"], 9),
+              _fmt(equilibrium["internal"]["mx"], 9),
+              _fmt(equilibrium["residual"]["mx"], 9), "kNm"],
+             ["My", _fmt(equilibrium["target"]["my"], 9),
+              _fmt(equilibrium["internal"]["my"], 9),
+              _fmt(equilibrium["residual"]["my"], 9), "kNm"]],
+            [29 * mm, 37 * mm, 37 * mm, 37 * mm, 20 * mm],
+            font=7.0,
+            keep=False,
+        )
+        tolerance = equilibrium.get("relative_tolerance")
+        self._small(
+            f"Accepted after {state.get('iterations', 0)} Newton iteration(s); "
+            f"normalised residual = {_fmt(equilibrium['normalised_residual'], 9)}"
+            + (f", tolerance = {_fmt(tolerance, 9)}." if tolerance is not None
+               else ". Direct uncracked linear solution; no Newton tolerance applies.")
+            + " The normalisation exactly preserves the solver's fixed numeric "
+              "[kN, kNm, kNm] maximum convention; it is not a physical-unit norm."
+        )
+        return plane, equilibrium, matrix
+
+    @staticmethod
+    def _matrix_substitution(row, plane):
+        return (
+            f"{_fmt(row[0], 9)} &#183; {_fmt(plane['sigma0_kpa'], 9)} + "
+            f"{_fmt(row[1], 9)} &#183; {_fmt(plane['gradient_x_kpa_per_m'], 9)} + "
+            f"{_fmt(row[2], 9)} &#183; {_fmt(plane['gradient_y_kpa_per_m'], 9)}"
+        )
+
+    def _elastic_worked(self, el):
+        """Publish the existing combined elastic calculation as a worked chain."""
+
+        states = el.get("accepted_states") or {}
+        superposition = el.get("superposition") or {}
+        if not states or not superposition:
+            self._h2("Worked elastic calculation unavailable")
+            self._small(
+                "The completed payload does not retain the accepted elastic states. "
+                "Sector does not repeat the solver in the report."
+            )
+            return
+
+        self._p(
+            "The elastic solver uses a raw reference-stress plane with E<sub>c</sub> "
+            "normalised to 1. Physical concrete strain is the retained reference "
+            "stress divided by the entered E<sub>c</sub>; eps0/kx/ky are therefore "
+            "not published as physical strain or curvature."
+        )
+
+        long_plane, long_eq, long_matrix = self._elastic_state_tables(
+            "Step 1 - accepted long-term state", states["long_term"]
+        )
+        self._formula(
+            "sigma<sub>ref</sub>(x,y) = sigma<sub>0</sub> + g<sub>x</sub>x + "
+            "g<sub>y</sub>y",
+            equation_key="elastic.long.stress-plane",
+            ref="Sector Ec=1 cracked-section stress-plane formulation.",
+            subst=(f"= {_fmt(long_plane['sigma0_kpa'], 9)} + "
+                   f"{_fmt(long_plane['gradient_x_kpa_per_m'], 9)}x + "
+                   f"{_fmt(long_plane['gradient_y_kpa_per_m'], 9)}y"),
+            result="Retained long-term reference-stress plane (x and y in m).",
+        )
+        self._formula(
+            "N<sub>int</sub> = J<sub>N</sub> q",
+            equation_key="elastic.long.equilibrium-n",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(long_matrix[0], long_plane),
+            result=(f"N<sub>int</sub> = {_fmt(long_eq['internal']['n'], 9)} kN; "
+                    f"target = {_fmt(long_eq['target']['n'], 9)} kN; "
+                    f"residual = {_fmt(long_eq['residual']['n'], 9)} kN"),
+        )
+        self._formula(
+            "M<sub>x,int</sub> = J<sub>Mx</sub> q",
+            equation_key="elastic.long.equilibrium-mx",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(long_matrix[1], long_plane),
+            result=(f"M<sub>x,int</sub> = {_fmt(long_eq['internal']['mx'], 9)} kNm; "
+                    f"target = {_fmt(long_eq['target']['mx'], 9)} kNm; "
+                    f"residual = {_fmt(long_eq['residual']['mx'], 9)} kNm"),
+        )
+        self._formula(
+            "M<sub>y,int</sub> = J<sub>My</sub> q",
+            equation_key="elastic.long.equilibrium-my",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(long_matrix[2], long_plane),
+            result=(f"M<sub>y,int</sub> = {_fmt(long_eq['internal']['my'], 9)} kNm; "
+                    f"target = {_fmt(long_eq['target']['my'], 9)} kNm; "
+                    f"residual = {_fmt(long_eq['residual']['my'], 9)} kNm"),
+        )
+
+        nl = superposition["long_term_modular_ratio"]
+        ns = superposition["short_term_modular_ratio"]
+        factor = superposition["long_term_reduction_factor"]
+        self._h2("Step 2 - neutralise the long-term concrete stress")
+        self._formula(
+            "r = 1 - n<sub>s</sub>/n<sub>l</sub>",
+            equation_key="elastic.combined.reduction-factor",
+            subst=f"= 1 - {_fmt(ns, 9)} / {_fmt(nl, 9)}",
+            result=f"r = {_fmt(factor, 9)}",
+        )
+        elements = el.get("elements") or []
+        if elements:
+            element = elements[0]
+            self._formula(
+                "sigma<sub>s2,i</sub> = r sigma<sub>s1,passive,i</sub>",
+                equation_key="elastic.combined.reduced-long-stress",
+                references=("elastic.combined.reduction-factor",),
+                subst=(f"= {_fmt(factor, 9)} &#183; "
+                       f"{_fmt(element['long_passive_mpa'], 9)} MPa"),
+                result=(f"sigma<sub>s2,{_html_escape(element['element_id'])}</sub> = "
+                        f"{_fmt(element['reduced_long_mpa'], 9)} MPa"),
+            )
+        neutralising = superposition["neutralising_resultant"]
+        terms_n = " + ".join(
+            f"{_fmt(row['reduced_long_mpa'], 6)}&#183;{_fmt(row['area_mm2'], 3)}/1000"
+            for row in elements
+        ) or "0"
+        terms_mx = " + ".join(
+            f"{_fmt(row['reduced_long_mpa'], 6)}&#183;{_fmt(row['area_mm2'], 3)}"
+            f"&#183;{_fmt(row['y_mm'], 3)}/1000000"
+            for row in elements
+        ) or "0"
+        terms_my = " + ".join(
+            f"{_fmt(row['reduced_long_mpa'], 6)}&#183;{_fmt(row['area_mm2'], 3)}"
+            f"&#183;{_fmt(row['x_mm'], 3)}/1000000"
+            for row in elements
+        ) or "0"
+        self._formula(
+            "N<sub>neu</sub> = sum(sigma<sub>s2,i</sub>A<sub>i</sub>)",
+            equation_key="elastic.combined.neutralising-n",
+            subst="= " + terms_n,
+            result=f"N<sub>neu</sub> = {_fmt(neutralising['n'], 9)} kN",
+        )
+        self._formula(
+            "M<sub>neu,x</sub> = sum(sigma<sub>s2,i</sub>A<sub>i</sub>y<sub>i</sub>)",
+            equation_key="elastic.combined.neutralising-mx",
+            subst="= " + terms_mx,
+            result=f"M<sub>neu,x</sub> = {_fmt(neutralising['mx'], 9)} kNm",
+        )
+        self._formula(
+            "M<sub>neu,y</sub> = sum(sigma<sub>s2,i</sub>A<sub>i</sub>x<sub>i</sub>)",
+            equation_key="elastic.combined.neutralising-my",
+            subst="= " + terms_my,
+            result=f"M<sub>neu,y</sub> = {_fmt(neutralising['my'], 9)} kNm",
+        )
+
+        instant_plane, instant_eq, instant_matrix = self._elastic_state_tables(
+            "Step 3 - accepted instantaneous combined state",
+            states["instantaneous_combined"],
+        )
+        combined_target = superposition["combined_target_before_neutralisation"]
+        self._formula(
+            "N<sub>target</sub> = N<sub>comb</sub> - N<sub>neu</sub>",
+            equation_key="elastic.combined.target-n",
+            subst=(f"= {_fmt(combined_target['n'], 9)} - "
+                   f"{_fmt(neutralising['n'], 9)} kN"),
+            result=f"N<sub>target</sub> = {_fmt(instant_eq['target']['n'], 9)} kN",
+        )
+        self._formula(
+            "M<sub>x,target</sub> = M<sub>x,comb</sub> - M<sub>x,neu</sub>",
+            equation_key="elastic.combined.target-mx",
+            subst=(f"= {_fmt(combined_target['mx'], 9)} - "
+                   f"{_fmt(neutralising['mx'], 9)} kNm"),
+            result=(f"M<sub>x,target</sub> = "
+                    f"{_fmt(instant_eq['target']['mx'], 9)} kNm"),
+        )
+        self._formula(
+            "M<sub>y,target</sub> = M<sub>y,comb</sub> - M<sub>y,neu</sub>",
+            equation_key="elastic.combined.target-my",
+            subst=(f"= {_fmt(combined_target['my'], 9)} - "
+                   f"{_fmt(neutralising['my'], 9)} kNm"),
+            result=(f"M<sub>y,target</sub> = "
+                    f"{_fmt(instant_eq['target']['my'], 9)} kNm"),
+        )
+        self._formula(
+            "sigma<sub>ref</sub>(x,y) = sigma<sub>0</sub> + g<sub>x</sub>x + "
+            "g<sub>y</sub>y",
+            equation_key="elastic.instantaneous.stress-plane",
+            ref="Sector Ec=1 cracked-section stress-plane formulation.",
+            subst=(f"= {_fmt(instant_plane['sigma0_kpa'], 9)} + "
+                   f"{_fmt(instant_plane['gradient_x_kpa_per_m'], 9)}x + "
+                   f"{_fmt(instant_plane['gradient_y_kpa_per_m'], 9)}y"),
+            result="Retained instantaneous combined reference-stress plane (x and y in m).",
+        )
+        self._formula(
+            "N<sub>int</sub> = J<sub>N</sub> q",
+            equation_key="elastic.instantaneous.equilibrium-n",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(instant_matrix[0], instant_plane),
+            result=(f"N<sub>int</sub> = {_fmt(instant_eq['internal']['n'], 9)} kN; "
+                    f"target = {_fmt(instant_eq['target']['n'], 9)} kN; "
+                    f"residual = {_fmt(instant_eq['residual']['n'], 9)} kN"),
+        )
+        self._formula(
+            "M<sub>x,int</sub> = J<sub>Mx</sub> q",
+            equation_key="elastic.instantaneous.equilibrium-mx",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(instant_matrix[1], instant_plane),
+            result=(f"M<sub>x,int</sub> = {_fmt(instant_eq['internal']['mx'], 9)} kNm; "
+                    f"target = {_fmt(instant_eq['target']['mx'], 9)} kNm; "
+                    f"residual = {_fmt(instant_eq['residual']['mx'], 9)} kNm"),
+        )
+        self._formula(
+            "M<sub>y,int</sub> = J<sub>My</sub> q",
+            equation_key="elastic.instantaneous.equilibrium-my",
+            ref="Final retained transformed equilibrium row.",
+            subst="= " + self._matrix_substitution(instant_matrix[2], instant_plane),
+            result=(f"M<sub>y,int</sub> = {_fmt(instant_eq['internal']['my'], 9)} kNm; "
+                    f"target = {_fmt(instant_eq['target']['my'], 9)} kNm; "
+                    f"residual = {_fmt(instant_eq['residual']['my'], 9)} kNm"),
+        )
+
+        if elements:
+            element = elements[0]
+            self._h2("Step 4 - combine the retained element stresses")
+            self._formula(
+                "sigma<sub>total,i</sub> = sigma<sub>s2,i</sub> + "
+                "sigma<sub>RST1,i</sub> + sigma<sub>p0,i</sub>",
+                equation_key="elastic.combined.total-stress",
+                subst=(f"= {_fmt(element['reduced_long_mpa'], 9)} + "
+                       f"{_fmt(element['rst1_mpa'], 9)} + "
+                       f"{_fmt(element['locked_in_mpa'], 9)} MPa"),
+                result=(f"sigma<sub>total,{_html_escape(element['element_id'])}</sub> = "
+                        f"{_fmt(element['total_mpa'], 9)} MPa"),
+            )
+            self._formula(
+                "sigma<sub>DIF,i</sub> = sigma<sub>total,i</sub> - "
+                "sigma<sub>long,i</sub>",
+                equation_key="elastic.combined.difference-stress",
+                subst=(f"= {_fmt(element['total_mpa'], 9)} - "
+                       f"{_fmt(element['long_mpa'], 9)} MPa"),
+                result=(f"sigma<sub>DIF,{_html_escape(element['element_id'])}</sub> = "
+                        f"{_fmt(element['dif_mpa'], 9)} MPa"),
+            )
+
     def _elastic(self):
         el = self.out["elastic"]
         self._case_heading(
@@ -5046,6 +5514,7 @@ class ReportBuilder:
                     f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kNm "
                     "(N tension-positive; calculation shown in Section and "
                     "materials).")
+        self._elastic_worked(el)
         checks = el.get("stress_outputs") or {}
         if checks:
             self._h2("Elastic stress outputs")

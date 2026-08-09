@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import inspect
 import pathlib
 import sys
 
@@ -14,9 +15,6 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
-from sector.materials import Concrete, MildSteel  # noqa: E402
-
-
 def _plastic(**updates):
     result = {
         "check_util": True,
@@ -114,96 +112,64 @@ def test_vt_interaction_status_reports_mathematical_verdict(interaction, expecte
     assert presentation.interaction_assessment_status(interaction) == expected
 
 
-def test_plastic_state_evidence_is_tension_positive_and_uses_mm2_area():
-    steel = MildSteel(
-        fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    inp = {
-        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
-        "holes": [],
-        "bars": [(0.0, -0.05, 500.0), (0.0, 0.05, 400.0)],
-        "tendons": [],
-        "concrete": Concrete(fck=30.0, gamma_c=1.5),
-        "steel": steel,
-        "prestress": None,
-    }
-    point = {
-        "V": 90.0, "na_x": float("inf"), "na_y": 0.0, "kappa": 0.01,
-    }
-    evidence = presentation.plastic_state_evidence(inp, point)
-    assert len(evidence["concrete"]) == 4
-    tension, compression = evidence["elements"]
-    assert tension["state"] == "Tension" and tension["strain_permille"] > 0.0
-    assert compression["state"] == "Compression"
-    assert compression["strain_permille"] < 0.0
-    assert tension["force_kn"] == pytest.approx(
-        tension["stress_mpa"] * 500.0 / 1000.0)
-
-
-def test_plastic_state_evidence_uses_and_identifies_each_material():
-    low = MildSteel(
-        fytk=300.0, fyck=300.0, futk=300.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    high = MildSteel(
-        fytk=600.0, fyck=600.0, futk=600.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    inp = {
-        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
-        "holes": [],
-        "bars": [(0.0, -0.05, 500.0), (0.0, -0.05, 500.0)],
-        "tendons": [],
-        "concrete": Concrete(fck=30.0, gamma_c=1.5),
-        "steel": low,
-        "bar_materials": [low, high],
-        "prestress": None,
-        "bar_elements": [
-            {"id": "R1", "material_id": "M1"},
-            {"id": "R2", "material_id": "M2"},
-        ],
-        "mild_material_catalog": {
-            "items": [
-                {"id": "M1", "name": "Low strength"},
-                {"id": "M2", "name": "High strength"},
-            ]
-        },
-    }
-    point = {
-        "V": 90.0, "na_x": float("inf"), "na_y": 0.0, "kappa": 0.10,
-    }
-
-    rows = presentation.plastic_state_evidence(inp, point)["elements"]
-
-    assert [row["material_id"] for row in rows] == ["M1", "M2"]
-    assert [row["material_name"] for row in rows] == [
-        "Low strength", "High strength"
+def test_plastic_state_rows_returns_only_the_retained_solver_rows():
+    concrete_rows = [
+        {
+            "point_no": 1,
+            "ring": "Outer",
+            "strain_permille": -3.1,
+            "stress_mpa": -20.0,
+        }
     ]
-    assert rows[1]["stress_mpa"] > rows[0]["stress_mpa"]
-
-
-def test_plastic_state_evidence_rejects_incomplete_material_sequence():
-    steel = MildSteel(
-        fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
-        gamma_y=1.0, curve=2,
-    )
-    inp = {
-        "outer": [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)],
-        "holes": [],
-        "bars": [(0.0, -0.05, 500.0), (0.0, 0.05, 500.0)],
-        "bar_materials": [steel],
-        "tendons": [],
-        "concrete": Concrete(fck=30.0, gamma_c=1.5),
-        "steel": steel,
-        "prestress": None,
+    reinforcement_rows = [
+        {
+            "element_type": "Bar",
+            "element_id": "R1",
+            "material_id": "M1",
+            "strain_permille": 2.5,
+            "stress_mpa": 500.0,
+            "force_kn": 250.0,
+        },
+        {
+            "element_type": "Tendon",
+            "element_id": "P1",
+            "material_id": "P1",
+            "strain_permille": 7.0,
+            "stress_mpa": 1_400.0,
+            "force_kn": 210.0,
+        },
+    ]
+    point = {
+        "V": 90.0,
+        "na_x": float("inf"),
+        "na_y": 0.0,
+        "concrete_corner_states": concrete_rows,
+        "reinforcement_states": reinforcement_rows,
     }
+    rows = presentation.plastic_state_rows(point)
 
-    with pytest.raises(ValueError, match="one material and prestrain"):
-        presentation.plastic_state_evidence(
-            inp, {"V": 90.0, "na_x": float("inf"), "na_y": 0.0,
-                  "kappa": 0.01}
-        )
+    assert rows["concrete"] == concrete_rows
+    assert rows["elements"] == reinforcement_rows
+    assert rows["concrete"] is not concrete_rows
+    assert rows["elements"] is not reinforcement_rows
+    assert rows["halfplane"] == pytest.approx((0.0, 1.0, 0.0))
+
+
+def test_plastic_state_rows_has_no_material_or_solver_input_boundary():
+    assert tuple(inspect.signature(presentation.plastic_state_rows).parameters) == (
+        "point",
+    )
+    source = inspect.getsource(presentation.plastic_state_rows)
+    assert ".stress(" not in source
+    assert "Concrete(" not in source
+    assert "MildSteel(" not in source
+    assert "Prestress(" not in source
+
+    rows = presentation.plastic_state_rows(
+        {"V": 0.0, "na_x": 0.0, "na_y": float("inf")}
+    )
+    assert rows["concrete"] == []
+    assert rows["elements"] == []
 
 
 def test_nm_boundary_rows_preserve_both_independent_axial_traces():

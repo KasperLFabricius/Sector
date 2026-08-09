@@ -1128,24 +1128,20 @@ def test_plastic_view_tolerates_a_pre_split_payload():
     assert not at.exception
 
 
-def test_plastic_bar_hover_reports_stress_strain_per_bar_and_varies_with_rotation():
-    # The plastic section hover reports each bar's design stress and strain at the
-    # selected rotation (tension-positive): a bar on the tension side reads a positive
-    # strain, one on the compression side negative, and the values change with the
-    # curvature (rotation).
-    from sector_app import _plastic_bar_hover
-    from sector.materials import MildSteel
-    steel = MildSteel(fytk=550.0, fyck=550.0, futk=600.0, eut=0.05, gamma_y=1.15,
-                      gamma_u=1.15, curve=3, Es=200000.0, ey0c=2.25)
-    hp = (0.0, 1.0, 0.0)                      # NA at y = 0, compression side y > 0
-    bars = [(0.0, -0.1), (0.0, 0.1)]          # tension bar (y<0), compression bar (y>0)
-    h = _plastic_bar_hover(bars, hp, kappa=0.05, material=steel)
-    assert "MPa" in h[0]
-    assert "= 0.500 %" in h[0]                # tension bar: +0.5 %
-    assert "= -0.500 %" in h[1]               # compression bar: -0.5 %
-    h2 = _plastic_bar_hover(bars, hp, kappa=0.10, material=steel)
-    assert h2[1] != h[1]                       # a different rotation -> different values
-    assert _plastic_bar_hover(bars, hp, 0.05, None) is None   # no material -> no hover
+def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law():
+    from sector_app import _plastic_state_hover
+
+    rows = [
+        {"stress_mpa": 500.0, "strain_permille": 5.0, "material_id": "M1"},
+        {"stress_mpa": -420.0, "strain_permille": -5.0, "material_id": "M2"},
+    ]
+    hover = _plastic_state_hover(rows)
+    assert "500.0 MPa" in hover[0]
+    assert "= 0.500 %" in hover[0]
+    assert "material M1" in hover[0]
+    assert "= -0.500 %" in hover[1]
+    assert "material M2" in hover[1]
+    assert _plastic_state_hover([]) is None
 
 
 def test_both_mode_runs_elastic_and_plastic():
@@ -1155,6 +1151,63 @@ def test_both_mode_runs_elastic_and_plastic():
     assert not at.exception
     res = at.session_state["results"]
     assert "plastic" in res and "elastic" in res
+
+
+def test_plastic_and_elastic_payloads_retain_one_textbook_ready_final_state():
+    at = _fresh()
+    at.run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
+    assert not at.exception
+
+    results = at.session_state["results"]
+    plastic = results["plastic"]
+    point = plastic["points"][plastic["worked_point_index"]]
+    assert point["concrete_corner_states"]
+    assert point["reinforcement_states"]
+    assert point["curvature_candidates"]
+    assert point["curvature_selection"]
+    for candidate in point["curvature_candidates"]:
+        assert candidate["curvature_per_m"] == pytest.approx(
+            candidate["strain_limit"] / candidate["distance_from_na_m"]
+        )
+    assert point["axial_achieved"] == pytest.approx(
+        point["concrete_force"] + point["bar_force"] + point["tendon_force"]
+    )
+    assert point["Mx"] == pytest.approx(
+        point["concrete_mx"] + point["bar_mx"] + point["tendon_mx"]
+    )
+    assert point["My"] == pytest.approx(
+        point["concrete_my"] + point["bar_my"] + point["tendon_my"]
+    )
+
+    elastic = results["elastic"]
+    assert set(elastic["accepted_states"]) == {
+        "long_term",
+        "instantaneous_combined",
+    }
+    for state in elastic["accepted_states"].values():
+        assert len(state["equilibrium"]["matrix"]) == 3
+        assert set(state["equilibrium"]["target"]) == {"n", "mx", "my"}
+        assert set(state["equilibrium"]["internal"]) == {"n", "mx", "my"}
+        assert set(state["equilibrium"]["residual"]) == {"n", "mx", "my"}
+    superposition = elastic["superposition"]
+    assert superposition["long_term_reduction_factor"] == pytest.approx(
+        1.0
+        - superposition["short_term_modular_ratio"]
+        / superposition["long_term_modular_ratio"]
+    )
+    for element in elastic["elements"]:
+        assert element["total_mpa"] == pytest.approx(
+            element["reduced_long_mpa"]
+            + element["rst1_mpa"]
+            + element["locked_in_mpa"]
+        )
+        assert element["dif_mpa"] == pytest.approx(
+            element["total_mpa"] - element["long_mpa"]
+        )
+
+    assert "calculation_evidence" not in results
+    assert "trace" not in results
 
 
 def test_plastic_and_elastic_use_independent_loads():

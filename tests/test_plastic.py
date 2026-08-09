@@ -12,14 +12,19 @@ from __future__ import annotations
 
 import inspect
 import math
-from dataclasses import MISSING, fields
+from dataclasses import FrozenInstanceError, MISSING, fields
 
 import numpy as np
 import pytest
 
 from sector import PlasticPoint
 from sector.materials import Concrete, MildSteel
-from sector.plastic import _band_stresses, plastic_capacity_at_angle, solve_plastic
+from sector.plastic import (
+    _band_stresses,
+    _governing_curvature,
+    plastic_capacity_at_angle,
+    solve_plastic,
+)
 from sector.section import Section
 
 
@@ -93,6 +98,103 @@ def test_solver_points_carry_complete_finite_diagnostics():
     )
     assert type(point.axial_reachable) is bool
     assert type(point.search_iterations) is int and point.search_iterations >= 0
+
+
+def test_accepted_plastic_state_retains_authoritative_corner_and_bar_rows():
+    section, concrete, steel = fundamentsbjaelke()
+    point = plastic_capacity_at_angle(section, concrete, steel, 0.0, 90.0)
+
+    assert point.concrete_corner_states is not None
+    assert point.bar_states is not None
+    assert point.tendon_states == ()
+    assert len(point.concrete_corner_states) == sum(map(len, section.concrete))
+    assert len(point.bar_states) == len(section.bars)
+
+    corner = point.concrete_corner_states[0]
+    assert tuple(field.name for field in fields(corner)) == (
+        "ring_index", "point_index", "x", "y", "section_strain",
+        "material_strain", "material_stress",
+    )
+    assert not hasattr(corner, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        corner.x = 0.0
+    for state in point.concrete_corner_states:
+        expected_section_strain = (
+            point.strain_gradient_x * state.x
+            + point.strain_gradient_y * state.y
+            + point.strain_offset
+        )
+        assert state.section_strain == pytest.approx(expected_section_strain)
+        assert state.material_strain == -state.section_strain
+        assert state.material_stress == concrete.stress(
+            state.material_strain, design=True
+        )
+
+    bar = point.bar_states[0]
+    assert tuple(field.name for field in fields(bar)) == (
+        "element_index", "x", "y", "area", "section_strain",
+        "initial_strain", "material_strain", "material_stress", "force",
+        "mx", "my",
+    )
+    assert not hasattr(bar, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        bar.force = 0.0
+    for index, state in enumerate(point.bar_states):
+        assert state.element_index == index
+        assert state.initial_strain == 0.0
+        assert state.material_strain == -state.section_strain
+        assert state.material_stress == steel.stress(state.material_strain, design=True)
+        assert state.force == pytest.approx(
+            -state.material_stress * state.area * 1000.0
+        )
+        assert state.mx == pytest.approx(state.force * state.y)
+        assert state.my == pytest.approx(state.force * state.x)
+
+    assert sum(state.force for state in point.bar_states) == pytest.approx(
+        point.bar_force
+    )
+    assert sum(state.mx for state in point.bar_states) == pytest.approx(point.bar_mx)
+    assert sum(state.my for state in point.bar_states) == pytest.approx(point.bar_my)
+    assert min(state.section_strain for state in point.bar_states) * 100.0 == (
+        pytest.approx(point.eps_steel)
+    )
+    assert max(state.section_strain for state in point.bar_states) * 100.0 == (
+        pytest.approx(point.eps_steel_comp)
+    )
+
+
+def test_accepted_curvature_selection_retains_candidates_and_stable_governor():
+    section = Section.from_polygon(
+        corners=[(-0.15, -0.3), (-0.15, 0.3), (0.15, 0.3), (0.15, -0.3)],
+        bars_xy_area_mm2=[(0.0, -0.25, 200.0)],
+    )
+    concrete = Concrete(fck=35.0, gamma_c=1.5, curve=2)
+    steel = MildSteel(
+        fytk=500.0, fyck=500.0, eut=0.01, futk=540.0,
+        gamma_y=1.15, gamma_u=1.15, gamma_E=1.0, curve=1,
+    )
+
+    point = plastic_capacity_at_angle(section, concrete, steel, 0.0, 90.0)
+    selection = point.curvature_selection
+    assert selection is not None
+    assert not hasattr(selection, "__dict__")
+    assert selection.selected_mode == "bar_tension_rupture"
+    assert selection.selected_element_index == 0
+    assert selection.selected_curvature == point.curvature
+    assert selection.candidates[0].mode == "concrete_crushing"
+    assert selection.candidates[0].element_index is None
+    assert all(
+        candidate.curvature
+        == pytest.approx(candidate.strain_limit / candidate.distance_from_na)
+        for candidate in selection.candidates
+    )
+    assert any(
+        candidate.mode == "bar_tension_rupture"
+        and candidate.element_index == 0
+        and candidate.curvature == selection.selected_curvature
+        for candidate in selection.candidates
+    )
+    assert all(not hasattr(candidate, "__dict__") for candidate in selection.candidates)
 
 
 def fundamentsbjaelke():
@@ -192,8 +294,6 @@ def test_slab_matches_eurocode_rectangular_block():
 def test_governing_curvature_caps_compression_steel_rupture():
     # The symmetric rupture must also cap the curvature for a compression bar: with
     # eut below the concrete crushing strain, a compression bar reaches eut first.
-    import numpy as np
-    from sector.plastic import _governing_curvature
     # s_na = s_max - c = 0.1. A bar 0.08 past the NA on the compression side (s = 0.18)
     # reaches eut = 2 permille before the concrete crushes. s_bars are the projections.
     s_bars = np.array([0.18, 0.099])

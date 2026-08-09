@@ -5001,6 +5001,195 @@ def _props_dict(p):
     return dict(area=p.area, cx=p.cx, cy=p.cy, Ix=p.Ix, Iy=p.Iy, Ixy=p.Ixy)
 
 
+def _plastic_point_result(point, inp):
+    """Flatten one accepted plastic state without evaluating a material law."""
+
+    corner_rows = []
+    for point_no, state in enumerate(point.concrete_corner_states or (), start=1):
+        corner_rows.append(dict(
+            point_no=point_no,
+            ring=("Outer" if state.ring_index == 0
+                  else f"Hole {state.ring_index}"),
+            ring_point_no=state.point_index + 1,
+            x_mm=state.x * _MM,
+            y_mm=state.y * _MM,
+            section_strain_permille=state.section_strain * _MM,
+            strain_permille=state.material_strain * _MM,
+            stress_mpa=state.material_stress,
+        ))
+
+    mild_names = {
+        item.get("id"): item.get("name")
+        for item in (inp.get("mild_material_catalog") or {}).get("items", [])
+    }
+    prestress_names = {
+        item.get("id"): item.get("name")
+        for item in (inp.get("prestress_material_catalog") or {}).get("items", [])
+    }
+
+    reinforcement_rows = []
+
+    def append_states(states, family, elements, names):
+        for state in states or ():
+            metadata = (
+                elements[state.element_index]
+                if state.element_index < len(elements) else {}
+            )
+            element_no = state.element_index + 1
+            element_id = str(metadata.get("id") or f"{family.lower()} {element_no}")
+            material_id = metadata.get("material_id")
+            strain = state.material_strain
+            reinforcement_rows.append(dict(
+                element_type=family,
+                element_no=element_no,
+                element_id=element_id,
+                material_id=material_id,
+                material_name=names.get(material_id),
+                state=("Tension" if strain > 1.0e-12 else
+                       "Compression" if strain < -1.0e-12 else "Neutral"),
+                x_mm=state.x * _MM,
+                y_mm=state.y * _MM,
+                area_mm2=state.area * 1.0e6,
+                section_strain_permille=state.section_strain * _MM,
+                initial_strain_permille=state.initial_strain * _MM,
+                strain_permille=strain * _MM,
+                stress_mpa=state.material_stress,
+                force_kn=-state.force,
+                internal_force_kn=state.force,
+                internal_mx_knm=state.mx,
+                internal_my_knm=state.my,
+            ))
+
+    bar_elements = list(inp.get("bar_elements") or [])
+    tendon_elements = list(inp.get("tendon_elements") or [])
+    append_states(point.bar_states, "Bar", bar_elements, mild_names)
+    append_states(point.tendon_states, "Tendon", tendon_elements, prestress_names)
+
+    candidate_rows = []
+    selection = point.curvature_selection
+    if selection is not None:
+        for candidate in selection.candidates:
+            if candidate.mode.startswith("bar_") and candidate.element_index is not None:
+                metadata = (bar_elements[candidate.element_index]
+                            if candidate.element_index < len(bar_elements) else {})
+                element_id = str(
+                    metadata.get("id") or f"bar {candidate.element_index + 1}"
+                )
+            elif (candidate.mode.startswith("tendon_")
+                  and candidate.element_index is not None):
+                metadata = (tendon_elements[candidate.element_index]
+                            if candidate.element_index < len(tendon_elements) else {})
+                element_id = str(
+                    metadata.get("id") or f"tendon {candidate.element_index + 1}"
+                )
+            else:
+                element_id = None
+            candidate_rows.append(dict(
+                mode=candidate.mode,
+                element_index=candidate.element_index,
+                element_id=element_id,
+                strain_limit=candidate.strain_limit,
+                distance_from_na_m=candidate.distance_from_na,
+                curvature_per_m=candidate.curvature,
+                selected=(
+                    candidate.mode == selection.selected_mode
+                    and candidate.element_index == selection.selected_element_index
+                ),
+            ))
+
+    return dict(
+        V=point.V,
+        Mx=point.Mx,
+        My=point.My,
+        na_x=point.na_x_intercept,
+        na_y=point.na_y_intercept,
+        eps_c=-point.eps_concrete,
+        eps_s=-point.eps_steel,
+        eps_s_comp=-point.eps_steel_comp,
+        eps_cable=-point.eps_cable,
+        kappa=point.curvature,
+        comp_force=point.compression_force,
+        lever=point.lever_arm,
+        dx=point.dx,
+        dy=point.dy,
+        converged=point.converged,
+        axial_requested=point.axial_requested,
+        axial_achieved=point.axial,
+        axial_residual=point.axial_residual,
+        axial_tolerance=point.axial_tolerance,
+        axial_reachable=point.axial_reachable,
+        compression_depth=point.compression_depth,
+        neutral_axis_offset=point.neutral_axis_offset,
+        strain_gradient_x=point.strain_gradient_x,
+        strain_gradient_y=point.strain_gradient_y,
+        strain_offset=point.strain_offset,
+        search_lower_depth=point.search_lower_depth,
+        search_upper_depth=point.search_upper_depth,
+        search_lower_axial=point.search_lower_axial,
+        search_upper_axial=point.search_upper_axial,
+        search_iterations=point.search_iterations,
+        concrete_force=point.concrete_force,
+        concrete_mx=point.concrete_mx,
+        concrete_my=point.concrete_my,
+        bar_force=point.bar_force,
+        bar_mx=point.bar_mx,
+        bar_my=point.bar_my,
+        tendon_force=point.tendon_force,
+        tendon_mx=point.tendon_mx,
+        tendon_my=point.tendon_my,
+        compression_mx=point.compression_mx,
+        compression_my=point.compression_my,
+        tension_force=point.tension_force,
+        tension_mx=point.tension_mx,
+        tension_my=point.tension_my,
+        concrete_corner_states=corner_rows,
+        reinforcement_states=reinforcement_rows,
+        curvature_candidates=candidate_rows,
+        curvature_selection=(
+            dict(
+                mode=selection.selected_mode,
+                element_index=selection.selected_element_index,
+                curvature_per_m=selection.selected_curvature,
+            ) if selection is not None else None
+        ),
+    )
+
+
+def _elastic_resultant_result(value):
+    """Flatten one named elastic resultant with heterogeneous physical units."""
+
+    return dict(
+        n=value.axial_force,
+        mx=value.moment_x,
+        my=value.moment_y,
+    )
+
+
+def _elastic_state_result(value):
+    """Flatten one accepted Ec=1 elastic state for publication."""
+
+    sigma0, gradient_x, gradient_y = value.raw_stress_plane
+    equilibrium = value.equilibrium
+    return dict(
+        raw_stress_plane=dict(
+            sigma0_kpa=sigma0,
+            gradient_x_kpa_per_m=gradient_x,
+            gradient_y_kpa_per_m=gradient_y,
+        ),
+        iterations=value.iterations,
+        converged=value.converged,
+        equilibrium=dict(
+            matrix=[list(row) for row in equilibrium.equilibrium_matrix],
+            target=_elastic_resultant_result(equilibrium.target),
+            internal=_elastic_resultant_result(equilibrium.internal),
+            residual=_elastic_resultant_result(equilibrium.residual),
+            residual_scale=equilibrium.residual_scale,
+            normalised_residual=equilibrium.normalised_residual,
+            relative_tolerance=equilibrium.relative_tolerance,
+        ),
+    )
+
+
 def _area_moments_dict(value):
     """Flatten one authoritative polygon-moment result for publication."""
 
@@ -5333,41 +5522,24 @@ def _run_single_analysis(
             util_demand=util_demand, util_resistance=util_resistance,
             applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
             converged=all(p.converged for p in pts),
-            # The solver reports strains compression-positive (its internal
-            # convention); negate them so the displayed strains are tension-positive,
-            # agreeing with N and the stresses (concrete crushing then reads negative).
-            points=[dict(V=p.V, Mx=p.Mx, My=p.My, na_x=p.na_x_intercept,
-                         na_y=p.na_y_intercept, eps_c=-p.eps_concrete,
-                         eps_s=-p.eps_steel, eps_s_comp=-p.eps_steel_comp,
-                         eps_cable=-p.eps_cable, kappa=p.curvature,
-                         comp_force=p.compression_force, lever=p.lever_arm,
-                         dx=p.dx, dy=p.dy, converged=p.converged,
-                         axial_requested=p.axial_requested,
-                         axial_achieved=p.axial,
-                         axial_residual=p.axial_residual,
-                         axial_tolerance=p.axial_tolerance,
-                         axial_reachable=p.axial_reachable,
-                         compression_depth=p.compression_depth,
-                         neutral_axis_offset=p.neutral_axis_offset,
-                         strain_gradient_x=p.strain_gradient_x,
-                         strain_gradient_y=p.strain_gradient_y,
-                         strain_offset=p.strain_offset,
-                         search_lower_depth=p.search_lower_depth,
-                         search_upper_depth=p.search_upper_depth,
-                         search_lower_axial=p.search_lower_axial,
-                         search_upper_axial=p.search_upper_axial,
-                         search_iterations=p.search_iterations,
-                         concrete_force=p.concrete_force,
-                         concrete_mx=p.concrete_mx,
-                         concrete_my=p.concrete_my,
-                         bar_force=p.bar_force, bar_mx=p.bar_mx,
-                         bar_my=p.bar_my, tendon_force=p.tendon_force,
-                         tendon_mx=p.tendon_mx, tendon_my=p.tendon_my,
-                         compression_mx=p.compression_mx,
-                         compression_my=p.compression_my,
-                         tension_force=p.tension_force,
-                         tension_mx=p.tension_mx,
-                         tension_my=p.tension_my) for p in pts],
+            # The adapter publishes the accepted state already evaluated by the
+            # plastic family. It performs unit/sign conversion and identity
+            # decoration only; no material law or capacity calculation is repeated.
+            points=[_plastic_point_result(point, inp) for point in pts],
+        )
+        worked_index = (
+            util_gov
+            if util_gov is not None and 0 <= util_gov < len(pts)
+            else max(range(len(pts)), key=lambda index: math.hypot(
+                pts[index].Mx, pts[index].My
+            ))
+        )
+        out["plastic"].update(
+            worked_point_index=worked_index,
+            worked_point_basis=(
+                "utilisation direction" if util_gov is not None
+                else "peak resultant moment"
+            ),
         )
         # Opt-in N-M interaction diagrams, one about each bending axis. For each axis
         # trace the +M branch (NA angle stored as V) and the -M branch (V+180) from
@@ -5457,6 +5629,15 @@ def _run_single_analysis(
                 for element in inp.get("tendon_elements", [])
             ],
         )
+        long_passive = mpa(r.bar_stress_long_passive)
+        reduced_long = mpa(r.bar_stress_reduced_long)
+        locked_in = mpa(r.bar_stress_locked_in)
+        for index, row in enumerate(elements):
+            row.update(
+                long_passive_mpa=long_passive[index],
+                reduced_long_mpa=reduced_long[index],
+                locked_in_mpa=locked_in[index],
+            )
         corners = sls_core.concrete_corner_rows(
             inp["outer"], inp["holes"],
             stress_plane=(r.short_term.eps0, r.short_term.kx, r.short_term.ky),
@@ -5496,6 +5677,24 @@ def _run_single_analysis(
             prestress=pre_resultant,
             converged=r.converged,
             stress_plane=(r.short_term.eps0, r.short_term.kx, r.short_term.ky),
+            accepted_states=dict(
+                long_term=_elastic_state_result(r.long),
+                instantaneous_combined=_elastic_state_result(r.short_term),
+            ),
+            superposition=dict(
+                long_term_modular_ratio=r.long_term_modular_ratio,
+                short_term_modular_ratio=r.short_term_modular_ratio,
+                long_term_reduction_factor=r.long_term_reduction_factor,
+                prestress_resultant=_elastic_resultant_result(
+                    r.prestress_resultant
+                ),
+                combined_target_before_neutralisation=_elastic_resultant_result(
+                    r.combined_target_before_neutralisation
+                ),
+                neutralising_resultant=_elastic_resultant_result(
+                    r.neutralising_resultant
+                ),
+            ),
             elements=elements,
             concrete_corners=corners,
             stress_outputs=stress_outputs,
@@ -7441,35 +7640,19 @@ def _plastic_table(pts, cable, steel_comp=False):
     return cols
 
 
-def _plastic_bar_hover(points, hp, kappa, material, prestrain=0.0,
-                       material_ids=None):
-    """Per-bar hover strings 'sigma = X MPa, eps = Y %' at a plastic state.
+def _plastic_state_hover(rows):
+    """Format retained plastic material states for section-figure hover text."""
 
-    From the strain plane -- the compression half-plane ``hp`` gives the signed
-    distance ``d`` from the neutral axis, so the section strain is ``kappa*d``
-    (compression positive) -- and the material's design stress. Tension-positive: the
-    net strain is ``prestrain - kappa*d`` (prestrain 0 for mild bars, IS for tendons)
-    and the stress is the design stress at that strain, matching the solver's per-bar
-    integration. ``points`` are in metres (the half-plane units)."""
-    if material is None:
+    if not rows:
         return None
-    materials = (list(material) if isinstance(material, (list, tuple))
-                 else [material] * len(points))
-    prestrains = (list(prestrain) if isinstance(prestrain, (list, tuple))
-                  else [prestrain] * len(points))
-    if len(materials) != len(points) or len(prestrains) != len(points):
-        raise ValueError("one material and prestrain are required per element")
-    ids = ([""] * len(points) if material_ids is None else list(material_ids))
-    if len(ids) != len(points):
-        raise ValueError("one material ID is required per element")
-    a, b, c = hp
     out = []
-    for p, law, initial, material_id in zip(points, materials, prestrains, ids):
-        eps = initial - kappa * (a * p[0] + b * p[1] + c)    # tension positive
-        sig = law.stress(eps, design=True)
-        suffix = f", material {material_id}" if material_id else ""
+    for row in rows:
+        suffix = (
+            f", material {row['material_id']}" if row.get("material_id") else ""
+        )
         out.append(
-            f"{_SIGMA} = {sig:.1f} MPa, {_EPS} = {eps * 100.0:.3f} %{suffix}"
+            f"{_SIGMA} = {row['stress_mpa']:.1f} MPa, "
+            f"{_EPS} = {row['strain_permille'] / 10.0:.3f} %{suffix}"
         )
     return out
 
@@ -7541,37 +7724,34 @@ def plastic_view(inp, results):
                        key="pl_state",
                        help="Inspect the section state at one swept neutral-axis angle.")
     pt = pts[sel]
-    hp = viz.plastic_halfplane(pt["V"], pt["na_x"], pt["na_y"])
+    retained_state = presentation.plastic_state_rows(pt)
+    hp = retained_state["halfplane"]
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"],
                         bbox=_outline_bbox(inp["outer"]))
     cL, cR = st.columns([3, 2])
     with cL:
         bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
         tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
-        # Colour the steel by its tension/compression state at this neutral-axis
-        # angle, like the elastic view. Mild bars follow the side of the neutral
-        # axis; tendons carry their locked-in prestrain so one on the compression
-        # side still reads as tension. Points are in metres (the half-plane units).
-        tendon_laws = list(inp.get("tendon_materials") or [])
-        if not tendon_laws and inp.get("prestress") is not None:
-            tendon_laws = [inp["prestress"]] * len(inp["tendons"])
-        tendon_prestrains = [material.IS for material in tendon_laws]
-        bar_colors = viz.halfplane_bar_colors(inp["bars"], hp, kappa=pt["kappa"])
-        tendon_colors = viz.halfplane_bar_colors(inp["tendons"], hp, kappa=pt["kappa"],
-                                                 prestrain=tendon_prestrains)
-        # Per-bar stress/strain at this rotation, shown on hover (varies with V).
-        bar_hover = _plastic_bar_hover(
-            inp["bars"], hp, pt["kappa"],
-            inp.get("bar_materials") or inp["steel"],
-            material_ids=[item["material_id"]
-                          for item in inp.get("bar_elements", [])],
+        # Colour and hover text use the accepted material states retained by the
+        # plastic solver. A tendon on the compression side may therefore remain
+        # tensile because its locked-in prestrain is already included.
+        bar_states = [
+            row for row in retained_state["elements"]
+            if row.get("element_type") == "Bar"
+        ]
+        tendon_states = [
+            row for row in retained_state["elements"]
+            if row.get("element_type") == "Tendon"
+        ]
+        state_colour = lambda row: (
+            viz.BAR_TENSION
+            if row.get("strain_permille", 0.0) >= 0.0
+            else viz.BAR_COMPRESSION
         )
-        tendon_hover = _plastic_bar_hover(inp["tendons"], hp, pt["kappa"],
-                                          tendon_laws or inp.get("prestress"),
-                                          prestrain=tendon_prestrains,
-                                          material_ids=[item["material_id"] for item
-                                                        in inp.get(
-                                                            "tendon_elements", [])])
+        bar_colors = [state_colour(row) for row in bar_states]
+        tendon_colors = [state_colour(row) for row in tendon_states]
+        bar_hover = _plastic_state_hover(bar_states)
+        tendon_hover = _plastic_state_hover(tendon_states)
         st.plotly_chart(
             viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
                                bar_colors=bar_colors, tendons=tendon_xy,
@@ -7622,14 +7802,14 @@ def plastic_view(inp, results):
                    "with N and the stresses -- so a crushing concrete strain reads "
                    "negative.")
 
-    evidence = presentation.plastic_state_evidence(inp, pt)
+    state_rows = retained_state
     with st.expander("Selected neutral-axis state - QA evidence", expanded=False):
         st.caption(
             f"Point-by-point design stress and compatible strain at NA angle = "
             f"{pt['V']:.0f}{_DEG}. Signs are tension positive; reinforcement force "
             "is stress x entered area."
         )
-        concrete_rows = evidence["concrete"]
+        concrete_rows = state_rows["concrete"]
         if concrete_rows:
             st.markdown("**Concrete corner response**")
             st.dataframe(
@@ -7648,7 +7828,7 @@ def plastic_view(inp, results):
                 width="stretch",
                 height=min(35 * (len(concrete_rows) + 1) + 3, 420),
             )
-        element_rows = evidence["elements"]
+        element_rows = state_rows["elements"]
         if element_rows:
             st.markdown("**Reinforcement and tendon response**")
             material_labels = [

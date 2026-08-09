@@ -80,6 +80,31 @@ def test_cable_strain_includes_initial_prestrain():
     # (smaller magnitude); the IS offset is what brings it to ~0.70 %.
     assert abs(r.eps_cable) > 0.40
 
+    assert r.tendon_states is not None
+    assert len(r.tendon_states) == len(section.tendons)
+    for index, state in enumerate(r.tendon_states):
+        assert state.element_index == index
+        assert state.initial_strain == prestress.IS
+        assert state.material_strain == pytest.approx(
+            state.initial_strain - state.section_strain
+        )
+        assert state.material_stress == prestress.stress(
+            state.material_strain, design=True
+        )
+        assert state.force == pytest.approx(
+            -state.material_stress * state.area * 1000.0
+        )
+        assert state.mx == pytest.approx(state.force * state.y)
+        assert state.my == pytest.approx(state.force * state.x)
+    assert sum(state.force for state in r.tendon_states) == pytest.approx(
+        r.tendon_force
+    )
+    assert sum(state.mx for state in r.tendon_states) == pytest.approx(r.tendon_mx)
+    assert sum(state.my for state in r.tendon_states) == pytest.approx(r.tendon_my)
+    assert max(state.material_strain for state in r.tendon_states) * -100.0 == (
+        pytest.approx(r.eps_cable)
+    )
+
 
 def test_solve_plastic_passes_prestress_through_sweep():
     section, concrete, steel, prestress = t_beam()

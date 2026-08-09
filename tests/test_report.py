@@ -17,7 +17,13 @@ sys.path.insert(0, str(ROOT / "app"))
 import sector_report  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import capacity, detailing, elastic as elastic_core, geometry  # noqa: E402
+from sector import (  # noqa: E402
+    capacity,
+    detailing,
+    elastic as elastic_core,
+    geometry,
+    plastic as plastic_core,
+)
 from sector.design_standards import (  # noqa: E402
     Capability,
     DesignBasisKey,
@@ -77,18 +83,134 @@ def _crack():
     return dict(candidate, gov_bar=1, candidates=[candidate])
 
 
+def _plastic_point():
+    return {
+        "V": 0.0,
+        "Mx": 100.0,
+        "My": 0.0,
+        "na_x": 0.0,
+        "na_y": 0.05,
+        "eps_c": 0.35,
+        "eps_s": 2.0,
+        "eps_s_comp": -0.1,
+        "eps_cable": 0.0,
+        "kappa": 0.02,
+        "comp_force": 250.0,
+        "lever": 0.2,
+        "dx": 0.0,
+        "dy": 0.2,
+        "converged": True,
+        "axial_requested": 0.0,
+        "axial_achieved": 0.0,
+        "axial_residual": 0.0,
+        "axial_tolerance": 1.0e-6,
+        "axial_reachable": True,
+        "compression_depth": 0.175,
+        "neutral_axis_offset": 0.0,
+        "strain_gradient_x": 0.0,
+        "strain_gradient_y": -0.02,
+        "strain_offset": 0.0,
+        "search_lower_depth": 0.01,
+        "search_upper_depth": 0.29,
+        "search_lower_axial": -45.0,
+        "search_upper_axial": 62.0,
+        "search_iterations": 8,
+        "concrete_force": 250.0,
+        "concrete_mx": 70.0,
+        "concrete_my": 0.0,
+        "bar_force": -250.0,
+        "bar_mx": 30.0,
+        "bar_my": 0.0,
+        "tendon_force": 0.0,
+        "tendon_mx": 0.0,
+        "tendon_my": 0.0,
+        "compression_mx": 70.0,
+        "compression_my": 0.0,
+        "tension_force": -250.0,
+        "tension_mx": 30.0,
+        "tension_my": 0.0,
+        "concrete_corner_states": [{
+            "point_no": 1,
+            "ring": "Outer",
+            "ring_point_no": 1,
+            "x_mm": -100.0,
+            "y_mm": -150.0,
+            "section_strain_permille": 3.0,
+            "strain_permille": -3.0,
+            "stress_mpa": -20.0,
+        }],
+        "reinforcement_states": [{
+            "element_type": "Bar",
+            "element_no": 1,
+            "element_id": "bar 1",
+            "material_id": "M1",
+            "material_name": "B500",
+            "state": "Tension",
+            "x_mm": 0.0,
+            "y_mm": -120.0,
+            "area_mm2": 500.0,
+            "section_strain_permille": -2.5,
+            "initial_strain_permille": 0.0,
+            "strain_permille": 2.5,
+            "stress_mpa": 500.0,
+            "force_kn": 250.0,
+            "internal_force_kn": -250.0,
+            "internal_mx_knm": 30.0,
+            "internal_my_knm": 0.0,
+        }],
+        "curvature_candidates": [{
+            "mode": "concrete_crushing",
+            "element_index": None,
+            "element_id": None,
+            "strain_limit": 0.0035,
+            "distance_from_na_m": 0.175,
+            "curvature_per_m": 0.02,
+            "selected": True,
+        }],
+        "curvature_selection": {
+            "mode": "concrete_crushing",
+            "element_index": None,
+            "curvature_per_m": 0.02,
+        },
+    }
+
+
+def _elastic_state(mx):
+    return {
+        "raw_stress_plane": {
+            "sigma0_kpa": 0.0,
+            "gradient_x_kpa_per_m": mx,
+            "gradient_y_kpa_per_m": 0.0,
+        },
+        "iterations": 4,
+        "converged": True,
+        "equilibrium": {
+            "matrix": [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            "target": {"n": 0.0, "mx": mx, "my": 0.0},
+            "internal": {"n": 0.0, "mx": mx, "my": 0.0},
+            "residual": {"n": 0.0, "mx": 0.0, "my": 0.0},
+            "residual_scale": abs(mx),
+            "normalised_residual": 0.0,
+            "relative_tolerance": 1.0e-8,
+        },
+    }
+
+
 def _out():
     return {
         "plastic": {"mx": [100.0, 0.0, -100.0, 0.0], "my": [0.0, 100.0, 0.0, -100.0],
                     "max_mx": 100.0, "max_my": 100.0, "min_mx": -100.0, "min_my": -100.0,
                     "util": 0.8, "closed": True,
                     "check_util": True, "applied": (80.0, 0.0), "converged": True,
-                    "points": [{"V": 0.0, "Mx": 100.0, "My": 0.0, "na_x": 0.0,
-                                "na_y": 0.05, "eps_c": 0.35, "eps_s": 2.0,
-                                "eps_s_comp": -0.1, "eps_cable": 0.0, "kappa": 0.02,
-                                "comp_force": 300.0, "lever": 0.2, "dx": 0.0,
-                                "dy": 0.2}]},
-        "elastic": {"total": [150.0], "long": [120.0], "dif": [30.0], "rst1": [0.0],
+                    "worked_point_index": 0,
+                    "worked_point_basis": "utilisation direction",
+                    "points": [_plastic_point()]},
+        "elastic": {"total": [150.0], "long": [120.0], "dif": [30.0],
+                    "rst1": [90.404040404],
                     "max_conc": 12.0, "max_conc_xy": (0.0, 0.15), "max_conc_point": 4,
                     "na_x": 0.0, "na_y": 0.04, "max_steel": 150.0, "max_steel_bar": 1,
                     "max_steel_element": "bar 1",
@@ -100,7 +222,10 @@ def _out():
                         "element_id": "bar 1", "x_mm": 0.0, "y_mm": -120.0,
                         "area_mm2": 500.0, "strain_permille": 0.75,
                         "total_mpa": 150.0, "long_mpa": 120.0,
-                        "dif_mpa": 30.0, "rst1_mpa": 0.0,
+                        "dif_mpa": 30.0, "rst1_mpa": 90.404040404,
+                        "long_passive_mpa": 100.0,
+                        "reduced_long_mpa": 59.595959596,
+                        "locked_in_mpa": 0.0,
                     }],
                     "concrete_corners": [
                         {"point_no": 1, "ring": "Outer", "ring_point_no": 1,
@@ -148,7 +273,27 @@ def _out():
                         "case": "Long-term", "governing": "bar 1",
                         "unit": "mm", "calculation_state": "CALCULATED",
                     },
-                    "crack_code": "EN 1992-1-1:2005", "crack_member": None},
+                    "crack_code": "EN 1992-1-1:2005", "crack_member": None,
+                    "accepted_states": {
+                        "long_term": _elastic_state(80.0),
+                        "instantaneous_combined": _elastic_state(95.0),
+                    },
+                    "superposition": {
+                        "long_term_modular_ratio": 15.0,
+                        "short_term_modular_ratio": 200.0 / 33.0,
+                        "long_term_reduction_factor": 1.0 - (200.0 / 33.0) / 15.0,
+                        "prestress_resultant": {"n": 0.0, "mx": 0.0, "my": 0.0},
+                        "combined_target_before_neutralisation": {
+                            "n": 29.797979798,
+                            "mx": 91.424242424,
+                            "my": 0.0,
+                        },
+                        "neutralising_resultant": {
+                            "n": 29.797979798,
+                            "mx": -3.575757576,
+                            "my": 0.0,
+                        },
+                    }},
         "section_properties": {
             "rings": [{
                 "ring_id": "outer", "role": "gross outline",
@@ -869,6 +1014,100 @@ def test_report_shared_preparation_survives_poisoned_calculators(monkeypatch):
     assert "Design strength" in text
     assert "Initial prestress action" in text
     assert "Elastic material transformation" in text
+
+
+def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )).split())
+
+    for heading in (
+        "Worked plastic calculation (utilisation direction)",
+        "Accepted strain plane",
+        "Ultimate-curvature candidates",
+        "Compression-depth solution",
+        "Accepted section resultants",
+        "Step 1 - accepted long-term state",
+        "Step 2 - neutralise the long-term concrete stress",
+        "Step 3 - accepted instantaneous combined state",
+        "Step 4 - combine the retained element stresses",
+    ):
+        assert heading in text
+    assert "0.003500000 / 0.175000000" in text
+    assert "Bisection iterations 8" in text
+    assert "250.000000 + -250.000000 + 0.000000 kN" in text
+    assert "100.000000000 MPa" in text
+    assert "59.595959596 MPa" in text
+    assert "internal bisection sequence and integration bands are not published" in (
+        text.casefold()
+    )
+    assert "raw reference-stress plane" in text
+    assert "not a physical-unit norm" in text
+
+
+def test_completed_textbook_report_never_calls_a_solver_or_material_law(monkeypatch):
+    def poisoned(*_args, **_kwargs):
+        raise AssertionError("report reran an engineering calculator")
+
+    for module, names in (
+        (plastic_core, (
+            "solve_plastic", "solve_interaction", "_curvature_at_depth",
+            "_accumulate", "_accumulate_at_depth",
+        )),
+        (elastic_core, (
+            "solve_elastic", "solve_elastic_uncracked", "solve_elastic_combined",
+            "transformed_properties", "_newton_solve",
+        )),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, poisoned)
+    monkeypatch.setattr(Concrete, "stress", poisoned)
+    monkeypatch.setattr(MildSteel, "stress", poisoned)
+    monkeypatch.setattr(Prestress, "stress", poisoned)
+
+    pdf = sector_report.build_report(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )
+    assert pdf[:4] == b"%PDF"
+
+
+def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
+    out = _out()
+    point = out["plastic"]["points"][0]
+    point.pop("search_lower_depth")
+    point.pop("concrete_mx")
+    out["elastic"].pop("accepted_states")
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Compression-depth solution unavailable" in text
+    assert "does not reconstruct those solver values" in text
+    assert "Accepted section resultants unavailable" in text
+    assert "does not reconstruct material or section response" in text
+    assert "Worked elastic calculation unavailable" in text
+    assert "does not repeat the solver in the report" in text
+
+
+def test_textbook_report_methods_have_no_engineering_fallbacks():
+    source = "\n".join((
+        inspect.getsource(sector_report.ReportBuilder._plastic_worked),
+        inspect.getsource(sector_report.ReportBuilder._elastic_worked),
+    ))
+    forbidden = (
+        ".stress(",
+        "solve_plastic(",
+        "solve_interaction(",
+        "_curvature_at_depth(",
+        "_accumulate(",
+        "solve_elastic(",
+        "solve_elastic_combined(",
+        "transformed_properties(",
+        "_newton_solve(",
+        "max(pts",
+    )
+    assert not [pattern for pattern in forbidden if pattern in source]
 
 
 def test_report_shared_blocks_have_no_engineering_fallbacks():

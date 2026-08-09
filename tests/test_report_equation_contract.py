@@ -42,7 +42,25 @@ EXPECTED_CONTRACT_KEYS = {
     ("detailing.minimum.area-2005", None),
     ("detailing.minimum.bending-2023", None),
     ("detailing.minimum.tension-2023", None),
+    ("elastic.combined.difference-stress", None),
+    ("elastic.combined.neutralising-mx", None),
+    ("elastic.combined.neutralising-my", None),
+    ("elastic.combined.neutralising-n", None),
+    ("elastic.combined.reduced-long-stress", None),
+    ("elastic.combined.reduction-factor", None),
+    ("elastic.combined.target-mx", None),
+    ("elastic.combined.target-my", None),
+    ("elastic.combined.target-n", None),
+    ("elastic.combined.total-stress", None),
     ("elastic.concrete.effective-modulus", None),
+    ("elastic.instantaneous.equilibrium-mx", None),
+    ("elastic.instantaneous.equilibrium-my", None),
+    ("elastic.instantaneous.equilibrium-n", None),
+    ("elastic.instantaneous.stress-plane", None),
+    ("elastic.long.equilibrium-mx", None),
+    ("elastic.long.equilibrium-my", None),
+    ("elastic.long.equilibrium-n", None),
+    ("elastic.long.stress-plane", None),
     ("elastic.modular-ratio.long", None),
     ("elastic.modular-ratio.short", None),
     ("geometry.concrete.centroid-x", None),
@@ -56,6 +74,12 @@ EXPECTED_CONTRACT_KEYS = {
     ("materials.concrete.fcd", "2023"),
     ("materials.steel.fyd-N", None),
     ("plastic.worked.axial-equilibrium", None),
+    ("plastic.worked.curvature-candidate", None),
+    ("plastic.worked.curvature-selection", None),
+    ("plastic.worked.element-force", None),
+    ("plastic.worked.moment-x", None),
+    ("plastic.worked.moment-y", None),
+    ("plastic.worked.strain-plane", None),
     ("prestress.element-force", None),
     ("prestress.initial-stress", None),
     ("prestress.resultant-mx", None),
@@ -168,7 +192,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 75
+    assert len(calls) == 99
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -179,7 +203,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 76
+    assert len(catalogue_pairs) == 100
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -196,12 +220,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 56,
+        "numerical": 80,
         "none": 20,
     }
-    assert publication_role_counts == {"calculation": 69, "theory": 7}
+    assert publication_role_counts == {"calculation": 93, "theory": 7}
     # One extra contract is the second runtime branch of shear.chord.demand.
-    assert result_counts == {True: 60, False: 16}
+    assert result_counts == {True: 84, False: 16}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key

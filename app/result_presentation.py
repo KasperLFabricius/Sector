@@ -16,7 +16,6 @@ import viz
 from sector import detailing
 from sector.design_standards import get_design_basis
 
-_MM = 1000.0
 _DEGREE = chr(0x00B0)
 _THETA = chr(0x03B8)
 _RHO = chr(0x03C1)
@@ -90,116 +89,20 @@ def plastic_assessment_text(assessment):
     return " | ".join(parts)
 
 
-def plastic_state_evidence(inp, point):
-    """Build concrete-corner and reinforcement evidence at one plastic state.
+def plastic_state_rows(point):
+    """Return retained rows for one accepted plastic state.
 
-    Strain and stress are tension-positive. Reinforcement force is derived only
-    for presentation from the solver-consistent material law:
-    ``F [kN] = sigma [MPa] * A [mm2] / 1000``.
+    The calculation family has already evaluated every material response.  This
+    helper only exposes those immutable rows and reconstructs the neutral-axis
+    line used for drawing; it never calls a material law or repeats a solver.
     """
-    hp = viz.plastic_halfplane(
-        point["V"], point["na_x"], point["na_y"],
-    )
-    a, b, c = hp
-    kappa = float(point["kappa"])
 
-    concrete_rows = []
-    point_no = 0
-    rings = [("Outer", inp.get("outer") or [])]
-    rings.extend(
-        (f"Hole {index}", ring)
-        for index, ring in enumerate(inp.get("holes") or [], start=1)
-    )
-    concrete = inp.get("concrete")
-    for ring_name, ring in rings:
-        for ring_point_no, vertex in enumerate(ring, start=1):
-            point_no += 1
-            x, y = float(vertex[0]), float(vertex[1])
-            strain = -kappa * (a * x + b * y + c)
-            stress = concrete.stress(strain, design=True) if concrete is not None else 0.0
-            concrete_rows.append({
-                "point_no": point_no,
-                "ring": ring_name,
-                "ring_point_no": ring_point_no,
-                "x_mm": x * _MM,
-                "y_mm": y * _MM,
-                "strain_permille": strain * _MM,
-                "stress_mpa": stress,
-            })
-
-    element_rows = []
-
-    def append_elements(points, element_type, material, prestrain=0.0, ids=None,
-                        material_ids=None, material_names=None):
-        points = list(points or [])
-        if material is None:
-            return
-        materials = (list(material) if isinstance(material, (list, tuple))
-                     else [material] * len(points))
-        prestrains = (list(prestrain) if isinstance(prestrain, (list, tuple))
-                      else [prestrain] * len(points))
-        if len(materials) != len(points) or len(prestrains) != len(points):
-            raise ValueError("one material and prestrain are required per element")
-        for element_no, (element, law, initial) in enumerate(
-                zip(points, materials, prestrains), start=1):
-            x, y = float(element[0]), float(element[1])
-            area = float(element[2]) if len(element) > 2 else 0.0
-            strain = initial - kappa * (a * x + b * y + c)
-            stress = law.stress(strain, design=True)
-            state = ("Tension" if strain > 1e-12 else
-                     "Compression" if strain < -1e-12 else "Neutral")
-            element_rows.append({
-                "element_type": element_type,
-                "element_no": element_no,
-                "element_id": (str(ids[element_no - 1])
-                               if ids and element_no <= len(ids)
-                               else f"{element_type.lower()} {element_no}"),
-                "material_id": (str(material_ids[element_no - 1])
-                                if material_ids and element_no <= len(material_ids)
-                                else None),
-                "material_name": (str(material_names[element_no - 1])
-                                  if material_names and element_no <= len(material_names)
-                                  else None),
-                "state": state,
-                "x_mm": x * _MM,
-                "y_mm": y * _MM,
-                "area_mm2": area,
-                "strain_permille": strain * _MM,
-                "stress_mpa": stress,
-                "force_kn": stress * area / _MM,
-            })
-
-    bar_ids = [item.get("id") for item in inp.get("bar_elements", [])]
-    tendon_ids = [item.get("id") for item in inp.get("tendon_elements", [])]
-    bar_material_ids = [item.get("material_id")
-                        for item in inp.get("bar_elements", [])]
-    tendon_material_ids = [item.get("material_id")
-                           for item in inp.get("tendon_elements", [])]
-    mild_names = {item.get("id"): item.get("name") for item in
-                  (inp.get("mild_material_catalog") or {}).get("items", [])}
-    prestress_names = {item.get("id"): item.get("name") for item in
-                       (inp.get("prestress_material_catalog") or {}).get("items", [])}
-    append_elements(
-        inp.get("bars"), "Bar", inp.get("bar_materials") or inp.get("steel"),
-        ids=bar_ids, material_ids=bar_material_ids,
-        material_names=[mild_names.get(value) for value in bar_material_ids],
-    )
-    prestress = inp.get("prestress")
-    append_elements(
-        inp.get("tendons"),
-        "Tendon",
-        inp.get("tendon_materials") or prestress,
-        ([material.IS for material in inp.get("tendon_materials", [])]
-         if inp.get("tendon_materials") else
-         float(getattr(prestress, "IS", 0.0)) if prestress is not None else 0.0),
-        ids=tendon_ids,
-        material_ids=tendon_material_ids,
-        material_names=[prestress_names.get(value) for value in tendon_material_ids],
-    )
     return {
-        "halfplane": hp,
-        "concrete": concrete_rows,
-        "elements": element_rows,
+        "halfplane": viz.plastic_halfplane(
+            point["V"], point["na_x"], point["na_y"],
+        ),
+        "concrete": list(point.get("concrete_corner_states") or ()),
+        "elements": list(point.get("reinforcement_states") or ()),
     }
 
 

@@ -274,12 +274,192 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("phi<sub>max</sub>", "larger detailing diameter of the pair", "mm"),
         ("D<sub>upper</sub>", "upper aggregate size", "mm"),
     ),
+    ("plastic.worked.strain-plane", None): _result(
+        "eps<sub>sec</sub>", "dimensionless",
+        ("eps<sub>sec</sub>", "section strain, compression positive"),
+        ("eps<sub>0</sub>", "retained strain-plane offset"),
+        ("g<sub>x</sub>", "retained strain gradient in x", "1/m"),
+        ("g<sub>y</sub>", "retained strain gradient in y", "1/m"),
+        ("x", "section x-coordinate", "m"),
+        ("y", "section y-coordinate", "m"),
+    ),
+    ("plastic.worked.curvature-candidate", None): _result(
+        "kappa<sub>i</sub>", "1/m",
+        ("kappa<sub>i</sub>", "ultimate-curvature candidate i", "1/m"),
+        ("eps<sub>lim,i</sub>", "retained effective strain limit"),
+        ("d<sub>i</sub>", "positive distance from the neutral axis", "m"),
+    ),
+    ("plastic.worked.curvature-selection", None): _result(
+        "kappa<sub>u</sub>", "1/m",
+        ("kappa<sub>u</sub>", "governing ultimate curvature", "1/m"),
+        ("kappa<sub>c</sub>", "concrete-crushing curvature candidate", "1/m"),
+        ("kappa<sub>s,i</sub>", "bar rupture curvature candidate i", "1/m"),
+        ("kappa<sub>p,j</sub>", "tendon rupture curvature candidate j", "1/m"),
+    ),
     ("plastic.worked.axial-equilibrium", None): _result(
-        "N", "kN",
-        ("T", "reinforcement tensile resultant", "kN"),
-        ("F<sub>c</sub>", "concrete compressive resultant", "kN"),
-        ("N", "applied axial force", "kN"),
-        ("residual", "absolute axial-equilibrium residual", "kN"),
+        "N<sub>int</sub>", "kN",
+        ("N<sub>int</sub>", "accepted internal axial resultant", "kN"),
+        ("F<sub>c</sub>", "concrete axial resultant", "kN"),
+        ("F<sub>s</sub>", "mild-reinforcement axial resultant", "kN"),
+        ("F<sub>p</sub>", "prestressing-steel axial resultant", "kN"),
+        ("residual", "signed axial-equilibrium residual", "kN"),
+    ),
+    ("plastic.worked.moment-x", None): _result(
+        "M<sub>x</sub>", "kNm",
+        ("M<sub>x</sub>", "accepted section moment about x", "kNm"),
+        ("M<sub>c,x</sub>", "concrete moment contribution about x", "kNm"),
+        ("M<sub>s,x</sub>", "mild-reinforcement moment contribution about x", "kNm"),
+        ("M<sub>p,x</sub>", "prestressing-steel moment contribution about x", "kNm"),
+    ),
+    ("plastic.worked.moment-y", None): _result(
+        "M<sub>y</sub>", "kNm",
+        ("M<sub>y</sub>", "accepted section moment about y", "kNm"),
+        ("M<sub>c,y</sub>", "concrete moment contribution about y", "kNm"),
+        ("M<sub>s,y</sub>", "mild-reinforcement moment contribution about y", "kNm"),
+        ("M<sub>p,y</sub>", "prestressing-steel moment contribution about y", "kNm"),
+    ),
+    ("plastic.worked.element-force", None): _result(
+        "F<sub>i</sub>", "kN",
+        ("F<sub>i</sub>", "tension-positive force of reinforcement element i", "kN"),
+        ("sigma<sub>i</sub>", "retained material stress of element i", "MPa"),
+        ("A<sub>i</sub>", "entered area of element i", "mm2"),
+    ),
+    ("elastic.long.stress-plane", None): _result(
+        "sigma<sub>ref</sub>", "kN/m2",
+        ("sigma<sub>ref</sub>", "raw Ec=1 reference stress", "kN/m2"),
+        ("sigma<sub>0</sub>", "retained reference-stress offset", "kN/m2"),
+        ("g<sub>x</sub>", "retained reference-stress gradient in x", "kN/m3"),
+        ("g<sub>y</sub>", "retained reference-stress gradient in y", "kN/m3"),
+        ("x", "section x-coordinate", "m"),
+        ("y", "section y-coordinate", "m"),
+    ),
+    ("elastic.instantaneous.stress-plane", None): _result(
+        "sigma<sub>ref</sub>", "kN/m2",
+        ("sigma<sub>ref</sub>", "raw Ec=1 reference stress", "kN/m2"),
+        ("sigma<sub>0</sub>", "retained reference-stress offset", "kN/m2"),
+        ("g<sub>x</sub>", "retained reference-stress gradient in x", "kN/m3"),
+        ("g<sub>y</sub>", "retained reference-stress gradient in y", "kN/m3"),
+        ("x", "section x-coordinate", "m"),
+        ("y", "section y-coordinate", "m"),
+    ),
+    ("elastic.long.equilibrium-n", None): _result(
+        "N<sub>int</sub>", "kN",
+        ("N<sub>int</sub>", "accepted long-term internal axial resultant", "kN"),
+        ("J", "retained final transformed equilibrium row", "mixed section units"),
+        ("q", "retained raw reference-stress plane", "mixed stress units"),
+        ("target", "solver target resultant", "kN"),
+        ("residual", "signed final equilibrium residual", "kN"),
+    ),
+    ("elastic.long.equilibrium-mx", None): _result(
+        "M<sub>x,int</sub>", "kNm",
+        ("M<sub>x,int</sub>", "accepted long-term internal moment about x", "kNm"),
+        ("J", "retained final transformed equilibrium row", "mixed section units"),
+        ("q", "retained raw reference-stress plane", "mixed stress units"),
+        ("target", "solver target resultant", "kNm"),
+        ("residual", "signed final equilibrium residual", "kNm"),
+    ),
+    ("elastic.long.equilibrium-my", None): _result(
+        "M<sub>y,int</sub>", "kNm",
+        ("M<sub>y,int</sub>", "accepted long-term internal moment about y", "kNm"),
+        ("J", "retained final transformed equilibrium row", "mixed section units"),
+        ("q", "retained raw reference-stress plane", "mixed stress units"),
+        ("target", "solver target resultant", "kNm"),
+        ("residual", "signed final equilibrium residual", "kNm"),
+    ),
+    ("elastic.instantaneous.equilibrium-n", None): _result(
+        "N<sub>int</sub>", "kN",
+        ("N<sub>int</sub>", "accepted instantaneous internal axial resultant", "kN"),
+        ("J", "retained final transformed equilibrium row", "mixed section units"),
+        ("q", "retained raw reference-stress plane", "mixed stress units"),
+        ("target", "solver target resultant", "kN"),
+        ("residual", "signed final equilibrium residual", "kN"),
+    ),
+    ("elastic.instantaneous.equilibrium-mx", None): _result(
+        "M<sub>x,int</sub>", "kNm",
+        ("M<sub>x,int</sub>", "accepted instantaneous internal moment about x", "kNm"),
+        ("J", "retained final transformed equilibrium row", "mixed section units"),
+        ("q", "retained raw reference-stress plane", "mixed stress units"),
+        ("target", "solver target resultant", "kNm"),
+        ("residual", "signed final equilibrium residual", "kNm"),
+    ),
+    ("elastic.instantaneous.equilibrium-my", None): _result(
+        "M<sub>y,int</sub>", "kNm",
+        ("M<sub>y,int</sub>", "accepted instantaneous internal moment about y", "kNm"),
+        ("J", "retained final transformed equilibrium row", "mixed section units"),
+        ("q", "retained raw reference-stress plane", "mixed stress units"),
+        ("target", "solver target resultant", "kNm"),
+        ("residual", "signed final equilibrium residual", "kNm"),
+    ),
+    ("elastic.combined.reduction-factor", None): _result(
+        "r", "dimensionless",
+        ("r", "long-term steel-stress reduction factor"),
+        ("n<sub>s</sub>", "short-term modular ratio"),
+        ("n<sub>l</sub>", "long-term modular ratio"),
+    ),
+    ("elastic.combined.reduced-long-stress", None): _result(
+        "sigma<sub>s2,i</sub>", "MPa",
+        ("sigma<sub>s2,i</sub>", "reduced passive long-term stress", "MPa"),
+        ("r", "long-term steel-stress reduction factor"),
+        ("sigma<sub>s1,passive,i</sub>", "passive long-term element stress", "MPa"),
+    ),
+    ("elastic.combined.neutralising-n", None): _result(
+        "N<sub>neu</sub>", "kN",
+        ("N<sub>neu</sub>", "neutralising axial resultant", "kN"),
+        ("sigma<sub>s2,i</sub>", "reduced passive long-term stress", "MPa"),
+        ("A<sub>i</sub>", "element area", "mm2"),
+    ),
+    ("elastic.combined.neutralising-mx", None): _result(
+        "M<sub>neu,x</sub>", "kNm",
+        ("M<sub>neu,x</sub>", "neutralising moment about x", "kNm"),
+        ("sigma<sub>s2,i</sub>", "reduced passive long-term stress", "MPa"),
+        ("A<sub>i</sub>", "element area", "mm2"),
+        ("y<sub>i</sub>", "element y-coordinate", "mm"),
+    ),
+    ("elastic.combined.neutralising-my", None): _result(
+        "M<sub>neu,y</sub>", "kNm",
+        ("M<sub>neu,y</sub>", "neutralising moment about y", "kNm"),
+        ("sigma<sub>s2,i</sub>", "reduced passive long-term stress", "MPa"),
+        ("A<sub>i</sub>", "element area", "mm2"),
+        ("x<sub>i</sub>", "element x-coordinate", "mm"),
+    ),
+    ("elastic.combined.target-n", None): _result(
+        "N<sub>target</sub>", "kN",
+        ("N<sub>target</sub>", "instantaneous axial target after neutralisation", "kN"),
+        ("N<sub>comb</sub>", "combined target before neutralisation", "kN"),
+        ("N<sub>neu</sub>", "retained neutralising resultant", "kN"),
+    ),
+    ("elastic.combined.target-mx", None): _result(
+        "M<sub>x,target</sub>", "kNm",
+        (
+            "M<sub>x,target</sub>",
+            "instantaneous moment-x target after neutralisation",
+            "kNm",
+        ),
+        ("M<sub>x,comb</sub>", "combined target before neutralisation", "kNm"),
+        ("M<sub>x,neu</sub>", "retained neutralising resultant", "kNm"),
+    ),
+    ("elastic.combined.target-my", None): _result(
+        "M<sub>y,target</sub>", "kNm",
+        (
+            "M<sub>y,target</sub>",
+            "instantaneous moment-y target after neutralisation",
+            "kNm",
+        ),
+        ("M<sub>y,comb</sub>", "combined target before neutralisation", "kNm"),
+        ("M<sub>y,neu</sub>", "retained neutralising resultant", "kNm"),
+    ),
+    ("elastic.combined.total-stress", None): _result(
+        "sigma<sub>total,i</sub>", "MPa",
+        ("sigma<sub>total,i</sub>", "total retained element stress", "MPa"),
+        ("sigma<sub>s2,i</sub>", "reduced passive long-term stress", "MPa"),
+        ("sigma<sub>RST1,i</sub>", "instantaneous response stress", "MPa"),
+        ("sigma<sub>p0,i</sub>", "locked-in prestress", "MPa"),
+    ),
+    ("elastic.combined.difference-stress", None): _result(
+        "sigma<sub>DIF,i</sub>", "MPa",
+        ("sigma<sub>DIF,i</sub>", "total-minus-long element stress", "MPa"),
+        ("sigma<sub>total,i</sub>", "total retained element stress", "MPa"),
+        ("sigma<sub>long,i</sub>", "reported long-term element stress", "MPa"),
     ),
     ("shear.2023.effective-span", None): _result(
         "a<sub>cs</sub>", "mm",
@@ -644,8 +824,10 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 76:
-        raise RuntimeError(f"Expected 76 report equation contracts, got {len(_CONTRACTS)}.")
+    if len(_CONTRACTS) != 100:
+        raise RuntimeError(
+            f"Expected 100 report equation contracts, got {len(_CONTRACTS)}."
+        )
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):
             raise RuntimeError(f"Invalid equation-contract key: {key!r}.")

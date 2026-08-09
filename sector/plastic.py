@@ -41,6 +41,77 @@ _USE_KERNEL = kernels.HAS_NUMBA
 
 
 @dataclass(frozen=True, slots=True)
+class PlasticConcreteCornerState:
+    """Material response at one concrete vertex of the accepted strain plane.
+
+    ``section_strain`` follows the plastic solver's compression-positive
+    convention. ``material_strain`` and ``material_stress`` are the exact
+    tension-positive arguments and result of :meth:`Concrete.stress`.
+    ``ring_index`` and ``point_index`` are zero-based and preserve input order.
+    """
+
+    ring_index: int
+    point_index: int
+    x: float
+    y: float
+    section_strain: float
+    material_strain: float
+    material_stress: float
+
+
+@dataclass(frozen=True, slots=True)
+class PlasticReinforcementState:
+    """One bar or tendon contribution at the accepted strain plane.
+
+    ``section_strain`` is compression-positive. ``initial_strain``,
+    ``material_strain`` and ``material_stress`` use the material law's
+    tension-positive convention. Force and moments use the plastic solver's
+    compression-positive resultant convention, so their sums reproduce the
+    corresponding fields on :class:`PlasticPoint` without a report-side solve.
+    ``element_index`` is zero-based within its bar or tendon family.
+    """
+
+    element_index: int
+    x: float
+    y: float
+    area: float
+    section_strain: float
+    initial_strain: float
+    material_strain: float
+    material_stress: float
+    force: float
+    mx: float
+    my: float
+
+
+@dataclass(frozen=True, slots=True)
+class PlasticCurvatureCandidate:
+    """One existing ultimate-strain limit at the accepted compression depth.
+
+    ``strain_limit`` is the exact effective numerator used by the solver. For a
+    reinforcement rupture candidate it therefore includes the existing tiny
+    intact-state back-off; for a tendon it is the backed-off remaining strain
+    after initial prestrain. ``curvature = strain_limit / distance_from_na``.
+    """
+
+    mode: str
+    element_index: int | None
+    strain_limit: float
+    distance_from_na: float
+    curvature: float
+
+
+@dataclass(frozen=True, slots=True)
+class PlasticCurvatureSelection:
+    """Candidate minimum and governing identity for the accepted strain plane."""
+
+    candidates: tuple[PlasticCurvatureCandidate, ...]
+    selected_mode: str
+    selected_element_index: int | None
+    selected_curvature: float
+
+
+@dataclass(frozen=True, slots=True)
 class PlasticAccumulation:
     """Authoritative material and sign-split resultants at one strain plane."""
 
@@ -62,6 +133,8 @@ class PlasticAccumulation:
     min_bar_strain: float
     max_bar_strain: float
     min_tendon_strain: float
+    bar_states: tuple[PlasticReinforcementState, ...] = ()
+    tendon_states: tuple[PlasticReinforcementState, ...] = ()
 
     @property
     def axial(self) -> float:
@@ -133,6 +206,18 @@ class PlasticPoint:
     tension_force: float | None = field(default=None, kw_only=True, repr=False, compare=False)
     tension_mx: float | None = field(default=None, kw_only=True, repr=False, compare=False)
     tension_my: float | None = field(default=None, kw_only=True, repr=False, compare=False)
+    concrete_corner_states: tuple[PlasticConcreteCornerState, ...] | None = field(
+        default=None, kw_only=True, repr=False, compare=False
+    )
+    bar_states: tuple[PlasticReinforcementState, ...] | None = field(
+        default=None, kw_only=True, repr=False, compare=False
+    )
+    tendon_states: tuple[PlasticReinforcementState, ...] | None = field(
+        default=None, kw_only=True, repr=False, compare=False
+    )
+    curvature_selection: PlasticCurvatureSelection | None = field(
+        default=None, kw_only=True, repr=False, compare=False
+    )
 
 
 def _material_sequence(default, specific, count, label):
@@ -147,6 +232,92 @@ def _material_sequence(default, specific, count, label):
     if len(laws) != count:
         raise ValueError(f"need {count} {label} materials, got {len(laws)}")
     return laws
+
+
+def _curvature_at_depth(
+    bar_materials: Sequence[MildSteel],
+    tendon_materials: Sequence[Prestress],
+    s_max: float,
+    c: float,
+    s_bars: np.ndarray,
+    s_tendons: np.ndarray,
+    eps_cu: float,
+    *,
+    retain_selection: bool,
+) -> tuple[float, PlasticCurvatureSelection | None]:
+    """Apply the sole ultimate-curvature minimum and optionally retain its rows."""
+
+    s_na = s_max - c
+    phi = eps_cu / c  # concrete-crushing limit
+    selected_mode: str = "concrete_crushing"
+    selected_element_index: int | None = None
+    candidates: list[PlasticCurvatureCandidate] | None = (
+        [PlasticCurvatureCandidate(selected_mode, None, eps_cu, c, phi)]
+        if retain_selection else None
+    )
+
+    # When steel or a tendon governs it sits exactly at its rupture strain, where
+    # it is still intact (carrying its rupture force). Back the limiting curvature
+    # off by a negligible amount so floating-point rounding cannot tip the strain
+    # a hair past rupture (which the material law would read as fractured, zero
+    # force). The back-off is far larger than rounding yet physically negligible.
+    intact = 1.0 - 1.0e-9
+
+    for index, (s_bar, material) in enumerate(zip(s_bars, bar_materials)):
+        if s_bar < s_na:
+            strain_limit = intact * material.eut
+            distance = s_na - float(s_bar)
+            candidate = strain_limit / distance
+            if candidates is not None:
+                candidates.append(PlasticCurvatureCandidate(
+                    "bar_tension_rupture", index, strain_limit, distance, candidate
+                ))
+            if candidate < phi:
+                phi = candidate
+                selected_mode = "bar_tension_rupture"
+                selected_element_index = index
+        # The rupture strain is symmetric, so a compression bar must not be driven
+        # past eut either. This only bites when eut < the concrete crushing strain.
+        if material.active_in_compression and s_bar > s_na:
+            strain_limit = intact * material.eut
+            distance = float(s_bar) - s_na
+            candidate = strain_limit / distance
+            if candidates is not None:
+                candidates.append(PlasticCurvatureCandidate(
+                    "bar_compression_rupture",
+                    index,
+                    strain_limit,
+                    distance,
+                    candidate,
+                ))
+            if candidate < phi:
+                phi = candidate
+                selected_mode = "bar_compression_rupture"
+                selected_element_index = index
+
+    for index, (s_tendon, material) in enumerate(zip(s_tendons, tendon_materials)):
+        margin = material.rupture_strain - material.IS
+        if s_tendon < s_na and margin > 0.0:
+            strain_limit = intact * margin
+            distance = s_na - float(s_tendon)
+            candidate = strain_limit / distance
+            if candidates is not None:
+                candidates.append(PlasticCurvatureCandidate(
+                    "tendon_tension_rupture", index, strain_limit, distance, candidate
+                ))
+            if candidate < phi:
+                phi = candidate
+                selected_mode = "tendon_tension_rupture"
+                selected_element_index = index
+
+    if candidates is None:
+        return phi, None
+    return phi, PlasticCurvatureSelection(
+        candidates=tuple(candidates),
+        selected_mode=selected_mode,
+        selected_element_index=selected_element_index,
+        selected_curvature=phi,
+    )
 
 
 def _governing_curvature(bar_materials, tendon_materials, s_max, c, s_bars,
@@ -166,30 +337,16 @@ def _governing_curvature(bar_materials, tendon_materials, s_max, c, s_bars,
         bar_materials = (bar_materials,) * len(s_bars)
     if isinstance(tendon_materials, Prestress):
         tendon_materials = (tendon_materials,) * len(s_tendons)
-    tendon_materials = tendon_materials or ()
-    s_na = s_max - c
-    phi = eps_cu / c  # concrete-crushing limit
-
-    # When steel or a tendon governs it sits exactly at its rupture strain, where
-    # it is still intact (carrying its rupture force). Back the limiting curvature
-    # off by a negligible amount so floating-point rounding cannot tip the strain
-    # a hair past rupture (which the material law would read as fractured, zero
-    # force). The back-off is far larger than rounding yet physically negligible.
-    intact = 1.0 - 1.0e-9
-
-    for s_bar, material in zip(s_bars, bar_materials):
-        if s_bar < s_na:
-            phi = min(phi, intact * material.eut / (s_na - float(s_bar)))
-        # The rupture strain is symmetric, so a compression bar must not be driven
-        # past eut either. This only bites when eut < the concrete crushing strain.
-        if material.active_in_compression and s_bar > s_na:
-            phi = min(phi, intact * material.eut / (float(s_bar) - s_na))
-
-    for s_tendon, material in zip(s_tendons, tendon_materials):
-        margin = material.rupture_strain - material.IS
-        if s_tendon < s_na and margin > 0.0:
-            phi = min(phi, intact * margin / (s_na - float(s_tendon)))
-
+    phi, _ = _curvature_at_depth(
+        bar_materials,
+        tendon_materials or (),
+        s_max,
+        c,
+        s_bars,
+        s_tendons,
+        eps_cu,
+        retain_selection=False,
+    )
     return phi
 
 
@@ -227,7 +384,8 @@ def _band_stresses(concrete, kappa, h, n_bands, memo=None):
 def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi,
                 n_bands,
                 rings, bar_data, tendon_data, ring_xy=None, ring_starts=None,
-                buf_a=None, buf_b=None, band_memo=None) -> PlasticAccumulation:
+                buf_a=None, buf_b=None, band_memo=None, *,
+                retain_element_states=False) -> PlasticAccumulation:
     """Force resultants for a trial compression depth ``c`` (s-units).
 
     Returns the concrete, bar, and tendon force/Mx/My totals as well as the
@@ -247,6 +405,8 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
     tendon_F = tendon_Fx = tendon_Fy = 0.0
     comp_F = comp_Fx = comp_Fy = 0.0
     ten_F = ten_Fx = ten_Fy = 0.0
+    bar_states: tuple[PlasticReinforcementState, ...] = ()
+    tendon_states: tuple[PlasticReinforcementState, ...] = ()
 
     # -- concrete (always compression over the zone s > s_na) --
     fcd = concrete.fcd
@@ -306,6 +466,25 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
             for e, material in zip(eps_b, bar_materials)
         ])  # comp +, MPa
         fb = sig_b * ba * _MN_TO_KN                          # kN, comp +
+        if retain_element_states:
+            bar_states = tuple(
+                PlasticReinforcementState(
+                    element_index=index,
+                    x=float(x),
+                    y=float(y),
+                    area=float(area),
+                    section_strain=float(section_strain),
+                    initial_strain=0.0,
+                    material_strain=-float(section_strain),
+                    material_stress=-float(stress),
+                    force=float(force),
+                    mx=float(force * y),
+                    my=float(force * x),
+                )
+                for index, (x, y, area, section_strain, stress, force) in enumerate(
+                    zip(bx, by, ba, eps_b, sig_b, fb)
+                )
+            )
         bar_F = float(fb.sum())
         bar_Fx = float((fb * bx).sum())
         bar_Fy = float((fb * by).sum())
@@ -332,6 +511,34 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
             for e, material in zip(e_total, tendon_materials)
         ])  # tension +, MPa
         ft = -sig_t * ta * _MN_TO_KN                        # tension -> negative (comp +)
+        if retain_element_states:
+            tendon_states = tuple(
+                PlasticReinforcementState(
+                    element_index=index,
+                    x=float(x),
+                    y=float(y),
+                    area=float(area),
+                    section_strain=float(section_strain),
+                    initial_strain=float(material.IS),
+                    material_strain=float(total_strain),
+                    material_stress=float(stress),
+                    force=float(force),
+                    mx=float(force * y),
+                    my=float(force * x),
+                )
+                for index, (
+                    x,
+                    y,
+                    area,
+                    section_strain,
+                    total_strain,
+                    stress,
+                    force,
+                    material,
+                ) in enumerate(
+                    zip(tx, ty, ta, eps_c, e_total, sig_t, ft, tendon_materials)
+                )
+            )
         tendon_F = float(ft.sum())
         tendon_Fx = float((ft * tx).sum())
         tendon_Fy = float((ft * ty).sum())
@@ -362,6 +569,8 @@ def _accumulate(concrete, bar_materials, tendon_materials, dx, dy, s_max, c, phi
         min_bar_strain=min_eps,
         max_bar_strain=max_eps,
         min_tendon_strain=min_eps_cable,
+        bar_states=bar_states,
+        tendon_states=tendon_states,
     )
 
 
@@ -417,6 +626,36 @@ def _prep_section(section: Section, include_tendons: bool) -> _SectionPrep:
     return _SectionPrep(bx=bx, by=by, ba=ba, tx=tx, ty=ty, ta=ta, verts=verts,
                         rings=rings, ring_xy=ring_xy, ring_starts=ring_starts,
                         buf_a=buf_a, buf_b=buf_b)
+
+
+def _accepted_concrete_corner_states(
+    section: Section,
+    concrete: Concrete,
+    direction_x: float,
+    direction_y: float,
+    neutral_axis_offset: float,
+    curvature: float,
+) -> tuple[PlasticConcreteCornerState, ...]:
+    """Evaluate each input-order concrete corner once at the accepted plane."""
+
+    states: list[PlasticConcreteCornerState] = []
+    for ring_index, ring in enumerate(section.concrete):
+        for point_index, vertex in enumerate(ring):
+            x, y = float(vertex[0]), float(vertex[1])
+            section_strain = curvature * (
+                x * direction_x + y * direction_y - neutral_axis_offset
+            )
+            material_strain = -section_strain
+            states.append(PlasticConcreteCornerState(
+                ring_index=ring_index,
+                point_index=point_index,
+                x=x,
+                y=y,
+                section_strain=section_strain,
+                material_strain=material_strain,
+                material_stress=concrete.stress(material_strain, design=True),
+            ))
+    return tuple(states)
 
 
 def _accumulate_at_depth(
@@ -591,11 +830,21 @@ def plastic_capacity_at_angle(
                 break
         c = 0.5 * (lo + hi)
 
-    phi = _governing_curvature(bar_laws, tendon_laws, s_max, c, s_bars,
-                               s_tendons, concrete.eps_cu2)
+    phi, curvature_selection = _curvature_at_depth(
+        bar_laws,
+        tendon_laws,
+        s_max,
+        c,
+        s_bars,
+        s_tendons,
+        concrete.eps_cu2,
+        retain_selection=True,
+    )
+    assert curvature_selection is not None
     accumulation = _accumulate(
         concrete, bar_laws, tendon_laws, dx, dy, s_max, c, phi, n_bands,
-        rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b, band_memo
+        rings, bar_data, tendon_data, ring_xy, ring_starts, buf_a, buf_b, band_memo,
+        retain_element_states=True,
     )
 
     # A valid root must be reachable by the endpoint responses *and* satisfy axial
@@ -610,6 +859,14 @@ def plastic_capacity_at_angle(
     My = accumulation.my
     kappa = phi
     s_na = s_max - c
+    concrete_corner_states = _accepted_concrete_corner_states(
+        section,
+        concrete,
+        dx,
+        dy,
+        s_na,
+        kappa,
+    )
     eps_concrete = phi * c  # extreme concrete strain (<= eps_cu2; less if steel governs)
 
     # Resultant load position. R is signed (Mx = P*R*sin U, My = P*R*cos U), so a
@@ -681,6 +938,10 @@ def plastic_capacity_at_angle(
         tension_force=accumulation.tension_force,
         tension_mx=accumulation.tension_mx,
         tension_my=accumulation.tension_my,
+        concrete_corner_states=concrete_corner_states,
+        bar_states=accumulation.bar_states,
+        tendon_states=accumulation.tendon_states,
+        curvature_selection=curvature_selection,
         converged=converged,
     )
 
