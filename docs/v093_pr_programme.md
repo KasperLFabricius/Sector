@@ -226,8 +226,15 @@ repeat a search or choose a governing branch. Dict-heavy families may be made
 more explicit within their existing result boundary, but do not feed a second
 generic tracing subsystem.
 
-The current report presents each requested calculation in a consistent textbook
-sequence. PR-07B later applies density profiles without changing that sequence:
+Every calculated case remains visible in the consolidated result summaries, but
+the report publishes a complete textbook derivation only for the globally
+governing or extremal result in each calculation family. This prevents repeated
+load cases from turning the report into many copies of the same method. The
+first-generation DK/NA crack-width route is the deliberate exception: it
+publishes one globally governing fine-system example and one globally governing
+coarse-system example because they are distinct calculation branches. PR-07B
+later applies density profiles without changing this selection rule or the
+following sequence for each selected worked example:
 
 1. **Question.** State the quantity/check being calculated and, where one
    exists, the criterion being tested.
@@ -254,9 +261,12 @@ sequence. PR-07B later applies density profiles without changing that sequence:
    result means and what Sector has not assessed, without adding a global
    compliance conclusion.
 
-The default report must be independently followable from start to finish. PR-07B
-later lets Brief summarize the derivation and Audit add full precision and wider
-non-governing tables without changing any calculation result.
+The default report must be independently followable from start to finish. Its
+overview identifies every calculated case and the selected governing cases;
+the complete chains then teach each implemented method once. PR-07B later lets
+Brief summarize the derivation and Audit add precision or wider compact result
+tables without duplicating full non-governing derivations or changing any
+calculation result.
 
 The initial family inventory freezes the minimum migration boundary:
 
@@ -743,9 +753,12 @@ Acceptance:
 - rounding happens only at publication;
 - a missing required result field or substitution fails closed;
 - every live equation contract has substitution, result and source; and
-- every calculation in the current default report follows the nine-part textbook
-  sequence and can be followed by a reader who has not previously used the
-  formula; PR-07B must preserve that chain in its later profiles;
+- every globally governing/extremal worked example in the current default report
+  follows the nine-part textbook sequence and can be followed by a reader who
+  has not previously used the formula;
+- every non-governing case remains available in compact summaries but does not
+  repeat the full derivation; DK/NA crack width publishes exactly the globally
+  governing fine and coarse branches; PR-07B must preserve this density rule;
 - iterative/search methods publish a compact existing-result summary
   without flooding the report with implementation noise; and
 - existing final results remain numerically unchanged unless a separately

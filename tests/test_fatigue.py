@@ -27,6 +27,7 @@ def _state(
         converged=converged,
         bar_stress_long_mpa=tuple(bar_long),
         bar_stress_total_mpa=tuple(bar_total),
+        bar_stress_design_total_mpa=tuple(bar_design_total),
         bar_stress_fatigue_design_total_mpa=tuple(bar_design_total),
         concrete_compression_long_mpa=tuple(concrete_long),
         concrete_compression_total_mpa=tuple(concrete_total),
@@ -204,6 +205,74 @@ def test_concrete_fatigue_strength_matches_2005_and_2023_expressions():
     )
 
 
+def test_concrete_fatigue_strength_retains_only_the_selected_edition_operands():
+    old = fatigue.concrete_fatigue_strength_result(
+        fatigue.ConcreteFatigueProperties(
+            edition="2005",
+            fck_mpa=40.0,
+            gamma_c=1.5,
+            beta_cc_t0=0.9,
+            alpha_cc=0.95,
+            k1=0.85,
+        )
+    )
+    new = fatigue.concrete_fatigue_strength_result(
+        fatigue.ConcreteFatigueProperties(
+            edition="2023",
+            fck_mpa=80.0,
+            gamma_c=1.5,
+            beta_cc_t0=0.9,
+        )
+    )
+    capped = fatigue.concrete_fatigue_strength_result(
+        fatigue.ConcreteFatigueProperties(
+            edition="2023",
+            fck_mpa=30.0,
+            gamma_c=1.5,
+            beta_cc_t0=1.0,
+        )
+    )
+
+    assert old.edition == fatigue.EC2_2005
+    assert old.base_strength_mpa == pytest.approx(0.9 * 0.95 * 40.0 / 1.5)
+    assert old.high_strength_reduction == pytest.approx(1.0 - 40.0 / 250.0)
+    assert old.eta_cc_raw is None
+    assert old.eta_cc_cap is None
+    assert old.eta_cc is None
+    assert old.eta_cc_fat_raw is None
+    assert old.eta_cc_fat_cap is None
+    assert old.eta_cc_fat is None
+    assert old.high_strength_reduction is not None
+    assert old.fcd_fat_mpa == pytest.approx(
+        0.85 * old.base_strength_mpa * old.high_strength_reduction
+    )
+
+    expected_eta = (40.0 / 80.0) ** (1.0 / 3.0)
+    assert new.edition == fatigue.EC2_2023
+    assert new.base_strength_mpa == pytest.approx(0.9 * 80.0 / 1.5)
+    assert new.alpha_cc is None
+    assert new.k1 is None
+    assert new.high_strength_reduction is None
+    assert new.eta_cc_raw == pytest.approx(expected_eta)
+    assert new.eta_cc_cap == pytest.approx(1.0)
+    assert new.eta_cc == pytest.approx(expected_eta)
+    assert new.eta_cc_fat_raw == pytest.approx(0.85 * expected_eta)
+    assert new.eta_cc_fat_cap == pytest.approx(0.8)
+    assert new.eta_cc_fat == pytest.approx(min(0.85 * expected_eta, 0.8))
+    assert new.eta_cc_fat is not None
+    assert new.fcd_fat_mpa == pytest.approx(
+        new.base_strength_mpa * new.eta_cc_fat
+    )
+    assert capped.eta_cc_raw is not None
+    assert capped.eta_cc_cap is not None
+    assert capped.eta_cc_fat_raw is not None
+    assert capped.eta_cc_fat_cap is not None
+    assert capped.eta_cc_raw > capped.eta_cc_cap
+    assert capped.eta_cc == pytest.approx(capped.eta_cc_cap)
+    assert capped.eta_cc_fat_raw > capped.eta_cc_fat_cap
+    assert capped.eta_cc_fat == pytest.approx(capped.eta_cc_fat_cap)
+
+
 def test_concrete_life_matches_corrected_bridge_and_2023_equation():
     life = fatigue.concrete_fatigue_life(
         10.0,
@@ -288,6 +357,87 @@ def test_concrete_equivalent_method_ignores_cycles_and_reports_each_pair():
     assert result.governing_equivalent_bin == (
         states[int(np.argmax(expected))].name
     )
+    assert result.governing_criterion == "Equivalent amplitude"
+    assert result.governing_bin == result.governing_equivalent_bin
+    governing = next(
+        item for item in result.bins
+        if item.bin_name == result.governing_bin
+    )
+    assert governing.life_branch == "damage-equivalent criterion"
+    assert governing.life_coefficient is None
+    assert governing.life_range_term == pytest.approx(
+        math.sqrt(1.0 - governing.stress_ratio)
+    )
+
+
+def test_equivalent_method_retains_compressive_stress_when_it_is_larger(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        fatigue,
+        "concrete_equivalent_utilisation",
+        lambda *_args, **_kwargs: 0.1,
+    )
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=37.5,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+        method=fatigue.CONCRETE_EQUIVALENT,
+    )
+
+    result = fatigue.assess_concrete_spectrum(
+        np.asarray([(0.0, 0.0)]),
+        (
+            _state(
+                "stress governs",
+                1.0e6,
+                concrete_long=(4.0,),
+                concrete_total=(10.0,),
+            ),
+        ),
+        properties,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.stress_utilisation == pytest.approx(0.5)
+    assert result.equivalent_utilisation == pytest.approx(0.1)
+    assert result.utilisation == pytest.approx(0.5)
+    assert result.governing_criterion == "compressive stress"
+    assert result.governing_bin == "stress governs"
+
+
+def test_equivalent_criterion_is_selected_on_an_exact_stress_tie():
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=37.5,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+        method=fatigue.CONCRETE_EQUIVALENT,
+    )
+
+    result = fatigue.assess_concrete_spectrum(
+        np.asarray([(0.0, 0.0)]),
+        (
+            _state(
+                "constant compression",
+                1.0e6,
+                concrete_long=(8.0,),
+                concrete_total=(8.0,),
+            ),
+        ),
+        properties,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.equivalent_utilisation == pytest.approx(
+        result.stress_utilisation
+    )
+    assert result.governing_criterion == "Equivalent amplitude"
+    assert result.governing_bin == "constant compression"
+    tied_bin = result.bins[0]
+    assert tied_bin.compression_min_state == "long-term"
+    assert tied_bin.compression_max_state == "action-factored total"
 
 
 def test_reinforcement_damage_and_yield_are_accumulated_per_element():
@@ -322,9 +472,162 @@ def test_reinforcement_damage_and_yield_are_accumulated_per_element():
         sum(item.damage for item in results[0].bins)
     )
     assert results[0].bins[0].stress_range_mpa == 80.0
+    tension_bin = results[0].bins[0]
+    assert tension_bin.yield_design_total_check is not None
+    assert tension_bin.yield_design_total_check.branch == "tension fytk"
+    assert tension_bin.yield_design_total_check.characteristic_strength_mpa == 500.0
     assert results[1].yield_utilisation == pytest.approx(450.0 / 400.0)
     assert results[1].governing_yield_bin == "B1"
+    assert results[1].governing_criterion == "yield/proof stress"
+    assert results[1].governing_bin == "B1"
+    compression_bin = results[1].bins[0]
+    assert compression_bin.yield_long_check is not None
+    assert compression_bin.yield_design_total_check is not None
+    assert compression_bin.governing_yield_check is not None
+    assert compression_bin.yield_long_check.state == "long-term"
+    assert compression_bin.yield_long_check.branch == "compression fyck"
+    assert compression_bin.yield_long_check.characteristic_strength_mpa == 400.0
+    assert compression_bin.yield_design_total_check.state == "design total"
+    assert compression_bin.yield_design_total_check.branch == "compression fyck"
+    assert compression_bin.governing_yield_check == (
+        compression_bin.yield_design_total_check
+    )
     assert results[1].passed is False
+
+
+def test_reinforcement_result_retains_governing_sn_branch_and_damage_operands():
+    states = (
+        _state(
+            "high range",
+            1.0e7,
+            bar_long=(0.0,),
+            bar_total=(200.0,),
+        ),
+        _state(
+            "low range",
+            1.0,
+            bar_long=(0.0,),
+            bar_total=(80.0,),
+        ),
+    )
+
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(),),
+        states,
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+    high, low = result.bins
+
+    assert result.governing_criterion == "Miner damage"
+    assert result.governing_bin == "high range"
+    assert high.sn_reference_cycles == pytest.approx(2.0e6)
+    assert high.sn_slope_1 == pytest.approx(5.0)
+    assert high.sn_slope_2 == pytest.approx(9.0)
+    assert high.sn_knee_stress_range_mpa == pytest.approx(160.0)
+    assert high.sn_branch == "k1 (at or above knee)"
+    assert high.sn_reference_ratio == pytest.approx(160.0 / 200.0)
+    assert high.material_factor == pytest.approx(1.0)
+    assert low.sn_branch == "k2 (below knee)"
+    assert low.sn_reference_ratio == pytest.approx(160.0 / 80.0)
+
+
+def test_reinforcement_yield_selection_can_retain_the_long_term_endpoint():
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(fyck=400.0),),
+        (
+            _state(
+                "cyclic relief",
+                1.0,
+                bar_long=(-450.0,),
+                bar_total=(-350.0,),
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0].bins[0]
+
+    assert result.governing_yield_check == result.yield_long_check
+    assert result.governing_yield_check is not None
+    assert result.governing_yield_check.state == "long-term"
+    assert result.governing_yield_check.branch == "compression fyck"
+    assert result.governing_yield_check.characteristic_strength_mpa == 400.0
+    assert result.governing_yield_check.design_limit_mpa == pytest.approx(400.0)
+    assert result.governing_yield_check.utilisation == pytest.approx(450.0 / 400.0)
+
+
+def test_concrete_result_retains_governing_life_branch_and_miner_operands():
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=37.5,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+        c=14.0,
+    )
+    states = (
+        _state(
+            "governing damage",
+            2.0e9,
+            concrete_long=(4.0,),
+            concrete_total=(10.0,),
+        ),
+        _state(
+            "minor damage",
+            1.0,
+            concrete_long=(1.0,),
+            concrete_total=(6.0,),
+        ),
+    )
+
+    result = fatigue.assess_concrete_spectrum(
+        np.asarray([(0.0, 0.0)]),
+        states,
+        properties,
+        gamma_ff=1.0,
+    )[0]
+    governing = result.bins[0]
+
+    assert result.governing_criterion == "Miner damage"
+    assert result.governing_bin == "governing damage"
+    assert governing.life_branch == "variable compression"
+    assert governing.life_coefficient == pytest.approx(14.0)
+    assert governing.life_range_term == pytest.approx(math.sqrt(1.0 - 0.4))
+    assert governing.log10_cycles_to_failure == pytest.approx(
+        14.0
+        * (1.0 - governing.e_cd_max)
+        / governing.life_range_term
+    )
+
+
+def test_concrete_endpoint_identities_follow_reversed_design_compression():
+    properties = fatigue.ConcreteFatigueProperties(
+        edition="2023",
+        fck_mpa=37.5,
+        gamma_c=1.5,
+        beta_cc_t0=1.0,
+    )
+    result = fatigue.assess_concrete_spectrum(
+        np.asarray([(0.0, 0.0)]),
+        (
+            _state(
+                "unloading",
+                1.0e3,
+                concrete_long=(10.0,),
+                concrete_total=(8.0,),
+                concrete_design_total=(6.0,),
+                design_action_factor=2.0,
+            ),
+        ),
+        properties,
+        gamma_ff=2.0,
+    )[0].bins[0]
+
+    assert result.compression_total_mpa == 8.0
+    assert result.compression_total_design_mpa == 6.0
+    assert result.compression_min_design_mpa == 6.0
+    assert result.compression_min_state == "action-factored total"
+    assert result.compression_max_design_mpa == 10.0
+    assert result.compression_max_state == "long-term"
 
 
 def test_gamma_ff_is_visible_as_design_range_but_not_hidden_in_raw_stress():
@@ -348,6 +651,8 @@ def test_gamma_ff_is_visible_as_design_range_but_not_hidden_in_raw_stress():
     assert result.design_stress_range_mpa == 60.0
     assert result.stress_total_mpa == 150.0
     assert result.stress_total_design_mpa == 160.0
+    assert result.stress_total_design_elastic_mpa == 160.0
+    assert result.design_stress_range_elastic_mpa == 60.0
     assert result.governing_stress_mpa == 160.0
 
 
@@ -440,6 +745,9 @@ def test_concrete_gamma_ff_and_strength_utilisation_are_explicit():
 
     assert result.compression_min_design_mpa == 5.0
     assert result.compression_max_design_mpa == 8.75
+    assert result.compression_total_design_mpa == 8.75
+    assert result.compression_min_state == "long-term"
+    assert result.compression_max_state == "action-factored total"
     assert result.stress_utilisation == pytest.approx(
         8.75 / fatigue.concrete_fatigue_strength(properties)
     )
@@ -852,6 +1160,13 @@ def test_equivalent_concrete_search_matches_the_fixed_fibre_criterion():
     assert result.concrete_search.upper_damage == pytest.approx(expected)
     assert result.utilisation == pytest.approx(expected)
     assert result.concrete[0].equivalent_utilisation == pytest.approx(expected)
+    assert result.concrete_strength is not None
+    assert result.fcd_fat_mpa == pytest.approx(
+        result.concrete_strength.fcd_fat_mpa
+    )
+    assert result.concrete_strength.edition == fatigue.EC2_2023
+    assert result.governing_domain == "concrete"
+    assert result.governing_criterion == "Equivalent amplitude"
 
 
 def test_tendon_only_section_is_included_in_fatigue_solver_order():
@@ -934,6 +1249,19 @@ def test_2005_mixed_bond_correction_applies_eta_to_rebar_only():
     assert "6.8.2(2)" in mild.bond_method
     assert "tendon range unadjusted" in tendon.bond_method
     assert mild.stress_total_elastic_mpa != mild.stress_long_mpa
+    state = result.bins[0]
+    assert mild.stress_total_design_elastic_mpa == pytest.approx(
+        state.bar_stress_design_total_mpa[0]
+    )
+    assert mild.design_stress_range_elastic_mpa == pytest.approx(
+        abs(
+            state.bar_stress_design_total_mpa[0]
+            - state.bar_stress_long_mpa[0]
+        )
+    )
+    assert mild.stress_total_design_mpa != pytest.approx(
+        mild.stress_total_design_elastic_mpa
+    )
 
 
 def test_2023_mixed_bond_correction_uses_equivalent_tendon_area():

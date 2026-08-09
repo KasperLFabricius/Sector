@@ -5987,6 +5987,9 @@ def run_analysis(
                 else _run_fatigue_or_invalid(inp)
             )
         result.update(shared_results)
+        result["worked_example_selection"] = (
+            presentation.worked_example_selection(inp, result)
+        )
         return result
 
     def _runner(case_inp, *, reuse_plastic=None):
@@ -6019,6 +6022,9 @@ def run_analysis(
             else _run_fatigue_or_invalid(inp)
         )
     result.update(shared_results)
+    result["worked_example_selection"] = (
+        presentation.worked_example_selection(inp, result)
+    )
     return result
 
 
@@ -8843,7 +8849,7 @@ def _fatigue_spectrum_panel(inp, spectrum):
         }
         for record in records
     ], height=520)
-    st.markdown("**Elastic solver states**")
+    st.markdown("**Retained elastic solver-state register**")
     _fatigue_result_table([
         {
             "Bin": row["bin"],
@@ -8851,12 +8857,6 @@ def _fatigue_spectrum_panel(inp, spectrum):
             "Cycles": row["cycles"],
             "Status": row["status"],
             "gamma_Ff": row["gamma_ff"],
-            f"Max design {_DELTA}{_SIGMA} [MPa]": (
-                row["max_design_stress_range_mpa"]
-            ),
-            "Max concrete compression [MPa]": (
-                row["max_concrete_compression_mpa"]
-            ),
             "Bond method": row["bond_method"],
         }
         for row in fatigue_presentation.spectrum_bin_rows(spectrum)

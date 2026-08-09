@@ -7,9 +7,8 @@ unit, and the semantic role of its authored publication rows.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-
+from dataclasses import dataclass
 
 _KEY_RE = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*")
 _MATERIAL_KEY_RE = re.compile(r"materials\.steel\.fyd-[1-9][0-9]*")
@@ -234,6 +233,190 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("D<sub>c</sub>", "concrete Miner damage"),
         ("n<sub>i</sub>", "applied cycles in bin i", "cycles"),
         ("N<sub>R,i</sub>", "concrete fatigue life for bin i", "cycles"),
+    ),
+    ("fatigue.reinforcement.design-stress-range", None): _result(
+        "Delta sigma<sub>Ed,i</sub>", "MPa",
+        (
+            "Delta sigma<sub>Ed,i</sub>",
+            "design reinforcement stress range for bin i",
+            "MPa",
+        ),
+        (
+            "Delta sigma<sub>Ed,el,i</sub>",
+            "elastic design reinforcement stress range before bond adjustment",
+            "MPa",
+        ),
+        (
+            "sigma<sub>total,Ed,el,i</sub>",
+            "elastic reinforcement stress at the action-factored fatigue state",
+            "MPa",
+        ),
+        (
+            "sigma<sub>long,i</sub>",
+            "reinforcement stress at the sustained state",
+            "MPa",
+        ),
+        ("eta<sub>b</sub>", "retained bond stress-range adjustment factor"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.reinforcement.design-resistance-range", None): _result(
+        "Delta sigma<sub>Rd</sub>", "MPa",
+        ("Delta sigma<sub>Rd</sub>", "design fatigue stress-range resistance", "MPa"),
+        (
+            "Delta sigma<sub>Rsk</sub>",
+            "characteristic fatigue stress-range resistance",
+            "MPa",
+        ),
+        ("gamma<sub>s</sub>", "partial factor for reinforcement fatigue"),
+    ),
+    ("fatigue.reinforcement.sn-life", "power-law"): _result(
+        "N<sub>R,i</sub>", "cycles",
+        ("N<sub>R,i</sub>", "design fatigue life for bin i", "cycles"),
+        ("N<super>*</super>", "reference number of cycles", "cycles"),
+        ("Delta sigma<sub>Rd</sub>", "design fatigue stress-range resistance", "MPa"),
+        ("Delta sigma<sub>Ed,i</sub>", "design stress range for bin i", "MPa"),
+        ("k", "S-N curve exponent for the retained branch"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.reinforcement.sn-life", "zero-range"): _result(
+        "N<sub>R,i</sub>", "cycles",
+        ("N<sub>R,i</sub>", "unbounded design fatigue life for bin i", "cycles"),
+        ("Delta sigma<sub>Ed,i</sub>", "design stress range for bin i", "MPa"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.reinforcement.bin-damage", None): _result(
+        "D<sub>i</sub>", "dimensionless",
+        ("D<sub>i</sub>", "Miner damage contribution from bin i"),
+        ("n<sub>i</sub>", "applied cycles in bin i", "cycles"),
+        ("N<sub>R,i</sub>", "design fatigue life for bin i", "cycles"),
+    ),
+    ("fatigue.reinforcement.miner-sum", None): _result(
+        "D", "dimensionless",
+        ("D", "total reinforcement Miner damage"),
+        ("D<sub>i</sub>", "Miner damage contribution from bin i"),
+    ),
+    ("fatigue.reinforcement.yield-limit", None): _result(
+        "sigma<sub>Rd</sub>", "MPa",
+        ("sigma<sub>Rd</sub>", "design reinforcement stress limit", "MPa"),
+        (
+            "f<sub>yk/proof</sub>",
+            "characteristic yield or proof strength for the retained branch",
+            "MPa",
+        ),
+        ("gamma<sub>s</sub>", "partial factor for reinforcement strength"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.reinforcement.yield-utilisation", None): _result(
+        "u<sub>yield</sub>", "dimensionless",
+        ("u<sub>yield</sub>", "reinforcement yield or proof-stress utilisation"),
+        ("sigma<sub>Ed</sub>", "governing design reinforcement stress", "MPa"),
+        ("sigma<sub>Rd</sub>", "design reinforcement stress limit", "MPa"),
+    ),
+    ("fatigue.reinforcement.utilisation", None): _result(
+        "u", "dimensionless",
+        ("u", "governing reinforcement fatigue utilisation"),
+        ("D", "total reinforcement Miner damage"),
+        ("u<sub>yield</sub>", "reinforcement yield or proof-stress utilisation"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.concrete.strength", "2005"): _result(
+        "f<sub>cd,fat</sub>", "MPa",
+        ("f<sub>cd,fat</sub>", "design concrete fatigue strength", "MPa"),
+        ("k<sub>1</sub>", "concrete fatigue strength factor"),
+        ("beta<sub>cc</sub>", "concrete age strength factor"),
+        ("alpha<sub>cc</sub>", "concrete strength coefficient"),
+        ("f<sub>ck</sub>", "characteristic concrete compressive strength", "MPa"),
+        ("gamma<sub>c</sub>", "partial factor for concrete"),
+    ),
+    ("fatigue.concrete.strength", "2023"): _result(
+        "f<sub>cd,fat</sub>", "MPa",
+        ("f<sub>cd,fat</sub>", "design concrete fatigue strength", "MPa"),
+        ("beta<sub>cc</sub>", "concrete age strength factor"),
+        ("f<sub>ck</sub>", "characteristic concrete compressive strength", "MPa"),
+        ("eta<sub>cc,fat</sub>", "concrete fatigue strength reduction factor"),
+        ("gamma<sub>c</sub>", "partial factor for concrete"),
+    ),
+    ("fatigue.concrete.eta-cc", None): _result(
+        "eta<sub>cc</sub>", "dimensionless",
+        ("eta<sub>cc</sub>", "concrete compressive-strength reduction factor"),
+        ("f<sub>ck</sub>", "characteristic concrete compressive strength", "MPa"),
+    ),
+    ("fatigue.concrete.eta-cc-fat", None): _result(
+        "eta<sub>cc,fat</sub>", "dimensionless",
+        ("eta<sub>cc,fat</sub>", "concrete fatigue strength reduction factor"),
+        ("eta<sub>cc</sub>", "concrete compressive-strength reduction factor"),
+    ),
+    ("fatigue.concrete.normalised-stress", None): _result(
+        "E<sub>cd,min/max</sub>", "dimensionless",
+        (
+            "E<sub>cd,min/max</sub>",
+            "normalized minimum and maximum design concrete stresses",
+        ),
+        (
+            "sigma<sub>c,min/max,Ed</sub>",
+            "minimum and maximum design concrete compressive stresses",
+            "MPa",
+        ),
+        ("f<sub>cd,fat</sub>", "design concrete fatigue strength", "MPa"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.concrete.equivalent", None): _result(
+        "u<sub>eq</sub>", "dimensionless",
+        ("u<sub>eq</sub>", "equivalent-amplitude concrete fatigue utilisation"),
+        ("E<sub>cd,max</sub>", "normalized maximum design concrete stress"),
+        ("E<sub>cd,min</sub>", "normalized minimum design concrete stress"),
+    ),
+    ("fatigue.concrete.life", "variable-compression"): _result(
+        "N<sub>R,i</sub>", "cycles",
+        ("N<sub>R,i</sub>", "design concrete fatigue life for bin i", "cycles"),
+        (
+            "log<sub>10</sub>N<sub>R,i</sub>",
+            "base-10 logarithm of the design fatigue life",
+        ),
+        ("C", "retained concrete fatigue-life coefficient"),
+        ("E<sub>cd,max</sub>", "normalized maximum design concrete stress"),
+        ("sigma<sub>c,min</sub>", "minimum concrete compressive stress", "MPa"),
+        ("sigma<sub>c,max</sub>", "maximum concrete compressive stress", "MPa"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.concrete.life", "zero-compression"): _result(
+        "N<sub>R,i</sub>", "cycles",
+        ("N<sub>R,i</sub>", "unbounded design concrete fatigue life for bin i", "cycles"),
+        ("sigma<sub>c,min</sub>", "minimum concrete compressive stress", "MPa"),
+        ("sigma<sub>c,max</sub>", "maximum concrete compressive stress", "MPa"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.concrete.life", "constant-compression"): _result(
+        "N<sub>R,i</sub>", "cycles",
+        ("N<sub>R,i</sub>", "unbounded design concrete fatigue life for bin i", "cycles"),
+        ("sigma<sub>c,min</sub>", "minimum concrete compressive stress", "MPa"),
+        ("sigma<sub>c,max</sub>", "maximum concrete compressive stress", "MPa"),
+        applicability_note_required=True,
+    ),
+    ("fatigue.concrete.bin-damage", None): _result(
+        "D<sub>i</sub>", "dimensionless",
+        ("D<sub>i</sub>", "concrete Miner damage contribution from bin i"),
+        ("n<sub>i</sub>", "applied cycles in bin i", "cycles"),
+        ("N<sub>R,i</sub>", "design concrete fatigue life for bin i", "cycles"),
+    ),
+    ("fatigue.concrete.miner-sum", None): _result(
+        "D", "dimensionless",
+        ("D", "total concrete Miner damage"),
+        ("D<sub>i</sub>", "concrete Miner damage contribution from bin i"),
+    ),
+    ("fatigue.concrete.stress-utilisation", None): _result(
+        "u<sub>sigma</sub>", "dimensionless",
+        ("u<sub>sigma</sub>", "concrete compressive-stress utilisation"),
+        ("E<sub>cd,max</sub>", "normalized maximum design concrete stress"),
+    ),
+    ("fatigue.concrete.utilisation", None): _result(
+        "u", "dimensionless",
+        ("u", "governing concrete fatigue utilisation"),
+        ("D", "total concrete Miner damage"),
+        ("u<sub>sigma</sub>", "concrete compressive-stress utilisation"),
+        ("u<sub>eq</sub>", "equivalent-amplitude concrete fatigue utilisation"),
+        ("u<sub>bound</sub>", "retained bounded-search fatigue utilisation"),
+        applicability_note_required=True,
     ),
     ("basis.detailing.transverse-ratios", None): _relation(
         ("rho<sub>w</sub>", "shear-link reinforcement ratio"),
@@ -946,9 +1129,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 116:
+    if len(_CONTRACTS) != 138:
         raise RuntimeError(
-            f"Expected 116 report equation contracts, got {len(_CONTRACTS)}."
+            f"Expected 138 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):

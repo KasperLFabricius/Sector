@@ -15,6 +15,94 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
+
+
+def test_worked_example_selection_retains_named_cases_branches_and_directions():
+    out = {
+        "plastic_cases": [
+            {
+                "name": "PL-A",
+                "results": {
+                    "plastic": {"converged": True, "util": 0.7},
+                    "shear": {"directions": {
+                        "vx": {"res": {"valid": True}, "util": 0.8},
+                        "vy": {"res": {"valid": True}, "util": 0.8},
+                    }},
+                },
+            },
+            {
+                "name": "PL-B",
+                "results": {
+                    "plastic": {"converged": True, "util": 0.9},
+                    "shear": {"directions": {
+                        "vx": {"res": {"valid": True}, "util": 0.95},
+                    }},
+                },
+            },
+        ],
+        "elastic_cases": [
+            {
+                "name": "EL-A",
+                "results": {"elastic": {
+                    "converged": True, "max_conc": 10.0, "max_steel": 100.0,
+                    "lambda_cr": 0.9,
+                    "crack": {"wk": 0.2}, "crack_short": {"wk": 0.3},
+                }},
+            },
+            {
+                "name": "EL-B",
+                "results": {"elastic": {
+                    "converged": True, "max_conc": 12.0, "max_steel": 120.0,
+                    "lambda_cr": 0.7,
+                    "crack": {"wk": 0.4}, "crack_short": {"wk": 0.1},
+                }},
+            },
+        ],
+    }
+
+    selection = presentation.worked_example_selection({}, out)
+
+    assert selection["families"]["plastic"]["case_id"] == "PL-B"
+    assert selection["families"]["shear"] == {
+        "case_id": "PL-B", "component": "vx",
+    }
+    assert selection["families"]["elastic"]["case_id"] == "EL-B"
+    assert selection["cracking_threshold"]["case_id"] == "EL-B"
+    assert selection["crack_examples"] == [{
+        "case_id": "EL-B", "system": "governing", "branch": "crack",
+        "label": "long-term",
+    }]
+
+
+def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
+    interaction = {"valid": True, "value": math.inf}
+    minimum = {"applicable": True, "value": math.inf}
+    out = {"plastic_cases": [{
+        "name": "PL-INF",
+        "results": {"torsion": {
+            "valid": True,
+            "util": 0.5,
+            "directional_interactions": {
+                "vx": {"interaction": interaction, "min_reinf": minimum},
+                "vy": {
+                    "interaction": dict(interaction), "min_reinf": dict(minimum),
+                },
+            },
+        }},
+    }]}
+
+    selected = presentation.worked_example_selection({}, out)[
+        "torsion_subchecks"
+    ]
+
+    assert selected["interaction"] == {
+        "case_id": "PL-INF", "component": "vx",
+    }
+    assert selected["minimum_reinforcement"] == {
+        "case_id": "PL-INF", "component": "vx",
+    }
+
+
 def _plastic(**updates):
     result = {
         "check_util": True,
@@ -220,6 +308,8 @@ def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
                 "governing": "bar 1",
             },
         },
+        "lambda_cr": 0.82,
+        "cracked": True,
         "show_cw": False,
     }
     rows = presentation.result_summary_rows(
@@ -233,6 +323,11 @@ def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
     assert by_check["Reinforcement stress"]["status"] == "CALCULATED"
     assert by_check["Reinforcement stress"]["criterion"] == "Output only"
     assert by_check["Reinforcement stress"]["util"] is None
+    assert by_check["Cracking threshold/state"]["status"] == "CALCULATED"
+    assert by_check["Cracking threshold/state"]["result"] == (
+        "lambda_cr 0.820; cracked"
+    )
+    assert by_check["Cracking threshold/state"]["criterion"] == "Output only"
     assert presentation.overall_summary_status(rows) == "PASS"
 
 

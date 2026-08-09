@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import ast
 import collections
-from dataclasses import FrozenInstanceError
 import io
 import pathlib
 import sys
+from dataclasses import FrozenInstanceError
 
 import pytest
-
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import report_equation_contract as contracts  # noqa: E402
-import sector_report  # noqa: E402
-
+import report_equation_contract as contracts
+import sector_report
 
 EXPECTED_CONTRACT_KEYS = {
     ("basis.detailing.transverse-ratios", None),
@@ -77,6 +75,28 @@ EXPECTED_CONTRACT_KEYS = {
     ("elastic.long.stress-plane", None),
     ("elastic.modular-ratio.long", None),
     ("elastic.modular-ratio.short", None),
+    ("fatigue.concrete.bin-damage", None),
+    ("fatigue.concrete.equivalent", None),
+    ("fatigue.concrete.eta-cc", None),
+    ("fatigue.concrete.eta-cc-fat", None),
+    ("fatigue.concrete.life", "constant-compression"),
+    ("fatigue.concrete.life", "variable-compression"),
+    ("fatigue.concrete.life", "zero-compression"),
+    ("fatigue.concrete.miner-sum", None),
+    ("fatigue.concrete.normalised-stress", None),
+    ("fatigue.concrete.strength", "2005"),
+    ("fatigue.concrete.strength", "2023"),
+    ("fatigue.concrete.stress-utilisation", None),
+    ("fatigue.concrete.utilisation", None),
+    ("fatigue.reinforcement.bin-damage", None),
+    ("fatigue.reinforcement.design-resistance-range", None),
+    ("fatigue.reinforcement.design-stress-range", None),
+    ("fatigue.reinforcement.miner-sum", None),
+    ("fatigue.reinforcement.sn-life", "power-law"),
+    ("fatigue.reinforcement.sn-life", "zero-range"),
+    ("fatigue.reinforcement.utilisation", None),
+    ("fatigue.reinforcement.yield-limit", None),
+    ("fatigue.reinforcement.yield-utilisation", None),
     ("geometry.concrete.centroid-x", None),
     ("geometry.concrete.centroid-y", None),
     ("geometry.concrete.centroidal-ix", None),
@@ -193,7 +213,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 118
+    assert len(calls) == 139
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -204,7 +224,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 116
+    assert len(catalogue_pairs) == 138
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -221,12 +241,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 109,
+        "numerical": 131,
         "none": 7,
     }
-    assert publication_role_counts == {"calculation": 109, "theory": 7}
-    # One extra contract is the second runtime branch of shear.chord.demand.
-    assert result_counts == {True: 109, False: 7}
+    assert publication_role_counts == {"calculation": 131, "theory": 7}
+    # Conditional call sites expand to every exact runtime variant in the catalogue.
+    assert result_counts == {True: 131, False: 7}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key
@@ -304,6 +324,42 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
     assert "w<sub>k,cal</sub>" in definitions
     assert "w<sub>k</sub>" in definitions
     assert "equal to w<sub>k,cal</sub>" in definitions["w<sub>k</sub>"]
+
+
+def test_fatigue_contracts_are_exact_numerical_worked_blocks():
+    fatigue = {
+        identity: contract
+        for identity, contract in contracts.equation_contract_items()
+        if identity[0].startswith("fatigue.")
+    }
+    expected = {
+        identity for identity in EXPECTED_CONTRACT_KEYS
+        if identity[0].startswith("fatigue.")
+    }
+    assert set(fatigue) == expected
+    assert len(fatigue) == 22
+    assert all(
+        contract.publication_role == "calculation"
+        and contract.substitution_role == "numerical"
+        and contract.expects_result
+        for contract in fatigue.values()
+    )
+    assert {
+        identity
+        for identity, contract in fatigue.items()
+        if contract.applicability_note_required
+    } == {
+        ("fatigue.reinforcement.design-stress-range", None),
+        ("fatigue.reinforcement.sn-life", "power-law"),
+        ("fatigue.reinforcement.sn-life", "zero-range"),
+        ("fatigue.reinforcement.yield-limit", None),
+        ("fatigue.reinforcement.utilisation", None),
+        ("fatigue.concrete.normalised-stress", None),
+        ("fatigue.concrete.life", "constant-compression"),
+        ("fatigue.concrete.life", "variable-compression"),
+        ("fatigue.concrete.life", "zero-compression"),
+        ("fatigue.concrete.utilisation", None),
+    }
 
 
 @pytest.mark.parametrize(

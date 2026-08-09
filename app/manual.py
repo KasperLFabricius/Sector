@@ -1046,11 +1046,13 @@ def manual_blocks() -> list:
     md("In the Report panel, select **Default report** or **Default report + QA "
        "appendix** before generating the PDF. Both options reproduce the complete "
        "named case register, descriptions, signed actions, per-Elastic-row crack-width "
-       "choice and every fatigue spectrum bin. Its overview keeps individual genuine "
-       "demand/resistance verdicts and gives output-only quantities no verdict. Every "
-       "computed case is covered in the bookmarked detail chapters; the "
-       "fatigue chapter includes all spectra, figures, element/fibre results, bin "
-       "evidence, factors, references and provenance. Zero-action checks remain "
+       "choice and every fatigue spectrum bin. The overview keeps individual genuine "
+       "demand/resistance verdicts and gives output-only quantities no verdict. All "
+       "calculated cases remain in compact summaries; complete worked derivations are "
+       "limited to the global governing or extremal calculation in each family. The "
+       "DK/NA crack method shows one global fine-system and one global coarse-system "
+       "example, while fatigue may show separate governing reinforcement and concrete "
+       "examples. Zero-action checks remain "
        "visible as not applicable and are not given a false result. The optional "
        "QA appendix adds one consolidated chapter of standards references and "
        "implementation notes.")
@@ -1288,8 +1290,12 @@ def manual_blocks() -> list:
        "transformed area $n\\,A$. (The solver can also subtract the concrete a "
        "compression-zone bar displaces, using $(n-1)\\,A$ there; Sector leaves that "
        "refinement off, so the reported stresses and section properties use "
-       "$n\\,A$ throughout.) The strain plane $(\\varepsilon_0,k_x,k_y)$ is solved "
-       "by Newton iteration so the transformed-section resultants equal "
+       "$n\\,A$ throughout.) The Elastic solver stores an $E_c=1$ reference-stress "
+       "plane $(\\sigma_0,g_x,g_y)$, not a physical strain/curvature plane. The "
+       "physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$. Legacy "
+       "result-field names remain for compatibility, but the report labels the "
+       "stored quantities by their actual stress units. Newton iteration solves the "
+       "reference-stress plane so the transformed-section resultants equal "
        "$(N,M_x,M_y)$, updating the compression zone until it settles.")
     md("Creep enters through the modular ratio: the long-term state uses "
        "$n_l = E_s/E_{c,eff}$ with $E_{c,eff}=E_c/(1+\\varphi)$, and the "
@@ -1365,7 +1371,9 @@ def manual_blocks() -> list:
        "9.3 (built from the near-face layer and extended over the tension layers). "
        "The mean strain (9.11) keeps the same numerator but its lower bound is "
        "$(1-k_t)\\sigma_s/E_s$. **Worked:** $s_{r,m,cal}=134$ mm, $w_k=0.186$ mm.")
-    md("The four editions on the same beam and service moment ($M_x=150$ kNm):")
+    md("The three code options give four method/system results on the same beam and "
+       "service moment ($M_x=150$ kNm), because DK/NA evaluates distinct fine and "
+       "coarse reinforcement systems:")
     table(["Crack-width edition", "$s_{r,max}$ (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"],
           [["EN 1992-1-1:2005", "236", "0.125", "0.188"],
            ["DS/EN + DK NA (fine)", "206", "0.125", "0.164"],
@@ -1374,8 +1382,10 @@ def manual_blocks() -> list:
     call("standard", "The *Crack-width code* offers three options -- EN 1992-1-1:"
          "2005, DS/EN 1992-1-1 + DK NA and EN 1992-1-1:2023. The DK NA option "
          "reports the fine and the coarse system together (all four columns above), "
-         "each for the long-term and short-term load; the report writes out the "
-         "governing worked crack width.")
+         "each for the long-term and short-term load. Ordinary methods show one "
+         "global governing worked crack width; DK/NA shows one global fine-system "
+         "and one global coarse-system worked example. All other elastic cases remain "
+         "in the compact report summaries.")
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")

@@ -904,6 +904,13 @@ def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
         "prestress_initial", "elastic_shared",
     }
     assert shared_keys <= set(result)
+    assert result["worked_example_selection"] == {
+        "schema": 1,
+        "families": {},
+        "crack_examples": [],
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+    }
     for entry in result["elastic_cases"]:
         assert not shared_keys & set(entry["results"])
 

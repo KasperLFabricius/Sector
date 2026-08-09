@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import pathlib
 import sys
 from types import SimpleNamespace
@@ -498,6 +499,137 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
     assert result["capability_bindings"]["concrete"]["capability"] == (
         Capability.CONCRETE_FATIGUE_DAMAGE_SUM.value
     )
+    assert result["governing_reinforcement_example"] is None
+    assert result["governing_concrete_example"] is None
+
+
+def test_global_fatigue_examples_are_selected_independently_and_fail_closed():
+    def spectrum(
+        name,
+        *,
+        reinforcement_util,
+        concrete_util,
+        search_upper,
+        converged=True,
+    ):
+        reinforcement = SimpleNamespace(
+            element_id=f"R-{name}",
+            utilisation=reinforcement_util,
+            converged=converged,
+            governing_criterion="Miner damage",
+            governing_bin=f"RB-{name}",
+        )
+        concrete = SimpleNamespace(
+            fibre_index=1,
+            utilisation=concrete_util,
+            converged=converged,
+            governing_criterion="compressive stress",
+            governing_bin=f"CB-{name}",
+        )
+        search = SimpleNamespace(
+            upper_damage=search_upper,
+            converged=converged,
+        )
+        return SimpleNamespace(
+            spectrum_name=name,
+            bins=(SimpleNamespace(converged=converged),),
+            reinforcement=(reinforcement,),
+            concrete=(concrete,),
+            concrete_search=search,
+            concrete_method=fatigue_analysis.CONCRETE_MINER,
+            governing_reinforcement_id=reinforcement.element_id,
+            governing_concrete_fibre=concrete.fibre_index,
+        )
+
+    spectra = (
+        spectrum(
+            "Steel",
+            reinforcement_util=0.92,
+            concrete_util=0.45,
+            search_upper=0.46,
+        ),
+        spectrum(
+            "Concrete",
+            reinforcement_util=0.70,
+            concrete_util=0.94,
+            search_upper=0.97,
+        ),
+        spectrum(
+            "Invalid",
+            reinforcement_util=math.inf,
+            concrete_util=math.inf,
+            search_upper=math.inf,
+            converged=False,
+        ),
+    )
+
+    reinforcement = fatigue_analysis._global_reinforcement_example(spectra)
+    concrete = fatigue_analysis._global_concrete_example(spectra)
+
+    assert reinforcement == {
+        "spectrum_name": "Steel",
+        "element_id": "R-Steel",
+        "utilisation": pytest.approx(0.92),
+        "criterion": "Miner damage",
+        "bin_name": "RB-Steel",
+    }
+    assert concrete == {
+        "spectrum_name": "Concrete",
+        "fibre_index": 1,
+        "utilisation": pytest.approx(0.97),
+        "criterion": "Miner damage upper bound",
+        "bin_name": "CB-Concrete",
+        "search_upper_bound_governs": True,
+    }
+
+
+def test_global_fatigue_examples_keep_valid_infinity_and_first_tie():
+    def spectrum(name, utilisation, *, search_upper=None):
+        reinforcement = SimpleNamespace(
+            element_id=f"R-{name}",
+            utilisation=utilisation,
+            converged=True,
+            governing_criterion="yield/proof stress",
+            governing_bin=name,
+        )
+        concrete = SimpleNamespace(
+            fibre_index=0,
+            utilisation=utilisation,
+            converged=True,
+            governing_criterion="Equivalent amplitude",
+            governing_bin=name,
+        )
+        search = (
+            None
+            if search_upper is None else
+            SimpleNamespace(upper_damage=search_upper, converged=True)
+        )
+        return SimpleNamespace(
+            spectrum_name=name,
+            bins=(SimpleNamespace(converged=True),),
+            reinforcement=(reinforcement,),
+            concrete=(concrete,),
+            concrete_search=search,
+            concrete_method=fatigue_analysis.CONCRETE_EQUIVALENT,
+            governing_reinforcement_id=reinforcement.element_id,
+            governing_concrete_fibre=0,
+        )
+
+    first = spectrum("First", math.inf, search_upper=0.8)
+    second = spectrum("Second", math.inf, search_upper=math.inf)
+
+    reinforcement = fatigue_analysis._global_reinforcement_example(
+        (first, second)
+    )
+    concrete = fatigue_analysis._global_concrete_example((first, second))
+
+    assert reinforcement is not None
+    assert reinforcement["spectrum_name"] == "First"
+    assert reinforcement["utilisation"] == math.inf
+    assert concrete is not None
+    assert concrete["spectrum_name"] == "First"
+    assert concrete["utilisation"] == math.inf
+    assert concrete["search_upper_bound_governs"] is False
 
 
 def test_equivalent_concrete_method_is_mapped_and_referenced_explicitly():

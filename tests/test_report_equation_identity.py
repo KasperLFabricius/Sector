@@ -16,8 +16,7 @@ from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import sector_report  # noqa: E402
-
+import sector_report
 
 _TEST_RELATION = sector_report.report_equation_contract.EquationContract(
     symbols=(
@@ -298,7 +297,7 @@ def test_all_retained_report_formula_calls_have_code_authored_keys():
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "_formula"
     ]
-    assert len(calls) == 118
+    assert len(calls) == 139
 
     allowed_dynamic = "f'materials.steel.fyd-{material_index + 1}'"
     authored = []
@@ -331,6 +330,9 @@ def test_all_retained_report_formula_calls_have_code_authored_keys():
         "crack.effective-reinforcement.ratio": 2,
         "detailing.links.provided-ratio": 2,
         "detailing.links.spacing-limit": 3,
+        "fatigue.concrete.life": 2,
+        "fatigue.concrete.strength": 2,
+        "fatigue.reinforcement.sn-life": 2,
         "torsion.resistance.steel": 2,
         "torsion.resistance.crushing": 2,
         "torsion.resistance.governing": 2,

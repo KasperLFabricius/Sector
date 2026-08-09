@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import io
+
+import pypdf
+import pytest
+
 from tools.report_render_fixture import (
     _inputs,
     _results,
@@ -10,12 +15,29 @@ from tools.report_render_fixture import (
     validate_fixture_engineering,
     validate_pdf_content,
     validate_rendered_pages,
+    validate_worked_example_text,
 )
 
 
 def test_reference_fixture_engineering_is_internally_consistent():
     inp = _inputs()
     validate_fixture_engineering(inp, _results(inp))
+
+
+def test_reference_fixture_retains_governing_worked_chains_without_figures():
+    """Check the textbook payload and PDF text without launching a browser."""
+    pdf = build_fixture_pdf(figures=False)
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    validate_worked_example_text(text)
+
+
+def test_worked_example_text_rejects_any_unavailable_placeholder():
+    with pytest.raises(AssertionError, match="unavailable worked-example"):
+        validate_worked_example_text(
+            "Worked plastic calculation\n"
+            "The completed retained operands are unavailable"
+        )
 
 
 def test_issued_report_renders_every_page_and_retains_expected_content():

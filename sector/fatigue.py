@@ -245,6 +245,43 @@ class FatigueLife:
     cycles: float
     log10_cycles: float
     exponent: float
+    branch: str = ""
+    knee_stress_range_mpa: float | None = None
+    reference_ratio: float | None = None
+    range_term: float | None = None
+
+
+@dataclass(frozen=True)
+class ConcreteFatigueStrengthResult:
+    """Edition-owned operands and result of the concrete fatigue strength."""
+
+    edition: str
+    fck_mpa: float
+    gamma_c: float
+    beta_cc_t0: float
+    base_strength_mpa: float
+    alpha_cc: float | None
+    k1: float | None
+    high_strength_reduction: float | None
+    eta_cc_raw: float | None
+    eta_cc_cap: float | None
+    eta_cc: float | None
+    eta_cc_fat_raw: float | None
+    eta_cc_fat_cap: float | None
+    eta_cc_fat: float | None
+    fcd_fat_mpa: float
+
+
+@dataclass(frozen=True)
+class ReinforcementYieldCheck:
+    """One retained endpoint check against tension/compression strength."""
+
+    state: str
+    stress_mpa: float
+    branch: str
+    characteristic_strength_mpa: float
+    design_limit_mpa: float
+    utilisation: float
 
 
 @dataclass(frozen=True)
@@ -292,6 +329,18 @@ class ReinforcementBinResult:
     governing_stress_mpa: float
     yield_limit_mpa: float
     yield_utilisation: float
+    sn_reference_cycles: float | None = None
+    sn_slope_1: float | None = None
+    sn_slope_2: float | None = None
+    sn_knee_stress_range_mpa: float | None = None
+    sn_branch: str = ""
+    sn_reference_ratio: float | None = None
+    material_factor: float | None = None
+    stress_total_design_elastic_mpa: float | None = None
+    design_stress_range_elastic_mpa: float | None = None
+    yield_long_check: ReinforcementYieldCheck | None = None
+    yield_design_total_check: ReinforcementYieldCheck | None = None
+    governing_yield_check: ReinforcementYieldCheck | None = None
 
 
 @dataclass(frozen=True)
@@ -309,6 +358,8 @@ class ReinforcementFatigueResult:
     utilisation: float
     converged: bool
     passed: bool
+    governing_criterion: str = ""
+    governing_bin: str = ""
 
 
 @dataclass(frozen=True)
@@ -328,6 +379,12 @@ class ConcreteBinResult:
     damage: float
     stress_utilisation: float
     equivalent_utilisation: float | None = None
+    life_branch: str = ""
+    life_coefficient: float | None = None
+    life_range_term: float | None = None
+    compression_total_design_mpa: float | None = None
+    compression_min_state: str = ""
+    compression_max_state: str = ""
 
 
 @dataclass(frozen=True)
@@ -348,6 +405,8 @@ class ConcreteFibreFatigueResult:
     method: str = CONCRETE_MINER
     equivalent_utilisation: float | None = None
     governing_equivalent_bin: str | None = None
+    governing_criterion: str = ""
+    governing_bin: str = ""
 
 
 @dataclass(frozen=True)
@@ -381,6 +440,9 @@ class FatigueSpectrumResult:
     converged: bool
     passed: bool
     concrete_method: str | None = None
+    concrete_strength: ConcreteFatigueStrengthResult | None = None
+    governing_domain: str | None = None
+    governing_criterion: str | None = None
 
 
 def steel_fatigue_life(
@@ -411,11 +473,22 @@ def steel_fatigue_life(
     )
     material_factor = _positive(gamma_s, "gamma_s")
     action_factor = _positive(gamma_ff, "gamma_Ff")
-    if stress_range == 0.0:
-        return FatigueLife(math.inf, math.inf, 0.0)
-
     knee = reference / (material_factor * action_factor)
-    exponent = slope_1 if stress_range >= knee else slope_2
+    if stress_range == 0.0:
+        return FatigueLife(
+            math.inf,
+            math.inf,
+            0.0,
+            branch="zero stress range",
+            knee_stress_range_mpa=knee,
+        )
+
+    if stress_range >= knee:
+        exponent = slope_1
+        branch = "k1 (at or above knee)"
+    else:
+        exponent = slope_2
+        branch = "k2 (below knee)"
     ratio = reference / (
         material_factor * action_factor * stress_range
     )
@@ -424,7 +497,73 @@ def steel_fatigue_life(
         cycles=_pow10(log10_cycles),
         log10_cycles=log10_cycles,
         exponent=exponent,
+        branch=branch,
+        knee_stress_range_mpa=knee,
+        reference_ratio=ratio,
     )
+
+
+def concrete_fatigue_strength_result(
+    properties: ConcreteFatigueProperties,
+) -> ConcreteFatigueStrengthResult:
+    """Return the authoritative edition-specific ``fcd,fat`` calculation."""
+
+    edition = _normalise_edition(properties.edition)
+    fck = float(properties.fck_mpa)
+    gamma_c = float(properties.gamma_c)
+    beta = float(properties.beta_cc_t0)
+    if edition == EC2_2005:
+        alpha_cc = float(properties.alpha_cc)
+        k1 = float(properties.k1)
+        reduction = 1.0 - fck / 250.0
+        base_strength = beta * alpha_cc * fck / gamma_c
+        value = k1 * base_strength * reduction
+        result = ConcreteFatigueStrengthResult(
+            edition=edition,
+            fck_mpa=fck,
+            gamma_c=gamma_c,
+            beta_cc_t0=beta,
+            base_strength_mpa=base_strength,
+            alpha_cc=alpha_cc,
+            k1=k1,
+            high_strength_reduction=reduction,
+            eta_cc_raw=None,
+            eta_cc_cap=None,
+            eta_cc=None,
+            eta_cc_fat_raw=None,
+            eta_cc_fat_cap=None,
+            eta_cc_fat=None,
+            fcd_fat_mpa=value,
+        )
+    else:
+        eta_cc_raw = (40.0 / fck) ** (1.0 / 3.0)
+        eta_cc_cap = 1.0
+        eta_cc = min(eta_cc_raw, eta_cc_cap)
+        eta_cc_fat_raw = 0.85 * eta_cc
+        eta_cc_fat_cap = 0.8
+        eta_cc_fat = min(eta_cc_fat_raw, eta_cc_fat_cap)
+        base_strength = beta * fck / gamma_c
+        value = base_strength * eta_cc_fat
+        result = ConcreteFatigueStrengthResult(
+            edition=edition,
+            fck_mpa=fck,
+            gamma_c=gamma_c,
+            beta_cc_t0=beta,
+            base_strength_mpa=base_strength,
+            alpha_cc=None,
+            k1=None,
+            high_strength_reduction=None,
+            eta_cc_raw=eta_cc_raw,
+            eta_cc_cap=eta_cc_cap,
+            eta_cc=eta_cc,
+            eta_cc_fat_raw=eta_cc_fat_raw,
+            eta_cc_fat_cap=eta_cc_fat_cap,
+            eta_cc_fat=eta_cc_fat,
+            fcd_fat_mpa=value,
+        )
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError("calculated concrete fatigue strength must be positive")
+    return result
 
 
 def concrete_fatigue_strength(
@@ -432,26 +571,7 @@ def concrete_fatigue_strength(
 ) -> float:
     """Return ``fcd,fat`` in MPa for the selected Eurocode edition."""
 
-    edition = _normalise_edition(properties.edition)
-    fck = float(properties.fck_mpa)
-    gamma_c = float(properties.gamma_c)
-    beta = float(properties.beta_cc_t0)
-    if edition == EC2_2005:
-        value = (
-            float(properties.k1)
-            * beta
-            * float(properties.alpha_cc)
-            * fck
-            / gamma_c
-            * (1.0 - fck / 250.0)
-        )
-    else:
-        eta_cc = min((40.0 / fck) ** (1.0 / 3.0), 1.0)
-        eta_cc_fat = min(0.85 * eta_cc, 0.8)
-        value = beta * fck / gamma_c * eta_cc_fat
-    if not math.isfinite(value) or value <= 0.0:
-        raise ValueError("calculated concrete fatigue strength must be positive")
-    return value
+    return concrete_fatigue_strength_result(properties).fcd_fat_mpa
 
 
 def concrete_fatigue_life(
@@ -476,18 +596,32 @@ def concrete_fatigue_life(
     strength = _positive(fcd_fat_mpa, "fcd,fat")
     coefficient = _positive(c, "concrete fatigue coefficient C")
     if sigma_max == 0.0:
-        return FatigueLife(math.inf, math.inf, 0.0)
+        return FatigueLife(
+            math.inf,
+            math.inf,
+            0.0,
+            branch="zero compression",
+            range_term=0.0,
+        )
 
     e_max = sigma_max / strength
     ratio = sigma_min / sigma_max
     if math.isclose(ratio, 1.0, rel_tol=1.0e-12, abs_tol=1.0e-12):
-        return FatigueLife(math.inf, math.inf, 0.0)
+        return FatigueLife(
+            math.inf,
+            math.inf,
+            0.0,
+            branch="constant compression",
+            range_term=0.0,
+        )
     denominator = math.sqrt(max(1.0 - ratio, 0.0))
     exponent = coefficient * (1.0 - e_max) / denominator
     return FatigueLife(
         cycles=_pow10(exponent),
         log10_cycles=exponent,
         exponent=exponent,
+        branch="variable compression",
+        range_term=denominator,
     )
 
 
@@ -577,7 +711,8 @@ def _concrete_damage_field(
         raise ValueError("concrete fatigue search points must be an (N, 2) array")
     if not np.isfinite(fibres).all():
         raise ValueError("concrete fatigue search points must be finite")
-    strength = concrete_fatigue_strength(properties)
+    strength_result = concrete_fatigue_strength_result(properties)
+    strength = strength_result.fcd_fat_mpa
     damage = np.zeros(len(fibres), dtype=float)
     for state in states:
         result = _design_elastic_result(state, gamma_ff)
@@ -1524,17 +1659,28 @@ def _yield_assessment(
     stress_mpa: float,
     properties: ReinforcementFatigueProperties,
     gamma_s: float,
-) -> tuple[float, float]:
+    *,
+    state: str,
+) -> ReinforcementYieldCheck:
     if stress_mpa >= 0.0:
         characteristic = float(properties.fytk_mpa)
+        branch = "tension fytk"
     else:
-        characteristic = float(
-            properties.fyck_mpa
-            if properties.fyck_mpa is not None
-            else properties.fytk_mpa
-        )
+        if properties.fyck_mpa is not None:
+            characteristic = float(properties.fyck_mpa)
+            branch = "compression fyck"
+        else:
+            characteristic = float(properties.fytk_mpa)
+            branch = "compression fytk fallback"
     limit = characteristic / gamma_s
-    return limit, abs(float(stress_mpa)) / limit
+    return ReinforcementYieldCheck(
+        state=state,
+        stress_mpa=float(stress_mpa),
+        branch=branch,
+        characteristic_strength_mpa=characteristic,
+        design_limit_mpa=limit,
+        utilisation=abs(float(stress_mpa)) / limit,
+    )
 
 
 def assess_reinforcement_spectrum(
@@ -1578,18 +1724,35 @@ def assess_reinforcement_spectrum(
                 else ()
             )
         )
+        design_elastic_total = (
+            state.bar_stress_design_total_mpa
+            or (
+                state.bar_stress_total_mpa
+                if math.isclose(
+                    action_factor,
+                    1.0,
+                    rel_tol=0.0,
+                    abs_tol=1.0e-12,
+                )
+                else fatigue_design_total
+            )
+        )
         if (
             len(state.bar_stress_long_mpa) != len(props)
             or len(state.bar_stress_total_mpa) != len(props)
             or len(fatigue_total) != len(props)
             or len(fatigue_design_total) != len(props)
+            or len(design_elastic_total) != len(props)
         ):
             raise ValueError(
                 "reinforcement fatigue properties and action-level design "
                 "stresses must match solver bar order"
             )
         if (
-            state.bar_stress_fatigue_design_total_mpa
+            (
+                state.bar_stress_design_total_mpa
+                or state.bar_stress_fatigue_design_total_mpa
+            )
             and not math.isclose(
                 float(state.design_action_factor),
                 action_factor,
@@ -1617,14 +1780,41 @@ def assess_reinforcement_spectrum(
                 state.bar_stress_fatigue_design_total_mpa
                 or fatigue_total
             )
+            has_design_elastic_total = bool(
+                state.bar_stress_design_total_mpa
+            ) or math.isclose(
+                action_factor,
+                1.0,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+            design_elastic_total = (
+                state.bar_stress_design_total_mpa
+                or (
+                    state.bar_stress_total_mpa
+                    if math.isclose(
+                        action_factor,
+                        1.0,
+                        rel_tol=0.0,
+                        abs_tol=1.0e-12,
+                    )
+                    else fatigue_design_total
+                )
+            )
             stress_total = float(fatigue_total[index])
             stress_total_design = float(fatigue_design_total[index])
+            stress_total_design_elastic = float(
+                design_elastic_total[index]
+            )
             stress_range = abs(stress_total - stress_long)
             design_stress_range = abs(
                 stress_total_design - stress_long
             )
             stress_range_elastic = abs(
                 stress_total_elastic - stress_long
+            )
+            design_stress_range_elastic = abs(
+                stress_total_design_elastic - stress_long
             )
             if stress_range_elastic > 0.0:
                 bond_adjustment = stress_range / stress_range_elastic
@@ -1642,20 +1832,22 @@ def assess_reinforcement_spectrum(
                 gamma_ff=1.0,
             )
             damage = _damage(state.cycles, life.log10_cycles)
-            long_limit, long_util = _yield_assessment(
-                stress_long, item, material_factor
+            long_check = _yield_assessment(
+                stress_long,
+                item,
+                material_factor,
+                state="long-term",
             )
-            total_limit, total_util = _yield_assessment(
-                stress_total_design, item, material_factor
+            design_total_check = _yield_assessment(
+                stress_total_design,
+                item,
+                material_factor,
+                state="design total",
             )
-            if total_util >= long_util:
-                governing_stress = stress_total_design
-                yield_limit = total_limit
-                yield_utilisation = total_util
+            if design_total_check.utilisation >= long_check.utilisation:
+                governing_yield_check = design_total_check
             else:
-                governing_stress = stress_long
-                yield_limit = long_limit
-                yield_utilisation = long_util
+                governing_yield_check = long_check
             bins.append(ReinforcementBinResult(
                 bin_name=state.name,
                 cycles=state.cycles,
@@ -1677,9 +1869,27 @@ def assess_reinforcement_spectrum(
                 cycles_to_failure=life.cycles,
                 log10_cycles_to_failure=life.log10_cycles,
                 damage=damage,
-                governing_stress_mpa=governing_stress,
-                yield_limit_mpa=yield_limit,
-                yield_utilisation=yield_utilisation,
+                governing_stress_mpa=governing_yield_check.stress_mpa,
+                yield_limit_mpa=governing_yield_check.design_limit_mpa,
+                yield_utilisation=governing_yield_check.utilisation,
+                sn_reference_cycles=float(item.n_star),
+                sn_slope_1=float(item.k1),
+                sn_slope_2=float(item.k2),
+                sn_knee_stress_range_mpa=life.knee_stress_range_mpa,
+                sn_branch=life.branch,
+                sn_reference_ratio=life.reference_ratio,
+                material_factor=material_factor,
+                stress_total_design_elastic_mpa=(
+                    stress_total_design_elastic
+                    if has_design_elastic_total else None
+                ),
+                design_stress_range_elastic_mpa=(
+                    design_stress_range_elastic
+                    if has_design_elastic_total else None
+                ),
+                yield_long_check=long_check,
+                yield_design_total_check=design_total_check,
+                governing_yield_check=governing_yield_check,
             ))
         damage = sum(result.damage for result in bins)
         damage_governing = max(bins, key=lambda result: result.damage)
@@ -1688,6 +1898,12 @@ def assess_reinforcement_spectrum(
         )
         converged = all(result.converged for result in bins)
         utilisation = max(damage, yield_governing.yield_utilisation)
+        if damage >= yield_governing.yield_utilisation:
+            governing_criterion = "Miner damage"
+            governing_bin = damage_governing.bin_name
+        else:
+            governing_criterion = "yield/proof stress"
+            governing_bin = yield_governing.bin_name
         output.append(ReinforcementFatigueResult(
             element_id=item.element_id,
             kind=str(item.kind).strip().lower(),
@@ -1706,6 +1922,8 @@ def assess_reinforcement_spectrum(
                 and damage <= DAMAGE_LIMIT
                 and yield_governing.yield_utilisation <= 1.0
             ),
+            governing_criterion=governing_criterion,
+            governing_bin=governing_bin,
         ))
     return tuple(output)
 
@@ -1732,7 +1950,8 @@ def assess_concrete_spectrum(
         "fatigue bin",
     )
     action_factor = _positive(gamma_ff, "gamma_Ff")
-    strength = concrete_fatigue_strength(properties)
+    strength_result = concrete_fatigue_strength_result(properties)
+    strength = strength_result.fcd_fat_mpa
     method = _normalise_concrete_method(properties.method)
     for state in solved:
         design_total = (
@@ -1785,8 +2004,16 @@ def assess_concrete_spectrum(
                 or state.concrete_compression_total_mpa
             )
             sigma_total_design = float(design_total[fibre_index])
-            sigma_min = min(sigma_long, sigma_total_design)
-            sigma_max = max(sigma_long, sigma_total_design)
+            if sigma_long <= sigma_total_design:
+                sigma_min = sigma_long
+                sigma_max = sigma_total_design
+                sigma_min_state = "long-term"
+                sigma_max_state = "action-factored total"
+            else:
+                sigma_min = sigma_total_design
+                sigma_max = sigma_long
+                sigma_min_state = "action-factored total"
+                sigma_max_state = "long-term"
             equivalent_utilisation = None
             if method in CONCRETE_MINER_METHODS:
                 life = concrete_fatigue_life(
@@ -1796,9 +2023,21 @@ def assess_concrete_spectrum(
                     c=properties.c,
                 )
                 damage = _damage(state.cycles, life.log10_cycles)
+                life_coefficient = float(properties.c)
             else:
-                life = FatigueLife(math.inf, math.inf, 0.0)
+                life = FatigueLife(
+                    math.inf,
+                    math.inf,
+                    0.0,
+                    branch=(
+                        "zero compression"
+                        if sigma_max == 0.0
+                        else "damage-equivalent criterion"
+                    ),
+                    range_term=(0.0 if sigma_max == 0.0 else None),
+                )
                 damage = 0.0
+                life_coefficient = None
                 equivalent_utilisation = concrete_equivalent_utilisation(
                     sigma_max,
                     sigma_min,
@@ -1807,6 +2046,11 @@ def assess_concrete_spectrum(
             ratio = sigma_min / sigma_max if sigma_max > 0.0 else 0.0
             e_min = sigma_min / strength
             e_max = sigma_max / strength
+            range_term = (
+                life.range_term
+                if life.range_term is not None
+                else math.sqrt(max(1.0 - ratio, 0.0))
+            )
             bins.append(ConcreteBinResult(
                 bin_name=state.name,
                 cycles=state.cycles,
@@ -1823,6 +2067,12 @@ def assess_concrete_spectrum(
                 damage=damage,
                 stress_utilisation=e_max,
                 equivalent_utilisation=equivalent_utilisation,
+                life_branch=life.branch,
+                life_coefficient=life_coefficient,
+                life_range_term=range_term,
+                compression_total_design_mpa=sigma_total_design,
+                compression_min_state=sigma_min_state,
+                compression_max_state=sigma_max_state,
             ))
         damage = sum(result.damage for result in bins)
         damage_governing = max(bins, key=lambda result: result.damage)
@@ -1848,6 +2098,20 @@ def assess_concrete_spectrum(
             stress_governing.stress_utilisation,
             equivalent_utilisation or 0.0,
         )
+        if (
+            equivalent_governing is not None
+            and equivalent_utilisation is not None
+            and equivalent_utilisation
+            >= stress_governing.stress_utilisation
+        ):
+            governing_criterion = "Equivalent amplitude"
+            governing_bin = equivalent_governing.bin_name
+        elif damage >= stress_governing.stress_utilisation:
+            governing_criterion = "Miner damage"
+            governing_bin = damage_governing.bin_name
+        else:
+            governing_criterion = "compressive stress"
+            governing_bin = stress_governing.bin_name
         output.append(ConcreteFibreFatigueResult(
             fibre_index=fibre_index,
             x_m=float(x),
@@ -1877,6 +2141,8 @@ def assess_concrete_spectrum(
                 if equivalent_governing is not None
                 else None
             ),
+            governing_criterion=governing_criterion,
+            governing_bin=governing_bin,
         ))
     return tuple(output)
 
@@ -2069,6 +2335,11 @@ def analyse_fatigue_spectrum(
         if check_concrete and concrete is not None
         else ()
     )
+    concrete_strength = (
+        concrete_fatigue_strength_result(concrete)
+        if check_concrete and concrete is not None
+        else None
+    )
     all_results = (*steel_results, *concrete_results)
     converged = bool(
         all(state.converged for state in states)
@@ -2077,10 +2348,40 @@ def analyse_fatigue_spectrum(
             or concrete_search.converged
         )
     )
-    utilisations = [result.utilisation for result in all_results]
+    governing_candidates: list[
+        tuple[float, str | None, str | None]
+    ] = [
+        (
+            result.utilisation,
+            "reinforcement",
+            result.governing_criterion,
+        )
+        for result in steel_results
+    ]
+    governing_candidates.extend(
+        (
+            result.utilisation,
+            "concrete",
+            result.governing_criterion,
+        )
+        for result in concrete_results
+    )
     if concrete_search is not None:
-        utilisations.append(concrete_search.upper_damage)
-    utilisation = max(utilisations, default=0.0)
+        governing_candidates.append((
+            concrete_search.upper_damage,
+            "concrete search",
+            (
+                "Equivalent amplitude upper bound"
+                if concrete_method == CONCRETE_EQUIVALENT
+                else "Miner damage upper bound"
+            ),
+        ))
+    governing = max(
+        governing_candidates,
+        key=lambda candidate: candidate[0],
+        default=(0.0, None, None),
+    )
+    utilisation = governing[0]
     governing_steel = (
         max(steel_results, key=lambda result: result.utilisation).element_id
         if steel_results
@@ -2101,9 +2402,8 @@ def analyse_fatigue_spectrum(
         concrete=concrete_results,
         concrete_search=concrete_search,
         fcd_fat_mpa=(
-            concrete_fatigue_strength(concrete)
-            if check_concrete and concrete is not None
-            else None
+            concrete_strength.fcd_fat_mpa
+            if concrete_strength is not None else None
         ),
         governing_reinforcement_id=governing_steel,
         governing_concrete_fibre=governing_concrete,
@@ -2118,6 +2418,9 @@ def analyse_fatigue_spectrum(
             )
         ),
         concrete_method=concrete_method,
+        concrete_strength=concrete_strength,
+        governing_domain=governing[1],
+        governing_criterion=governing[2],
     )
 
 

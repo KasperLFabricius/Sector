@@ -12,9 +12,8 @@ from reportlab.platypus import SimpleDocTemplate
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import report_equation_contract as contracts  # noqa: E402
-import sector_report  # noqa: E402
-
+import report_equation_contract as contracts
+import sector_report
 
 EM_DASH = chr(0x2014)
 DELTA = chr(0x0394)

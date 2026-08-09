@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import ast
 import copy
-from dataclasses import asdict
-import io
 import inspect
+import io
 import math
 import pathlib
 import sys
+import textwrap
+from dataclasses import asdict
 from types import SimpleNamespace as NS
 
 import pytest
@@ -16,20 +18,19 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import sector_report  # noqa: E402
+import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
-from sector import (  # noqa: E402
-    capacity,
-    combined as combined_core,
-    codes,
-    detailing,
-    elastic as elastic_core,
-    geometry,
-    plastic as plastic_core,
-    shear as shear_core,
-    torsion as torsion_core,
-)
+import result_presentation  # noqa: E402
+import sector_report  # noqa: E402
+
+from sector import capacity, codes, detailing, geometry  # noqa: E402
+from sector import combined as combined_core  # noqa: E402
+from sector import elastic as elastic_core  # noqa: E402
+from sector import fatigue as fatigue_core  # noqa: E402
+from sector import plastic as plastic_core  # noqa: E402
+from sector import shear as shear_core  # noqa: E402
+from sector import torsion as torsion_core  # noqa: E402
 from sector.design_standards import (  # noqa: E402
     Capability,
     DesignBasisKey,
@@ -38,6 +39,24 @@ from sector.design_standards import (  # noqa: E402
 )
 from sector.fatigue import CONCRETE_PROJECT_MINER  # noqa: E402
 from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
+
+
+_build_report_from_completed_payload = sector_report.build_report
+
+
+def _build_report_with_selection(meta, inp, out, *args, **kwargs):
+    """Mirror run_analysis assembly for report unit-test payloads."""
+    completed = dict(out or {})
+    completed.setdefault(
+        "worked_example_selection",
+        result_presentation.worked_example_selection(inp, completed),
+    )
+    return _build_report_from_completed_payload(
+        meta, inp, completed, *args, **kwargs
+    )
+
+
+sector_report.build_report = _build_report_with_selection
 
 
 def _inp():
@@ -546,32 +565,82 @@ def _fatigue_report_fixture():
                     "n_short_ed_kn": -10.0,
                     "my_short_ed_knm": 30.0,
                 },
+                {
+                    "spectrum": "Traffic C",
+                    "name": "FAT-C1",
+                    "description": "Non-governing service traffic",
+                    "cycles": 1.0e5,
+                    "n_long_ed_kn": -150.0,
+                    "mx_long_ed_knm": 10.0,
+                    "n_short_ed_kn": 5.0,
+                    "mx_short_ed_knm": 12.0,
+                },
             ]),
     })
 
-    def spectrum(name, bin_name, utilisation):
+    def spectrum(
+        name,
+        bin_name,
+        reinforcement_utilisation,
+        concrete_utilisation,
+    ):
+        yield_limit_mpa = 500.0 / 1.15
+        governing_stress_mpa = yield_limit_mpa * reinforcement_utilisation
+        stress_long_mpa = governing_stress_mpa - 66.0
+        sn_reference_cycles = 2.0e6
+        sn_reference_ratio = 2.0
+        cycles_to_failure = 64.0e6
+        damage = 2.0e5 / cycles_to_failure
+        yield_long = NS(
+            state="long-term endpoint",
+            stress_mpa=stress_long_mpa,
+            branch="tension yield",
+            characteristic_strength_mpa=500.0,
+            design_limit_mpa=yield_limit_mpa,
+            utilisation=abs(stress_long_mpa) / yield_limit_mpa,
+        )
+        yield_total = NS(
+            state="design total endpoint",
+            stress_mpa=governing_stress_mpa,
+            branch="tension yield",
+            characteristic_strength_mpa=500.0,
+            design_limit_mpa=yield_limit_mpa,
+            utilisation=reinforcement_utilisation,
+        )
         steel_bin = NS(
             bin_name=bin_name,
             cycles=2.0e5,
             converged=True,
-            stress_long_mpa=105.0,
-            stress_total_mpa=165.0,
-            stress_total_design_mpa=171.0,
-            stress_total_elastic_mpa=165.0,
+            stress_long_mpa=stress_long_mpa,
+            stress_total_mpa=governing_stress_mpa / 1.10,
+            stress_total_design_mpa=governing_stress_mpa,
+            stress_total_elastic_mpa=governing_stress_mpa / 1.10,
             stress_range_mpa=60.0,
             stress_range_elastic_mpa=60.0,
             bond_adjustment=1.0,
             bond_method="Perfect bond",
             design_stress_range_mpa=66.0,
-            delta_sigma_rsk_mpa=160.0,
-            delta_sigma_rd_mpa=139.13,
+            delta_sigma_rsk_mpa=151.8,
+            delta_sigma_rd_mpa=132.0,
             sn_exponent=5.0,
-            cycles_to_failure=3.0e6,
-            log10_cycles_to_failure=6.47712,
-            damage=0.0666667,
-            governing_stress_mpa=171.0,
-            yield_limit_mpa=434.78,
-            yield_utilisation=0.3933,
+            cycles_to_failure=cycles_to_failure,
+            log10_cycles_to_failure=math.log10(cycles_to_failure),
+            damage=damage,
+            governing_stress_mpa=governing_stress_mpa,
+            yield_limit_mpa=yield_limit_mpa,
+            yield_utilisation=reinforcement_utilisation,
+            sn_reference_cycles=sn_reference_cycles,
+            sn_slope_1=5.0,
+            sn_slope_2=9.0,
+            sn_knee_stress_range_mpa=132.0,
+            sn_branch="upper S-N branch",
+            sn_reference_ratio=sn_reference_ratio,
+            material_factor=1.15,
+            stress_total_design_elastic_mpa=governing_stress_mpa,
+            design_stress_range_elastic_mpa=66.0,
+            yield_long_check=yield_long,
+            yield_design_total_check=yield_total,
+            governing_yield_check=yield_total,
         )
         steel = NS(
             element_id="R1",
@@ -579,57 +648,77 @@ def _fatigue_report_fixture():
             detail_id="F1",
             diameter_mm=25.23,
             bins=(steel_bin,),
-            damage=utilisation,
-            damage_utilisation=utilisation,
+            damage=damage,
+            damage_utilisation=damage,
             governing_damage_bin=bin_name,
-            yield_utilisation=0.3933,
+            yield_utilisation=reinforcement_utilisation,
             governing_yield_bin=bin_name,
-            utilisation=utilisation,
+            utilisation=reinforcement_utilisation,
             converged=True,
             passed=True,
+            governing_criterion="yield/proof stress",
+            governing_bin=bin_name,
         )
+        fcd_fat_mpa = 14.72
+        e_cd_min = 0.20
+        e_cd_max = concrete_utilisation
+        concrete_cycles_to_failure = 20.0e6
+        concrete_damage = 2.0e5 / concrete_cycles_to_failure
         concrete_bin = NS(
             bin_name=bin_name,
             cycles=2.0e5,
             converged=True,
-            compression_long_mpa=6.0,
-            compression_total_mpa=10.0,
-            compression_min_design_mpa=6.0,
-            compression_max_design_mpa=10.4,
-            stress_ratio=0.5769,
-            e_cd_min=0.25,
-            e_cd_max=0.433,
-            cycles_to_failure=2.0e7,
-            log10_cycles_to_failure=7.30103,
-            damage=0.01,
-            stress_utilisation=0.433,
+            compression_long_mpa=e_cd_min * fcd_fat_mpa / 1.10,
+            compression_total_mpa=e_cd_max * fcd_fat_mpa / 1.10,
+            compression_min_design_mpa=e_cd_min * fcd_fat_mpa,
+            compression_max_design_mpa=e_cd_max * fcd_fat_mpa,
+            stress_ratio=e_cd_min / e_cd_max,
+            e_cd_min=e_cd_min,
+            e_cd_max=e_cd_max,
+            cycles_to_failure=concrete_cycles_to_failure,
+            log10_cycles_to_failure=math.log10(concrete_cycles_to_failure),
+            damage=concrete_damage,
+            stress_utilisation=concrete_utilisation,
+            equivalent_utilisation=None,
+            life_branch="variable compression",
+            life_coefficient=14.0,
+            life_range_term=0.75,
+            compression_total_design_mpa=e_cd_max * fcd_fat_mpa,
+            compression_min_state="long-term endpoint",
+            compression_max_state="design total endpoint",
         )
         concrete = NS(
             fibre_index=4,
             x_m=0.1,
             y_m=-0.15,
             bins=(concrete_bin,),
-            fcd_fat_mpa=24.0,
-            damage=0.01,
-            damage_utilisation=0.01,
+            fcd_fat_mpa=fcd_fat_mpa,
+            damage=concrete_damage,
+            damage_utilisation=concrete_damage,
             governing_damage_bin=bin_name,
-            stress_utilisation=0.433,
+            stress_utilisation=concrete_utilisation,
             governing_stress_bin=bin_name,
-            utilisation=0.433,
+            utilisation=concrete_utilisation,
             converged=True,
             passed=True,
+            method=fatigue_core.CONCRETE_MINER,
+            equivalent_utilisation=None,
+            governing_equivalent_bin=None,
+            governing_criterion="compressive stress",
+            governing_bin=bin_name,
         )
         search = NS(
             x_m=0.1,
             y_m=-0.15,
-            damage=0.01,
-            upper_damage=0.011,
+            damage=max(concrete_utilisation - 0.002, 0.0),
+            upper_damage=max(concrete_utilisation - 0.001, 0.0),
             divisions=96,
             boxes_evaluated=128,
             points_evaluated=772,
             absolute_gap=0.001,
             relative_gap=0.10,
             converged=True,
+            method=fatigue_core.CONCRETE_MINER,
         )
         state = NS(
             name=bin_name,
@@ -639,23 +728,51 @@ def _fatigue_report_fixture():
             bond_method="Perfect bond",
             design_action_factor=1.10,
         )
+        concrete_strength = NS(
+            edition=fatigue_core.EC2_2023,
+            fck_mpa=30.0,
+            gamma_c=1.50,
+            beta_cc_t0=0.92,
+            base_strength_mpa=18.4,
+            alpha_cc=None,
+            k1=None,
+            high_strength_reduction=None,
+            eta_cc_raw=(40.0 / 30.0) ** (1.0 / 3.0),
+            eta_cc_cap=1.0,
+            eta_cc=1.0,
+            eta_cc_fat_raw=0.85,
+            eta_cc_fat_cap=0.8,
+            eta_cc_fat=0.8,
+            fcd_fat_mpa=fcd_fat_mpa,
+        )
+        if reinforcement_utilisation >= concrete_utilisation:
+            governing_domain = "reinforcement"
+            governing_criterion = "yield/proof stress"
+        else:
+            governing_domain = "concrete"
+            governing_criterion = "compressive stress"
         return NS(
             spectrum_name=name,
             bins=(state,),
             reinforcement=(steel,),
             concrete=(concrete,),
             concrete_search=search,
-            fcd_fat_mpa=24.0,
+            fcd_fat_mpa=fcd_fat_mpa,
             governing_reinforcement_id="R1",
             governing_concrete_fibre=4,
-            utilisation=utilisation,
+            utilisation=max(reinforcement_utilisation, concrete_utilisation),
             converged=True,
             passed=True,
+            concrete_method=fatigue_core.CONCRETE_MINER,
+            concrete_strength=concrete_strength,
+            governing_domain=governing_domain,
+            governing_criterion=governing_criterion,
         )
 
     spectra = (
-        spectrum("Traffic A", "FAT-A1", 0.55),
-        spectrum("Traffic B", "FAT-B1", 0.72),
+        spectrum("Traffic A", "FAT-A1", 0.82, 0.35),
+        spectrum("Traffic B", "FAT-B1", 0.55, 0.91),
+        spectrum("Traffic C", "FAT-C1", 0.41, 0.50),
     )
     basis = get_design_basis(DesignBasisKey.PUBLISHED_2023)
     reinforcement_binding = capability_binding(
@@ -739,7 +856,22 @@ def _fatigue_report_fixture():
         "elements": tuple(inp["bar_elements"]),
         "spectra": spectra,
         "governing_spectrum": "Traffic B",
-        "utilisation": 0.72,
+        "governing_reinforcement_example": {
+            "spectrum_name": "Traffic A",
+            "element_id": "R1",
+            "utilisation": 0.82,
+            "criterion": "yield/proof stress",
+            "bin_name": "FAT-A1",
+        },
+        "governing_concrete_example": {
+            "spectrum_name": "Traffic B",
+            "fibre_index": 4,
+            "utilisation": 0.91,
+            "criterion": "compressive stress",
+            "bin_name": "FAT-B1",
+            "search_upper_bound_governs": False,
+        },
+        "utilisation": 0.91,
         "converged": True,
         "passed": True,
     }
@@ -755,7 +887,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
 
     assert "Grouped fatigue" in text
     assert "REVIEW - Traffic B" in text
-    assert "Traffic A" in text and "Traffic B" in text
+    assert all(name in text for name in ("Traffic A", "Traffic B", "Traffic C"))
     assert "FAT-A1" in text and "FAT-B1" in text
     assert "Reinforcement fatigue" in text
     assert "Concrete fatigue" in text
@@ -764,7 +896,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "Fatigue total" in text
     assert "Bond factor / method" in text
     assert "bond transformation" in text
-    assert "raw solver range" in text
+    assert "raw action-factored solver range" in text
     assert "action-level" in text
     assert "Annex E.5" in text and "Formulae (E.7)-(E.8)" in text
     assert "published reference; project adoption required" in text
@@ -776,13 +908,162 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     compact = text.replace(" ", "")
     delta_sigma = chr(0x394) + chr(0x3C3)
     sigma = chr(0x3C3)
-    formula_start = compact.index(delta_sigma + "i=")
-    formula = compact[formula_start:formula_start + 90]
-    assert formula.startswith(delta_sigma + "i=|")
-    assert sigma + "(long)i|" in formula
+    eta = chr(0x3B7)
+    assert (
+        delta_sigma + "Ed,el,i=|" + sigma + "total,Ed,el,i-"
+        + sigma + "long,i|"
+    ) in compact
+    assert (
+        delta_sigma + "Ed,i=" + eta + "b" + delta_sigma + "Ed,el,i"
+    ) in compact
     assert "delta " + sigma not in text
     assert text.count(delta_sigma) >= 7
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
+
+
+def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
+    inp, out = _fatigue_report_fixture()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    # Every independently checked spectrum remains visible in compact evidence.
+    assert all(name in text for name in ("Traffic A", "Traffic B", "Traffic C"))
+    # Reinforcement and concrete intentionally govern in different spectra.
+    assert text.count(
+        "Textbook calculation - governing reinforcement fatigue"
+    ) == 1
+    assert text.count("Textbook calculation - governing concrete fatigue") == 1
+    assert "Spectrum - Traffic A" in text
+    assert "Spectrum - Traffic B" in text
+    assert "Spectrum - Traffic C" not in text
+    assert "Governing reinforcement element - R1" in text
+    assert "Governing concrete fibre - 4" in text
+
+
+def test_fatigue_worked_formulas_use_retained_operands(monkeypatch):
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    steel_bin = payload["spectra"][0].reinforcement[0].bins[0]
+    steel_bin.material_factor = 1.234567
+    steel_bin.sn_reference_ratio = 7.654321
+    concrete_strength = payload["spectra"][1].concrete_strength
+    concrete_strength.beta_cc_t0 = 0.923456
+    concrete_strength.eta_cc_fat = 0.712345
+    concrete_strength.fcd_fat_mpa = 16.54321
+    payload["spectra"][1].concrete[0].fcd_fat_mpa = 16.54321
+
+    calls = {}
+
+    def capture(_self, _expression, **kwargs):
+        key = kwargs.get("equation_key")
+        if key:
+            calls.setdefault(key, []).append(kwargs)
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture)
+    pdf = sector_report.build_report({}, inp, out, figures=False)
+
+    assert pdf.startswith(b"%PDF")
+    assert "1.234567" in calls[
+        "fatigue.reinforcement.design-resistance-range"
+    ][0]["subst"]
+    assert "7.654321" in calls["fatigue.reinforcement.sn-life"][0]["subst"]
+    assert "0.92345600" in calls[
+        "fatigue.concrete.strength"
+    ][0]["subst"]
+    assert "0.71234500" in calls["fatigue.concrete.strength"][0]["subst"]
+    assert "16.54321000" in calls["fatigue.concrete.strength"][0]["result"]
+
+
+def test_fatigue_worked_examples_fail_closed_when_operands_are_missing(
+    monkeypatch,
+):
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["spectra"][0].reinforcement[0].bins[0].material_factor = None
+    payload["spectra"][1].concrete[0].fcd_fat_mpa = None
+
+    calls = []
+
+    def capture(_self, _expression, **kwargs):
+        if kwargs.get("equation_key"):
+            calls.append(kwargs["equation_key"])
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture)
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False
+    )).split())
+
+    assert text.count("Worked example unavailable") >= 2
+    assert not any(key.startswith("fatigue.reinforcement.") for key in calls)
+    assert not any(
+        key in {
+            "fatigue.concrete.normalised-stress",
+            "fatigue.concrete.life",
+            "fatigue.concrete.bin-damage",
+            "fatigue.concrete.miner-sum",
+            "fatigue.concrete.equivalent",
+            "fatigue.concrete.stress-utilisation",
+            "fatigue.concrete.utilisation",
+        }
+        for key in calls
+    )
+
+
+def test_figures_off_fatigue_report_consumes_completed_payload_only(monkeypatch):
+    inp, out = _fatigue_report_fixture()
+
+    def poison(*_args, **_kwargs):
+        raise AssertionError("report attempted to recalculate completed fatigue")
+
+    for name in (
+        "steel_fatigue_life",
+        "concrete_fatigue_strength_result",
+        "concrete_fatigue_strength",
+        "concrete_fatigue_life",
+        "solve_fatigue_bin",
+        "analyse_fatigue_spectrum",
+    ):
+        monkeypatch.setattr(fatigue_core, name, poison)
+    monkeypatch.setattr(
+        fatigue_analysis, "_global_reinforcement_example", poison
+    )
+    monkeypatch.setattr(fatigue_analysis, "_global_concrete_example", poison)
+
+    pdf = sector_report.build_report({}, inp, out, figures=False)
+
+    assert pdf.startswith(b"%PDF")
+
+
+def test_fatigue_report_has_no_python_max_or_solver_selection_fallback():
+    methods = (
+        sector_report.ReportBuilder._fatigue,
+        sector_report.ReportBuilder._fatigue_reinforcement_formulas,
+        sector_report.ReportBuilder._fatigue_concrete_formulas,
+    )
+    source = "\n".join(textwrap.dedent(inspect.getsource(method)) for method in methods)
+    tree = ast.parse(source)
+
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "max"
+        for node in ast.walk(tree)
+    )
+    assert all(
+        forbidden not in source
+        for forbidden in (
+            "steel_fatigue_life(",
+            "concrete_fatigue_strength_result(",
+            "concrete_fatigue_strength(",
+            "concrete_fatigue_life(",
+            "solve_fatigue_bin(",
+            "analyse_fatigue_spectrum(",
+            "_global_reinforcement_example(",
+            "_global_concrete_example(",
+        )
+    )
 
 
 def test_report_includes_damage_equivalent_concrete_method_evidence():
@@ -1050,7 +1331,7 @@ def test_report_outline_decodes_literal_engineering_token_case_id():
 
 def test_report_preserves_negative_infinite_concrete_log_life():
     inp, out = _fatigue_report_fixture()
-    concrete_bin = out["fatigue"]["spectra"][0].concrete[0].bins[0]
+    concrete_bin = out["fatigue"]["spectra"][1].concrete[0].bins[0]
     concrete_bin.log10_cycles_to_failure = -math.inf
 
     text = " ".join(_pdf_text(sector_report.build_report(
@@ -1073,12 +1354,12 @@ def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):
     sector_report.build_report({}, inp, out, figures=True)
 
     assert sum(title.startswith("Fatigue utilisation") for title in titles) == 2
-    assert sum(title.startswith("S-N assessment") for title in titles) == 2
-    assert sum(title.startswith("Miner damage - R1") for title in titles) == 2
+    assert sum(title.startswith("S-N assessment") for title in titles) == 1
+    assert sum(title.startswith("Miner damage - R1") for title in titles) == 1
     assert sum(
         title.startswith("Miner damage - concrete fibre")
         for title in titles
-    ) == 2
+    ) == 1
 
 
 def test_report_pdf_generates():
@@ -1851,12 +2132,16 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "Results overview - FAIL" not in flat
     assert all(case in flat for case in ("PL-01", "PL-02", "EL-01", "EL-02"))
     assert "Governing combination" in flat and "Frequent response" in flat
-    assert flat.count(". Plastic section capacity") == 2
-    assert flat.count(". Elastic section response and stresses") == 2
+    assert flat.count(". Plastic section capacity") == 1
+    assert flat.count(". Elastic section response and stresses") == 1
+    assert "Plastic section capacity - PL-01" not in flat
+    assert "Elastic section response and stresses - EL-01" not in flat
+    assert "Cracking threshold and governing crack width - EL-01" in flat
     assert "Plastic section capacity - PL-02" in flat
     assert "Elastic section response and stresses - EL-02" in flat
-    assert "Cracking threshold - EL-02" in flat
-    assert "Crack width was not requested for this run." in flat
+    assert "Cracking threshold - EL-02" not in flat
+    assert "Crack width was not requested for this run." not in flat
+    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
     assert "the project as a whole have no verdict" in flat
     assert "125.0 %" in flat
     assert "456.000 MPa" in flat
@@ -1881,6 +2166,13 @@ def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
             "mx_short_ed_knm": 30.0, "my_short_ed_knm": 0.0,
             "calculate_crack_width": True,
         },
+        {
+            "name": "EL-03", "description": "Non-governing",
+            "n_long_ed_kn": 0.0, "mx_long_ed_knm": 60.0,
+            "my_long_ed_knm": 0.0, "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 10.0, "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        },
     ]
     inp["elastic_cases"] = rows
     first = copy.deepcopy(_out()["elastic"])
@@ -1899,20 +2191,434 @@ def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
         crack_short_coarse=_coarse_crack(wk=0.25),
         crack_code="DS/EN 1992-1-1 + DK NA",
     )
+    third = copy.deepcopy(_out()["elastic"])
+    third.update(
+        crack=dict(_crack(), wk=0.10),
+        crack_short=dict(_crack(), wk=0.11),
+        crack_coarse=_coarse_crack(wk=0.12),
+        crack_short_coarse=_coarse_crack(wk=0.09),
+        crack_code="DS/EN 1992-1-1 + DK NA",
+    )
     out = _out()
     out["elastic_cases"] = [
         {"name": row["name"], "actions": row, "evaluated": True,
          "results": {"elastic": result}}
-        for row, result in zip(rows, (first, second))
+            for row, result in zip(rows, (first, second, third))
     ]
     flat = " ".join(_pdf_text(sector_report.build_report(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
     assert flat.count("Crack width worked - governing case") == 2
+    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
     assert "governing case (long-term (fine))" in flat
     assert "governing case (long-term (coarse))" in flat
     assert "Candidate summary for governing crack example" in flat
     assert "Case (LT/ST)" in flat
+    assert "EL-03" in flat
+    assert "Governing crack width - EL-03" not in flat
+    assert "Cracking threshold and governing crack width - EL-03" not in flat
+
+
+def test_worked_selectors_ignore_invalid_nonfinite_case_results():
+    inp = _inp()
+    plastic_rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 20.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 0.0,
+        }
+        for name, description in (
+            ("PL-INVALID", "Invalid plastic"),
+            ("PL-VALID", "Valid plastic"),
+            ("PL-INFINITE", "Valid infinite failure"),
+        )
+    ]
+    elastic_rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_long_ed_kn": 0.0,
+            "mx_long_ed_knm": 20.0,
+            "my_long_ed_knm": 0.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 5.0,
+            "my_short_ed_knm": 0.0,
+            "calculate_crack_width": True,
+        }
+        for name, description in (
+            ("EL-INVALID", "Invalid elastic"),
+            ("EL-VALID", "Valid elastic"),
+        )
+    ]
+    inp["plastic_cases"] = plastic_rows
+    inp["elastic_cases"] = elastic_rows
+
+    invalid_plastic = copy.deepcopy(_out()["plastic"])
+    invalid_plastic.update(converged=False, util=math.inf, max_mx=math.inf)
+    valid_plastic = copy.deepcopy(_out()["plastic"])
+    valid_plastic.update(converged=True, util=0.7)
+    infinite_plastic = copy.deepcopy(_out()["plastic"])
+    infinite_plastic.update(converged=True, util=math.inf)
+
+    invalid_elastic = copy.deepcopy(_out()["elastic"])
+    invalid_elastic.update(
+        converged=False,
+        max_conc=math.inf,
+        max_steel=math.inf,
+        crack=dict(_crack(), wk=math.inf),
+        crack_short=None,
+    )
+    valid_elastic = copy.deepcopy(_out()["elastic"])
+    valid_elastic.update(
+        converged=True,
+        max_conc=18.0,
+        max_steel=220.0,
+        crack=dict(_crack(), wk=0.24),
+        crack_short=None,
+    )
+    invalid_case = {
+        "minimum_reinforcement": {
+            "status": "INVALID",
+            "checks": [{"status": "INVALID", "utilisation": math.inf}],
+        },
+        "transverse_reinforcement": {
+            "status": "INVALID",
+            "checks": [{"status": "INVALID", "utilisation": math.inf}],
+        },
+    }
+    finite_checks = {
+        "minimum_reinforcement": {
+            "status": "PASS",
+            "checks": [{"status": "PASS", "utilisation": 0.6}],
+        },
+        "transverse_reinforcement": {
+            "status": "PASS",
+            "checks": [{"status": "PASS", "utilisation": 0.8}],
+        },
+    }
+    infinite_checks = {
+        "minimum_reinforcement": {
+            "status": "FAIL",
+            "checks": [{"status": "FAIL", "utilisation": math.inf}],
+            "governing_utilisation": math.inf,
+        },
+        "transverse_reinforcement": {
+            "status": "FAIL",
+            "checks": [{"status": "FAIL", "utilisation": math.inf}],
+            "governing_utilisation": math.inf,
+        },
+    }
+    out = {
+        "plastic_cases": [
+            {
+                "actions": plastic_rows[0],
+                "evaluated": True,
+                "results": {"plastic": invalid_plastic, **invalid_case},
+            },
+            {
+                "actions": plastic_rows[1],
+                "evaluated": True,
+                "results": {"plastic": valid_plastic, **finite_checks},
+            },
+            {
+                "actions": plastic_rows[2],
+                "evaluated": True,
+                "results": {"plastic": infinite_plastic, **infinite_checks},
+            },
+        ],
+        "elastic_cases": [
+            {
+                "actions": elastic_rows[0],
+                "evaluated": True,
+                "results": {"elastic": invalid_elastic},
+            },
+            {
+                "actions": elastic_rows[1],
+                "evaluated": True,
+                "results": {"elastic": valid_elastic},
+            },
+        ],
+    }
+
+    selected = result_presentation.worked_example_selection(inp, out)
+
+    assert selected["families"]["plastic"]["case_id"] == "PL-INFINITE"
+    assert selected["families"]["elastic"]["case_id"] == "EL-VALID"
+    assert selected["families"]["minimum_reinforcement"]["case_id"] == (
+        "PL-INFINITE"
+    )
+    assert selected["families"]["transverse_reinforcement"]["case_id"] == (
+        "PL-INFINITE"
+    )
+    assert {item["case_id"] for item in selected["crack_examples"]} == {
+        "EL-VALID"
+    }
+
+
+def test_report_builder_consumes_selection_and_does_not_choose_candidates():
+    source = inspect.getsource(sector_report.ReportBuilder)
+
+    assert "def _select_critical" not in source
+    assert "def _critical_transverse_direction" not in source
+    assert "id(case_out)" not in source
+    assert "_transverse_metric" not in source
+    assert 'get("worked_example_selection")' in source
+
+
+def test_report_fails_closed_when_worked_example_selection_is_absent():
+    text = " ".join(_pdf_text(_build_report_from_completed_payload(
+        {}, _inp(), _out(), figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked plastic calculation" not in text
+    assert "Crack width worked - governing case" not in text
+
+
+@pytest.mark.parametrize(
+    "selection",
+    (
+        {"schema": 99, "families": {"plastic": {"case_id": "__single__"}}},
+        {"schema": 1, "families": ["plastic"], "crack_examples": "crack"},
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": ["crack"],
+            "cracking_threshold": ["elastic"],
+            "torsion_subchecks": ["torsion"],
+        },
+        {
+            "schema": 1,
+            "families": {
+                "plastic": ["PL-TEST"],
+                "shear": {"case_id": "__single__", "component": []},
+            },
+            "crack_examples": [{
+                "case_id": "__single__", "branch": [], "label": "invalid",
+            }],
+            "cracking_threshold": None,
+            "torsion_subchecks": {"interaction": ["__single__"]},
+        },
+    ),
+)
+def test_report_fails_closed_on_corrupt_worked_example_selection(selection):
+    out = _out()
+    out["worked_example_selection"] = selection
+
+    text = " ".join(_pdf_text(_build_report_from_completed_payload(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked plastic calculation" not in text
+    assert "Crack width worked - governing case" not in text
+
+
+def test_crack_worked_example_fails_closed_on_partial_selected_branch():
+    inp = _inp()
+    out = _out()
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
+    del out["elastic"]["crack"]["governing_candidate"][
+        "spacing_operands"
+    ]["k1"]
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in text
+    assert "spacing.k1" in text
+    assert "EQ-CRACK.2005.SPACING" not in text
+
+
+def test_crack_worked_example_rejects_an_unknown_retained_formula_branch():
+    inp = _inp()
+    out = _out()
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
+    out["elastic"]["crack"]["governing_candidate"][
+        "spacing_operands"
+    ]["selected_candidate"] = "unknown-formula"
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in text
+    assert "spacing.selected_candidate-supported" in text
+    assert "EQ-CRACK.2005.SPACING" not in text
+
+
+def _tension_zone_cap_crack_2023():
+    crack = _crack_2023()
+    candidate = crack["governing_candidate"]
+    spacing = candidate["spacing_operands"]
+    cap_spacing = spacing["formula_spacing"] * 0.5
+    spacing.update({
+        "cap_tension_depth": cap_spacing * crack["kw"] / 1.3 / 1000.0,
+        "cap_spacing": cap_spacing,
+        "selected_candidate": "tension-zone-cap",
+        "selected_spacing": cap_spacing,
+    })
+    crack_width = crack["kw"] * crack["k1_r"] * cap_spacing * crack["esm_ecm"]
+    crack.update(sr_max=cap_spacing, wk=crack_width)
+    candidate.update(sr_max=cap_spacing, wk=crack_width)
+    crack["candidates"] = [copy.deepcopy(candidate)]
+    return crack
+
+
+def test_crack_2023_tension_zone_cap_is_a_supported_worked_branch():
+    inp = _inp()
+    out = _out()
+    crack = _tension_zone_cap_crack_2023()
+    out["elastic"].update(
+        crack=crack,
+        crack_short=None,
+        crack_code="EN 1992-1-1:2023",
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "selected: tension-zone-cap" in text
+    assert "EQ-CRACK.2023.SPACING" in text
+    assert "Worked calculation unavailable" not in text
+
+
+def test_crack_2023_tension_zone_cap_fails_closed_without_cap_depth():
+    inp = _inp()
+    out = _out()
+    crack = _tension_zone_cap_crack_2023()
+    del crack["governing_candidate"]["spacing_operands"]["cap_tension_depth"]
+    out["elastic"].update(
+        crack=crack,
+        crack_short=None,
+        crack_code="EN 1992-1-1:2023",
+    )
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in text
+    assert "spacing.cap_tension_depth" in text
+    assert "EQ-CRACK.2023.SPACING" not in text
+
+
+@pytest.mark.parametrize(
+    ("selection_key", "payload_key", "renderer", "formula"),
+    (
+        (
+            "interaction", "interaction", "_torsion_interaction_example",
+            "Formula 6.29",
+        ),
+        (
+            "minimum_reinforcement", "min_reinf",
+            "_torsion_minimum_reinforcement_example", "Formula 6.31",
+        ),
+    ),
+)
+def test_infinite_torsion_subcheck_with_partial_operands_is_unavailable(
+    selection_key, payload_key, renderer, formula,
+):
+    payload = (
+        {"valid": True, "value": math.inf}
+        if payload_key == "interaction"
+        else {"applicable": True, "value": math.inf}
+    )
+    out = {
+        "torsion": {payload_key: payload},
+        "worked_example_selection": {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [],
+            "cracking_threshold": None,
+            "torsion_subchecks": {
+                selection_key: {"case_id": "__single__", "component": None},
+            },
+        },
+    }
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), out, figures=False,
+    )
+
+    getattr(builder, renderer)()
+    text = " ".join(
+        item.getPlainText()
+        for item in builder.flow
+        if hasattr(item, "getPlainText")
+    )
+
+    assert "Worked calculation unavailable" in text
+    assert formula in text
+
+
+def test_report_publishes_one_globally_critical_cracking_threshold():
+    inp = _inp()
+    inp["mode"] = "Elastic"
+    rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_long_ed_kn": 0.0,
+            "mx_long_ed_knm": moment,
+            "my_long_ed_knm": 0.0,
+            "n_short_ed_kn": 0.0,
+            "mx_short_ed_knm": 0.0,
+            "my_short_ed_knm": 0.0,
+            "calculate_crack_width": False,
+        }
+        for name, description, moment in (
+            ("EL-A", "Uncracked", 30.0),
+            ("EL-B", "Critical threshold", 80.0),
+            ("EL-C", "Intermediate", 50.0),
+        )
+    ]
+    inp["elastic_cases"] = rows
+    results = []
+    for lambda_cr, cracked in ((1.40, False), (0.80, True), (1.10, False)):
+        elastic = copy.deepcopy(_out()["elastic"])
+        elastic.update(
+            converged=True,
+            show_cw=False,
+            lambda_cr=lambda_cr,
+            cracked=cracked,
+            crack=None,
+            crack_short=None,
+            crack_coarse=None,
+            crack_short_coarse=None,
+        )
+        results.append(elastic)
+    out = {
+        "elastic_cases": [
+            {
+                "actions": row,
+                "evaluated": True,
+                "results": {"elastic": elastic},
+            }
+            for row, elastic in zip(rows, results)
+        ]
+    }
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert all(name in flat for name in ("EL-A", "EL-B", "EL-C"))
+    assert "Cracking threshold - EL-B" in flat
+    assert "Cracking threshold - EL-A" not in flat
+    assert "Cracking threshold - EL-C" not in flat
+    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
+    assert "lambda_cr 0.800; cracked" in flat
 
 
 def test_report_escapes_user_entered_action_provenance():
@@ -3095,23 +3801,15 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
         ]
     }
 
-    builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, inp, out, figures=False
-    )
+    selected = result_presentation.worked_example_selection(inp, out)
 
-    assert builder._critical_worked_case_ids["shear"] == id(second)
-    assert builder._critical_worked_case_ids["torsion"] == id(second)
-    assert builder._critical_worked_case_ids["combined"] == id(second)
-    assert (
-        builder._critical_torsion_subchecks["interaction"]["case_out_id"]
-        == id(first)
-    )
-    assert (
-        builder._critical_torsion_subchecks["minimum_reinforcement"][
-            "case_out_id"
-        ]
-        == id(first)
-    )
+    assert selected["families"]["shear"]["case_id"] == "PL-B"
+    assert selected["families"]["torsion"]["case_id"] == "PL-B"
+    assert selected["families"]["combined"]["case_id"] == "PL-B"
+    assert selected["torsion_subchecks"]["interaction"]["case_id"] == "PL-A"
+    assert selected["torsion_subchecks"]["minimum_reinforcement"][
+        "case_id"
+    ] == "PL-A"
 
 
 def test_report_includes_combined_section():
@@ -3169,6 +3867,9 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block():
         vx,
         directions={"vx": vx, "vy": vy},
         biaxial=True,
+    )
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(_inp(), out)
     )
     builder = sector_report.ReportBuilder(
         io.BytesIO(), {}, _inp(), out, figures=False

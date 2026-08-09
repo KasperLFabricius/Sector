@@ -1,7 +1,7 @@
 """Generate a QA-able PDF report of a Sector cross-section analysis.
 
 Modelled on the BriCoS report: a sectioned reportlab document with a numbered
-footer, every case summarised and each computed case reported in detail, and
+footer, every case summarised and governing calculations reported in detail, and
 every computed quantity tied to its formula and the selected
 ``EN 1992-1-1`` edition.
 
@@ -51,6 +51,7 @@ import viz
 import result_presentation as presentation
 from sector import codes as ec2_codes
 from sector import detailing
+from sector import fatigue as fatigue_core
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
 
@@ -692,22 +693,26 @@ class ReportBuilder:
         self._publication_counter = PublicationCounter("0")
         self._publication_section_title = "Document control"
         self._publication_subsection_title = None
-        self._critical_worked_case_ids = {
-            "plastic": self._select_critical_worked_case("plastic"),
-            "elastic": self._select_critical_worked_case("elastic"),
-            "shear": self._select_critical_worked_case("shear"),
-            "torsion": self._select_critical_worked_case("torsion"),
-            "combined": self._select_critical_worked_case("combined"),
-            "minimum_reinforcement": self._select_critical_check_case(
-                "minimum_reinforcement"
-            ),
-            "transverse_reinforcement": self._select_critical_check_case(
-                "transverse_reinforcement"
-            ),
-        }
-        self._critical_crack_examples = self._select_critical_crack_examples()
-        self._critical_torsion_subchecks = (
-            self._select_critical_torsion_subchecks()
+        selection = self._base_out.get("worked_example_selection")
+        self._worked_example_selection = (
+            selection
+            if isinstance(selection, Mapping) and selection.get("schema") == 1
+            else {}
+        )
+        families = self._worked_example_selection.get("families")
+        self._selected_families = families if isinstance(families, Mapping) else {}
+        crack_examples = self._worked_example_selection.get("crack_examples")
+        self._selected_crack_examples = tuple(
+            item for item in crack_examples
+            if isinstance(item, Mapping)
+        ) if isinstance(crack_examples, (list, tuple)) else ()
+        threshold = self._worked_example_selection.get("cracking_threshold")
+        self._selected_cracking_threshold = (
+            threshold if isinstance(threshold, Mapping) else None
+        )
+        torsion_subchecks = self._worked_example_selection.get("torsion_subchecks")
+        self._selected_torsion_subchecks = (
+            torsion_subchecks if isinstance(torsion_subchecks, Mapping) else {}
         )
 
     def _case_contexts(self, family):
@@ -744,6 +749,21 @@ class ReportBuilder:
             )
         )
         return [(self._base_inp, self._base_out)] if active else []
+
+    @staticmethod
+    def _case_id(case_inp, family):
+        """Return the stable identity used by the retained selection contract."""
+        if "_report_case_actions" not in case_inp:
+            return "__single__"
+        return presentation.action_set(case_inp, family)["id"]
+
+    def _selected_family(self, family, case_inp):
+        selected = self._selected_families.get(family)
+        if not isinstance(selected, Mapping):
+            return None
+        return selected if selected.get("case_id") == self._case_id(
+            case_inp, "elastic" if family == "elastic" else "plastic"
+        ) else None
 
     def _result_values(self, key):
         family = "elastic" if key == "elastic" else "plastic"
@@ -1608,8 +1628,10 @@ class ReportBuilder:
                 ):
                     continue
                 if (
-                    key in {"shear", "torsion", "combined"}
-                    and self._critical_worked_case_ids[key] != id(case_out)
+                    self._selected_family(key, case_inp) is None
+                    and not self._needs_diagnostic_chapter(
+                        key, case_out[key]
+                    )
                 ):
                     continue
                 jobs.append((
@@ -1627,11 +1649,11 @@ class ReportBuilder:
                 "_torsion_minimum_reinforcement_example",
             ),
         ):
-            selection = self._critical_torsion_subchecks.get(key)
-            if selection is None:
+            selection = self._selected_torsion_subchecks.get(key)
+            if not isinstance(selection, Mapping):
                 continue
             for case_inp, case_out in plastic_contexts:
-                if id(case_out) != selection["case_out_id"]:
+                if self._case_id(case_inp, "plastic") != selection.get("case_id"):
                     continue
                 case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
                 jobs.append((
@@ -1644,13 +1666,34 @@ class ReportBuilder:
                 break
         for case_inp, case_out in self._case_contexts("elastic"):
             case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
-            if "elastic" in case_out:
-                jobs.extend([
-                    (case_inp, case_out,
-                     f"Elastic stresses - {case_id}...", "_elastic", True),
-                    (case_inp, case_out,
-                     f"Cracking - {case_id}...", "_cracking", False),
-                ])
+            if (
+                "elastic" in case_out
+                and (
+                    self._selected_family("elastic", case_inp) is not None
+                    or self._needs_diagnostic_chapter(
+                        "elastic", case_out["elastic"]
+                    )
+                )
+            ):
+                jobs.append((
+                    case_inp, case_out,
+                    f"Elastic stresses - {case_id}...", "_elastic", True,
+                ))
+            if (
+                any(
+                    item.get("case_id") == self._case_id(case_inp, "elastic")
+                    for item in self._selected_crack_examples
+                )
+                or (
+                    isinstance(self._selected_cracking_threshold, Mapping)
+                    and self._selected_cracking_threshold.get("case_id")
+                    == self._case_id(case_inp, "elastic")
+                )
+            ):
+                jobs.append((
+                    case_inp, case_out,
+                    f"Cracking - {case_id}...", "_cracking", False,
+                ))
 
         try:
             for index, (case_inp, case_out, label, method, new_page) in enumerate(jobs):
@@ -2893,226 +2936,51 @@ class ReportBuilder:
             references=("elastic.modular-ratio.short",),
         )
 
-    def _select_critical_crack_examples(self):
-        """Select only the governing stored crack examples for publication."""
+    def _needs_diagnostic_chapter(self, family, result):
+        """Keep an unrankable/invalid result's reason without a worked chain."""
 
-        contexts = self._case_contexts("elastic")
-        has_coarse = any(
-            (case_out.get("elastic") or {}).get(key) is not None
-            for _, case_out in contexts
-            for key in ("crack_coarse", "crack_short_coarse")
-        )
-        systems = (
-            (
-                ("fine", (
-                    ("crack", "long-term (fine)"),
-                    ("crack_short", "short-term (fine)"),
-                )),
-                ("coarse", (
-                    ("crack_coarse", "long-term (coarse)"),
-                    ("crack_short_coarse", "short-term (coarse)"),
-                )),
+        if not isinstance(result, Mapping):
+            return False
+        if family in {"plastic", "elastic"}:
+            return result.get("converged") is False
+        if family == "torsion":
+            return result.get("valid") is False
+        if family in {"minimum_reinforcement", "transverse_reinforcement"}:
+            checks = tuple(result.get("checks") or ())
+            if not checks:
+                return bool(result.get("reason"))
+            return not any(
+                check.get("status") in {"PASS", "FAIL"}
+                and self._retained_utilisation_available(check.get("utilisation"))
+                for check in checks
             )
-            if has_coarse
-            else (("governing", (
-                ("crack", "long-term"),
-                ("crack_short", "short-term"),
-            )),)
-        )
-        selected = {}
-        for system, keys in systems:
-            best = None
-            for context_index, (_, case_out) in enumerate(contexts):
-                elastic = case_out.get("elastic") or {}
-                for key_index, (key, label) in enumerate(keys):
-                    crack = elastic.get(key)
-                    if crack is None:
-                        continue
-                    rank = (
-                        float(crack.get("wk") or 0.0),
-                        -context_index,
-                        -key_index,
-                    )
-                    if best is None or rank > best[0]:
-                        best = (rank, case_out, crack, label)
-            if best is None:
-                continue
-            _, case_out, crack, label = best
-            selected.setdefault(id(case_out), []).append(
-                (system, crack, label)
+        if family == "shear":
+            directions = result.get("directions") or {}
+            items = tuple(directions.values()) or (result,)
+            return not any(
+                (
+                    (item.get("links") or {}).get("res") or {}
+                ).get("valid")
+                and self._retained_utilisation_available(
+                    (item.get("links") or {}).get("util")
+                )
+                or (
+                    not item.get("links")
+                    and (item.get("res") or {}).get("valid")
+                    and self._retained_utilisation_available(item.get("util"))
+                )
+                for item in items
             )
-        return selected
-
-    def _select_critical_worked_case(self, family):
-        """Return the result-map identity selected for one complete worked chain."""
-
-        best = None
-        context_family = (
-            "plastic" if family in {"shear", "torsion", "combined"} else family
-        )
-        for order, (_, case_out) in enumerate(self._case_contexts(context_family)):
-            result = case_out.get(family)
-            if not result:
-                continue
-            if family == "plastic":
-                utilisation = result.get("util")
-                if utilisation is not None and math.isfinite(float(utilisation)):
-                    score = (2, float(utilisation), -order)
-                else:
-                    capacity_extreme = max(
-                        abs(float(result.get(name) or 0.0))
-                        for name in ("max_mx", "min_mx", "max_my", "min_my")
-                    )
-                    score = (1, capacity_extreme, -order)
-            elif family in {"shear", "torsion", "combined"}:
-                metric = self._critical_transverse_metric(family, result)
-                score = (2, metric, -order) if metric is not None else (
-                    1, -math.inf, -order
-                )
-            else:
-                stress_extreme = max(
-                    abs(float(result.get(name) or 0.0))
-                    for name in ("max_conc", "max_steel")
-                )
-                score = (1, stress_extreme, -order)
-            if best is None or score > best[0]:
-                best = (score, id(case_out))
-        return None if best is None else best[1]
+        return False
 
     @staticmethod
-    def _stored_metric(value):
-        """Return one stored result metric without deriving an engineering value."""
-
-        if value is None:
-            return None
+    def _retained_utilisation_available(value):
+        """Whether a stored assessment utilisation can be published."""
         try:
             metric = float(value)
         except (TypeError, ValueError):
-            return None
-        return metric if math.isfinite(metric) else None
-
-    def _critical_transverse_metric(self, family, result):
-        """Rank retained transverse-family results for publication selection only."""
-
-        def shear_metric(item):
-            links = item.get("links") or {}
-            if links:
-                if not (links.get("res") or {}).get("valid"):
-                    return None
-                return self._stored_metric(links.get("util"))
-            if not (item.get("res") or {}).get("valid"):
-                return None
-            return self._stored_metric(item.get("util"))
-
-        def combined_metric(item):
-            if not item.get("valid"):
-                return None
-            return self._stored_metric(item.get("dkna_sum"))
-
-        directions = result.get("directions") or {}
-        if family == "shear":
-            items = [directions[key] for key in ("vx", "vy") if key in directions]
-            if not items:
-                items = [result]
-            values = [
-                metric for item in items
-                if (metric := shear_metric(item)) is not None
-            ]
-        elif family == "combined":
-            items = [directions[key] for key in ("vx", "vy") if key in directions]
-            if not items:
-                items = [result]
-            values = [
-                metric for item in items
-                if (metric := combined_metric(item)) is not None
-            ]
-        else:
-            values = (
-                [metric]
-                if result.get("valid")
-                and (metric := self._stored_metric(result.get("util"))) is not None
-                else []
-            )
-        return max(values) if values else None
-
-    def _critical_transverse_direction(self, family, result):
-        """Select one retained biaxial direction for the family's worked example."""
-
-        directions = result.get("directions") or {}
-        best = None
-        for order, component in enumerate(("vx", "vy")):
-            item = directions.get(component)
-            if not item:
-                continue
-            metric = self._critical_transverse_metric(family, item)
-            score = (-math.inf if metric is None else metric, -order)
-            if best is None or score > best[0]:
-                best = (score, component)
-        return None if best is None else best[1]
-
-    def _select_critical_check_case(self, key):
-        """Select one stored plastic-case result by its greatest utilisation."""
-
-        best = None
-        for order, (_, case_out) in enumerate(self._case_contexts("plastic")):
-            result = case_out.get(key)
-            if not result:
-                continue
-            values = [
-                float(check["utilisation"])
-                for check in result.get("checks") or []
-                if check.get("utilisation") is not None
-                and math.isfinite(float(check["utilisation"]))
-            ]
-            stored = result.get("governing_utilisation")
-            if stored is not None and math.isfinite(float(stored)):
-                values.append(float(stored))
-            score = (max(values) if values else -math.inf, -order)
-            if best is None or score > best[0]:
-                best = (score, id(case_out))
-        return None if best is None else best[1]
-
-    def _select_critical_torsion_subchecks(self):
-        """Select one finite, valid retained example for each torsion subcheck."""
-
-        selected = {}
-        for case_order, (_, case_out) in enumerate(
-            self._case_contexts("plastic")
-        ):
-            torsion_result = case_out.get("torsion") or {}
-            directional = torsion_result.get("directional_interactions") or {}
-            items = [
-                (component, directional[component])
-                for component in ("vx", "vy")
-                if component in directional
-            ]
-            if not items:
-                items = [(None, torsion_result)]
-            for direction_order, (component, item) in enumerate(items):
-                interaction = item.get("interaction") or {}
-                if interaction.get("valid"):
-                    value = self._stored_metric(interaction.get("value"))
-                    if value is not None:
-                        score = (value, -case_order, -direction_order)
-                        prior = selected.get("interaction")
-                        if prior is None or score > prior[0]:
-                            selected["interaction"] = (
-                                score, id(case_out), component
-                            )
-                minimum = item.get("min_reinf") or {}
-                if minimum.get("applicable"):
-                    value = self._stored_metric(minimum.get("value"))
-                    if value is not None:
-                        score = (value, -case_order, -direction_order)
-                        prior = selected.get("minimum_reinforcement")
-                        if prior is None or score > prior[0]:
-                            selected["minimum_reinforcement"] = (
-                                score, id(case_out), component
-                            )
-        return {
-            key: {"case_out_id": value[1], "component": value[2]}
-            for key, value in selected.items()
-        }
+            return False
+        return math.isfinite(metric) or metric == math.inf
 
     def _theory(self):
         self._h1("Basis of analysis")
@@ -3336,8 +3204,7 @@ class ReportBuilder:
     def _minimum_reinforcement(self):
         result = self.out["minimum_reinforcement"]
         publish_worked = (
-            self._critical_worked_case_ids["minimum_reinforcement"]
-            == id(self.out)
+            self._selected_family("minimum_reinforcement", self.inp) is not None
         )
         direction = str(
             result.get("modelled_reinforcement_direction") or "longitudinal"
@@ -3597,8 +3464,7 @@ class ReportBuilder:
     def _transverse_reinforcement(self):
         result = self.out["transverse_reinforcement"]
         publish_worked = (
-            self._critical_worked_case_ids["transverse_reinforcement"]
-            == id(self.out)
+            self._selected_family("transverse_reinforcement", self.inp) is not None
         )
         self._case_heading("Shear/torsion link detailing", "plastic")
         status = str(result.get("status") or "NOT ASSESSED").upper()
@@ -4097,7 +3963,7 @@ class ReportBuilder:
         self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever L, d<sub>x</sub> "
                     "and d<sub>y</sub> in mm; strain in %; kappa in 1/m; "
                     "F<sub>c</sub> in kN.")
-        if self._critical_worked_case_ids["plastic"] == id(self.out):
+        if self._selected_family("plastic", self.inp) is not None:
             self._plastic_worked(pl)
         else:
             self._small(
@@ -4547,7 +4413,8 @@ class ReportBuilder:
     def _shear(self):
         aggregate = self.out["shear"]
         directions = aggregate.get("directions") or {}
-        critical = self._critical_worked_case_ids["shear"] == id(self.out)
+        selected = self._selected_family("shear", self.inp)
+        critical = selected is not None
         if not directions:
             self._case_heading("Shear resistance", "plastic")
             links = aggregate.get("links") or {}
@@ -4666,12 +4533,12 @@ class ReportBuilder:
             "overview. The complete shear worked example is published only for "
             "the governing retained utilisation across all plastic cases."
         )
-        component = self._critical_transverse_direction("shear", aggregate)
-        if component is None:
+        component = selected.get("component")
+        if not isinstance(component, str) or component not in directions:
             self._h2("Worked shear calculation unavailable")
             self._small(
-                "The completed payload does not retain a directional result from "
-                "which to select the governing worked example."
+                "The completed payload does not retain the selected directional "
+                "result required by the governing worked-example contract."
             )
             return
         label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
@@ -5177,7 +5044,8 @@ class ReportBuilder:
     def _combined(self):
         aggregate = self.out["combined"]
         directions = aggregate.get("directions") or {}
-        critical = self._critical_worked_case_ids["combined"] == id(self.out)
+        selected = self._selected_family("combined", self.inp)
+        critical = selected is not None
         if not aggregate.get("biaxial") or not directions:
             self._case_heading(
                 "Combined bending + shear + torsion (M-V-T)", "plastic"
@@ -5277,12 +5145,12 @@ class ReportBuilder:
             "published only for the governing retained utilisation across all "
             "plastic cases."
         )
-        component = self._critical_transverse_direction("combined", aggregate)
-        if component is None:
+        component = selected.get("component")
+        if not isinstance(component, str) or component not in directions:
             self._h2("Worked combined calculation unavailable")
             self._small(
-                "The completed payload does not retain a directional result from "
-                "which to select the governing worked example."
+                "The completed payload does not retain the selected directional "
+                "result required by the governing worked-example contract."
             )
             return
         block_start = len(self.flow)
@@ -5766,17 +5634,22 @@ class ReportBuilder:
         self._fig(viz.subtube_figure(subs), 150, 90)
 
     def _selected_torsion_subcheck(self, key):
-        selection = self._critical_torsion_subchecks.get(key)
-        if selection is None or selection["case_out_id"] != id(self.out):
+        selection = self._selected_torsion_subchecks.get(key)
+        if (
+            not isinstance(selection, Mapping)
+            or selection.get("case_id") != self._case_id(self.inp, "plastic")
+        ):
             return None, None
         torsion_result = self.out.get("torsion") or {}
         component = selection.get("component")
         if component is None:
             item = torsion_result
-        else:
+        elif isinstance(component, str):
             item = (
                 torsion_result.get("directional_interactions") or {}
             ).get(component) or {}
+        else:
+            return None, None
         payload_key = (
             "interaction" if key == "interaction" else "min_reinf"
         )
@@ -5784,11 +5657,24 @@ class ReportBuilder:
 
     def _torsion_interaction_example(self):
         component, interaction = self._selected_torsion_subcheck("interaction")
-        if not isinstance(interaction, dict) or not interaction.get("valid"):
-            return
         self._case_heading(
             "Governing shear + torsion concrete-strut interaction", "plastic"
         )
+        required = (
+            "valid", "value", "t_ed", "trd_max", "v_ed", "vrd_max",
+            "cot", "theta_deg",
+        )
+        if (
+            not isinstance(interaction, dict)
+            or not interaction.get("valid")
+            or any(key not in interaction or interaction[key] is None for key in required)
+        ):
+            self._small(
+                "<b>Worked calculation unavailable.</b> The retained governing "
+                "Formula 6.29 payload is incomplete; the report does not "
+                "reconstruct its operands."
+            )
+            return
         direction = (
             ""
             if component is None
@@ -5796,7 +5682,7 @@ class ReportBuilder:
         )
         self._small(
             "All calculated V+T screens remain in the results overview. This is "
-            "the single largest finite retained Formula 6.29 utilisation across "
+            "the single largest retained Formula 6.29 utilisation across "
             f"all plastic cases and directions{direction}."
         )
         self._crushing_interaction({"interaction": interaction})
@@ -5805,11 +5691,24 @@ class ReportBuilder:
         component, minimum = self._selected_torsion_subcheck(
             "minimum_reinforcement"
         )
-        if not isinstance(minimum, dict) or not minimum.get("applicable"):
-            return
         self._case_heading(
             "Governing shear + torsion minimum-reinforcement screen", "plastic"
         )
+        required = (
+            "applicable", "value", "ok", "t_ed", "trd_c", "v_ed",
+            "vrd_c", "solid",
+        )
+        if (
+            not isinstance(minimum, dict)
+            or not minimum.get("applicable")
+            or any(key not in minimum or minimum[key] is None for key in required)
+        ):
+            self._small(
+                "<b>Worked calculation unavailable.</b> The retained governing "
+                "Formula 6.31 payload is incomplete; the report does not "
+                "reconstruct its operands."
+            )
+            return
         direction = (
             ""
             if component is None
@@ -5817,7 +5716,7 @@ class ReportBuilder:
         )
         self._small(
             "All calculated Formula 6.31 screens remain in the results overview. "
-            "This is the single largest finite retained screen value across all "
+            "This is the single largest retained screen value across all "
             f"plastic cases and directions{direction}."
         )
         self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
@@ -5886,7 +5785,7 @@ class ReportBuilder:
     def _torsion(self):
         t = self.out["torsion"]
         tube = t["tube"]
-        critical = self._critical_worked_case_ids["torsion"] == id(self.out)
+        critical = self._selected_family("torsion", self.inp) is not None
         self._case_heading("Torsion (thin-walled tube)", "plastic")
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
@@ -6473,7 +6372,8 @@ class ReportBuilder:
                     f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm.")
         else:
             self._p(
-                "No verified cracked/uncracked classification is issued. "
+                "There is no verified cracking classification or "
+                "cracked/uncracked state. "
                 "Diagnostic neutral-axis intercepts: "
                 f"x<sub>na</sub> = {_fmt(el['na_x']*_MM, 3)} mm, "
                 f"y<sub>na</sub> = {_fmt(el['na_y']*_MM, 3)} mm."
@@ -6491,7 +6391,7 @@ class ReportBuilder:
                     f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kNm "
                     "(N tension-positive; calculation shown in Section and "
                     "materials).")
-        if self._critical_worked_case_ids["elastic"] == id(self.out):
+        if self._selected_family("elastic", self.inp) is not None:
             self._elastic_worked(el)
         else:
             self._small(
@@ -6639,50 +6539,81 @@ class ReportBuilder:
 
     def _cracking(self):
         el = self.out["elastic"]
+        case_id = self._case_id(self.inp, "elastic")
+        publish_threshold = (
+            isinstance(self._selected_cracking_threshold, Mapping)
+            and self._selected_cracking_threshold.get("case_id") == case_id
+        )
+        examples = [
+            item for item in self._selected_crack_examples
+            if item.get("case_id") == case_id
+        ]
+        publish_crack_width = bool(examples)
+        if publish_threshold and publish_crack_width:
+            heading = "Cracking threshold and governing crack width"
+        elif publish_crack_width:
+            heading = "Governing crack width"
+        else:
+            heading = "Cracking threshold"
         self._case_heading(
-            "Cracking and crack width" if el.get("show_cw")
-            else "Cracking threshold",
+            heading,
             "elastic",
         )
-        # Threshold.
-        if el.get("show_cw"):
-            self._h2("Cracking threshold")
-        lam = el.get("lambda_cr")
-        verdict = "cracked" if el.get("cracked") else "uncracked"
         valid = el.get("converged", True)
         crack_2023 = (
             el.get("crack_edition") == "2023"
             or "2023" in str(el.get("crack_code", ""))
         )
-        self._formula("lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
-                      equation_key="cracking.threshold",
-                      ref=("Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                           "(EN 1992-1-1:2023 &#167;9.2.1)"
-                           if crack_2023 else
-                           "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                           "(DS/EN 1992-1-1 &#167;7.1)"),
-                      subst=f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
-                            f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa",
-                      result=(
-                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
-                          f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
-                          if valid else
-                          f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
-                          "no verified cracking classification"
-                      ))
-        if valid:
+        if publish_threshold:
+            if publish_crack_width:
+                self._h2("Governing cracking threshold")
+            lam = el.get("lambda_cr")
+            verdict = "cracked" if el.get("cracked") else "uncracked"
+            self._formula(
+                "lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
+                equation_key="cracking.threshold",
+                ref=(
+                    "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                    "(EN 1992-1-1:2023 &#167;9.2.1)"
+                    if crack_2023 else
+                    "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
+                    "(DS/EN 1992-1-1 &#167;7.1)"
+                ),
+                subst=(
+                    f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
+                    f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa"
+                ),
+                result=(
+                    f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
+                    f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
+                    if valid else
+                    f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
+                    "no verified cracking classification"
+                ),
+            )
             self._small(
-                "Governing of the long-term and total (long + short) actions: "
-                "cracking is triggered by the peak tension the section sees, and "
+                "Globally critical threshold across the elastic cases. "
+                "Cracking is triggered by the peak tension the section sees and "
                 "is irreversible."
             )
-        else:
-            self._small(
-                "Diagnostic value only: at least one elastic solve did not "
-                "converge, so no cracked/uncracked verdict is issued."
-            )
-        if not el.get("show_cw"):
-            self._small("Crack width was not requested for this run.")
+        if not publish_crack_width:
+            assessment = el.get("crack_output") or {}
+            status = assessment.get("calculation_state", "NOT CALCULATED")
+            if status == "NOT APPLICABLE" or (
+                el.get("crack") is None
+                and el.get("crack_short") is None
+                and el.get("crack_coarse") is None
+                and el.get("crack_short_coarse") is None
+            ):
+                self._small(
+                    f"Calculation state: {status}. No crack-width limit, "
+                    "exposure acceptance or action-set completeness criterion "
+                    "is applied."
+                )
+                self._small(
+                    "No crack width: section uncracked or no reinforcement "
+                    "in tension."
+                )
             return
         cl, cs = el.get("crack"), el.get("crack_short")
         clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
@@ -6706,18 +6637,30 @@ class ReportBuilder:
                         "in tension.")
             return
         self._crack_table(cl, cs, clc, csc)
-        examples = self._critical_crack_examples.get(id(self.out), [])
-        if not examples:
-            self._small(
-                "The complete numerical worked example is published only for "
-                "the governing crack-width extremum across all elastic cases."
-            )
-            return
         selected_cases = []
-        for _system, crack, label in examples:
-            selected_cases.append((crack, label))
+        selected_worked = []
+        allowed_branches = {
+            "crack", "crack_short", "crack_coarse", "crack_short_coarse",
+        }
+        for item in examples:
+            branch = item.get("branch")
+            crack = (
+                el.get(branch)
+                if isinstance(branch, str) and branch in allowed_branches
+                else None
+            )
+            if isinstance(crack, Mapping):
+                selected = (crack, str(item.get("label") or ""))
+                selected_cases.append(selected)
+                selected_worked.append(selected)
+            else:
+                self._small(
+                    "<b>Worked calculation unavailable.</b> The retained "
+                    "worked-example selection references a missing or unsupported "
+                    "crack branch; no alternative branch is selected in the report."
+                )
         self._crack_candidates(selected_cases)
-        for _system, crack, label in examples:
+        for crack, label in selected_worked:
             self._crack_worked(crack, label)
 
     def _crack_table(self, cl, cs, clc=None, csc=None):
@@ -6766,19 +6709,22 @@ class ReportBuilder:
             return
         self._h2(f"Crack width worked - governing case ({which})" if which
                  else "Crack width worked (governing element)")
+        missing = self._crack_worked_missing_operands(cw)
+        if missing:
+            self._small(
+                "<b>Worked calculation unavailable.</b> The selected retained "
+                "crack branch is incomplete (missing: "
+                + _html_escape(", ".join(missing))
+                + "). Sector does not substitute defaults or reconstruct "
+                "engineering operands in the report."
+            )
+            return
         self._small(f"Governing element (largest w<sub>k</sub>): "
                     f"{cw.get('element_id', 'element ' + str(cw.get('gov_bar','-')))}; "
                     f"clear cover c = {_fmt(cw.get('cover',0), 3)} mm.")
         candidate = cw.get("governing_candidate") or {}
         mean = candidate.get("mean_strain_operands") or {}
         spacing = candidate.get("spacing_operands") or {}
-        if not candidate or not mean or not spacing:
-            self._small(
-                "<b>Worked calculation unavailable.</b> The completed result "
-                "does not contain the retained interim operands required for a "
-                "numerical example. Sector does not recreate them in the report."
-            )
-            return
         code = self.out["elastic"].get("crack_code")
         coarse = bool(cw.get("coarse"))
         if code:
@@ -6878,6 +6824,111 @@ class ReportBuilder:
                   + f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                     f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
+
+    @staticmethod
+    def _crack_worked_missing_operands(cw):
+        """Validate every operand required by the selected crack formula branch."""
+        missing = []
+
+        def require(mapping, prefix, keys):
+            if not isinstance(mapping, Mapping):
+                missing.append(prefix.rstrip("."))
+                return
+            missing.extend(
+                prefix + key for key in keys
+                if key not in mapping or mapping[key] is None
+            )
+
+        require(cw, "crack.", (
+            "cover", "sr_max", "esm_ecm", "wk", "governing_candidate",
+            "effective_area_operands", "edition",
+        ))
+        candidate = cw.get("governing_candidate") or {}
+        require(candidate, "candidate.", (
+            "as_eff", "ap_eff", "ac_eff", "rho_p_eff",
+            "mean_strain_operands", "spacing_operands",
+        ))
+        mean = candidate.get("mean_strain_operands") or {}
+        require(mean, "mean_strain.", (
+            "sigma_s", "concrete_tension_reduction", "es",
+            "formula_candidate", "lower_bound_factor",
+            "lower_bound_candidate", "selected_esm_ecm", "selected_candidate",
+        ))
+        spacing = candidate.get("spacing_operands") or {}
+        require(spacing, "spacing.", ("selected_candidate", "selected_spacing"))
+        area = cw.get("effective_area_operands") or {}
+        require(area, "effective_area.", ("record_kind", "ac_eff"))
+        edition = cw.get("edition")
+        if edition not in {"2004", "2005", "2023"}:
+            missing.append("crack.edition-supported")
+        if edition == "2023":
+            require(cw, "crack.", ("kw", "k1_r", "effective_reinforcement_2023"))
+            require(spacing, "spacing.", (
+                "flexural_factor_method", "cover_coefficient", "cover",
+                "flexural_factor", "bond_factor_kb", "diameter_ratio_divisor",
+                "diameter", "rho_p_eff", "formula_spacing",
+                "cap_tension_depth", "cap_spacing",
+            ))
+            if spacing.get("selected_candidate") not in {
+                "formula-9.15", "tension-zone-cap",
+            }:
+                missing.append("spacing.selected_candidate-supported")
+            reinforcement = cw.get("effective_reinforcement_2023") or {}
+            require(reinforcement, "effective_reinforcement.", (
+                "as_eff", "ap_eff_weighted", "ac_eff", "rho_p_eff",
+            ))
+        elif edition in {"2004", "2005"}:
+            require(spacing, "spacing.", (
+                "nearest_neighbour_spacing", "close_spacing_limit",
+            ))
+            spacing_candidate = spacing.get("selected_candidate")
+            if spacing_candidate == "formula-7.14":
+                require(spacing, "spacing.", ("tension_zone_depth",))
+            elif spacing_candidate == "formula-7.11":
+                require(spacing, "spacing.", (
+                    "k3_used", "cover", "k1", "k2", "k4", "diameter",
+                    "rho_p_eff",
+                ))
+            else:
+                missing.append("spacing.selected_candidate-supported")
+
+        area_keys = {
+            "CrackEffectiveArea2005Fine": (
+                "candidate_2_5_h_minus_d", "candidate_h_over_2",
+                "selected_hc_eff", "selected_candidate",
+            ),
+            "CrackEffectiveArea2005Coarse": (
+                "band_centroid_axis", "reinforcement_centroid_axis",
+                "centroid_gap", "selected_hc_eff",
+            ),
+            "CrackEffectiveArea2023Bending": (
+                "candidate_ay_plus_5phi", "candidate_10phi",
+                "candidate_3_5ay", "layer_spread", "candidate_h_minus_x",
+                "candidate_h_over_2", "selected_hc_eff",
+                "final_selected_candidate",
+            ),
+            "CrackEffectiveArea2023Direct": (
+                "width", "height", "inner_width", "inner_height",
+            ),
+        }
+        record_kind = area.get("record_kind")
+        if record_kind not in area_keys:
+            missing.append("effective_area.record_kind")
+        else:
+            require(area, "effective_area.", area_keys[record_kind])
+            if edition == "2023" and record_kind not in {
+                "CrackEffectiveArea2023Bending",
+                "CrackEffectiveArea2023Direct",
+            }:
+                missing.append("effective_area.record_kind-for-edition")
+            if edition in {"2004", "2005"}:
+                expected_kind = (
+                    "CrackEffectiveArea2005Coarse"
+                    if cw.get("coarse") else "CrackEffectiveArea2005Fine"
+                )
+                if record_kind != expected_kind:
+                    missing.append("effective_area.record_kind-for-system")
+        return tuple(dict.fromkeys(missing))
 
     def _crack_effective_area_worked(self, cw, candidate):
         """Publish retained effective-area and reinforcement-ratio operands."""
@@ -7107,7 +7158,7 @@ class ReportBuilder:
                 f"{_fmt(spacing.get('formula_spacing'), 3)} mm"
                 + (
                     f"; cap = (1.3 / {_fmt(cw.get('kw'), 3)}) &#183; "
-                    f"{_fmt(float(spacing.get('cap_tension_depth', 0)) * _MM, 3)} = "
+                    f"{_fmt(float(spacing['cap_tension_depth']) * _MM, 3)} = "
                     f"{_fmt(cap, 3)} mm"
                     if cap is not None else "; no finite tension-zone cap"
                 )
@@ -7324,13 +7375,40 @@ class ReportBuilder:
             self._base_inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
         )
         spectra = fatigue_presentation.items(payload, "spectra")
+        reinforcement_example = payload.get("governing_reinforcement_example")
+        concrete_example = payload.get("governing_concrete_example")
+        selected_spectrum_names = {
+            str(selection.get("spectrum_name"))
+            for selection in (reinforcement_example, concrete_example)
+            if isinstance(selection, Mapping) and selection.get("spectrum_name")
+        }
+        if checks.get("reinforcement") and not reinforcement_example:
+            self._small(
+                "<b>Worked example unavailable:</b> no converged governing "
+                "reinforcement fatigue result was retained."
+            )
+        if checks.get("concrete") and not concrete_example:
+            self._small(
+                "<b>Worked example unavailable:</b> no converged governing "
+                "concrete fatigue result was retained."
+            )
         for spectrum in spectra:
-            # Each independently assessed spectrum starts as a coherent report
-            # unit; do not strand its heading below the aggregate summary.
-            self.flow.append(NotAtTopPageBreak())
             spectrum_name = str(
                 fatigue_presentation.value(spectrum, "spectrum_name", "-")
             )
+            if spectrum_name not in selected_spectrum_names:
+                continue
+            publish_reinforcement = bool(
+                isinstance(reinforcement_example, Mapping)
+                and reinforcement_example.get("spectrum_name") == spectrum_name
+            )
+            publish_concrete = bool(
+                isinstance(concrete_example, Mapping)
+                and concrete_example.get("spectrum_name") == spectrum_name
+            )
+            # Only spectra containing a globally governing family example become
+            # detailed report units. Every other spectrum remains in the summary.
+            self.flow.append(NotAtTopPageBreak())
             spectrum_status = fatigue_presentation.result_status(spectrum)
             self._h2("Spectrum - " + _html_escape(spectrum_name))
             self._status_block(
@@ -7398,23 +7476,23 @@ class ReportBuilder:
             if state_rows:
                 self._h2("Elastic solver states")
                 rows = [[
-                    "Bin", "Status", "gamma<sub>Ff</sub>", "Bond method",
-                    "Max design &#916;sigma", "Max concrete compression",
+                    "Bin", "Description", "Cycles", "Status",
+                    "gamma<sub>Ff</sub>", "Bond method",
                 ]]
                 rows.extend([
                     [
                         _html_escape(row["bin"]),
+                        _html_escape(row["description"]),
+                        _fmt_sig(row["cycles"], 8),
                         row["status"],
                         _fmt(row["gamma_ff"], 3),
                         _html_escape(row["bond_method"]),
-                        f"{_fmt(row['max_design_stress_range_mpa'], 3)} MPa",
-                        f"{_fmt(row['max_concrete_compression_mpa'], 3)} MPa",
                     ]
                     for row in state_rows
                 ])
                 self._table(
                     rows,
-                    [22 * mm, 18 * mm, 22 * mm, 42 * mm, 31 * mm, 31 * mm],
+                    [22 * mm, 48 * mm, 23 * mm, 18 * mm, 22 * mm, 32 * mm],
                     font=6.4,
                     keep=False,
                 )
@@ -7422,7 +7500,7 @@ class ReportBuilder:
             reinforcement_rows = fatigue_presentation.reinforcement_rows(
                 spectrum
             )
-            if reinforcement_rows:
+            if reinforcement_rows and publish_reinforcement:
                 self._h2("Reinforcement fatigue")
                 rows = [[
                     "Element", "Type", "Detail", "phi", "Miner D",
@@ -7450,14 +7528,7 @@ class ReportBuilder:
                     keep=False,
                     repeat_cols=3,
                 )
-                governing_id = fatigue_presentation.value(
-                    spectrum, "governing_reinforcement_id"
-                )
-                if governing_id is None:
-                    governing_id = max(
-                        reinforcement_rows,
-                        key=lambda row: row["utilisation"] or -math.inf,
-                    )["element_id"]
+                governing_id = reinforcement_example.get("element_id")
                 result = fatigue_presentation.result_by_element(
                     spectrum, governing_id
                 )
@@ -7524,7 +7595,7 @@ class ReportBuilder:
                     )
                     rows = [[
                         "Bin", "Cycles", "Status", "Long stress",
-                        "Fatigue total", "Design total", "Elastic &#916;sigma",
+                        "Fatigue total", "Design total", "Design elastic &#916;sigma",
                         "Design &#916;sigma", "Bond factor / method",
                     ]]
                     rows.extend([
@@ -7535,7 +7606,7 @@ class ReportBuilder:
                             _fmt(row["stress_long_mpa"], 3),
                             _fmt(row["stress_total_mpa"], 3),
                             _fmt(row["stress_total_design_mpa"], 3),
-                            _fmt(row["stress_range_elastic_mpa"], 3),
+                            _fmt(row["design_stress_range_elastic_mpa"], 3),
                             _fmt(row["design_stress_range_mpa"], 3),
                             (
                                 f"{_fmt(row['bond_adjustment'], 3)}<br/>"
@@ -7553,8 +7624,9 @@ class ReportBuilder:
                     )
                     self._small(
                         "All stresses are in MPa. Fatigue total includes the bond "
-                        "transformation; elastic &#916;sigma is the raw solver "
-                        "range; design values include action-level "
+                        "transformation; design elastic &#916;sigma is the raw "
+                        "action-factored solver range before the bond correction; "
+                        "design values include action-level "
                         "gamma<sub>Ff</sub>."
                     )
                     rows = [[
@@ -7583,12 +7655,19 @@ class ReportBuilder:
                         font=5.4,
                         keep=False,
                     )
+                    self._fatigue_reinforcement_formulas(
+                        result,
+                        bin_rows,
+                        reinforcement_example,
+                        references.get("reinforcement"),
+                    )
 
             concrete_rows = fatigue_presentation.concrete_rows(spectrum)
-            if concrete_rows:
-                equivalent_method = any(
-                    row.get("equivalent_utilisation") is not None
-                    for row in concrete_rows
+            if concrete_rows and publish_concrete:
+                equivalent_method = (
+                    str(fatigue_presentation.value(
+                        spectrum, "concrete_method", ""
+                    )) == fatigue_core.CONCRETE_EQUIVALENT
                 )
                 self._h2("Concrete fatigue")
                 rows = [[
@@ -7629,26 +7708,16 @@ class ReportBuilder:
                     "Coordinates in mm; f<sub>cd,fat</sub> in MPa. The selected "
                     "criterion and stress are evaluated at the same fixed fibre."
                 )
-                governing_fibre = fatigue_presentation.value(
-                    spectrum, "governing_concrete_fibre"
-                )
+                governing_fibre = concrete_example.get("fibre_index")
                 result = fatigue_presentation.result_by_fibre(
                     spectrum, governing_fibre
                 )
                 if result is None:
-                    result = max(
-                        fatigue_presentation.items(spectrum, "concrete"),
-                        key=lambda item: (
-                            fatigue_presentation.evidence_number(
-                                fatigue_presentation.value(
-                                    item, "utilisation"
-                                )
-                            ) or -math.inf
-                        ),
+                    self._small(
+                        "<b>Worked example unavailable:</b> the retained global "
+                        "concrete-fibre identity is absent from this spectrum."
                     )
-                    governing_fibre = fatigue_presentation.value(
-                        result, "fibre_index"
-                    )
+                    continue
                 self._h2(
                     "Governing concrete fibre - "
                     + _html_escape(str(governing_fibre))
@@ -7819,6 +7888,13 @@ class ReportBuilder:
                     font=6.5,
                     keep=False,
                 )
+                self._fatigue_concrete_formulas(
+                    spectrum,
+                    result,
+                    bin_rows,
+                    concrete_example,
+                    references.get("concrete"),
+                )
                 if equivalent_method:
                     self._small(
                         "Concrete criterion: E<sub>cd,max</sub> + 0.43 "
@@ -7827,6 +7903,577 @@ class ReportBuilder:
                         "damage-equivalent amplitude for 10<super>6</super> "
                         "cycles; the entered cycle count is not used for concrete."
                     )
+
+    def _fatigue_reinforcement_formulas(
+        self, result, bin_rows, selection, reference
+    ):
+        """Publish one solver-retained governing reinforcement fatigue chain."""
+
+        selected_bin = next(
+            (
+                row for row in bin_rows
+                if row["bin"] == str(selection.get("bin_name") or "")
+            ),
+            None,
+        )
+        required = (
+            "stress_long_mpa",
+            "stress_total_design_mpa",
+            "stress_total_design_elastic_mpa",
+            "design_stress_range_elastic_mpa",
+            "bond_adjustment",
+            "design_stress_range_mpa",
+            "delta_sigma_rsk_mpa",
+            "delta_sigma_rd_mpa",
+            "sn_reference_cycles",
+            "sn_exponent",
+            "cycles_to_failure",
+            "cycles",
+            "damage",
+            "material_factor",
+        )
+        if selected_bin is None or any(
+            selected_bin.get(key) is None for key in required
+        ):
+            self._small(
+                "<b>Worked example unavailable:</b> the governing reinforcement "
+                "bin does not retain every required numerical operand."
+            )
+            return
+        yield_check = selected_bin.get("governing_yield_check")
+        characteristic = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(
+                yield_check, "characteristic_strength_mpa"
+            )
+        )
+        design_limit = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(yield_check, "design_limit_mpa")
+        )
+        yield_stress = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(yield_check, "stress_mpa")
+        )
+        yield_util = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(yield_check, "utilisation")
+        )
+        damage_total = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "damage")
+        )
+        yield_total = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "yield_utilisation")
+        )
+        utilisation = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "utilisation")
+        )
+        damages = [row.get("damage") for row in bin_rows]
+        if (
+            reference is None
+            or yield_check is None
+            or None in (
+                characteristic,
+                design_limit,
+                yield_stress,
+                yield_util,
+                damage_total,
+                yield_total,
+                utilisation,
+            )
+            or any(value is None for value in damages)
+        ):
+            self._small(
+                "<b>Worked example unavailable:</b> the governing reinforcement "
+                "result does not retain the complete criterion or source chain."
+            )
+            return
+        source = _html_escape(str(reference))
+        self._h2("Textbook calculation - governing reinforcement fatigue")
+        self._p(
+            "The globally governing reinforcement element and bin are used once "
+            "to demonstrate the S-N, Miner and yield/proof checks. All other "
+            "elements and spectra remain in the compact summaries above."
+        )
+        self._formula(
+            "Delta sigma<sub>Ed,el,i</sub> = "
+            "|sigma<sub>total,Ed,el,i</sub> - sigma<sub>long,i</sub>|; "
+            "Delta sigma<sub>Ed,i</sub> = eta<sub>b</sub> "
+            "Delta sigma<sub>Ed,el,i</sub>",
+            equation_key="fatigue.reinforcement.design-stress-range",
+            ref=source,
+            subst=(
+                f"|{_fmt(selected_bin['stress_total_design_elastic_mpa'], 6)} - "
+                f"{_fmt(selected_bin['stress_long_mpa'], 6)}| = "
+                f"{_fmt(selected_bin['design_stress_range_elastic_mpa'], 6)} MPa; "
+                f"{_fmt(selected_bin['bond_adjustment'], 6)} &#183; "
+                f"{_fmt(selected_bin['design_stress_range_elastic_mpa'], 6)} MPa"
+            ),
+            result=(
+                "Delta sigma<sub>Ed,i</sub> = "
+                f"{_fmt(selected_bin['design_stress_range_mpa'], 6)} MPa"
+            ),
+            note=_html_escape(selected_bin.get("bond_method") or ""),
+        )
+        material_factor = selected_bin["material_factor"]
+        self._formula(
+            "Delta sigma<sub>Rd</sub> = Delta sigma<sub>Rsk</sub> / "
+            "gamma<sub>s</sub>",
+            equation_key="fatigue.reinforcement.design-resistance-range",
+            ref=source,
+            subst=(
+                f"{_fmt(selected_bin['delta_sigma_rsk_mpa'], 6)} / "
+                f"{_fmt(material_factor, 6)} MPa"
+            ),
+            result=(
+                "Delta sigma<sub>Rd</sub> = "
+                f"{_fmt(selected_bin['delta_sigma_rd_mpa'], 6)} MPa"
+            ),
+        )
+        if (
+            selected_bin.get("sn_reference_ratio") is None
+            and selected_bin["design_stress_range_mpa"] == 0.0
+        ):
+            self._formula(
+                "Delta sigma<sub>Ed,i</sub> = 0 "
+                "implies N<sub>R,i</sub> = +infinity",
+                equation_key="fatigue.reinforcement.sn-life",
+                equation_variant="zero-range",
+                ref=source,
+                subst=(
+                    "Delta sigma<sub>Ed,i</sub> = "
+                    f"{_fmt(selected_bin['design_stress_range_mpa'], 6)} MPa"
+                ),
+                result=(
+                    "N<sub>R,i</sub> = "
+                    f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)} cycles"
+                ),
+                note=_html_escape(selected_bin.get("sn_branch") or ""),
+            )
+        elif selected_bin.get("sn_reference_ratio") is not None:
+            self._formula(
+                "N<sub>R,i</sub> = N<super>*</super> "
+                "(Delta sigma<sub>Rd</sub> / Delta sigma<sub>Ed,i</sub>)"
+                "<super>k</super>",
+                equation_key="fatigue.reinforcement.sn-life",
+                equation_variant="power-law",
+                ref=source,
+                subst=(
+                    f"{_fmt_sig(selected_bin['sn_reference_cycles'], 8)} &#183; "
+                    f"({_fmt(selected_bin['sn_reference_ratio'], 8)})"
+                    f"<super>{_fmt(selected_bin['sn_exponent'], 3)}</super>"
+                ),
+                result=(
+                    "N<sub>R,i</sub> = "
+                    f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)} cycles"
+                ),
+                note=_html_escape(selected_bin.get("sn_branch") or ""),
+            )
+        else:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing S-N branch "
+                "does not retain its reference ratio."
+            )
+            return
+        self._formula(
+            "D<sub>i</sub> = n<sub>i</sub> / N<sub>R,i</sub>",
+            equation_key="fatigue.reinforcement.bin-damage",
+            ref=source,
+            subst=(
+                f"{_fmt_sig(selected_bin['cycles'], 8)} / "
+                f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+            ),
+            result=f"D<sub>i</sub> = {_fmt_sig(selected_bin['damage'], 8)}",
+        )
+        self._formula(
+            "D = sum D<sub>i</sub>",
+            equation_key="fatigue.reinforcement.miner-sum",
+            ref=source,
+            subst=" + ".join(_fmt_sig(value, 8) for value in damages),
+            result=f"D = {_fmt_sig(damage_total, 8)}",
+        )
+        self._formula(
+            "sigma<sub>Rd</sub> = f<sub>yk/proof</sub> / gamma<sub>s</sub>",
+            equation_key="fatigue.reinforcement.yield-limit",
+            ref=source,
+            subst=(
+                f"{_fmt(characteristic, 6)} / {_fmt(material_factor, 6)} MPa"
+            ),
+            result=f"sigma<sub>Rd</sub> = {_fmt(design_limit, 6)} MPa",
+            note=_html_escape(
+                fatigue_presentation.value(yield_check, "branch", "")
+            ),
+        )
+        self._formula(
+            "u<sub>yield</sub> = |sigma<sub>Ed</sub>| / "
+            "sigma<sub>Rd</sub>",
+            equation_key="fatigue.reinforcement.yield-utilisation",
+            ref=source,
+            subst=(
+                f"|{_fmt(yield_stress, 6)}| / {_fmt(design_limit, 6)}"
+            ),
+            result=f"u<sub>yield</sub> = {_fmt(yield_util, 8)}",
+        )
+        self._formula(
+            "u = max(D, u<sub>yield</sub>)",
+            equation_key="fatigue.reinforcement.utilisation",
+            ref=source,
+            subst=(
+                f"max({_fmt_sig(damage_total, 8)}, "
+                f"{_fmt(yield_total, 8)})"
+            ),
+            result=(
+                "u = "
+                f"{_fmt(utilisation, 8)}"
+            ),
+            note=_html_escape(
+                fatigue_presentation.value(result, "governing_criterion", "")
+            ),
+        )
+
+    def _fatigue_concrete_formulas(
+        self, spectrum, result, bin_rows, selection, reference
+    ):
+        """Publish one solver-retained governing concrete fatigue chain."""
+
+        strength = fatigue_presentation.value(spectrum, "concrete_strength")
+        selected_bin = next(
+            (
+                row for row in bin_rows
+                if row["bin"] == str(selection.get("bin_name") or "")
+            ),
+            None,
+        )
+        if strength is None or selected_bin is None:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "strength or bin identity is absent."
+            )
+            return
+        if reference is None:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "calculation source is absent."
+            )
+            return
+        source = _html_escape(str(reference))
+        self._h2("Textbook calculation - governing concrete fatigue")
+        edition = str(fatigue_presentation.value(strength, "edition", ""))
+        strength_published = False
+        if edition == fatigue_core.EC2_2005:
+            required = (
+                "k1", "beta_cc_t0", "alpha_cc", "fck_mpa", "gamma_c",
+                "high_strength_reduction", "fcd_fat_mpa",
+            )
+            values = {
+                key: fatigue_presentation.evidence_number(
+                    fatigue_presentation.value(strength, key)
+                )
+                for key in required
+            }
+            if all(value is not None for value in values.values()):
+                self._formula(
+                    "f<sub>cd,fat</sub> = k<sub>1</sub> beta<sub>cc</sub> "
+                    "alpha<sub>cc</sub> f<sub>ck</sub> / gamma<sub>c</sub> "
+                    "(1 - f<sub>ck</sub>/250)",
+                    equation_key="fatigue.concrete.strength",
+                    equation_variant="2005",
+                    ref=source,
+                    subst=(
+                        f"{_fmt(values['k1'], 6)} &#183; "
+                        f"{_fmt(values['beta_cc_t0'], 6)} &#183; "
+                        f"{_fmt(values['alpha_cc'], 6)} &#183; "
+                        f"{_fmt(values['fck_mpa'], 6)} / "
+                        f"{_fmt(values['gamma_c'], 6)} &#183; "
+                        f"(1 - {_fmt(values['fck_mpa'], 6)} / 250) = "
+                        f"{_fmt(values['k1'], 6)} &#183; "
+                        f"{_fmt(values['beta_cc_t0'], 6)} &#183; "
+                        f"{_fmt(values['alpha_cc'], 6)} &#183; "
+                        f"{_fmt(values['fck_mpa'], 6)} / "
+                        f"{_fmt(values['gamma_c'], 6)} &#183; "
+                        f"{_fmt(values['high_strength_reduction'], 6)} MPa"
+                    ),
+                    result=(
+                        "f<sub>cd,fat</sub> = "
+                        f"{_fmt(values['fcd_fat_mpa'], 6)} MPa"
+                    ),
+                )
+                strength_published = True
+        elif edition == fatigue_core.EC2_2023:
+            beta = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "beta_cc_t0")
+            )
+            fck = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "fck_mpa")
+            )
+            gamma_c = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "gamma_c")
+            )
+            eta_raw = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_raw")
+            )
+            eta_cap = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_cap")
+            )
+            eta = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc")
+            )
+            eta_fat_raw = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_fat_raw")
+            )
+            eta_fat_cap = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_fat_cap")
+            )
+            eta_fat = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "eta_cc_fat")
+            )
+            fcd_fat = fatigue_presentation.evidence_number(
+                fatigue_presentation.value(strength, "fcd_fat_mpa")
+            )
+            if None not in (
+                beta,
+                fck,
+                gamma_c,
+                eta_raw,
+                eta_cap,
+                eta,
+                eta_fat_raw,
+                eta_fat_cap,
+                eta_fat,
+                fcd_fat,
+            ):
+                self._formula(
+                    "eta<sub>cc</sub> = min((40/f<sub>ck</sub>)"
+                    "<super>1/3</super>, 1.0)",
+                    equation_key="fatigue.concrete.eta-cc",
+                    ref=source,
+                    subst=(
+                        f"min((40 / {_fmt(fck, 6)})"
+                        f"<super>1/3</super>, {_fmt(eta_cap, 8)}) = "
+                        f"min({_fmt(eta_raw, 8)}, {_fmt(eta_cap, 8)})"
+                    ),
+                    result=f"eta<sub>cc</sub> = {_fmt(eta, 8)}",
+                )
+                self._formula(
+                    "eta<sub>cc,fat</sub> = min(0.85 eta<sub>cc</sub>, 0.8)",
+                    equation_key="fatigue.concrete.eta-cc-fat",
+                    ref=source,
+                    subst=(
+                        f"min(0.85 &#183; {_fmt(eta, 8)}, "
+                        f"{_fmt(eta_fat_cap, 8)}) = "
+                        f"min({_fmt(eta_fat_raw, 8)}, "
+                        f"{_fmt(eta_fat_cap, 8)})"
+                    ),
+                    result=f"eta<sub>cc,fat</sub> = {_fmt(eta_fat, 8)}",
+                )
+                self._formula(
+                    "f<sub>cd,fat</sub> = beta<sub>cc</sub> "
+                    "f<sub>ck</sub> eta<sub>cc,fat</sub> / gamma<sub>c</sub>",
+                    equation_key="fatigue.concrete.strength",
+                    equation_variant="2023",
+                    ref=source,
+                    subst=(
+                        f"{_fmt(beta, 8)} &#183; {_fmt(fck, 6)} / "
+                        f"{_fmt(gamma_c, 6)} &#183; {_fmt(eta_fat, 8)} MPa"
+                    ),
+                    result=f"f<sub>cd,fat</sub> = {_fmt(fcd_fat, 8)} MPa",
+                )
+                strength_published = True
+        if not strength_published:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "strength record is incomplete or uses an unsupported edition."
+            )
+            return
+        required = (
+            "compression_min_design_mpa",
+            "compression_max_design_mpa",
+            "e_cd_min",
+            "e_cd_max",
+        )
+        if any(selected_bin.get(key) is None for key in required):
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete bin "
+                "does not retain every normalized-stress operand."
+            )
+            return
+        fcd_fat = fatigue_presentation.evidence_number(
+            fatigue_presentation.value(result, "fcd_fat_mpa")
+        )
+        if fcd_fat is None:
+            self._small(
+                "<b>Worked example unavailable:</b> the governing concrete "
+                "fatigue strength is absent from the selected fibre result."
+            )
+            return
+        self._formula(
+            "E<sub>cd,min/max</sub> = sigma<sub>c,min/max,Ed</sub> / "
+            "f<sub>cd,fat</sub>",
+            equation_key="fatigue.concrete.normalised-stress",
+            ref=source,
+            subst=(
+                f"{_fmt(selected_bin['compression_min_design_mpa'], 6)} / "
+                f"{_fmt(fcd_fat, 6)}; "
+                f"{_fmt(selected_bin['compression_max_design_mpa'], 6)} / "
+                f"{_fmt(fcd_fat, 6)}"
+            ),
+            result=(
+                f"E<sub>cd,min</sub> = {_fmt(selected_bin['e_cd_min'], 8)}; "
+                f"E<sub>cd,max</sub> = {_fmt(selected_bin['e_cd_max'], 8)}"
+            ),
+            note=(
+                _html_escape(selected_bin.get("compression_min_state") or "")
+                + " / "
+                + _html_escape(selected_bin.get("compression_max_state") or "")
+            ),
+        )
+        equivalent = selected_bin.get("equivalent_utilisation")
+        if equivalent is not None:
+            self._formula(
+                "u<sub>eq</sub> = E<sub>cd,max</sub> + 0.43 "
+                "sqrt(1 - E<sub>cd,min</sub>/E<sub>cd,max</sub>)",
+                equation_key="fatigue.concrete.equivalent",
+                ref=source,
+                subst=(
+                    f"{_fmt(selected_bin['e_cd_max'], 8)} + 0.43 sqrt(1 - "
+                    f"{_fmt(selected_bin['e_cd_min'], 8)} / "
+                    f"{_fmt(selected_bin['e_cd_max'], 8)})"
+                ),
+                result=f"u<sub>eq</sub> = {_fmt(equivalent, 8)}",
+            )
+        elif None not in (
+            selected_bin.get("life_coefficient"),
+            selected_bin.get("life_range_term"),
+            selected_bin.get("cycles_to_failure"),
+        ):
+            life_branch = str(selected_bin.get("life_branch") or "")
+            if life_branch == "variable compression":
+                self._formula(
+                    "log<sub>10</sub>N<sub>R,i</sub> = C "
+                    "(1 - E<sub>cd,max</sub>) / "
+                    "sqrt(1 - sigma<sub>c,min</sub>/sigma<sub>c,max</sub>)",
+                    equation_key="fatigue.concrete.life",
+                    equation_variant="variable-compression",
+                    ref=source,
+                    subst=(
+                        f"{_fmt(selected_bin['life_coefficient'], 6)} &#183; "
+                        f"(1 - {_fmt(selected_bin['e_cd_max'], 8)}) / "
+                        f"sqrt(1 - "
+                        f"{_fmt(selected_bin['compression_min_design_mpa'], 8)} / "
+                        f"{_fmt(selected_bin['compression_max_design_mpa'], 8)}) = "
+                        f"{_fmt(selected_bin['life_coefficient'], 6)} &#183; "
+                        f"(1 - {_fmt(selected_bin['e_cd_max'], 8)}) / "
+                        f"{_fmt(selected_bin['life_range_term'], 8)}"
+                    ),
+                    result=(
+                        f"log<sub>10</sub>N<sub>R,i</sub> = "
+                        f"{_fmt(selected_bin['log10_cycles_to_failure'], 8)}; "
+                        f"N<sub>R,i</sub> = "
+                        f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+                    ),
+                    note=_html_escape(life_branch),
+                )
+            elif life_branch in {"zero compression", "constant compression"}:
+                self._formula(
+                    (
+                        "sigma<sub>c,max</sub> = 0 implies "
+                        "N<sub>R,i</sub> = +infinity"
+                        if life_branch == "zero compression"
+                        else "sigma<sub>c,min</sub> = sigma<sub>c,max</sub> "
+                        "implies N<sub>R,i</sub> = +infinity"
+                    ),
+                    equation_key="fatigue.concrete.life",
+                    equation_variant=(
+                        "zero-compression"
+                        if life_branch == "zero compression"
+                        else "constant-compression"
+                    ),
+                    ref=source,
+                    subst=(
+                        f"sigma<sub>c,min</sub> = "
+                        f"{_fmt(selected_bin['compression_min_design_mpa'], 8)} MPa; "
+                        f"sigma<sub>c,max</sub> = "
+                        f"{_fmt(selected_bin['compression_max_design_mpa'], 8)} MPa"
+                    ),
+                    result=(
+                        "N<sub>R,i</sub> = "
+                        f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+                    ),
+                    note=_html_escape(life_branch),
+                )
+            else:
+                self._small(
+                    "<b>Worked example unavailable:</b> the governing concrete "
+                    "life branch is not recognised."
+                )
+                return
+            self._formula(
+                "D<sub>i</sub> = n<sub>i</sub> / N<sub>R,i</sub>",
+                equation_key="fatigue.concrete.bin-damage",
+                ref=source,
+                subst=(
+                    f"{_fmt_sig(selected_bin['cycles'], 8)} / "
+                    f"{_fmt_sig(selected_bin['cycles_to_failure'], 8)}"
+                ),
+                result=f"D<sub>i</sub> = {_fmt_sig(selected_bin['damage'], 8)}",
+            )
+            damages = [row.get("damage") for row in bin_rows]
+            if all(value is not None for value in damages):
+                self._formula(
+                    "D = sum D<sub>i</sub>",
+                    equation_key="fatigue.concrete.miner-sum",
+                    ref=source,
+                    subst=" + ".join(_fmt_sig(value, 8) for value in damages),
+                    result=(
+                        "D = "
+                        f"{_fmt_sig(fatigue_presentation.value(result, 'damage'), 8)}"
+                    ),
+                )
+        stress_bin_name = str(
+            fatigue_presentation.value(result, "governing_stress_bin", "")
+        )
+        stress_bin = next(
+            (row for row in bin_rows if row["bin"] == stress_bin_name),
+            None,
+        )
+        if stress_bin is not None and stress_bin.get("e_cd_max") is not None:
+            self._formula(
+                "u<sub>sigma</sub> = E<sub>cd,max</sub>",
+                equation_key="fatigue.concrete.stress-utilisation",
+                ref=source,
+                subst=_fmt(stress_bin["e_cd_max"], 8),
+                result=(
+                    "u<sub>sigma</sub> = "
+                    f"{_fmt(fatigue_presentation.value(result, 'stress_utilisation'), 8)}"
+                ),
+            )
+        candidates = [
+            fatigue_presentation.evidence_number(
+                fatigue_presentation.value(result, "damage_utilisation")
+            ),
+            fatigue_presentation.evidence_number(
+                fatigue_presentation.value(result, "stress_utilisation")
+            ),
+            fatigue_presentation.evidence_number(
+                fatigue_presentation.value(result, "equivalent_utilisation")
+            ),
+        ]
+        search = fatigue_presentation.value(spectrum, "concrete_search")
+        if search is not None and bool(
+            fatigue_presentation.value(search, "converged", False)
+        ):
+            candidates.append(fatigue_presentation.evidence_number(
+                fatigue_presentation.value(search, "upper_damage")
+            ))
+        candidates = [value for value in candidates if value is not None]
+        if candidates:
+            self._formula(
+                "u = max(D, u<sub>sigma</sub>, u<sub>eq</sub>, "
+                "u<sub>bound</sub>)",
+                equation_key="fatigue.concrete.utilisation",
+                ref=source,
+                subst="max(" + ", ".join(
+                    _fmt_sig(value, 8) for value in candidates
+                ) + ")",
+                result=f"u = {_fmt_sig(selection.get('utilisation'), 8)}",
+                note=_html_escape(selection.get("criterion") or ""),
+            )
 
     def _appendix(self):
         self.flow.append(NotAtTopPageBreak())

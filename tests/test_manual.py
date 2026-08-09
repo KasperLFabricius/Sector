@@ -364,8 +364,10 @@ def test_manual_documents_native_case_tables_results_and_report():
         "Results overview",
         "Select a Plastic/capacity case",
         "Select an Elastic case",
-        "Every computed case",
-        "bookmarked detail chapters",
+        "All calculated cases remain in compact summaries",
+        "global governing or extremal calculation",
+        "one global fine-system and one global coarse-system example",
+        "separate governing reinforcement and concrete examples",
         "Default report + QA appendix",
     ):
         assert expected in text
@@ -391,6 +393,22 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
     ):
         assert expected in text
     assert "termination reason" not in text
+
+
+def test_manual_uses_exact_elastic_state_and_crack_example_terminology():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+
+    for expected in (
+        "E_c=1",
+        "reference-stress plane",
+        "not a physical strain/curvature plane",
+        "physical concrete strain",
+        "three code options give four method/system results",
+        "one global governing worked crack width",
+        "one global fine-system",
+        "one global coarse-system worked example",
+    ):
+        assert expected in text
 
 
 def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():

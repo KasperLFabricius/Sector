@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 import math
 import pathlib
-from types import SimpleNamespace as NS
 import sys
+import textwrap
+from types import SimpleNamespace as NS
 
 import pytest
 
@@ -38,6 +41,18 @@ def _reinforcement(element_id="R1", utilisation=0.60):
         governing_stress_mpa=186.0,
         yield_limit_mpa=416.7,
         yield_utilisation=0.446,
+        sn_reference_cycles=2.0e6,
+        sn_slope_1=5.0,
+        sn_slope_2=9.0,
+        sn_knee_stress_range_mpa=98.5,
+        sn_branch="upper S-N branch",
+        sn_reference_ratio=98.5 / 66.0,
+        material_factor=1.32,
+        stress_total_design_elastic_mpa=186.0,
+        design_stress_range_elastic_mpa=66.0,
+        yield_long_check=None,
+        yield_design_total_check=None,
+        governing_yield_check=None,
     )
     return NS(
         element_id=element_id,
@@ -53,6 +68,8 @@ def _reinforcement(element_id="R1", utilisation=0.60):
         utilisation=utilisation,
         converged=True,
         passed=utilisation <= 1.0,
+        governing_criterion="Miner damage",
+        governing_bin="FAT-1",
     )
 
 
@@ -72,6 +89,13 @@ def _concrete(utilisation=0.35):
         log10_cycles_to_failure=7.301,
         damage=0.01,
         stress_utilisation=0.38,
+        equivalent_utilisation=None,
+        life_branch="variable compression",
+        life_coefficient=14.0,
+        life_range_term=0.75,
+        compression_total_design_mpa=9.4,
+        compression_min_state="long-term endpoint",
+        compression_max_state="design total endpoint",
     )
     return NS(
         fibre_index=4,
@@ -87,6 +111,11 @@ def _concrete(utilisation=0.35):
         utilisation=utilisation,
         converged=True,
         passed=utilisation <= 1.0,
+        method="Explicit Palmgren-Miner spectrum",
+        equivalent_utilisation=None,
+        governing_equivalent_bin=None,
+        governing_criterion="compressive stress",
+        governing_bin="FAT-1",
     )
 
 
@@ -124,6 +153,9 @@ def _spectrum(*, utilisation=0.60, converged=True, passed=True):
         utilisation=utilisation,
         converged=converged,
         passed=passed,
+        concrete_method="Explicit Palmgren-Miner spectrum",
+        governing_domain="reinforcement",
+        governing_criterion="Miner damage",
     )
 
 
@@ -231,14 +263,24 @@ def test_concrete_rows_identify_search_point_and_certification_evidence():
     assert bins[0]["stress_ratio"] == pytest.approx(0.53)
 
 
-def test_spectrum_bin_rows_join_component_evidence_without_recalculation():
+def test_spectrum_bin_rows_publish_retained_state_without_recalculation():
     row = presentation.spectrum_bin_rows(_spectrum())[0]
 
     assert row["bin"] == "FAT-1"
     assert row["cycles"] == pytest.approx(2.0e5)
     assert row["gamma_ff"] == pytest.approx(1.1)
-    assert row["max_design_stress_range_mpa"] == pytest.approx(66.0)
-    assert row["max_concrete_compression_mpa"] == pytest.approx(9.4)
+    assert row["bond_method"] == "Perfect bond"
+    assert "max_design_stress_range_mpa" not in row
+    assert "max_concrete_compression_mpa" not in row
+
+    source = textwrap.dedent(inspect.getsource(presentation.spectrum_bin_rows))
+    tree = ast.parse(source)
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "max"
+        for node in ast.walk(tree)
+    )
 
 
 def test_stable_result_and_property_lookup():

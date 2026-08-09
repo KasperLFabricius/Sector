@@ -30,6 +30,31 @@ standard option or solver method. Existing final numerical results remain
 unchanged unless a separately proven defect is discovered and owner scope is
 updated explicitly.
 
+## Governing-example density rule
+
+Every calculated case remains in the consolidated result overview and compact
+family summaries. A complete textbook derivation is published only once for the
+globally governing or extremal result in each calculation family. When a family
+has independent criteria, the report may publish one governing example for each
+materially different criterion, but it does not repeat the same derivation for
+every load case.
+
+For the first-generation DK/NA crack-width method, fine and coarse reinforcement
+systems are distinct calculation branches. Sector therefore publishes exactly
+one globally largest fine-system crack-width example and one globally largest
+coarse-system crack-width example across all elastic cases. Other crack methods
+publish one globally governing crack-width example. Fatigue follows the same
+principle separately for the governing reinforcement and governing concrete
+criterion because those checks may occur in different spectra.
+
+Publication selection is deterministic and uses only retained, applicable final
+values. Invalid results, NaN and negative infinity cannot suppress a valid
+worked example. A valid demand/resistance failure with positive-infinite
+utilisation remains the governing result; when its retained state cannot support
+a complete derivation, Sector states that the governing worked calculation is
+unavailable rather than substituting a less critical case. If no valid completed
+result exists for a family, Sector publishes no invented derivation.
+
 ## Binding trace-retirement boundary
 
 The complete calculation-trace subsystem from the previous programme's PR-08
@@ -82,7 +107,8 @@ result or supply an operand to report text or equations.
 
 ## Textbook publication sequence
 
-For every enabled existing calculation the report presents, as applicable:
+For each selected governing/extremal existing calculation the report presents,
+as applicable:
 
 1. the engineering question;
 2. the exact Given data, units, sign convention and selected method;
@@ -118,8 +144,8 @@ PR-03 is one GitHub pull request developed through bounded green commits:
 8. perform semantic, independent numerical, rendered and full exact-head gates.
 
 Each family commit carries its retained result fields, adapter exposure, report
-publication and focused tests together. PR-03 does not add unused intermediate
-fields for later consumption.
+publication, governing-only selection and focused tests together. PR-03 does
+not add unused intermediate fields for later consumption.
 
 Only directly affected family tests run after a small commit. The full suite and
 unsigned Windows QA-package gate run once at PR closeout and again on GitHub.
@@ -141,6 +167,8 @@ Acceptance requires:
   needed to establish validity;
 - no raw debug sequence or retired trace product surface appears;
 - formula blocks remain together, readable and unclipped in rendered PDFs; and
+- non-governing cases remain in compact summaries without duplicate full worked
+  chapters, with exactly one fine and one coarse DK/NA crack example; and
 - the final calculation-family publication inventory has no unexplained live
   equation or final result gap.
 
