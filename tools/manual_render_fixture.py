@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import functools
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import manual  # noqa: E402
+
 from sector import __version__  # noqa: E402
 from tools.publication_preflight import (  # noqa: E402
     MANUAL_FURNITURE,
@@ -27,6 +29,16 @@ from tools.publication_preflight import (  # noqa: E402
 from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
 _EXPECTED_FIGURE_COUNT = 16
+_UNRENDERED_MATH_TOKENS = (
+    "sqrt",
+    "Cfrac",
+    "Big",
+    "varepsilon",
+    "rightarrow",
+    "qquadk",
+    "quadf",
+    "kN.m",
+)
 _MANUAL_CROPS = (
     RasterCrop(
         "manual cover and contents",
@@ -53,20 +65,30 @@ def build_fixture_pdf() -> bytes:
     return manual.build_manual_pdf_bytes(figures=True)
 
 
+def _unrendered_math_token(text: str) -> str | None:
+    """Return a standalone leaked math command without matching prose substrings."""
+    for token in _UNRENDERED_MATH_TOKENS:
+        if re.search(
+            rf"(?<![A-Za-z]){re.escape(token)}(?![A-Za-z])",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return token
+    return None
+
+
 def validate_pdf_content(pdf: bytes) -> str:
     reader, page_texts = preflight_pdf(pdf, min_pages=6)
     text = "\n".join(page_texts)
     flat_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
-    for token in (
-        "sqrt", "Cfrac", "Big", "varepsilon", "rightarrow",
-        "qquadk", "quadf", "kN.m",
-    ):
-        if token.casefold() in text.casefold():
-            raise AssertionError(
-                f"the manual exposes an unrendered mathematics token: {token}"
-            )
+    leaked_token = _unrendered_math_token(text)
+    if leaked_token is not None:
+        raise AssertionError(
+            "the manual exposes an unrendered mathematics token: "
+            f"{leaked_token}"
+        )
     for symbol in (chr(0x221A), chr(0x2211), chr(0x03B8), chr(0x03B2)):
         if symbol not in text:
             raise AssertionError(

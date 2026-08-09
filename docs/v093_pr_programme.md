@@ -31,8 +31,8 @@ slices stay planned.
 |---|---|---|---|
 | 1 | PR-01 - Programme, decisions and acceptance freeze | v0.92 baseline | Merged |
 | 2 | PR-02 - Bridge scope reset, schema 24 and design-standard registry | PR-01 | Merged |
-| 3 | PR-03 - Textbook worked calculations and complete substitutions | PR-02 | In progress |
-| 4 | PR-04 - Input correctness, reusable IDs and mathematical table guides | PR-02 | Planned |
+| 3 | PR-03 - Textbook worked calculations and complete substitutions | PR-02 | Merged |
+| 4 | PR-04 - Input correctness, reusable IDs and mathematical table guides | PR-02 | In progress |
 | 5 | PR-05 - Stateful input tabs and explicit modelled direction | PR-04 | Planned |
 | 6 | PR-06 - Optional crack criterion and DK/NA heightened check | PR-03, PR-04, PR-05 | Planned |
 | 7 | PR-07A - Eurocode-style shared equation renderer | PR-03 | Planned |
@@ -770,6 +770,8 @@ examples; report block tests; trace-retirement guards; and focused rendered
 report/pedagogical review.
 
 ### PR-04 - Input correctness, reusable IDs and mathematical table guides
+
+Acceptance record: [PR-04 input-correctness acceptance](pr04_v093_input_correctness_acceptance.md).
 
 Scope:
 
