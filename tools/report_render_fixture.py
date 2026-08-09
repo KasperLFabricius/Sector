@@ -88,7 +88,7 @@ _REPORT_CROPS = (
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "9b64441a8c8f251fa433daa8a2d9848b8ccc36d52db7897627296f62f8ad71a8",
+        "aed8ddb13b51957b1c778e994b218d0ff6dbb9d3fd7198b158918d3a58be91a5",
     ),
 )
 
