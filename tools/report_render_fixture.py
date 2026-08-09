@@ -99,6 +99,12 @@ class _FixedDateTime(datetime.datetime):
 
 def validate_outline_destinations(reader: pypdf.PdfReader) -> list[tuple[str, int]]:
     """Return outline titles/pages after proving every link reaches its heading."""
+
+    def normalized_text(value: object) -> str:
+        # PDF extractors insert line breaks when a long visible heading wraps.
+        # Bookmark titles are unwrapped strings, so compare semantic whitespace
+        # rather than page-layout line boundaries.
+        return " ".join(str(value).split())
     entries = []
 
     def visit(items):
@@ -113,7 +119,7 @@ def validate_outline_destinations(reader: pypdf.PdfReader) -> list[tuple[str, in
                     f"outline destination is invalid: {title!r} -> page {page}"
                 )
             page_text = reader.pages[page - 1].extract_text() or ""
-            if title not in page_text:
+            if normalized_text(title) not in normalized_text(page_text):
                 raise AssertionError(
                     f"outline destination misses its heading: {title!r} -> page {page}"
                 )
