@@ -1710,7 +1710,7 @@ def validate_pdf_content(
         "Concrete tensile factor",
         "125.0 %",
         "245.000 MPa",
-        "Crack-width candidates",
+        "Candidate summary for governing crack example",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",
     ):
         if expected not in text and expected not in flat_text:

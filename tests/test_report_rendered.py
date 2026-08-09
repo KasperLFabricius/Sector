@@ -75,6 +75,7 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     page_texts = [page.extract_text() or "" for page in reader.pages]
     text = "\n".join(page_texts)
     validate_worked_example_text(text)
+    assert "Candidate summary for governing crack example" in text
     heading_pages = [
         page_text
         for page_text in page_texts
