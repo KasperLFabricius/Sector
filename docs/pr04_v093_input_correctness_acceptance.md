@@ -190,6 +190,15 @@ initialization now precedes generated assignments and the builder binds them to
 an actual live material ID. All 19 affected remote nodes pass locally in both
 serial and CI-equivalent four-worker execution.
 
+The next exact-head remote gate passed all 2,975 tests, coverage, policies and
+the real-figure report render. Its sole failure was the manual raster preflight:
+the new editable-table reference legitimately moves Part D to page 42 and makes
+the manual 46 pages, so the contents and footer fingerprints were stale. The
+exact Actions artifact was downloaded by digest, rendered with PDFium without a
+browser or JavaScript runtime, and visually checked for clipping, overlap,
+glyph, alignment and margin defects. The accepted contents and footer crops are
+now pinned to those independently reproduced pixels.
+
 No local browser, JavaScript runtime or real Windows package build was launched.
 GitHub must record the exact candidate revision/tree and pass the complete
 coverage, real report/manual render and unsigned Windows package workflows on
