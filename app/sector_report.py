@@ -695,6 +695,9 @@ class ReportBuilder:
         self._critical_worked_case_ids = {
             "plastic": self._select_critical_worked_case("plastic"),
             "elastic": self._select_critical_worked_case("elastic"),
+            "shear": self._select_critical_worked_case("shear"),
+            "torsion": self._select_critical_worked_case("torsion"),
+            "combined": self._select_critical_worked_case("combined"),
             "minimum_reinforcement": self._select_critical_check_case(
                 "minimum_reinforcement"
             ),
@@ -703,6 +706,9 @@ class ReportBuilder:
             ),
         }
         self._critical_crack_examples = self._select_critical_crack_examples()
+        self._critical_torsion_subchecks = (
+            self._select_critical_torsion_subchecks()
+        )
 
     def _case_contexts(self, family):
         """Return ordered ``(case_input, case_results)`` report contexts."""
@@ -1580,7 +1586,8 @@ class ReportBuilder:
             self.inp, self.out = self._base_inp, self._base_out
             self._clear_spacing()
         jobs = []
-        for case_inp, case_out in self._case_contexts("plastic"):
+        plastic_contexts = self._case_contexts("plastic")
+        for case_inp, case_out in plastic_contexts:
             case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
             for key, label, method in (
                 ("plastic", "Plastic capacity", "_plastic"),
@@ -1600,9 +1607,41 @@ class ReportBuilder:
                     and not case_out[key].get("biaxial")
                 ):
                     continue
+                if (
+                    key in {"shear", "torsion", "combined"}
+                    and self._critical_worked_case_ids[key] != id(case_out)
+                ):
+                    continue
                 jobs.append((
                     case_inp, case_out, f"{label} - {case_id}...", method, True
                 ))
+        for key, label, method in (
+            (
+                "interaction",
+                "Governing shear-torsion concrete-strut interaction",
+                "_torsion_interaction_example",
+            ),
+            (
+                "minimum_reinforcement",
+                "Governing shear-torsion minimum-reinforcement screen",
+                "_torsion_minimum_reinforcement_example",
+            ),
+        ):
+            selection = self._critical_torsion_subchecks.get(key)
+            if selection is None:
+                continue
+            for case_inp, case_out in plastic_contexts:
+                if id(case_out) != selection["case_out_id"]:
+                    continue
+                case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
+                jobs.append((
+                    case_inp,
+                    case_out,
+                    f"{label} - {case_id}...",
+                    method,
+                    True,
+                ))
+                break
         for case_inp, case_out in self._case_contexts("elastic"):
             case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
             if "elastic" in case_out:
@@ -2908,7 +2947,10 @@ class ReportBuilder:
         """Return the result-map identity selected for one complete worked chain."""
 
         best = None
-        for order, (_, case_out) in enumerate(self._case_contexts(family)):
+        context_family = (
+            "plastic" if family in {"shear", "torsion", "combined"} else family
+        )
+        for order, (_, case_out) in enumerate(self._case_contexts(context_family)):
             result = case_out.get(family)
             if not result:
                 continue
@@ -2922,6 +2964,11 @@ class ReportBuilder:
                         for name in ("max_mx", "min_mx", "max_my", "min_my")
                     )
                     score = (1, capacity_extreme, -order)
+            elif family in {"shear", "torsion", "combined"}:
+                metric = self._critical_transverse_metric(family, result)
+                score = (2, metric, -order) if metric is not None else (
+                    1, -math.inf, -order
+                )
             else:
                 stress_extreme = max(
                     abs(float(result.get(name) or 0.0))
@@ -2930,6 +2977,77 @@ class ReportBuilder:
                 score = (1, stress_extreme, -order)
             if best is None or score > best[0]:
                 best = (score, id(case_out))
+        return None if best is None else best[1]
+
+    @staticmethod
+    def _stored_metric(value):
+        """Return one stored result metric without deriving an engineering value."""
+
+        if value is None:
+            return None
+        try:
+            metric = float(value)
+        except (TypeError, ValueError):
+            return None
+        return metric if math.isfinite(metric) else None
+
+    def _critical_transverse_metric(self, family, result):
+        """Rank retained transverse-family results for publication selection only."""
+
+        def shear_metric(item):
+            links = item.get("links") or {}
+            if links:
+                if not (links.get("res") or {}).get("valid"):
+                    return None
+                return self._stored_metric(links.get("util"))
+            if not (item.get("res") or {}).get("valid"):
+                return None
+            return self._stored_metric(item.get("util"))
+
+        def combined_metric(item):
+            if not item.get("valid"):
+                return None
+            return self._stored_metric(item.get("dkna_sum"))
+
+        directions = result.get("directions") or {}
+        if family == "shear":
+            items = [directions[key] for key in ("vx", "vy") if key in directions]
+            if not items:
+                items = [result]
+            values = [
+                metric for item in items
+                if (metric := shear_metric(item)) is not None
+            ]
+        elif family == "combined":
+            items = [directions[key] for key in ("vx", "vy") if key in directions]
+            if not items:
+                items = [result]
+            values = [
+                metric for item in items
+                if (metric := combined_metric(item)) is not None
+            ]
+        else:
+            values = (
+                [metric]
+                if result.get("valid")
+                and (metric := self._stored_metric(result.get("util"))) is not None
+                else []
+            )
+        return max(values) if values else None
+
+    def _critical_transverse_direction(self, family, result):
+        """Select one retained biaxial direction for the family's worked example."""
+
+        directions = result.get("directions") or {}
+        best = None
+        for order, component in enumerate(("vx", "vy")):
+            item = directions.get(component)
+            if not item:
+                continue
+            metric = self._critical_transverse_metric(family, item)
+            score = (-math.inf if metric is None else metric, -order)
+            if best is None or score > best[0]:
+                best = (score, component)
         return None if best is None else best[1]
 
     def _select_critical_check_case(self, key):
@@ -2953,6 +3071,48 @@ class ReportBuilder:
             if best is None or score > best[0]:
                 best = (score, id(case_out))
         return None if best is None else best[1]
+
+    def _select_critical_torsion_subchecks(self):
+        """Select one finite, valid retained example for each torsion subcheck."""
+
+        selected = {}
+        for case_order, (_, case_out) in enumerate(
+            self._case_contexts("plastic")
+        ):
+            torsion_result = case_out.get("torsion") or {}
+            directional = torsion_result.get("directional_interactions") or {}
+            items = [
+                (component, directional[component])
+                for component in ("vx", "vy")
+                if component in directional
+            ]
+            if not items:
+                items = [(None, torsion_result)]
+            for direction_order, (component, item) in enumerate(items):
+                interaction = item.get("interaction") or {}
+                if interaction.get("valid"):
+                    value = self._stored_metric(interaction.get("value"))
+                    if value is not None:
+                        score = (value, -case_order, -direction_order)
+                        prior = selected.get("interaction")
+                        if prior is None or score > prior[0]:
+                            selected["interaction"] = (
+                                score, id(case_out), component
+                            )
+                minimum = item.get("min_reinf") or {}
+                if minimum.get("applicable"):
+                    value = self._stored_metric(minimum.get("value"))
+                    if value is not None:
+                        score = (value, -case_order, -direction_order)
+                        prior = selected.get("minimum_reinforcement")
+                        if prior is None or score > prior[0]:
+                            selected["minimum_reinforcement"] = (
+                                score, id(case_out), component
+                            )
+        return {
+            key: {"case_out_id": value[1], "component": value[2]}
+            for key, value in selected.items()
+        }
 
     def _theory(self):
         self._h1("Basis of analysis")
@@ -4387,12 +4547,62 @@ class ReportBuilder:
     def _shear(self):
         aggregate = self.out["shear"]
         directions = aggregate.get("directions") or {}
+        critical = self._critical_worked_case_ids["shear"] == id(self.out)
         if not directions:
-            self._shear_direction(aggregate)
+            self._case_heading("Shear resistance", "plastic")
+            links = aggregate.get("links") or {}
+            resistance = (
+                (links.get("res") or {}).get("vrd")
+                if links else (aggregate.get("res") or {}).get("vrd_c")
+            )
+            utilisation = links.get("util") if links else aggregate.get("util")
+            component = aggregate.get("component") or (
+                "vy" if aggregate.get("axis") == "x" else "vx"
+            )
+            action = "V<sub>y,Ed</sub>" if component == "vy" else "V<sub>x,Ed</sub>"
+            self._table(
+                [
+                    ["Direction", "V<sub>Ed</sub>", "V<sub>Rd</sub>",
+                     "Utilisation", "Status", "Tension face"],
+                    [
+                        action,
+                        f"{_fmt(aggregate.get('signed_v_ed', aggregate.get('v_ed')), 3)} kN",
+                        f"{_fmt(resistance, 3)} kN",
+                        _pct(utilisation),
+                        aggregate.get("status", "NOT ASSESSED"),
+                        viz.tension_face_label(
+                            aggregate.get("tension_low", True),
+                            aggregate.get("axis"),
+                        ),
+                    ],
+                ],
+                [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm],
+            )
+            if links.get("out_of_limits") or aggregate.get("out_of_limits"):
+                self._small(
+                    "Warning: the retained compression-strut bounds are outside "
+                    "the selected method's default range. The actual entered "
+                    "bounds remain in the completed result."
+                )
+            if not critical:
+                self._small(
+                    "The complete shear worked example is published only for the "
+                    "governing retained utilisation across all plastic cases."
+                )
+                return
+            self._small(
+                "All calculated shear cases remain in the results overview. The "
+                "complete shear worked example is published only for the governing "
+                "retained utilisation across all plastic cases."
+            )
+            self._h2(f"Governing worked example: {action}")
+            self._shear_direction(
+                aggregate, include_case_heading=False, component=component
+            )
             return
 
         self._case_heading("Shear resistance", "plastic")
-        if aggregate.get("biaxial") and self.figures:
+        if critical and aggregate.get("biaxial") and self.figures:
             components = self.inp.get("shear_components") or {}
             self._fig(
                 viz.biaxial_shear_overview_figure(
@@ -4435,14 +4645,41 @@ class ReportBuilder:
                 "Generic cross-direction interaction is not calculated and no "
                 "aggregate shear verdict is issued."
             )
-        for component in ("vx", "vy"):
-            if component in directions:
-                label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
-                self._h2(f"{label} directional check")
-                self._shear_direction(
-                    directions[component], include_case_heading=False,
-                    component=component,
-                )
+        if any(
+            (item.get("links") or {}).get("out_of_limits")
+            or item.get("out_of_limits")
+            for item in directions.values()
+        ):
+            self._small(
+                "Warning: one or more directional compression-strut bands are "
+                "outside the selected method's default range. The actual entered "
+                "bounds remain in the completed results."
+            )
+        if not critical:
+            self._small(
+                "The complete shear worked example is published only for the "
+                "governing retained utilisation across all plastic cases."
+            )
+            return
+        self._small(
+            "All calculated shear cases and directions remain in the results "
+            "overview. The complete shear worked example is published only for "
+            "the governing retained utilisation across all plastic cases."
+        )
+        component = self._critical_transverse_direction("shear", aggregate)
+        if component is None:
+            self._h2("Worked shear calculation unavailable")
+            self._small(
+                "The completed payload does not retain a directional result from "
+                "which to select the governing worked example."
+            )
+            return
+        label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
+        self._h2(f"Governing worked example: {label}")
+        self._shear_direction(
+            directions[component], include_case_heading=False,
+            component=component,
+        )
 
     def _shear_direction(self, sh, *, include_case_heading=True, component=None):
         res = sh["res"]
@@ -4653,6 +4890,17 @@ class ReportBuilder:
             self._small("Warning: the link resistance is zero -- check the leg count, "
                         "diameter and spacing (A<sub>sw</sub>/s must be &gt; 0).")
             return
+        retained_angle_fields = {
+            "cot", "tan", "theta_deg", "cot_min", "cot_max",
+            "cot_unconstrained", "angle_selection",
+        }
+        if not retained_angle_fields.issubset(lk):
+            self._small(
+                "Worked shear calculation unavailable: the completed payload does "
+                "not retain the accepted strut-angle operands. Sector does not "
+                "reconstruct them in the report."
+            )
+            return
         if links["out_of_limits"]:
             limit_ref = (
                 (links.get("angle_limits") or {}).get("clause")
@@ -4707,6 +4955,31 @@ class ReportBuilder:
                  f"{_fmt(lk['alpha_cw'], 3)}"]
             )
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        shared_angle = links.get("member_angle_selection") or {}
+        if shared_angle:
+            labels = tuple(shared_angle.get("objective_labels") or ())
+            governing = tuple(shared_angle.get("governing_objectives") or ())
+            self._small(
+                "Accepted common member-angle selection: cot theta = "
+                f"{_fmt(shared_angle.get('cot'), 4)} within "
+                f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
+                f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
+                f"{int(shared_angle.get('selected_index', 0)) + 1} of "
+                f"{int(shared_angle.get('samples', 0))}. "
+                "Governing retained objective(s): "
+                f"{_html_escape(', '.join(governing) or 'not identified')}. "
+                "The compact certificate covers "
+                f"{_html_escape(', '.join(labels) or 'the active checks')} and "
+                "does not contain an iteration history."
+            )
+        else:
+            self._small(
+                "Accepted resistance-angle selection: unconstrained cot theta = "
+                f"{_fmt(lk['cot_unconstrained'], 4)}, entered band "
+                f"[{_fmt(lk['cot_min'], 3)}, {_fmt(lk['cot_max'], 3)}], "
+                f"selected cot theta = {_fmt(lk['cot'], 4)} "
+                f"({_html_escape(lk['angle_selection'])})."
+            )
         self._fig(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                    links["dia"], links["s"]), 130, 80)
         if model_2023:
@@ -4723,7 +4996,7 @@ class ReportBuilder:
                 equation_key="shear.links.sigma-field",
                 ref="EN 1992-1-1:2023 Formula (8.44)",
                 subst=f"{_fmt(lk['tau_ed'], 3)} &#183; "
-                      f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) "
+                      f"({_fmt(lk['cot'], 3)} + {_fmt(lk['tan'], 3)}) "
                       f"&#8804; {_fmt(lk['nu'], 3)} &#183; {_fmt(lk['fcd'], 2)}",
                 result=f"sigma<sub>cd</sub> = {_fmt(lk['sigma_cd'], 3)} MPa; "
                        f"limit = {_fmt(lk['nu_fcd'], 3)} MPa")
@@ -4743,7 +5016,7 @@ class ReportBuilder:
                 references=("shear.links.sigma-field",),
                 subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(sh['bw'], 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / "
-                      f"({_fmt(lk['cot'], 3)} + {_fmt(1.0 / lk['cot'], 3)}) / 1000",
+                      f"({_fmt(lk['cot'], 3)} + {_fmt(lk['tan'], 3)}) / 1000",
                 result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
         else:
             self._formula(
@@ -4763,12 +5036,13 @@ class ReportBuilder:
                 subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
                       f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
                       f"{_fmt(lk['fcd'], 2)} / ({_fmt(lk['cot'], 3)} + "
-                      f"{_fmt(1.0 / lk['cot'], 3)}) / 1000",
+                      f"{_fmt(lk['tan'], 3)}) / 1000",
                 result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
         self._formula(
             "V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>)",
             equation_key="shear.links.vrd",
             references=("shear.links.vrds", "shear.links.vrdmax"),
+            subst=f"min({_fmt(lk['vrd_s'], 3)}, {_fmt(lk['vrd_max'], 3)})",
             result=f"V<sub>Rd</sub> = {_fmt(lk['vrd'], 3)} kN "
                    f"(governed by {lk['governs']})")
         util = links["util"]
@@ -4903,8 +5177,49 @@ class ReportBuilder:
     def _combined(self):
         aggregate = self.out["combined"]
         directions = aggregate.get("directions") or {}
+        critical = self._critical_worked_case_ids["combined"] == id(self.out)
         if not aggregate.get("biaxial") or not directions:
-            self._combined_direction(aggregate)
+            self._case_heading(
+                "Combined bending + shear + torsion (M-V-T)", "plastic"
+            )
+            status = (
+                "NOT ASSESSED" if not aggregate.get("valid")
+                else "PASS" if aggregate.get("dkna_ok") else "FAIL"
+            )
+            self._table(
+                [
+                    ["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
+                     "r<sub>T</sub>", "DK NA sum", "Status"],
+                    [
+                        "M+V+T",
+                        _pct(aggregate.get("r_m")),
+                        _pct(aggregate.get("r_v")),
+                        _pct(aggregate.get("r_t")),
+                        _pct(aggregate.get("dkna_sum")),
+                        status,
+                    ],
+                ],
+                [30 * mm, 25 * mm, 25 * mm, 25 * mm, 30 * mm, 35 * mm],
+            )
+            if aggregate.get("outside_default_range"):
+                self._small(
+                    "Warning: the retained shared compression-strut bounds are "
+                    "outside the selected method's default range."
+                )
+            if not critical:
+                self._small(
+                    "The complete combined M-V-T worked example is published only "
+                    "for the governing retained utilisation across all plastic cases."
+                )
+                return
+            self._small(
+                "All calculated combined-action cases remain in the results "
+                "overview. The complete combined M-V-T worked example is published "
+                "only for the governing retained utilisation across all plastic "
+                "cases."
+            )
+            self._h2("Governing combined worked example")
+            self._combined_direction(aggregate, include_case_heading=False)
             return
 
         self._case_heading(
@@ -4942,21 +5257,43 @@ class ReportBuilder:
              34 * mm, 18 * mm, 24 * mm],
             font=5.8,
         )
-        for component in ("vx", "vy"):
-            if component in directions:
-                block_start = len(self.flow)
-                label = "V<sub>x,Ed</sub> + T<sub>Ed</sub>" if component == "vx" \
-                    else "V<sub>y,Ed</sub> + T<sub>Ed</sub>"
-                self._h2(f"Directional screen: {label}")
-                self._combined_direction(
-                    directions[component], include_case_heading=False,
-                    component=component,
-                )
-                # A directional screen is a single auditable result.  Keep its
-                # heading, inputs and verdict together when the complete block
-                # fits on one page, instead of starting it at the foot of a page
-                # and continuing without context on the next one.
-                self._keep_from(block_start)
+        if any(
+            item.get("outside_default_range")
+            for item in directions.values()
+        ):
+            self._small(
+                "Warning: one or more retained shared compression-strut bands are "
+                "outside the selected method's default range."
+            )
+        if not critical:
+            self._small(
+                "The complete combined M-V-T worked example is published only for "
+                "the governing retained utilisation across all plastic cases."
+            )
+            return
+        self._small(
+            "All calculated combined-action cases and directions remain in the "
+            "results overview. The complete combined M-V-T worked example is "
+            "published only for the governing retained utilisation across all "
+            "plastic cases."
+        )
+        component = self._critical_transverse_direction("combined", aggregate)
+        if component is None:
+            self._h2("Worked combined calculation unavailable")
+            self._small(
+                "The completed payload does not retain a directional result from "
+                "which to select the governing worked example."
+            )
+            return
+        block_start = len(self.flow)
+        label = "V<sub>x,Ed</sub> + T<sub>Ed</sub>" if component == "vx" \
+            else "V<sub>y,Ed</sub> + T<sub>Ed</sub>"
+        self._h2(f"Governing directional worked example: {label}")
+        self._combined_direction(
+            directions[component], include_case_heading=False,
+            component=component,
+        )
+        self._keep_from(block_start)
 
     def _combined_direction(self, c, *, include_case_heading=True, component=None):
         if include_case_heading:
@@ -5003,21 +5340,41 @@ class ReportBuilder:
             self._small("Warning: the shared compression-strut bounds fall outside "
                         "the selected method's default range. The actual values are "
                         "retained in the combined calculations.")
+        selection = c.get("dkna_selection")
+        if not isinstance(selection, dict):
+            self._h2("Worked combined calculation unavailable")
+            self._small(
+                "The completed payload does not retain the DK NA inclusion branch "
+                "and component sums. Sector does not reconstruct them in the report."
+            )
+            return
         verdict = _demand_resistance_verdict(c["dkna_ok"])
         if c["m_v_independent"]:
             expr = "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)"
             note = ("M and V checked separately (shear longitudinal steel provided); "
                     "N is folded into the bending utilisation.")
+            subst = (
+                f"max({_fmt(selection['m_plus_t'], 4)}, "
+                f"{_fmt(selection['v_plus_t'], 4)})"
+            )
         else:
             expr = "r<sub>M</sub> + r<sub>V</sub> + r<sub>T</sub>"
             note = "each action alone; N folded into the bending utilisation."
+            subst = (
+                f"{_fmt(selection['r_m'], 4)} + "
+                f"{_fmt(selection['r_v'], 4)} + "
+                f"{_fmt(selection['r_t'], 4)}"
+            )
         self._formula(
             expr,
             equation_key="combined.dk-na.sum",
-            note=note,
+            subst=subst,
+            note=(f"{note} Retained inclusion rule: "
+                  f"{_html_escape(selection['inclusion_rule'])}; governing chord: "
+                  f"{_html_escape(selection['governing_chord'])}."),
             result=(
                 "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
-                f"{_pct(c['dkna_sum'])}  ({verdict})"
+                f"{_pct(selection['utilisation'])}  ({verdict})"
             ),
         )
         self._h2("Physical resistance components")
@@ -5095,6 +5452,11 @@ class ReportBuilder:
                         "(6.3.2(2)), selected to minimise the governing utilisation.")
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
+            if cr is not None or tr is not None:
+                # Keep the complete governing chord derivation together. Without
+                # this semantic break, its final utilisation equation is commonly
+                # orphaned by the preceding strut/stirrup blocks.
+                self._page_break()
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             vv = _demand_resistance_verdict(lg["ok"])
             coverage = lg.get("off_not_evaluated")
@@ -5260,7 +5622,20 @@ class ReportBuilder:
     def _subtube_section(self, t):
         """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""
         subs = t["subtubes"]
-        c_tot = sum(s["stiffness"] for s in subs) or 1.0
+        distribution = t.get("torque_distribution") or {}
+        shares = distribution.get("shares") or ()
+        if (
+            not isinstance(distribution, dict)
+            or len(shares) != len(subs)
+            or any(not isinstance(share, dict) for share in shares)
+        ):
+            self._h2("Worked sub-tube calculation unavailable")
+            self._small(
+                "The completed payload does not retain the stiffness-proportional "
+                "torque shares for every sub-tube. Sector does not recreate that "
+                "distribution in the report."
+            )
+            return
         self._p("Compound section: modelled as component rectangles, each an equivalent "
                 "thin-walled tube. T<sub>Rd</sub> is the SUM of the sub-tube capacities "
                 "(6.3.1(3)) and the applied T<sub>Ed</sub> is split by uncracked "
@@ -5272,6 +5647,7 @@ class ReportBuilder:
                  "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
                  "T<sub>Rd,i</sub>", "util", "governs"]]
         for i, s in enumerate(subs):
+            share = shares[i]
             role = "web" if i == 0 else f"part {i + 1}"
             ut = ("inf" if not math.isfinite(s["util"])
                   else f"{_fmt(s['util'] * 100, 0)}%")
@@ -5279,8 +5655,9 @@ class ReportBuilder:
                          f"({_fmt(s['x_mm'], 0)}, {_fmt(s['y_mm'], 0)})<br/>"
                          f"{_fmt(s['b_mm'], 0)}x{_fmt(s['h_mm'], 0)}",
                          _fmt(s["tube"]["tef"], 1), _fmt(s["tube"]["Ak"] * 1e6, 0),
-                         f"{_fmt(s['stiffness'] / c_tot * 100, 0)}%",
-                         _fmt(s["t_ed"], 2), _fmt(s["trd"], 2), ut, s["governs"]])
+                         _pct(share.get("fraction")),
+                         _fmt(share.get("torque"), 2),
+                         _fmt(s["trd"], 2), ut, s["governs"]])
         self._table(rows, [16 * mm, 24 * mm, 14 * mm, 18 * mm, 13 * mm, 16 * mm,
                            16 * mm, 12 * mm, 25 * mm])
         # The torque is split by STIFFNESS, not capacity, so the governing check is the
@@ -5290,10 +5667,93 @@ class ReportBuilder:
         verdict = _demand_resistance_verdict(viz.util_ok(util))
         g = t.get("governing_sub")
         gov = ("web" if g == 0 else f"part {g + 1}") if g is not None else "-"
+        if not isinstance(g, int) or not 0 <= g < len(subs):
+            self._h2("Governing sub-tube calculation unavailable")
+            self._small(
+                "The completed payload does not retain the governing sub-tube "
+                "identity. Sector does not select one in the report."
+            )
+            return
+        governing = subs[g]
+        governing_share = shares[g]
+        steel = governing.get("steel_resistance") or {}
+        strut = governing.get("strut_resistance") or {}
+        resistance = governing.get("resistance_selection") or {}
+        required = (
+            "asw_over_s", "two_ak_m2", "fywd_mpa", "cot", "trd_s"
+        )
+        strut_required = (
+            "nu", "alpha_cw", "fcd_mpa", "ak_m2", "tef_mm",
+            "sin_cos", "trd_max",
+        )
+        if (
+            any(name not in steel for name in required)
+            or any(name not in strut for name in strut_required)
+            or any(name not in resistance for name in ("trd_s", "trd_max",
+                                                        "resistance", "governs"))
+        ):
+            self._h2("Governing sub-tube calculation unavailable")
+            self._small(
+                "The completed payload does not retain the governing sub-tube's "
+                "resistance operands. Sector does not recreate them in the report."
+            )
+            return
+        self._formula(
+            "lambda<sub>i</sub> = C<sub>i</sub> / &#8721; C<sub>j</sub>",
+            equation_key="torsion.subtube.stiffness-share",
+            ref="EN 1992-1-1 6.3.1(4), uncracked torsional-stiffness distribution.",
+            subst=(f"{_fmt(governing_share['stiffness'], 6)} / "
+                   f"{_fmt(distribution['positive_stiffness_sum'], 6)}"),
+            result=f"lambda<sub>{g + 1}</sub> = {_fmt(governing_share['fraction'], 6)}",
+        )
+        self._formula(
+            "T<sub>Ed,i</sub> = lambda<sub>i</sub> T<sub>Ed</sub>",
+            equation_key="torsion.subtube.torque-share",
+            references=("torsion.subtube.stiffness-share",),
+            subst=(f"{_fmt(governing_share['fraction'], 6)} &#183; "
+                   f"{_fmt(distribution['applied_torque'], 3)}"),
+            result=f"T<sub>Ed,{g + 1}</sub> = {_fmt(governing_share['torque'], 3)} kN&#183;m",
+        )
+        self._formula(
+            "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> "
+            "f<sub>ywd</sub> cot theta",
+            equation_key="torsion.resistance.steel",
+            ref="EN 1992-1-1 wall shear flow (6.27) and transverse equilibrium (6.8)",
+            subst=f"{_fmt(steel['asw_over_s'], 4)} &#183; "
+                  f"{_fmt(steel['two_ak_m2'], 4)} &#183; "
+                  f"{_fmt(steel['fywd_mpa'], 1)} &#183; {_fmt(steel['cot'], 3)}",
+            result=f"T<sub>Rd,s</sub> = {_fmt(steel['trd_s'], 3)} kN&#183;m",
+        )
+        self._formula(
+            "T<sub>Rd,max</sub> = 2 nu alpha<sub>cw</sub> f<sub>cd</sub> "
+            "A<sub>k</sub> t<sub>ef</sub> sin theta cos theta",
+            equation_key="torsion.resistance.crushing",
+            ref="EN 1992-1-1 (6.30)",
+            subst=f"2 &#183; {_fmt(strut['nu'], 3)} &#183; "
+                  f"{_fmt(strut['alpha_cw'], 3)} &#183; "
+                  f"{_fmt(strut['fcd_mpa'], 2)} &#183; {_fmt(strut['ak_m2'], 4)} "
+                  f"&#183; ({_fmt(strut['tef_mm'], 3)} / 1000) &#183; "
+                  f"{_fmt(strut['sin_cos'], 4)} &#183; 1000",
+            result=f"T<sub>Rd,max</sub> = {_fmt(strut['trd_max'], 3)} kN&#183;m",
+        )
+        self._formula(
+            "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
+            equation_key="torsion.resistance.governing",
+            references=("torsion.resistance.steel", "torsion.resistance.crushing"),
+            subst=f"min({_fmt(resistance['trd_s'], 3)}, "
+                  f"{_fmt(resistance['trd_max'], 3)})",
+            result=f"T<sub>Rd</sub> = {_fmt(resistance['resistance'], 3)} kN&#183;m "
+                   f"(governed by {resistance['governs']})",
+        )
         self._formula(
             "governing utilisation = max(T<sub>Ed,i</sub> / T<sub>Rd,i</sub>)",
             equation_key="torsion.subtube.governing-utilisation",
-            ref=f"worst sub-tube: {gov}", result=f"{util_txt}  ({verdict})")
+            references=("torsion.subtube.torque-share",
+                        "torsion.resistance.governing"),
+            ref=f"worst sub-tube: {gov}",
+            subst=(f"{_fmt(governing['t_ed'], 3)} / "
+                   f"{_fmt(governing['trd'], 3)}"),
+            result=f"{util_txt}  ({verdict})")
         self._small("The applied torque is split by stiffness, not capacity, so a "
                     "sub-tube can be overstressed even while T<sub>Ed</sub> &#8804; sum "
                     "T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}"
@@ -5304,7 +5764,88 @@ class ReportBuilder:
                     "bending steel; the combined V+T crushing pairs the shear with the "
                     "web sub-tube.")
         self._fig(viz.subtube_figure(subs), 150, 90)
-        self._crushing_interaction(t)
+
+    def _selected_torsion_subcheck(self, key):
+        selection = self._critical_torsion_subchecks.get(key)
+        if selection is None or selection["case_out_id"] != id(self.out):
+            return None, None
+        torsion_result = self.out.get("torsion") or {}
+        component = selection.get("component")
+        if component is None:
+            item = torsion_result
+        else:
+            item = (
+                torsion_result.get("directional_interactions") or {}
+            ).get(component) or {}
+        payload_key = (
+            "interaction" if key == "interaction" else "min_reinf"
+        )
+        return component, item.get(payload_key)
+
+    def _torsion_interaction_example(self):
+        component, interaction = self._selected_torsion_subcheck("interaction")
+        if not isinstance(interaction, dict) or not interaction.get("valid"):
+            return
+        self._case_heading(
+            "Governing shear + torsion concrete-strut interaction", "plastic"
+        )
+        direction = (
+            ""
+            if component is None
+            else " for " + ("Vx + T" if component == "vx" else "Vy + T")
+        )
+        self._small(
+            "All calculated V+T screens remain in the results overview. This is "
+            "the single largest finite retained Formula 6.29 utilisation across "
+            f"all plastic cases and directions{direction}."
+        )
+        self._crushing_interaction({"interaction": interaction})
+
+    def _torsion_minimum_reinforcement_example(self):
+        component, minimum = self._selected_torsion_subcheck(
+            "minimum_reinforcement"
+        )
+        if not isinstance(minimum, dict) or not minimum.get("applicable"):
+            return
+        self._case_heading(
+            "Governing shear + torsion minimum-reinforcement screen", "plastic"
+        )
+        direction = (
+            ""
+            if component is None
+            else " for " + ("Vx + T" if component == "vx" else "Vy + T")
+        )
+        self._small(
+            "All calculated Formula 6.31 screens remain in the results overview. "
+            "This is the single largest finite retained screen value across all "
+            f"plastic cases and directions{direction}."
+        )
+        self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
+        outcome = (
+            "minimum reinforcement suffices"
+            if minimum["ok"] else "designed reinforcement required"
+        )
+        self._formula(
+            "T<sub>Ed</sub>/T<sub>Rd,c</sub> + "
+            "V<sub>Ed</sub>/V<sub>Rd,c</sub>",
+            equation_key="torsion.minimum-reinforcement.screen",
+            ref="EN 1992-1-1 (6.31)",
+            subst=(
+                f"{_fmt(minimum['t_ed'], 3)}/{_fmt(minimum['trd_c'], 3)} + "
+                f"{_fmt(minimum['v_ed'], 3)}/{_fmt(minimum['vrd_c'], 3)}"
+            ),
+            result=f"{_fmt(minimum['value'], 3)}  ({outcome})",
+        )
+        solid_note = (
+            "Assumes an approximately solid rectangular section."
+            if minimum["solid"]
+            else "This section has a void: 6.31 is for solid sections, so it "
+            "does not strictly apply."
+        )
+        self._small(
+            "If &#8804; 1, only minimum shear + torsion reinforcement is required "
+            "(no designed stirrups for these actions). " + solid_note
+        )
 
     def _crushing_interaction(self, t):
         """Combined shear + torsion concrete crushing (6.29), if it was evaluated.
@@ -5345,6 +5886,7 @@ class ReportBuilder:
     def _torsion(self):
         t = self.out["torsion"]
         tube = t["tube"]
+        critical = self._critical_worked_case_ids["torsion"] == id(self.out)
         self._case_heading("Torsion (thin-walled tube)", "plastic")
         self._p("Torsion resistance from the thin-walled closed-tube idealisation "
                 "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
@@ -5354,6 +5896,24 @@ class ReportBuilder:
                    "minimise the governing utilisation)."
                    if t.get("theta_mode") == "utilisation"
                    else "(auto-optimised for the torsion resistance)."))
+        status = (
+            "NOT ASSESSED" if not t.get("valid")
+            else _demand_resistance_verdict(viz.util_ok(t.get("util")))
+        )
+        self._table(
+            [
+                ["T<sub>Ed</sub>", "T<sub>Rd</sub>", "Utilisation",
+                 "Governing resistance", "Status"],
+                [
+                    f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
+                    f"{_fmt(t.get('trd'), 3)} kN&#183;m",
+                    _pct(t.get("util")),
+                    t.get("governs") or "-",
+                    status,
+                ],
+            ],
+            [31 * mm, 31 * mm, 31 * mm, 46 * mm, 31 * mm],
+        )
         directional = t.get("directional_interactions") or {}
         if directional:
             self._small(
@@ -5453,6 +6013,17 @@ class ReportBuilder:
                         "outside the selected method's default range 1..2.5 "
                         "(6.7N / 6.7a NA). The actual values are retained in the "
                         "torsion and dependent interaction calculations.")
+        if not critical:
+            self._small(
+                "The complete torsion worked example is published only for the "
+                "governing retained utilisation across all plastic cases."
+            )
+            return
+        self._small(
+            "All calculated torsion cases remain in the results overview. The "
+            "complete torsion worked example is published only for the governing "
+            "retained utilisation across all plastic cases."
+        )
         self._small(
             "Torsional cracking uses the actual direct input "
             "gamma<sub>ct</sub> = "
@@ -5465,6 +6036,31 @@ class ReportBuilder:
             self._h2("Sub-tubes (compound section, 6.3.1(3))")
             self._subtube_section(t)
             return
+        retained = {
+            name: t.get(name)
+            for name in (
+                "angle_selection",
+                "steel_resistance",
+                "strut_resistance",
+                "resistance_selection",
+                "cracking_resistance",
+                "longitudinal_reinforcement",
+            )
+        }
+        if any(not isinstance(value, dict) for value in retained.values()):
+            self._h2("Worked torsion calculation unavailable")
+            self._small(
+                "The completed payload does not retain every accepted torsion "
+                "formula operand and governing selection. Sector does not recreate "
+                "them in the report."
+            )
+            return
+        angle = retained["angle_selection"]
+        steel = retained["steel_resistance"]
+        strut = retained["strut_resistance"]
+        resistance = retained["resistance_selection"]
+        cracking = retained["cracking_resistance"]
+        longitudinal = retained["longitudinal_reinforcement"]
         tef_src = ("user input" if tube["tef_user"]
                    else ("A/u, capped at the wall" if tube["tef_capped"] else "A/u"))
         rows = [["Quantity", "Symbol", "Value"],
@@ -5485,6 +6081,26 @@ class ReportBuilder:
                  f"{_fmt(t.get('fctd'), 3)} MPa"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        shared_angle = t.get("member_angle_selection") or {}
+        if shared_angle:
+            self._small(
+                "Accepted common member-angle selection: cot theta = "
+                f"{_fmt(shared_angle.get('cot'), 4)} within "
+                f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
+                f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
+                f"{int(shared_angle.get('selected_index', 0)) + 1} of "
+                f"{int(shared_angle.get('samples', 0))}; governing retained "
+                "objective(s): "
+                f"{_html_escape(', '.join(shared_angle.get('governing_objectives') or ()) or 'not identified')}."
+            )
+        else:
+            self._small(
+                "Accepted torsion-resistance angle: unconstrained cot theta = "
+                f"{_fmt(angle.get('cot_unconstrained'), 4)}, entered band "
+                f"[{_fmt(angle.get('cot_min'), 3)}, {_fmt(angle.get('cot_max'), 3)}], "
+                f"selected cot theta = {_fmt(angle.get('cot'), 4)} "
+                f"({_html_escape(angle.get('selection'))})."
+            )
         self._fig(viz.tube_figure(self.inp["outer"], self.inp.get("holes"),
                                   tube["tef"], ak_m2=tube["Ak"]), 120, 100)
         if t.get("n_prestress"):
@@ -5502,25 +6118,29 @@ class ReportBuilder:
             "cot theta",
             equation_key="torsion.resistance.steel",
             ref="EN 1992-1-1 wall shear flow (6.27) and transverse equilibrium (6.8)",
-            subst=f"{_fmt(t['asw_over_s'], 4)} &#183; 2 &#183; {_fmt(tube['Ak'], 4)} "
-                  f"&#183; {_fmt(t['fywd'], 1)} &#183; {_fmt(t['cot'], 3)}",
-            result=f"T<sub>Rd,s</sub> = {_fmt(t['trd_s'], 3)} kN&#183;m")
+            subst=f"{_fmt(steel['asw_over_s'], 4)} &#183; "
+                  f"{_fmt(steel['two_ak_m2'], 4)} &#183; "
+                  f"{_fmt(steel['fywd_mpa'], 1)} &#183; {_fmt(steel['cot'], 3)}",
+            result=f"T<sub>Rd,s</sub> = {_fmt(steel['trd_s'], 3)} kN&#183;m")
         self._formula(
             "T<sub>Rd,max</sub> = 2 nu alpha<sub>cw</sub> f<sub>cd</sub> "
             "A<sub>k</sub> t<sub>ef</sub> sin theta cos theta",
             equation_key="torsion.resistance.crushing",
             ref="EN 1992-1-1 (6.30)",
-            subst=f"2 &#183; {_fmt(t['nu'], 3)} &#183; {_fmt(t['alpha_cw'], 3)} &#183; "
-                  f"{_fmt(t['fcd'], 2)} &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; "
-                  f"{_fmt(t['cot'] / (1.0 + t['cot'] ** 2), 4)} &#183; 1000",
-            result=f"T<sub>Rd,max</sub> = {_fmt(t['trd_max'], 3)} kN&#183;m")
+            subst=f"2 &#183; {_fmt(strut['nu'], 3)} &#183; "
+                  f"{_fmt(strut['alpha_cw'], 3)} &#183; "
+                  f"{_fmt(strut['fcd_mpa'], 2)} &#183; {_fmt(strut['ak_m2'], 4)} "
+                  f"&#183; ({_fmt(strut['tef_mm'], 3)} / 1000) &#183; "
+                  f"{_fmt(strut['sin_cos'], 4)} &#183; 1000",
+            result=f"T<sub>Rd,max</sub> = {_fmt(strut['trd_max'], 3)} kN&#183;m")
         self._formula(
             "T<sub>Rd</sub> = min(T<sub>Rd,s</sub>, T<sub>Rd,max</sub>)",
             equation_key="torsion.resistance.governing",
             references=("torsion.resistance.steel", "torsion.resistance.crushing"),
-            result=f"T<sub>Rd</sub> = {_fmt(t['trd'], 3)} kN&#183;m "
-                   f"(governed by {t['governs']})")
+            subst=f"min({_fmt(resistance['trd_s'], 3)}, "
+                  f"{_fmt(resistance['trd_max'], 3)})",
+            result=f"T<sub>Rd</sub> = {_fmt(resistance['resistance'], 3)} kN&#183;m "
+                   f"(governed by {resistance['governs']})")
         self._formula(
             "f<sub>ctd</sub> = f<sub>ctk,0.05</sub> / gamma<sub>ct</sub>",
             equation_key="torsion.cracking.fctd",
@@ -5533,10 +6153,11 @@ class ReportBuilder:
             equation_key="torsion.cracking.resistance",
             references=("torsion.cracking.fctd",),
             ref="cracking (tau = f<sub>ctd</sub>)",
-            subst=f"2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(tube['tef'] / 1000.0, 4)} &#183; {_fmt(t['fctd'], 3)} "
+            subst=f"2 &#183; {_fmt(cracking['ak_m2'], 4)} &#183; "
+                  f"({_fmt(cracking['tef_mm'], 3)} / 1000) &#183; "
+                  f"{_fmt(cracking['fctd_mpa'], 3)} "
                   "&#183; 1000",
-            result=f"T<sub>Rd,c</sub> = {_fmt(t['trd_c'], 3)} kN&#183;m")
+            result=f"T<sub>Rd,c</sub> = {_fmt(cracking['trd_c'], 3)} kN&#183;m")
         util = t["util"]
         util_txt = _pct(util)
         verdict = _demand_resistance_verdict(viz.util_ok(util))
@@ -5550,36 +6171,15 @@ class ReportBuilder:
             "(2 A<sub>k</sub> f<sub>yd</sub>)",
             equation_key="torsion.longitudinal-steel",
             ref="EN 1992-1-1 (6.28)",
-            subst=f"{_fmt(t['t_ed'], 3)} &#183; {_fmt(tube['uk'], 4)} &#183; "
-                  f"{_fmt(t['cot'], 3)} / (2 &#183; {_fmt(tube['Ak'], 4)} &#183; "
-                  f"{_fmt(t['fyd_long'], 1)}) &#183; 1000",
-            result=f"&#8721;A<sub>sl</sub> = {_fmt(t['asl_req'], 0)} mm<sup>2</sup> "
+            subst=f"{_fmt(longitudinal['numerator'], 6)} / "
+                  f"{_fmt(longitudinal['denominator'], 6)} &#183; 1000",
+            result=f"&#8721;A<sub>sl</sub> = "
+                   f"{_fmt(longitudinal['asl_required_mm2'], 0)} mm<sup>2</sup> "
                    "(in addition to the bending steel)")
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
                     "MN&#183;m to kN&#183;m (resistances) and m<sup>2</sup> "
                     "to mm<sup>2</sup> "
                     "(A<sub>sl</sub>).")
-        # Biaxial runs report Eq. 6.31 per shear direction above. The standalone
-        # torsion payload has no shear companion and must not replace those screens.
-        mr = None if directional else t.get("min_reinf")
-        if mr is not None and mr.get("applicable"):
-            self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
-            vv = ("minimum reinforcement suffices" if mr["ok"]
-                  else "designed reinforcement required")
-            self._formula(
-                "T<sub>Ed</sub>/T<sub>Rd,c</sub> + V<sub>Ed</sub>/V<sub>Rd,c</sub>",
-                equation_key="torsion.minimum-reinforcement.screen",
-                ref="EN 1992-1-1 (6.31)",
-                subst=f"{_fmt(mr['t_ed'], 3)}/{_fmt(mr['trd_c'], 3)} + "
-                      f"{_fmt(mr['v_ed'], 3)}/{_fmt(mr['vrd_c'], 3)}",
-                result=f"{_fmt(mr['value'], 3)}  ({vv})")
-            solid_note = ("Assumes an approximately solid rectangular section."
-                          if mr["solid"] else "This section has a void: 6.31 is for "
-                          "solid sections, so it does not strictly apply.")
-            self._small("If &#8804; 1, only minimum shear + torsion reinforcement is "
-                        "required (no designed stirrups for these actions). "
-                        + solid_note)
-        self._crushing_interaction(t)
 
     def _elastic_state_tables(self, title, state):
         """Publish one retained Ec=1 state without repeating the elastic solve."""

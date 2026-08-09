@@ -158,12 +158,13 @@ def test_numerical_result_has_explicit_roles_canonical_identity_and_symbols():
     )
 
 
-def test_applicability_note_is_not_mislabelled_as_a_numerical_substitution():
+def test_applicability_note_is_distinct_from_the_numerical_substitution():
     builder = _builder()
     builder._h1("Combined")
     builder._formula(
         "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)",
         equation_key="combined.dk-na.sum",
+        subst="max(0.50 + 0.20, 0.40 + 0.20)",
         note="M and V are checked separately.",
         result="&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = 70.0% (PASS)",
     )
@@ -171,7 +172,7 @@ def test_applicability_note_is_not_mislabelled_as_a_numerical_substitution():
     text = equation.getPlainText()
 
     assert "Applicability / method note: M and V are checked separately." in text
-    assert "Numerical substitution:" not in text
+    assert "Numerical substitution: max(0.50 + 0.20, 0.40 + 0.20)" in text
     assert (
         f"Result {EM_DASH} {SUM}(SEd/SRd) "
         f"[dimensionless; displayed as %]: {SUM}(SEd/SRd) = 70.0% (PASS)"

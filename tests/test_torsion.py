@@ -177,6 +177,61 @@ def test_distribute_by_stiffness_all_zero_is_zeros():
     assert torsion.distribute_by_stiffness(50.0, [0.0, 0.0]) == [0.0, 0.0]
 
 
+def test_retained_stiffness_distribution_is_compact_and_exact():
+    result = torsion.stiffness_distribution_result(90.0, [1.0, 2.0, -1.0])
+    assert result.positive_stiffness_sum == pytest.approx(3.0)
+    assert result.torque_parts == pytest.approx((30.0, 60.0, 0.0))
+    assert sum(result.torque_parts) == pytest.approx(result.applied_torque)
+    assert [share.fraction for share in result.shares] == pytest.approx(
+        [1.0 / 3.0, 2.0 / 3.0, 0.0]
+    )
+    assert not hasattr(result, "__dict__")
+    with pytest.raises(AttributeError):
+        result.applied_torque = 1.0
+
+
+def test_retained_torsion_formula_results_match_legacy_scalars():
+    code = codes.EC2_2005_DKNA
+    steel = torsion.trd_s_result(0.08, 435.0, 2.1, 1.75)
+    assert steel.trd_s == pytest.approx(
+        torsion.trd_s(0.08, 435.0, 2.1, 1.75)
+    )
+    strut = torsion.trd_max_result(
+        35.0, code, 0.08, 80.0, 1.0, 1.75, fcd_mpa=23.0
+    )
+    assert strut.trd_max == pytest.approx(
+        torsion.trd_max(
+            35.0, code, 0.08, 80.0, 1.0, 1.75, fcd_mpa=23.0
+        )
+    )
+    assert strut.tan == pytest.approx(1.0 / 1.75)
+    assert strut.sin_cos == pytest.approx(1.75 / (1.0 + 1.75**2))
+    cracking = torsion.trd_c_result(1.9, 0.08, 80.0)
+    assert cracking.trd_c == pytest.approx(torsion.trd_c(1.9, 0.08, 80.0))
+    longitudinal = torsion.asl_required_result(
+        40.0, 1.2, 0.08, 435.0, 1.75
+    )
+    assert longitudinal.asl_required_mm2 == pytest.approx(
+        torsion.asl_required(40.0, 1.2, 0.08, 435.0, 1.75)
+    )
+    selected = torsion.select_torsion_resistance(
+        steel.trd_s, strut.trd_max, asw_over_s=2.1
+    )
+    assert selected.resistance == pytest.approx(
+        min(steel.trd_s, strut.trd_max)
+    )
+
+
+def test_retained_torsion_wrappers_preserve_invalid_legacy_boundaries():
+    result = torsion.asl_required_result(10.0, 1.0, -0.1, -500.0, 1.0)
+    assert result.asl_required_mm2 == 0.0
+    zero_angle = torsion.trd_max_result(
+        35.0, codes.EC2_2005, 0.08, 80.0, 1.0, 0.0
+    )
+    assert math.isinf(zero_angle.tan)
+    assert zero_angle.trd_max == 0.0
+
+
 def test_torsion_nu_closed_detailing_only_changes_dk_na():
     # The nu_t->nu_v allowance changes nu ONLY on the DK NA edition; the recommended
     # edition ignores closed_detailing. This underpins gating the display flag.
@@ -665,10 +720,33 @@ def test_app_combined_shear_torsion_interaction():
     inter = at.session_state["results"]["torsion"]["interaction"]
     assert inter["value"] == pytest.approx(
         inter["t_ed"] / inter["trd_max"] + inter["v_ed"] / inter["vrd_max"])
+    assert inter["value"] == pytest.approx(
+        inter["torsion_ratio"] + inter["shear_ratio"]
+    )
     # ONE member strut angle (6.3.2(2)) applies within each mandatory face
     # candidate. Different check domains may independently govern on different
     # faces, so their aggregate representatives need not have the same angle.
     r = at.session_state["results"]
+    primary = r["torsion"]["primary"]
+    assert primary["steel_resistance"]["trd_s"] == pytest.approx(
+        primary["trd_s"]
+    )
+    assert primary["strut_resistance"]["trd_max"] == pytest.approx(
+        primary["trd_max"]
+    )
+    assert primary["resistance_selection"]["resistance"] == pytest.approx(
+        primary["trd"]
+    )
+    assert primary["longitudinal_reinforcement"]["asl_required_mm2"] == (
+        pytest.approx(primary["asl_req"])
+    )
+    assert r["torsion"]["torque_distribution"]["applied_torque"] == (
+        pytest.approx(r["torsion"]["t_ed"])
+    )
+    assert r["shear"]["links"]["res"]["tan"] == pytest.approx(
+        1.0 / r["shear"]["links"]["res"]["cot"]
+    )
+    assert r["shear"]["links"]["member_angle_selection"]["samples"] == 1501
     checked = 0
     for candidate in r["shear"]["face_candidates"]:
         candidate_torsion = candidate["torsion"]

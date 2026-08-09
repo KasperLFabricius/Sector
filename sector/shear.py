@@ -25,9 +25,46 @@ tension-positive, so the caller passes ``-N`` here.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from . import geometry
+
+
+@dataclass(frozen=True, slots=True)
+class StrutAngleSelection:
+    """Final analytic variable-strut-angle selection and its direct operands.
+
+    This is deliberately a single accepted state, not an angle-search history.  It
+    retains the values needed to explain how the existing resistance optimum was
+    selected inside the entered ``cot(theta)`` band.
+    """
+
+    cot: float
+    tan: float
+    theta_deg: float
+    sin_cos: float
+    cot_min: float
+    cot_max: float
+    cot_unconstrained: float
+    selection: str
+
+
+def _angle_fields(selection: StrutAngleSelection, a: float, b: float) -> dict:
+    """Flatten one family-owned angle selection into a shear result payload."""
+
+    return {
+        "cot": selection.cot,
+        "tan": selection.tan,
+        "theta_deg": selection.theta_deg,
+        "sin_cos": selection.sin_cos,
+        "cot_min": selection.cot_min,
+        "cot_max": selection.cot_max,
+        "cot_unconstrained": selection.cot_unconstrained,
+        "angle_selection": selection.selection,
+        "angle_a": a,
+        "angle_b": b,
+    }
 
 
 def _coord(point, axis: str) -> float:
@@ -169,7 +206,9 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
                     z=0.9 * d_mm, ddg=ddg_mm, fyd=fyd_mpa, k_vp=1.0,
                     d_kvp=d_mm, a_cs=0.0, n_ed_tension=n_ed_tension_kn,
                     m_ed=m_ed_knm, v_ed=v_ed_kn, axial_applied=False,
-                    gamma_v=code.shear_gamma_v, model="2023", valid=False)
+                    gamma_v=code.shear_gamma_v, model="2023", valid=False,
+                    fck=fck, bw=bw_mm, d=d_mm, asl=asl_mm2,
+                    tau_governs="none")
     gv = code.shear_gamma_v
     rho_l = asl_mm2 / (bw_mm * d_mm)
     z = 0.9 * d_mm
@@ -196,7 +235,9 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
                  z=z, ddg=ddg_mm, fyd=fyd_mpa, k_vp=k_vp, d_kvp=d_kvp,
                  a_cs=a_cs, n_ed_tension=n_ed_tension_kn, m_ed=m_ed_knm,
                  v_ed=v_ed_kn, axial_applied=axial_applied,
-                 gamma_v=gv, model="2023", valid=True)
+                 gamma_v=gv, model="2023", valid=True,
+                 fck=fck, bw=bw_mm, d=d_mm, asl=asl_mm2,
+                 tau_governs=("basic" if tau_basic >= tau_min else "minimum"))
 
 
 def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
@@ -223,22 +264,70 @@ def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
     if d_mm <= 0.0 or bw_mm <= 0.0:
         return dict(vrd_c=0.0, k=0.0, rho_l=0.0, sigma_cp=0.0, fcd=0.0,
                     v_basic=0.0, v_floor=0.0, crd_c=0.0, vmin=0.0,
-                    k1=code.shear_k1, gamma_c=gc, valid=False)
+                    k1=code.shear_k1, gamma_c=gc, valid=False,
+                    fck=fck, bw=bw_mm, d=d_mm, asl=asl_mm2,
+                    ac=ac_m2, n_ed_comp=n_ed_comp_kn, rho_l_raw=0.0,
+                    rho_l_cap=0.02, sigma_cp_raw=0.0, sigma_cp_cap=0.0,
+                    stress=0.0, governs="none", model="2005")
     k = min(1.0 + math.sqrt(200.0 / d_mm), 2.0)
-    rho_l = min(asl_mm2 / (bw_mm * d_mm), 0.02)
+    rho_l_raw = asl_mm2 / (bw_mm * d_mm)
+    rho_l = min(rho_l_raw, 0.02)
     fcd = (code.concrete_factor(fck) * fck / gc
            if fcd_mpa is None else float(fcd_mpa))                       # MPa
-    sigma_cp = min(n_ed_comp_kn / ac_m2 / 1000.0 if ac_m2 > 0 else 0.0,   # kN/m2 -> MPa
-                   0.2 * fcd)
+    sigma_cp_raw = n_ed_comp_kn / ac_m2 / 1000.0 if ac_m2 > 0 else 0.0
+    sigma_cp_cap = 0.2 * fcd
+    sigma_cp = min(sigma_cp_raw, sigma_cp_cap)                            # MPa
     crd_c = code.shear_crd_c_over_gamma(gc)
     vmin = code.shear_vmin(k, fck, gc)
     basic = crd_c * k * (100.0 * rho_l * fck) ** (1.0 / 3.0) + code.shear_k1 * sigma_cp
     floor = vmin + code.shear_k1 * sigma_cp
     stress = max(basic, floor, 0.0)                                       # MPa
+    governs = "basic" if basic >= max(floor, 0.0) else (
+        "minimum" if floor >= 0.0 else "zero"
+    )
     return dict(vrd_c=stress * bw_mm * d_mm / 1000.0,                     # kN
                 k=k, rho_l=rho_l, sigma_cp=sigma_cp, fcd=fcd,
                 v_basic=basic, v_floor=floor, crd_c=crd_c, vmin=vmin,
-                k1=code.shear_k1, gamma_c=gc, valid=True)
+                k1=code.shear_k1, gamma_c=gc, valid=True,
+                fck=fck, bw=bw_mm, d=d_mm, asl=asl_mm2,
+                ac=ac_m2, n_ed_comp=n_ed_comp_kn, rho_l_raw=rho_l_raw,
+                rho_l_cap=0.02, sigma_cp_raw=sigma_cp_raw,
+                sigma_cp_cap=sigma_cp_cap, stress=stress,
+                governs=governs, model="2005")
+
+
+def optimum_strut_angle(
+    a: float, b: float, cot_min: float, cot_max: float
+) -> StrutAngleSelection:
+    """Return the accepted analytic strut angle and its publication operands."""
+
+    if a <= 0.0:
+        cot = cot_max
+        unconstrained = math.inf
+        basis = "no transverse reinforcement; upper bound"
+    else:
+        cot_star = math.sqrt(max(b / a - 1.0, 0.0))
+        unconstrained = max(cot_star, 1.0)
+        cot = min(max(unconstrained, cot_min), cot_max)
+        if cot < unconstrained:
+            basis = "upper bound"
+        elif cot > unconstrained:
+            basis = "lower bound"
+        elif cot_star < 1.0:
+            basis = "cot(theta) = 1 optimum"
+        else:
+            basis = "stirrup/crushing crossover"
+    tan = 1.0 / cot
+    return StrutAngleSelection(
+        cot=cot,
+        tan=tan,
+        theta_deg=math.degrees(math.atan(tan)),
+        sin_cos=cot / (1.0 + cot * cot),
+        cot_min=cot_min,
+        cot_max=cot_max,
+        cot_unconstrained=unconstrained,
+        selection=basis,
+    )
 
 
 def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> float:
@@ -253,11 +342,7 @@ def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> flo
     The result is clamped to the user band ``[cot_min, cot_max]``, which may be
     widened past the code's ``1..2.5`` (the UI warns rather than blocks).
     """
-    if a <= 0.0:
-        return cot_max
-    cot_star = math.sqrt(max(b / a - 1.0, 0.0))
-    cot_opt = max(cot_star, 1.0)                 # the optimum is never below cot = 1
-    return min(max(cot_opt, cot_min), cot_max)
+    return optimum_strut_angle(a, b, cot_min, cot_max).cot
 
 
 def compression_field_limits_2023(
@@ -327,7 +412,8 @@ def vrd_links_2023(
     yielding and compression-field crushing at the resistance-optimal angle inside
     the user-entered range.
     """
-    del fck  # The simplified 2023 value nu = 0.5 is independent of fck.
+    # The simplified 2023 value nu = 0.5 is independent of fck, but retain fck as
+    # entered so a worked calculation can show the complete given-data set.
     z = z_mm if (z_mm and z_mm > 0.0) else 0.9 * d_mm
     gs = code.gamma_s if gamma_s is None else float(gamma_s)
     # Callers must supply the final user-defined design strength. Reconstructing it
@@ -341,7 +427,7 @@ def vrd_links_2023(
         or fcd <= 0.0
         or gs <= 0.0
     ):
-        return dict(
+        invalid = dict(
             vrd_s=0.0,
             vrd_max=0.0,
             vrd=0.0,
@@ -366,13 +452,29 @@ def vrd_links_2023(
             model="2023",
             valid=False,
         )
+        invalid.update(
+            fck=fck,
+            bw=bw_mm,
+            d=d_mm,
+            fywk=fywk,
+            cot_min=cot_min,
+            cot_max=cot_max,
+            tan=0.0,
+            sin_cos=0.0,
+            cot_unconstrained=0.0,
+            angle_selection="none",
+            angle_a=0.0,
+            angle_b=0.0,
+        )
+        return invalid
     fywd = fywk / gs
     nu = 0.5
     rho_w = asw_over_s / bw_mm
     a = asw_over_s * fywd
     b = bw_mm * nu * fcd
-    cot = optimum_cot_theta(a, b, cot_min, cot_max)
-    tan = 1.0 / cot
+    angle = optimum_strut_angle(a, b, cot_min, cot_max)
+    cot = angle.cot
+    tan = angle.tan
     vrd_s = a * z * cot / 1000.0
     vrd_max = b * z / (cot + tan) / 1000.0
     vrd = min(vrd_s, vrd_max)
@@ -384,7 +486,7 @@ def vrd_links_2023(
         "links (tau_Rd,sy)" if vrd_s <= vrd_max
         else "compression field (sigma_cd)"
     )
-    return dict(
+    result = dict(
         vrd_s=vrd_s,
         vrd_max=vrd_max,
         vrd=vrd,
@@ -409,6 +511,8 @@ def vrd_links_2023(
         model="2023",
         valid=True,
     )
+    result.update(_angle_fields(angle, a, b), fck=fck, bw=bw_mm, d=d_mm, fywk=fywk)
+    return result
 
 
 def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
@@ -445,7 +549,10 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
         return dict(vrd_s=0.0, vrd_max=0.0, vrd=0.0, cot=0.0, theta_deg=0.0, z=z,
                     fywd=0.0, nu1=0.0, alpha_cw=0.0, sigma_cp=0.0, fcd=0.0,
                     gamma_s=gs, asw_over_s=asw_over_s, governs="none",
-                    valid=False)
+                    valid=False, fck=fck, bw=bw_mm, d=d_mm, fywk=fywk,
+                    cot_min=cot_min, cot_max=cot_max, tan=0.0, sin_cos=0.0,
+                    cot_unconstrained=0.0, angle_selection="none",
+                    angle_a=0.0, angle_b=0.0, model="2005")
     fcd = (code.concrete_factor(fck) * fck / code.gamma_c
            if fcd_mpa is None else float(fcd_mpa))                       # MPa
     fywd = fywk / gs                                                     # MPa
@@ -456,13 +563,16 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
     alpha_cw = code.shear_alpha_cw(sigma_cp, fcd)
     a = asw_over_s * fywd                                                 # N/mm
     b = alpha_cw * bw_mm * nu1 * fcd                                      # N/mm
-    cot = optimum_cot_theta(a, b, cot_min, cot_max)
+    angle = optimum_strut_angle(a, b, cot_min, cot_max)
+    cot = angle.cot
     vrd_s = asw_over_s * z * fywd * cot / 1000.0                          # kN
     vrd_max = alpha_cw * bw_mm * z * nu1 * fcd / (cot + 1.0 / cot) / 1000.0  # kN
     vrd = min(vrd_s, vrd_max)
     governs = "stirrups (VRd,s)" if vrd_s <= vrd_max else "crushing (VRd,max)"
-    theta_deg = math.degrees(math.atan(1.0 / cot))
-    return dict(vrd_s=vrd_s, vrd_max=vrd_max, vrd=vrd, cot=cot, theta_deg=theta_deg,
-                z=z, fywd=fywd, nu1=nu1, alpha_cw=alpha_cw, sigma_cp=sigma_cp,
-                fcd=fcd, gamma_s=gs, asw_over_s=asw_over_s,
-                governs=governs, valid=True)
+    result = dict(vrd_s=vrd_s, vrd_max=vrd_max, vrd=vrd,
+                  z=z, fywd=fywd, nu1=nu1, alpha_cw=alpha_cw, sigma_cp=sigma_cp,
+                  fcd=fcd, gamma_s=gs, asw_over_s=asw_over_s,
+                  governs=governs, valid=True, fck=fck, bw=bw_mm, d=d_mm,
+                  fywk=fywk, model="2005")
+    result.update(_angle_fields(angle, a, b))
+    return result

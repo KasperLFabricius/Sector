@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import asdict
+import io
 import inspect
 import math
 import pathlib
@@ -19,10 +21,14 @@ import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import (  # noqa: E402
     capacity,
+    combined as combined_core,
+    codes,
     detailing,
     elastic as elastic_core,
     geometry,
     plastic as plastic_core,
+    shear as shear_core,
+    torsion as torsion_core,
 )
 from sector.design_standards import (  # noqa: E402
     Capability,
@@ -1210,6 +1216,18 @@ def test_completed_textbook_report_never_calls_a_solver_or_material_law(monkeypa
             "solve_elastic", "solve_elastic_uncracked", "solve_elastic_combined",
             "transformed_properties", "_newton_solve",
         )),
+        (shear_core, (
+            "vrd_c", "vrd_c_2023", "vrd_links", "vrd_links_2023",
+            "optimum_strut_angle",
+        )),
+        (torsion_core, (
+            "stiffness_distribution_result", "trd_s_result", "trd_max_result",
+            "trd_c_result", "asl_required_result", "select_torsion_resistance",
+        )),
+        (combined_core, (
+            "crushing_interaction_result", "governing_strut_result",
+            "dkna_interaction_result", "longitudinal_check",
+        )),
     ):
         for name in names:
             monkeypatch.setattr(module, name, poisoned)
@@ -1242,10 +1260,40 @@ def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
     assert "does not repeat the solver in the report" in text
 
 
+def test_transverse_textbook_report_fails_closed_without_retained_operands():
+    out = _out()
+    shear = _shear_out()
+    shear["links"] = _links_out()
+    shear["links"]["res"].pop("tan")
+    torsion = _torsion_out()
+    torsion.pop("strut_resistance")
+    combined = _combined_out()
+    combined.pop("dkna_selection")
+    out.update(shear=shear, torsion=torsion, combined=combined)
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "does not retain the accepted strut-angle operands" in text
+    assert "does not retain every accepted torsion formula operand" in text
+    assert "does not retain the DK NA inclusion branch" in text
+    assert "EQ-SHEAR.LINKS.VRDS" not in text
+    assert "EQ-TORSION.RESISTANCE.GOVERNING" not in text
+    assert "EQ-COMBINED.DK-NA.SUM" not in text
+
+
 def test_textbook_report_methods_have_no_engineering_fallbacks():
     source = "\n".join((
         inspect.getsource(sector_report.ReportBuilder._plastic_worked),
         inspect.getsource(sector_report.ReportBuilder._elastic_worked),
+        inspect.getsource(sector_report.ReportBuilder._shear),
+        inspect.getsource(sector_report.ReportBuilder._shear_direction),
+        inspect.getsource(sector_report.ReportBuilder._shear_links),
+        inspect.getsource(sector_report.ReportBuilder._torsion),
+        inspect.getsource(sector_report.ReportBuilder._subtube_section),
+        inspect.getsource(sector_report.ReportBuilder._combined),
+        inspect.getsource(sector_report.ReportBuilder._combined_direction),
     ))
     forbidden = (
         ".stress(",
@@ -1258,6 +1306,14 @@ def test_textbook_report_methods_have_no_engineering_fallbacks():
         "transformed_properties(",
         "_newton_solve(",
         "max(pts",
+        "1.0 / lk['cot']",
+        "t['cot'] / (1.0 + t['cot'] ** 2)",
+        "stiffness_distribution_result(",
+        "trd_s_result(",
+        "trd_max_result(",
+        "crushing_interaction_result(",
+        "dkna_interaction_result(",
+        "governing_strut_result(",
     )
     assert not [pattern for pattern in forbidden if pattern in source]
 
@@ -2619,20 +2675,55 @@ def _torsion_out(interaction=False):
     tube = {"A": 0.18, "u": 1.8, "tef": 100.0, "Ak": 0.1, "uk": 1.4,
             "tef_auto": 100.0, "tef_capped": False, "tef_user": False,
             "hollow": False, "valid": True}
-    out = {"tube": tube, "trd_s": 76.4, "trd_max": 76.4, "trd": 76.4,
-           "trd_c": 26.435,
-           "cot": 1.751, "theta_deg": 29.7, "util": 40.0 / 76.4, "asl_req": 1176.0,
+    angle = shear_core.optimum_strut_angle(
+        0.5236 * 416.67,
+        codes.EC2_2005_DKNA.torsion_nu(35.0) * 24.14 * 100.0,
+        1.0,
+        2.5,
+    )
+    steel = torsion_core.trd_s_result(0.1, 416.67, 0.5236, angle.cot)
+    strut = torsion_core.trd_max_result(
+        35.0, codes.EC2_2005_DKNA, 0.1, 100.0, 1.0, angle.cot,
+        fcd_mpa=24.14,
+    )
+    resistance = torsion_core.select_torsion_resistance(
+        steel.trd_s, strut.trd_max, asw_over_s=0.5236
+    )
+    cracking = torsion_core.trd_c_result(1.3218, 0.1, 100.0)
+    longitudinal = torsion_core.asl_required_result(
+        40.0, 1.4, 0.1, 416.67, angle.cot
+    )
+    out = {"tube": tube, "trd_s": steel.trd_s, "trd_max": strut.trd_max,
+           "trd": resistance.resistance, "trd_c": cracking.trd_c,
+           "cot": angle.cot, "theta_deg": angle.theta_deg,
+           "util": 40.0 / resistance.resistance,
+           "asl_req": longitudinal.asl_required_mm2,
            "t_ed": 40.0, "fcd": 24.14, "fywd": 416.67, "fyd_long": 416.67,
            "nu": 0.3675, "alpha_cw": 1.0, "fctk_005": 2.247,
            "gamma_ct": 1.70, "fctd": 1.3218, "asw_t": 78.5,
            "asw_over_s": 0.5236, "dia": 10.0, "s": 150.0, "cot_min": 1.0,
            "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
-           "governs": "stirrups (TRd,s)", "valid": True, "cot_limit_lo": 1.0,
-           "cot_limit_hi": 2.5, "out_of_limits": False}
+           "governs": resistance.governs, "valid": True, "cot_limit_lo": 1.0,
+           "cot_limit_hi": 2.5, "out_of_limits": False,
+           "angle_selection": asdict(angle),
+           "steel_resistance": asdict(steel),
+           "strut_resistance": asdict(strut),
+           "resistance_selection": asdict(resistance),
+           "cracking_resistance": asdict(cracking),
+           "longitudinal_reinforcement": asdict(longitudinal)}
     if interaction:
-        out["interaction"] = dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
-                                  vrd_max=650.0, t_ed=40.0, v_ed=150.0,
-                                  value=40.0 / 88.7 + 150.0 / 650.0)
+        retained = combined_core.crushing_interaction_result(
+            40.0, 88.7, 150.0, 650.0
+        )
+        out["interaction"] = dict(
+            valid=True, cot=1.0, theta_deg=45.0,
+            trd_max=88.7, vrd_max=650.0,
+            t_ed=40.0, v_ed=150.0,
+            value=retained.utilisation,
+            torsion_ratio=retained.torsion_ratio,
+            shear_ratio=retained.shear_ratio,
+            ok=retained.ok,
+        )
     return out
 
 
@@ -2643,11 +2734,11 @@ def test_report_includes_torsion_section():
     assert "Torsion" in txt
     assert "6.30" in txt and "6.28" in txt          # the clause formulae
     assert "76.4" in txt                            # TRd
-    assert "26.435" in txt                          # TRd,c with gamma_ct = 1.70
+    assert "26.436" in txt                          # TRd,c with gamma_ct = 1.70
     assert "1.700" in txt                           # actual tensile factor provenance
     assert "fctd = fctk,0.05 /" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
-    assert "1176" in txt                            # required Asl
+    assert "1177" in txt                            # required Asl
     assert chr(0x2211) in txt                       # summation operator
     assert chr(0x00B7) in txt                       # centred multiplication/unit dot
     assert chr(0x00B0) in txt                       # degree symbol
@@ -2706,10 +2797,23 @@ def test_report_compound_torsion_requires_subdivision():
 
 
 def _subtube(b, h, tef, ak, c, ted, trd, util, gov, cx=0.0, cy=0.0):
-    return dict(tube={"tef": tef, "Ak": ak, "valid": True}, b_mm=b, h_mm=h,
-                x_mm=cx, y_mm=cy,
-                stiffness=c, t_ed=ted, trd=trd, util=util, governs=gov,
-                trd_s=trd, trd_max=trd + 5.0, trd_c=trd * 0.4, cot=1.75, nu=0.37)
+    steel = torsion_core.trd_s_result(ak, 416.67, 0.5236, 1.75)
+    strut = torsion_core.trd_max_result(
+        35.0, codes.EC2_2005_DKNA, ak, tef, 1.0, 1.75,
+        fcd_mpa=24.14,
+    )
+    resistance = torsion_core.select_torsion_resistance(
+        steel.trd_s, strut.trd_max, asw_over_s=0.5236
+    )
+    return dict(
+        tube={"tef": tef, "Ak": ak, "valid": True}, b_mm=b, h_mm=h,
+        x_mm=cx, y_mm=cy, stiffness=c, t_ed=ted,
+        trd=resistance.resistance, util=ted / resistance.resistance,
+        governs=resistance.governs, trd_s=steel.trd_s,
+        trd_max=strut.trd_max, trd_c=trd * 0.4, cot=1.75, nu=0.37,
+        steel_resistance=asdict(steel), strut_resistance=asdict(strut),
+        resistance_selection=asdict(resistance),
+    )
 
 
 def test_report_torsion_subdivided():
@@ -2721,11 +2825,25 @@ def test_report_torsion_subdivided():
                      "crushing (TRd,max)", 0.0, 300.0)]
     t["subdivided"] = True
     t["subtubes"] = subs
-    t["trd"] = 110.0
+    t["trd"] = sum(s["trd"] for s in subs)
     # P1: governing = the worst sub-tube (part 2 here), not the pooled TEd/sum(TRd).
     t["util"] = max(s["util"] for s in subs)
-    t["governing_sub"] = 1
+    t["governing_sub"] = max(range(len(subs)), key=lambda index: subs[index]["util"])
     t["asl_req"] = 1400.0
+    stiffness_sum = sum(s["stiffness"] for s in subs)
+    t["torque_distribution"] = {
+        "applied_torque": 40.0,
+        "positive_stiffness_sum": stiffness_sum,
+        "shares": tuple(
+            {
+                "index": index,
+                "stiffness": sub["stiffness"],
+                "fraction": sub["stiffness"] / stiffness_sum,
+                "torque": sub["t_ed"],
+            }
+            for index, sub in enumerate(subs)
+        ),
+    }
     out["torsion"] = t
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Sub-tubes" in txt                        # the compound-section heading
@@ -2774,14 +2892,226 @@ def test_report_torsion_shows_min_reinf_screen():
 
 
 def _combined_out(mv_independent=False):
-    return {"valid": True, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
-            "r_m": 0.6, "r_v": 0.4, "r_t": 0.3, "m_v_independent": mv_independent,
-            "dkna_sum": (max(0.9, 0.7) if mv_independent else 1.3),
-            "dkna_ok": (max(0.9, 0.7) if mv_independent else 1.3) <= 1.0,
-            "crushing": dict(valid=True, cot=1.0, theta_deg=45.0, trd_max=88.7,
-                             vrd_max=650.0, t_ed=40.0, v_ed=150.0,
-                             value=40.0 / 88.7 + 150.0 / 650.0),
-            "asl_torsion": 1176.0, "delta_ftd": 200.0, "links": True}
+    dkna = combined_core.dkna_interaction_result(
+        0.6, 0.4, 0.3, m_v_independent=mv_independent
+    )
+    crushing = combined_core.crushing_interaction_result(
+        40.0, 88.7, 150.0, 650.0
+    )
+    return {
+        "valid": True, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "r_m": 0.6, "r_v": 0.4, "r_t": 0.3,
+        "m_v_independent": mv_independent,
+        "dkna_sum": dkna.utilisation, "dkna_ok": dkna.ok,
+        "dkna_selection": asdict(dkna),
+        "crushing": dict(
+            valid=True, cot=1.0, theta_deg=45.0,
+            trd_max=88.7, vrd_max=650.0, t_ed=40.0, v_ed=150.0,
+            value=crushing.utilisation,
+            torsion_ratio=crushing.torsion_ratio,
+            shear_ratio=crushing.shear_ratio,
+            ok=crushing.ok,
+        ),
+        "asl_torsion": 1176.0, "delta_ftd": 200.0, "links": True,
+    }
+
+
+def _retain_combined_chords(payload, *candidates):
+    retained = [item for item in candidates if item is not None]
+    payload["longitudinal_candidates"] = retained
+    payload["governing_longitudinal"] = (
+        max(retained, key=lambda item: item["util"])
+        if retained else None
+    )
+    payload["longitudinal_fallback"] = next(
+        (item for item in retained if not item.get("conditional", True)),
+        None,
+    )
+    payload["longitudinal_all_conditional"] = bool(retained) and (
+        payload["longitudinal_fallback"] is None
+    )
+    return payload
+
+
+def test_report_publishes_only_governing_transverse_family_worked_examples():
+    inp = _inp()
+    rows = [
+        {
+            "name": "PL-LOW", "description": "Lower transverse actions",
+            "n_ed_kn": 0.0, "mx_ed_knm": 40.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 20.0, "vy_ed_kn": 30.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 20.0,
+        },
+        {
+            "name": "PL-GOV", "description": "Governing transverse actions",
+            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 30.0,
+            "vx_ed_kn": 45.0, "vy_ed_kn": 80.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 40.0,
+        },
+    ]
+    inp["plastic_cases"] = rows
+
+    shear_low = _shear_out()
+    shear_low.update(v_ed=30.0, signed_v_ed=30.0,
+                     util=30.0 / shear_low["res"]["vrd_c"])
+    vx = copy.deepcopy(_shear_out())
+    vx.update(component="vx", axis="y", signed_v_ed=45.0, v_ed=45.0,
+              util=45.0 / vx["res"]["vrd_c"], status="PASS")
+    vy = copy.deepcopy(_shear_out())
+    vy.update(component="vy", axis="x", signed_v_ed=80.0, v_ed=80.0,
+              util=80.0 / vy["res"]["vrd_c"], status="PASS")
+    shear_governing = dict(
+        vy, directions={"vx": vx, "vy": vy}, biaxial=True,
+        active_directions=["vx", "vy"],
+    )
+
+    torsion_low = _torsion_out()
+    torsion_low.update(t_ed=20.0, util=20.0 / torsion_low["trd"])
+    torsion_governing = _torsion_out()
+
+    def combined_with(r_m, r_v, r_t, component):
+        item = _combined_out()
+        selection = combined_core.dkna_interaction_result(
+            r_m, r_v, r_t, m_v_independent=False
+        )
+        item.update(
+            component=component,
+            r_m=r_m, r_v=r_v, r_t=r_t,
+            dkna_sum=selection.utilisation,
+            dkna_ok=selection.ok,
+            dkna_selection=asdict(selection),
+            governing_face="negative" if component == "vx" else "positive",
+            governing_cot=1.25 if component == "vx" else 1.75,
+        )
+        return item
+
+    combined_low = combined_with(0.10, 0.10, 0.10, "vy")
+    combined_vx = combined_with(0.15, 0.15, 0.10, "vx")
+    combined_vy = combined_with(0.60, 0.40, 0.30, "vy")
+    combined_governing = dict(
+        combined_vy,
+        directions={"vx": combined_vx, "vy": combined_vy},
+        biaxial=True,
+    )
+
+    out = {
+        "plastic_cases": [
+            {
+                "name": rows[0]["name"], "actions": rows[0], "evaluated": True,
+                "results": {
+                    "shear": shear_low,
+                    "torsion": torsion_low,
+                    "combined": combined_low,
+                },
+            },
+            {
+                "name": rows[1]["name"], "actions": rows[1], "evaluated": True,
+                "results": {
+                    "shear": shear_governing,
+                    "torsion": torsion_governing,
+                    "combined": combined_governing,
+                },
+            },
+        ]
+    }
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "PL-LOW" in flat and "PL-GOV" in flat
+    assert "Shear resistance - PL-LOW" not in flat
+    assert "Torsion (thin-walled tube) - PL-LOW" not in flat
+    assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in flat
+    assert flat.count("EQ-SHEAR.2005.VRDC") == 1
+    assert flat.count("EQ-TORSION.RESISTANCE.GOVERNING") == 1
+    assert flat.count("EQ-COMBINED.DK-NA.SUM") == 1
+    assert flat.count("The complete shear worked example is published only") == 1
+    assert flat.count("The complete torsion worked example is published only") == 1
+    assert flat.count("complete combined M-V-T worked example is published only") == 1
+    assert "Vx+T" in flat and "Vy+T" in flat
+
+
+def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
+    inp = _inp()
+    actions = [
+        {
+            "name": "PL-A", "description": "First",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 1.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 1.0,
+        },
+        {
+            "name": "PL-B", "description": "Second",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 2.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 2.0,
+        },
+        {
+            "name": "PL-INVALID", "description": "Invalid",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 3.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 3.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+
+    first = {
+        "shear": {
+            "res": {"valid": True}, "util": 0.99,
+            "links": {"res": {"valid": True}, "util": 0.40},
+        },
+        "torsion": {
+            "valid": True, "util": 0.40,
+            "min_reinf": {"applicable": True, "value": 9.0},
+            "interaction": {"valid": True, "value": 8.0},
+        },
+        "combined": {
+            "valid": True, "dkna_sum": 0.60,
+            "crushing": {"valid": True, "value": 7.0},
+        },
+    }
+    second = {
+        "shear": {
+            "res": {"valid": True}, "util": 0.85,
+            "links": {"res": {"valid": True}, "util": 0.80},
+        },
+        "torsion": {"valid": True, "util": 0.75},
+        "combined": {"valid": True, "dkna_sum": 0.90},
+    }
+    invalid = {
+        "shear": {
+            "res": {"valid": False}, "util": math.inf,
+            "links": {"res": {"valid": False}, "util": math.inf},
+        },
+        "torsion": {"valid": False, "util": math.inf},
+        "combined": {"valid": False, "dkna_sum": math.inf},
+    }
+    out = {
+        "plastic_cases": [
+            {"actions": actions[0], "results": first, "evaluated": True},
+            {"actions": actions[1], "results": second, "evaluated": True},
+            {"actions": actions[2], "results": invalid, "evaluated": True},
+        ]
+    }
+
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, out, figures=False
+    )
+
+    assert builder._critical_worked_case_ids["shear"] == id(second)
+    assert builder._critical_worked_case_ids["torsion"] == id(second)
+    assert builder._critical_worked_case_ids["combined"] == id(second)
+    assert (
+        builder._critical_torsion_subchecks["interaction"]["case_out_id"]
+        == id(first)
+    )
+    assert (
+        builder._critical_torsion_subchecks["minimum_reinforcement"][
+            "case_out_id"
+        ]
+        == id(first)
+    )
 
 
 def test_report_includes_combined_section():
@@ -2827,7 +3157,7 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     assert "1.250" in txt and "1.750" in txt
 
 
-def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
+def test_report_keeps_only_governing_biaxial_combined_worked_block():
     import io
 
     out = _out()
@@ -2854,10 +3184,10 @@ def test_report_keeps_each_biaxial_combined_screen_as_one_audit_block():
             for item in flowable._content
             if hasattr(item, "getPlainText")
         )
-        if "Directional screen:" in text:
+        if "Governing directional worked example:" in text:
             screen_blocks.append(text)
 
-    assert len(screen_blocks) == 2
+    assert len(screen_blocks) == 1
     assert all(f"{chr(0x2211)}(SEd/SRd)" in text for text in screen_blocks)
 
 
@@ -2870,6 +3200,7 @@ def test_report_combined_out_of_range_retains_values_and_verdicts():
         ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
         m_total=240.4, util=240.4 / 400.0, ok=True, capped=False,
     )
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "selected method's default range" in txt
@@ -2883,6 +3214,7 @@ def test_report_combined_longitudinal_check():
     c["longitudinal"] = dict(valid=True, axis="x", z=0.54, m_ed=100.0, m_rd=400.0,
                              ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
                              m_total=240.4, util=240.4 / 400.0, ok=True, capped=False)
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Longitudinal reinforcement" in txt
@@ -2900,6 +3232,7 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
                              util=105.0 / 300.0, ok=True, capped=False,
                              tension_low=True, off_util=0.03, biaxial=False,
                              m_off=90.0, conditional=False)
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "required x-axis negative face" in txt
@@ -2929,7 +3262,7 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback():
     )
     c["longitudinal"] = exact
     c["chord_off"] = off_axis
-    c["longitudinal_candidates"] = [fallback, exact, off_axis]
+    _retain_combined_chords(c, fallback, exact, off_axis)
     out["combined"] = c
 
     txt = " ".join(_pdf_text(sector_report.build_report(
@@ -2958,6 +3291,7 @@ def test_report_combined_longitudinal_conditional_mrd():
                              util=105.0 / 250.0, ok=True, capped=False,
                              tension_low=True, off_util=0.4, biaxial=True,
                              m_off=90.0, conditional=True, has_torsion=True)
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     # Collapse the PDF's line wrapping so multi-word phrases can be asserted.
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
@@ -2979,6 +3313,7 @@ def test_report_off_axis_skip_disclosed_uniaxially():
                              tension_low=True, off_util=0.0, biaxial=False,
                              m_off=0.0, conditional=True, has_torsion=True,
                              off_not_evaluated="subdivided")
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
@@ -3001,6 +3336,7 @@ def test_report_partial_torsion_face_coverage_disclosed():
                              tension_low=True, off_util=0.0, biaxial=False,
                              m_off=0.0, conditional=True, has_torsion=True,
                              gets_shift=True, off_not_evaluated="not_solved")
+    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
@@ -3025,6 +3361,7 @@ def test_report_off_axis_chord_block():
                           ftd_v=0.0, ftd_t=100.0, mv=0.0, mt=15.0, m_total=105.0,
                           util=105.0 / 180.0, ok=True, capped=False,
                           tension_low=True, m_off=20.0, conditional=True)
+    _retain_combined_chords(c, c["longitudinal"], c["chord_off"])
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
@@ -3069,8 +3406,13 @@ def test_report_skips_invalid_combined():
 
 def _links_out():
     return {"res": {"vrd_s": 540.0, "vrd_max": 648.9, "vrd": 540.0, "cot": 2.5,
+                    "tan": 0.4, "sin_cos": 2.5 / (1.0 + 2.5**2),
                     "theta_deg": 21.8, "z": 495.0, "fywd": 416.67, "nu1": 0.525,
                     "alpha_cw": 1.0, "sigma_cp": 0.0, "fcd": 24.14,
+                    "cot_min": 1.0, "cot_max": 2.5,
+                    "cot_unconstrained": 3.0,
+                    "angle_selection": "upper entered bound",
+                    "angle_a": 436.3, "angle_b": 3801.9,
                     "governs": "stirrups (VRd,s)", "valid": True},
             "util": 80.0 / 540.0, "asw": 157.08, "asw_over_s": 1.047, "legs": 2.0,
             "dia": 10.0, "s": 150.0, "fywk": 500.0, "cot_min": 1.0, "cot_max": 2.5,
@@ -3226,21 +3568,27 @@ def _combined_longitudinal(theta_mode):
     # Minimal combined block that renders only the M+V+T tension-chord note. Crushing
     # and transverse are omitted so the section reduces to the longitudinal paragraph,
     # whose wording is driven purely by theta_mode.
-    return {
-        "combined": {
-            "method": "EN 1992-1-1:2005",
-            "valid": True,
-            "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
-            "dkna_ok": True, "dkna_sum": 0.90, "m_v_independent": False,
-            "longitudinal": {
-                "valid": True, "ok": True, "axis": "x", "tension_low": True,
-                "m_ed": 100.0, "m_rd": 200.0, "mv": 20.0, "mt": 10.0,
-                "ftd_v": 40.0, "ftd_t": 15.0, "z": 0.25, "m_total": 130.0,
-                "util": 0.65, "biaxial": False, "capped": False,
-                "theta_mode": theta_mode,
-            },
-        }
+    dkna = combined_core.dkna_interaction_result(
+        0.50, 0.60, 0.30, m_v_independent=False
+    )
+    payload = {
+        "method": "EN 1992-1-1:2005",
+        "valid": True,
+        "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
+        "dkna_ok": dkna.ok,
+        "dkna_sum": dkna.utilisation,
+        "dkna_selection": asdict(dkna),
+        "m_v_independent": False,
+        "longitudinal": {
+            "valid": True, "ok": True, "axis": "x", "tension_low": True,
+            "m_ed": 100.0, "m_rd": 200.0, "mv": 20.0, "mt": 10.0,
+            "ftd_v": 40.0, "ftd_t": 15.0, "z": 0.25, "m_total": 130.0,
+            "util": 0.65, "biaxial": False, "capped": False,
+            "theta_mode": theta_mode,
+        },
     }
+    _retain_combined_chords(payload, payload["longitudinal"])
+    return {"combined": payload}
 
 
 def test_report_no_load_longitudinal_note_states_resistance_optimum():

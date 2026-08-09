@@ -131,6 +131,8 @@ EXPECTED_CONTRACT_KEYS = {
     ("torsion.resistance.steel", None),
     ("torsion.shear.crushing-interaction", None),
     ("torsion.subtube.governing-utilisation", None),
+    ("torsion.subtube.stiffness-share", None),
+    ("torsion.subtube.torque-share", None),
     ("torsion.utilisation", None),
 }
 
@@ -146,12 +148,7 @@ THEORY_ONLY_EQUATIONS = {
 
 # This is an executable PR-03 work list, not a permanent allowance. Each family
 # slice removes its entries by publishing a numerical substitution and result.
-EXISTING_LIVE_EQUATION_GAPS = {
-    ("combined.dk-na.sum", None),
-    ("shear.links.vrd", None),
-    ("torsion.resistance.governing", None),
-    ("torsion.subtube.governing-utilisation", None),
-}
+EXISTING_LIVE_EQUATION_GAPS = set()
 
 
 def _formula_calls():
@@ -196,7 +193,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 113
+    assert len(calls) == 118
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -207,7 +204,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 114
+    assert len(catalogue_pairs) == 116
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -224,12 +221,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 103,
-        "none": 11,
+        "numerical": 109,
+        "none": 7,
     }
-    assert publication_role_counts == {"calculation": 107, "theory": 7}
+    assert publication_role_counts == {"calculation": 109, "theory": 7}
     # One extra contract is the second runtime branch of shear.chord.demand.
-    assert result_counts == {True: 107, False: 7}
+    assert result_counts == {True: 109, False: 7}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key
@@ -296,7 +293,7 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
     geometric = contracts.equation_contract(
         "crack.2005.spacing", "geometric"
     )
-    assert combined.substitution_role == "none"
+    assert combined.substitution_role == "numerical"
     assert geometric.substitution_role == "numerical"
     assert combined.applicability_note_required
     assert geometric.applicability_note_required
@@ -369,11 +366,12 @@ def test_contract_metadata_reaches_the_equation_flowable_unchanged():
     builder._formula(
         "max(rM + rT, rV + rT)",
         equation_key="combined.dk-na.sum",
+        subst="max(0.4 + 0.2, 0.3 + 0.2)",
         note="M and V are checked separately.",
         result="sum(S<sub>Ed</sub>/S<sub>Rd</sub>) = 0.70",
     )
     note_equation = builder.flow[-1]
-    assert note_equation._sector_equation_substitution_role == "none"
+    assert note_equation._sector_equation_substitution_role == "numerical"
     assert note_equation._sector_equation_applicability_note_required
     assert "M and V are checked separately." in note_equation.getPlainText()
 

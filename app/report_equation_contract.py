@@ -657,7 +657,6 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("V<sub>Rd</sub>", "governing design shear resistance with links", "kN"),
         ("V<sub>Rd,s</sub>", "link-yield shear resistance", "kN"),
         ("V<sub>Rd,max</sub>", "concrete compression resistance", "kN"),
-        substitution_role="none",
     ),
     ("shear.links.utilisation", None): _result(
         "utilisation", "dimensionless",
@@ -693,7 +692,6 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("r<sub>V</sub>", "stand-alone shear utilisation"),
         ("r<sub>T</sub>", "stand-alone torsion utilisation"),
         ("sum(S<sub>Ed</sub>/S<sub>Rd</sub>)", "governing DK NA interaction sum"),
-        substitution_role="none",
         applicability_note_required=True,
     ),
     ("combined.crushing.interaction", None): _result(
@@ -742,7 +740,18 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("T<sub>Ed,i</sub>", "torsion assigned to sub-tube i", "kNm"),
         ("T<sub>Rd,i</sub>", "torsion resistance of sub-tube i", "kNm"),
         ("governing utilisation", "largest sub-tube demand/resistance ratio"),
-        substitution_role="none",
+    ),
+    ("torsion.subtube.stiffness-share", None): _result(
+        "lambda<sub>i</sub>", "dimensionless",
+        ("lambda<sub>i</sub>", "fraction of applied torque assigned to sub-tube i"),
+        ("C<sub>i</sub>", "uncracked torsional stiffness of sub-tube i"),
+        ("&#8721; C<sub>j</sub>", "sum of positive sub-tube torsional stiffnesses"),
+    ),
+    ("torsion.subtube.torque-share", None): _result(
+        "T<sub>Ed,i</sub>", "kNm",
+        ("T<sub>Ed,i</sub>", "torsion assigned to sub-tube i", "kNm"),
+        ("lambda<sub>i</sub>", "stiffness-proportional torque fraction"),
+        ("T<sub>Ed</sub>", "applied design torsion", "kNm"),
     ),
     ("torsion.shear.crushing-interaction", None): _result(
         "interaction", "dimensionless",
@@ -775,7 +784,6 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("T<sub>Rd</sub>", "governing design torsion resistance", "kNm"),
         ("T<sub>Rd,s</sub>", "closed-link torsion resistance", "kNm"),
         ("T<sub>Rd,max</sub>", "torsion concrete-strut resistance", "kNm"),
-        substitution_role="none",
     ),
     ("torsion.cracking.fctd", None): _result(
         "f<sub>ctd</sub>", "MPa",
@@ -938,9 +946,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 114:
+    if len(_CONTRACTS) != 116:
         raise RuntimeError(
-            f"Expected 114 report equation contracts, got {len(_CONTRACTS)}."
+            f"Expected 116 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):

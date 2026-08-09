@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from importlib import import_module
 from typing import Any
 
@@ -446,39 +446,57 @@ def tube_torsion(
     nu_t = tcode.torsion_nu(fck, closed_detailing=nu_detail)
     a_t = asw_over_s * fywd
     b_t = nu_t * alpha_cw * fcd * tube["tef"]
-    cot = (
-        _module("shear").optimum_cot_theta(a_t, b_t, cot_min, cot_max)
-        if a_t > 0.0 else max(cot_min, 1.0)
-    )
+    shear = _module("shear")
+    if a_t > 0.0:
+        angle = shear.optimum_strut_angle(a_t, b_t, cot_min, cot_max)
+        cot = angle.cot
+        angle_selection = asdict(angle)
+    else:
+        cot = max(cot_min, 1.0)
+        angle_selection = {
+            "cot": cot,
+            "tan": (math.inf if cot == 0.0 else 1.0 / cot),
+            "theta_deg": math.degrees(math.atan2(1.0, cot)),
+            "sin_cos": cot / (1.0 + cot * cot),
+            "cot_min": cot_min,
+            "cot_max": cot_max,
+            "cot_unconstrained": 1.0,
+            "selection": "no transverse reinforcement; crushing optimum",
+        }
     torsion = _module("torsion")
-    trd_s = torsion.trd_s(tube["Ak"], fywd, asw_over_s, cot)
-    trd_max = torsion.trd_max(
+    steel = torsion.trd_s_result(tube["Ak"], fywd, asw_over_s, cot)
+    strut = torsion.trd_max_result(
         fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot,
         closed_detailing=nu_detail, fcd_mpa=fcd,
     )
-    trd = min(trd_s, trd_max) if asw_over_s > 0.0 else trd_max
-    trd_c = torsion.trd_c(fctd, tube["Ak"], tube["tef"])
-    util = t_ed / trd if trd > 0.0 else math.inf
-    asl = torsion.asl_required(t_ed, tube["uk"], tube["Ak"], fyd_long, cot)
-    governs = (
-        "stirrups (TRd,s)"
-        if asw_over_s > 0.0 and trd_s <= trd_max
-        else "crushing (TRd,max)"
+    selection = torsion.select_torsion_resistance(
+        steel.trd_s, strut.trd_max, asw_over_s=asw_over_s
+    )
+    cracking = torsion.trd_c_result(fctd, tube["Ak"], tube["tef"])
+    util = t_ed / selection.resistance if selection.resistance > 0.0 else math.inf
+    longitudinal = torsion.asl_required_result(
+        t_ed, tube["uk"], tube["Ak"], fyd_long, cot
     )
     return {
         "tube": tube,
         "t_ed": t_ed,
-        "trd_s": trd_s,
-        "trd_max": trd_max,
-        "trd": trd,
-        "trd_c": trd_c,
+        "trd_s": steel.trd_s,
+        "trd_max": strut.trd_max,
+        "trd": selection.resistance,
+        "trd_c": cracking.trd_c,
         "cot": cot,
-        "theta_deg": math.degrees(math.atan(1.0 / cot)) if cot > 0.0 else 0.0,
+        "theta_deg": math.degrees(math.atan2(1.0, cot)),
         "util": util,
-        "asl_req": asl,
+        "asl_req": longitudinal.asl_required_mm2,
         "nu": nu_t,
-        "governs": governs,
+        "governs": selection.governs,
         "valid": tube["valid"],
+        "angle_selection": angle_selection,
+        "steel_resistance": asdict(steel),
+        "strut_resistance": asdict(strut),
+        "resistance_selection": asdict(selection),
+        "cracking_resistance": asdict(cracking),
+        "longitudinal_reinforcement": asdict(longitudinal),
     }
 
 
@@ -875,12 +893,14 @@ def build_torsion_context(inp, n_ed_comp):
             )
             stiffnesses.append(torsion.rectangle_torsion_constant(b_m, h_m))
             dimensions.append((x_mm, y_mm, b_mm, h_mm))
-        torque_parts = torsion.distribute_by_stiffness(t_ed, stiffnesses)
+        distribution = torsion.stiffness_distribution_result(t_ed, stiffnesses)
+        torque_parts = list(distribution.torque_parts)
     else:
         subtubes = [tube]
         stiffnesses = [1.0]
         dimensions = [None]
-        torque_parts = [t_ed]
+        distribution = torsion.stiffness_distribution_result(t_ed, stiffnesses)
+        torque_parts = list(distribution.torque_parts)
 
     return {
         "_tk": tube_kwargs,
@@ -889,6 +909,7 @@ def build_torsion_context(inp, n_ed_comp):
         "subtubes": subtubes,
         "consts": stiffnesses,
         "ted_parts": torque_parts,
+        "torque_distribution": asdict(distribution),
         "sub_dims": dimensions,
         "t_ed": t_ed,
         "tcode": tcode,
@@ -943,9 +964,10 @@ def finalize_combined(inp, out):
     r_t = torsion_out["util"]
     independent_mv = bool(inp["combined_mv_independent"])
     combined = _module("combined")
-    dk_sum = combined.dkna_sum(
+    dk_selection = combined.dkna_interaction_result(
         r_m, r_v, r_t, m_v_independent=independent_mv
     )
+    dk_sum = dk_selection.utilisation
     outside_default_range = bool(
         torsion_out.get("out_of_limits")
         or (links is not None and links.get("out_of_limits"))
@@ -959,11 +981,17 @@ def finalize_combined(inp, out):
         "m_v_independent": independent_mv,
         "dkna_sum": dk_sum,
         "dkna_ok": dk_sum <= 1.0 + 1e-9,
+        "dkna_selection": asdict(dk_selection),
         "outside_default_range": outside_default_range,
         "crushing": torsion_out.get("interaction"),
         "asl_torsion": torsion_out["asl_req"],
         "delta_ftd": links["delta_ftd"] if links is not None else 0.0,
         "links": links is not None,
+        "member_angle_selection": (
+            links.get("member_angle_selection")
+            if links is not None
+            else torsion_out.get("member_angle_selection")
+        ),
     }
     longitudinal = links.get("chord") if links is not None else None
     if longitudinal is not None:
@@ -973,6 +1001,14 @@ def finalize_combined(inp, out):
         payload["chord_off"] = chord_off
     if links is not None and links.get("chord_candidates") is not None:
         payload["longitudinal_candidates"] = links["chord_candidates"]
+    if links is not None:
+        for retained_key in (
+            "governing_longitudinal",
+            "longitudinal_fallback",
+            "longitudinal_all_conditional",
+        ):
+            if retained_key in links:
+                payload[retained_key] = links[retained_key]
 
     if (
         links is not None
@@ -1013,7 +1049,9 @@ def finalize_combined(inp, out):
             payload["transverse"] = {
                 "valid": True,
                 "cot": cot,
-                "theta_deg": math.degrees(math.atan(1.0 / cot)),
+                "tan": math.inf if cot == 0.0 else 1.0 / cot,
+                "sin_cos": cot / (1.0 + cot * cot),
+                "theta_deg": math.degrees(math.atan2(1.0, cot)),
                 "u_stirrup": stirrup_util,
                 "u_crush": crushing_util,
                 "governing": governing,

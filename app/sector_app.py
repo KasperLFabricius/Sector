@@ -6206,12 +6206,27 @@ def _run_uniaxial_capacity_checks(inp, out):
             return factor * v_ed_s * cot
 
         utils = []
+        objective_labels = []
+
+        def _add_angle_objective(label, evaluator):
+            objective_labels.append(label)
+            utils.append(evaluator)
+
         if shear_live:
-            utils.append(lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_s"]))
-            utils.append(lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_max"]))
+            _add_angle_objective(
+                "shear link yielding",
+                lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_s"]),
+            )
+            _add_angle_objective(
+                "shear strut crushing",
+                lambda c: combined.ratio(v_ed_s, _snap(c)["lk"]["vrd_max"]),
+            )
         if tors_live:
             for i in range(len(tors_ctx["subtubes"])):
-                utils.append(lambda c, i=i: _snap(c)["subs"][i]["util"])
+                _add_angle_objective(
+                    f"torsion sub-tube {i + 1}",
+                    lambda c, i=i: _snap(c)["subs"][i]["util"],
+                )
         if links_valid and tors_live and tors_ctx["asw_over_s_t"] > 0.0:
             # The one closed stirrup carries shear AND the web's torsion share (the
             # transverse check); the web struts crush under both (6.29).
@@ -6227,27 +6242,37 @@ def _run_uniaxial_capacity_checks(inp, out):
                 return combined.crushing_interaction(
                     snap["subs"][0]["t_ed"], snap["subs"][0]["trd_max"],
                     v_ed_s, snap["lk"]["vrd_max"])
-            utils.append(_shared_stirrup)
-            utils.append(_crush_629)
+            _add_angle_objective("shared closed stirrup", _shared_stirrup)
+            _add_angle_objective("shared shear-torsion strut", _crush_629)
         for _cf in chord_faces:
             # The objective sees exactly the reported chord utilisation. The 2005
             # shear shift is capped per 6.2.3(7); the 2023 NVd force from (8.50) is
             # not capped because Sector does not establish the support/load-specific
             # condition in (8.53).
             if _cf["m_rd"] > 0.0 and (shear_live or tors_live):
-                utils.append(lambda c, f=_cf: combined.longitudinal_check(
-                    f["m_ed"], f["m_rd"],
-                    _ftd_v_at(c) if f["gets_shift"] else 0.0,
-                    _ftd_t_at(c), f["z_m"],
-                    cap_shear_force=not links_model_2023)["util"])
+                face = "negative" if _cf["tension_low"] else "positive"
+                _add_angle_objective(
+                    f"{_cf['axis']}-axis {face} longitudinal chord",
+                    lambda c, f=_cf: combined.longitudinal_check(
+                        f["m_ed"], f["m_rd"],
+                        _ftd_v_at(c) if f["gets_shift"] else 0.0,
+                        _ftd_t_at(c), f["z_m"],
+                        cap_shear_force=not links_model_2023,
+                    )["util"],
+                )
         for _ocf in chord_off_faces:
             # Each off-axis face depends on the angle only through Ftd,T; both join
             # the objective (m_rd > 0) so the optimiser and the reported governing
             # verdict agree. A zero-capacity face is kept out (util = inf at every
             # angle would tie the scan).
             if _ocf["m_rd"] > 0.0 and tors_live:
-                utils.append(lambda c, f=_ocf: combined.longitudinal_check(
-                    f["m_ed"], f["m_rd"], 0.0, _ftd_t_at(c), f["z_m"])["util"])
+                face = "negative" if _ocf["tension_low"] else "positive"
+                _add_angle_objective(
+                    f"{_ocf['axis']}-axis {face} off-axis chord",
+                    lambda c, f=_ocf: combined.longitudinal_check(
+                        f["m_ed"], f["m_rd"], 0.0, _ftd_t_at(c), f["z_m"]
+                    )["util"],
+                )
         if (inp.get("combined_on") and pl is not None and pl.get("util") is not None
                 and math.isfinite(pl["util"])
                 and links_valid and tors_valid and (shear_live or tors_live)):
@@ -6257,11 +6282,21 @@ def _run_uniaxial_capacity_checks(inp, out):
                 r_v = combined.ratio(v_ed_s, _snap(c)["lk"]["vrd"])
                 r_t = max(s["util"] for s in _snap(c)["subs"])
                 return combined.dkna_sum(r_m, r_v, r_t, m_v_independent=_mv_ind)
-            utils.append(_dkna)
+            _add_angle_objective("DK NA governing interaction", _dkna)
 
         cot_star = None
+        member_angle_selection = None
         if band is not None and utils:
-            cot_star, _ = combined.governing_strut_cot(utils, band[0], band[1])
+            angle_result = combined.governing_strut_result(
+                utils, band[0], band[1]
+            )
+            cot_star = angle_result.cot
+            member_angle_selection = dataclasses.asdict(angle_result)
+            member_angle_selection["objective_labels"] = tuple(objective_labels)
+            member_angle_selection["governing_objectives"] = tuple(
+                objective_labels[index]
+                for index in angle_result.governing_component_indices
+            )
         # One label for how the member angle was chosen, reused by every payload:
         #   utilisation -> a live load drove the minimax choice (cot_star found);
         #   resistance  -> no live transverse load, so the capacity result uses its
@@ -6335,7 +6370,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                 subdivision_requested=tors_ctx["subdivision_requested"],
                 subdivision_valid=tors_ctx["subdivision_valid"],
                 subdivision_reason=tors_ctx["subdivision_reason"],
-                theta_mode=(theta_mode_str if tors_live else "resistance"))
+                theta_mode=(theta_mode_str if tors_live else "resistance"),
+                torque_distribution=tors_ctx["torque_distribution"],
+                member_angle_selection=member_angle_selection)
 
         # ---- links payload at the member angle ----
         if link_ctx is not None:
@@ -6438,6 +6475,18 @@ def _run_uniaxial_capacity_checks(inp, out):
                     ochecks.append(fchk)
                     if ochk is None or fchk["util"] > ochk["util"]:
                         ochk = fchk
+            required_chords = lchecks + ochecks
+            governing_longitudinal = (
+                max(required_chords, key=lambda item: item["util"])
+                if required_chords else None
+            )
+            longitudinal_fallback = next(
+                (
+                    item for item in required_chords
+                    if not item.get("conditional", True)
+                ),
+                None,
+            )
             out["shear"].update(
                 links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
                            asw_over_s=link_ctx["asw_over_s"],
@@ -6461,9 +6510,16 @@ def _run_uniaxial_capacity_checks(inp, out):
                            out_of_limits=links_out_of_limits,
                            required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
                            chord_off=ochk,
-                           chord_candidates=lchecks + ochecks,
+                           chord_candidates=required_chords,
+                           governing_longitudinal=governing_longitudinal,
+                           longitudinal_fallback=longitudinal_fallback,
+                           longitudinal_all_conditional=(
+                               bool(required_chords)
+                               and longitudinal_fallback is None
+                           ),
                            theta_mode=(theta_mode_str if shear_live
-                                       else "resistance")))
+                                       else "resistance"),
+                           member_angle_selection=member_angle_selection))
 
         # ---- checks that pair shear and torsion, at the member angle ----
         if tors_ctx is not None:
@@ -6487,10 +6543,14 @@ def _run_uniaxial_capacity_checks(inp, out):
                                                    reason="zero resistance")
             else:
                 vrd_c_ms, v_ed_ms = sh_ms["res"]["vrd_c"], sh_ms["v_ed"]
-                screen = t_ed / _trdc + v_ed_ms / vrd_c_ms
+                torsion_ratio = t_ed / _trdc
+                shear_ratio = v_ed_ms / vrd_c_ms
+                screen = torsion_ratio + shear_ratio
                 out["torsion"]["min_reinf"] = dict(
                     applicable=True, value=screen, ok=bool(screen <= 1.0 + 1e-9),
                     t_ed=t_ed, trd_c=_trdc, v_ed=v_ed_ms, vrd_c=vrd_c_ms,
+                    torsion_ratio=torsion_ratio, shear_ratio=shear_ratio,
+                    governs=("torsion" if torsion_ratio >= shear_ratio else "shear"),
                     solid=bool(not inp["holes"]),
                     model_2023=bool(sh_ms.get("model_2023")))
             # Combined shear+torsion concrete crushing (6.29) at the member angle,
@@ -6506,19 +6566,24 @@ def _run_uniaxial_capacity_checks(inp, out):
                     if cot_star is not None
                     else min(max(1.0, pl_lo), pl_hi)
                 )
-                trdmax_c = torsion.trd_max(
+                trdmax_result = torsion.trd_max_result(
                     tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
                     p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
                     closed_detailing=tors_ctx["nu_detail"],
                     fcd_mpa=tors_ctx["fcd"])
                 vlk = link_ctx["build"](cot_c, cot_c)
-                inter = combined.crushing_interaction(
-                    t_ed_p, trdmax_c, v_ed_s, vlk["vrd_max"])
+                inter = combined.crushing_interaction_result(
+                    t_ed_p, trdmax_result.trd_max, v_ed_s, vlk["vrd_max"])
                 out["torsion"]["interaction"] = dict(
                     valid=True, cot=cot_c,
-                    theta_deg=math.degrees(math.atan(1.0 / cot_c)),
-                    trd_max=trdmax_c, vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
-                    v_ed=v_ed_s, value=inter)
+                    theta_deg=math.degrees(math.atan2(1.0, cot_c)),
+                    trd_max=trdmax_result.trd_max,
+                    vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
+                    v_ed=v_ed_s, value=inter.utilisation,
+                    torsion_ratio=inter.torsion_ratio,
+                    shear_ratio=inter.shear_ratio,
+                    ok=inter.ok,
+                    torsion_strut=dataclasses.asdict(trdmax_result))
 
     capacity.finalize_combined(inp, out)
 

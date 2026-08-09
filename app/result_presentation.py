@@ -263,14 +263,10 @@ def required_chord_candidates(payload):
 
 
 def required_chord_fallback(payload):
-    """Return the first required face using a pure-axis fallback, if any."""
-    return next(
-        (
-            item for item in required_chord_candidates(payload)
-            if not item.get("conditional", True)
-        ),
-        None,
-    )
+    """Return the retained required face using a pure-axis fallback, if any."""
+    payload = payload or {}
+    fallback = payload.get("longitudinal_fallback")
+    return fallback if isinstance(fallback, dict) else None
 
 
 def combined_physical_components(combined):
@@ -345,31 +341,14 @@ def combined_physical_components(combined):
     longitudinal = combined.get("longitudinal")
     chord_off = combined.get("chord_off")
 
-    def candidate_util(item):
-        value = item.get("util")
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            return -math.inf
-        return -math.inf if math.isnan(value) else value
-
-    candidates = required_chord_candidates(combined)
-    governing = (
-        max(candidates, key=candidate_util)
-        if candidates else None
-    )
-    required_candidates = candidates
+    governing = combined.get("governing_longitudinal")
+    if not isinstance(governing, dict) or not governing.get("valid"):
+        governing = None
     coverage = (
         longitudinal.get("off_not_evaluated")
         if longitudinal is not None else None
     )
-    conditional = bool(
-        governing is not None
-        and all(
-            item.get("conditional", True)
-            for item in required_candidates
-        )
-    )
+    conditional = bool(combined.get("longitudinal_all_conditional"))
     main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
     long_valid = governing is not None and main_valid
     long_util = governing.get("util") if governing is not None else None
@@ -388,13 +367,7 @@ def combined_physical_components(combined):
         )
     elif not conditional:
         long_status = "NOT ASSESSED"
-        fallback = next(
-            (
-                item for item in required_candidates
-                if not item.get("conditional", True)
-            ),
-            {},
-        )
+        fallback = required_chord_fallback(combined) or {}
         face = "negative" if fallback.get("tension_low", True) else "positive"
         long_note = (
             f"Required {fallback.get('axis', '?')}-axis {face} face uses "

@@ -388,6 +388,62 @@ def test_optimum_cot_theta_never_below_one_even_with_wide_lower_bound():
     assert shear.optimum_cot_theta(a=1.0, b=5.0, cot_min=0.5, cot_max=2.5) == pytest.approx(2.0)
 
 
+def test_retained_strut_angle_is_compact_frozen_and_reconstructs_selection():
+    result = shear.optimum_strut_angle(3.0, 21.0, 1.0, 2.5)
+    assert result.cot == pytest.approx(
+        shear.optimum_cot_theta(3.0, 21.0, 1.0, 2.5)
+    )
+    assert result.tan == pytest.approx(1.0 / result.cot)
+    assert result.sin_cos == pytest.approx(result.cot / (1.0 + result.cot**2))
+    assert result.cot_unconstrained == pytest.approx(math.sqrt(6.0))
+    assert result.selection == "stirrup/crushing crossover"
+    assert not hasattr(result, "__dict__")
+    with pytest.raises(AttributeError):
+        result.cot = 2.0
+
+
+def test_shear_results_retain_caps_and_final_angle_operands():
+    concrete = shear.vrd_c(
+        35.0,
+        codes.EC2_2005_DKNA,
+        bw_mm=300.0,
+        d_mm=550.0,
+        asl_mm2=20_000.0,
+        n_ed_comp_kn=10_000.0,
+        ac_m2=0.18,
+    )
+    assert concrete["rho_l"] == pytest.approx(min(concrete["rho_l_raw"], 0.02))
+    assert concrete["sigma_cp"] == pytest.approx(
+        min(concrete["sigma_cp_raw"], concrete["sigma_cp_cap"])
+    )
+    assert concrete["stress"] == pytest.approx(
+        max(concrete["v_basic"], concrete["v_floor"], 0.0)
+    )
+
+    links = shear.vrd_links(
+        35.0,
+        codes.EC2_2005_DKNA,
+        300.0,
+        550.0,
+        asw_over_s=3.0,
+        fywk=500.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.18,
+        cot_min=1.0,
+        cot_max=2.5,
+    )
+    assert links["tan"] == pytest.approx(1.0 / links["cot"])
+    assert links["sin_cos"] == pytest.approx(
+        links["cot"] / (1.0 + links["cot"] ** 2)
+    )
+    assert links["angle_a"] == pytest.approx(
+        links["asw_over_s"] * links["fywd"]
+    )
+    assert links["angle_b"] == pytest.approx(
+        links["alpha_cw"] * links["bw"] * links["nu1"] * links["fcd"]
+    )
+
+
 def test_vrd_links_widened_lower_bound_does_not_reduce_vrd():
     # Heavy links whose crossover is well below 1: the optimiser picks cot = 1 (not
     # the widened 0.5 floor), and forcing cot = 0.5 gives a strictly smaller VRd.

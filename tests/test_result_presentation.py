@@ -261,6 +261,10 @@ def test_combined_summary_cannot_hide_subordinate_failure():
             "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
         },
         "chord_off": {"valid": True, "util": 0.55, "axis": "y"},
+        "governing_longitudinal": {
+            "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
+        },
+        "longitudinal_all_conditional": True,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -291,6 +295,15 @@ def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
             "valid": True, "util": 0.60, "axis": "x",
             "biaxial": True, "conditional": False,
         },
+        "governing_longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "biaxial": True, "conditional": False,
+        },
+        "longitudinal_fallback": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "biaxial": True, "conditional": False,
+        },
+        "longitudinal_all_conditional": False,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -344,6 +357,14 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
             "biaxial": False,
             "off_not_evaluated": "not_solved",
         },
+        "governing_longitudinal": {
+            "valid": True,
+            "util": 0.65,
+            "axis": "x",
+            "biaxial": False,
+            "off_not_evaluated": "not_solved",
+        },
+        "longitudinal_all_conditional": True,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -358,20 +379,24 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
 
 
 def test_combined_physical_components_uses_the_governing_longitudinal_face():
+    shear_axis = {
+        "valid": True, "util": 0.60, "axis": "x",
+        "tension_low": True, "biaxial": False, "conditional": True,
+    }
+    governing = {
+        "valid": True, "util": 0.85, "axis": "y",
+        "tension_low": False, "biaxial": True, "conditional": True,
+    }
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
             "u_crush": 0.40, "u_stirrup": 0.55,
             "shear_fraction": 0.20, "torsion_fraction": 0.35,
         },
-        "longitudinal": {
-            "valid": True, "util": 0.60, "axis": "x",
-            "tension_low": True, "biaxial": False,
-        },
-        "chord_off": {
-            "valid": True, "util": 0.85, "axis": "y",
-            "tension_low": False, "biaxial": True, "conditional": True,
-        },
+        "longitudinal": shear_axis,
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
 
     assert [item["label"] for item in components] == [
@@ -386,20 +411,25 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
 
 
 def test_combined_components_withhold_verdict_for_non_governing_fallback():
+    fallback = {
+        "valid": True, "util": 0.60, "axis": "x",
+        "tension_low": True, "biaxial": False, "conditional": False,
+    }
+    governing = {
+        "valid": True, "util": 0.85, "axis": "y",
+        "tension_low": False, "biaxial": True, "conditional": True,
+    }
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
             "u_crush": 0.40, "u_stirrup": 0.55,
             "shear_fraction": 0.20, "torsion_fraction": 0.35,
         },
-        "longitudinal": {
-            "valid": True, "util": 0.60, "axis": "x",
-            "tension_low": True, "biaxial": False, "conditional": False,
-        },
-        "chord_off": {
-            "valid": True, "util": 0.85, "axis": "y",
-            "tension_low": False, "biaxial": True, "conditional": True,
-        },
+        "longitudinal": fallback,
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_fallback": fallback,
+        "longitudinal_all_conditional": False,
     })
 
     longitudinal = components[2]
@@ -426,6 +456,9 @@ def test_combined_components_preserve_non_governing_face_fallback():
         },
         "longitudinal": exact_governing,
         "longitudinal_candidates": [fallback_face, exact_governing],
+        "governing_longitudinal": exact_governing,
+        "longitudinal_fallback": fallback_face,
+        "longitudinal_all_conditional": False,
     })
 
     longitudinal = components[2]
@@ -435,35 +468,69 @@ def test_combined_components_preserve_non_governing_face_fallback():
 
 
 def test_combined_physical_components_tolerates_missing_candidate_utilisation():
+    governing = {"valid": True, "util": 0.75, "axis": "y"}
     components = presentation.combined_physical_components({
         "transverse": None,
         "longitudinal": {"valid": True, "util": None, "axis": "x"},
-        "chord_off": {"valid": True, "util": 0.75, "axis": "y"},
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
     assert components[2]["util"] == pytest.approx(0.75)
 
 
 def test_combined_physical_components_withholds_off_axis_only_verdict():
+    governing = {"valid": True, "util": 0.75, "axis": "y"}
     components = presentation.combined_physical_components({
         "transverse": None,
         "longitudinal": None,
-        "chord_off": {"valid": True, "util": 0.75, "axis": "y"},
+        "chord_off": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
     assert components[2]["status"] == "NOT ASSESSED"
     assert "shear-axis" in components[2]["note"]
 
 
 def test_combined_physical_components_tolerates_missing_strut_angle():
+    governing = {"valid": True, "util": 0.60, "axis": "x"}
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": None,
             "u_crush": 0.40, "u_stirrup": 0.55,
             "shear_fraction": 0.20, "torsion_fraction": 0.35,
         },
-        "longitudinal": {"valid": True, "util": 0.60, "axis": "x"},
+        "longitudinal": governing,
+        "governing_longitudinal": governing,
+        "longitudinal_all_conditional": True,
     })
     assert components[0]["status"] == "PASS"
     assert components[0]["note"] == "V-T crushing at the shared member angle"
+
+
+def test_combined_components_fail_closed_without_retained_governing_chord():
+    components = presentation.combined_physical_components({
+        "longitudinal": {
+            "valid": True, "util": 0.60, "axis": "x",
+            "tension_low": True, "conditional": True,
+        },
+        "chord_off": {
+            "valid": True, "util": 0.85, "axis": "y",
+            "tension_low": False, "conditional": True,
+        },
+        "longitudinal_all_conditional": True,
+    })
+
+    assert components[2]["status"] == "NOT ASSESSED"
+    assert components[2]["util"] is None
+
+
+def test_combined_component_formatter_does_not_reselect_governing_chords():
+    source = inspect.getsource(presentation.combined_physical_components)
+
+    assert "governing_longitudinal" in source
+    assert "max(" not in source
+    assert "candidate_util" not in source
 
 
 def test_shear_screening_does_not_fail_when_selected_links_pass():

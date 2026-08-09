@@ -36,6 +36,54 @@ def test_dkna_sum_summed_vs_independent():
     assert combined.dkna_sum(0.3, 0.4, 0.2, m_v_independent=True) == pytest.approx(0.6)
 
 
+def test_retained_combined_results_are_compact_and_reconstruct_scalars():
+    crushing = combined.crushing_interaction_result(
+        40.0, 80.0, 150.0, 600.0
+    )
+    assert crushing.torsion_ratio == pytest.approx(0.5)
+    assert crushing.shear_ratio == pytest.approx(0.25)
+    assert crushing.utilisation == pytest.approx(
+        combined.crushing_interaction(40.0, 80.0, 150.0, 600.0)
+    )
+    dk = combined.dkna_interaction_result(
+        0.3, 0.4, 0.2, m_v_independent=True
+    )
+    assert dk.m_plus_t == pytest.approx(0.5)
+    assert dk.v_plus_t == pytest.approx(0.6)
+    assert dk.governing_chord == "V+T"
+    assert dk.utilisation == pytest.approx(
+        combined.dkna_sum(0.3, 0.4, 0.2, m_v_independent=True)
+    )
+    assert not hasattr(dk, "__dict__")
+    with pytest.raises(AttributeError):
+        dk.utilisation = 0.0
+
+
+def test_retained_governing_strut_has_only_final_scan_certificate():
+    functions = [lambda cot: 1.0 / cot, lambda cot: cot / 2.0]
+    result = combined.governing_strut_result(functions, 1.0, 2.5, n=151)
+    legacy_cot, legacy_util = combined.governing_strut_cot(
+        functions, 1.0, 2.5, n=151
+    )
+    assert result.cot == pytest.approx(legacy_cot)
+    assert result.utilisation == pytest.approx(legacy_util)
+    assert result.samples == 151
+    assert result.step == pytest.approx((2.5 - 1.0) / 150.0)
+    assert result.selected_index == pytest.approx(
+        (result.cot - 1.0) / result.step
+    )
+    assert result.objective_count == 2
+    assert not hasattr(result, "candidates")
+    assert not hasattr(result, "iterations")
+    assert not hasattr(result, "history")
+
+
+def test_empty_governing_strut_certificate_handles_zero_lower_bound():
+    result = combined.governing_strut_result([], 0.0, 2.5, n=2)
+    assert result.cot == 0.0
+    assert result.theta_deg == pytest.approx(90.0)
+
+
 def test_longitudinal_check_uncapped():
     # No cap needed (bending + shear stays well below MRd): a straight sum.
     #   mv = min(50*0.5, 400-100) = 25; mt = 30*0.5/2 = 7.5; total = 132.5
@@ -422,7 +470,17 @@ def test_app_combined_assembles_all_three():
     c = at.session_state["results"]["combined"]
     assert c["valid"]
     assert c["dkna_sum"] == pytest.approx(c["r_m"] + c["r_v"] + c["r_t"])
+    assert c["dkna_selection"]["utilisation"] == pytest.approx(c["dkna_sum"])
+    assert c["dkna_selection"]["all_sum"] == pytest.approx(
+        c["r_m"] + c["r_v"] + c["r_t"]
+    )
+    assert c["dkna_selection"]["governing_chord"] == "M+V+T"
+    assert c["member_angle_selection"]["selected_index"] >= 0
+    assert c["member_angle_selection"]["samples"] == 1501
     assert c["crushing"] is not None            # shear links present -> crushing check
+    assert c["crushing"]["value"] == pytest.approx(
+        c["crushing"]["torsion_ratio"] + c["crushing"]["shear_ratio"]
+    )
     assert c["asl_torsion"] > 0.0
 
 
@@ -514,6 +572,19 @@ def test_app_combined_view_renders():
     assert {item["role"] for item in links["chord_candidates"]} == {
         "shear_axis", "off_axis",
     }
+    assert links["governing_longitudinal"]["util"] == pytest.approx(
+        max(item["util"] for item in links["chord_candidates"])
+    )
+    assert links["longitudinal_all_conditional"] is (
+        links["longitudinal_fallback"] is None
+    )
+    combined = at.session_state["results"]["combined"]
+    assert combined["governing_longitudinal"] == links["governing_longitudinal"]
+    assert combined["longitudinal_fallback"] == links["longitudinal_fallback"]
+    assert (
+        combined["longitudinal_all_conditional"]
+        is links["longitudinal_all_conditional"]
+    )
     _select_view(at, "M-V-T Combined")
     assert not at.exception
     labels = [m.label for m in at.metric]
