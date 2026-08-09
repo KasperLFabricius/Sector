@@ -36,6 +36,13 @@ _WIDGET_ALIASES = {
     "shear_bw": "shear_vy_bw",
     "shear_link_legs": "shear_vy_link_legs",
 }
+_INPUT_STAGE_LABELS = (
+    f"1 {chr(0x00B7)} Analysis settings",
+    f"2 {chr(0x00B7)} Section",
+    f"3 {chr(0x00B7)} Material parameters",
+    f"4 {chr(0x00B7)} Loads",
+    "Project & report",
+)
 
 
 def _tree_contains_key(node, keys):
@@ -46,13 +53,24 @@ def _tree_contains_key(node, keys):
     return any(_tree_contains_key(child, keys) for child in values)
 
 
-def _tree_parent_of_key(node, key):
+def _direct_tab_labels(node):
     children = getattr(node, "children", {})
-    values = children.values() if isinstance(children, dict) else children
-    if any(getattr(child, "key", None) == key for child in values):
-        return node
+    values = list(children.values() if isinstance(children, dict) else children)
+    return [
+        getattr(child, "label", None)
+        for child in values
+        if getattr(child, "type", None) == "tab"
+    ]
+
+
+def _tree_parent_of_tab_group(node, labels):
+    children = getattr(node, "children", {})
+    values = list(children.values() if isinstance(children, dict) else children)
     for child in values:
-        parent = _tree_parent_of_key(child, key)
+        if _direct_tab_labels(child) == list(labels):
+            return node
+    for child in values:
+        parent = _tree_parent_of_tab_group(child, labels)
         if parent is not None:
             return parent
     return None
@@ -66,13 +84,13 @@ def discard_retired_qs_fragment(at):
         for child in at._tree.children.values()
         if getattr(child, "type", None) == "main"
     )
-    input_host = _tree_parent_of_key(main, "_input_tab")
+    input_host = _tree_parent_of_tab_group(main, _INPUT_STAGE_LABELS)
     if input_host is None:
         return at
     retired_markers = {"qs_apply", "qs_back", "shape"}
     for index, child in list(input_host.children.items()):
         if (
-            getattr(child, "key", None) != "_input_tab"
+            _direct_tab_labels(child) != list(_INPUT_STAGE_LABELS)
             and _tree_contains_key(child, retired_markers)
         ):
             del input_host.children[index]
@@ -174,13 +192,9 @@ def _goto_inputs(at):
 
 def goto_input_stage(at, short_name):
     _goto_inputs(at)
-    dot = chr(0x00B7)
     labels = {
-        "Analysis settings": f"1 {dot} Analysis settings",
-        "Section": f"2 {dot} Section",
-        "Material parameters": f"3 {dot} Material parameters",
-        "Loads": f"4 {dot} Loads",
-        "Project & report": "Project & report",
+        label.split(" ", 2)[-1] if label[0].isdigit() else label: label
+        for label in _INPUT_STAGE_LABELS
     }
     target = labels[short_name]
     try:
@@ -188,7 +202,8 @@ def goto_input_stage(at, short_name):
     except KeyError:
         current = None
     if current != target:
-        at.selectbox(key="_input_tab").set_value(target).run()
+        at.session_state["_input_tab"] = target
+        at.run()
 
 
 def _goto_material(at, family):

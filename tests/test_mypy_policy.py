@@ -28,7 +28,11 @@ from tools.verify_mypy_policy import (
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "quality-mypy-policy.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
-V093_TYPED_FILES = (*INITIAL_FILES, "sector/design_standards.py")
+V093_TYPED_FILES = (
+    *INITIAL_FILES,
+    "sector/design_standards.py",
+    "app/modelled_direction.py",
+)
 
 
 def _policy():

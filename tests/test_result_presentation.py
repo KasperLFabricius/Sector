@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
 
+from app import modelled_direction  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 
 
@@ -973,6 +974,28 @@ def test_detailing_summary_reports_values_status_and_target_view():
     assert spacing_row["result"] == "18.0 mm (R1-R2)"
     assert spacing_row["note"] == "8.2(2)"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_detailing_summary_uses_retained_direction_then_optional_alias():
+    minimum = {
+        "status": "PASS",
+        "modelled_reinforcement_direction": "transverse",
+        "checks": [],
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            minimum_reinforcement_on=True,
+            detailing_cut_direction="Transverse cut",
+            **{modelled_direction.ALIAS_KEY: "cross-span"},
+        ),
+        {"minimum_reinforcement": minimum},
+    )
+
+    assert rows[-1]["check"] == (
+        "Transverse (project alias: cross-span) minimum reinforcement"
+    )
 
 
 def test_transverse_detailing_summary_keeps_ratio_and_spacing_evidence():

@@ -19,6 +19,7 @@ import material_catalog
 import project_io
 import reinforcement_table
 
+from app import modelled_direction
 from sector import capacity, codes, design_standards
 
 
@@ -148,6 +149,41 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert json.loads(first)["version"] == project_io.VERSION
     assert json.loads(second)["version"] == project_io.VERSION
+
+
+def test_direction_alias_round_trips_outside_calculation_inputs():
+    tables, scalars = _current_project()
+    without_alias_hash = project_io.input_sha256(tables, scalars)
+    without_alias_persistence = project_io.persistence_sha256(tables, scalars)
+    scalars[modelled_direction.ALIAS_KEY] = "  span   direction  "
+
+    text = project_io.dump_project(tables, scalars)
+    loaded_tables, loaded_scalars = project_io.parse_project(text)
+    payload = json.loads(text)
+
+    assert payload["presentation"] == {
+        modelled_direction.ALIAS_KEY: "span direction"
+    }
+    assert modelled_direction.ALIAS_KEY not in payload["scalars"]
+    assert loaded_scalars[modelled_direction.ALIAS_KEY] == "span direction"
+    assert project_io.input_sha256(loaded_tables, loaded_scalars) == (
+        without_alias_hash
+    )
+    assert project_io.persistence_sha256(
+        loaded_tables, loaded_scalars
+    ) != without_alias_persistence
+
+
+def test_direction_alias_validation_is_separate_from_input_integrity():
+    tables, scalars = _current_project()
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["presentation"][modelled_direction.ALIAS_KEY] = "span\ndirection"
+
+    assert project_io.project_provenance(
+        json.dumps(payload)
+    )["input_hash_valid"] is True
+    with pytest.raises(ValueError, match="must be a single line"):
+        project_io.parse_project(json.dumps(payload))
 
 
 def test_project_round_trip_preserves_decimal_precision_and_blank_action_zero():

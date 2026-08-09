@@ -6,6 +6,7 @@ import pathlib
 import sys
 
 import pandas as pd
+import pytest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -17,6 +18,7 @@ from input_stage_host import (  # noqa: E402
     live_fragment_value,
     normalise_stage_selection,
     reset_input_stage_mounts,
+    stateful_input_tabs,
 )
 
 
@@ -64,6 +66,31 @@ class _SeedHost:
         return args[1][index]
 
 
+class _NativeTab(_Host):
+    def __init__(self, calls, name, open_state):
+        super().__init__(calls, name)
+        self.open = open_state
+
+
+class _NativeTabsHost:
+    def __init__(self, open_states):
+        self.calls = []
+        self.open_states = tuple(open_states)
+        self.tab_call = None
+
+    def tabs(self, labels, *, key, on_change, width):
+        self.tab_call = {
+            "labels": tuple(labels),
+            "key": key,
+            "on_change": on_change,
+            "width": width,
+        }
+        return tuple(
+            _NativeTab(self.calls, f"tab-{index}", open_state)
+            for index, open_state in enumerate(self.open_states)
+        )
+
+
 def test_only_selected_outer_stage_delegates() -> None:
     host = _Host()
     first, second, third = input_stages(
@@ -76,6 +103,130 @@ def test_only_selected_outer_stage_delegates() -> None:
     assert second.number_input("Visible", key="value") == 99.0
     assert all(not child.open for child in third.columns(2))
     assert host.calls == [("root", "number_input", "Visible")]
+
+
+def test_stateful_native_tabs_delegate_only_the_single_open_stage() -> None:
+    callback = object()
+    state = {"_input_tab": "Second"}
+    host = _NativeTabsHost((False, True, False))
+
+    first, second, third = stateful_input_tabs(
+        host,
+        ("First", "Second", "Third"),
+        key="_input_tab",
+        state=state,
+        on_change=callback,
+        width=720,
+    )
+
+    assert host.tab_call == {
+        "labels": ("First", "Second", "Third"),
+        "key": "_input_tab",
+        "on_change": callback,
+        "width": 720,
+    }
+    assert [first.open, second.open, third.open] == [False, True, False]
+    first.markdown("hidden first")
+    second.markdown("visible")
+    third.markdown("hidden third")
+    assert host.calls == [("tab-1", "markdown", "visible")]
+
+
+@pytest.mark.parametrize(
+    ("open_states", "selected"),
+    [
+        ((False, False, False), "Second"),
+        ((None, None, None), "Second"),
+        ((True, True, False), "First"),
+        ((False, True), "Second"),
+        ((False, True, False), "First"),
+    ],
+)
+def test_stateful_native_tabs_fail_closed_on_ambiguous_host_state(
+    open_states, selected
+) -> None:
+    state = {"stage": selected}
+    host = _NativeTabsHost(open_states)
+
+    stages = stateful_input_tabs(
+        host,
+        ("First", "Second", "Third"),
+        key="stage",
+        state=state,
+    )
+
+    assert len(stages) == 3
+    assert all(not stage.open for stage in stages)
+    for stage in stages:
+        stage.markdown("hidden")
+    assert host.calls == []
+
+
+def test_stateful_native_tabs_normalise_selection_before_mounting() -> None:
+    state = {
+        "stage": "Removed",
+        "_pending_input_events": {"stage": "Removed"},
+        "_durable_input_scalars": {"stage": "Removed"},
+    }
+    host = _NativeTabsHost((True, False))
+
+    first, second = stateful_input_tabs(
+        host,
+        ("First", "Second"),
+        key="stage",
+        state=state,
+    )
+
+    assert [first.open, second.open] == [True, False]
+    assert host.tab_call["on_change"] == "rerun"
+    assert host.tab_call["width"] == "stretch"
+    assert state["stage"] == "First"
+    assert "stage" not in state["_pending_input_events"]
+    assert state["_durable_input_scalars"]["stage"] == "First"
+
+
+def test_stateful_native_tabs_cannot_escape_a_closed_parent_stage() -> None:
+    state = {"stage": "Second"}
+    host = _NativeTabsHost((False, True))
+    closed_parent = InputStage(host, active=False, state=state)
+
+    stages = stateful_input_tabs(
+        closed_parent,
+        ("First", "Second"),
+        key="stage",
+        state=state,
+    )
+
+    assert all(not stage.open for stage in stages)
+    assert host.tab_call is None
+
+
+def test_stateful_native_tabs_unwrap_an_active_parent_stage() -> None:
+    state = {"stage": "Second"}
+    host = _NativeTabsHost((False, True))
+    active_parent = InputStage(host, active=True, state=state)
+
+    first, second = stateful_input_tabs(
+        active_parent,
+        ("First", "Second"),
+        key="stage",
+        state=state,
+    )
+
+    first.markdown("hidden")
+    second.markdown("visible")
+    assert [first.open, second.open] == [False, True]
+    assert host.calls == [("tab-1", "markdown", "visible")]
+
+
+@pytest.mark.parametrize("labels", [(), ("Repeated", "Repeated")])
+def test_stateful_native_tabs_reject_unaddressable_labels(labels) -> None:
+    host = _NativeTabsHost(())
+
+    with pytest.raises(ValueError):
+        stateful_input_tabs(host, labels, key="stage", state={})
+
+    assert host.tab_call is None
 
 
 def test_nested_stages_cannot_open_when_their_parent_is_closed() -> None:

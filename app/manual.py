@@ -777,11 +777,19 @@ def manual_blocks() -> list:
     fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
         "applied load; the sweep from 0 to 360 degrees closes the curve.")
     h2("Reinforcement detailing")
-    md("Select **Beam** or **Slab**. For a slab, use **Section cut direction** to "
-       "identify whether the model is a "
-       "transverse cut (longitudinal reinforcement) or a longitudinal cut "
-       "(transverse reinforcement). Sector checks only bars normal to that section "
-       "plane; it does not request an unmodelled orthogonal layer.")
+    md("Select **Beam** or **Slab**. **Section cut direction** fixes the canonical, "
+       "member-relative modelled reinforcement direction. Sector checks only the "
+       "bars represented by that cut; it does not request an unmodelled orthogonal "
+       "layer.")
+    table(["Section cut", "Canonical modelled reinforcement direction"],
+          [["Transverse cut", "Longitudinal"],
+           ["Longitudinal cut", "Transverse"]])
+    md("In words, a transverse cut models the Longitudinal reinforcement, while "
+       "a longitudinal cut models the Transverse reinforcement.")
+    md("The optional **Project direction alias** records local terminology, for "
+       "example *span direction*. Sector publishes it in parentheses after the "
+       "canonical direction; an alias never replaces the canonical Longitudinal "
+       "or Transverse meaning and does not change a calculation.")
     md("Enable **Check minimum reinforcement in modelled direction** and select the check on each "
        "required Plastic/capacity row. The selected detailing edition and the "
        "global $f_{ctm}$ apply to those rows. A secondary-direction slab minimum is "

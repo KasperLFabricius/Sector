@@ -160,7 +160,8 @@ def _goto_input_tab(at, name):
     except KeyError:
         current = None
     if current != label:
-        at.selectbox(key="_input_tab").set_value(label).run()
+        at.session_state["_input_tab"] = label
+        at.run()
     return at
 
 
@@ -2915,6 +2916,29 @@ def test_autosave_writes_a_roundtrippable_project(tmp_path, monkeypatch):
     assert at.session_state["_autosave_last"]      # the panel records the time
 
 
+def test_alias_only_change_refreshes_the_autosave(tmp_path, monkeypatch):
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+    saved = tmp_path / "autosave.json"
+    before = saved.read_text(encoding="utf-8")
+
+    at.text_input(key="modelled_direction_alias").set_value(
+        "span direction"
+    ).run()
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+
+    after = saved.read_text(encoding="utf-8")
+    assert after != before
+    import project_io
+    _, scalars = project_io.parse_project(after)
+    assert scalars["modelled_direction_alias"] == "span direction"
+    assert not at.exception
+
+
 def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
     # A genuine Analysis-fragment interaction must service a due autosave even
     # though input widgets and the top-level dispatcher are not rerun (second
@@ -3128,6 +3152,71 @@ def test_report_download_becomes_stale_after_analysis_input_change():
     _set(at, ("number_input", "pl_Mx", 123.0))
     _goto_input_tab(at, "Project & report")
     assert any("Report out of date" in w.value for w in at.warning)
+
+
+def test_direction_alias_is_visible_before_checks_and_follows_the_cut():
+    from sector import detailing
+
+    at = _fresh()
+    at.run()
+    assert at.text_input(key="modelled_direction_alias").value == ""
+    assert any(
+        item.value == "Modelled reinforcement direction: Longitudinal"
+        for item in at.info
+    )
+
+    at.text_input(key="modelled_direction_alias").set_value(
+        "span direction"
+    ).run()
+    at.selectbox(key="detailing_member_type").set_value("Slab").run()
+    at.selectbox(key="detailing_cut_direction").set_value(
+        detailing.CUT_LONGITUDINAL
+    ).run()
+    expected = (
+        "Modelled reinforcement direction: Transverse "
+        "(project alias: span direction)"
+    )
+    assert any(item.value == expected for item in at.info)
+
+    _goto_input_tab(at, "Loads")
+    assert any(item.value == expected for item in at.info)
+    assert not at.exception
+
+
+def test_direction_alias_changes_only_the_report_document_signature():
+    import sector_app
+
+    input_signature = ("unchanged-calculation",)
+    without_alias = sector_app._report_signature(
+        input_signature,
+        meta={"modelled_direction_alias": ""},
+        report_content="Default report",
+    )
+    with_alias = sector_app._report_signature(
+        input_signature,
+        meta={"modelled_direction_alias": "span direction"},
+        report_content="Default report",
+    )
+
+    assert without_alias[0] == with_alias[0] == repr(input_signature)
+    assert without_alias[1] != with_alias[1]
+
+
+def test_calculation_fallback_hash_excludes_direction_alias(monkeypatch):
+    import sector_app
+
+    def invalid_project_boundary():
+        raise ValueError("invalid canonical project")
+
+    monkeypatch.setattr(
+        sector_app, "_project_input_hash", invalid_project_boundary
+    )
+    base = {"mode": "Plastic", "modelled_direction_alias": "span"}
+    renamed = {**base, "modelled_direction_alias": "deck north"}
+
+    assert sector_app._calculation_input_hash(base) == (
+        sector_app._calculation_input_hash(renamed)
+    )
 
 
 def test_capacity_only_toggle_drops_utilisation_without_locking_case_table():
@@ -4193,10 +4282,7 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
         f"4 {d} Loads",
         "Project & report",
     ]
-    stage_selector = at.selectbox(key="_input_tab")
-    assert stage_selector.options == expected_outer
-    assert stage_selector.value == expected_outer[0]
-    assert not at.tabs
+    assert [tab.label for tab in at.tabs] == expected_outer
     assert at.session_state["_input_tab"] == expected_outer[0]
     labels = [ex.label for ex in at.expander]
     assert labels == [
@@ -4309,7 +4395,14 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
     family = at.selectbox(key="_material_tab")
     assert family.options == ["Concrete", "Mild steel", "Prestressing steel"]
     assert family.value == "Concrete"
-    assert not at.tabs
+    dot = chr(0x00B7)
+    assert [tab.label for tab in at.tabs] == [
+        f"1 {dot} Analysis settings",
+        f"2 {dot} Section",
+        f"3 {dot} Material parameters",
+        f"4 {dot} Loads",
+        "Project & report",
+    ]
     number_keys = {widget.key for widget in at.number_input}
     assert "conc_fck" in number_keys
     assert "mild_fytk" not in number_keys

@@ -43,6 +43,7 @@ import case_analysis
 import fatigue_inputs
 import fatigue_presentation
 import material_catalog
+from app import modelled_direction
 from app import table_field_definitions as table_fields
 from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
@@ -177,6 +178,20 @@ def _html_escape(value, quote=True):
         ),
         escaped,
     ))
+
+
+def _modelled_direction_report_label(
+    result=None, *, cut_direction=None, alias=None
+):
+    """Return canonical direction plus literal-safe project terminology."""
+
+    canonical = modelled_direction.canonical_direction(
+        result, cut_direction=cut_direction
+    ).capitalize()
+    project_alias = modelled_direction.normalise_alias(alias)
+    if not project_alias:
+        return canonical
+    return f"{canonical} (project alias: {_html_escape(project_alias)})"
 
 
 def _greek(s):
@@ -996,7 +1011,8 @@ class ReportBuilder:
         ]]
         data.extend([
             [
-                row["check"], _html_escape(row["case"]), row["status"],
+                _html_escape(row["check"]), _html_escape(row["case"]),
+                row["status"],
                 row["result"], row["criterion"], "YES" if is_governing else "-",
             ]
             for row, is_governing in zip(rows, governing)
@@ -1828,6 +1844,14 @@ class ReportBuilder:
                         if self.qa_appendix else "Default report"
                     ),
                 ]]
+        direction_alias = modelled_direction.normalise_alias(
+            self.inp.get(modelled_direction.ALIAS_KEY)
+        )
+        if direction_alias:
+            rows.append([
+                "Project direction alias",
+                _html_escape(direction_alias),
+            ])
         if self._case_contexts("plastic"):
             rows.append([
                 "Plastic analysis cases",
@@ -2742,6 +2766,10 @@ class ReportBuilder:
             rows.append(["Utilisation check",
                          "applied moment checked" if checked else "capacity only"])
         if inp.get("minimum_reinforcement_on"):
+            direction_label = _modelled_direction_report_label(
+                cut_direction=inp.get("detailing_cut_direction"),
+                alias=inp.get(modelled_direction.ALIAS_KEY),
+            )
             rows.extend([
                 ["Minimum reinforcement", "selected per capacity case"],
                 ["Detailing edition", str(inp.get("detailing_edition") or "-")],
@@ -2750,6 +2778,7 @@ class ReportBuilder:
                     "Section cut direction",
                     str(inp.get("detailing_cut_direction") or "Transverse cut"),
                 ],
+                ["Modelled reinforcement direction", direction_label],
             ])
             if not self._result_values("elastic"):
                 rows.append([
@@ -3206,9 +3235,14 @@ class ReportBuilder:
             )
         if minimum_results:
             edition = str(self.inp.get("detailing_edition") or "")
+            direction_label = _modelled_direction_report_label(
+                minimum_results[0],
+                cut_direction=self.inp.get("detailing_cut_direction"),
+                alias=self.inp.get(modelled_direction.ALIAS_KEY),
+            )
             if edition == detailing.EC2_2023:
                 self._p(
-                    "<b>Minimum reinforcement in the modelled direction.</b> The nominal section "
+                    f"<b>Minimum reinforcement - {direction_label}.</b> The nominal section "
                     "resistance at characteristic reinforcement yield is compared "
                     "with the cracking action for each selected case. Pure tension "
                     "uses direct force equilibrium."
@@ -3219,7 +3253,7 @@ class ReportBuilder:
                 )
             else:
                 self._p(
-                    "<b>Minimum reinforcement in the modelled direction.</b> The resultant "
+                    f"<b>Minimum reinforcement - {direction_label}.</b> The resultant "
                     "gross-concrete tension zone is checked using "
                     "A<sub>s,min</sub> = max(0.26 "
                     "f<sub>ctm</sub>/f<sub>yk</sub>, 0.0013) b<sub>t</sub>d."
@@ -3276,10 +3310,14 @@ class ReportBuilder:
         publish_worked = (
             self._selected_family("minimum_reinforcement", self.inp) is not None
         )
-        direction = str(
-            result.get("modelled_reinforcement_direction") or "longitudinal"
-        ).capitalize()
-        self._case_heading(f"{direction} minimum reinforcement", "plastic")
+        direction_label = _modelled_direction_report_label(
+            result,
+            cut_direction=self.inp.get("detailing_cut_direction"),
+            alias=self.inp.get(modelled_direction.ALIAS_KEY),
+        )
+        self._case_heading(
+            f"{direction_label} minimum reinforcement", "plastic"
+        )
         status = str(result.get("status") or "NOT ASSESSED").upper()
         checks = result.get("checks") or []
         utilisations = [
@@ -3294,6 +3332,7 @@ class ReportBuilder:
         )
         self._status_block(f"{status} - {summary}", status)
         self._small(
+            f"<b>Modelled direction:</b> {direction_label}; "
             f"<b>Method:</b> {_html_escape(result.get('member_type', '-'))}; "
             f"{_html_escape(result.get('cut_direction', '-'))} | "
             f"{_html_escape(result.get('edition', '-'))} | "

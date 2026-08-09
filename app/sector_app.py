@@ -34,6 +34,7 @@ from input_stage_host import (  # noqa: E402
     live_fragment_value,
     normalise_stage_selection,
     reset_input_stage_mounts,
+    stateful_input_tabs,
 )
 from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
@@ -57,6 +58,7 @@ rebar_table = deferred_module("reinforcement_table")
 presentation = deferred_module("result_presentation")
 session_state_migrations = deferred_module("session_state_migrations")
 table_fields = deferred_module("app.table_field_definitions")
+modelled_direction = deferred_module("app.modelled_direction")
 viz = deferred_module("viz")
 
 capacity = deferred_module("sector.capacity")
@@ -1954,6 +1956,11 @@ def _load_case_editors(box):
         if key not in st.session_state:
             st.session_state[key] = defaults[key]
 
+    direction_label = modelled_direction.resolved_markdown_label(
+        cut_direction=st.session_state.get("detailing_cut_direction"),
+        alias=st.session_state.get(modelled_direction.ALIAS_KEY),
+    )
+    box.info(f"Modelled reinforcement direction: {direction_label}")
     box.markdown("**Plastic and capacity cases**")
     box.caption(
         "One row per named case. Section forces retain their signs. Zero Vx,Ed, "
@@ -2164,11 +2171,15 @@ def _fatigue_spectrum_signature(value):
 # Autosave preferences and tracked input-tab choices are session settings rather
 # than project inputs, but they need the same treatment while their controls are
 # off-screen.
-_DURABLE_INPUT_SCALARS = tuple(project_io.SCALAR_KEYS) + (
-    "autosave_on", "autosave_min", "_input_tab", "_material_tab",
-    "_material_catalog_revision", "_mild_catalog_selected",
-    "_prestress_catalog_selected", "_fatigue_catalog_revision",
-    "_fatigue_catalog_selected", "_fatigue_basis_revision",
+_DURABLE_INPUT_SCALARS = (
+    tuple(project_io.SCALAR_KEYS)
+    + tuple(project_io.PRESENTATION_SCALAR_KEYS)
+    + (
+        "autosave_on", "autosave_min", "_input_tab", "_material_tab",
+        "_material_catalog_revision", "_mild_catalog_selected",
+        "_prestress_catalog_selected", "_fatigue_catalog_revision",
+        "_fatigue_catalog_selected", "_fatigue_basis_revision",
+    )
 )
 _INPUT_STATE_KEY = "_durable_input_scalars"
 _INPUT_BUILD_KEY = "_inputs_build_in_progress"
@@ -2356,9 +2367,13 @@ def _project_state():
     tables = {base: _current_table(base, ed, cols)
               for base, ed, cols in _PROJECT_TABLES if base in st.session_state}
     durable = st.session_state.get(_INPUT_STATE_KEY, {})
+    project_scalar_keys = (
+        tuple(project_io.SCALAR_KEYS)
+        + tuple(project_io.PRESENTATION_SCALAR_KEYS)
+    )
     scalars = {
         key: live_fragment_value(st.session_state, durable, key)
-        for key in project_io.SCALAR_KEYS
+        for key in project_scalar_keys
         if key in st.session_state or key in durable
     }
     for key in load_cases.CASE_TABLE_KEYS:
@@ -2378,6 +2393,11 @@ def _project_input_hash() -> str:
     return project_io.input_sha256(tables, scalars)
 
 
+def _project_persistence_hash() -> str:
+    tables, scalars = _project_state()
+    return project_io.persistence_sha256(tables, scalars)
+
+
 def _calculation_input_hash(inp) -> str:
     """Use the persisted-input identity, or a typed fallback if unsavable."""
 
@@ -2387,7 +2407,12 @@ def _calculation_input_hash(inp) -> str:
         # A failed canonical project boundary must not suppress calculation
         # provenance. The typed payload fingerprint remains deterministic and
         # keeps the record explicitly tied to the actual attempted inputs.
-        return project_io.result_sha256(inp)
+        calculation_payload = {
+            key: value
+            for key, value in inp.items()
+            if key not in project_io.PRESENTATION_SCALAR_KEYS
+        }
+        return project_io.result_sha256(calculation_payload)
 
 
 def _gather_project() -> str:
@@ -2446,7 +2471,7 @@ def _perform_autosave() -> bool:
     if len(corners) < 3:
         return False   # no usable outline yet
     try:
-        digest = _project_input_hash()
+        digest = _project_persistence_hash()
     except Exception:
         return False
     if digest == st.session_state.get("_autosave_hash"):
@@ -2533,8 +2558,7 @@ def _autosave_startup() -> None:
         if not path.exists():
             return
         text = path.read_text(encoding="utf-8")
-        project_io.parse_project(text)               # validate before restoring
-        provenance = project_io.project_provenance(text)
+        tables, scalars = project_io.parse_project(text)
     except ValueError as exc:
         st.session_state["_project_msg"] = (
             "error",
@@ -2548,7 +2572,9 @@ def _autosave_startup() -> None:
         return
     st.session_state["_pending_project"] = text
     st.session_state["_autosave_restoring"] = True
-    st.session_state["_autosave_hash"] = provenance.get("input_sha256")
+    st.session_state["_autosave_hash"] = project_io.persistence_sha256(
+        tables, scalars
+    )
 
 
 def _autosave_panel(box) -> None:
@@ -2792,6 +2818,9 @@ def _report_meta():
     meta = {k: st.session_state.get(f"rep_{k}", "")
             for k, _ in _REPORT_FIELDS}
     meta["comments"] = st.session_state.get("rep_comments", "")
+    meta[modelled_direction.ALIAS_KEY] = st.session_state.get(
+        modelled_direction.ALIAS_KEY, ""
+    )
     meta["source_revision"] = source_revision()
     return meta
 
@@ -2807,6 +2836,9 @@ def _report_signature(input_signature, meta=None, report_content=None):
     document_values += (
         str(meta.get("comments", "")),
         str(report_content),
+        modelled_direction.normalise_alias(
+            meta.get(modelled_direction.ALIAS_KEY)
+        ),
     )
     return repr(input_signature), document_values
 
@@ -3489,9 +3521,10 @@ def build_inputs(host=st):
     mat_catalog.material_ids(prestress_catalogue, "prestress")
     app_run_probe.stop_phase(st.session_state, normalization_token)
 
-    # A full-width selector replaces the narrow tab strip. Panels carry
-    # the calculation methodology (Elastic / Plastic), not a limit state -- the
-    # same analysis can serve several load combinations.
+    # Stateful native tabs retain the active stage across reruns. Their bodies
+    # remain active-only through InputStage, so hidden stages do not execute.
+    # Panels carry calculation methodology (Elastic / Plastic), not a limit
+    # state -- the same analysis can serve several load combinations.
     _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
     input_tab_labels = [
         f"1 {_dot} Analysis settings",
@@ -3500,21 +3533,13 @@ def build_inputs(host=st):
         f"4 {_dot} Loads",
         "Project & report",
     ]
-    normalise_stage_selection(st.session_state, "_input_tab", input_tab_labels)
-    selected_input_tab = s.selectbox(
-        "Input stage",
+    aset, sec_tab, mat_tab, loads, project = stateful_input_tabs(
+        s,
         input_tab_labels,
         key="_input_tab",
+        state=st.session_state,
         on_change=_snapshot_completed_input_state,
         width="stretch",
-        help="Choose the engineering input stage or project/report tools.",
-    )
-    stage_host = s.container()
-    aset, sec_tab, mat_tab, loads, project = input_stages(
-        stage_host,
-        input_tab_labels,
-        selected_input_tab,
-        state=st.session_state,
     )
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
@@ -3892,6 +3917,23 @@ def build_inputs(host=st):
         detailing_cut_direction = detailing.CUT_TRANSVERSE
         st.session_state["detailing_cut_direction"] = detailing_cut_direction
 
+    modelled_direction_alias = _seeded_text(
+        det,
+        "Project direction alias (optional)",
+        "",
+        modelled_direction.ALIAS_KEY,
+        max_chars=60,
+        help=(
+            "Optional project wording shown after Sector's canonical longitudinal "
+            "or transverse direction. It changes presentation only, not the model."
+        ),
+    )
+    direction_label = modelled_direction.resolved_markdown_label(
+        cut_direction=detailing_cut_direction,
+        alias=modelled_direction_alias,
+    )
+    det.info(f"Modelled reinforcement direction: {direction_label}")
+
     minimum_reinforcement_on = _seeded_checkbox(
         det,
         "Check minimum reinforcement in modelled direction",
@@ -3988,12 +4030,7 @@ def build_inputs(host=st):
         det.caption(
             f"Selected Plastic/capacity cases: {selected_minimum_cases}. "
             "The case must represent the design situation required by the clause. "
-            "Modelled bars: "
-            + (
-                "longitudinal."
-                if detailing_cut_direction == detailing.CUT_TRANSVERSE
-                else "transverse."
-            )
+            f"Modelled bars: {direction_label}."
         )
     if transverse_detailing_on:
         det.caption(
@@ -5095,6 +5132,9 @@ def build_inputs(host=st):
                 detailing_edition=detailing_edition,
                 detailing_member_type=detailing_member_type,
                 detailing_cut_direction=detailing_cut_direction,
+                modelled_direction_alias=modelled_direction.normalise_alias(
+                    modelled_direction_alias
+                ),
                 detailing_d_upper=detailing_d_upper,
                 detailing_include_tendons=detailing_include_tendons,
                 transverse_ductility_class=transverse_ductility_class,
@@ -7631,16 +7671,12 @@ def detailing_view(inp, results, *, global_results=None):
     st.subheader("Detailing")
     min_card, transverse_card, spacing_card = st.columns(3)
     with min_card.container(border=True):
-        modelled_direction = str(
-            (minimum or {}).get("modelled_reinforcement_direction")
-            or (
-                "longitudinal"
-                if inp.get("detailing_cut_direction")
-                != detailing.CUT_LONGITUDINAL
-                else "transverse"
-            )
+        direction_label = modelled_direction.resolved_markdown_label(
+            minimum,
+            cut_direction=inp.get("detailing_cut_direction"),
+            alias=inp.get(modelled_direction.ALIAS_KEY),
         )
-        st.markdown(f"**{modelled_direction.capitalize()} minimum reinforcement**")
+        st.markdown(f"**{direction_label} minimum reinforcement**")
         if not inp.get("minimum_reinforcement_on"):
             st.caption("Not selected for this case.")
         elif minimum is None:

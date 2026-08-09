@@ -267,6 +267,67 @@ def input_stages(host, labels: Sequence[str], selected: str, *, state):
     )
 
 
+def stateful_input_tabs(
+    host,
+    labels: Sequence[str],
+    *,
+    key,
+    state,
+    on_change="rerun",
+    width="stretch",
+):
+    """Return active-only wrappers around Streamlit's stateful native tabs.
+
+    A stateful ``st.tabs`` call is authoritative only when its keyed selection
+    and ``.open`` flags identify the same single tab. Any incomplete or
+    contradictory host response closes every stage so hidden input bodies
+    cannot execute during a navigation transition.
+    """
+
+    labels = tuple(labels)
+    if not labels:
+        raise ValueError("Stateful input tabs require at least one label")
+    if len(set(labels)) != len(labels):
+        raise ValueError("Stateful input tab labels must be unique")
+
+    normalise_stage_selection(state, key, labels)
+    tabs = tuple(
+        host.tabs(
+            labels,
+            key=key,
+            on_change=on_change,
+            width=width,
+        )
+    )
+    open_indices = tuple(
+        index
+        for index, tab in enumerate(tabs)
+        if getattr(tab, "open", None) is True
+    )
+    selected = state.get(key)
+    valid_active = (
+        len(tabs) == len(labels)
+        and len(open_indices) == 1
+        and labels[open_indices[0]] == selected
+    )
+    if not valid_active:
+        return tuple(
+            InputStage(None, active=False, state=state) for _ in labels
+        )
+
+    active_index = open_indices[0]
+    return tuple(
+        InputStage(
+            tab._delegate if isinstance(tab, InputStage) else tab,
+            active=index == active_index,
+            state=state,
+        )
+        if index == active_index
+        else InputStage(None, active=False, state=state)
+        for index, tab in enumerate(tabs)
+    )
+
+
 def normalise_stage_selection(state, key, labels: Sequence[str]):
     """Remove unavailable navigation values from live and retained mirrors."""
 

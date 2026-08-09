@@ -301,6 +301,7 @@ def test_app_deferred_contract_and_fatigue_method_identity_are_pinned():
         "reinforcement_table",
         "result_presentation",
         "session_state_migrations",
+        "app.modelled_direction",
         "app.table_field_definitions",
         "viz",
     }
