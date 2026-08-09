@@ -6,18 +6,18 @@ from textwrap import dedent
 
 import pandas as pd
 
-import bridge_inputs
 import fatigue_inputs
 import load_cases
 import material_catalog
 import project_io
 import reinforcement_table
 from sector import __version__
-from sector import bridge, codes, detailing
+from sector import codes, detailing
+from sector.design_standards import DesignBasisKey
 
 
-PROJECT_NAME = "Sector_v091_complete_reference.json"
-CHECK_NAME = "Sector_v091_complete_reference_check.md"
+PROJECT_NAME = "Sector_v093_complete_reference.json"
+CHECK_NAME = "Sector_v093_complete_reference_check.md"
 DK_PRESET = codes.EC2_2005_DKNA.label
 
 
@@ -135,40 +135,6 @@ def project_tables() -> dict[str, pd.DataFrame]:
                     "my_short_ed_knm": 0.0,
                 },
             ]),
-        bridge_inputs.BRITTLE_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "region_id": "Bottom chord",
-                "m_rep_knm": 1000.0,
-                "z_s_m": 0.8,
-                "f_yk_mpa": 500.0,
-                "as_provided_mm2": 3000.0,
-            }],
-            bridge_inputs.BRITTLE_TABLE_KEY,
-        ),
-        bridge_inputs.BOX_WALL_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "wall_id": "Left wall",
-                "cot_theta": 0.5,
-                "v_ed_kn": 200.0,
-                "v_rd_max_kn": 500.0,
-                "t_ed_equivalent_kn": 50.0,
-                "t_rd_max_equivalent_kn": 250.0,
-            }],
-            bridge_inputs.BOX_WALL_TABLE_KEY,
-        ),
-        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "component": "Web",
-                "act_mm2": 100000.0,
-                "k_c": 0.4,
-                "k": 0.8,
-                "fct_eff_mpa": 3.0,
-                "sigma_s_mpa": 200.0,
-                "as_provided_mm2": 600.0,
-                "restrained_shrinkage": False,
-            }],
-            bridge_inputs.MINIMUM_CRACK_TABLE_KEY,
-        ),
     }
     return tables
 
@@ -233,7 +199,7 @@ def project_scalars() -> dict:
         "sls_code": "DS/EN 1992-1-1 + DK NA",
         "sls_member": "Beam",
         "fatigue_on": True,
-        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_edition": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
@@ -278,7 +244,6 @@ def project_scalars() -> dict:
         "combined_on": True,
         "combined_method": DK_PRESET,
         "combined_mv_independent": False,
-        "bridge_standard": bridge.EN1992_2_DK_NA,
         "rep_proj_no": "SECTOR-F036",
         "rep_proj_name": "Sector complete reproducible example",
         "rep_section": "200 x 300 mm complete reference section",
@@ -400,21 +365,13 @@ def checking_pack() -> str:
         spectrum verdict is FAIL because numerical convergence is required, even
         though every retained element/fibre utilisation is below one.
 
-        ## Independent bridge kernels
-
-        - Brittle Method B: As,req=1000x1000/(0.8x500)=2500 mm2;
-          2500/3000=0.8333333333: PASS.
-        - Box wall: 200/500+50/250=0.6000000000: PASS.
-        - Minimum crack reinforcement: As,min=0.4x0.8x3x100000/200
-          =480 mm2; 480/600=0.8000000000: PASS.
-
         ## Report completeness
 
         A calculated report must contain Section and materials, Basis of analysis,
         Plastic section capacity, Elastic section response, Cracking and crack
         width, Grouped fatigue, Shear resistance, Torsion, M-V-T interaction,
-        minimum reinforcement, link detailing, clear spacing, Independent bridge
-        calculations, explicit equations, numerical substitutions, source notes,
+        minimum reinforcement, link detailing, clear spacing, explicit equations,
+        numerical substitutions, source notes,
         units and genuine demand/resistance verdicts. The saved input SHA-256 above
         identifies the exact project used for these independent comparisons.
 

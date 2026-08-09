@@ -29,8 +29,6 @@ import threading
 import plotly.graph_objects as go
 import streamlit as st
 
-import bridge_analysis
-import bridge_inputs
 from manual_equation_publication import (
     EQUATION_BLOCK,
     dependency_numbers,
@@ -44,7 +42,7 @@ import reproducible_example
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
-from sector import bridge, material_presets, templates
+from sector import material_presets, templates
 from sector.codes import fctm
 from sector.fatigue import steel_fatigue_life
 from sector.materials import Concrete, Prestress
@@ -56,32 +54,6 @@ import viz
 
 # Display scale for the section drawings: the geometry is in metres, drawn in mm.
 _MM = 1000.0
-
-
-def _worked_bridge_method_b() -> dict:
-    """Return one direct live Method B calculation for the manual."""
-
-    inp = {
-        "section": None,
-        "bridge_standard": bridge.EN1992_2_BASE,
-        bridge_inputs.BRITTLE_TABLE_KEY: [{
-            "region_id": "bottom",
-            "m_rep_knm": 1000.0,
-            "z_s_m": 0.8,
-            "f_yk_mpa": 500.0,
-            "as_provided_mm2": 2600.0,
-        }],
-        bridge_inputs.BOX_WALL_TABLE_KEY: None,
-        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: None,
-    }
-    result = bridge_analysis.run(inp)
-    calculation = result.get("calculations", {}).get("brittle_method_b")
-    if not isinstance(calculation, dict):
-        raise RuntimeError("manual bridge Method B example is not applicable")
-    rows = calculation.get("rows")
-    if not isinstance(rows, list) or len(rows) != 1:
-        raise RuntimeError("manual bridge Method B example is not unique")
-    return calculation
 
 
 # ==========================================================================
@@ -594,7 +566,6 @@ def manual_blocks() -> list:
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
            ["Fatigue Results", "All spectra; selected spectrum, element, fibre and bin evidence"],
-           ["Bridge Calculations", "Optional Method B, box-wall and web/flange numerical calculations"],
            ["Detailing", "Selected case: modelled-direction minimum reinforcement and link detailing; section-wide spacing"],
            ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
@@ -607,9 +578,10 @@ def manual_blocks() -> list:
     h1("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
-       "earlier results; press *Calculate* to create current results. Sector 0.92 "
-       "supports only current project schema version 23; older schemas are rejected "
-       "rather than migrated.")
+       "earlier results; press *Calculate* to create current results. The "
+       "in-development Sector v0.93 line supports only current project schema "
+       "version 24. Released Sector 0.92 projects used schema version 23 and are "
+       "rejected rather than migrated.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
@@ -619,8 +591,8 @@ def manual_blocks() -> list:
        "and a separate **independent checking pack**. The project is deliberately "
        "small but enables every main report calculation family: plastic capacity, "
        "cracked elastic and crack width, fatigue, shear, torsion, combined M-V-T, "
-       "longitudinal and transverse detailing, clear spacing, and all three optional "
-       "bridge kernels. Load it, press *Calculate*, and generate the tables-only or "
+       "longitudinal and transverse detailing, and clear spacing. Load it, press "
+       "*Calculate*, and generate the tables-only or "
        "ordinary report. The checking pack reconstructs representative results from "
        "the original inputs without calling a Sector solver and records the exact "
        "project/input SHA-256. It is evidence for reproducibility, not an approval or "
@@ -1070,13 +1042,6 @@ def manual_blocks() -> list:
        "concrete compression strut, shared closed stirrup and governing longitudinal "
        "reinforcement. The detailed blocks retain each contribution and the selected "
        "member strut angle.")
-    h2("Bridge calculations")
-    md("The **Bridge Calculations** view publishes each enabled independent kernel "
-       "with its actual row inputs, equation/method reference, warnings and numerical "
-       "result. Optional brittle Method B, validated box-wall shear/torsion and "
-       "web/flange minimum crack reinforcement are available here. Concrete "
-       "compression fatigue and direct crack width remain in their ordinary Fatigue "
-       "and Elastic views. Generic bridge-code coverage is not calculated.")
     h2("PDF report")
     md("In the Report panel, select **Default report** or **Default report + QA "
        "appendix** before generating the PDF. Both options reproduce the complete "
@@ -1115,32 +1080,6 @@ def manual_blocks() -> list:
          "is converted at the boundary, so you only enter and read tension-positive "
          "values. The concrete strain limits $\\varepsilon_{c2}$ / $\\varepsilon_{cu2}$ "
          "are still entered as positive compression magnitudes (as in EC2).")
-
-    h1("Worked standards calculation")
-    h2("Bridge brittle Method B")
-    md("For one bottom region, take $M_{rep}=1000$ kNm, $z_s=0.8$ m, "
-       "$f_{yk}=500$ MPa and $A_{s,provided}=2600$ mm2. The selected method is "
-       "DS/EN 1992-2:2005 + AC:2008 Method B. The live bridge kernel evaluates "
-       "$A_{s,min}=M_{rep}/(z_s f_{yk})$ and compares the required area directly "
-       "with the entered provided area.")
-    worked_method = _worked_bridge_method_b()
-    worked_row = worked_method["rows"][0]
-    table(
-        ["Calculation field", "Live solver value"],
-        [
-            ["Method", worked_method["method"]],
-            ["Equation", worked_method["equation"]],
-            ["Numerical substitution", "1000 x 1000 / (0.8 x 500)"],
-            ["Required reinforcement", f"{worked_row['as_required_mm2']:.1f} mm2"],
-            ["Provided reinforcement", f"{worked_row['as_provided_mm2']:.1f} mm2"],
-            ["Utilisation", f"{worked_row['utilisation']:.6f}"],
-            ["Verdict", worked_row["status"]],
-            ["Source", worked_method["source"]],
-        ],
-    )
-    md("The hand-check comparison is $2500/2600=0.961538...\\le1.0$, so the "
-       "published result is **PASS**. The table is populated from the same direct "
-       "bridge calculation used by the app and report.")
 
     h1("Material laws")
     h2("Concrete (parabola-rectangle)")
@@ -1755,6 +1694,10 @@ def manual_blocks() -> list:
     md("Sector follows the Eurocode 2 family. Material, crack-width, detailing and "
        "member-check editions are selected explicitly and recorded in the results "
        "and report; Part C states the implemented differences.")
+    call("limit", "DS/EN 1992-1-1:2023 is available as a **published "
+         "project-adoption basis**. The engineer must document project adoption; "
+         "Sector applies no Danish National Annex to this basis. The 2023 "
+         "confinement enhancement is not included or assessed.")
     table(["Topic", "Reference"],
           [["Concrete stress-strain law", "DS/EN 1992-1-1 3.1.7 and Table 3.1"],
            ["Ultimate strains", "DS/EN 1992-1-1 Table 3.1"],

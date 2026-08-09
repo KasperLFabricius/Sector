@@ -39,15 +39,13 @@ from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import bridge, codes  # noqa: E402
+from sector import codes, design_standards  # noqa: E402
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 
 # The app has many independent calculation and publication surfaces. Keep their
 # modules inert until the active input stage or requested result actually reaches
 # them; importing a hidden stage must not dominate first render time.
-bridge_analysis = deferred_module("bridge_analysis")
-bridge_inputs = deferred_module("bridge_inputs")
 case_analysis = deferred_module("case_analysis")
 fatigue_analysis = deferred_module("fatigue_analysis")
 fatigue_inputs = deferred_module("fatigue_inputs")
@@ -57,6 +55,7 @@ mat_catalog = deferred_module("material_catalog")
 project_io = deferred_module("project_io")
 rebar_table = deferred_module("reinforcement_table")
 presentation = deferred_module("result_presentation")
+session_state_migrations = deferred_module("session_state_migrations")
 viz = deferred_module("viz")
 
 capacity = deferred_module("sector.capacity")
@@ -132,8 +131,6 @@ _CRACK_CODES = {
     "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
     "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
     "EN 1992-1-1:2023": dict(dk_na=False, edition="2023"),
-    bridge.EN1992_2_BASE: dict(dk_na=False, edition="2004"),
-    bridge.EN1992_2_DK_NA: dict(dk_na=True, edition="2004"),
 }
 # Old saved values for the (now merged) fine/coarse DK NA options.
 _CRACK_CODE_ALIASES = {
@@ -1819,14 +1816,9 @@ def _load_case_editors(box):
 
 
 _FATIGUE_EDITOR_KEY = "fatigue_spectrum_editor"
-_BRIDGE_EDITOR_KEYS = {
-    key: f"{key}_editor"
-    for key in bridge_inputs.TABLE_KEYS
-}
 _NON_REPLAYABLE_INPUT_EVENT_KEYS = frozenset({
     *_CASE_EDITOR_KEYS.values(),
     _FATIGUE_EDITOR_KEY,
-    *_BRIDGE_EDITOR_KEYS.values(),
 })
 
 
@@ -1939,128 +1931,6 @@ def _fatigue_spectrum_editor(box):
     return fatigue_inputs.active_spectrum_table(current)
 
 
-def _bridge_column_config(key):
-    """Readable strict columns for one optional bridge calculation table."""
-    labels = {
-        "region_id": "Region *",
-        "m_rep_knm": "Mrep [kNm]",
-        "z_s_m": "zs [m]",
-        "f_yk_mpa": "fyk [MPa]",
-        "as_provided_mm2": "As,provided [mm2]",
-        "wall_id": "Wall *",
-        "cot_theta": "cot(theta)",
-        "v_ed_kn": "VEd [kN]",
-        "v_rd_max_kn": "VRd,max [kN]",
-        "t_ed_equivalent_kn": "TEd,eq [kN]",
-        "t_rd_max_equivalent_kn": "TRd,max,eq [kN]",
-        "component": "Component *",
-        "act_mm2": "Act [mm2]",
-        "k_c": "kc",
-        "k": "k",
-        "fct_eff_mpa": "fct,eff [MPa]",
-        "sigma_s_mpa": "sigma_s [MPa]",
-        "restrained_shrinkage": "Restrained shrinkage",
-    }
-    config = {}
-    for column in bridge_inputs.TABLE_COLUMNS[key]:
-        if column in bridge_inputs.TEXT_COLUMNS[key]:
-            if column == "component":
-                config[column] = st.column_config.SelectboxColumn(
-                    labels[column],
-                    options=["web", "flange"],
-                    required=True,
-                    width="small",
-                )
-            else:
-                config[column] = st.column_config.TextColumn(
-                    labels[column],
-                    required=True,
-                    pinned=True,
-                    width="small",
-                )
-        elif column in bridge_inputs.BOOLEAN_COLUMNS[key]:
-            config[column] = st.column_config.CheckboxColumn(
-                labels[column],
-                default=False,
-                width="small",
-            )
-        else:
-            config[column] = st.column_config.NumberColumn(
-                labels[column],
-                format="%.4g",
-                required=True,
-                min_value=0.0,
-                step=0.1,
-                width="small",
-            )
-    return config
-
-
-def _bridge_table_editor(box, key):
-    """Render one stable native editor and return its canonical current rows."""
-    editor_key = _BRIDGE_EDITOR_KEYS[key]
-    seed_key = f"_{key}_editor_seed"
-    if key not in st.session_state:
-        st.session_state[key] = bridge_inputs.empty_table(key)
-    if not bool(getattr(box, "open", True)):
-        return bridge_inputs.normalise_table(st.session_state[key], key)
-    if editor_key not in st.session_state or seed_key not in st.session_state:
-        st.session_state[seed_key] = bridge_inputs.normalise_table(
-            st.session_state[key], key
-        )
-    seed = bridge_inputs.normalise_table(st.session_state[seed_key], key)
-    edited = box.data_editor(
-        seed,
-        key=editor_key,
-        **_input_widget_kwargs(
-            editor_key,
-            {
-                "num_rows": "dynamic",
-                "hide_index": True,
-                "width": "stretch",
-                "height": "auto",
-                "column_config": _bridge_column_config(key),
-                "column_order": bridge_inputs.TABLE_COLUMNS[key],
-            },
-        ),
-    )
-    current = bridge_inputs.normalise_table(edited, key)
-    st.session_state[key] = current.copy(deep=True)
-    return current
-
-
-def _bridge_tables_panel(box):
-    """Direct optional bridge calculations; empty tables simply do not run."""
-    standard = _seeded_selectbox(
-        box,
-        "Selected bridge method family",
-        list(bridge.METHODS),
-        bridge.COMPONENT_METHODS,
-        "bridge_standard",
-        help=(
-            "A direct calculation choice. It supplies equations, references and "
-            "warnings; it is not a bridge-code coverage statement."
-        ),
-    )
-    box.caption(
-        "Add only the calculations needed. Empty tables are ignored. Method B "
-        "remains available with a warning when the selected Danish method family "
-        "expects another brittle-failure method."
-    )
-    labels = {
-        bridge_inputs.BRITTLE_TABLE_KEY: "Optional brittle Method B",
-        bridge_inputs.BOX_WALL_TABLE_KEY: "Box-wall shear and torsion",
-        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: (
-            "Web/flange minimum crack reinforcement"
-        ),
-    }
-    tables = {}
-    for key in bridge_inputs.TABLE_KEYS:
-        box.markdown(f"**{labels[key]}**")
-        tables[key] = _bridge_table_editor(box, key)
-    return standard, tables
-
-
 def _fatigue_basis_prefix():
     revision = int(st.session_state.get("_fatigue_basis_revision", 0))
     return f"fatiguebasis_r{revision}"
@@ -2134,10 +2004,6 @@ def _fatigue_spectrum_signature(value):
             row.append(cell)
         rows.append(tuple(row))
     return tuple(rows)
-
-
-def _bridge_table_signature(value, key):
-    return bridge_inputs.table_signature(value, key)
 
 
 # Input widgets are not rendered on the Analysis page. Streamlit consequently
@@ -2352,10 +2218,6 @@ def _project_state():
         tables[fatigue_key] = fatigue_inputs.normalise_spectrum_table(
             st.session_state[fatigue_key]
         )
-    for key in bridge_inputs.TABLE_KEYS:
-        tables[key] = bridge_inputs.normalise_table(
-            st.session_state.get(key), key
-        )
     return tables, scalars
 
 
@@ -2365,16 +2227,14 @@ def _project_input_hash() -> str:
 
 
 def _calculation_input_hash(inp) -> str:
-    """Use the persisted-input identity, or a typed fallback if it is unsavable."""
+    """Use the persisted-input identity, or a typed fallback if unsavable."""
 
     try:
         return _project_input_hash()
     except ValueError:
-        # Independent bridge kernels may legitimately run while the section is
-        # invalid and therefore cannot be canonicalised as a project.  The
-        # calculation record still needs an exact deterministic input identity;
-        # the same typed payload fingerprint is the documented headless-run
-        # fallback.
+        # A failed canonical project boundary must not suppress calculation
+        # provenance. The typed payload fingerprint remains deterministic and
+        # keeps the record explicitly tied to the actual attempted inputs.
         return project_io.result_sha256(inp)
 
 
@@ -2523,7 +2383,13 @@ def _autosave_startup() -> None:
         text = path.read_text(encoding="utf-8")
         project_io.parse_project(text)               # validate before restoring
         provenance = project_io.project_provenance(text)
-    except Exception:
+    except ValueError as exc:
+        st.session_state["_project_msg"] = (
+            "error",
+            f"Autosave not restored: {exc}. Starting with the default section.",
+        )
+        return
+    except (OSError, UnicodeError):
         st.session_state["_project_msg"] = (
             "error", "An autosave file was found but could not be read; "
                      "starting with the default section.")
@@ -2583,11 +2449,6 @@ def _apply_pending_project() -> None:
         st.session_state.pop(fatigue_key, None)
         st.session_state.pop("fatigue_spectrum_editor", None)
         st.session_state.pop(f"_{fatigue_key}_editor_seed", None)
-    for key in bridge_inputs.TABLE_KEYS:
-        if key not in tables:
-            st.session_state.pop(key, None)
-            st.session_state.pop(_BRIDGE_EDITOR_KEYS[key], None)
-            st.session_state.pop(f"_{key}_editor_seed", None)
     for key, df in tables.items():
         if key in load_cases.CASE_TABLE_KEYS:
             _reseed_case_table(key, df)
@@ -2596,11 +2457,6 @@ def _apply_pending_project() -> None:
             st.session_state[key] = fatigue_inputs.normalise_spectrum_table(df)
             st.session_state.pop("fatigue_spectrum_editor", None)
             st.session_state.pop(f"_{fatigue_key}_editor_seed", None)
-            continue
-        if key in bridge_inputs.TABLE_KEYS:
-            st.session_state[key] = bridge_inputs.normalise_table(df, key)
-            st.session_state.pop(_BRIDGE_EDITOR_KEYS[key], None)
-            st.session_state.pop(f"_{key}_editor_seed", None)
             continue
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
@@ -3496,7 +3352,6 @@ def build_inputs(host=st):
     scw = aset.expander("Elastic crack-width method", expanded=False)
     det = aset.expander("Reinforcement detailing", expanded=False)
     fat = aset.expander("Fatigue", expanded=False)
-    brg = aset.expander("Optional bridge calculations", expanded=False)
     sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
     about_slot = project.container()
     report_slot = project.container()
@@ -3526,15 +3381,27 @@ def build_inputs(host=st):
         "fatigue_on",
         help="Use the cracked elastic section to assess grouped fatigue spectra.",
     )
+    fatigue_standard_options = tuple(
+        basis.key.value
+        for basis in design_standards.basis_options(
+            design_standards.Capability.REINFORCEMENT_FATIGUE
+        )
+    )
     fatigue_edition = _seeded_selectbox(
         fat,
-        "Fatigue edition",
-        list(fatigue_inputs.EDITIONS),
-        fatigue_inputs.EC2_2005_DKNA,
+        "Fatigue design basis",
+        fatigue_standard_options,
+        design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "fatigue_edition",
+        format_func=lambda value: design_standards.get_design_basis(value).label,
         disabled=not fatigue_on,
-        help="Selects the Eurocode fatigue-resistance expressions and preset values.",
+        help=(
+            "Selects a capability-backed Eurocode fatigue route. The stable "
+            "basis key controls dispatch; labels alone never select a solver."
+        ),
     )
+    fatigue_standard_basis = design_standards.get_design_basis(fatigue_edition)
+    fat.caption(fatigue_standard_basis.disclosure)
     fatigue_check_steel = _seeded_toggle(
         fat,
         "Reinforcement",
@@ -3642,7 +3509,8 @@ def build_inputs(host=st):
         "fatigue_concrete_k1",
         disabled=(
             not (fatigue_on and fatigue_check_concrete)
-            or "2023" in fatigue_edition
+            or fatigue_standard_basis.family
+            is design_standards.StandardFamily.PUBLISHED_2023
         ),
         help=r"Coefficient in the 2005 design strength $f_{cd,\mathrm{fat}}$; "
              "not used by the 2023 expression.",
@@ -3664,7 +3532,6 @@ def build_inputs(host=st):
     )
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
-    bridge_standard, bridge_tables = _bridge_tables_panel(brg)
 
     # Load tables are rendered before the crack controls so their per-case
     # choices can enable the numerical crack-width settings in the same rerun.
@@ -4906,15 +4773,7 @@ def build_inputs(host=st):
         if fatigue_on
         else ("fatigue", False)
     )
-    bridge_sig = (
-        "bridge",
-        bridge_standard,
-        tuple(
-            (key, _bridge_table_signature(bridge_tables[key], key))
-            for key in bridge_inputs.TABLE_KEYS
-        ),
-    )
-    sig = plastic_sig + elastic_sig + (fatigue_sig, bridge_sig)
+    sig = plastic_sig + elastic_sig + (fatigue_sig,)
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
     # the report and the download capture the fully-built section and loads.
@@ -4933,8 +4792,7 @@ def build_inputs(host=st):
                 "- **Plastic:** M-M capacity and utilisation\n"
                 "- **Elastic:** cracked-section stresses and optional crack width\n"
                 "- **Fatigue:** grouped spectrum assessment\n"
-                "- **Capacity checks:** shear, torsion and combined M-V-T\n"
-                "- **Bridge calculations:** optional independent numerical methods")
+                "- **Capacity checks:** shear, torsion and combined M-V-T")
             st.caption(
                 "Sector is a transparent calculation tool. The selected methods "
                 "supply equations, references, defaults and warnings; the engineer "
@@ -5064,11 +4922,6 @@ def build_inputs(host=st):
                 fatigue_t0_days=fatigue_t0_days,
                 fatigue_concrete_k1=fatigue_concrete_k1,
                 fatigue_concrete_c=fatigue_concrete_c,
-                bridge_standard=bridge_standard,
-                **{
-                    key: bridge_inputs.normalise_table(bridge_tables[key], key)
-                    for key in bridge_inputs.TABLE_KEYS
-                },
                 mode=mode, extent=extent,
                 label_scale=label_scale, label_min_gap=label_min_gap,
                 signature=sig,
@@ -5652,11 +5505,6 @@ def _run_fatigue_or_invalid(inp):
     )
 
 
-def _run_bridge_or_invalid(inp):
-    """Run optional bridge kernels through their typed domain boundary."""
-    return bridge_analysis.run(inp)
-
-
 def run_analysis(
     inp,
     *,
@@ -5667,15 +5515,11 @@ def run_analysis(
     reuse_elastic_cases=None,
     reuse_fatigue=None,
 ):
-    """Run every current named action and optional independent calculation."""
-    bridge_result = _run_bridge_or_invalid(inp)
-    bridge_active = bool(
-        bridge_result.get("calculations") or bridge_result.get("failures")
-    )
+    """Run every current named action and enabled calculation."""
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
-        return {"bridge": bridge_result} if bridge_active else {}
+        return {}
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
         result = _run_single_analysis(
             inp,
@@ -5696,8 +5540,6 @@ def run_analysis(
                 if reuse_fatigue is not None
                 else _run_fatigue_or_invalid(inp)
             )
-        if bridge_active:
-            result["bridge"] = bridge_result
         return result
 
     def _runner(case_inp, *, reuse_plastic=None):
@@ -5724,8 +5566,6 @@ def run_analysis(
             if reuse_fatigue is not None
             else _run_fatigue_or_invalid(inp)
         )
-    if bridge_active:
-        result["bridge"] = bridge_result
     return result
 
 
@@ -6747,7 +6587,6 @@ VIEWS = [
     "N-M Interaction",
     "Elastic Results",
     "Fatigue Results",
-    "Bridge Calculations",
     "Detailing",
     "Shear",
     "Torsion",
@@ -8531,7 +8370,12 @@ def _fatigue_result_basis_panel(payload):
     checks = payload.get("checks") or {}
     parameters = payload.get("concrete_parameters") or {}
     rows = [
-        ("Edition", payload.get("edition") or "-"),
+        (
+            "Design basis",
+            payload.get("basis_label") or payload.get("edition") or "-",
+        ),
+        ("Design basis key", payload.get("basis_key") or "-"),
+        ("Basis disclosure", payload.get("basis_disclosure") or "-"),
         (
             "Checks",
             ", ".join(
@@ -8568,6 +8412,18 @@ def _fatigue_result_basis_panel(payload):
             {"Check": key.capitalize(), "Reference": value}
             for key, value in references.items()
         ], height=180)
+    capability_bindings = payload.get("capability_bindings") or {}
+    if capability_bindings:
+        st.markdown("**Capability bindings**")
+        _fatigue_result_table([
+            {
+                "Check": key.capitalize(),
+                "Capability": binding.get("capability") or "-",
+                "Source": binding.get("source") or "-",
+                "Disclosure": binding.get("disclosure") or "-",
+            }
+            for key, binding in capability_bindings.items()
+        ], height=240)
     details = payload.get("fatigue_detail_basis") or ()
     if details:
         st.markdown("**Assigned fatigue details**")
@@ -8712,112 +8568,6 @@ def fatigue_view(inp, results, *, stale=False):
         _fatigue_spectrum_panel(inp, spectrum)
     else:
         _fatigue_result_basis_panel(payload)
-
-
-def bridge_view(inp, results):
-    """Present each optional bridge calculation independently."""
-    payload = (results or {}).get("bridge")
-    if payload is None:
-        st.info(
-            "Add a row under Optional bridge calculations and press Calculate."
-        )
-        return
-    st.subheader("Independent bridge calculations")
-    st.caption(
-        f"Selected method family: {payload.get('selected_standard') or '-'}."
-    )
-    st.info(
-        "These are separate numerical methods. Generic bridge-code coverage and "
-        "generic cross-method interaction are not calculated."
-    )
-    failures = tuple(payload.get("failures") or ())
-    for failure in failures:
-        family = str(failure.get("family") or "bridge").replace("_", " ")
-        state = str(failure.get("state") or "INVALID")
-        code = str(failure.get("code") or "INVALID_INPUT")
-        message = str(failure.get("message") or "Calculation unavailable")
-        st.error(f"{family}: {state} ({code}) - {message}")
-    calculations = payload.get("calculations") or {}
-    if not calculations:
-        if not failures:
-            st.info("No bridge calculation rows were supplied.")
-        return
-
-    brittle = calculations.get("brittle_method_b")
-    if brittle:
-        st.markdown("#### Optional brittle Method B")
-        if brittle.get("warning"):
-            st.warning(brittle["warning"])
-        st.caption(
-            f"{brittle.get('equation', '-')} | {brittle.get('source', '-')}"
-        )
-        st.dataframe(
-            [
-                {
-                    "Region": row["region_id"],
-                    "Mrep [kNm]": row["m_rep_knm"],
-                    "zs [m]": row["z_s_m"],
-                    "fyk [MPa]": row["f_yk_mpa"],
-                    "As,required [mm2]": row["as_required_mm2"],
-                    "As,provided [mm2]": row["as_provided_mm2"],
-                    "Utilisation [%]": 100.0 * row["utilisation"],
-                    "Status": row["status"],
-                }
-                for row in brittle["rows"]
-            ],
-            hide_index=True,
-            width="stretch",
-        )
-
-    walls = calculations.get("box_walls")
-    if walls:
-        st.markdown("#### Box-wall shear and torsion")
-        st.caption(f"{walls.get('equation', '-')} | {walls.get('source', '-')}")
-        for warning in walls.get("warnings") or ():
-            st.warning(warning)
-        st.dataframe(
-            [
-                {
-                    "Wall": row["wall_id"],
-                    "cot(theta)": row["cot_theta"],
-                    "VEd [kN]": row["v_ed_kn"],
-                    "VRd,max [kN]": row["v_rd_max_kn"],
-                    "TEd,eq [kN]": row["t_ed_equivalent_kn"],
-                    "TRd,max,eq [kN]": row[
-                        "t_rd_max_equivalent_kn"
-                    ],
-                    "Utilisation [%]": 100.0 * row["utilisation"],
-                    "Status": row["status"],
-                }
-                for row in walls["rows"]
-            ],
-            hide_index=True,
-            width="stretch",
-        )
-
-    minimum = calculations.get("minimum_crack_reinforcement")
-    if minimum:
-        st.markdown("#### Web/flange minimum crack reinforcement")
-        st.caption(
-            f"{minimum.get('equation', '-')} | {minimum.get('source', '-')}"
-        )
-        st.dataframe(
-            [
-                {
-                    "Component": row["component"].capitalize(),
-                    "Act [mm2]": row["act_mm2"],
-                    "fct,eff used [MPa]": row["fct_eff_used_mpa"],
-                    "sigma_s [MPa]": row["sigma_s_mpa"],
-                    "As,required [mm2]": row["as_required_mm2"],
-                    "As,provided [mm2]": row["as_provided_mm2"],
-                    "Utilisation [%]": 100.0 * row["utilisation"],
-                    "Status": row["status"],
-                }
-                for row in minimum["rows"]
-            ],
-            hide_index=True,
-            width="stretch",
-        )
 
 
 def _verdict_metric(box, label, value, ok, *, help=None):
@@ -10008,6 +9758,7 @@ def combined_view(inp, results):
 
 _VIEW_ALIASES = {
     "M-V-T Interaction": "M-V-T Combined",
+    "Bridge Calculations": "Results Overview",
     "Section": "Results Overview",
     "Material laws": "Results Overview",
     "Stress-Strain diagrams": "Results Overview",
@@ -10337,8 +10088,6 @@ def _analysis_workspace(inp):
         interaction_view(view_inp, view_results)
     elif view == "Fatigue Results":
         fatigue_view(result_inp, results, stale=stale)
-    elif view == "Bridge Calculations":
-        bridge_view(result_inp, results)
     elif view == "Detailing":
         detailing_view(view_inp, view_results, global_results=results)
     elif view == "Shear":
@@ -10356,6 +10105,11 @@ def _analysis_workspace(inp):
 # Layout
 # ---------------------------------------------------------------------------
 
+_v093_state_purged = (
+    session_state_migrations.purge_retired_bridge_session_state(
+        st.session_state
+    )
+)
 _autosave_startup()        # restore the last autosaved session (BriCoS-style) on launch
 _apply_pending_project()   # restore an uploaded project before any widget is built
 # Migrate renamed workspace choices even while Inputs is selected; otherwise an old
@@ -10377,7 +10131,8 @@ if quick_section_open:
 st.session_state.setdefault("_main_page", "Inputs")
 _restore_input_state(
     replace=(
-        bool(st.session_state.get(_INPUT_BUILD_KEY, False))
+        _v093_state_purged
+        or bool(st.session_state.get(_INPUT_BUILD_KEY, False))
         or (
             st.session_state.get("_main_page") == "Inputs"
             and st.session_state.get(_LAST_WORKSPACE_KEY) == "Analysis"

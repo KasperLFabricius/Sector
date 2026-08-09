@@ -27,15 +27,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import sector_report  # noqa: E402
-import bridge_analysis  # noqa: E402
-import bridge_inputs  # noqa: E402
 import case_analysis  # noqa: E402
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 from sector import __version__  # noqa: E402
-from sector import bridge, capacity, codes, combined, detailing, shear, torsion  # noqa: E402
+from sector import capacity, codes, combined, detailing, shear, torsion  # noqa: E402
+from sector.design_standards import DesignBasisKey  # noqa: E402
 from sector.materials import Concrete  # noqa: E402
 from sector.section import Section  # noqa: E402
 from tools.publication_preflight import (  # noqa: E402
@@ -219,48 +218,12 @@ def _inputs() -> dict:
             "single loaded lane in the QA fixture; issued-report regression spectrum"
         ),
     })
-    bridge_tables = {
-        bridge_inputs.BRITTLE_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "region_id": "Bottom chord",
-                "m_rep_knm": 1000.0,
-                "z_s_m": 0.8,
-                "f_yk_mpa": 500.0,
-                "as_provided_mm2": 3000.0,
-            }],
-            bridge_inputs.BRITTLE_TABLE_KEY,
-        ),
-        bridge_inputs.BOX_WALL_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "wall_id": "Left wall",
-                "cot_theta": 0.5,
-                "v_ed_kn": 200.0,
-                "v_rd_max_kn": 500.0,
-                "t_ed_equivalent_kn": 50.0,
-                "t_rd_max_equivalent_kn": 250.0,
-            }],
-            bridge_inputs.BOX_WALL_TABLE_KEY,
-        ),
-        bridge_inputs.MINIMUM_CRACK_TABLE_KEY: bridge_inputs.normalise_table(
-            [{
-                "component": "Web",
-                "act_mm2": 100000.0,
-                "k_c": 0.4,
-                "k": 0.8,
-                "fct_eff_mpa": 3.0,
-                "sigma_s_mpa": 200.0,
-                "as_provided_mm2": 600.0,
-                "restrained_shrinkage": False,
-            }],
-            bridge_inputs.MINIMUM_CRACK_TABLE_KEY,
-        ),
-    }
     return {
         "mode": "Both",
         "plastic_cases": plastic_cases,
         "elastic_cases": elastic_cases,
         "fatigue_on": True,
-        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_edition": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
@@ -274,8 +237,6 @@ def _inputs() -> dict:
         fatigue_inputs.DETAIL_CATALOG_KEY: fatigue_catalogue,
         fatigue_inputs.SPECTRUM_TABLE_KEY: fatigue_spectrum,
         fatigue_inputs.BASIS_KEY: fatigue_basis,
-        "bridge_standard": bridge.EN1992_2_DK_NA,
-        **bridge_tables,
         "shear_on": True,
         "shear_links": True,
         "shear_method": codes.EC2_2005_DKNA.label,
@@ -848,7 +809,6 @@ def _results(inp: dict | None = None) -> dict:
         "plastic": plastic,
         "elastic": elastic,
         "fatigue": fatigue,
-        "bridge": bridge_analysis.run(inp),
         "shear": shear_payload,
         "torsion": torsion_payload,
         "combined": combined_payload,
@@ -1296,12 +1256,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Reinforcement fatigue",
         "Concrete fatigue",
         "Bounded governing-fibre search",
-        "Independent bridge calculations",
-        "Optional brittle Method B",
-        "Box-wall shear and torsion",
-        "Web/flange minimum crack reinforcement",
-        "DS/EN 1992-2:2005 6.1(109)-(110)",
-        "generic bridge-code coverage and generic cross-method interaction are not calculated",
+        "DS/EN 1992-2:2005/AC:2008",
+        "6.106",
         "Torsion and shear fatigue are not assessed",
         "Physical resistance components",
         "Concrete compression strut",
@@ -1316,6 +1272,18 @@ def validate_pdf_content(pdf: bytes) -> str:
     ):
         if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected report content is missing: {expected}")
+
+    for removed in (
+        "Independent bridge calculations",
+        "Optional brittle Method B",
+        "Box-wall shear and torsion",
+        "Web/flange minimum crack reinforcement",
+        "DS/EN 1992-2:2005 6.1(109)-(110)",
+    ):
+        if removed in text or removed in flat_text:
+            raise AssertionError(
+                f"removed component-mapped bridge content remains: {removed}"
+            )
 
     validate_report_page_semantics(page_texts)
     overview_pages = [

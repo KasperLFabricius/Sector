@@ -28,6 +28,7 @@ from tools.verify_mypy_policy import (
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "quality-mypy-policy.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
+V093_TYPED_FILES = (*INITIAL_FILES, "sector/design_standards.py")
 
 
 def _policy():
@@ -91,13 +92,13 @@ def test_live_strict_policy_workflow_and_boundaries_pass():
     validate_workflow(WORKFLOW.read_text(encoding="utf-8"))
     execute_policy(POLICY, ROOT)
 
-    assert tuple(policy["tool"]["mypy"]["files"]) == INITIAL_FILES
+    assert tuple(policy["tool"]["mypy"]["files"]) == V093_TYPED_FILES
     assert policy["tool"]["mypy"] == {
         "python_version": "3.13",
         "strict": True,
         "follow_imports": "silent",
         "incremental": False,
-        "files": list(INITIAL_FILES),
+        "files": list(V093_TYPED_FILES),
     }
     assert validator_command().endswith(
         "--baseline-ref $env:SECTOR_MYPY_POLICY_BASE"
@@ -229,6 +230,16 @@ def test_accepted_file_inventory_and_order_cannot_shrink():
     files[0], files[1] = files[1], files[0]
     with pytest.raises(MypyPolicyError, match="initial typed boundary"):
         validate_policy(candidate, ROOT, baseline=baseline)
+
+
+def test_v093_standards_registry_cannot_leave_the_live_typed_boundary():
+    policy = deepcopy(_policy())
+    assert tuple(policy["tool"]["mypy"]["files"]) == V093_TYPED_FILES
+
+    candidate = deepcopy(policy)
+    candidate["tool"]["mypy"]["files"].remove("sector/design_standards.py")
+    with pytest.raises(MypyPolicyError, match="inventory shrank"):
+        validate_policy(candidate, ROOT, baseline=policy)
 
 
 def test_follow_imports_can_strengthen_and_waiver_can_expire():

@@ -172,9 +172,6 @@ MANUAL_TABLE_SPECS = (
     ManualTableSpec("Part B - Features & options", "Loads",
                     ("Table", "Per-row fields", "Row-specific rule"),
                     "Action tables, row fields and row-specific rules"),
-    ManualTableSpec("Part C - Theory & methodology", "Worked standards calculation",
-                    ("Calculation field", "Live solver value"),
-                    "Worked brittle-failure Method B calculation"),
     ManualTableSpec("Part C - Theory & methodology", "Serviceability: cracking and crack width",
                     ("Crack-width edition", "$s_{r,max}$ (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"),
                     "Worked crack-width comparison by edition"),
@@ -193,7 +190,7 @@ MANUAL_TABLE_SPECS = (
 # same-header replacement or row reorder that would otherwise look identical.
 MANUAL_TABLE_CONTENT_SHA256 = (
     "dfc12f2afad4b9961ecc50234ff2717edd71655ce2bee317fa560d7b697525b6",
-    "8e623f23a5a9af565875e0e498014bdaeac60ffcb369af182dd8a7f08b96936b",
+    "41d5e6ca0aa102ed274644a46c181ce4fd36feff6b57aae2f84857f4ac27e998",
     "b972bfbfeb72f66d02898862d2af8e0ec6837629130b1fd333213cbd26ece414",
     "f662166b2b933f6fb95a347996ad85a631c780d8e28afa1cc3ce044f5d2059d5",
     "e1805fa14f8c0fc53f79bdc7c4b35c2774c4ed664f53b1d46f51f10ab78ea70b",
@@ -204,7 +201,6 @@ MANUAL_TABLE_CONTENT_SHA256 = (
     "86092aa2081aaea15fd442cd36e7f8e350dbd4b4528abb29746825030c0a107e",
     "ad5dc6287681973d22542ffb4f93e5bd2fa229d6f7389c6848c4d53967edfeff",
     "7626d90edb81ce4dad70867b5573a36e1ff97730314b6cdd74297084eef78f9c",
-    "f57b507c79141afe45e8719b5e86736c4860891f517a644166a3fb2fe05474f9",
     "f424e1860fa68c13ecf29d839b7c968fd8bf64d011338fa4e971c51ed7743422",
     "ff260782abd04f7e511a1726534b517456b4683769e849990d03a01acbf1548f",
     "b79bcee2d4538ceb2ba0d81bc56e8ec9599faef6a03a3fd8264f7e7b2d5171e1",

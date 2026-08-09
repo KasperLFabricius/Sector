@@ -38,10 +38,10 @@ cross-section and reports, for the same section:
   section-wide clear-spacing review with stable element IDs.
 * **Fatigue analysis** - grouped sustained/basic and cyclic action bins, using
   the cracked elastic section for reinforcing steel, tendons and concrete.
-* **Bridge-relevant numerical kernels** - optional brittle Method B with a method
-  warning, box-wall shear/torsion and web/flange minimum crack reinforcement;
-  concrete compression fatigue and direct crack width remain in their ordinary
-  analysis panels.
+* **Capability-scoped standards provenance** - fatigue routes use stable design-
+  basis keys with explicit source and adoption disclosures. The retained
+  bridge-source concrete damage-sum method uses user-supplied section actions;
+  Sector does not infer semantic bridge components or complete bridge coverage.
 
 Plastic and Elastic identify the calculation method, not the limit state. Each
 named row carries the user's project-defined description or classification (for
@@ -103,12 +103,13 @@ sector/        computation core (headless, regression-tested)
   capacity     headless shear, torsion, and M-V-T result orchestration
   detailing    modelled-direction reinforcement, link detailing and clear spacing
   serviceability  cracking threshold, tension stiffening, crack width
-  bridge       independent bridge numerical kernels
+  bridge       typed decommission marker for retired component-mapped kernels
+  design_standards  capability-scoped basis and source registry
   templates    parametric section + reinforcement builders
 app/           Streamlit interface and canonical input models
   fatigue_inputs  stable S-N detail catalogue and grouped spectrum schema
   fatigue_analysis  validated application-to-fatigue-engine boundary
-  bridge_inputs / bridge_analysis  optional bridge tables and adapter
+  session_state_migrations  bounded current-schema state transitions
 tools/         developer tooling (e.g. regression-fixture generation)
 tests/         unit tests + the verification regression
 ```

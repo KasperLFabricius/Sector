@@ -35,10 +35,10 @@ EXPECTED_LABELS = (
     "Figure B4-1", "Figure B4-2", "Figure B4-3",
     "Figure B5-1", "Table B5-1", "Table B5-2", "Table B5-3",
     "Table B5-4", "Table B5-5", "Table B5-6", "Table B5-7",
-    "Table B6-1", "Figure C1-1", "Table C2-1",
-    "Figure C3-1", "Figure C3-2", "Figure C3-3",
-    "Figure C4-1", "Figure C4-2", "Figure C6-1", "Table C7-1",
-    "Figure C8-1", "Figure C8-2", "Table C8-1",
+    "Table B6-1", "Figure C1-1",
+    "Figure C2-1", "Figure C2-2", "Figure C2-3",
+    "Figure C3-1", "Figure C3-2", "Figure C5-1", "Table C6-1",
+    "Figure C7-1", "Figure C7-2", "Table C7-1",
     "Table D1-1", "Table D3-1",
 )
 
@@ -91,7 +91,7 @@ def test_manual_inventory_has_exact_objects_labels_and_destinations():
 
     assert tuple(item.label for item in items) == EXPECTED_LABELS
     assert len(MANUAL_FIGURE_SPECS) == 16
-    assert len(MANUAL_TABLE_SPECS) == 17
+    assert len(MANUAL_TABLE_SPECS) == 16
     assert len({item.label for item in items}) == len(items)
     assert len({item.anchor for item in items}) == len(items)
     assert all(item.caption.strip() for item in items)

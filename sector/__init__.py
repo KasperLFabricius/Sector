@@ -106,6 +106,7 @@ _MODULES = {
         "capacity",
         "codes",
         "combined",
+        "design_standards",
         "detailing",
         "elastic",
         "fatigue",

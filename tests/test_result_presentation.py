@@ -12,6 +12,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
+
+from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
@@ -703,7 +705,7 @@ def test_fatigue_summary_prevents_a_false_overall_pass(
     inp = _inp(
         mode="",
         fatigue_on=True,
-        fatigue_edition="DS/EN 1992-1-1:2005 + DK NA:2024",
+        fatigue_edition=DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         fatigue_basis={"method": "User-defined grouped spectrum"},
     )
     results = {"fatigue": fatigue} if fatigue is not None else {}
@@ -749,6 +751,40 @@ def test_stale_fatigue_summary_uses_the_calculated_basis_not_live_edits():
     assert row["case"] == "OLD SPECTRUM"
     assert row["case_type"] == "CALCULATED EDITION"
     assert row["source"] == "CALCULATED SOURCE"
+
+
+def test_fatigue_summary_formats_stable_keys_and_prefers_result_basis_label():
+    live_basis = DesignBasisKey.PUBLISHED_2023
+    calculated_basis = DesignBasisKey.FIRST_GEN_DK_NA_2024
+    inp = _inp(
+        mode="",
+        fatigue_on=True,
+        fatigue_edition=live_basis.value,
+        fatigue_basis={"method": "Grouped"},
+    )
+    not_run = presentation.fatigue_summary_rows(inp, {})[0]
+    assert not_run["case_type"] == get_design_basis(live_basis).label
+    assert live_basis.value not in not_run["case_type"]
+
+    calculated_label = get_design_basis(calculated_basis).label
+    fatigue = {
+        "basis_key": calculated_basis.value,
+        "basis_label": calculated_label,
+        "edition": "legacy fallback must not win",
+        "basis": {"method": "Grouped"},
+        "governing_spectrum": "Traffic",
+        "utilisation": 0.75,
+        "converged": True,
+        "passed": True,
+        "warnings": (),
+    }
+    stale = presentation.fatigue_summary_rows(
+        inp,
+        {"fatigue": fatigue},
+        stale=True,
+    )[0]
+    assert stale["case_type"] == calculated_label
+    assert stale["status"] == "STALE"
 
 
 def test_multi_case_summary_records_zero_actions_as_not_evaluated():

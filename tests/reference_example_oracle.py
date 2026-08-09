@@ -332,18 +332,3 @@ def fatigue() -> dict[str, float]:
         "concrete_damage": concrete_damage,
         "concrete_stress_utilisation": concrete_stress_utilisation,
     }
-
-
-def bridge() -> dict[str, float]:
-    """Direct substitutions for the three independent bridge kernels."""
-
-    brittle_required = 1000.0 * 1000.0 / (0.8 * 500.0)
-    box_wall_utilisation = 200.0 / 500.0 + 50.0 / 250.0
-    crack_required = 0.4 * 0.8 * 3.0 * 100_000.0 / 200.0
-    return {
-        "brittle_required_mm2": brittle_required,
-        "brittle_utilisation": brittle_required / 3000.0,
-        "box_wall_utilisation": box_wall_utilisation,
-        "crack_required_mm2": crack_required,
-        "crack_utilisation": crack_required / 600.0,
-    }

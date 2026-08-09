@@ -11,20 +11,28 @@ authority route or code-completeness decision is inferred here.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-import math
-
-import numpy as np
 
 import fatigue_inputs
 import load_cases
 import material_catalog as mat_catalog
+import numpy as np
+
+from sector.design_standards import (
+    Capability,
+    CapabilityBinding,
+    DesignBasisKey,
+    capability_binding,
+    get_design_basis,
+    parse_design_basis_key,
+)
 from sector.fatigue import (
     CONCRETE_EQUIVALENT,
-    CONCRETE_MINER_METHODS,
     CONCRETE_METHODS,
     CONCRETE_MINER,
+    CONCRETE_MINER_METHODS,
     CONCRETE_PROJECT_MINER,
     ConcreteFatigueProperties,
     FatigueSpectrumResult,
@@ -49,7 +57,10 @@ class PreparedFatigueAnalysis:
     ns: float
     reinforcement: tuple[ReinforcementFatigueProperties, ...]
     concrete: ConcreteFatigueProperties | None
-    edition: str
+    basis_key: DesignBasisKey
+    basis_label: str
+    basis_disclosure: str
+    solver_edition: str
     solver_element_ids: tuple[str, ...]
     element_records: tuple[Mapping, ...]
     detail_records: tuple[Mapping, ...]
@@ -93,70 +104,69 @@ def _finite_attribute(value, label: str, errors: list[str], *, positive=False):
     return number
 
 
-def _edition(value) -> str:
-    text = str(value or "").strip()
-    if text in fatigue_inputs.EDITIONS:
-        return text
-    if "2023" in text:
-        return fatigue_inputs.EC2_2023
-    if "2005" in text or "2004" in text:
-        return fatigue_inputs.EC2_2005
-    raise ValueError(
-        "fatigue edition must identify DS/EN 1992-1-1:2005, "
-        "DK NA:2024 or DS/EN 1992-1-1:2023"
-    )
+def _concrete_capability(concrete_method: str) -> Capability:
+    if concrete_method == CONCRETE_EQUIVALENT:
+        return Capability.CONCRETE_FATIGUE_EQUIVALENT
+    if concrete_method in CONCRETE_MINER_METHODS:
+        return Capability.CONCRETE_FATIGUE_DAMAGE_SUM
+    raise ValueError("Select a valid concrete fatigue method")
+
+
+def _selected_capability_bindings(
+    basis_key: DesignBasisKey,
+    *,
+    check_reinforcement: bool,
+    check_concrete: bool,
+    concrete_method: str | None,
+) -> dict[str, CapabilityBinding]:
+    """Resolve every requested solver route through the typed catalogue."""
+
+    bindings = {}
+    if check_reinforcement:
+        bindings["reinforcement"] = capability_binding(
+            basis_key,
+            Capability.REINFORCEMENT_FATIGUE,
+        )
+    if check_concrete:
+        bindings["concrete"] = capability_binding(
+            basis_key,
+            _concrete_capability(str(concrete_method or "")),
+        )
+    return bindings
+
+
+def _solver_edition(bindings: Mapping[str, CapabilityBinding]) -> str:
+    editions = {binding.solver_edition for binding in bindings.values()}
+    if len(editions) != 1:
+        raise ValueError(
+            "selected fatigue capabilities do not share one solver edition"
+        )
+    return next(iter(editions))
 
 
 def calculation_references(
-    edition: str,
+    fatigue_edition: object,
     concrete_method: str = CONCRETE_MINER,
 ) -> dict[str, str]:
     """Return the explicit steel and concrete fatigue-method references."""
 
-    selected = _edition(edition)
-    equivalent = concrete_method == CONCRETE_EQUIVALENT
+    basis_key = parse_design_basis_key(fatigue_edition)
+    reinforcement = capability_binding(
+        basis_key,
+        Capability.REINFORCEMENT_FATIGUE,
+    )
     project_miner = concrete_method == CONCRETE_PROJECT_MINER
     if project_miner:
         concrete_reference = (
             "Project-defined concrete Miner S-N relation (uncited)"
         )
-    elif "2023" in selected:
-        concrete_reference = (
-            "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2)"
-            if equivalent
-            else "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)"
-        )
     else:
-        national = (
-            " with DK NA:2024 explicit input factors"
-            if selected == fatigue_inputs.EC2_2005_DKNA
-            else ""
-        )
-        concrete_reference = (
-            (
-                "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.7, "
-                "Formula (6.72)"
-            )
-            if equivalent
-            else "DS/EN 1992-2:2005/AC:2008, corrected clause 6.106"
-        ) + national
-    if "2023" in selected:
-        return {
-            "reinforcement": (
-                "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2"
-            ),
-            "concrete": concrete_reference,
-        }
-    national = (
-        " with DK NA:2024 explicit input factors"
-        if selected == fatigue_inputs.EC2_2005_DKNA
-        else ""
-    )
+        concrete_reference = capability_binding(
+            basis_key,
+            _concrete_capability(concrete_method),
+        ).source
     return {
-        "reinforcement": (
-            "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.4 and "
-            f"Tables 6.3N/6.4N{national}"
-        ),
+        "reinforcement": reinforcement.source,
         "concrete": concrete_reference,
     }
 
@@ -384,14 +394,32 @@ def validation_errors(inp: Mapping) -> list[str]:
         if inp.get(key):
             errors.append(str(inp[key]))
 
-    try:
-        edition = _edition(inp.get("fatigue_edition"))
-    except ValueError as exc:
-        errors.append(str(exc))
-        edition = ""
-
     check_reinforcement = bool(inp.get("fatigue_check_steel"))
     check_concrete = bool(inp.get("fatigue_check_concrete"))
+    concrete_method = str(
+        inp.get("fatigue_concrete_method") or CONCRETE_MINER
+    )
+    concrete_method_valid = concrete_method in CONCRETE_METHODS
+    try:
+        basis_key = parse_design_basis_key(inp.get("fatigue_edition"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        basis_key = None
+    solver_edition = ""
+    if basis_key is not None and (
+        check_reinforcement or (check_concrete and concrete_method_valid)
+    ):
+        try:
+            solver_edition = _solver_edition(
+                _selected_capability_bindings(
+                    basis_key,
+                    check_reinforcement=check_reinforcement,
+                    check_concrete=check_concrete,
+                    concrete_method=concrete_method,
+                )
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
     if not check_reinforcement and not check_concrete:
         errors.append("Enable the reinforcement and/or concrete fatigue check")
     if (
@@ -410,10 +438,7 @@ def validation_errors(inp: Mapping) -> list[str]:
     if check_reinforcement:
         _positive(inp.get("fatigue_gamma_s"), "gamma_s", errors)
     if check_concrete:
-        concrete_method = str(
-            inp.get("fatigue_concrete_method") or CONCRETE_MINER
-        )
-        if concrete_method not in CONCRETE_METHODS:
+        if not concrete_method_valid:
             errors.append("Select a valid concrete fatigue method")
         _positive(inp.get("fatigue_gamma_c"), "gamma_c,fat", errors)
         _positive(inp.get("fatigue_beta_cc_t0"), "beta_cc(t0)", errors)
@@ -434,14 +459,14 @@ def validation_errors(inp: Mapping) -> list[str]:
                 errors,
                 positive=True,
             )
-            if "2023" not in edition:
+            if solver_edition and solver_edition != fatigue_inputs.EC2_2023:
                 _finite_attribute(
                     getattr(concrete, "alpha_cc", None),
                     "Concrete alpha_cc",
                     errors,
                     positive=True,
                 )
-        if "2023" not in edition:
+        if solver_edition and solver_edition != fatigue_inputs.EC2_2023:
             _positive(
                 inp.get("fatigue_concrete_k1"),
                 "Concrete fatigue k1",
@@ -541,8 +566,13 @@ def validation_errors(inp: Mapping) -> list[str]:
     if check_reinforcement:
         selected_family = (
             fatigue_inputs.EC2_2023
-            if "2023" in edition
-            else fatigue_inputs.EC2_2005 if edition else None
+            if solver_edition == fatigue_inputs.EC2_2023
+            else fatigue_inputs.EC2_2005 if solver_edition else None
+        )
+        basis_label = (
+            get_design_basis(basis_key).label
+            if basis_key is not None
+            else "unregistered fatigue basis"
         )
         for expected_kind, records in (
             (fatigue_inputs.MILD, bars),
@@ -582,9 +612,9 @@ def validation_errors(inp: Mapping) -> list[str]:
                     ):
                         errors.append(
                             f"{element_id}: fatigue detail '{detail_id}' uses "
-                            f"{detail_edition} resistance with {edition}; select "
-                            "an edition-aligned preset or identify the detail as "
-                            "Custom / imported"
+                            f"{detail_edition} resistance with {basis_label}; "
+                            "select an edition-aligned preset or identify the "
+                            "detail as Custom / imported"
                         )
         if bars and tendons:
             for record in tendons:
@@ -683,11 +713,28 @@ def invalid_result(
         )
     except (TypeError, ValueError):
         basis = fatigue_inputs.default_basis()
-    raw_edition = str(inp.get("fatigue_edition") or "").strip()
+    raw_basis_key = inp.get("fatigue_edition")
     try:
-        edition = _edition(raw_edition)
+        basis_key = parse_design_basis_key(raw_basis_key)
+        design_basis = get_design_basis(basis_key)
     except ValueError:
-        edition = raw_edition or "-"
+        basis_key = None
+        design_basis = None
+    solver_edition = None
+    if basis_key is not None:
+        try:
+            selected_bindings = _selected_capability_bindings(
+                basis_key,
+                check_reinforcement=bool(inp.get("fatigue_check_steel")),
+                check_concrete=bool(inp.get("fatigue_check_concrete")),
+                concrete_method=str(
+                    inp.get("fatigue_concrete_method") or CONCRETE_MINER
+                ),
+            )
+            if selected_bindings:
+                solver_edition = _solver_edition(selected_bindings)
+        except ValueError:
+            pass
     method = str(basis.get("method") or "")
     return {
         "valid": False,
@@ -695,7 +742,17 @@ def invalid_result(
         "passed": False,
         "errors": unique_errors,
         "warnings": tuple(validation_warnings(inp)),
-        "edition": edition,
+        "basis_key": (
+            basis_key.value
+            if basis_key is not None
+            else str(raw_basis_key or "-")
+        ),
+        "basis_label": design_basis.label if design_basis is not None else "-",
+        "basis_disclosure": (
+            design_basis.disclosure if design_basis is not None else ""
+        ),
+        "edition": design_basis.label if design_basis is not None else "-",
+        "solver_edition": solver_edition,
         "checks": {
             "reinforcement": bool(inp.get("fatigue_check_steel")),
             "concrete": bool(inp.get("fatigue_check_concrete")),
@@ -705,6 +762,7 @@ def invalid_result(
             method, "-"
         ),
         "calculation_references": {},
+        "capability_bindings": {},
         "partial_factors": {
             "gamma_c": inp.get("fatigue_gamma_c"),
             "gamma_s": inp.get("fatigue_gamma_s"),
@@ -865,11 +923,19 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         else []
     )
 
-    edition = _edition(inp.get("fatigue_edition"))
-    is_2023 = "2023" in edition
+    basis_key = parse_design_basis_key(inp.get("fatigue_edition"))
+    design_basis = get_design_basis(basis_key)
+    selected_bindings = _selected_capability_bindings(
+        basis_key,
+        check_reinforcement=check_reinforcement,
+        check_concrete=check_concrete,
+        concrete_method=concrete_method,
+    )
+    solver_edition = _solver_edition(selected_bindings)
+    is_2023 = solver_edition == fatigue_inputs.EC2_2023
     concrete = (
         ConcreteFatigueProperties(
-            edition=edition,
+            edition=solver_edition,
             fck_mpa=float(inp["concrete"].fck),
             gamma_c=gamma_c,
             beta_cc_t0=float(inp["fatigue_beta_cc_t0"]),
@@ -919,7 +985,10 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         ns=float(inp["ns"]),
         reinforcement=tuple(reinforcement),
         concrete=concrete,
-        edition=edition,
+        basis_key=basis_key,
+        basis_label=design_basis.label,
+        basis_disclosure=design_basis.disclosure,
+        solver_edition=solver_edition,
         solver_element_ids=tuple(
             str(record["id"]).strip() for record in bars + tendons
         ),
@@ -1025,7 +1094,8 @@ def analysis_signature(inp: Mapping) -> tuple:
         ),
         reinforcement_signature,
         concrete_signature,
-        prepared.edition,
+        prepared.basis_key.value,
+        prepared.solver_edition,
         prepared.solver_element_ids,
         prepared.nl,
         prepared.ns,
@@ -1063,7 +1133,7 @@ def run_analysis(
         prepared.ns,
         reinforcement=prepared.reinforcement,
         concrete=prepared.concrete,
-        fatigue_edition=prepared.edition,
+        fatigue_edition=prepared.solver_edition,
         solver_element_ids=prepared.solver_element_ids,
         gamma_s=(
             prepared.gamma_s if prepared.gamma_s is not None else 1.0
@@ -1076,9 +1146,21 @@ def run_analysis(
     ))
     governing = max(results, key=lambda result: result.utilisation)
     references = calculation_references(
-        prepared.edition,
+        prepared.basis_key,
         prepared.concrete_method or CONCRETE_MINER,
     )
+    selected_bindings = _selected_capability_bindings(
+        prepared.basis_key,
+        check_reinforcement=prepared.check_reinforcement,
+        check_concrete=prepared.check_concrete,
+        concrete_method=prepared.concrete_method,
+    )
+    standard_evidence_bindings = dict(selected_bindings)
+    if prepared.concrete_method == CONCRETE_PROJECT_MINER:
+        # The selected basis still controls the shared concrete-strength solver
+        # edition. The user-defined S-N relation is not, however, evidence of a
+        # registered Eurocode damage-sum implementation.
+        standard_evidence_bindings.pop("concrete", None)
     if (
         prepared.check_reinforcement
         and any(record["custom"] for record in prepared.detail_records)
@@ -1088,7 +1170,11 @@ def run_analysis(
             "separately"
         )
     return {
-        "edition": prepared.edition,
+        "basis_key": prepared.basis_key.value,
+        "basis_label": prepared.basis_label,
+        "basis_disclosure": prepared.basis_disclosure,
+        "edition": prepared.basis_label,
+        "solver_edition": prepared.solver_edition,
         "checks": {
             "reinforcement": prepared.check_reinforcement,
             "concrete": prepared.check_concrete,
@@ -1105,6 +1191,14 @@ def run_analysis(
                 (key == "reinforcement" and prepared.check_reinforcement)
                 or (key == "concrete" and prepared.check_concrete)
             )
+        },
+        "capability_bindings": {
+            key: {
+                "capability": binding.capability.value,
+                "source": references[key],
+                "disclosure": binding.disclosure,
+            }
+            for key, binding in standard_evidence_bindings.items()
         },
         "warnings": prepared.warnings,
         "partial_factors": {

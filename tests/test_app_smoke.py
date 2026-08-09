@@ -24,14 +24,11 @@ sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` 
 
 APP = str(ROOT / "app" / "sector_app.py")
 
-import bridge_inputs
 from app_case_inputs import (
     apply_case_changes,
     discard_retired_qs_fragment,
     first_case_value,
 )
-
-from sector import bridge
 
 _MATH_SPAN_RE = re.compile(r"\${1,2}.*?\${1,2}", flags=re.DOTALL)
 _LEAKED_MATH_RE = re.compile(
@@ -1825,6 +1822,7 @@ def test_save_load_round_trip_through_the_app():
 def test_app_restores_fatigue_inputs_into_the_ui():
     import fatigue_inputs
     import project_io
+    from sector import design_standards
 
     spectrum = fatigue_inputs.normalise_spectrum_table([{
         "spectrum": "Traffic",
@@ -1852,7 +1850,7 @@ def test_app_restores_fatigue_inputs_into_the_ui():
     assert at.session_state["fatigue_on"] is True
     assert at.toggle(key="fatigue_on").value is True
     assert at.selectbox(key="fatigue_edition").value == (
-        fatigue_inputs.EC2_2005_DKNA
+        design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
     )
     _goto_input_tab(at, "Loads")
     assert "fatigue_spectrum_editor" in at.session_state
@@ -1959,6 +1957,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     import fatigue_inputs
     import project_io
     import reinforcement_table as rt
+    from sector import design_standards
 
     at = _fresh()
     at.run()
@@ -1990,7 +1989,9 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     }
     scalars.update({
         "fatigue_on": True,
-        "fatigue_edition": fatigue_inputs.EC2_2005_DKNA,
+        "fatigue_edition": (
+            design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
+        ),
         "fatigue_check_steel": True,
         "fatigue_check_concrete": False,
         "fatigue_gamma_s": 1.15,
@@ -2010,6 +2011,13 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     fatigue = at.session_state["results"]["fatigue"]
     assert fatigue["governing_spectrum"] == "Traffic"
     assert len(fatigue["spectra"]) == 1
+    expected_basis = design_standards.get_design_basis(
+        design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024
+    )
+    assert fatigue["basis_key"] == expected_basis.key.value
+    assert fatigue["basis_label"] == expected_basis.label
+    assert fatigue["basis_disclosure"] == expected_basis.disclosure
+    assert set(fatigue["capability_bindings"]) == {"reinforcement"}
     assert at.session_state["result_fatigue_sig"] == (
         at.session_state["_latest_inputs"]["fatigue_sig"]
     )
@@ -2098,9 +2106,33 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         frame.value for frame in at.dataframe
         if list(frame.value.columns) == ["Item", "Value"]
     )
-    assert "Edition" in set(basis_table["Item"])
-    assert "gamma_Ff" in set(basis_table["Item"])
+    basis_items = set(basis_table["Item"])
+    assert {
+        "Design basis",
+        "Design basis key",
+        "Basis disclosure",
+        "gamma_Ff",
+    }.issubset(basis_items)
+    basis_values = dict(zip(basis_table["Item"], basis_table["Value"]))
+    assert basis_values["Design basis"] == expected_basis.label
+    assert basis_values["Design basis key"] == expected_basis.key.value
+    assert basis_values["Basis disclosure"] == expected_basis.disclosure
     assert basis_table["Value"].map(type).eq(str).all()
+    capability_table = next(
+        frame.value
+        for frame in at.dataframe
+        if {
+            "Check",
+            "Capability",
+            "Source",
+            "Disclosure",
+        }.issubset(frame.value.columns)
+    )
+    assert capability_table.iloc[0]["Capability"] == "reinforcement_fatigue"
+    assert "User-supplied factors govern" in capability_table.iloc[0]["Disclosure"]
+    assert "no hidden DK-specific fatigue equation or factor" in (
+        capability_table.iloc[0]["Disclosure"]
+    )
 
     # Stale results must retain the actions and geometry that produced them. If the
     # live spectrum is edited before recalculation, the result drill-down must not
@@ -3761,7 +3793,6 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
         "Elastic crack-width method",
         "Reinforcement detailing",
         "Fatigue",
-        "Optional bridge calculations",
         "Shear, torsion & combined (Plastic)",
     ]
     _goto_input_tab(at, "Project & report")
@@ -3773,71 +3804,69 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
     ]
 
 
-def test_bridge_typed_failure_does_not_mask_valid_sibling_result():
+def test_v093_hot_reload_purges_schema23_bridge_state_before_widgets_mount():
+    import session_state_migrations as migrations
+
     at = _fresh()
-    at.session_state["bridge_standard"] = bridge.COMPONENT_METHODS
-    at.session_state[bridge_inputs.BRITTLE_TABLE_KEY] = [{
-        "region_id": "bottom",
-        "m_rep_knm": 1.0,
-        "z_s_m": 1.0e-200,
-        "f_yk_mpa": 1.0e-200,
-        "as_provided_mm2": 1.0,
-    }]
-    at.session_state[bridge_inputs.BOX_WALL_TABLE_KEY] = [{
-        "wall_id": "left",
-        "cot_theta": 1.5,
-        "v_ed_kn": 20.0,
-        "v_rd_max_kn": 100.0,
-        "t_ed_equivalent_kn": 10.0,
-        "t_rd_max_equivalent_kn": 100.0,
-    }]
-    at.session_state[bridge_inputs.MINIMUM_CRACK_TABLE_KEY] = []
+    at.run()
+    assert not at.exception
+
+    del at.session_state[migrations.MIGRATION_MARKER]
+    for key in migrations.RETIRED_BRIDGE_STATE_KEYS:
+        at.session_state[key] = {"legacy": key}
+    at.session_state["_durable_input_scalars"] = {
+        "autosave_min": 17,
+        "bridge_standard": "legacy",
+        "bridge_brittle_base": [{"region_id": "R1"}],
+    }
+    at.session_state["_pending_input_events"] = {
+        "autosave_on": False,
+        "bridge_box_walls_base": [{"wall_id": "W1"}],
+    }
+    at.session_state["_latest_inputs"] = {
+        "signature": ("schema-23",),
+        "bridge_standard": "legacy",
+    }
+    at.session_state["results"] = {
+        "plastic": {"legacy": True},
+        "bridge": {"calculations": {"legacy": True}},
+    }
+    at.session_state["result_sig"] = ("schema-23",)
+    at.session_state["result_plastic_sig"] = ("schema-23",)
+    at.session_state["result_input_snapshot"] = {"bridge_standard": "legacy"}
+    at.session_state["calculation_record"] = {"input_sha256": "legacy"}
+    at.session_state["report_buffer"] = b"legacy report"
+    at.session_state["report_signature"] = ("schema-23",)
+    at.session_state["manual_pdf"] = b"legacy manual"
+    at.session_state["view"] = "Bridge Calculations"
+    at.session_state["_workspace_view"] = "Bridge Calculations"
+    at.session_state["_main_page"] = "Analysis"
 
     at.run()
-    _calculate(at)
-    _select_view(at, "Bridge Calculations")
 
     assert not at.exception
-    assert any(
-        "brittle method b: invalid (numerical_failure)" in error.value.lower()
-        for error in at.error
+    assert at.session_state[migrations.MIGRATION_MARKER] is True
+    for key in migrations.RETIRED_BRIDGE_STATE_KEYS:
+        assert key not in at.session_state
+    assert at.session_state["_durable_input_scalars"]["autosave_min"] == 17
+    assert "bridge_standard" not in at.session_state["_durable_input_scalars"]
+    assert "_pending_input_events" not in at.session_state
+    assert "results" not in at.session_state
+    assert "result_sig" not in at.session_state
+    assert "result_plastic_sig" not in at.session_state
+    assert "result_input_snapshot" not in at.session_state
+    assert "calculation_record" not in at.session_state
+    assert "report_buffer" not in at.session_state
+    assert "report_signature" not in at.session_state
+    assert "manual_pdf" not in at.session_state
+    assert "bridge_standard" not in at.session_state["_latest_inputs"]
+    assert at.session_state["_main_page"] == "Inputs"
+    assert at.session_state["view"] == "Results Overview"
+    assert at.session_state["_workspace_view"] == "Results Overview"
+    assert all(
+        "bridge" not in expander.label.casefold()
+        for expander in at.expander
     )
-    wall_table = next(
-        frame.value
-        for frame in at.dataframe
-        if "Wall" in frame.value.columns
-    )
-    assert wall_table.iloc[0]["Wall"] == "left"
-    results = at.session_state["results"]
-    assert "plastic" in results
-    payload = results["bridge"]
-    assert tuple(payload["calculations"]) == ("box_walls",)
-    assert payload["failures"][0]["state"] == "INVALID"
-
-
-def test_bridge_failure_only_result_remains_active_with_section_results():
-    at = _fresh()
-    at.session_state["bridge_standard"] = bridge.COMPONENT_METHODS
-    at.session_state[bridge_inputs.BRITTLE_TABLE_KEY] = [{
-        "region_id": "bottom",
-        "m_rep_knm": 1.0,
-        "z_s_m": 1.0e-200,
-        "f_yk_mpa": 1.0e-200,
-        "as_provided_mm2": 1.0,
-    }]
-    at.session_state[bridge_inputs.BOX_WALL_TABLE_KEY] = []
-    at.session_state[bridge_inputs.MINIMUM_CRACK_TABLE_KEY] = []
-
-    at.run()
-    _calculate(at)
-    _select_view(at, "Bridge Calculations")
-
-    assert not at.exception
-    results = at.session_state["results"]
-    assert "plastic" in results
-    assert results["bridge"]["calculations"] == {}
-    assert results["bridge"]["failures"][0]["code"] == "NUMERICAL_FAILURE"
-    assert any("numerical_failure" in error.value.lower() for error in at.error)
 
 
 def test_only_selected_outer_stage_mounts_and_retains_material_edits():

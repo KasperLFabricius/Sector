@@ -85,23 +85,29 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
-def test_manual_includes_direct_live_method_b_hand_check():
-    calculation = manual._worked_bridge_method_b()
-    row = calculation["rows"][0]
-    assert calculation["equation"] == "As,min = Mrep / (zs fyk)"
-    assert calculation["source"] == "DS/EN 1992-2:2005 6.1(109)-(110)"
-    assert row["as_required_mm2"] == pytest.approx(2500.0)
-    assert row["as_provided_mm2"] == pytest.approx(2600.0)
-    assert row["utilisation"] == pytest.approx(2500.0 / 2600.0)
-    assert row["status"] == "PASS"
-    blocks = manual.manual_blocks()
-    assert any(
-        block[:2] == ("h1", "Worked standards calculation")
-        for block in blocks
-    )
-    assert "calculation trace" not in " ".join(
-        str(block) for block in blocks
-    ).casefold()
+def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for removed in (
+        "Bridge Calculations",
+        "Bridge brittle Method B",
+        "Optional brittle Method B",
+        "box-wall",
+        "web/flange minimum crack reinforcement",
+        "DS/EN 1992-2:2005 6.1(109)-(110)",
+    ):
+        assert removed not in text
+    for retained in (
+        "published project-adoption basis",
+        "no Danish National Annex",
+        "confinement enhancement is not included or assessed",
+        "current project schema version 24",
+        "in-development Sector v0.93 line",
+        "Released Sector 0.92 projects used schema version 23",
+        "DS/EN 1992-2:2005/AC:2008",
+        "6.106",
+    ):
+        assert retained in text
+    assert "Sector 0.92 supports only current project schema version 24" not in text
 
 
 def test_manual_math_spacing_cannot_merge_latex_commands_with_symbols():
