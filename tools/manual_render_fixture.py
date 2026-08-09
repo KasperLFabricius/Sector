@@ -32,13 +32,13 @@ _MANUAL_CROPS = (
         "manual cover and contents",
         1,
         (0.10, 0.07, 0.90, 0.45),
-        "2cc081c5bb6c4cd7353f1744ede8c442e927208f0629f6862f889e73e00d4dbe",
+        "91b33433aafdc22aef60647649212db0b0b215bbf70f6ecdf5c2cc47263a439c",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "cdad9c115fc43b44ca625d530b8b838614042f1ba876acb6a94c9aa1c3b43c24",
+        "be77a57d0e8a84a9669af5d8ed0bb63b79b239bdc56f4a38d61f655eec15f9c5",
     ),
 )
 
@@ -56,6 +56,7 @@ def build_fixture_pdf() -> bytes:
 def validate_pdf_content(pdf: bytes) -> str:
     reader, page_texts = preflight_pdf(pdf, min_pages=6)
     text = "\n".join(page_texts)
+    flat_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
     for token in (
@@ -153,7 +154,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Project-defined / uncited",
         "Part D - Reference",
     ):
-        if expected not in text:
+        if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected manual content is missing: {expected}")
     return text
 

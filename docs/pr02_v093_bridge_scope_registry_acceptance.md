@@ -119,7 +119,10 @@ The final local affected-suite gate on this candidate produced:
 - 213 passed and 1 skipped: complete semantic report, manual,
   publication-object, reference-example and result-presentation suites; and
 - 15 passed: focused Streamlit hot-reload, project/fatigue restoration,
-  configured calculation, provenance and complete lazy-startup regressions.
+  configured calculation, provenance and complete lazy-startup regressions;
+  and
+- 3 passed plus standalone fixture generation: the real rendered report and
+  manual gates produced 55 and 45 visually reviewed pages, respectively.
 
 The Ruff policy executor, strict-mypy policy executor and `git diff --check`
 also passed. An attempted full 216-test local Streamlit/lazy-startup run remained
