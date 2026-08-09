@@ -1024,8 +1024,8 @@ class ReportBuilder:
             ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
             ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 1.2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
+            ("TOPPADDING", (0, 0), (-1, -1), 0.8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.8),
         ]
         style.extend(context_style)
         fills = {
