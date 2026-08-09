@@ -3081,6 +3081,75 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert "confinement enhancement is not included or assessed" in flat
 
 
+def test_concrete_table_and_design_strength_equation_share_one_layout_group():
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), _out(), figures=False,
+    )
+    builder._h1("Inputs")
+    builder._h2("Concrete")
+    builder._concrete_block()
+
+    matching_groups = []
+    for flowable in builder.flow:
+        if not isinstance(flowable, sector_report.KeepTogether):
+            continue
+        equation_keys = {
+            item._sector_equation_key
+            for item in getattr(flowable, "_sector_equations", ())
+        }
+        if "materials.concrete.fcd" in equation_keys:
+            matching_groups.append((flowable, equation_keys))
+
+    assert len(matching_groups) == 1
+    group, equation_keys = matching_groups[0]
+    assert any(
+        isinstance(item, sector_report._PaginatedReportTable)
+        for item in group._content
+    )
+    assert equation_keys == {"materials.concrete.fcd"}
+    assert not any(
+        isinstance(item, sector_report._EquationFlowable)
+        for item in group._content
+    )
+    assert any(
+        isinstance(item, sector_report._EquationFlowable)
+        and item._sector_equation_key == "materials.concrete.curve-2"
+        for item in builder.flow
+    )
+
+    # Put the bounded calculation near a page foot.  It must move as one measured
+    # unit instead of releasing the equation onto the following page.
+    import pypdf
+
+    paginated = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), _out(), figures=False,
+    )
+    paginated._h1("Inputs")
+    paginated.flow.append(sector_report.Spacer(1, 500))
+    paginated._h2("Concrete")
+    paginated._concrete_block()
+    pdf = io.BytesIO()
+    sector_report.SimpleDocTemplate(
+        pdf,
+        pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm,
+        rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm,
+        bottomMargin=20 * sector_report.mm,
+    ).build(list(paginated.flow))
+    pages = [page.extract_text() or "" for page in pypdf.PdfReader(pdf).pages]
+    table_pages = [
+        index for index, text in enumerate(pages)
+        if "Characteristic strength" in text
+    ]
+    equation_pages = [
+        index for index, text in enumerate(pages)
+        if "= 20.000 MPa" in text
+    ]
+    assert table_pages == equation_pages
+    assert table_pages and table_pages[0] > 0
+
+
 def test_report_prints_actual_custom_half_and_double_partial_factors():
     inp = _inp()
     inp["concrete"] = Concrete(

@@ -1039,7 +1039,29 @@ def _results(inp: dict | None = None) -> dict:
     plastic_rows = case_analysis.case_records(inputs, "plastic")
     elastic_rows = case_analysis.case_records(inputs, "elastic")
     fatigue = fatigue_analysis.run_analysis(inputs)
+    material_properties = {
+        "concrete": {
+            "variant": "2005",
+            "characteristic_strength_mpa": inp["concrete"].fck,
+            "strength_factor": inp["concrete"].alpha_cc,
+            "partial_factor": inp["concrete"].gamma_c,
+            "eta_cc": inp.get("concrete_eta_cc"),
+            "k_tc": inp.get("concrete_k_tc"),
+            "design_strength_mpa": inp["concrete"].fcd,
+        },
+        "mild": [
+            {
+                "material_id": material_id,
+                "characteristic_yield_mpa": material.fytk,
+                "yield_factor": material.gamma_y,
+                "design_yield_mpa": capacity.design_yield(material),
+            }
+            for material_id, material in inp["mild_materials"].items()
+        ],
+        "prestress": [],
+    }
     out = {
+        "material_properties": material_properties,
         "plastic": plastic,
         "elastic": elastic,
         "fatigue": fatigue,
@@ -1086,6 +1108,22 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             raise AssertionError(
                 f"inconsistent fixture {label}: {actual!r} != {expected!r}"
             )
+
+    retained_materials = out["material_properties"]
+    close(
+        "concrete design strength",
+        retained_materials["concrete"]["design_strength_mpa"],
+        inp["concrete"].fcd,
+    )
+    retained_mild = {
+        row["material_id"]: row for row in retained_materials["mild"]
+    }
+    for material_id, material in inp["mild_materials"].items():
+        close(
+            f"{material_id} design yield",
+            retained_mild[material_id]["design_yield_mpa"],
+            capacity.design_yield(material),
+        )
 
     plastic_worked = out["plastic_cases"][1]["results"]["plastic"]
     worked_index = plastic_worked.get("worked_point_index")

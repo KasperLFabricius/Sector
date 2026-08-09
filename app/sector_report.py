@@ -1096,6 +1096,28 @@ class ReportBuilder:
                 block.append(item)
         self.flow[start:] = [KeepTogether(block)]
 
+    def _keep_measured_calculation_from(self, start):
+        """Keep a bounded table/equation calculation together using real heights.
+
+        ``_EquationFlowable`` is itself a ``KeepTogether`` and therefore reports
+        ReportLab's deliberately artificial height when nested.  Flatten its
+        visible rows for this outer layout group, while retaining the sealed
+        equation objects as publication metadata on the group.
+        """
+        block = []
+        equations = []
+        for item in self.flow[start:]:
+            if isinstance(item, _EquationFlowable):
+                equations.append(item)
+                block.extend(item._content)
+            elif isinstance(item, KeepTogether):
+                block.extend(item._content)
+            else:
+                block.append(item)
+        group = KeepTogether(block)
+        group._sector_equations = tuple(equations)
+        self.flow[start:] = [group]
+
     def _formula(
         self,
         expr,
@@ -1871,10 +1893,8 @@ class ReportBuilder:
         self._concrete_section_properties_block()
         # Materials are reported only when the section actually uses them: mild
         # steel when there are bars, prestress when there are tendons.
-        start = len(self.flow)
         self._h2("Concrete")
         self._concrete_block()
-        self._keep_from(start)
         if inp.get("bars") or inp.get("shear_on") or inp.get("torsion_on"):
             start = len(self.flow)
             self._h2("Reinforcement")
@@ -2099,7 +2119,13 @@ class ReportBuilder:
             rows.append(
                 ["Design strength", "f<sub>cd</sub>", f"{_fmt(fcd, 3)} MPa"]
             )
+        # Keep the material table with its numerical design-strength equation,
+        # while allowing the longer constitutive-law/figure material below to
+        # paginate independently.  Wrapping the complete Concrete subsection can
+        # exceed a page and lets ReportLab split the table from this equation.
+        definition_start = len(self.flow)
         self._table(rows, [60 * mm, 35 * mm, 50 * mm])
+        applicability_note = None
         if is_2023 and fcd is not None:
             self._formula(
                 "f<sub>cd</sub> = eta<sub>cc</sub> &#183; k<sub>tc</sub> &#183; "
@@ -2112,7 +2138,7 @@ class ReportBuilder:
                       f"{_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
                 result=f"= {_fmt(fcd, 3)} MPa")
             if math.isclose(float(self.inp.get("concrete_k_tc") or 0.0), 1.0):
-                self._small(
+                applicability_note = (
                     "<b>Applicability assumption:</b> k<sub>tc</sub> = 1.00 was "
                     "selected assuming t<sub>ref</sub> &#8804; 28 days for CR/CN "
                     "or &#8804; 56 days for CS and that design loading is not "
@@ -2120,7 +2146,7 @@ class ReportBuilder:
                     "governing National Annex states otherwise (5.1.6(1))."
                 )
             else:
-                self._small(
+                applicability_note = (
                     "k<sub>tc</sub> = 0.85 is the general / other-case value stated "
                     "in EN 1992-1-1:2023 5.1.6(1)."
                 )
@@ -2134,6 +2160,10 @@ class ReportBuilder:
                 subst=f"= {_fmt(c.alpha_cc,3)} &#183; {_fmt(c.fck, 3)} / "
                       f"{_fmt(c.gamma_c, 3)}",
                 result=f"= {_fmt(fcd, 3)} MPa")
+        if fcd is not None:
+            self._keep_measured_calculation_from(definition_start)
+        if applicability_note is not None:
+            self._small(applicability_note)
         if c.curve == 2:
             self._formula(
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
