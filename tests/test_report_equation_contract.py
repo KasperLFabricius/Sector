@@ -82,6 +82,35 @@ EXPECTED_CONTRACT_KEYS = {
     ("torsion.utilisation", None),
 }
 
+THEORY_ONLY_EQUATIONS = {
+    ("basis.detailing.transverse-ratios", None),
+    ("basis.fatigue.concrete-miner", None),
+    ("basis.fatigue.reinforcement-miner", None),
+    ("basis.fatigue.stress-range", None),
+    ("basis.plastic.equilibrium", None),
+    ("basis.plastic.governing-curvature", None),
+    ("materials.concrete.curve-2", None),
+}
+
+# This is an executable PR-03 work list, not a permanent allowance. Each family
+# slice removes its entries by publishing a numerical substitution and result.
+EXISTING_LIVE_EQUATION_GAPS = {
+    ("combined.dk-na.sum", None),
+    ("crack.2005.mean-strain", None),
+    ("crack.2005.spacing", "geometric"),
+    ("crack.2005.spacing", "reinforcement"),
+    ("crack.2023.mean-strain", None),
+    ("crack.2023.spacing", None),
+    ("detailing.clear-spacing.requirement", None),
+    ("detailing.links.minimum-ratio", None),
+    ("detailing.minimum.area-2005", None),
+    ("detailing.minimum.bending-2023", None),
+    ("detailing.minimum.tension-2023", None),
+    ("shear.links.vrd", None),
+    ("torsion.resistance.governing", None),
+    ("torsion.subtube.governing-utilisation", None),
+}
+
 
 def _formula_calls():
     path = ROOT / "app" / "sector_report.py"
@@ -143,6 +172,9 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
 
 def test_every_contract_is_complete_immutable_and_role_pinned():
     items = contracts.equation_contract_items()
+    publication_role_counts = collections.Counter(
+        contract.publication_role for _key, contract in items
+    )
     role_counts = collections.Counter(
         contract.substitution_role for _key, contract in items
     )
@@ -151,9 +183,9 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
     )
     assert role_counts == {
         "numerical": 42,
-        "none": 18,
-        "applicability-note": 2,
+        "none": 20,
     }
+    assert publication_role_counts == {"calculation": 55, "theory": 7}
     # One extra contract is the second runtime branch of shear.chord.demand.
     assert result_counts == {True: 46, False: 16}
 
@@ -172,9 +204,33 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
             assert contract.result_unit and contract.result_unit.strip(), key
         else:
             assert contract.result_unit is None, key
+        if contract.publication_role == "theory":
+            assert not contract.expects_result, key
+            assert not contract.expects_substitution, key
+            assert not contract.applicability_note_required, key
 
     with pytest.raises(FrozenInstanceError):
         items[0][1].result_unit = "changed"
+
+
+def test_theory_and_existing_live_equation_gap_inventory_are_exact():
+    items = contracts.equation_contract_items()
+    theory = {
+        key for key, contract in items if contract.publication_role == "theory"
+    }
+    incomplete_calculations = {
+        key
+        for key, contract in items
+        if contract.publication_role == "calculation"
+        and (
+            contract.substitution_role != "numerical"
+            or not contract.expects_result
+        )
+    }
+
+    assert theory == THEORY_ONLY_EQUATIONS
+    assert incomplete_calculations == EXISTING_LIVE_EQUATION_GAPS
+    assert not theory & incomplete_calculations
 
 
 def test_dynamic_material_identity_and_variant_selection_are_exact():
@@ -198,8 +254,10 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
     geometric = contracts.equation_contract(
         "crack.2005.spacing", "geometric"
     )
-    assert combined.substitution_role == "applicability-note"
-    assert geometric.substitution_role == "applicability-note"
+    assert combined.substitution_role == "none"
+    assert geometric.substitution_role == "none"
+    assert combined.applicability_note_required
+    assert geometric.applicability_note_required
 
     crack = contracts.equation_contract("crack.2023.width")
     definitions = {symbol.markup: symbol.meaning for symbol in crack.symbols}
@@ -262,6 +320,8 @@ def test_contract_metadata_reaches_the_equation_flowable_unchanged():
     assert equation._sector_equation_result_symbol == "f<sub>cd</sub>"
     assert equation._sector_equation_result_unit == "MPa"
     assert equation._sector_equation_substitution_role == "numerical"
+    assert equation._sector_equation_publication_role == "calculation"
+    assert not equation._sector_equation_applicability_note_required
 
     builder._h2("Applicability")
     builder._formula(
@@ -271,8 +331,52 @@ def test_contract_metadata_reaches_the_equation_flowable_unchanged():
         result="sum(S<sub>Ed</sub>/S<sub>Rd</sub>) = 0.70",
     )
     note_equation = builder.flow[-1]
-    assert note_equation._sector_equation_substitution_role == "applicability-note"
+    assert note_equation._sector_equation_substitution_role == "none"
+    assert note_equation._sector_equation_applicability_note_required
     assert "M and V are checked separately." in note_equation.getPlainText()
+
+
+def test_numerical_substitution_and_applicability_note_are_independent():
+    builder = _builder()
+    builder._h1("Independent publication rows")
+    contract = contracts.EquationContract(
+        symbols=(
+            contracts.EquationSymbol("x", "input", "kN"),
+            contracts.EquationSymbol("y", "result", "kN"),
+        ),
+        result_symbol="y",
+        result_unit="kN",
+        substitution_role="numerical",
+        publication_role="calculation",
+        applicability_note_required=True,
+    )
+    builder._formula(
+        "y = 2x",
+        equation_key="test.numerical-with-note",
+        equation_spec=contract,
+        subst="= 2 x 3 kN",
+        note="This branch applies because the declared condition is true.",
+        result="y = 6 kN",
+    )
+    equation = builder.flow[-1]
+    assert equation._sector_equation_substitution_role == "numerical"
+    assert equation._sector_equation_applicability_note_required
+    roles = equation._sector_equation_roles
+    assert "symbolic-expression" in roles
+    assert "numerical-substitution" in roles
+    assert "applicability-note" in roles
+    assert "result" in roles
+    assert roles.index("numerical-substitution") < roles.index("applicability-note")
+    assert roles.index("applicability-note") < roles.index("result")
+
+    with pytest.raises(ValueError, match="requires an applicability note"):
+        builder._formula(
+            "y = 2x",
+            equation_key="test.numerical-with-note",
+            equation_spec=contract,
+            subst="= 2 x 3 kN",
+            result="y = 6 kN",
+        )
 
 
 def test_explicit_test_contract_cannot_mask_a_variant_or_wrong_type():

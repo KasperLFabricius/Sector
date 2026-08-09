@@ -553,6 +553,10 @@ class _EquationFlowable(KeepTogether):
         self._sector_equation_result_symbol = contract.result_symbol
         self._sector_equation_result_unit = contract.result_unit
         self._sector_equation_substitution_role = contract.substitution_role
+        self._sector_equation_publication_role = contract.publication_role
+        self._sector_equation_applicability_note_required = (
+            contract.applicability_note_required
+        )
         self._sector_equation_anchor = anchor
         self._sector_equation_number = number
         self._sector_equation_section = section

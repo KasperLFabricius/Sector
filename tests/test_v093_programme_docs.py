@@ -882,7 +882,6 @@ def test_complete_calculation_not_only_crack_spacing_is_textbook_readable():
         "detailing",
         "fatigue",
         "ordinary crack width",
-        "heightened crack control",
     ):
         assert family in collapsed
     for step in (
@@ -892,12 +891,18 @@ def test_complete_calculation_not_only_crack_spacing_is_textbook_readable():
         "**Equation.**",
         "**Substitution.**",
         "**Interim result.**",
-        "**Numerical solution evidence.**",
+        "**Numerical solution summary.**",
         "**Final result and criterion.**",
         "**Interpretation and scope.**",
     ):
         assert step in programme
-    assert "Standard and Audit must both be independently followable" in collapsed
+    assert "The default report must be independently followable" in collapsed
+    assert "must not revive the calculation-trace programme" in collapsed
+    assert "There is no new cross-family trace/evidence data contract" in collapsed
+    assert (
+        "PR-06 separately adds the optional comparison and heightened Formula "
+        "7.100 NA calculation"
+    ) in collapsed
 
 
 def test_pr01_is_planning_only_and_current_release_remains_0_92():

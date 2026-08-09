@@ -1,8 +1,8 @@
 """Frozen semantic contracts for generated-report equation blocks.
 
-The report owns the numerical values and authored expressions.  This module owns
-the publication identity around those values: every equation's symbols, final
-quantity and unit, and the semantic role of the optional intermediate row.
+Solver and result objects own the numerical values.  This module owns the
+publication identity around them: every equation's symbols, final quantity and
+unit, and the semantic role of its authored publication rows.
 """
 
 from __future__ import annotations
@@ -13,7 +13,8 @@ import re
 
 _KEY_RE = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*")
 _MATERIAL_KEY_RE = re.compile(r"materials\.steel\.fyd-[1-9][0-9]*")
-_SUBSTITUTION_ROLES = frozenset(("none", "numerical", "applicability-note"))
+_PUBLICATION_ROLES = frozenset(("theory", "calculation"))
+_SUBSTITUTION_ROLES = frozenset(("none", "numerical"))
 _MATERIAL_TEMPLATE_KEY = "materials.steel.fyd-N"
 
 
@@ -34,6 +35,8 @@ class EquationContract:
     result_symbol: str | None = None
     result_unit: str | None = None
     substitution_role: str = "none"
+    publication_role: str = "theory"
+    applicability_note_required: bool = False
 
     @property
     def expects_result(self) -> bool:
@@ -55,17 +58,28 @@ def _relation(*rows: tuple[str, str] | tuple[str, str, str]) -> EquationContract
     return EquationContract(_symbols(*rows))
 
 
+def _calculation_relation(
+    *rows: tuple[str, str] | tuple[str, str, str],
+) -> EquationContract:
+    """Mark an existing live calculation whose worked block is incomplete."""
+
+    return EquationContract(_symbols(*rows), publication_role="calculation")
+
+
 def _result(
     result_symbol: str,
     result_unit: str,
     *rows: tuple[str, str] | tuple[str, str, str],
     substitution_role: str = "numerical",
+    applicability_note_required: bool = False,
 ) -> EquationContract:
     return EquationContract(
         _symbols(*rows),
         result_symbol=result_symbol,
         result_unit=result_unit,
         substitution_role=substitution_role,
+        publication_role="calculation",
+        applicability_note_required=applicability_note_required,
     )
 
 
@@ -144,14 +158,14 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("A<sub>leg</sub>", "area of one effective closed-link leg", "mm2"),
         ("t<sub>ef</sub>", "effective torsion-wall thickness", "mm"),
     ),
-    ("detailing.minimum.area-2005", None): _relation(
+    ("detailing.minimum.area-2005", None): _calculation_relation(
         ("A<sub>s,min</sub>", "required minimum longitudinal reinforcement", "mm2"),
         ("f<sub>ctm</sub>", "mean concrete tensile strength", "MPa"),
         ("f<sub>yk</sub>", "characteristic reinforcement yield strength", "MPa"),
         ("b<sub>t</sub>", "mean width of the tension zone", "mm"),
         ("d", "effective depth", "mm"),
     ),
-    ("detailing.minimum.tension-2023", None): _relation(
+    ("detailing.minimum.tension-2023", None): _calculation_relation(
         ("R<sub>nom</sub>", "nominal reinforcement tensile resistance", "kN"),
         ("A<sub>s,i</sub>", "area of reinforcement element i", "mm2"),
         ("f<sub>yk,i</sub>", "characteristic yield strength of element i", "MPa"),
@@ -159,17 +173,17 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("A<sub>c</sub>", "gross concrete area", "mm2"),
         ("f<sub>ctm</sub>", "mean concrete tensile strength", "MPa"),
     ),
-    ("detailing.minimum.bending-2023", None): _relation(
+    ("detailing.minimum.bending-2023", None): _calculation_relation(
         ("M<sub>R,nom</sub>", "nominal bending resistance", "kNm"),
         ("M<sub>cr</sub>", "cracking moment", "kNm"),
         ("N<sub>Ed</sub>", "applied design axial force", "kN"),
     ),
-    ("detailing.links.minimum-ratio", None): _relation(
+    ("detailing.links.minimum-ratio", None): _calculation_relation(
         ("rho<sub>w,min</sub>", "minimum shear-link ratio"),
         ("f<sub>ck</sub>", "characteristic concrete compressive strength", "MPa"),
         ("f<sub>ywk</sub>", "characteristic link yield strength", "MPa"),
     ),
-    ("detailing.clear-spacing.requirement", None): _relation(
+    ("detailing.clear-spacing.requirement", None): _calculation_relation(
         ("c<sub>req</sub>", "required clear reinforcement spacing", "mm"),
         ("phi<sub>max</sub>", "larger detailing diameter of the pair", "mm"),
         ("D<sub>upper</sub>", "upper aggregate size", "mm"),
@@ -349,7 +363,8 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("r<sub>V</sub>", "stand-alone shear utilisation"),
         ("r<sub>T</sub>", "stand-alone torsion utilisation"),
         ("sum(S<sub>Ed</sub>/S<sub>Rd</sub>)", "governing DK NA interaction sum"),
-        substitution_role="applicability-note",
+        substitution_role="none",
+        applicability_note_required=True,
     ),
     ("combined.crushing.interaction", None): _result(
         "interaction", "dimensionless",
@@ -479,9 +494,10 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("s<sub>r,max</sub>", "maximum crack spacing", "mm"),
         ("h", "section depth in the crack direction", "mm"),
         ("x", "neutral-axis depth", "mm"),
-        substitution_role="applicability-note",
+        substitution_role="none",
+        applicability_note_required=True,
     ),
-    ("crack.2005.spacing", "reinforcement"): _relation(
+    ("crack.2005.spacing", "reinforcement"): _calculation_relation(
         ("s<sub>r,max</sub>", "maximum crack spacing", "mm"),
         ("k<sub>1</sub>", "bond coefficient"),
         ("k<sub>2</sub>", "strain-distribution coefficient"),
@@ -491,7 +507,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("phi", "bar diameter", "mm"),
         ("rho<sub>p,eff</sub>", "effective reinforcement ratio"),
     ),
-    ("crack.2005.mean-strain", None): _relation(
+    ("crack.2005.mean-strain", None): _calculation_relation(
         ("eps<sub>sm</sub>-eps<sub>cm</sub>", "mean reinforcement/concrete strain difference"),
         ("sigma<sub>s</sub>", "reinforcement stress", "MPa"),
         ("k<sub>t</sub>", "load-duration factor"),
@@ -518,8 +534,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
             ("h-x", "tension-zone depth", "mm"),
         ),
         substitution_role="numerical",
+        publication_role="calculation",
     ),
-    ("crack.2023.mean-strain", None): _relation(
+    ("crack.2023.mean-strain", None): _calculation_relation(
         ("eps<sub>sm</sub>-eps<sub>cm</sub>", "mean reinforcement/concrete strain difference"),
         ("sigma<sub>s</sub>", "reinforcement stress", "MPa"),
         ("k<sub>t</sub>", "load-duration factor"),
@@ -558,8 +575,18 @@ def _validate_catalogue() -> None:
         for symbol in contract.symbols:
             if not symbol.meaning.strip() or not symbol.unit.strip():
                 raise RuntimeError(f"Equation contract {key!r} has an incomplete symbol.")
+        if contract.publication_role not in _PUBLICATION_ROLES:
+            raise RuntimeError(f"Equation contract {key!r} has an invalid publication role.")
         if contract.substitution_role not in _SUBSTITUTION_ROLES:
             raise RuntimeError(f"Equation contract {key!r} has an invalid role.")
+        if contract.publication_role == "theory" and (
+            contract.expects_result
+            or contract.expects_substitution
+            or contract.applicability_note_required
+        ):
+            raise RuntimeError(
+                f"Theory equation contract {key!r} advertises calculation output."
+            )
         if contract.expects_result:
             if not contract.result_symbol.strip() or not contract.result_unit:
                 raise RuntimeError(f"Equation contract {key!r} has an incomplete result.")
@@ -611,17 +638,23 @@ def validate_equation_payload(
         raise ValueError(f"Equation {equation_key} requires a symbolic expression.")
     has_substitution = isinstance(substitution, str) and bool(substitution.strip())
     has_note = isinstance(applicability_note, str) and bool(applicability_note.strip())
-    if contract.substitution_role == "numerical":
-        valid_intermediate = has_substitution and not has_note
-    elif contract.substitution_role == "applicability-note":
-        valid_intermediate = has_note and not has_substitution
-    else:
-        valid_intermediate = not has_substitution and not has_note
-    if not valid_intermediate:
+    valid_substitution = (
+        has_substitution
+        if contract.substitution_role == "numerical"
+        else not has_substitution
+    )
+    if not valid_substitution:
         raise ValueError(
             f"Equation {equation_key} requires {contract.substitution_role} "
-            "intermediate evidence in its dedicated field."
+            "substitution content in its dedicated field."
         )
+    if has_note != contract.applicability_note_required:
+        expected_note = (
+            "an applicability note"
+            if contract.applicability_note_required
+            else "no applicability note"
+        )
+        raise ValueError(f"Equation {equation_key} requires {expected_note}.")
     has_result = isinstance(result, str) and bool(result.strip())
     if has_result != contract.expects_result:
         expected = "a final result" if contract.expects_result else "no final result"
