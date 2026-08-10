@@ -13,8 +13,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 
 import load_cases
+from deferred_import import deferred_module
 
-from sector import sls as sls_core
+sls_core = deferred_module("sector.sls")
 
 _PLASTIC_RESULT_KEYS = (
     "plastic", "shear", "torsion", "combined", "minimum_reinforcement",
@@ -167,7 +168,7 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
     out = dict(base)
     calculate_crack_width = bool(record["calculate_crack_width"])
     criterion = record.get("ordinary_crack_criterion_mm")
-    criterion_source = sls_core.crack_criterion_source(
+    criterion_source = load_cases.ordinary_crack_criterion_source(
         record[load_cases.NAME]
     )
     out.update(
@@ -214,7 +215,7 @@ def _with_ordinary_crack_assessment(
         raw_output,
         requested=bool(record["calculate_crack_width"]),
         criterion_mm=record.get("ordinary_crack_criterion_mm"),
-        criterion_source=sls_core.crack_criterion_source(
+        criterion_source=load_cases.ordinary_crack_criterion_source(
             record[load_cases.NAME]
         ),
     )

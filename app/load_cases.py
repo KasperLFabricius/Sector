@@ -31,6 +31,12 @@ CASE_TABLE_KEYS = (PLASTIC_TABLE_KEY, ELASTIC_TABLE_KEY)
 NAME = "name"
 DESCRIPTION = "description"
 
+
+def ordinary_crack_criterion_source(case_name: object) -> str:
+    """Return the stable provenance label for one Elastic-case criterion."""
+
+    return f"User input - Elastic case {str(case_name).strip()}"
+
 # The stored values are deliberately coordinate-neutral.  The UI presents the
 # matching physical face for each component (Vx: left/right; Vy: bottom/top).
 FACE_AUTO = "auto"

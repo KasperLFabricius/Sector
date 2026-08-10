@@ -45,6 +45,12 @@ def test_optional_ordinary_crack_criterion_accepts_comma_and_roundtrips():
     assert record["calculate_crack_width"] is False
 
 
+def test_ordinary_crack_criterion_source_is_stable_and_case_owned():
+    assert load_cases.ordinary_crack_criterion_source("  EL-limit  ") == (
+        "User input - Elastic case EL-limit"
+    )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

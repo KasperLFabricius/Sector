@@ -5284,8 +5284,8 @@ def build_inputs(host=st):
                 ordinary_crack_criterion_mm=case_head[
                     "ordinary_crack_criterion_mm"
                 ],
-                ordinary_crack_criterion_source=sls_core.crack_criterion_source(
-                    el_case_id
+                ordinary_crack_criterion_source=(
+                    load_cases.ordinary_crack_criterion_source(el_case_id)
                 ),
                 sls_heightened_on=sls_heightened_on,
                 sls_heightened_crack_system=sls_heightened_crack_system,
