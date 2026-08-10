@@ -9,9 +9,9 @@ may explain local terminology, but it never replaces the canonical
 
 from __future__ import annotations
 
+import string
 from collections.abc import Mapping
 from html import escape
-import string
 
 from sector import detailing
 

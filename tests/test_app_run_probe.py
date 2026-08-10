@@ -10,7 +10,6 @@ from streamlit.testing.v1 import AppTest
 
 from app import app_run_probe
 
-
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = str(ROOT / "app" / "sector_app.py")
 sys.path.insert(0, str(ROOT / "app"))

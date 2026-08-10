@@ -1849,8 +1849,11 @@ class ReportBuilder:
         )
         if direction_alias:
             rows.append([
-                "Project direction alias",
-                _html_escape(direction_alias),
+                "Modelled reinforcement direction",
+                _modelled_direction_report_label(
+                    cut_direction=self.inp.get("detailing_cut_direction"),
+                    alias=direction_alias,
+                ),
             ])
         if self._case_contexts("plastic"):
             rows.append([

@@ -1728,12 +1728,31 @@ def test_report_publishes_canonical_direction_and_html_safe_project_alias():
     )).split())
 
     label = "Transverse (project alias: sigma m2 1e-3 <north>)"
-    assert "Project direction alias sigma m2 1e-3 <north>" in text
+    assert "Project direction alias" not in text
     assert "Modelled reinforcement direction " + label in text
     assert "Minimum reinforcement - " + label in text
     assert label + " minimum reinforcement" in text
     assert "Modelled direction: " + label in text
     assert "Longitudinal (project alias:" not in text
+
+
+def test_report_cover_keeps_canonical_direction_when_minimum_check_is_off():
+    inp = _inp()
+    inp.update({
+        "minimum_reinforcement_on": False,
+        "detailing_cut_direction": detailing.CUT_TRANSVERSE,
+        "modelled_direction_alias": "<b>span axis</b>",
+    })
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, {}, figures=False,
+    )).split())
+
+    assert "Project direction alias" not in text
+    assert (
+        "Modelled reinforcement direction Longitudinal "
+        "(project alias: <b>span axis</b>)"
+    ) in text
 
 
 def test_results_overview_escapes_supported_markup_in_check_labels(monkeypatch):
