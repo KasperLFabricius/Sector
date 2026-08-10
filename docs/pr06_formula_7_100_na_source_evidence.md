@@ -2,7 +2,8 @@
 
 Status: controlled source and independent benchmark record for the PR-06
 development candidate. This record identifies and checks the implementation
-source without redistributing licensed standard content.
+source without redistributing the controlled PDF, screenshots, copied standard
+prose or the reviewers' private pixel transcription.
 
 ## Controlled document identity
 
@@ -21,7 +22,9 @@ source without redistributing licensed standard content.
 The controlled file was readable at inspection. Its local library location is
 discovery metadata, not proof of project applicability or a redistribution
 licence. The file is visibly marked Confidential. No screenshot, copied
-standard prose or normalized transcription is committed to Sector.
+standard prose or private pixel transcription is committed to Sector. The
+independently reconciled normalized algebra is necessarily implemented in code
+and in the application's authored calculation equations.
 
 ## Visible identity anomaly
 
@@ -46,7 +49,9 @@ records agreed exactly and produced this common SHA-256:
 
 A mismatch would have required a third source-led read. No mismatch occurred.
 Only the digest and reviewer procedure are retained here; the controlled
-formula transcription itself is not published.
+private visual transcription itself is not published. The implemented algebra
+does not substitute for access to the licensed standard or project-specific
+applicability review.
 
 ## Current Danish context checked separately
 
