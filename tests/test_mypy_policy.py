@@ -33,6 +33,7 @@ V093_TYPED_FILES = (
     "sector/design_standards.py",
     "app/modelled_direction.py",
     "sector/heightened_crack_control.py",
+    "app/publication_equation_layout.py",
 )
 
 
