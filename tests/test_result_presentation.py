@@ -104,6 +104,121 @@ def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
     }
 
 
+def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():
+    out = {
+        "elastic_cases": [
+            {
+                "name": "EL-LARGEST-WIDTH",
+                "results": {"elastic": {
+                    "converged": True,
+                    "crack_output": {
+                        "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
+                        "value": 0.30,
+                        "criterion_mm": 0.40,
+                        "ratio": 0.75,
+                    },
+                }},
+            },
+            {
+                "name": "EL-LARGEST-RATIO",
+                "results": {"elastic": {
+                    "converged": True,
+                    "crack_output": {
+                        "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                        "value": 0.20,
+                        "criterion_mm": 0.10,
+                        "ratio": 2.0,
+                    },
+                }},
+            },
+        ],
+    }
+
+    selection = presentation.worked_example_selection({}, out)
+
+    assert selection["crack_comparison"] == {
+        "case_id": "EL-LARGEST-WIDTH",
+    }
+
+
+@pytest.mark.parametrize(
+    ("state", "criterion", "expected_criterion"),
+    [
+        ("NOT REQUESTED", None, "User criterion not specified"),
+        ("NOT ASSESSED", 0.20, "User-specified limit 0.200 mm"),
+        (
+            "CALCULATED - ACCEPTANCE NOT ASSESSED",
+            None,
+            "User criterion not specified",
+        ),
+        ("WITHIN USER-SPECIFIED LIMIT", 0.30, "User-specified limit 0.300 mm"),
+        ("EXCEEDS USER-SPECIFIED LIMIT", 0.10, "User-specified limit 0.100 mm"),
+    ],
+)
+def test_crack_summary_preserves_exact_bounded_state(
+    state, criterion, expected_criterion,
+):
+    output = {
+        "calculation_state": state,
+        "value": None if state in {"NOT REQUESTED", "NOT ASSESSED"} else 0.25,
+        "criterion_mm": criterion,
+        "ratio": (
+            2.5 if state == "EXCEEDS USER-SPECIFIED LIMIT"
+            else 0.833 if state == "WITHIN USER-SPECIFIED LIMIT"
+            else None
+        ),
+        "criterion_source": "User input - Elastic case EL-01" if criterion else None,
+        "reason": "Retained assessment reason",
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Elastic"),
+        {"elastic": {
+            "converged": True,
+            "stress_outputs": {},
+            "lambda_cr": 1.0,
+            "crack_output": output,
+        }},
+    )
+    crack = next(row for row in rows if row["check"] == "Crack width")
+
+    assert crack["status"] == state
+    assert crack["criterion"] == expected_criterion
+    assert crack["util"] is None
+    assert "Retained assessment reason" in crack["note"]
+
+
+def test_heightened_crack_summary_is_singleton_and_not_global_utilisation():
+    heightened = {
+        "status": "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+        "required_reinforcement_area_mm2": 420.0,
+        "provided_reinforcement_area_mm2": 350.0,
+        "comparison_ratio": 1.2,
+        "disclosure": "User-declared applicability.",
+    }
+    rows = presentation.multi_case_summary_rows(
+        _inp(
+            mode="",
+            plastic_cases=[],
+            elastic_cases=[],
+        ),
+        {
+            "elastic_cases": [],
+            "heightened_crack_control": heightened,
+        },
+    )
+    selected = presentation.worked_example_selection(
+        {}, {"heightened_crack_control": heightened},
+    )
+    rows = [row for row in rows if row["check"] == "DK heightened crack-control minimum"]
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "PROVIDED AREA BELOW CALCULATED REQUIREMENT"
+    assert rows[0]["util"] is None
+    assert selected["heightened_crack_control"] == {
+        "result_key": "heightened_crack_control",
+    }
+
+
 def _plastic(**updates):
     result = {
         "check_util": True,

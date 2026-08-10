@@ -43,6 +43,8 @@ class Capability(StrEnum):
     REINFORCEMENT_FATIGUE = "reinforcement_fatigue"
     CONCRETE_FATIGUE_EQUIVALENT = "concrete_fatigue_equivalent"
     CONCRETE_FATIGUE_DAMAGE_SUM = "concrete_fatigue_damage_sum"
+    ORDINARY_CRACK_WIDTH = "ordinary_crack_width"
+    HEIGHTENED_CRACK_CONTROL = "heightened_crack_control"
 
 
 class ContextRole(StrEnum):
@@ -64,6 +66,17 @@ class DesignBasis:
 
 
 @dataclass(frozen=True, slots=True)
+class OrdinaryCrackWidthSolverRoute:
+    """Typed arguments that select one live ordinary crack-width route."""
+
+    edition: str
+    k3_cover_dependent: bool
+    include_hx_term_for_ordinary_beams: bool
+    include_hx_term_for_slabs_or_prestressed: bool
+    report_coarse_system: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityBinding:
     """One verified solver route and its bounded engineering provenance."""
 
@@ -72,6 +85,7 @@ class CapabilityBinding:
     solver_edition: str
     source: str
     disclosure: str
+    ordinary_crack_width_route: OrdinaryCrackWidthSolverRoute | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +173,32 @@ _DK_BINDING_DISCLOSURE = (
 _PUBLISHED_2023_BINDING_DISCLOSURE = (
     "Annex E implementation; no Danish National Annex is applied."
 )
+_FIRST_GEN_CRACK_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 7.3.2 and 7.3.4, "
+    "Formulas (7.8), (7.9), (7.11) and (7.14)"
+)
+_DK_ORDINARY_CRACK_SOURCE = (
+    f"{_FIRST_GEN_CRACK_SOURCE}, with DS/EN 1992-1-1 DK NA:2024, "
+    "7.3.4(1), 7.3.4(3) and Figure 7.100 NA"
+)
+_PUBLISHED_2023_CRACK_SOURCE = (
+    "DS/EN 1992-1-1:2023, 9.2.2 and 9.2.3, Figure 9.3 and Formulas "
+    "(9.6), (9.8), (9.9), (9.11), (9.12), (9.15), (9.17), (9.18) "
+    "and (9.20)"
+)
+_DK_HEIGHTENED_CRACK_SOURCE = (
+    "DS/EN 1992-1-1 DK NA:2024, supplementary provision to "
+    "7.3.2(1)P, Formula 7.100 NA"
+)
+_DK_ORDINARY_CRACK_DISCLOSURE = (
+    "The implemented Danish ordinary crack-width route reports the fine and "
+    "coarse crack systems. Selection records the stated Danish project basis."
+)
+_DK_HEIGHTENED_CRACK_DISCLOSURE = (
+    "Separate user-selected first-generation Danish calculation. The user "
+    "supplies the permitted crack width and decides applicability; Sector "
+    "does not infer that the supplementary provision applies."
+)
 
 
 def _binding(
@@ -167,6 +207,8 @@ def _binding(
     solver_edition: str,
     source: str,
     disclosure: str,
+    *,
+    ordinary_crack_width_route: OrdinaryCrackWidthSolverRoute | None = None,
 ) -> CapabilityBinding:
     return CapabilityBinding(
         basis_key=basis_key,
@@ -174,6 +216,7 @@ def _binding(
         solver_edition=solver_edition,
         source=source,
         disclosure=disclosure,
+        ordinary_crack_width_route=ordinary_crack_width_route,
     )
 
 
@@ -247,6 +290,64 @@ _CAPABILITY_BINDINGS[
     "DS/EN 1992-1-1:2023",
     "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)",
     _PUBLISHED_2023_BINDING_DISCLOSURE,
+)
+
+_CAPABILITY_BINDINGS[
+    (DesignBasisKey.FIRST_GEN_BASE, Capability.ORDINARY_CRACK_WIDTH)
+] = _binding(
+    DesignBasisKey.FIRST_GEN_BASE,
+    Capability.ORDINARY_CRACK_WIDTH,
+    "2004",
+    _FIRST_GEN_CRACK_SOURCE,
+    _BASE_BINDING_DISCLOSURE,
+    ordinary_crack_width_route=OrdinaryCrackWidthSolverRoute(
+        edition="2004",
+        k3_cover_dependent=False,
+        include_hx_term_for_ordinary_beams=True,
+        include_hx_term_for_slabs_or_prestressed=True,
+        report_coarse_system=False,
+    ),
+)
+_CAPABILITY_BINDINGS[
+    (DesignBasisKey.FIRST_GEN_DK_NA_2024, Capability.ORDINARY_CRACK_WIDTH)
+] = _binding(
+    DesignBasisKey.FIRST_GEN_DK_NA_2024,
+    Capability.ORDINARY_CRACK_WIDTH,
+    "2004",
+    _DK_ORDINARY_CRACK_SOURCE,
+    _DK_ORDINARY_CRACK_DISCLOSURE,
+    ordinary_crack_width_route=OrdinaryCrackWidthSolverRoute(
+        edition="2004",
+        k3_cover_dependent=True,
+        include_hx_term_for_ordinary_beams=False,
+        include_hx_term_for_slabs_or_prestressed=True,
+        report_coarse_system=True,
+    ),
+)
+_CAPABILITY_BINDINGS[
+    (DesignBasisKey.PUBLISHED_2023, Capability.ORDINARY_CRACK_WIDTH)
+] = _binding(
+    DesignBasisKey.PUBLISHED_2023,
+    Capability.ORDINARY_CRACK_WIDTH,
+    "2023",
+    _PUBLISHED_2023_CRACK_SOURCE,
+    _PUBLISHED_2023_DISCLOSURE,
+    ordinary_crack_width_route=OrdinaryCrackWidthSolverRoute(
+        edition="2023",
+        k3_cover_dependent=False,
+        include_hx_term_for_ordinary_beams=False,
+        include_hx_term_for_slabs_or_prestressed=False,
+        report_coarse_system=False,
+    ),
+)
+_CAPABILITY_BINDINGS[
+    (DesignBasisKey.FIRST_GEN_DK_NA_2024, Capability.HEIGHTENED_CRACK_CONTROL)
+] = _binding(
+    DesignBasisKey.FIRST_GEN_DK_NA_2024,
+    Capability.HEIGHTENED_CRACK_CONTROL,
+    "dk_na_2024_formula_7_100_na",
+    _DK_HEIGHTENED_CRACK_SOURCE,
+    _DK_HEIGHTENED_CRACK_DISCLOSURE,
 )
 
 CAPABILITY_BINDINGS: Mapping[

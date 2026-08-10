@@ -2,7 +2,7 @@
 
 The manual remains authored as Markdown.  This module binds that live block
 stream through the accepted location, source and semantic contracts, then
-replaces only the 32 canonical display expressions with typed equation blocks.
+replaces only the 33 canonical display expressions with typed equation blocks.
 It contains no Streamlit, ReportLab, solver or report-renderer dependency.
 """
 

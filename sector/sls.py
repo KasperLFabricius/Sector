@@ -1,14 +1,36 @@
 """Headless serviceability output and result-table helpers.
 
 The elastic solver returns numerical section states. This module exposes those
-states as reproducible calculation outputs without applying stress, crack-width,
-exposure, durability, decompression or load-combination acceptance criteria.
+states as reproducible calculation outputs. An ordinary crack-width result may
+optionally be compared with a positive limit entered for its named Elastic case;
+no exposure, durability, decompression or load-combination criterion is inferred.
 """
 
 from __future__ import annotations
 
 import math
 from typing import Iterable, Mapping, Sequence
+
+CRACK_NOT_REQUESTED = "NOT REQUESTED"
+CRACK_NOT_ASSESSED = "NOT ASSESSED"
+CRACK_CALCULATED_UNASSESSED = "CALCULATED - ACCEPTANCE NOT ASSESSED"
+CRACK_WITHIN_USER_LIMIT = "WITHIN USER-SPECIFIED LIMIT"
+CRACK_EXCEEDS_USER_LIMIT = "EXCEEDS USER-SPECIFIED LIMIT"
+CRACK_COMPARISON_EQUATION = "w_k / w_k,criterion"
+
+
+def _is_boolean_scalar(value: object) -> bool:
+    value_type = type(value)
+    return isinstance(value, bool) or (
+        value_type.__module__.partition(".")[0] in {"numpy", "pandas"}
+        and value_type.__name__.lower().rstrip("_") in {"bool", "boolean"}
+    )
+
+
+def crack_criterion_source(case_name: object) -> str:
+    """Return the stable provenance label for one Elastic-case criterion."""
+
+    return f"User input - Elastic case {str(case_name).strip()}"
 
 
 def _element_id(ids: Sequence[str] | None, index: int, fallback: str) -> str:
@@ -96,39 +118,249 @@ def stress_outputs(
     }
 
 
+def _positive_criterion(value: object) -> tuple[float | None, str | None]:
+    """Return a positive finite criterion or a fail-closed reason."""
+
+    if value is None:
+        return None, None
+    if _is_boolean_scalar(value):
+        return None, "The crack-width criterion must be a positive finite number."
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None, "The crack-width criterion must be a positive finite number."
+    if not math.isfinite(number) or number <= 0.0:
+        return None, "The crack-width criterion must be a positive finite number."
+    return number, None
+
+
+def _finite_crack_value(value: object) -> float | None:
+    """Return one non-negative finite width, otherwise ``None``."""
+
+    if _is_boolean_scalar(value):
+        return None
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number >= 0.0 else None
+
+
+def assess_crack_output(
+    output: Mapping,
+    *,
+    requested: bool,
+    criterion_mm: object = None,
+    criterion_source: str | None = None,
+) -> dict:
+    """Apply only the optional, user-owned ordinary crack comparison.
+
+    The returned ``calculation_state`` is the single authoritative public state;
+    no parallel verdict is emitted. Existing crack identity fields are retained
+    and the comparison is deliberately local to the crack-width family.
+    """
+
+    criterion, criterion_error = _positive_criterion(criterion_mm)
+    source = (
+        str(criterion_source).strip()
+        if criterion_mm is not None and criterion_source is not None
+        else None
+    )
+    value = _finite_crack_value(output.get("value"))
+    result = {
+        "value": value,
+        "case": output.get("case"),
+        "governing": output.get("governing"),
+        "unit": output.get("unit") or "mm",
+        "calculation_state": CRACK_NOT_ASSESSED,
+        "criterion_mm": criterion,
+        "ratio": None,
+        "criterion_source": source,
+        "reason": None,
+        "comparison_equation": None,
+    }
+
+    if not requested:
+        result.update(
+            value=None,
+            case=None,
+            governing=None,
+            calculation_state=CRACK_NOT_REQUESTED,
+            reason="Crack-width calculation was not requested for this Elastic case.",
+        )
+        return result
+
+    if criterion_error is not None:
+        result.update(calculation_state=CRACK_NOT_ASSESSED, reason=criterion_error)
+        return result
+
+    if criterion is not None and not source:
+        result.update(
+            calculation_state=CRACK_NOT_ASSESSED,
+            reason=(
+                "The user-specified crack-width criterion requires a nonblank "
+                "criterion source."
+            ),
+        )
+        return result
+
+    if value is None:
+        retained_reason = str(output.get("reason") or "").strip()
+        result.update(
+            calculation_state=CRACK_NOT_ASSESSED,
+            reason=(
+                retained_reason
+                or "No calculated crack width is available for assessment."
+            ),
+        )
+        return result
+
+    if criterion is None:
+        result.update(
+            calculation_state=CRACK_CALCULATED_UNASSESSED,
+            reason=(
+                "No ordinary crack-width criterion was specified; acceptance "
+                "is not assessed."
+            ),
+        )
+        return result
+
+    if result["unit"] != "mm":
+        result.update(
+            calculation_state=CRACK_NOT_ASSESSED,
+            reason=(
+                "The calculated crack width must be retained in millimetres "
+                "before comparison with the user-specified criterion."
+            ),
+        )
+        return result
+
+    ratio = value / criterion
+    within = ratio <= 1.0
+    result.update(
+        calculation_state=(
+            CRACK_WITHIN_USER_LIMIT if within else CRACK_EXCEEDS_USER_LIMIT
+        ),
+        ratio=ratio,
+        reason=(
+            "The calculated crack width is within the user-specified limit."
+            if within
+            else "The calculated crack width exceeds the user-specified limit."
+        ),
+        comparison_equation=CRACK_COMPARISON_EQUATION,
+    )
+    return result
+
+
+def _case_result(value: object) -> tuple[object | None, str | None]:
+    """Unwrap a result mapping or a CrackWidthEvaluation-like object."""
+
+    if value is None:
+        return None, None
+    if isinstance(value, Mapping):
+        if "wk" in value:
+            return value, None
+        if "status" in value and "result" in value:
+            reason = str(value.get("reason") or "").strip() or None
+            return value.get("result"), reason
+        return value, None
+    if hasattr(value, "status") and hasattr(value, "result"):
+        reason = str(getattr(value, "reason", "") or "").strip() or None
+        return getattr(value, "result", None), reason
+    return value, None
+
+
+def _result_field(value: object, key: str, default: object = None) -> object:
+    if isinstance(value, Mapping):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
 def crack_outputs(
-    cases: Mapping[str, Mapping | None],
+    cases: Mapping[str, object | None],
     *,
     valid: bool,
+    requested: bool = True,
+    criterion_mm: object = None,
+    criterion_source: str | None = None,
 ) -> dict:
-    """Return the largest calculated crack width across the supplied actions."""
-    available = [(name, case) for name, case in cases.items() if case is not None]
+    """Return the largest width and its optional ordinary comparison.
+
+    A case may be an existing flattened crack mapping or a
+    ``CrackWidthEvaluation``-like object. The latter keeps the exact reason from
+    :func:`sector.serviceability.evaluate_crack_width` when no width is available.
+    """
+
+    available: list[tuple[str, object]] = []
+    unavailable_reasons: list[str] = []
+    for name, value in cases.items():
+        crack, reason = _case_result(value)
+        if crack is None:
+            if reason and reason not in unavailable_reasons:
+                unavailable_reasons.append(reason)
+            continue
+        width = _finite_crack_value(_result_field(crack, "wk"))
+        if width is None:
+            if reason and reason not in unavailable_reasons:
+                unavailable_reasons.append(reason)
+            continue
+        available.append((name, crack))
+
     if not valid:
-        return {
+        raw = {
             "value": None,
             "case": None,
             "governing": None,
             "unit": "mm",
-            "calculation_state": "INVALID",
+            "reason": (
+                "; ".join(unavailable_reasons)
+                if unavailable_reasons
+                else (
+                    "The Elastic calculation is invalid; crack width is not "
+                    "assessed."
+                )
+            ),
         }
-    if not available:
-        return {
+    elif not available:
+        raw = {
             "value": None,
             "case": None,
             "governing": None,
             "unit": "mm",
-            "calculation_state": "NOT APPLICABLE",
+            "reason": (
+                unavailable_reasons[0]
+                if len(unavailable_reasons) == 1
+                else (
+                    "; ".join(unavailable_reasons)
+                    if unavailable_reasons
+                    else "No calculated crack width is available for assessment."
+                )
+            ),
         }
-    name, governing = max(available, key=lambda item: float(item[1].get("wk", 0.0)))
-    return {
-        "value": float(governing.get("wk", 0.0)),
-        "case": name,
-        "governing": governing.get(
-            "element_id", f"element {governing.get('gov_bar', '-')}"
-        ),
-        "unit": "mm",
-        "calculation_state": "CALCULATED",
-    }
+    else:
+        name, governing = max(
+            available,
+            key=lambda item: float(_result_field(item[1], "wk", 0.0)),
+        )
+        governing_id = _result_field(governing, "element_id")
+        if not governing_id:
+            bar_index = _result_field(governing, "gov_bar", "-")
+            if not isinstance(governing, Mapping) and isinstance(bar_index, int):
+                bar_index += 1
+            governing_id = f"element {bar_index}"
+        raw = {
+            "value": float(_result_field(governing, "wk", 0.0)),
+            "case": name,
+            "governing": governing_id,
+            "unit": "mm",
+            "reason": None,
+        }
+    return assess_crack_output(
+        raw,
+        requested=requested,
+        criterion_mm=criterion_mm,
+        criterion_source=criterion_source,
+    )
 
 
 def element_rows(

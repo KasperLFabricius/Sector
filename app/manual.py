@@ -845,8 +845,19 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
     call("standard", "The DK NA reports the fine and the coarse crack system side "
-         "by side, each for the long-term and short-term load (four crack widths). "
-         "Part C derives every model in full with the worked crack width.")
+       "by side, each for the long-term and short-term load (four crack widths). "
+       "An optional positive criterion belongs to that named Elastic row. Blank "
+       "means the width is calculated without an acceptance assessment; when a "
+       "criterion is entered, Sector reports only a bounded comparison with that "
+       "user-specified value and does not infer exposure, durability, prestress "
+       "category or owner requirements. Part C derives every model in full with "
+       "the critical worked crack width.")
+    md("For the first-generation Danish basis only, **DK heightened crack-control "
+       "minimum** is a separate section-level opt-in. The user must declare its "
+       "applicability and enter the permitted width, crack system, reinforcement "
+       "surface, bar diameter, effective tensile strength, reinforcement modulus, "
+       "effective tension area and provided reinforcement area. Sector does not "
+       "derive those project decisions from the ordinary crack calculation.")
     h2("Grouped fatigue")
     md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
        "**Reinforcement** and/or **Concrete**. Enter the complete project factors "
@@ -1423,6 +1434,19 @@ def manual_blocks() -> list:
     call("tip", "The single *DS/EN 1992-1-1 + DK NA* option reports the fine and the "
          "coarse system side by side, each for the long-term and the short-term "
          "load -- four crack widths -- so you can read both without re-running.")
+    h2("DK NA heightened crack-control minimum")
+    md("This is a separate, user-selected DS/EN 1992-1-1 DK NA:2024 "
+       "Formula 7.100 NA calculation, not another ordinary crack-width result. "
+       "The required reinforcement ratio is\n\n"
+       "$$\\rho_{s,min}=m_s\\sqrt{\\frac{\\phi f_{ct,eff}}"
+       "{4E_{sk}kw_k}}$$\n\n"
+       "where $k=1$ for the fine crack system and $k=2$ for the coarse system; "
+       "$m_s=1$ for ribbed reinforcement and $m_s=\\sqrt{2}$ for smooth "
+       "reinforcement. Sector multiplies the retained ratio by the user-supplied "
+       "$A_{c,eff}$ and compares the resulting $A_{s,req}$ with the user-supplied "
+       "$A_{s,prov}$. Applicability, restraint, watertightness and the permitted "
+       "$w_k$ remain user declarations. The option is unavailable for the 2023 "
+       "basis.")
     h2("EN 1992-1-1:2023 refined model")
     md("The 2023 edition uses a refined model (9.2.3):\n\n"
        "$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-"
@@ -1450,7 +1474,10 @@ def manual_blocks() -> list:
          "each for the long-term and short-term load. Ordinary methods show one "
          "global governing worked crack width; DK/NA shows one global fine-system "
          "and one global coarse-system worked example. All other elastic cases remain "
-         "in the compact report summaries.")
+         "in the compact report summaries. If user criteria are present, the report "
+         "shows one comparison for the largest calculated ordinary width -- never "
+         "the largest ratio -- plus at most one section-level Formula 7.100 NA "
+         "worked example when that separate DK option is enabled.")
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")

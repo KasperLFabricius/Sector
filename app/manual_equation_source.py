@@ -118,22 +118,26 @@ MANUAL_EQUATION_SOURCES = (
         f"{DOC_BASE} 7.3.4, Formulas (7.11) and (7.14).",
     ),
     _source(
-        14, "manual.crack.2023.width", "C7-3", SOURCE_STANDARD,
+        14, "manual.crack.dk-na-heightened", "C7-5", SOURCE_STANDARD,
+        f"{DOC_DK} 7.3.2(1)P, Formula (7.100 NA).",
+    ),
+    _source(
+        15, "manual.crack.2023.width", "C7-3", SOURCE_STANDARD,
         f"{DOC_CURRENT} 9.2.3, Formulas (9.8) and (9.9).",
     ),
     _source(
-        15, "manual.crack.2023.spacing", "C7-4", SOURCE_STANDARD,
+        16, "manual.crack.2023.spacing", "C7-4", SOURCE_STANDARD,
         f"{DOC_CURRENT} 9.2.3, Formulas (9.15)-(9.18).",
     ),
     _source(
-        16, "manual.fatigue.stress-range", "C8-1", SOURCE_MIXED,
+        17, "manual.fatigue.stress-range", "C8-1", SOURCE_MIXED,
         "Project-defined / uncited retained Elastic stress reconstruction with "
         f"a selected fatigue action factor; {DOC_BASE} 2.4.2.3 and 6.8.4(1), "
         f"or {DOC_CURRENT} 10.2 and Annex E, defines how that factor enters the "
         "retained edition's fatigue action route.",
     ),
     _source(
-        17, "manual.fatigue.reinforcement.design-range", "C8-2",
+        18, "manual.fatigue.reinforcement.design-range", "C8-2",
         SOURCE_MIXED,
         "Project-defined / uncited characteristic range for Custom / imported "
         f"fatigue details; {DOC_BASE} 6.8.4 and Tables 6.3N-6.4N, or "
@@ -141,83 +145,83 @@ MANUAL_EQUATION_SOURCES = (
         "edition preset.",
     ),
     _source(
-        18, "manual.fatigue.reinforcement.life", "C8-3", SOURCE_MIXED,
+        19, "manual.fatigue.reinforcement.life", "C8-3", SOURCE_MIXED,
         "Project-defined / uncited S-N relationship for Custom / imported "
         f"fatigue details; {DOC_BASE} 6.8.4 and Tables 6.3N-6.4N, or "
         f"{DOC_CURRENT} Annex E.5 and Tables E.1-E.2, for the corresponding "
         "edition preset.",
     ),
     _source(
-        19, "manual.fatigue.reinforcement.miner", "C8-4", SOURCE_STANDARD,
+        20, "manual.fatigue.reinforcement.miner", "C8-4", SOURCE_STANDARD,
         f"{DOC_BASE} 6.8.4, Palmgren-Miner summation; {DOC_CURRENT} "
         "Annex E.5, Palmgren-Miner summation.",
     ),
     _source(
-        20, "manual.fatigue.concrete.strength-2005", "C8-5", SOURCE_STANDARD,
+        21, "manual.fatigue.concrete.strength-2005", "C8-5", SOURCE_STANDARD,
         f"{DOC_BASE} 3.1.6 and 6.8.7, Formula (6.76).",
     ),
     _source(
-        21, "manual.fatigue.concrete.strength-2023", "C8-6", SOURCE_STANDARD,
+        22, "manual.fatigue.concrete.strength-2023", "C8-6", SOURCE_STANDARD,
         f"{DOC_CURRENT} 5.1.6(1), Formula (5.3), and 10.5, Formula (10.5).",
     ),
     _source(
-        22, "manual.fatigue.concrete.life", "C8-7", SOURCE_MIXED,
+        23, "manual.fatigue.concrete.life", "C8-7", SOURCE_MIXED,
         "Project-defined / uncited concrete Miner S-N relation when the "
         f"user-defined method is selected; {DOC_BRIDGE} corrected 6.106, or "
         f"{DOC_CURRENT} E.5.3, Formulas (E.7)-(E.8), for the corresponding "
         "standard Miner method.",
     ),
     _source(
-        23, "manual.fatigue.concrete.equivalent", "C8-8", SOURCE_STANDARD,
+        24, "manual.fatigue.concrete.equivalent", "C8-8", SOURCE_STANDARD,
         f"{DOC_BASE} 6.8.7, Formula (6.72); {DOC_CURRENT} E.4.3, "
         "Formula (E.2).",
     ),
     _source(
-        24, "manual.shear.no-links.variable", "C9-1", SOURCE_STANDARD,
+        25, "manual.shear.no-links.variable", "C9-1", SOURCE_STANDARD,
         f"{DOC_BASE} 6.2.2(1), Formula (6.2a), with {DOC_DK} where selected.",
     ),
     _source(
-        25, "manual.shear.no-links.minimum", "C9-2", SOURCE_STANDARD,
+        26, "manual.shear.no-links.minimum", "C9-2", SOURCE_STANDARD,
         f"{DOC_BASE} 6.2.2(1), Formula (6.2b), with {DOC_DK} where selected.",
     ),
     _source(
-        26, "manual.shear.action-factor-2023", "C9-3", SOURCE_STANDARD,
+        27, "manual.shear.action-factor-2023", "C9-3", SOURCE_STANDARD,
         f"{DOC_CURRENT} 8.2.2(3)-(4), Formulas (8.30) and (8.31).",
     ),
     _source(
-        27, "manual.shear.links-2005", "C9-4", SOURCE_STANDARD,
+        28, "manual.shear.links-2005", "C9-4", SOURCE_STANDARD,
         f"{DOC_BASE} 6.2.3(3), Formulas (6.8) and (6.9), with {DOC_DK} "
         "6.2.3(2)-(3) where selected.",
     ),
     _source(
-        28, "manual.shear.links-2023", "C9-5", SOURCE_STANDARD,
+        29, "manual.shear.links-2023", "C9-5", SOURCE_STANDARD,
         f"{DOC_CURRENT} 8.2.3(5), Formulas (8.42) and (8.44).",
     ),
     _source(
-        29, "manual.torsion.resistance", "C10-1", SOURCE_STANDARD,
+        30, "manual.torsion.resistance", "C10-1", SOURCE_STANDARD,
         f"{DOC_BASE} 6.3.2(1), Formula (6.27), 6.2.3(3), Formula (6.8), "
         f"and 6.3.2(4), Formula (6.30), with {DOC_DK} where selected.",
     ),
     _source(
-        30, "manual.torsion.strut-interaction", "C10-2", SOURCE_STANDARD,
+        31, "manual.torsion.strut-interaction", "C10-2", SOURCE_STANDARD,
         f"{DOC_BASE} 6.3.2(4), Formula (6.29).",
     ),
     _source(
-        31, "manual.combined.strut-interaction", "C11-1", SOURCE_STANDARD,
+        32, "manual.combined.strut-interaction", "C11-1", SOURCE_STANDARD,
         f"{DOC_BASE} 6.3.2(4), Formula (6.29).",
     ),
     _source(
-        32, "manual.combined.utilisation", "C11-2", SOURCE_STANDARD,
+        33, "manual.combined.utilisation", "C11-2", SOURCE_STANDARD,
         f"{DOC_DK} 6.3.2(6).",
     ),
 )
 
 
 def _validate_catalogue() -> None:
-    if len(MANUAL_EQUATION_SOURCES) != 32:
-        raise RuntimeError("Expected exactly 32 manual equation sources.")
+    if len(MANUAL_EQUATION_SOURCES) != 33:
+        raise RuntimeError("Expected exactly 33 manual equation sources.")
     if tuple(item.ordinal for item in MANUAL_EQUATION_SOURCES) != tuple(
-        range(1, 33)
+        range(1, 34)
     ):
         raise RuntimeError("Manual equation source ordinals must be contiguous.")
     for source, location in zip(
@@ -265,7 +269,7 @@ def _validate_catalogue() -> None:
         kind: sum(item.source_kind == kind for item in MANUAL_EQUATION_SOURCES)
         for kind in SOURCE_KINDS
     }
-    if counts != {SOURCE_STANDARD: 25, SOURCE_MIXED: 5, SOURCE_PROJECT: 2}:
+    if counts != {SOURCE_STANDARD: 26, SOURCE_MIXED: 5, SOURCE_PROJECT: 2}:
         raise RuntimeError("Manual equation source classification drifted.")
 
 
@@ -282,7 +286,7 @@ def bind_manual_equation_sources(
         raise ValueError("Located manual equations must retain tuple identity.")
     if type(catalogue) is not tuple or catalogue != MANUAL_EQUATION_SOURCES:
         raise ValueError("Canonical manual equation source catalogue changed.")
-    if len(equations) != 32:
+    if len(equations) != 33:
         raise ValueError("Located manual equation cardinality changed.")
     sourced = []
     for equation, location, source in zip(

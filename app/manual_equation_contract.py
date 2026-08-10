@@ -308,7 +308,23 @@ MANUAL_EQUATION_CONTRACTS = (
         "length relation",
     ),
     _contract(
-        14, "manual.crack.2023.width", "C7-3",
+        14, "manual.crack.dk-na-heightened", "C7-5",
+        _terms(
+            (r"\rho_{s,min}", "required heightened minimum reinforcement ratio", "1"),
+            (r"m_s", "reinforcement-surface multiplier", "1"),
+            (r"\phi", "bar diameter", "mm"),
+            (r"f_{ct,eff}", "user-supplied effective tensile strength", "MPa"),
+            (r"E_{sk}", "reinforcement elastic modulus", "MPa"),
+            (r"k", "fine/coarse crack-system factor", "1"),
+            (r"w_k", "user-supplied permitted crack width", "mm"),
+        ),
+        _terms(
+            (r"\rho_{s,min}", "required heightened minimum reinforcement ratio", "1"),
+        ),
+        "dimensionless reinforcement-ratio relation",
+    ),
+    _contract(
+        15, "manual.crack.2023.width", "C7-3",
         _terms(
             (r"w_k", "characteristic crack width", "mm"),
             (r"k_w", "characteristic-to-mean crack factor", "1"),
@@ -329,7 +345,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ("manual.crack.2023.spacing",),
     ),
     _contract(
-        15, "manual.crack.2023.spacing", "C7-4",
+        16, "manual.crack.2023.spacing", "C7-4",
         _terms(
             (r"s_{r,m,cal}", "calculated mean crack spacing", "mm"),
             (r"c", "reinforcement cover", "mm"),
@@ -345,7 +361,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "length relation",
     ),
     _contract(
-        16, "manual.fatigue.stress-range", "C8-1",
+        17, "manual.fatigue.stress-range", "C8-1",
         _terms(
             (r"\Delta\sigma_{Ed,i}", "design stress range in bin i", "MPa"),
             (r"\sigma(S)", "stress reconstructed for action state S", "MPa"),
@@ -360,7 +376,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "stress-range relation",
     ),
     _contract(
-        17, "manual.fatigue.reinforcement.design-range", "C8-2",
+        18, "manual.fatigue.reinforcement.design-range", "C8-2",
         _terms(
             (r"\Delta\sigma_{Rd}", "design fatigue-detail stress range", "MPa"),
             (r"\Delta\sigma_{Rsk}",
@@ -373,7 +389,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "stress relation",
     ),
     _contract(
-        18, "manual.fatigue.reinforcement.life", "C8-3",
+        19, "manual.fatigue.reinforcement.life", "C8-3",
         _terms(
             (r"N_{R,i}", "resistant cycle count for bin i", "cycles"),
             (r"N^*", "reference cycle count", "cycles"),
@@ -390,7 +406,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        19, "manual.fatigue.reinforcement.miner", "C8-4",
+        20, "manual.fatigue.reinforcement.miner", "C8-4",
         _terms(
             (r"D", "Palmgren-Miner damage", "1"),
             (r"n_i", "applied cycle count in bin i", "cycles"),
@@ -402,7 +418,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ("manual.fatigue.reinforcement.life",),
     ),
     _contract(
-        20, "manual.fatigue.concrete.strength-2005", "C8-5",
+        21, "manual.fatigue.concrete.strength-2005", "C8-5",
         _terms(
             (r"f_{cd,fat}", "design concrete fatigue strength", "MPa"),
             (r"k_1", "fatigue-strength coefficient", "1"),
@@ -416,7 +432,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "stress relation",
     ),
     _contract(
-        21, "manual.fatigue.concrete.strength-2023", "C8-6",
+        22, "manual.fatigue.concrete.strength-2023", "C8-6",
         _terms(
             (r"\eta_{cc}", "concrete strength-effect factor", "1"),
             (r"\eta_{cc,fat}", "fatigue concrete strength-effect factor", "1"),
@@ -434,7 +450,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "dimensionless factors and stress relation",
     ),
     _contract(
-        22, "manual.fatigue.concrete.life", "C8-7",
+        23, "manual.fatigue.concrete.life", "C8-7",
         _terms(
             (r"N_R", "resistant cycle count", "cycles"),
             (r"C", "selected concrete S-N coefficient", "1"),
@@ -449,7 +465,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        23, "manual.fatigue.concrete.equivalent", "C8-8",
+        24, "manual.fatigue.concrete.equivalent", "C8-8",
         _terms(
             (r"E_{max}", "maximum normalized equivalent stress", "1"),
             (r"E_{min}", "minimum normalized equivalent stress", "1"),
@@ -465,7 +481,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        24, "manual.shear.no-links.variable", "C9-1",
+        25, "manual.shear.no-links.variable", "C9-1",
         _terms(
             (r"V_{Rd,c}", "design shear resistance without links", "N"),
             (r"C_{Rd,c}", "edition-specific shear coefficient", "1"),
@@ -481,7 +497,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "force relation",
     ),
     _contract(
-        25, "manual.shear.no-links.minimum", "C9-2",
+        26, "manual.shear.no-links.minimum", "C9-2",
         _terms(
             (r"V_{Rd,c}", "minimum design shear resistance without links", "N"),
             (r"v_{min}", "minimum shear stress", "MPa"),
@@ -496,7 +512,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "force relation",
     ),
     _contract(
-        26, "manual.shear.action-factor-2023", "C9-3",
+        27, "manual.shear.action-factor-2023", "C9-3",
         _terms(
             (r"a_{cs}", "shear-span parameter", "mm"),
             (r"k_{vp}", "axial-action shear factor", "1"),
@@ -512,7 +528,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "length and dimensionless factor",
     ),
     _contract(
-        27, "manual.shear.links-2005", "C9-4",
+        28, "manual.shear.links-2005", "C9-4",
         _terms(
             (r"V_{Rd,s}", "shear-link resistance", "N"),
             (r"V_{Rd,max}", "maximum concrete-strut shear resistance", "N"),
@@ -533,7 +549,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "force relations",
     ),
     _contract(
-        28, "manual.shear.links-2023", "C9-5",
+        29, "manual.shear.links-2023", "C9-5",
         _terms(
             (r"\tau_{Rd,sy}", "link-provided design shear stress", "MPa"),
             (r"\rho_w", "provided shear-link reinforcement ratio", "1"),
@@ -552,7 +568,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ("manual.detailing.links.minimum-ratio",),
     ),
     _contract(
-        29, "manual.torsion.resistance", "C10-1",
+        30, "manual.torsion.resistance", "C10-1",
         _terms(
             (r"T_{Rd,s}", "torsion-link resistance", "N mm"),
             (r"T_{Rd,max}", "maximum concrete-strut torsion resistance", "N mm"),
@@ -573,7 +589,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "moment relations",
     ),
     _contract(
-        30, "manual.torsion.strut-interaction", "C10-2",
+        31, "manual.torsion.strut-interaction", "C10-2",
         _terms(
             (r"T_{Ed}", "design torsional moment", "N mm"),
             (r"T_{Rd,max}", "maximum concrete-strut torsion resistance", "N mm"),
@@ -591,7 +607,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        31, "manual.combined.strut-interaction", "C11-1",
+        32, "manual.combined.strut-interaction", "C11-1",
         _terms(
             (r"T_{Ed}", "design torsional moment", "N mm"),
             (r"T_{Rd,max}", "maximum concrete-strut torsion resistance", "N mm"),
@@ -609,7 +625,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        32, "manual.combined.utilisation", "C11-2",
+        33, "manual.combined.utilisation", "C11-2",
         _terms(
             (r"S_{Ed}", "one design sectional action", "matching action"),
             (r"S_{Rd}", "resistance to that action acting alone", "matching action"),
@@ -662,10 +678,10 @@ def _validate_dependency_graph() -> None:
 def _validate_catalogue() -> None:
     if type(MANUAL_EQUATION_CONTRACTS) is not tuple:
         raise RuntimeError("Manual equation contract catalogue must remain a tuple.")
-    if len(MANUAL_EQUATION_CONTRACTS) != 32:
-        raise RuntimeError("Expected exactly 32 manual equation contracts.")
+    if len(MANUAL_EQUATION_CONTRACTS) != 33:
+        raise RuntimeError("Expected exactly 33 manual equation contracts.")
     if tuple(item.ordinal for item in MANUAL_EQUATION_CONTRACTS) != tuple(
-        range(1, 33)
+        range(1, 34)
     ):
         raise RuntimeError("Manual equation contract ordinals must be contiguous.")
 
@@ -720,7 +736,7 @@ def bind_manual_equation_contracts(
 ) -> tuple[ContractedManualEquation, ...]:
     """Bind exact canonical semantics to exact canonical sourced equations."""
 
-    if type(catalogue) is not tuple or len(catalogue) != 32:
+    if type(catalogue) is not tuple or len(catalogue) != 33:
         raise ValueError("Canonical manual equation contract catalogue changed.")
     if any(
         type(item) is not ManualEquationContract
@@ -736,9 +752,9 @@ def bind_manual_equation_contracts(
         raise ValueError("Canonical manual equation contract catalogue changed.")
     if type(equations) is not tuple:
         raise ValueError("Sourced manual equations must remain a tuple.")
-    if len(equations) != 32:
+    if len(equations) != 33:
         raise ValueError(
-            f"Sourced manual equation cardinality changed: expected 32, "
+            f"Sourced manual equation cardinality changed: expected 33, "
             f"got {len(equations)}."
         )
 

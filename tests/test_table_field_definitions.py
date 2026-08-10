@@ -61,11 +61,16 @@ def test_field_definitions_are_frozen_slotted_and_encode_blank_semantics():
     case_name = fields.field_definition(load_cases.PLASTIC_TABLE_KEY, "name")
     cycles = fields.field_definition(fatigue_inputs.SPECTRUM_TABLE_KEY, "cycles")
     bar_area = fields.field_definition("bars_base", reinforcement_table.AREA)
+    crack_criterion = fields.field_definition(
+        load_cases.ELASTIC_TABLE_KEY, "ordinary_crack_criterion_mm"
+    )
 
     assert axial.blank is fields.BlankPolicy.ZERO
     assert case_name.blank is fields.BlankPolicy.REQUIRED
     assert cycles.blank is fields.BlankPolicy.REQUIRED
     assert bar_area.blank is fields.BlankPolicy.NULL
+    assert crack_criterion.blank is fields.BlankPolicy.NULL
+    assert crack_criterion.math_symbol == "w_{k,criterion}"
     assert axial.math_symbol == "N_{Ed}"
     assert hasattr(axial, "__slots__")
     with pytest.raises(dataclasses.FrozenInstanceError):

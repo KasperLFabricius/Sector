@@ -2825,17 +2825,178 @@ def test_report_marks_no_crack_width_as_output_not_applicable():
         crack_short=None,
         crack_output={
             "value": None,
-            "calculation_state": "NOT APPLICABLE",
+            "calculation_state": "NOT ASSESSED",
             "case": None,
             "governing": None,
             "unit": "mm",
+            "reason": "Section uncracked; no width is available.",
         },
     )
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "NOT APPLICABLE" in txt
-    assert "No crack width:" in txt
-    assert "No crack-width limit" in txt
+    assert "NOT ASSESSED" in txt
+    assert "Section uncracked; no width is available." in txt
+    assert "No crack width: section uncracked or no reinforcement" not in txt
+    assert "No user-specified crack-width criterion" in txt
     assert "DB-SLS-01 section 4" not in txt
+
+
+def test_threshold_case_with_unrequested_width_keeps_only_retained_reason():
+    inp = _inp()
+    inp["sls_cw"] = False
+    out = _out()
+    elastic = out["elastic"]
+    elastic.update(
+        show_cw=False,
+        crack=None,
+        crack_short=None,
+        crack_coarse=None,
+        crack_short_coarse=None,
+        crack_output={
+            "value": None,
+            "case": None,
+            "governing": None,
+            "unit": "mm",
+            "calculation_state": "NOT REQUESTED",
+            "criterion_mm": None,
+            "ratio": None,
+            "criterion_source": None,
+            "reason": "Crack width was not requested for this run.",
+            "comparison_equation": None,
+        },
+    )
+
+    text = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+
+    assert "Cracking threshold - EL-TEST" in text
+    assert "NOT REQUESTED" in text
+    assert "Crack width was not requested for this run." in text
+    assert "No crack width: section uncracked or no reinforcement" not in text
+
+
+def test_stale_crack_selection_with_no_values_never_infers_physical_reason():
+    inp = _inp()
+    out = _out()
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
+    retained_reason = (
+        "The selected action state is outside the validated ordinary crack-width "
+        "scope."
+    )
+    out["elastic"].update(
+        crack=None,
+        crack_short=None,
+        crack_coarse=None,
+        crack_short_coarse=None,
+        crack_output={
+            "value": None,
+            "case": None,
+            "governing": None,
+            "unit": "mm",
+            "calculation_state": "NOT ASSESSED",
+            "criterion_mm": None,
+            "ratio": None,
+            "criterion_source": None,
+            "reason": retained_reason,
+            "comparison_equation": None,
+        },
+    )
+
+    text = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+
+    assert retained_reason in text
+    assert "No crack width: section uncracked or no reinforcement" not in text
+    assert "does not infer a physical reason" not in text
+
+
+def test_report_publishes_one_retained_critical_user_crack_comparison():
+    out = _out()
+    out["elastic"]["crack_output"] = {
+        "value": 0.213,
+        "case": "Long-term",
+        "governing": "bar 1",
+        "unit": "mm",
+        "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
+        "criterion_mm": 0.300,
+        "ratio": 0.710,
+        "criterion_source": "User input - Elastic case EL-TEST",
+        "reason": "The calculated crack width is within the user-specified limit.",
+        "comparison_equation": "w_k / w_k,criterion",
+    }
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert flat.count("User-specified crack-width comparison - critical case") == 1
+    assert flat.count("EQ-CRACK.USER-LIMIT.COMPARISON") == 1
+    assert "0.213 mm / 0.300 mm" in flat
+    assert "u w = 0.710" in flat or "uw = 0.710" in flat
+    assert "WITHIN USER-SPECIFIED LIMIT" in flat
+    assert "No user-specified crack-width criterion" not in flat
+
+
+def _heightened_crack_result():
+    return {
+        "basis_key": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+        "crack_system": "fine",
+        "reinforcement_surface": "smooth",
+        "bar_diameter_mm": 16.0,
+        "effective_tensile_strength_mpa": 2.9,
+        "reinforcement_modulus_mpa": 200_000.0,
+        "permitted_crack_width_mm": 0.20,
+        "effective_tension_area_mm2": 60_000.0,
+        "provided_reinforcement_area_mm2": 900.0,
+        "source": (
+            "DS/EN 1992-1-1 DK NA:2024, supplementary provision to "
+            "7.3.2(1)P, Formula 7.100 NA"
+        ),
+        "disclosure": (
+            "The user supplies the permitted crack width and decides applicability."
+        ),
+        "formula_identity": "Formula 7.100 NA",
+        "crack_system_factor": 1.0,
+        "reinforcement_surface_multiplier": math.sqrt(2.0),
+        "base_reinforcement_ratio": 0.0170293864,
+        "required_reinforcement_ratio": 0.0240831892,
+        "required_reinforcement_area_mm2": 1444.991352,
+        "comparison_ratio": 1.605546,
+        "status": "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+    }
+
+
+def test_report_publishes_singleton_heightened_crack_chain_from_retained_values():
+    out = _out()
+    out["heightened_crack_control"] = _heightened_crack_result()
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "DK heightened crack-control minimum" in flat
+    assert flat.count("EQ-CRACK.HEIGHTENED.BASE-RATIO") == 1
+    assert flat.count("EQ-CRACK.HEIGHTENED.REQUIRED-RATIO") == 1
+    assert flat.count("EQ-CRACK.HEIGHTENED.REQUIRED-AREA") == 1
+    assert flat.count("EQ-CRACK.HEIGHTENED.AREA-COMPARISON") == 1
+    assert "1.414214" in flat
+    assert "1445.0" in flat
+    assert "PROVIDED AREA BELOW CALCULATED REQUIREMENT" in flat
+    assert "watertightness" in flat
+
+
+def test_report_heightened_crack_partial_payload_fails_closed():
+    out = _out()
+    heightened = _heightened_crack_result()
+    del heightened["base_reinforcement_ratio"]
+    out["heightened_crack_control"] = heightened
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in flat
+    assert "base_reinforcement_ratio" in flat
+    assert "EQ-CRACK.HEIGHTENED.BASE-RATIO" not in flat
 
 
 def test_report_renders_greek_glyphs():

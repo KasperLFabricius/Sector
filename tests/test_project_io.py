@@ -96,6 +96,7 @@ def _current_project():
                 "mx_short_ed_knm": 4.0,
                 "my_short_ed_knm": 5.0,
                 "calculate_crack_width": True,
+                "ordinary_crack_criterion_mm": None,
             }],
             load_cases.ELASTIC_TABLE_KEY,
         ),
@@ -108,12 +109,29 @@ def _current_project():
         "conc_gamma_c": 0.5,
         "mild_gamma_y": 2.0,
         "torsion_gamma_ct": 2.0,
+        "sls_code": (
+            design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
+        ),
         "fatigue_edition": (
             design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
         ),
         "rep_proj_no": "P-001",
     }
     return tables, scalars
+
+
+def _heightened_inputs() -> dict[str, object]:
+    return {
+        "sls_heightened_on": True,
+        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_bar_diameter_mm": 16.0,
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
+        "sls_heightened_permitted_crack_width_mm": 0.2,
+        "sls_heightened_effective_tension_area_mm2": 120_000.0,
+        "sls_heightened_provided_reinforcement_area_mm2": 2_500.0,
+    }
 
 
 def test_current_schema_save_load_resave_retains_exact_inputs():
@@ -149,6 +167,99 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert json.loads(first)["version"] == project_io.VERSION
     assert json.loads(second)["version"] == project_io.VERSION
+
+
+def test_schema_24_missing_optional_crack_criterion_is_rejected():
+    tables, scalars = _current_project()
+    data = json.loads(project_io.dump_project(tables, scalars))
+    elastic = data["tables"][load_cases.ELASTIC_TABLE_KEY]
+    position = elastic["columns"].index("ordinary_crack_criterion_mm")
+    elastic["columns"].pop(position)
+    for row in elastic["rows"]:
+        row.pop(position)
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(
+        ValueError,
+        match="exact Elastic columns.*ordinary_crack_criterion_mm",
+    ):
+        project_io.parse_project(json.dumps(data))
+
+
+@pytest.mark.parametrize(
+    ("invalid", "message"),
+    (
+        (True, "malformed decimal input 'True'"),
+        (0.0, "ordinary_crack_criterion_mm must be a positive finite number"),
+        (-0.1, "ordinary_crack_criterion_mm must be a positive finite number"),
+        ("NaN", "malformed decimal input 'NaN'"),
+    ),
+)
+def test_rehashed_schema_24_rejects_invalid_ordinary_crack_criterion(
+    invalid,
+    message,
+):
+    tables, scalars = _current_project()
+    data = json.loads(project_io.dump_project(tables, scalars))
+    elastic = data["tables"][load_cases.ELASTIC_TABLE_KEY]
+    position = elastic["columns"].index("ordinary_crack_criterion_mm")
+    elastic["rows"][0][position] = invalid
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        project_io.parse_project(json.dumps(data))
+
+
+@pytest.mark.parametrize("mutation", ("extra", "reordered"))
+def test_schema_24_rejects_every_nonexact_elastic_column_shape(mutation):
+    tables, scalars = _current_project()
+    data = json.loads(project_io.dump_project(tables, scalars))
+    elastic = data["tables"][load_cases.ELASTIC_TABLE_KEY]
+    if mutation == "extra":
+        elastic["columns"].append("legacy_crack_limit")
+        for row in elastic["rows"]:
+            row.append(None)
+    else:
+        elastic["columns"][-2:] = reversed(elastic["columns"][-2:])
+        for row in elastic["rows"]:
+            row[-2:] = reversed(row[-2:])
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(ValueError, match="exact Elastic columns"):
+        project_io.parse_project(json.dumps(data))
+
+
+@pytest.mark.parametrize("criterion", (None, 0.3))
+def test_schema_24_round_trips_nullable_ordinary_crack_criterion(criterion):
+    tables, scalars = _current_project()
+    tables[load_cases.ELASTIC_TABLE_KEY].loc[
+        0, "ordinary_crack_criterion_mm"
+    ] = criterion
+
+    text = project_io.dump_project(tables, scalars)
+    loaded_tables, _ = project_io.parse_project(text)
+    payload = json.loads(text)
+    elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
+
+    assert tuple(elastic["columns"]) == load_cases.ELASTIC_COLUMNS
+    position = elastic["columns"].index("ordinary_crack_criterion_mm")
+    assert elastic["rows"][0][position] == criterion
+    loaded = loaded_tables[load_cases.ELASTIC_TABLE_KEY].loc[
+        0, "ordinary_crack_criterion_mm"
+    ]
+    if criterion is None:
+        assert loaded is None
+    else:
+        assert loaded == pytest.approx(criterion)
 
 
 def test_direction_alias_round_trips_outside_calculation_inputs():
@@ -670,6 +781,203 @@ def test_rehashed_schema_24_rejects_an_unregistered_fatigue_edition():
 
     with pytest.raises(ValueError, match="registered basis keys"):
         project_io.parse_project(json.dumps(data))
+
+
+@pytest.mark.parametrize("basis_key", tuple(design_standards.DesignBasisKey))
+def test_sls_code_round_trips_only_as_a_registered_basis_key(basis_key):
+    tables, scalars = _current_project()
+    scalars["sls_code"] = basis_key.value
+
+    text = project_io.dump_project(tables, scalars)
+    _, loaded = project_io.parse_project(text)
+
+    assert loaded["sls_code"] == basis_key.value
+    assert json.loads(text)["scalars"]["sls_code"] == basis_key.value
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        "EN 1992-1-1:2005",
+        "DS/EN 1992-1-1 + DK NA",
+        "DS/EN 1992-1-1 + DK NA (fine crack system)",
+        "EN 1992-1-1:2023",
+        "ec2_1_1_first_gen_dk_na_2024 ",
+        "unknown",
+        "",
+        None,
+        True,
+    ),
+)
+def test_sls_code_rejects_labels_aliases_whitespace_and_unknown_values(invalid):
+    tables, scalars = _current_project()
+    scalars["sls_code"] = invalid
+
+    with pytest.raises(ValueError, match="registered basis keys"):
+        project_io.dump_project(tables, scalars)
+
+
+def test_ordinary_crack_request_requires_a_persisted_sls_basis_key():
+    tables, scalars = _current_project()
+    scalars.pop("sls_code")
+
+    with pytest.raises(
+        ValueError,
+        match="sls_code is required when an Elastic case requests crack width",
+    ):
+        project_io.dump_project(tables, scalars)
+
+
+def test_active_heightened_inputs_round_trip_with_direct_fct_eff():
+    tables, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    scalars["sls_fctm"] = 9.9
+
+    text = project_io.dump_project(tables, scalars)
+    _, loaded = project_io.parse_project(text)
+    persisted = json.loads(text)["scalars"]
+
+    for key, value in _heightened_inputs().items():
+        assert loaded[key] == value
+        assert persisted[key] == value
+    assert loaded["sls_heightened_effective_tensile_strength_mpa"] == 2.9
+    assert loaded["sls_fctm"] == 9.9
+
+
+@pytest.mark.parametrize(
+    "basis_key",
+    (
+        design_standards.DesignBasisKey.FIRST_GEN_BASE,
+        design_standards.DesignBasisKey.PUBLISHED_2023,
+    ),
+)
+def test_active_heightened_check_is_strictly_dk_na_2024_only(basis_key):
+    tables, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    scalars["sls_code"] = basis_key.value
+
+    with pytest.raises(
+        ValueError,
+        match="heightened crack control requires "
+        "ec2_1_1_first_gen_dk_na_2024",
+    ):
+        project_io.dump_project(tables, scalars)
+
+
+@pytest.mark.parametrize(
+    "missing",
+    project_io.HEIGHTENED_CRACK_SCALAR_KEYS[1:],
+)
+def test_active_heightened_check_requires_every_selector_and_operand(missing):
+    tables, scalars = _current_project()
+    heightened = _heightened_inputs()
+    heightened.pop(missing)
+    scalars.update(heightened)
+
+    with pytest.raises(ValueError, match=rf"^{re.escape(missing)} is required"):
+        project_io.dump_project(tables, scalars)
+
+
+@pytest.mark.parametrize(
+    ("key", "invalid", "message"),
+    (
+        ("sls_heightened_crack_system", "Fine", "fine.*coarse"),
+        ("sls_heightened_crack_system", "fine ", "fine.*coarse"),
+        ("sls_heightened_crack_system", True, "fine.*coarse"),
+        (
+            "sls_heightened_reinforcement_surface",
+            "Ribbed",
+            "ribbed.*smooth",
+        ),
+        (
+            "sls_heightened_reinforcement_surface",
+            "smooth ",
+            "ribbed.*smooth",
+        ),
+        (
+            "sls_heightened_reinforcement_surface",
+            False,
+            "ribbed.*smooth",
+        ),
+    ),
+)
+def test_active_heightened_selectors_are_exact(key, invalid, message):
+    tables, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    scalars[key] = invalid
+
+    with pytest.raises(ValueError, match=message):
+        project_io.dump_project(tables, scalars)
+
+
+@pytest.mark.parametrize(
+    "key",
+    (
+        "sls_heightened_bar_diameter_mm",
+        "sls_heightened_effective_tensile_strength_mpa",
+        "sls_heightened_reinforcement_modulus_mpa",
+        "sls_heightened_permitted_crack_width_mm",
+        "sls_heightened_effective_tension_area_mm2",
+        "sls_heightened_provided_reinforcement_area_mm2",
+    ),
+)
+@pytest.mark.parametrize(
+    "invalid",
+    (True, "1.0", 0.0, -1.0, float("nan"), float("inf")),
+)
+def test_active_heightened_operands_must_be_positive_finite_reals(key, invalid):
+    tables, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    scalars[key] = invalid
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^{re.escape(key)} must be a positive",
+    ):
+        project_io.dump_project(tables, scalars)
+
+
+def test_active_heightened_fct_eff_never_falls_back_to_sls_fctm():
+    tables, scalars = _current_project()
+    heightened = _heightened_inputs()
+    heightened.pop("sls_heightened_effective_tensile_strength_mpa")
+    scalars.update(heightened)
+    scalars["sls_fctm"] = 2.9
+
+    with pytest.raises(
+        ValueError,
+        match="sls_heightened_effective_tensile_strength_mpa is required",
+    ):
+        project_io.dump_project(tables, scalars)
+
+
+@pytest.mark.parametrize("invalid", (0, 1, "true", None))
+def test_heightened_enable_flag_must_be_an_exact_boolean(invalid):
+    tables, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    scalars["sls_heightened_on"] = invalid
+
+    with pytest.raises(ValueError, match="sls_heightened_on must be a Boolean"):
+        project_io.dump_project(tables, scalars)
+
+
+def test_dormant_heightened_values_round_trip_under_a_non_dk_basis():
+    tables, scalars = _current_project()
+    dormant = _heightened_inputs()
+    dormant["sls_heightened_on"] = False
+    scalars.update(dormant)
+    scalars["sls_code"] = (
+        design_standards.DesignBasisKey.PUBLISHED_2023.value
+    )
+
+    text = project_io.dump_project(tables, scalars)
+    _, loaded = project_io.parse_project(text)
+
+    for key, value in dormant.items():
+        assert loaded[key] == value
+    assert loaded["sls_code"] == (
+        design_standards.DesignBasisKey.PUBLISHED_2023.value
+    )
 
 
 def test_obsolete_compliance_and_approval_inputs_are_not_in_schema():

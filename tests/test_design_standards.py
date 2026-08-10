@@ -19,7 +19,14 @@ EXPECTED_CAPABILITIES = {
     "reinforcement_fatigue",
     "concrete_fatigue_equivalent",
     "concrete_fatigue_damage_sum",
+    "ordinary_crack_width",
+    "heightened_crack_control",
 }
+FATIGUE_CAPABILITIES = (
+    standards.Capability.REINFORCEMENT_FATIGUE,
+    standards.Capability.CONCRETE_FATIGUE_EQUIVALENT,
+    standards.Capability.CONCRETE_FATIGUE_DAMAGE_SUM,
+)
 
 
 def test_catalogue_has_exactly_three_stable_basis_keys_and_labels():
@@ -68,17 +75,34 @@ def test_family_national_choice_and_disclosures_are_independent_facts():
     )
 
 
-def test_only_the_three_verified_fatigue_capabilities_are_registered():
+def test_only_verified_fatigue_and_crack_capabilities_are_registered():
     assert {item.value for item in standards.Capability} == EXPECTED_CAPABILITIES
     assert set(standards.CAPABILITY_BINDINGS) == {
         (basis, capability)
         for basis in standards.DesignBasisKey
-        for capability in standards.Capability
+        for capability in (
+            *FATIGUE_CAPABILITIES,
+            standards.Capability.ORDINARY_CRACK_WIDTH,
+        )
+    } | {
+        (
+            standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+            standards.Capability.HEIGHTENED_CRACK_CONTROL,
+        )
     }
-    for capability in standards.Capability:
+    for capability in (
+        *FATIGUE_CAPABILITIES,
+        standards.Capability.ORDINARY_CRACK_WIDTH,
+    ):
         assert tuple(
             basis.key for basis in standards.basis_options(capability)
         ) == tuple(standards.DesignBasisKey)
+    assert tuple(
+        basis.key
+        for basis in standards.basis_options(
+            standards.Capability.HEIGHTENED_CRACK_CONTROL
+        )
+    ) == (standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,)
 
 
 def test_solver_dispatch_is_exact_capability_scoped_and_fail_closed():
@@ -129,6 +153,110 @@ def test_first_generation_damage_sum_keeps_its_source_only_scope():
         ) in binding.disclosure
         assert "DK NA:2015" not in binding.source
         assert "DK NA:2015" not in binding.disclosure
+
+
+def test_ordinary_crack_bindings_use_live_solver_editions_and_exact_sources():
+    base = standards.capability_binding(
+        standards.DesignBasisKey.FIRST_GEN_BASE,
+        standards.Capability.ORDINARY_CRACK_WIDTH,
+    )
+    dk = standards.capability_binding(
+        standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        standards.Capability.ORDINARY_CRACK_WIDTH,
+    )
+    published = standards.capability_binding(
+        standards.DesignBasisKey.PUBLISHED_2023,
+        standards.Capability.ORDINARY_CRACK_WIDTH,
+    )
+
+    assert (base.solver_edition, dk.solver_edition) == ("2004", "2004")
+    assert published.solver_edition == "2023"
+    assert "7.3.2 and 7.3.4" in base.source
+    assert "Formulas (7.8), (7.9), (7.11) and (7.14)" in base.source
+    assert "DK NA:2024" in dk.source
+    assert "Figure 7.100 NA" in dk.source
+    assert published.source == (
+        "DS/EN 1992-1-1:2023, 9.2.2 and 9.2.3, Figure 9.3 and "
+        "Formulas (9.6), (9.8), (9.9), (9.11), (9.12), (9.15), "
+        "(9.17), (9.18) and (9.20)"
+    )
+    assert base.ordinary_crack_width_route == (
+        standards.OrdinaryCrackWidthSolverRoute(
+            edition="2004",
+            k3_cover_dependent=False,
+            include_hx_term_for_ordinary_beams=True,
+            include_hx_term_for_slabs_or_prestressed=True,
+            report_coarse_system=False,
+        )
+    )
+    assert dk.ordinary_crack_width_route == (
+        standards.OrdinaryCrackWidthSolverRoute(
+            edition="2004",
+            k3_cover_dependent=True,
+            include_hx_term_for_ordinary_beams=False,
+            include_hx_term_for_slabs_or_prestressed=True,
+            report_coarse_system=True,
+        )
+    )
+    assert published.ordinary_crack_width_route == (
+        standards.OrdinaryCrackWidthSolverRoute(
+            edition="2023",
+            k3_cover_dependent=False,
+            include_hx_term_for_ordinary_beams=False,
+            include_hx_term_for_slabs_or_prestressed=False,
+            report_coarse_system=False,
+        )
+    )
+
+    for binding in standards.CAPABILITY_BINDINGS.values():
+        if binding.capability is not standards.Capability.ORDINARY_CRACK_WIDTH:
+            assert binding.ordinary_crack_width_route is None
+
+
+def test_heightened_crack_binding_is_first_generation_dk_only_and_bounded():
+    binding = standards.capability_binding(
+        standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        standards.Capability.HEIGHTENED_CRACK_CONTROL,
+    )
+
+    assert binding.solver_edition == "dk_na_2024_formula_7_100_na"
+    assert binding.source == (
+        "DS/EN 1992-1-1 DK NA:2024, supplementary provision to "
+        "7.3.2(1)P, Formula 7.100 NA"
+    )
+    assert "user-selected" in binding.disclosure
+    assert "does not infer" in binding.disclosure
+
+    for unsupported in (
+        standards.DesignBasisKey.FIRST_GEN_BASE,
+        standards.DesignBasisKey.PUBLISHED_2023,
+    ):
+        with pytest.raises(ValueError, match="does not implement"):
+            standards.capability_binding(
+                unsupported,
+                standards.Capability.HEIGHTENED_CRACK_CONTROL,
+            )
+
+    crack_bindings = (
+        binding,
+        *(
+            standards.capability_binding(
+                basis,
+                standards.Capability.ORDINARY_CRACK_WIDTH,
+            )
+            for basis in standards.DesignBasisKey
+        ),
+    )
+    new_claims = "\n".join(
+        f"{item.source}\n{item.disclosure}" for item in crack_bindings
+    ).casefold()
+    for excluded in (
+        "1992-2",
+        "bridge",
+        "confinement",
+        "global compliance",
+    ):
+        assert excluded not in new_claims
 
 
 def test_context_records_are_non_selectable_and_have_no_solver_bindings():

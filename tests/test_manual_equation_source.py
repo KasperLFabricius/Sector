@@ -92,6 +92,10 @@ EXPECTED_ROWS = (
         "(7.11) and (7.14).",
     ),
     (
+        "C7-5", "standard",
+        "DS/EN 1992-1-1 DK NA:2024 7.3.2(1)P, Formula (7.100 NA).",
+    ),
+    (
         "C7-3", "standard",
         "DS/EN 1992-1-1:2023 9.2.3, Formulas (9.8) and (9.9).",
     ),
@@ -195,7 +199,7 @@ EXPECTED_ROWS = (
 )
 
 EXPECTED_SOURCE_SEAL = (
-    "fa01b2694da10aa2a060140a2608aa1f4d53ebaa7fcadcf12c68578a8a9a232d"
+    "7c9b6474e1faa26d8259cb0c7094632706b17bcaca10d1f3e5fa7ee522eb7019"
 )
 
 
@@ -212,7 +216,7 @@ def _bound(equations=None, catalogue=source.MANUAL_EQUATION_SOURCES):
 
 def test_live_manual_binds_exact_independent_source_matrix():
     bound = _bound()
-    assert len(bound) == 32
+    assert len(bound) == 33
     assert tuple(
         (
             item.source.number,
@@ -221,7 +225,7 @@ def test_live_manual_binds_exact_independent_source_matrix():
         )
         for item in bound
     ) == EXPECTED_ROWS
-    assert tuple(item.source.ordinal for item in bound) == tuple(range(1, 33))
+    assert tuple(item.source.ordinal for item in bound) == tuple(range(1, 34))
     assert tuple(item.source.key for item in bound) == tuple(
         item.key for item in location.MANUAL_EQUATION_LOCATIONS
     )
@@ -234,7 +238,7 @@ def test_complete_source_catalogue_has_exact_seal():
 def test_source_classification_is_exact_and_project_sources_are_uncited():
     records = source.MANUAL_EQUATION_SOURCES
     assert Counter(item.source_kind for item in records) == {
-        "standard": 25,
+        "standard": 26,
         "mixed": 5,
         "project": 2,
     }
@@ -273,7 +277,7 @@ def test_selectable_custom_fatigue_laws_retain_project_provenance():
         )
 
 
-@pytest.mark.parametrize("index", range(32))
+@pytest.mark.parametrize("index", range(33))
 @pytest.mark.parametrize(
     "field",
     ("ordinal", "key", "number", "source_kind", "source_text"),

@@ -24,7 +24,7 @@ import sector_report  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "3f5787cc5987c9d9d7a097a3b3cffd362f2d293a558d4d91353d5fb22b39cb6f"
+    "f916064417871ca87e9c623a2d6b6626dbb30634d6e6f5dd5a406f0bc39c6f03"
 )
 
 
@@ -76,7 +76,7 @@ def test_complete_example_retains_results_without_trace_payloads(
         "minimum_reinforcement", "transverse_reinforcement", "elastic_cases",
         "elastic", "clear_spacing", "fatigue", "material_properties",
         "section_properties", "prestress_initial", "elastic_shared",
-        "worked_example_selection",
+        "heightened_crack_control", "worked_example_selection",
     }
     assert "calculation_traces" not in results["plastic_cases"][0]["results"]
     assert "calculation_traces" not in results["elastic_cases"][0]["results"]
@@ -131,8 +131,32 @@ def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
         "case": "Short-term (fine)",
         "governing": "R1",
         "unit": "mm",
-        "calculation_state": "CALCULATED",
+        "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
+        "criterion_mm": 0.30,
+        "ratio": pytest.approx(
+            expected_elastic["crack_width_mm"] / 0.30,
+            rel=5.0e-12,
+        ),
+        "criterion_source": "User input - Elastic case EL-COMPLETE",
+        "reason": "The calculated crack width is within the user-specified limit.",
+        "comparison_equation": "w_k / w_k,criterion",
     }
+
+    heightened = results["heightened_crack_control"]
+    base_ratio = (16.0 * 2.9 / (4.0 * 200_000.0 * 1.0 * 0.20)) ** 0.5
+    required_ratio = 2.0**0.5 * base_ratio
+    required_area = required_ratio * 60_000.0
+    assert heightened["formula_identity"] == "Formula 7.100 NA"
+    assert heightened["base_reinforcement_ratio"] == pytest.approx(base_ratio)
+    assert heightened["required_reinforcement_ratio"] == pytest.approx(
+        required_ratio
+    )
+    assert heightened["required_reinforcement_area_mm2"] == pytest.approx(
+        required_area
+    )
+    assert heightened["status"] == (
+        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT"
+    )
 
 
 def test_member_and_detailing_outputs_match_independent_equations(
@@ -222,12 +246,20 @@ def test_fatigue_outputs_match_independent_equations(
 def test_checking_pack_is_separate_and_covers_every_main_family():
     pack = reproducible_example.checking_pack()
     assert EXPECTED_INPUT_SHA256 in pack
+    flat_pack = " ".join(pack.split())
     for text in (
         "Plastic capacity and applied ray", "Cracked elastic and crack width",
+        "DK NA heightened crack-control minimum",
+        "0.1343977823/0.30=0.4479926077",
+        "base ratio is sqrt(16 x 2.9/(4 x 200000 x 1 x 0.20))",
+        "rho_s,min=0.0240831891576",
+        "As,required",
+        "1444.991349455/1600=0.903119593409",
+        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
         "Detailing and member resistance", "Fatigue", "Report completeness",
         "explicit equations", "genuine demand/resistance verdicts",
     ):
-        assert text in pack
+        assert text in flat_pack
     manual_text = "\n".join(
         block[1] for block in manual.manual_blocks()
         if block[0] in {"h1", "h2", "md"}
@@ -270,6 +302,8 @@ def test_tables_only_report_contains_every_main_calculation_chapter(
         "Section and materials", "Basis of analysis", "Plastic section capacity",
         "Elastic section response and stresses",
         "Cracking threshold and governing crack width - EL-COMPLETE",
+        "User-specified crack-width comparison - critical case",
+        "DK heightened crack-control minimum",
         "Grouped fatigue", "Shear resistance", "Torsion (thin-walled tube)",
         "Combined bending + shear + torsion (M-V-T)", "minimum reinforcement",
         "Shear/torsion link detailing", "Reinforcement clear spacing",

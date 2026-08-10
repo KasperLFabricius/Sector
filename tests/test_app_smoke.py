@@ -24,6 +24,10 @@ sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` 
 
 APP = str(ROOT / "app" / "sector_app.py")
 
+_SLS_BASE = "ec2_1_1_first_gen_base"
+_SLS_DK = "ec2_1_1_first_gen_dk_na_2024"
+_SLS_2023 = "ec2_1_1_2023_published"
+
 from app_case_inputs import (
     apply_case_changes,
     discard_retired_qs_fragment,
@@ -909,7 +913,9 @@ def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
         "schema": 1,
         "families": {},
         "crack_examples": [],
+        "crack_comparison": None,
         "cracking_threshold": None,
+        "heightened_crack_control": None,
         "torsion_subchecks": {},
     }
     for entry in result["elastic_cases"]:
@@ -2264,6 +2270,60 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
     )
     assert payload["scalars"]["fatigue_on"] is False
     assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.50)
+
+
+def test_loading_project_without_heightened_check_clears_prior_dk_state():
+    import project_io
+    from sector import design_standards
+
+    heightened_project = project_io.dump_project(
+        {},
+        {
+            "mode": "Elastic",
+            "sls_code": design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+            "sls_heightened_on": True,
+            "sls_heightened_crack_system": "fine",
+            "sls_heightened_reinforcement_surface": "smooth",
+            "sls_heightened_bar_diameter_mm": 16.0,
+            "sls_heightened_effective_tensile_strength_mpa": 2.9,
+            "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
+            "sls_heightened_permitted_crack_width_mm": 0.20,
+            "sls_heightened_effective_tension_area_mm2": 60_000.0,
+            "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
+        },
+    )
+    at = _fresh()
+    at.session_state["_pending_project"] = heightened_project
+    at.run()
+    assert not at.exception
+    assert at.session_state["sls_heightened_on"] is True
+
+    at.session_state["_pending_project"] = project_io.dump_project(
+        {},
+        {"mode": "Plastic"},
+    )
+    at.run()
+
+    assert not at.exception
+    state = at.session_state.filtered_state
+    expected_defaults = {
+        "sls_heightened_on": False,
+        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_bar_diameter_mm": 0.0,
+        "sls_heightened_effective_tensile_strength_mpa": 0.0,
+        "sls_heightened_reinforcement_modulus_mpa": 0.0,
+        "sls_heightened_permitted_crack_width_mm": 0.0,
+        "sls_heightened_effective_tension_area_mm2": 0.0,
+        "sls_heightened_provided_reinforcement_area_mm2": 0.0,
+    }
+    assert {
+        key: state[key] for key in project_io.HEIGHTENED_CRACK_SCALAR_KEYS
+    } == expected_defaults
+    durable = state.get("_durable_input_scalars", {})
+    assert {
+        key: durable[key] for key in project_io.HEIGHTENED_CRACK_SCALAR_KEYS
+    } == expected_defaults
 
 
 def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
@@ -3992,11 +4052,11 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         "name", "description",
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
-        "calculate_crack_width",
+        "calculate_crack_width", "ordinary_crack_criterion_mm",
     ]
     for editor_key, action_columns in (
         ("plastic_cases_editor", load_cases.PLASTIC_NUMERIC),
-        ("elastic_cases_editor", load_cases.ELASTIC_NUMERIC),
+        ("elastic_cases_editor", load_cases.ELASTIC_ACTION_NUMERIC),
     ):
         column_config = json.loads(
             _widget(at.dataframe, editor_key).proto.columns
@@ -4005,6 +4065,12 @@ def test_native_load_case_editors_use_consistent_ed_columns():
             assert column_config[key]["required"] is False
             assert column_config[key]["default"] == "0"
             assert column_config[key]["type_config"]["type"] == "text"
+    criterion_config = json.loads(
+        _widget(at.dataframe, "elastic_cases_editor").proto.columns
+    )["ordinary_crack_criterion_mm"]
+    assert criterion_config["required"] is False
+    assert criterion_config.get("default") is None
+    assert criterion_config["type_config"]["type"] == "text"
     _goto_input_tab(at, "Analysis settings")
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_input_tab(at, "Loads")
@@ -4946,6 +5012,8 @@ def test_crack_width_off_by_default():
     e = at.session_state["results"]["elastic"]
     assert e["show_cw"] is False
     assert e["crack"] is None              # crack width toggle off
+    assert e["crack_output"]["calculation_state"] == "NOT REQUESTED"
+    assert e["crack_output"]["criterion_mm"] is None
 
 
 def test_crack_width_reports_both_load_cases():
@@ -4982,10 +5050,14 @@ def test_crack_output_and_candidate_table_are_retained_without_verdict():
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
-    assert e["crack_output"]["calculation_state"] == "CALCULATED"
+    assert e["crack_output"]["calculation_state"] == (
+        "CALCULATED - ACCEPTANCE NOT ASSESSED"
+    )
     assert e["crack_output"]["value"] > 0.0
     assert e["crack_output"]["case"] in {"Long-term", "Short-term"}
     assert e["crack_output"]["governing"].startswith(("R", "P"))
+    assert e["crack_output"]["criterion_mm"] is None
+    assert e["crack_output"]["ratio"] is None
     assert not {"limit", "util", "status"} & set(e["crack_output"])
     assert e["crack"]["candidates"]
     assert e["crack"]["candidates"][0]["wk"] == pytest.approx(e["crack"]["wk"])
@@ -4994,13 +5066,48 @@ def test_crack_output_and_candidate_table_are_retained_without_verdict():
         e["crack"]["candidates"][0].keys()
     _select_view(at, "Elastic Results")
     assert any(
-        "No crack-width limit" in item.value
+        "Criterion: not specified; acceptance is not assessed" in item.value
         for item in at.caption
     )
     assert not any("FAIL - Crack width" in item.value for item in at.error)
 
 
-def test_no_crack_width_is_output_not_applicable_without_limit_metadata():
+def test_user_crack_criterion_is_assessed_for_its_elastic_row_only():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Elastic"))
+    cases = at.session_state[load_cases.ELASTIC_TABLE_KEY].copy(deep=True)
+    cases.at[0, "mx_long_ed_knm"] = 400.0
+    cases.at[0, "calculate_crack_width"] = True
+    cases.at[0, "ordinary_crack_criterion_mm"] = 0.001
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, cases)
+    _calculate(at)
+
+    assert not at.exception
+    output = at.session_state["results"]["elastic"]["crack_output"]
+    assert output["calculation_state"] == "EXCEEDS USER-SPECIFIED LIMIT"
+    assert output["criterion_mm"] == pytest.approx(0.001)
+    assert output["ratio"] == pytest.approx(output["value"] / 0.001)
+    assert output["criterion_source"] == "User input - Elastic case EL-01"
+    assert output["comparison_equation"] == "w_k / w_k,criterion"
+    assert not {"status", "pass", "fail", "global_compliance"} & set(output)
+
+    _select_view(at, "Elastic Results")
+    assert any(
+        "EXCEEDS USER-SPECIFIED LIMIT" in item.value
+        and "User-specified criterion: 0.001 mm" in item.value
+        for item in at.caption
+    )
+
+    cases.at[0, "ordinary_crack_criterion_mm"] = 1.0
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, cases)
+    _select_view(at, "Elastic Results")
+    assert any("press Calculate" in item.value for item in at.warning)
+
+
+def test_no_crack_width_is_not_assessed_without_a_numerical_result():
     at = _fresh()
     at.run()
     _set_and_click(
@@ -5013,11 +5120,17 @@ def test_no_crack_width_is_output_not_applicable_without_limit_metadata():
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["crack"] is None and e["crack_short"] is None
-    assert e["crack_output"]["calculation_state"] == "NOT APPLICABLE"
+    assert e["crack_output"]["calculation_state"] == "NOT ASSESSED"
     assert e["crack_output"]["value"] is None
     assert "sls_limit_source" not in e
     _select_view(at, "Elastic Results")
-    assert any("No crack width:" in item.value for item in at.info)
+    reason = e["crack_output"]["reason"]
+    assert reason
+    assert any(reason in item.value for item in at.info)
+    assert not any(
+        "No crack width: section uncracked or no reinforcement" in item.value
+        for item in at.info
+    )
 
 
 def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
@@ -5033,7 +5146,7 @@ def test_dk_na_reports_fine_and_coarse_for_both_load_cases():
         ("number_input", "el_long_Mx", 400.0),
         ("number_input", "el_short_Mx", 150.0),
         ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "DS/EN 1992-1-1 + DK NA"),
+        ("selectbox", "sls_code", _SLS_DK),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
@@ -5054,7 +5167,7 @@ def test_non_dk_na_reports_no_coarse_columns():
         ("radio", "mode", "Elastic"),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "EN 1992-1-1:2005"),
+        ("selectbox", "sls_code", _SLS_BASE),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
@@ -5072,11 +5185,12 @@ def test_ec2_2023_crack_edition_calculates():
         ("radio", "mode", "Elastic"),
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        ("selectbox", "sls_code", _SLS_2023),
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
-    assert e["crack_code"] == "EN 1992-1-1:2023"
+    assert e["crack_basis_key"] == _SLS_2023
+    assert "2023" in e["crack_code"]
     assert e["crack"]["edition"] == "2023" and e["crack"]["kw"] == 1.7
     assert e["crack"]["wk"] > 0.0 and e["crack"]["k1_r"] >= 1.0
 
@@ -5092,7 +5206,7 @@ def test_bonded_tendon_ratio_invalidates_elastic_results_and_report():
         "calculate",
         ("number_input", "el_long_Mx", 400.0),
         ("checkbox", "sls_cw", True),
-        ("selectbox", "sls_code", "EN 1992-1-1:2023"),
+        ("selectbox", "sls_code", _SLS_2023),
         ("number_input", "sls_tendon_xi", 0.5),
     )
     assert not at.exception
@@ -5118,16 +5232,137 @@ def test_bonded_tendon_ratio_invalidates_elastic_results_and_report():
     assert elastic_after["crack"]["wk"] != pytest.approx(wk_before)
 
 
-def test_old_crack_code_alias_targets_a_current_option():
-    # A session saved with a since-removed crack-code label (the split fine/coarse
-    # DK NA options) is migrated (in build_inputs, before the selectbox reads it) to
-    # the merged DK NA option. Verify each alias is retired and maps to a live one.
-    import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "app"))
-    import sector_app
-    for old, new in sector_app._CRACK_CODE_ALIASES.items():
-        assert old not in sector_app._CRACK_CODES      # the old label is retired
-        assert new in sector_app._CRACK_CODES          # and points at a live option
+def test_crack_basis_widget_uses_only_stable_capability_keys():
+    from sector import design_standards
+
+    at = _fresh()
+    at.run()
+    box = at.selectbox(key="sls_code")
+    assert box.options == [
+        design_standards.get_design_basis(key).label
+        for key in (_SLS_BASE, _SLS_DK, _SLS_2023)
+    ]
+    assert box.value == _SLS_BASE
+    assert at.session_state["sls_code"] == _SLS_BASE
+
+
+def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("selectbox", "sls_code", _SLS_DK),
+        ("toggle", "sls_heightened_on", True),
+        ("selectbox", "sls_heightened_crack_system", "fine"),
+        ("selectbox", "sls_heightened_reinforcement_surface", "ribbed"),
+        ("number_input", "sls_heightened_bar_diameter_mm", 16.0),
+        (
+            "number_input",
+            "sls_heightened_effective_tensile_strength_mpa",
+            2.9,
+        ),
+        (
+            "number_input",
+            "sls_heightened_reinforcement_modulus_mpa",
+            200000.0,
+        ),
+        ("number_input", "sls_heightened_permitted_crack_width_mm", 0.2),
+        (
+            "number_input",
+            "sls_heightened_effective_tension_area_mm2",
+            100000.0,
+        ),
+        (
+            "number_input",
+            "sls_heightened_provided_reinforcement_area_mm2",
+            2000.0,
+        ),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    heightened = results["heightened_crack_control"]
+    assert heightened["basis_key"] == _SLS_DK
+    assert heightened["formula_identity"] == "Formula 7.100 NA"
+    assert heightened["effective_tensile_strength_mpa"] == pytest.approx(2.9)
+    assert heightened["required_reinforcement_area_mm2"] > 0.0
+    assert heightened["status"] == (
+        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT"
+    )
+    assert results["worked_example_selection"]["heightened_crack_control"] == {
+        "result_key": "heightened_crack_control"
+    }
+    assert all(
+        "heightened_crack_control" not in entry["results"]
+        for entry in results["elastic_cases"]
+    )
+
+    _select_view(at, "Elastic Results")
+    assert sum(
+        item.value == "#### DK NA heightened crack control"
+        for item in at.markdown
+    ) == 1
+    _set(
+        at,
+        (
+            "number_input",
+            "sls_heightened_provided_reinforcement_area_mm2",
+            2500.0,
+        ),
+    )
+    _select_view(at, "Elastic Results")
+    assert any("press Calculate" in item.value for item in at.warning)
+
+    # Turning the optional calculation off and changing basis must not erase the
+    # dormant direct operands; returning to DK restores the exact prior value.
+    _set(at, ("toggle", "sls_heightened_on", False))
+    _set(at, ("selectbox", "sls_code", _SLS_2023))
+    assert not any(
+        widget.key and widget.key.startswith("sls_heightened_")
+        for widgets in (at.toggle, at.selectbox, at.number_input)
+        for widget in widgets
+    )
+    _set(at, ("selectbox", "sls_code", _SLS_DK))
+    assert at.number_input(
+        key="sls_heightened_provided_reinforcement_area_mm2"
+    ).value == pytest.approx(2500.0)
+
+
+def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
+    at = _fresh()
+    seeded = {
+        "mode": "Elastic",
+        "sls_code": _SLS_2023,
+        "sls_heightened_on": True,
+        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_bar_diameter_mm": 16.0,
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        "sls_heightened_reinforcement_modulus_mpa": 200000.0,
+        "sls_heightened_permitted_crack_width_mm": 0.2,
+        "sls_heightened_effective_tension_area_mm2": 100000.0,
+        "sls_heightened_provided_reinforcement_area_mm2": 2000.0,
+    }
+    for key, value in seeded.items():
+        at.session_state[key] = value
+    at.run()
+
+    assert not at.exception
+    assert at.selectbox(key="sls_code").value == _SLS_2023
+    assert not any(
+        widget.key and widget.key.startswith("sls_heightened_")
+        for widgets in (at.toggle, at.selectbox, at.number_input)
+        for widget in widgets
+    )
+    _calculate(at)
+    assert "results" not in at.session_state
+    assert any(
+        "Heightened crack control requires the registered first-generation "
+        "DK NA:2024 design basis" in item.value
+        for item in at.error
+    )
 
 
 def test_short_term_crack_uses_combined_creep_state():
@@ -5207,7 +5442,7 @@ def test_dk_na_crack_edition_narrows_wk():
     _set_and_click(
         at,
         "calculate",
-        ("selectbox", "sls_code", "DS/EN 1992-1-1 + DK NA"),
+        ("selectbox", "sls_code", _SLS_DK),
         ("selectbox", "sls_member", "Slab"),
     )
     assert not at.exception

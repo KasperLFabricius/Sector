@@ -228,6 +228,32 @@ def _worked_crack_selection(out):
     return selected
 
 
+def _worked_crack_comparison_selection(out):
+    """Select one user-limit example by largest retained crack width.
+
+    The optional comparison must not change which physical crack result is
+    critical.  In particular, a smaller width paired with a tighter user limit
+    must not displace the largest calculated width.
+    """
+    best = None
+    assessed_states = {
+        "WITHIN USER-SPECIFIED LIMIT",
+        "EXCEEDS USER-SPECIFIED LIMIT",
+    }
+    for order, (case_id, case_out) in enumerate(_publication_cases(out, "elastic")):
+        elastic = case_out.get("elastic") or {}
+        output = elastic.get("crack_output") or {}
+        value = _publication_metric(output.get("value"))
+        if output.get("calculation_state") not in assessed_states:
+            continue
+        if value is None or value < 0.0:
+            continue
+        score = (value, -order)
+        if best is None or score > best[0]:
+            best = (score, {"case_id": case_id})
+    return None if best is None else best[1]
+
+
 def _cracking_threshold_selection(out):
     best = None
     for order, (case_id, case_out) in enumerate(_publication_cases(out, "elastic")):
@@ -290,8 +316,14 @@ def worked_example_selection(inp, out):
         "schema": 1,
         "families": {key: value for key, value in families.items() if value is not None},
         "crack_examples": _worked_crack_selection(out),
+        "crack_comparison": _worked_crack_comparison_selection(out),
         "cracking_threshold": _cracking_threshold_selection(out),
         "torsion_subchecks": _torsion_subcheck_selection(out),
+        "heightened_crack_control": (
+            {"result_key": "heightened_crack_control"}
+            if isinstance((out or {}).get("heightened_crack_control"), Mapping)
+            else None
+        ),
     }
 
 
@@ -458,6 +490,62 @@ def _summary_row(check, family, status, result="-", criterion="-", util=None,
         "view": view,
         "note": note,
     }
+
+
+def _ordinary_crack_summary_row(inp, output):
+    """Format one retained ordinary crack output without deriving a verdict."""
+    status = str(output.get("calculation_state") or "NOT ASSESSED")
+    value = _publication_metric(output.get("value"))
+    criterion = _publication_metric(output.get("criterion_mm"))
+    ratio = _publication_metric(output.get("ratio"))
+    result = "-" if value is None else f"{value:.3f} mm"
+    if criterion is None:
+        criterion_text = "User criterion not specified"
+    else:
+        criterion_text = f"User-specified limit {criterion:.3f} mm"
+    note_parts = [
+        str(output.get(key) or "").strip()
+        for key in ("reason", "case", "governing", "criterion_source")
+    ]
+    if ratio is not None:
+        note_parts.append(f"w_k / w_k,criterion = {ratio:.3f}")
+    return _summary_row(
+        "Crack width",
+        "elastic",
+        status,
+        result,
+        criterion_text,
+        None,
+        "Elastic Results",
+        "; ".join(part for part in note_parts if part),
+        inp,
+    )
+
+
+def _heightened_crack_summary_row(inp, result):
+    """Format the singleton retained Formula 7.100 NA area comparison."""
+    required = _publication_metric(result.get("required_reinforcement_area_mm2"))
+    provided = _publication_metric(result.get("provided_reinforcement_area_mm2"))
+    ratio = _publication_metric(result.get("comparison_ratio"))
+    result_text = (
+        f"As,req {required:.1f} mm2; As,prov {provided:.1f} mm2"
+        if required is not None and provided is not None
+        else "-"
+    )
+    note = str(result.get("disclosure") or result.get("source") or "")
+    if ratio is not None:
+        note = f"As,req / As,prov = {ratio:.3f}; {note}".rstrip("; ")
+    return _summary_row(
+        "DK heightened crack-control minimum",
+        "elastic",
+        str(result.get("status") or "NOT ASSESSED"),
+        result_text,
+        "User-declared Formula 7.100 NA applicability",
+        None,
+        "Elastic Results",
+        note,
+        inp,
+    )
 
 
 def _util_summary_status(util, *, valid=True):
@@ -829,27 +917,15 @@ def result_summary_rows(inp, results, *, stale=False):
             cracking_result, "Output only", None, "Elastic Results",
             cracking_note, inp,
         ))
-        if elastic.get("show_cw") or inp.get("sls_cw"):
-            output = elastic.get("crack_output") or {}
-            status = (
-                "INVALID" if not converged
-                else str(
-                    output.get("calculation_state") or "NOT CALCULATED"
-                )
-            )
-            value = output.get("value")
-            result = "-" if value is None else f"{value:.3f} mm"
+        output = elastic.get("crack_output")
+        if isinstance(output, Mapping):
+            rows.append(_ordinary_crack_summary_row(inp, output))
+        elif elastic.get("show_cw") or inp.get("sls_cw"):
             rows.append(_summary_row(
-                "Crack width", "elastic", status, result, "Output only",
-                None, "Elastic Results",
-                "; ".join(
-                    value for value in (
-                        str(output.get("case") or ""),
-                        str(output.get("governing") or ""),
-                    )
-                    if value
-                ),
-                inp,
+                "Crack width", "elastic", "NOT ASSESSED",
+                view="Elastic Results",
+                note="No authoritative crack-width output was retained",
+                inp=inp,
             ))
 
     minimum = results.get("minimum_reinforcement")
@@ -1275,6 +1351,10 @@ def result_summary_rows(inp, results, *, stale=False):
                     inp,
                 ))
 
+    heightened = results.get("heightened_crack_control")
+    if isinstance(heightened, Mapping):
+        rows.append(_heightened_crack_summary_row(inp, heightened))
+
     if stale and results:
         for row in rows:
             if row["status"] not in {"NOT RUN", "NOT APPLICABLE"}:
@@ -1398,6 +1478,14 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             if results.get("clear_spacing") is not None else {},
             stale=stale,
         ))
+    heightened = results.get("heightened_crack_control")
+    if isinstance(heightened, Mapping):
+        row = _heightened_crack_summary_row(inp, heightened)
+        if stale:
+            previous = row["status"]
+            row["status"] = "STALE"
+            row["note"] = f"Last status: {previous}; inputs changed"
+        rows.append(row)
     rows.extend(fatigue_summary_rows(inp, results, stale=stale))
     return rows
 

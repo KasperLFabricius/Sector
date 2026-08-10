@@ -449,6 +449,15 @@ _ELASTIC_FIELDS = (
         "Requests numerical crack-width calculation for the elastic action.",
         "Not applicable.", BlankPolicy.DEFAULT, "User selection", False,
     ),
+    _field(
+        "ordinary_crack_criterion_mm", "Crack-width criterion",
+        "Optional positive crack-width criterion. Leave blank to report the "
+        "calculated width without assessing acceptance.",
+        "w_{k,criterion}", "mm",
+        "User-specified upper bound for the ordinary crack-width comparison.",
+        "Must be greater than zero when specified.", BlankPolicy.NULL,
+        "User input", None,
+    ),
 )
 
 _FATIGUE_FIELDS = (

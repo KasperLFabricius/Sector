@@ -27,7 +27,7 @@ import reinforcement_table as rebar_table
 from app import modelled_direction
 from app.table_field_definitions import decimal_issue_ledger
 from sector import __version__ as sector_version
-from sector import capacity, design_standards, geometry
+from sector import capacity, design_standards, geometry, heightened_crack_control
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
@@ -59,6 +59,27 @@ FATIGUE_SCALAR_KEYS = (
     "fatigue_t0_days",
     "fatigue_concrete_k1",
     "fatigue_concrete_c",
+)
+
+HEIGHTENED_CRACK_SCALAR_KEYS = (
+    "sls_heightened_on",
+    "sls_heightened_crack_system",
+    "sls_heightened_reinforcement_surface",
+    "sls_heightened_bar_diameter_mm",
+    "sls_heightened_effective_tensile_strength_mpa",
+    "sls_heightened_reinforcement_modulus_mpa",
+    "sls_heightened_permitted_crack_width_mm",
+    "sls_heightened_effective_tension_area_mm2",
+    "sls_heightened_provided_reinforcement_area_mm2",
+)
+
+_HEIGHTENED_POSITIVE_OPERAND_KEYS = (
+    "sls_heightened_bar_diameter_mm",
+    "sls_heightened_effective_tensile_strength_mpa",
+    "sls_heightened_reinforcement_modulus_mpa",
+    "sls_heightened_permitted_crack_width_mm",
+    "sls_heightened_effective_tension_area_mm2",
+    "sls_heightened_provided_reinforcement_area_mm2",
 )
 
 # Current UI/session inputs only. Deprecated compliance, authority, cover-
@@ -94,6 +115,7 @@ SCALAR_KEYS = [
     "pl_interaction", "el_phi",
     "sls_cw", "sls_phi", "sls_bond", "sls_tendon_xi",
     "sls_code", "sls_member",
+    *HEIGHTENED_CRACK_SCALAR_KEYS,
     # Fatigue.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
     "fatigue_check_concrete", "fatigue_concrete_method",
@@ -249,6 +271,15 @@ def _obj_to_table(value, key: str) -> pd.DataFrame:
         or not isinstance(rows, list)
     ):
         raise ValueError(f"{key} table columns/rows are malformed")
+    if (
+        key == load_cases.ELASTIC_TABLE_KEY
+        and tuple(columns) != load_cases.ELASTIC_COLUMNS
+    ):
+        raise ValueError(
+            f"{key} table columns do not match current schema {VERSION}; "
+            "the exact Elastic columns, including "
+            "ordinary_crack_criterion_mm, are required"
+        )
     try:
         frame = pd.DataFrame(rows, columns=columns)
     except (TypeError, ValueError) as exc:
@@ -432,6 +463,78 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
                 payload["fatigue_edition"]
             ).value
         )
+    if "sls_code" in payload:
+        payload["sls_code"] = design_standards.parse_design_basis_key(
+            payload["sls_code"]
+        ).value
+
+    elastic = load_cases.active_table(
+        tables.get(load_cases.ELASTIC_TABLE_KEY),
+        load_cases.ELASTIC_TABLE_KEY,
+    )
+    ordinary_crack_requested = bool(
+        not elastic.empty and elastic["calculate_crack_width"].any()
+    )
+    if ordinary_crack_requested and "sls_code" not in payload:
+        raise ValueError(
+            "sls_code is required when an Elastic case requests crack width"
+        )
+
+    if "sls_heightened_on" in payload and not isinstance(
+        payload["sls_heightened_on"], bool
+    ):
+        raise ValueError("sls_heightened_on must be a Boolean")
+    if payload.get("sls_heightened_on", False):
+        if "sls_code" not in payload:
+            raise ValueError(
+                "sls_code is required when heightened crack control is enabled"
+            )
+        if payload["sls_code"] != (
+            design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
+        ):
+            raise ValueError(
+                "heightened crack control requires "
+                "ec2_1_1_first_gen_dk_na_2024"
+            )
+
+        crack_system_key = "sls_heightened_crack_system"
+        if crack_system_key not in payload:
+            raise ValueError(
+                f"{crack_system_key} is required when heightened crack "
+                "control is enabled"
+            )
+        try:
+            payload[crack_system_key] = heightened_crack_control.CrackSystem(
+                payload[crack_system_key]
+            ).value
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{crack_system_key} must be exactly 'fine' or 'coarse'"
+            ) from exc
+
+        surface_key = "sls_heightened_reinforcement_surface"
+        if surface_key not in payload:
+            raise ValueError(
+                f"{surface_key} is required when heightened crack control "
+                "is enabled"
+            )
+        try:
+            payload[surface_key] = (
+                heightened_crack_control.ReinforcementSurface(
+                    payload[surface_key]
+                ).value
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{surface_key} must be exactly 'ribbed' or 'smooth'"
+            ) from exc
+
+        for key in _HEIGHTENED_POSITIVE_OPERAND_KEYS:
+            if key not in payload:
+                raise ValueError(
+                    f"{key} is required when heightened crack control is enabled"
+                )
+            payload[key] = _positive_real(payload[key], key)
     method_resolvers = (
         ("shear_method", capacity.selected_shear_code),
         ("torsion_method", capacity.selected_torsion_code),

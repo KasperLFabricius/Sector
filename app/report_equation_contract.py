@@ -1125,13 +1125,50 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("s<sub>r,m,cal</sub>", "calculated mean crack spacing", "mm"),
         ("eps<sub>sm</sub>-eps<sub>cm</sub>", "mean reinforcement/concrete strain difference"),
     ),
+    ("crack.user-limit.comparison", None): _result(
+        "u<sub>w</sub>", "dimensionless",
+        ("u<sub>w</sub>", "user-specified crack-width comparison ratio"),
+        ("w<sub>k</sub>", "calculated characteristic crack width", "mm"),
+        ("w<sub>k,criterion</sub>", "user-specified crack-width criterion", "mm"),
+        applicability_note_required=True,
+    ),
+    ("crack.heightened.base-ratio", None): _result(
+        "rho<sub>s,min,base</sub>", "dimensionless",
+        ("rho<sub>s,min,base</sub>", "base heightened minimum reinforcement ratio"),
+        ("phi", "bar diameter", "mm"),
+        ("f<sub>ct,eff</sub>", "user-supplied effective tensile strength", "MPa"),
+        ("E<sub>sk</sub>", "reinforcement elastic modulus", "MPa"),
+        ("k", "fine/coarse crack-system factor"),
+        ("w<sub>k</sub>", "user-supplied permitted crack width", "mm"),
+        applicability_note_required=True,
+    ),
+    ("crack.heightened.required-ratio", None): _result(
+        "rho<sub>s,min</sub>", "dimensionless",
+        ("rho<sub>s,min</sub>", "required heightened minimum reinforcement ratio"),
+        ("m<sub>s</sub>", "reinforcement-surface multiplier"),
+        ("rho<sub>s,min,base</sub>", "base heightened minimum reinforcement ratio"),
+        applicability_note_required=True,
+    ),
+    ("crack.heightened.required-area", None): _result(
+        "A<sub>s,req</sub>", "mm2",
+        ("A<sub>s,req</sub>", "required reinforcement area", "mm2"),
+        ("rho<sub>s,min</sub>", "required heightened minimum reinforcement ratio"),
+        ("A<sub>c,eff</sub>", "user-supplied effective tension area", "mm2"),
+    ),
+    ("crack.heightened.area-comparison", None): _result(
+        "u<sub>A</sub>", "dimensionless",
+        ("u<sub>A</sub>", "required-to-provided reinforcement area ratio"),
+        ("A<sub>s,req</sub>", "required reinforcement area", "mm2"),
+        ("A<sub>s,prov</sub>", "user-supplied provided reinforcement area", "mm2"),
+        applicability_note_required=True,
+    ),
 }
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 138:
+    if len(_CONTRACTS) != 143:
         raise RuntimeError(
-            f"Expected 138 report equation contracts, got {len(_CONTRACTS)}."
+            f"Expected 143 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):

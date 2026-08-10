@@ -297,7 +297,7 @@ def test_all_retained_report_formula_calls_have_code_authored_keys():
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "_formula"
     ]
-    assert len(calls) == 139
+    assert len(calls) == 144
 
     allowed_dynamic = "f'materials.steel.fyd-{material_index + 1}'"
     authored = []

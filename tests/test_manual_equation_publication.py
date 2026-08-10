@@ -49,7 +49,7 @@ def test_publication_spine_is_exact_complete_and_immutable():
     published = _published()
     equations = _equations()
     assert type(published) is tuple
-    assert len(equations) == 32
+    assert len(equations) == 33
     assert all(type(item) is contract.ContractedManualEquation for item in equations)
     assert tuple(item.contract.number for item in equations) == tuple(
         item.number for item in contract.MANUAL_EQUATION_CONTRACTS
@@ -225,7 +225,7 @@ def test_streamlit_equation_detail_is_complete_but_collapsed_on_demand(monkeypat
 
     visible = "\n".join(recorder.markdowns)
     captions = "\n".join(recorder.captions)
-    assert len(recorder.expanders) == 32
+    assert len(recorder.expanders) == 33
     assert all(expanded is False for _label, expanded in recorder.expanders)
     for equation in _equations():
         number = equation.contract.number

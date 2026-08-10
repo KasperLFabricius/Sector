@@ -1,3 +1,4 @@
+import json
 import math
 import pathlib
 import sys
@@ -17,9 +18,88 @@ def test_default_tables_are_current_output_only_schema():
 
     assert tuple(elastic.columns) == load_cases.ELASTIC_COLUMNS
     assert "calculate_crack_width" in elastic
+    assert elastic.loc[0, "ordinary_crack_criterion_mm"] is None
     assert "check_stress" not in elastic
     assert "check_crack_width" not in elastic
     assert not any("limit" in column for column in elastic.columns)
+
+
+def test_optional_ordinary_crack_criterion_accepts_comma_and_roundtrips():
+    elastic = load_cases.normalise_table(
+        [{
+            "name": "EL-ordinary",
+            "calculate_crack_width": False,
+            "ordinary_crack_criterion_mm": "0,30",
+        }],
+        load_cases.ELASTIC_TABLE_KEY,
+    )
+
+    assert elastic.loc[0, "ordinary_crack_criterion_mm"] == pytest.approx(0.30)
+    assert load_cases.validation_errors(
+        load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY), elastic
+    ) == []
+    record = load_cases.table_records(
+        elastic, load_cases.ELASTIC_TABLE_KEY
+    )[0]
+    assert record["ordinary_crack_criterion_mm"] == pytest.approx(0.30)
+    assert record["calculate_crack_width"] is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '[{"name": "EL-null", "ordinary_crack_criterion_mm": null}]',
+        '[{"name": "EL-missing"}]',
+    ],
+)
+def test_null_json_and_missing_criterion_canonicalize_to_none(payload):
+    elastic = load_cases.table_from_records(
+        json.loads(payload), load_cases.ELASTIC_TABLE_KEY
+    )
+
+    assert elastic.loc[0, "ordinary_crack_criterion_mm"] is None
+    assert load_cases.table_records(
+        elastic, load_cases.ELASTIC_TABLE_KEY
+    )[0]["ordinary_crack_criterion_mm"] is None
+    assert load_cases.editor_table(
+        elastic, load_cases.ELASTIC_TABLE_KEY
+    ).loc[0, "ordinary_crack_criterion_mm"] == ""
+
+
+@pytest.mark.parametrize(
+    ("entered", "visible"),
+    [
+        (True, "True"),
+        (0.0, "0.0"),
+        (-0.1, "-0.1"),
+        (float("inf"), "inf"),
+        ("NaN", "NaN"),
+        ("not a width", "not a width"),
+    ],
+)
+def test_invalid_ordinary_crack_criterion_fails_closed_without_data_loss(
+    entered, visible
+):
+    elastic = load_cases.normalise_table(
+        [{
+            "name": "EL-invalid",
+            "calculate_crack_width": True,
+            "ordinary_crack_criterion_mm": entered,
+        }],
+        load_cases.ELASTIC_TABLE_KEY,
+    )
+
+    assert load_cases.validation_errors(
+        load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY), elastic
+    ) == [
+        "Elastic row 1: ordinary_crack_criterion_mm must be a positive "
+        "finite number"
+    ]
+    assert load_cases.editor_table(
+        elastic, load_cases.ELASTIC_TABLE_KEY
+    ).loc[0, "ordinary_crack_criterion_mm"] == visible
+    with pytest.raises(ValueError, match="positive finite number"):
+        load_cases.table_records(elastic, load_cases.ELASTIC_TABLE_KEY)
 
 
 def test_any_single_named_characteristic_action_is_valid():

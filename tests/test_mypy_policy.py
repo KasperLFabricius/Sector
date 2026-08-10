@@ -32,6 +32,7 @@ V093_TYPED_FILES = (
     *INITIAL_FILES,
     "sector/design_standards.py",
     "app/modelled_direction.py",
+    "sector/heightened_crack_control.py",
 )
 
 
@@ -236,12 +237,21 @@ def test_accepted_file_inventory_and_order_cannot_shrink():
         validate_policy(candidate, ROOT, baseline=baseline)
 
 
-def test_v093_standards_registry_cannot_leave_the_live_typed_boundary():
+@pytest.mark.parametrize(
+    "owned_file",
+    (
+        "sector/design_standards.py",
+        "sector/heightened_crack_control.py",
+    ),
+)
+def test_v093_crack_boundaries_cannot_leave_the_live_typed_boundary(
+    owned_file: str,
+):
     policy = deepcopy(_policy())
     assert tuple(policy["tool"]["mypy"]["files"]) == V093_TYPED_FILES
 
     candidate = deepcopy(policy)
-    candidate["tool"]["mypy"]["files"].remove("sector/design_standards.py")
+    candidate["tool"]["mypy"]["files"].remove(owned_file)
     with pytest.raises(MypyPolicyError, match="inventory shrank"):
         validate_policy(candidate, ROOT, baseline=policy)
 
