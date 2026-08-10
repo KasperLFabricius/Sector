@@ -44,13 +44,13 @@ _MANUAL_CROPS = (
         "manual cover and contents",
         1,
         (0.10, 0.07, 0.90, 0.45),
-        "ec22afcc93d96062f615a52826c3ff2ec0ed78fc51a46d5be2320d110c95bab6",
+        "10aad607a58a645a6806d7cc985ca78dd6048eb0faf8413f3f8045b96cb21b52",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "5d36a62aa320b355b68e741aed664f3a4ff556e6301d5cb629e1fa208d79cebd",
+        "65670a97c289821a7d4e065f9a361772c63670f32d2e82fe8ad756ec6d9bfabd",
     ),
 )
 
@@ -67,10 +67,15 @@ def build_fixture_pdf() -> bytes:
 
 def _unrendered_math_token(text: str) -> str | None:
     """Return a standalone leaked math command without matching prose substrings."""
+    visible_text = "\n".join(
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith("SECTOR-MATH[")
+    )
     for token in _UNRENDERED_MATH_TOKENS:
         if re.search(
             rf"(?<![A-Za-z]){re.escape(token)}(?![A-Za-z])",
-            text,
+            visible_text,
             flags=re.IGNORECASE,
         ):
             return token

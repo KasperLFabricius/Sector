@@ -20,6 +20,7 @@ from __future__ import annotations
 import atexit
 from collections.abc import Mapping
 import datetime
+import decimal
 import html as html_lib
 import io
 import math
@@ -35,7 +36,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from reportlab.platypus import (Image, KeepTogether, NotAtTopPageBreak,
+from reportlab.platypus import (Flowable, Image, KeepTogether, NotAtTopPageBreak,
                                 Paragraph, SimpleDocTemplate, Spacer, Table,
                                 TableStyle)
 
@@ -44,6 +45,7 @@ import fatigue_inputs
 import fatigue_presentation
 import material_catalog
 from app import modelled_direction
+from app import publication_equation_layout as publication_equations
 from app import table_field_definitions as table_fields
 from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
@@ -86,6 +88,23 @@ _INPUT_TABLE_SIMPLE_SUBSCRIPT_RE = re.compile(r"_([A-Za-z0-9]+)")
 _INPUT_TABLE_RAW_TEX_RE = re.compile(r"[\\{}$^]")
 _DERIVED_EQUATION_SOURCE = (
     "Derived relation; no separate normative source assigned."
+)
+_LITERAL_REPORT_RESULT_IDENTITIES = frozenset({
+    ("elastic.long.stress-plane", None),
+    ("elastic.instantaneous.stress-plane", None),
+})
+_EQUATION_DECIMAL_PLACES = 3
+_EQUATION_DECIMAL_QUANTUM = decimal.Decimal(1).scaleb(
+    -_EQUATION_DECIMAL_PLACES
+)
+_EQUATION_MAX_RELATIVE_ROUNDING = decimal.Decimal("0.005")
+_EQUATION_DECIMAL_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_#])"
+    r"((?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)"
+    r"(?![0-9_])"
+)
+_EQUATION_NEGATIVE_ZERO_RE = re.compile(
+    r"(^|[=(:,;+*/\[\]{}|<>^])(?P<space>\s*)-0(?=$|[\s),;%\]}|])"
 )
 
 # A Unicode (Greek-capable) font for the report. DejaVuSans is free and shipped
@@ -581,6 +600,28 @@ class ReportFigureError(RuntimeError):
     """Raised when a requested engineering figure cannot be embedded."""
 
 
+class _EquationAnchor(Flowable):
+    """Zero-height named destination kept under report ownership."""
+
+    def __init__(self, anchor):
+        super().__init__()
+        self._sector_equation_anchor = str(anchor)
+        self._sector_equation_role = "identity"
+
+    def wrap(self, availWidth, availHeight):
+        del availWidth, availHeight
+        self.width = 0.0
+        self.height = 0.0
+        return 0.0, 0.0
+
+    def draw(self):
+        self.canv.bookmarkHorizontal(self._sector_equation_anchor, 0.0, 0.0)
+
+    @staticmethod
+    def getPlainText():
+        return ""
+
+
 class _EquationFlowable(KeepTogether):
     """Indivisible equation whose complete text remains visible to audit probes."""
 
@@ -603,16 +644,64 @@ class _EquationFlowable(KeepTogether):
         self._sector_equation_number = number
         self._sector_equation_section = section
         self._sector_equation_subsection = subsection
-        self._sector_equation_roles = tuple(
-            child._sector_equation_role for child in content
-        )
+        roles = []
+        for child in content:
+            child_roles = getattr(child, "_sector_equation_roles", None)
+            if child_roles is not None:
+                roles.extend(child_roles)
+                continue
+            roles.append(child._sector_equation_role)
+        self._sector_equation_roles = tuple(roles)
+
+    def getSpaceBefore(self, content=None):
+        """Measure the first visible row rather than the zero-height anchor."""
+        rows = self._content if content is None else content
+        for child in rows:
+            if isinstance(child, _EquationAnchor):
+                continue
+            if not hasattr(child, "frameAction"):
+                return child.getSpaceBefore()
+        return 0
+
+    def wrap(self, available_width, available_height):
+        """Include visible leading space in ReportLab's keep decision."""
+        width, height = super().wrap(available_width, available_height)
+        # KeepTogether excludes the first non-zero child's spaceBefore from
+        # its internal height.  Our zero-height bookmark anchor is released
+        # ahead of the visible math, so that space is consumed when ReportLab
+        # lays out the children individually.  Retaining it here prevents a
+        # near-boundary fit from orphaning the final source row.
+        leading_space = self.getSpaceBefore()
+        frame = getattr(self, "_frame", None)
+        if frame is None:
+            unmeasured_space = leading_space
+        elif getattr(frame, "_atTop", False):
+            unmeasured_space = 0.0
+        else:
+            externally_applied = leading_space
+            if getattr(frame, "_oASpace", False):
+                externally_applied = max(
+                    leading_space - getattr(frame, "_prevASpace", 0.0),
+                    0.0,
+                )
+            unmeasured_space = max(
+                leading_space - externally_applied,
+                0.0,
+            )
+        self._H += unmeasured_space
+        return width, height
 
     def getPlainText(self):
-        return " ".join(
-            child.getPlainText()
-            for child in self._content
-            if hasattr(child, "getPlainText")
-        )
+        parts = []
+        for child in self._content:
+            if not hasattr(child, "getPlainText"):
+                continue
+            text = getattr(child, "_sector_report_plain_text", None)
+            if text is None:
+                text = child.getPlainText()
+            if text:
+                parts.append(text)
+        return " ".join(parts)
 
 
 def _equation_paragraph(markup, style, role, *, symbol=None):
@@ -674,6 +763,54 @@ def _fmt_sig(v, sig=6):
     if isinstance(v, float) and not math.isfinite(v):
         return "-inf" if math.isinf(v) and v < 0.0 else "inf"
     return f"{v:.{sig}g}"
+
+
+def _compact_equation_numbers(source):
+    """Round display-only equation values without hiding tiny nonzero terms."""
+
+    if not isinstance(source, str):
+        raise TypeError("equation display source must be text")
+
+    def compact(match):
+        raw = match.group(1)
+        value = decimal.Decimal(raw)
+        if value.is_zero():
+            return "0"
+
+        with decimal.localcontext() as context:
+            context.prec = max(
+                28,
+                len(value.as_tuple().digits) + abs(value.adjusted()) + 8,
+            )
+            rounded = value.quantize(
+                _EQUATION_DECIMAL_QUANTUM,
+                rounding=decimal.ROUND_HALF_UP,
+            )
+            relative_rounding = abs(rounded - value) / abs(value)
+            if (
+                "e" in raw.lower()
+                or rounded.is_zero()
+                or relative_rounding > _EQUATION_MAX_RELATIVE_ROUNDING
+            ):
+                exponent = abs(value).adjusted()
+                mantissa = value.scaleb(-exponent).quantize(
+                    _EQUATION_DECIMAL_QUANTUM,
+                    rounding=decimal.ROUND_HALF_UP,
+                )
+                if abs(mantissa) >= decimal.Decimal("10"):
+                    mantissa = mantissa / decimal.Decimal("10")
+                    exponent += 1
+                text = format(mantissa, "f").rstrip("0").rstrip(".")
+                return f"{text}e{exponent:+d}"
+
+            return format(rounded, "f").rstrip("0").rstrip(".")
+
+    compacted = _EQUATION_DECIMAL_TOKEN_RE.sub(compact, source)
+
+    def remove_negative_zero(match):
+        return f"{match.group(1)}{match.group('space')}0"
+
+    return _EQUATION_NEGATIVE_ZERO_RE.sub(remove_negative_zero, compacted)
 
 
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
@@ -1241,10 +1378,33 @@ class ReportBuilder:
         if not isinstance(source, str) or not source.strip():
             raise ValueError(f"Equation {equation_key} requires source text.")
 
-        number = None
-        if numbered:
-            self._equation_number += 1
-            number = f"{self._chapter}.{self._equation_number}"
+        display_substitution = (
+            _compact_equation_numbers(subst) if subst else None
+        )
+        display_result = _compact_equation_numbers(result) if result else None
+
+        compiled_expression = publication_equations.compile_report_math(expr)
+        compiled_substitution = (
+            publication_equations.compile_report_fragment(display_substitution)
+            if display_substitution else None
+        )
+        compiled_result = None
+        if display_result:
+            result_identity = (equation_key, equation_variant)
+            if result_identity in _LITERAL_REPORT_RESULT_IDENTITIES:
+                compiled_result = publication_equations.compile_report_literal(
+                    display_result
+                )
+            else:
+                compiled_result = publication_equations.compile_report_fragment(
+                    display_result
+                )
+
+        next_equation_number = self._equation_number + 1 if numbered else None
+        number = (
+            f"{self._chapter}.{next_equation_number}"
+            if next_equation_number is not None else None
+        )
         anchor = (
             f"sector-equation-{self._chapter}-{self._subsection}-"
             + _equation_anchor_key(equation_key)
@@ -1254,45 +1414,86 @@ class ReportBuilder:
             "anchor": anchor,
             "number": number,
         }
-        self._equations[scope] = record
 
         public = f"EQ-{equation_key.upper()}"
         identity = (
             f"Equation ({number}) | {public}"
             if number is not None else public
         )
-        content = [
-            _equation_paragraph(
-                f'<a name="{anchor}"/><b>{identity}</b>',
-                self.s["formula_id"],
-                "identity",
-            ),
-            _equation_paragraph(
-                f"<b>Symbolic expression:</b> {_equation_math(expr)}",
-                self.s["formula"],
-                "symbolic-expression",
-            ),
+        symbolic_plain_text = Paragraph(
+            f"<b>Symbolic expression:</b> {_equation_math(expr)}",
+            self.s["formula"],
+        ).getPlainText()
+        lines = [publication_equations.EquationLine(
+            "symbolic-expression",
+            compiled_expression,
+            "Symbolic expression:",
+            symbolic_plain_text,
+        )]
+        legacy_math_text = [
+            identity,
+            symbolic_plain_text,
         ]
-        if subst:
-            content.append(_equation_paragraph(
-                f"<b>Numerical substitution:</b> {_equation_math(subst)}",
+        if compiled_substitution is not None:
+            substitution_plain_text = Paragraph(
+                "<b>Numerical substitution:</b> "
+                f"{_equation_math(display_substitution)}",
                 self.s["formula"],
+            ).getPlainText()
+            lines.append(publication_equations.EquationLine(
                 "numerical-substitution",
+                compiled_substitution,
+                "Numerical substitution:",
+                substitution_plain_text,
             ))
+            legacy_math_text.append(substitution_plain_text)
+        if display_result:
+            display_unit = _equation_result_unit(
+                contract.result_unit, display_result
+            )
+            visible_result_symbol = Paragraph(
+                _equation_math(contract.result_symbol),
+                self.s["formula"],
+            ).getPlainText()
+            visible_result_unit = Paragraph(
+                _greek(display_unit),
+                self.s["formula"],
+            ).getPlainText()
+            result_label = (
+                f"Result {chr(0x2014)} {visible_result_symbol} "
+                f"[{visible_result_unit}]:"
+            )
+            result_plain_text = Paragraph(
+                "<b>Result &#8212; "
+                f"{_equation_math(contract.result_symbol)} "
+                f"[{_greek(display_unit)}]:</b> "
+                f"{_equation_math(display_result)}",
+                self.s["formula"],
+            ).getPlainText()
+            lines.append(publication_equations.EquationLine(
+                "result",
+                compiled_result,
+                result_label,
+                result_plain_text,
+            ))
+            legacy_math_text.append(result_plain_text)
+
+        math_flowable = publication_equations.EquationFlowable(
+            publication_equations.EquationBlock(tuple(lines), identity=identity)
+        )
+        math_flowable._sector_equation_role = "aligned-math"
+        math_flowable._sector_equation_roles = tuple(
+            line.role for line in lines
+        )
+        math_flowable._sector_report_plain_text = " ".join(legacy_math_text)
+        math_flowable.spaceBefore = 2
+        math_flowable.spaceAfter = 3
+        content = [_EquationAnchor(anchor), math_flowable]
         if note:
             content.append(_equation_paragraph(
                 f"<b>Applicability / method note:</b> {_greek(note)}",
                 self.s["formula"],
                 "applicability-note",
-            ))
-        if result:
-            display_unit = _equation_result_unit(contract.result_unit, result)
-            content.append(_equation_paragraph(
-                "<b>Result &#8212; "
-                f"{_equation_math(contract.result_symbol)} "
-                f"[{_greek(display_unit)}]:</b> {_equation_math(result)}",
-                self.s["formula"],
-                "result",
             ))
         content.append(_equation_paragraph(
             "<b>Symbols:</b>", self.s["formula_symbol"], "symbols-heading"
@@ -1320,12 +1521,20 @@ class ReportBuilder:
                 self.s["ref"],
                 "uses",
             ))
-        content.append(_equation_paragraph(
-            _greek(f"<b>Source / method note:</b> {source}"),
+        source_markup = _greek(f"<b>Source / method note:</b> {source}")
+        source_end_marker = f"SECTOR-SOURCE-END[{anchor}]"
+        source_row = _equation_paragraph(
+            source_markup
+            + f'<font color="#FFFFFF" size="0.1">{source_end_marker}</font>',
             self.s["ref"],
             "source",
-        ))
-        self.flow.append(_EquationFlowable(
+        )
+        source_row._sector_report_plain_text = Paragraph(
+            source_markup,
+            self.s["ref"],
+        ).getPlainText()
+        content.append(source_row)
+        equation = _EquationFlowable(
             content,
             key=equation_key,
             variant=equation_variant,
@@ -1334,7 +1543,11 @@ class ReportBuilder:
             number=number,
             section=self._chapter,
             subsection=self._subsection,
-        ))
+        )
+        if next_equation_number is not None:
+            self._equation_number = next_equation_number
+        self._equations[scope] = record
+        self.flow.append(equation)
 
     @staticmethod
     def _table_column_floors(

@@ -467,8 +467,8 @@ def test_numerical_substitution_and_applicability_note_are_independent():
     assert "numerical-substitution" in roles
     assert "applicability-note" in roles
     assert "result" in roles
-    assert roles.index("numerical-substitution") < roles.index("applicability-note")
-    assert roles.index("applicability-note") < roles.index("result")
+    assert roles.index("numerical-substitution") < roles.index("result")
+    assert roles.index("result") < roles.index("applicability-note")
 
     with pytest.raises(ValueError, match="requires an applicability note"):
         builder._formula(

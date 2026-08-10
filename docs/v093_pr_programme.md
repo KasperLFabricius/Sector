@@ -34,8 +34,8 @@ slices stay planned.
 | 3 | PR-03 - Textbook worked calculations and complete substitutions | PR-02 | Merged |
 | 4 | PR-04 - Input correctness, reusable IDs and mathematical table guides | PR-02 | Merged |
 | 5 | PR-05 - Stateful input tabs and explicit modelled direction | PR-04 | Merged |
-| 6 | PR-06 - Optional crack criterion and DK/NA heightened check | PR-03, PR-04, PR-05 | In progress |
-| 7 | PR-07A - Eurocode-style shared equation renderer | PR-03 | Planned |
+| 6 | PR-06 - Optional crack criterion and DK/NA heightened check | PR-03, PR-04, PR-05 | Merged |
+| 7 | PR-07A - Eurocode-style shared equation renderer | PR-03 | In progress |
 | 8 | PR-07B - Manual/report information architecture and profiles | PR-06, PR-07A | Planned |
 | 9 | PR-08 - Double-click portable Windows packaging | PR-07B | Planned |
 | 10 | PR-09 - Full qualification and Sector 0.93 release | PR-01 through PR-08 | Planned |
@@ -849,6 +849,8 @@ Tests: new independent numerical oracles, invalid boundaries, case signatures,
 schema, AppTest, report/manual/equation inventories and stale-result tests.
 
 ### PR-07A - Eurocode-style shared equation renderer
+
+Acceptance record: [PR-07A shared equation-renderer acceptance](pr07a_v093_equation_renderer_acceptance.md).
 
 Scope:
 

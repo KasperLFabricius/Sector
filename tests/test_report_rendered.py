@@ -13,6 +13,7 @@ from tools.report_render_fixture import (
     _results,
     build_fixture_pdf,
     render_pdf,
+    validate_equation_source_colocation,
     validate_fixture_engineering,
     validate_outline_destinations,
     validate_pdf_content,
@@ -83,6 +84,14 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     ]
     assert len(heading_pages) == 1
     assert "NA intercepts" in heading_pages[0]
+    concrete_pages = [
+        page_text
+        for page_text in page_texts
+        if "Characteristic strength" in page_text
+    ]
+    assert len(concrete_pages) == 1
+    assert "EQ-MATERIALS.CONCRETE.FCD" in concrete_pages[0]
+    assert "= 20 MPa" in concrete_pages[0]
     overview_pages = [
         page_text
         for page_text in page_texts
@@ -101,12 +110,31 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     ):
         assert expected in overview_text
 
+    validate_equation_source_colocation(page_texts)
+
 
 def test_worked_example_text_rejects_any_unavailable_placeholder():
     with pytest.raises(AssertionError, match="unavailable worked-example"):
         validate_worked_example_text(
             "Worked plastic calculation\n"
             "The completed retained operands are unavailable"
+        )
+
+
+def test_equation_source_colocation_rejects_a_page_split():
+    with pytest.raises(AssertionError, match="equation/source page split"):
+        validate_equation_source_colocation(
+            [
+                (
+                    "Equation (1.1) | EQ-TEST.RELATION\n"
+                    "Source / method note: retained source begins\n"
+                ),
+                (
+                    "retained source continuation\n"
+                    "SECTOR-SOURCE-END[sector-equation-1-1-test__relation]\n"
+                ),
+            ],
+            expected_equation_count=1,
         )
 
 
