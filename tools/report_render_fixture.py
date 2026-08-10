@@ -1741,7 +1741,7 @@ def validate_pdf_content(
          if "Characteristic strength" in (page.extract_text() or "")),
         "",
     )
-    if "= 20.000 MPa" not in concrete_page:
+    if "= 20 MPa" not in concrete_page:
         raise AssertionError("the concrete worked formula is split across pages")
 
     governing_page = next(

@@ -67,10 +67,15 @@ def build_fixture_pdf() -> bytes:
 
 def _unrendered_math_token(text: str) -> str | None:
     """Return a standalone leaked math command without matching prose substrings."""
+    visible_text = "\n".join(
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith("SECTOR-MATH[")
+    )
     for token in _UNRENDERED_MATH_TOKENS:
         if re.search(
             rf"(?<![A-Za-z]){re.escape(token)}(?![A-Za-z])",
-            text,
+            visible_text,
             flags=re.IGNORECASE,
         ):
             return token

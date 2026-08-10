@@ -84,6 +84,14 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     ]
     assert len(heading_pages) == 1
     assert "NA intercepts" in heading_pages[0]
+    concrete_pages = [
+        page_text
+        for page_text in page_texts
+        if "Characteristic strength" in page_text
+    ]
+    assert len(concrete_pages) == 1
+    assert "EQ-MATERIALS.CONCRETE.FCD" in concrete_pages[0]
+    assert "= 20 MPa" in concrete_pages[0]
     overview_pages = [
         page_text
         for page_text in page_texts
