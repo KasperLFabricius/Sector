@@ -32,8 +32,8 @@ slices stay planned.
 | 1 | PR-01 - Programme, decisions and acceptance freeze | v0.92 baseline | Merged |
 | 2 | PR-02 - Bridge scope reset, schema 24 and design-standard registry | PR-01 | Merged |
 | 3 | PR-03 - Textbook worked calculations and complete substitutions | PR-02 | Merged |
-| 4 | PR-04 - Input correctness, reusable IDs and mathematical table guides | PR-02 | In progress |
-| 5 | PR-05 - Stateful input tabs and explicit modelled direction | PR-04 | Planned |
+| 4 | PR-04 - Input correctness, reusable IDs and mathematical table guides | PR-02 | Merged |
+| 5 | PR-05 - Stateful input tabs and explicit modelled direction | PR-04 | In progress |
 | 6 | PR-06 - Optional crack criterion and DK/NA heightened check | PR-03, PR-04, PR-05 | Planned |
 | 7 | PR-07A - Eurocode-style shared equation renderer | PR-03 | Planned |
 | 8 | PR-07B - Manual/report information architecture and profiles | PR-06, PR-07A | Planned |
@@ -796,6 +796,8 @@ Tests: input model, catalogues, save/load, AppTest table lifecycle, metadata
 coverage, responsive UI and changed report/manual reference surfaces.
 
 ### PR-05 - Stateful input tabs and explicit modelled direction
+
+Acceptance record: [PR-05 navigation and modelled-direction acceptance](pr05_v093_navigation_direction_acceptance.md).
 
 Scope:
 

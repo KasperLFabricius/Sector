@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import reinforcement_table as rebar_table
 
+from app import modelled_direction
 from app.table_field_definitions import decimal_issue_ledger
 from sector import __version__ as sector_version
 from sector import capacity, design_standards, geometry
@@ -130,6 +131,10 @@ SCALAR_KEYS = [
     # Local application preferences that are meaningful on restore.
     "autosave_on", "autosave_min",
 ]
+
+# Project-owned wording that must survive save/load without becoming a
+# calculation input or changing the calculation-input hash.
+PRESENTATION_SCALAR_KEYS = (modelled_direction.ALIAS_KEY,)
 
 PREV_MARKERS = {
     "conc_prev": "conc_preset",
@@ -453,6 +458,14 @@ def _canonical_inputs(tables: Mapping, scalars: Mapping) -> dict:
     }
 
 
+def _canonical_presentation(scalars: Mapping) -> dict:
+    return {
+        modelled_direction.ALIAS_KEY: modelled_direction.normalise_alias(
+            scalars.get(modelled_direction.ALIAS_KEY)
+        )
+    }
+
+
 def _input_digest(content: Mapping) -> str:
     canonical = json.dumps(
         content,
@@ -467,6 +480,20 @@ def _input_digest(content: Mapping) -> str:
 def input_sha256(tables: Mapping, scalars: Mapping) -> str:
     """Hash the exact canonical calculation inputs."""
     return _input_digest(_canonical_inputs(tables, scalars))
+
+
+def persistence_sha256(tables: Mapping, scalars: Mapping) -> str:
+    """Hash everything Sector persists for local project recovery.
+
+    Presentation metadata remains outside ``input_sha256`` so it cannot alter
+    calculation identity.  Autosave still needs to notice an alias-only edit,
+    so its de-duplication key covers both canonical inputs and presentation.
+    """
+
+    return _input_digest({
+        "inputs": _canonical_inputs(tables, scalars),
+        "presentation": _canonical_presentation(scalars),
+    })
 
 
 def _fingerprint_value(value):
@@ -617,6 +644,7 @@ def dump_project(
         "format": FORMAT,
         "version": VERSION,
         **content,
+        "presentation": _canonical_presentation(scalars),
         "provenance": {
             "sector_version": app_version,
             "source_revision": revision,
@@ -671,6 +699,8 @@ def _decode(text: str) -> dict:
         raise ValueError("malformed tables section")
     if not isinstance(data.get("scalars"), Mapping):
         raise ValueError("malformed scalars section")
+    if not isinstance(data.get("presentation", {}), Mapping):
+        raise ValueError("malformed presentation section")
     if not isinstance(data.get("provenance"), Mapping):
         raise ValueError("missing project provenance")
     return data
@@ -740,5 +770,19 @@ def parse_project(text: str):
             + ", ".join(sorted(unknown_scalars))
         )
     scalars = _canonical_scalars(raw_scalars, tables)
+    raw_presentation = data.get("presentation", {})
+    unknown_presentation = (
+        set(raw_presentation) - set(PRESENTATION_SCALAR_KEYS)
+    )
+    if unknown_presentation:
+        raise ValueError(
+            "unknown current-schema presentation inputs: "
+            + ", ".join(sorted(unknown_presentation))
+        )
+    scalars[modelled_direction.ALIAS_KEY] = (
+        modelled_direction.normalise_alias(
+            raw_presentation.get(modelled_direction.ALIAS_KEY)
+        )
+    )
     _validate_geometry(tables)
     return tables, scalars

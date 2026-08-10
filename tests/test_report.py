@@ -1702,6 +1702,108 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
 
 
+def test_report_publishes_canonical_direction_and_html_safe_project_alias():
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "minimum_reinforcement_on": True,
+        "detailing_edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "detailing_member_type": "Slab",
+        "detailing_cut_direction": detailing.CUT_LONGITUDINAL,
+        "modelled_direction_alias": "sigma m2 1e-3 <north>",
+    })
+    minimum = {
+        "status": "NOT ASSESSED",
+        "reason": "No selected capacity case.",
+        "edition": inp["detailing_edition"],
+        "clause": "9.2.1.1(1), Formula (9.1N)",
+        "member_type": "Slab",
+        "cut_direction": detailing.CUT_LONGITUDINAL,
+        "modelled_reinforcement_direction": "transverse",
+        "checks": [],
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, {"minimum_reinforcement": minimum}, figures=False,
+    )).split())
+
+    label = "Transverse (project alias: sigma m2 1e-3 <north>)"
+    assert "Project direction alias" not in text
+    assert "Modelled reinforcement direction " + label in text
+    assert "Minimum reinforcement - " + label in text
+    assert label + " minimum reinforcement" in text
+    assert "Modelled direction: " + label in text
+    assert "Longitudinal (project alias:" not in text
+
+
+def test_report_cover_keeps_canonical_direction_when_minimum_check_is_off():
+    inp = _inp()
+    inp.update({
+        "minimum_reinforcement_on": False,
+        "detailing_cut_direction": detailing.CUT_TRANSVERSE,
+        "modelled_direction_alias": "<b>span axis</b>",
+    })
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, {}, figures=False,
+    )).split())
+
+    assert "Project direction alias" not in text
+    assert (
+        "Modelled reinforcement direction Longitudinal "
+        "(project alias: <b>span axis</b>)"
+    ) in text
+
+
+def test_results_overview_escapes_supported_markup_in_check_labels(monkeypatch):
+    hostile = (
+        "Longitudinal (project alias: <b>span</b> "
+        '<link href="https://example.test">deck</link> sigma m2 1e-3)'
+    )
+    monkeypatch.setattr(
+        result_presentation,
+        "multi_case_summary_rows",
+        lambda *_args: [{
+            "check": hostile,
+            "case": "PL-01",
+            "status": "NOT ASSESSED",
+            "result": "-",
+            "criterion": "Output only",
+        }],
+    )
+    monkeypatch.setattr(
+        result_presentation,
+        "summary_governing_case_flags",
+        lambda _rows: [False],
+    )
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), {}, figures=False
+    )
+
+    builder._results_overview()
+
+    paragraphs = []
+
+    def collect(value):
+        if hasattr(value, "getPlainText"):
+            paragraphs.append(value.getPlainText())
+        if hasattr(value, "_cellvalues"):
+            collect(value._cellvalues)
+        if hasattr(value, "_content"):
+            collect(value._content)
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                collect(item)
+
+    collect(builder.flow)
+    overview_label = next(
+        text for text in paragraphs if "project alias:" in text
+    )
+    assert "<b>span</b>" in overview_label
+    assert '<link href="https://example.test">deck</link>' in overview_label
+    assert "sigma m2 1e-3" in overview_label
+
+
 def test_report_includes_shear_torsion_link_detailing_evidence():
     inp = _inp()
     inp.update({

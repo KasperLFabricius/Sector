@@ -14,7 +14,7 @@ import case_analysis
 import fatigue_presentation
 import viz
 
-from sector import detailing
+from app import modelled_direction
 from sector.design_standards import get_design_basis
 
 _DEGREE = chr(0x00B0)
@@ -853,14 +853,11 @@ def result_summary_rows(inp, results, *, stale=False):
             ))
 
     minimum = results.get("minimum_reinforcement")
-    minimum_direction = str(
-        (minimum or {}).get("modelled_reinforcement_direction")
-        or (
-            "longitudinal"
-            if inp.get("detailing_cut_direction") != detailing.CUT_LONGITUDINAL
-            else "transverse"
-        )
-    ).capitalize()
+    minimum_direction = modelled_direction.resolved_label(
+        minimum,
+        cut_direction=inp.get("detailing_cut_direction"),
+        alias=inp.get(modelled_direction.ALIAS_KEY),
+    )
     minimum_label = f"{minimum_direction} minimum reinforcement"
     if minimum is None and inp.get("minimum_reinforcement_on"):
         rows.append(_summary_row(

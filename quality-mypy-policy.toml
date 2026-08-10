@@ -9,6 +9,7 @@ files = [
     "app/manual_equation_contract.py",
     "app/manual_equation_publication.py",
     "sector/design_standards.py",
+    "app/modelled_direction.py",
 ]
 
 [sector_policy]
