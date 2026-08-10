@@ -34,6 +34,7 @@ EXPECTED_KEYS = (
     "manual.detailing.torsion.minimum-ratio",
     "manual.crack.2005.width",
     "manual.crack.2005.spacing",
+    "manual.crack.dk-na-heightened",
     "manual.crack.2023.width",
     "manual.crack.2023.spacing",
     "manual.fatigue.stress-range",
@@ -57,14 +58,14 @@ EXPECTED_KEYS = (
 
 EXPECTED_NUMBERS = (
     "C3-1", "C3-2", "C3-3", "C4-1", "C5-1", "C5-2", "C5-3",
-    "C5-4", "C5-5", "C5-6", "C5-7", "C7-1", "C7-2", "C7-3",
-    "C7-4", "C8-1", "C8-2", "C8-3", "C8-4", "C8-5", "C8-6",
+    "C5-4", "C5-5", "C5-6", "C5-7", "C7-1", "C7-2", "C7-5",
+    "C7-3", "C7-4", "C8-1", "C8-2", "C8-3", "C8-4", "C8-5", "C8-6",
     "C8-7", "C8-8", "C9-1", "C9-2", "C9-3", "C9-4", "C9-5",
     "C10-1", "C10-2", "C11-1", "C11-2",
 )
 
 EXPECTED_CATALOGUE_SEAL = (
-    "68a50835e369abfde610085c040a7b934a87634d6a0271fa596f63088ab45579"
+    "18375114d842a71eb976f44eecf48eb52b8edd6d3ff4f651332320130a449cd0"
 )
 
 
@@ -120,8 +121,8 @@ def _first_part_c_display(blocks):
 
 def test_live_manual_registers_exact_catalogue_in_authored_order():
     registered = _registered()
-    assert len(registered) == 32
-    assert tuple(item.location.ordinal for item in registered) == tuple(range(1, 33))
+    assert len(registered) == 33
+    assert tuple(item.location.ordinal for item in registered) == tuple(range(1, 34))
     assert tuple(item.location.key for item in registered) == EXPECTED_KEYS
     assert tuple(item.location.number for item in registered) == EXPECTED_NUMBERS
     assert all(item.location.part == location.PART_C for item in registered)
@@ -286,7 +287,7 @@ def test_adjacent_nonempty_displays_are_counted_not_ignored():
     blocks = _blocks()
     index = _first_part_c_display(blocks)
     blocks[index] = ("md", blocks[index][1] + "$$x=y.$$$$y=z.$$")
-    with pytest.raises(ValueError, match="got 34"):
+    with pytest.raises(ValueError, match="got 35"):
         _registered(blocks)
 
 

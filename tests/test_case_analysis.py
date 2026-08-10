@@ -314,3 +314,131 @@ def test_rejects_names_duplicated_across_solver_tables():
 
     with pytest.raises(ValueError, match="duplicated"):
         case_analysis.run_case_tables(inp, lambda _inp, **_kwargs: {})
+
+
+def test_elastic_case_maps_optional_criterion_and_deterministic_source():
+    record = case_analysis.case_records(
+        {
+            "elastic_cases": _elastic([{
+                "name": "EL-frequent",
+                "calculate_crack_width": True,
+                "ordinary_crack_criterion_mm": "0,30",
+            }])
+        },
+        "elastic",
+    )[0]
+
+    mapped = case_analysis.elastic_case_input(_base(), record)
+
+    assert mapped["ordinary_crack_criterion_mm"] == pytest.approx(0.30)
+    assert mapped["ordinary_crack_criterion_source"] == (
+        "User input - Elastic case EL-frequent"
+    )
+
+
+def test_optional_criterion_changes_elastic_case_signature_and_reuse_boundary():
+    calls = []
+
+    def runner(case_inp):
+        calls.append(case_inp["ordinary_crack_criterion_mm"])
+        return {
+            "elastic": {
+                "crack_output": {
+                    "value": 0.24,
+                    "case": "Short-term",
+                    "governing": "R1",
+                    "unit": "mm",
+                }
+            }
+        }
+
+    def inputs(criterion):
+        return _base(
+            mode="Elastic",
+            shear_on=False,
+            torsion_on=False,
+            combined_on=False,
+            plastic_cases=load_cases.empty_table(
+                load_cases.PLASTIC_TABLE_KEY
+            ),
+            elastic_cases=_elastic([{
+                "name": "EL-one",
+                "calculate_crack_width": True,
+                "ordinary_crack_criterion_mm": criterion,
+            }]),
+        )
+
+    first = case_analysis.run_case_tables(inputs(0.30), runner)
+    second = case_analysis.run_case_tables(
+        inputs(0.40), runner, reuse_elastic=first["elastic_cases"]
+    )
+
+    assert calls == [0.30, 0.40]
+    assert first["elastic_cases"][0]["signature"] != (
+        second["elastic_cases"][0]["signature"]
+    )
+    assert second["elastic_cases"][0]["reused"] is False
+
+
+def test_case_orchestration_publishes_only_the_controlled_crack_comparison():
+    inp = _base(
+        mode="Elastic",
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+        plastic_cases=load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY),
+        elastic_cases=_elastic([{
+            "name": "EL-governing",
+            "calculate_crack_width": True,
+            "ordinary_crack_criterion_mm": 0.30,
+        }]),
+    )
+
+    result = case_analysis.run_case_tables(
+        inp,
+        lambda _case_inp: {
+            "elastic": {
+                "crack_output": {
+                    "value": 0.36,
+                    "case": "Short-term",
+                    "governing": "R7",
+                    "unit": "mm",
+                }
+            }
+        },
+    )
+    output = result["elastic_cases"][0]["results"]["elastic"][
+        "crack_output"
+    ]
+
+    assert output["calculation_state"] == "EXCEEDS USER-SPECIFIED LIMIT"
+    assert output["ratio"] == pytest.approx(1.2)
+    assert output["criterion_source"] == (
+        "User input - Elastic case EL-governing"
+    )
+    assert output["comparison_equation"] == "w_k / w_k,criterion"
+    assert "status" not in output
+
+
+def test_stored_criterion_is_not_assessed_when_width_was_not_requested():
+    inp = _base(
+        mode="Elastic",
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+        plastic_cases=load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY),
+        elastic_cases=_elastic([{
+            "name": "EL-stored",
+            "calculate_crack_width": False,
+            "ordinary_crack_criterion_mm": 0.30,
+        }]),
+    )
+
+    result = case_analysis.run_case_tables(
+        inp, lambda _case_inp: {"elastic": {}}
+    )
+    output = result["elastic"]["crack_output"]
+
+    assert output["calculation_state"] == "NOT REQUESTED"
+    assert output["criterion_mm"] == pytest.approx(0.30)
+    assert output["value"] is None

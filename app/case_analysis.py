@@ -13,7 +13,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 
 import load_cases
+from deferred_import import deferred_module
 
+sls_core = deferred_module("sector.sls")
 
 _PLASTIC_RESULT_KEYS = (
     "plastic", "shear", "torsion", "combined", "minimum_reinforcement",
@@ -35,10 +37,16 @@ def _case_record(row: Mapping, key: str) -> dict:
         for column in load_cases.TEXT_COLUMNS[key]
         if column not in {load_cases.NAME, load_cases.DESCRIPTION}
     })
-    record.update({
-        column: float(row[column])
-        for column in load_cases.NUMERIC_COLUMNS[key]
-    })
+    for column in load_cases.NUMERIC_COLUMNS[key]:
+        value = row[column]
+        record[column] = (
+            None
+            if (
+                column in load_cases.NULLABLE_NUMERIC_COLUMNS[key]
+                and load_cases.decimal_is_blank(value)
+            )
+            else float(value)
+        )
     record.update({
         column: bool(row[column])
         for column in load_cases.FLAG_COLUMNS[key]
@@ -159,10 +167,16 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
     """Map one Elastic row and its optional crack-width calculation."""
     out = dict(base)
     calculate_crack_width = bool(record["calculate_crack_width"])
+    criterion = record.get("ordinary_crack_criterion_mm")
+    criterion_source = load_cases.ordinary_crack_criterion_source(
+        record[load_cases.NAME]
+    )
     out.update(
         mode="Elastic",
         elastic_case=_metadata(record),
         calculate_crack_width=calculate_crack_width,
+        ordinary_crack_criterion_mm=criterion,
+        ordinary_crack_criterion_source=criterion_source,
         P_el_l=float(record["n_long_ed_kn"]),
         Mx_el_l=float(record["mx_long_ed_knm"]),
         My_el_l=float(record["my_long_ed_knm"]),
@@ -175,6 +189,38 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
         combined_on=False,
     )
     return out
+
+
+def _with_ordinary_crack_assessment(
+    result: Mapping,
+    record: Mapping,
+) -> dict:
+    """Attach the case-owned ordinary crack comparison to an Elastic result."""
+
+    copied = dict(result)
+    elastic = copied.get("elastic")
+    if not isinstance(elastic, Mapping):
+        return copied
+    elastic_copy = dict(elastic)
+    raw_output = elastic_copy.get("crack_output")
+    if not isinstance(raw_output, Mapping):
+        raw_output = {
+            "value": None,
+            "case": None,
+            "governing": None,
+            "unit": "mm",
+            "reason": "No crack-width output was returned by the calculation.",
+        }
+    elastic_copy["crack_output"] = sls_core.assess_crack_output(
+        raw_output,
+        requested=bool(record["calculate_crack_width"]),
+        criterion_mm=record.get("ordinary_crack_criterion_mm"),
+        criterion_source=load_cases.ordinary_crack_criterion_source(
+            record[load_cases.NAME]
+        ),
+    )
+    copied["elastic"] = elastic_copy
+    return copied
 
 
 def _reuse_by_name(entries: Sequence[Mapping] | None) -> dict[str, Mapping]:
@@ -335,7 +381,10 @@ def run_case_tables(
                     )
                 )
                 continue
-            result = runner(elastic_case_input(inp, record))
+            result = _with_ordinary_crack_assessment(
+                runner(elastic_case_input(inp, record)),
+                record,
+            )
             elastic_entries.append(
                 _entry(
                     record,

@@ -40,6 +40,11 @@ EXPECTED_CONTRACT_KEYS = {
     ("crack.2023.mean-strain", None),
     ("crack.2023.spacing", None),
     ("crack.2023.width", None),
+    ("crack.user-limit.comparison", None),
+    ("crack.heightened.base-ratio", None),
+    ("crack.heightened.required-ratio", None),
+    ("crack.heightened.required-area", None),
+    ("crack.heightened.area-comparison", None),
     ("cracking.threshold", None),
     ("detailing.clear-spacing.distance", None),
     ("detailing.clear-spacing.requirement", None),
@@ -213,7 +218,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 139
+    assert len(calls) == 144
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -224,7 +229,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 138
+    assert len(catalogue_pairs) == 143
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -241,12 +246,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 131,
+        "numerical": 136,
         "none": 7,
     }
-    assert publication_role_counts == {"calculation": 131, "theory": 7}
+    assert publication_role_counts == {"calculation": 136, "theory": 7}
     # Conditional call sites expand to every exact runtime variant in the catalogue.
-    assert result_counts == {True: 131, False: 7}
+    assert result_counts == {True: 136, False: 7}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key

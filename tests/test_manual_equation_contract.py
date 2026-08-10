@@ -20,7 +20,7 @@ import manual_equation_source as source  # noqa: E402
 
 
 EXPECTED_CONTRACT_SEAL = (
-    "bf761eb9014419e5c42e6f04e0a0c05628bb21549d5f8abe0c76d9f4e433613b"
+    "58a99d8ad084f6b3e8a58a3b98c4cf2366ed338f5eff63281edf97402dd1a69d"
 )
 
 EXPECTED_ROWS = (
@@ -67,6 +67,10 @@ EXPECTED_ROWS = (
     ),
     (
         "C7-2", 10, (r"s_{r,max}",), ("mm",), "length relation", (),
+    ),
+    (
+        "C7-5", 7, (r"\rho_{s,min}",), ("1",),
+        "dimensionless reinforcement-ratio relation", (),
     ),
     (
         "C7-3", 10, (r"w_k", r"\frac{k_1}{r}"), ("mm", "1"),
@@ -188,14 +192,14 @@ def _row(item):
 
 def test_live_manual_binds_exact_independent_semantic_inventory():
     bound = _bound()
-    assert len(bound) == 32
+    assert len(bound) == 33
     assert tuple(_row(item.contract) for item in bound) == EXPECTED_ROWS
-    assert tuple(item.contract.ordinal for item in bound) == tuple(range(1, 33))
+    assert tuple(item.contract.ordinal for item in bound) == tuple(range(1, 34))
     assert tuple(item.contract.key for item in bound) == tuple(
         item.key for item in location.MANUAL_EQUATION_LOCATIONS
     )
-    assert sum(len(item.contract.symbols) for item in bound) == 207
-    assert sum(len(item.contract.results) for item in bound) == 46
+    assert sum(len(item.contract.symbols) for item in bound) == 214
+    assert sum(len(item.contract.results) for item in bound) == 47
     assert sum(len(item.contract.uses) for item in bound) == 21
 
 
@@ -257,7 +261,7 @@ def test_edition_alternative_dependencies_are_complete_and_ordered():
     assert by_number["C8-8"].uses == expected
 
 
-@pytest.mark.parametrize("index", range(32))
+@pytest.mark.parametrize("index", range(33))
 @pytest.mark.parametrize(
     "field",
     (
@@ -453,7 +457,7 @@ def test_contract_records_bindings_and_nested_terms_are_immutable_exact_types():
 def test_dependency_graph_is_complete_known_unique_and_acyclic():
     contracts = contract.MANUAL_EQUATION_CONTRACTS
     by_key = {item.key: item for item in contracts}
-    assert len(by_key) == 32
+    assert len(by_key) == 33
     visiting = set()
     visited = set()
 
@@ -471,7 +475,7 @@ def test_dependency_graph_is_complete_known_unique_and_acyclic():
 
     for key in by_key:
         visit(key)
-    assert len(visited) == 32
+    assert len(visited) == 33
 
 
 def test_contract_module_has_only_predecessors_and_standard_library_imports():

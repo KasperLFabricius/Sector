@@ -747,6 +747,10 @@ class ReportBuilder:
             item for item in crack_examples
             if isinstance(item, Mapping)
         ) if isinstance(crack_examples, (list, tuple)) else ()
+        crack_comparison = self._worked_example_selection.get("crack_comparison")
+        self._selected_crack_comparison = (
+            crack_comparison if isinstance(crack_comparison, Mapping) else None
+        )
         threshold = self._worked_example_selection.get("cracking_threshold")
         self._selected_cracking_threshold = (
             threshold if isinstance(threshold, Mapping) else None
@@ -754,6 +758,12 @@ class ReportBuilder:
         torsion_subchecks = self._worked_example_selection.get("torsion_subchecks")
         self._selected_torsion_subchecks = (
             torsion_subchecks if isinstance(torsion_subchecks, Mapping) else {}
+        )
+        heightened = self._worked_example_selection.get(
+            "heightened_crack_control"
+        )
+        self._selected_heightened_crack_control = (
+            heightened if isinstance(heightened, Mapping) else None
         )
 
     def _case_contexts(self, family):
@@ -1006,6 +1016,9 @@ class ReportBuilder:
             "Demand-versus-resistance checks retain their individual verdicts. "
             "Output-only quantities and the project as a whole have no verdict."
         )
+        # Keep the explanatory lead-in with the table's first page.  This still
+        # lets genuinely oversized project overviews use the native row splitter.
+        self.flow[-1].keepWithNext = 1
         data = [[
             "Check", "Action set", "Status", "Result", "Criterion", "Gov."
         ]]
@@ -1019,7 +1032,7 @@ class ReportBuilder:
         ])
         body = ParagraphStyle(
             "summary-cell", parent=self.s["body"], fontSize=7.2,
-            fontName=_FONT, leading=9.2,
+            fontName=_FONT, leading=8.8,
         )
         head = ParagraphStyle(
             "summary-head", parent=body, fontName=_FONT_BOLD,
@@ -1055,7 +1068,10 @@ class ReportBuilder:
         header_row = 1 + context_count
         table = _PaginatedReportTable(
             formatted,
-            colWidths=[42 * mm, 25 * mm, 23 * mm, 31 * mm, 36 * mm, 13 * mm],
+            colWidths=[
+                41 * mm, 24 * mm, 27 * mm,
+                33 * mm, 35 * mm, 10 * mm,
+            ],
             repeatRows=1 + context_count + 1,
             hAlign="LEFT",
             splitByRow=1,
@@ -1066,8 +1082,10 @@ class ReportBuilder:
             ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
             ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 0.8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 0.7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.7),
         ]
         style.extend(context_style)
         fills = {
@@ -1753,6 +1771,11 @@ class ReportBuilder:
                     and self._selected_cracking_threshold.get("case_id")
                     == self._case_id(case_inp, "elastic")
                 )
+                or (
+                    isinstance(self._selected_crack_comparison, Mapping)
+                    and self._selected_crack_comparison.get("case_id")
+                    == self._case_id(case_inp, "elastic")
+                )
             ):
                 jobs.append((
                     case_inp, case_out,
@@ -1769,6 +1792,16 @@ class ReportBuilder:
                 getattr(self, method)()
         finally:
             self.inp, self.out = self._base_inp, self._base_out
+        if (
+            isinstance(self._selected_heightened_crack_control, Mapping)
+            and self._selected_heightened_crack_control.get("result_key")
+            == "heightened_crack_control"
+            and isinstance(
+                self._base_out.get("heightened_crack_control"), Mapping
+            )
+        ):
+            self.flow.append(NotAtTopPageBreak())
+            self._heightened_crack_control()
         if self._base_out.get("fatigue") is not None:
             self._tick(0.88, "Grouped fatigue...")
             self.flow.append(NotAtTopPageBreak())
@@ -6661,10 +6694,16 @@ class ReportBuilder:
             if item.get("case_id") == case_id
         ]
         publish_crack_width = bool(examples)
+        publish_comparison = (
+            isinstance(self._selected_crack_comparison, Mapping)
+            and self._selected_crack_comparison.get("case_id") == case_id
+        )
         if publish_threshold and publish_crack_width:
             heading = "Cracking threshold and governing crack width"
         elif publish_crack_width:
             heading = "Governing crack width"
+        elif publish_comparison:
+            heading = "Governing crack-width comparison"
         else:
             heading = "Cracking threshold"
         self._case_heading(
@@ -6710,28 +6749,26 @@ class ReportBuilder:
             )
         if not publish_crack_width:
             assessment = el.get("crack_output") or {}
-            status = assessment.get("calculation_state", "NOT CALCULATED")
-            if status == "NOT APPLICABLE" or (
+            self._ordinary_crack_assessment(
+                assessment,
+                publish_comparison=publish_comparison,
+            )
+            if (
                 el.get("crack") is None
                 and el.get("crack_short") is None
                 and el.get("crack_coarse") is None
                 and el.get("crack_short_coarse") is None
+                and not str(assessment.get("reason") or "").strip()
             ):
                 self._small(
-                    f"Calculation state: {status}. No crack-width limit, "
-                    "exposure acceptance or action-set completeness criterion "
-                    "is applied."
-                )
-                self._small(
-                    "No crack width: section uncracked or no reinforcement "
-                    "in tension."
+                    "No calculated crack-width value is available; the report "
+                    "does not infer a physical reason."
                 )
             return
         cl, cs = el.get("crack"), el.get("crack_short")
         clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
         no_results = cl is None and cs is None and clc is None and csc is None
         assessment = el.get("crack_output") or {}
-        status = assessment.get("calculation_state", "NOT CALCULATED")
         value = assessment.get("value")
         text = (
             f"Crack-width output | governing w<sub>k</sub> "
@@ -6740,13 +6777,16 @@ class ReportBuilder:
             f"element {assessment.get('governing') or '-'}"
         )
         self._p(text)
-        self._small(
-            f"Calculation state: {status}. No crack-width limit, exposure "
-            "acceptance or action-set completeness criterion is applied."
+        self._ordinary_crack_assessment(
+            assessment,
+            publish_comparison=publish_comparison,
         )
         if no_results:
-            self._small("No crack width: section uncracked or no reinforcement "
-                        "in tension.")
+            if not str(assessment.get("reason") or "").strip():
+                self._small(
+                    "No calculated crack-width value is available; the report "
+                    "does not infer a physical reason."
+                )
             return
         self._crack_table(cl, cs, clc, csc)
         selected_cases = []
@@ -6774,6 +6814,69 @@ class ReportBuilder:
         self._crack_candidates(selected_cases)
         for crack, label in selected_worked:
             self._crack_worked(crack, label)
+
+    def _ordinary_crack_assessment(self, assessment, *, publish_comparison):
+        """Publish one retained user comparison without inferring a code limit."""
+        status = str(assessment.get("calculation_state") or "NOT ASSESSED")
+        criterion = assessment.get("criterion_mm")
+        source = str(assessment.get("criterion_source") or "").strip()
+        reason = str(assessment.get("reason") or "").strip()
+        if criterion is None:
+            self._small(
+                f"Calculation state: {status}. No user-specified crack-width "
+                "criterion was supplied; exposure, durability, prestress "
+                "category and owner limits are not inferred."
+            )
+            if reason:
+                self._small(_html_escape(reason))
+            return
+
+        self._small(
+            f"Calculation state: {_html_escape(status)}. User-specified "
+            f"criterion = {_fmt(criterion, 3)} mm; source: "
+            f"{_html_escape(source or 'NOT RETAINED')}. This is a bounded "
+            "comparison only; no exposure or owner criterion is inferred."
+        )
+        if reason:
+            self._small(_html_escape(reason))
+        if not publish_comparison:
+            return
+        required = (
+            "value", "criterion_mm", "ratio", "criterion_source",
+            "comparison_equation", "calculation_state",
+        )
+        missing = [
+            key for key in required
+            if assessment.get(key) is None
+            or (key == "criterion_source" and not source)
+        ]
+        if missing:
+            self._small(
+                "<b>Worked comparison unavailable.</b> The retained critical "
+                "ordinary crack-width comparison is incomplete (missing: "
+                + ", ".join(missing)
+                + "). The report does not reconstruct it."
+            )
+            return
+        self._h2("User-specified crack-width comparison - critical case")
+        self._formula(
+            "u<sub>w</sub> = w<sub>k</sub> / w<sub>k,criterion</sub>",
+            equation_key="crack.user-limit.comparison",
+            ref="User-specified crack-width criterion",
+            note=(
+                "The largest calculated ordinary crack width is selected; a "
+                "smaller width with a tighter criterion cannot govern the "
+                "worked example."
+            ),
+            subst=(
+                f"= {_fmt(assessment.get('value'), 3)} mm / "
+                f"{_fmt(assessment.get('criterion_mm'), 3)} mm"
+            ),
+            result=(
+                f"u<sub>w</sub> = {_fmt(assessment.get('ratio'), 3)}; "
+                f"{_html_escape(status)}"
+            ),
+        )
 
     def _crack_table(self, cl, cs, clc=None, csc=None):
         # The full crack-width breakdown for both load cases, matching the view.
@@ -7290,6 +7393,162 @@ class ReportBuilder:
                   f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
                   f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
+
+    def _heightened_crack_control(self):
+        """Publish the singleton retained DK Formula 7.100 NA calculation."""
+        result = self._base_out.get("heightened_crack_control") or {}
+        required = (
+            "basis_key",
+            "crack_system",
+            "reinforcement_surface",
+            "bar_diameter_mm",
+            "effective_tensile_strength_mpa",
+            "reinforcement_modulus_mpa",
+            "permitted_crack_width_mm",
+            "effective_tension_area_mm2",
+            "provided_reinforcement_area_mm2",
+            "source",
+            "disclosure",
+            "formula_identity",
+            "crack_system_factor",
+            "reinforcement_surface_multiplier",
+            "base_reinforcement_ratio",
+            "required_reinforcement_ratio",
+            "required_reinforcement_area_mm2",
+            "comparison_ratio",
+            "status",
+        )
+        missing = [
+            key for key in required
+            if key not in result or result[key] is None
+            or (key in {"source", "disclosure"} and not str(result[key]).strip())
+        ]
+        self._h1("DK heightened crack-control minimum")
+        if missing:
+            self._small(
+                "<b>Worked calculation unavailable.</b> The retained Formula "
+                "7.100 NA result is incomplete (missing: "
+                + ", ".join(missing)
+                + "). The report does not reconstruct it."
+            )
+            return
+
+        self._p(
+            "<b>Calculation state:</b> "
+            + _html_escape(str(result["status"]))
+        )
+        self._small(
+            "<b>Source:</b> " + _html_escape(str(result["source"]))
+            + ". <b>Scope:</b> " + _html_escape(str(result["disclosure"]))
+        )
+        self._small(
+            "The user declared the applicability, crack system and permitted "
+            "width. Sector does not infer restraint, watertightness, exposure "
+            "class or owner requirements."
+        )
+        rows = [
+            ["Retained input", "Value"],
+            ["Crack system", _html_escape(str(result["crack_system"]))],
+            [
+                "Reinforcement surface",
+                _html_escape(str(result["reinforcement_surface"])),
+            ],
+            ["Bar diameter phi", f"{_fmt(result['bar_diameter_mm'], 3)} mm"],
+            [
+                "Effective tensile strength fct,eff",
+                f"{_fmt(result['effective_tensile_strength_mpa'], 3)} MPa",
+            ],
+            [
+                "Reinforcement modulus Esk",
+                f"{_fmt(result['reinforcement_modulus_mpa'], 1)} MPa",
+            ],
+            [
+                "Permitted crack width wk",
+                f"{_fmt(result['permitted_crack_width_mm'], 3)} mm",
+            ],
+            [
+                "Effective tension area Ac,eff",
+                f"{_fmt(result['effective_tension_area_mm2'], 1)} mm2",
+            ],
+            [
+                "Provided reinforcement area As,prov",
+                f"{_fmt(result['provided_reinforcement_area_mm2'], 1)} mm2",
+            ],
+        ]
+        self._table(rows, [82 * mm, 78 * mm])
+        self._formula(
+            "rho<sub>s,min,base</sub> = sqrt[phi f<sub>ct,eff</sub> / "
+            "(4 E<sub>sk</sub> k w<sub>k</sub>)]",
+            equation_key="crack.heightened.base-ratio",
+            ref=_html_escape(str(result["source"])),
+            note=(
+                "k = 1 for the fine crack system and k = 2 for the coarse "
+                "crack system."
+            ),
+            subst=(
+                f"= sqrt[({_fmt(result['bar_diameter_mm'], 3)})"
+                f"({_fmt(result['effective_tensile_strength_mpa'], 3)}) / "
+                f"(4({_fmt(result['reinforcement_modulus_mpa'], 1)})"
+                f"({_fmt(result['crack_system_factor'], 3)})"
+                f"({_fmt(result['permitted_crack_width_mm'], 3)}))]"
+            ),
+            result=(
+                "rho<sub>s,min,base</sub> = "
+                f"{_fmt(result['base_reinforcement_ratio'], 6)}"
+            ),
+        )
+        self._formula(
+            "rho<sub>s,min</sub> = m<sub>s</sub> "
+            "rho<sub>s,min,base</sub>",
+            equation_key="crack.heightened.required-ratio",
+            references=("crack.heightened.base-ratio",),
+            ref="DS/EN 1992-1-1 DK NA:2024 Formula 7.100 NA",
+            note=(
+                "m_s = 1 for ribbed reinforcement and sqrt(2) for smooth "
+                "reinforcement."
+            ),
+            subst=(
+                f"= {_fmt(result['reinforcement_surface_multiplier'], 6)} "
+                f"&#183; {_fmt(result['base_reinforcement_ratio'], 6)}"
+            ),
+            result=(
+                "rho<sub>s,min</sub> = "
+                f"{_fmt(result['required_reinforcement_ratio'], 6)}"
+            ),
+        )
+        self._formula(
+            "A<sub>s,req</sub> = rho<sub>s,min</sub> A<sub>c,eff</sub>",
+            equation_key="crack.heightened.required-area",
+            references=("crack.heightened.required-ratio",),
+            ref="User-supplied effective tension area",
+            subst=(
+                f"= {_fmt(result['required_reinforcement_ratio'], 6)} &#183; "
+                f"{_fmt(result['effective_tension_area_mm2'], 1)} mm<super>2</super>"
+            ),
+            result=(
+                "A<sub>s,req</sub> = "
+                f"{_fmt(result['required_reinforcement_area_mm2'], 1)} "
+                "mm<super>2</super>"
+            ),
+        )
+        self._formula(
+            "u<sub>A</sub> = A<sub>s,req</sub> / A<sub>s,prov</sub>",
+            equation_key="crack.heightened.area-comparison",
+            references=("crack.heightened.required-area",),
+            ref="User-provided reinforcement area comparison",
+            note=(
+                "Bounded comparison with the user-supplied provided area; this "
+                "is not a global project-compliance verdict."
+            ),
+            subst=(
+                f"= {_fmt(result['required_reinforcement_area_mm2'], 1)} / "
+                f"{_fmt(result['provided_reinforcement_area_mm2'], 1)}"
+            ),
+            result=(
+                f"u<sub>A</sub> = {_fmt(result['comparison_ratio'], 3)}; "
+                + _html_escape(str(result["status"]))
+            ),
+        )
 
     def _fatigue(self):
         payload = self._base_out["fatigue"]

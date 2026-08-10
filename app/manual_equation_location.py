@@ -129,101 +129,107 @@ MANUAL_EQUATION_LOCATIONS = (
         "e674c66afb21190f639015cce8da6a954fdcc19f8ddd326020667e25536c8fe3",
     ),
     _location(
-        14, "manual.crack.2023.width", "C7-3",
+        14, "manual.crack.dk-na-heightened", "C7-5",
+        "Serviceability: cracking and crack width",
+        "DK NA heightened crack-control minimum",
+        "23ab63d96b5151f131dc2679f1c799de51a2b250febbfbcafea908999e0c7371",
+    ),
+    _location(
+        15, "manual.crack.2023.width", "C7-3",
         "Serviceability: cracking and crack width",
         "EN 1992-1-1:2023 refined model",
         "4c15d71e9d8e368108149af68afc41acc767712cd71aa1ad7af0223bb5ae3d10",
     ),
     _location(
-        15, "manual.crack.2023.spacing", "C7-4",
+        16, "manual.crack.2023.spacing", "C7-4",
         "Serviceability: cracking and crack width",
         "EN 1992-1-1:2023 refined model",
         "3232760c0b31c26275f004adf2bf978d25bf8452b182b6966e3bfeb455cae8ea",
     ),
     _location(
-        16, "manual.fatigue.stress-range", "C8-1", "Grouped fatigue",
+        17, "manual.fatigue.stress-range", "C8-1", "Grouped fatigue",
         "Elastic stress ranges",
         "1c6d20674b30556d5158662f2eed158f78f16c0ec52b6134bf9ee4e728707878",
     ),
     _location(
-        17, "manual.fatigue.reinforcement.design-range", "C8-2",
+        18, "manual.fatigue.reinforcement.design-range", "C8-2",
         "Grouped fatigue", "Reinforcement S-N and Miner check",
         "79409e2d84eb04d50e0b3ecdb1a23cbaee4988c086d4d63375c8dc87267f5514",
     ),
     _location(
-        18, "manual.fatigue.reinforcement.life", "C8-3",
+        19, "manual.fatigue.reinforcement.life", "C8-3",
         "Grouped fatigue", "Reinforcement S-N and Miner check",
         "525ca21ac74aa72c0202fba278ff55bfc0e4c951c7c4b29a1d0776e657bad217",
     ),
     _location(
-        19, "manual.fatigue.reinforcement.miner", "C8-4",
+        20, "manual.fatigue.reinforcement.miner", "C8-4",
         "Grouped fatigue", "Reinforcement S-N and Miner check",
         "ace577b8ce30e7129bda1cc84198419a4fea29b0472f100afe793caddca79564",
     ),
     _location(
-        20, "manual.fatigue.concrete.strength-2005", "C8-5",
+        21, "manual.fatigue.concrete.strength-2005", "C8-5",
         "Grouped fatigue", "Concrete compression fatigue",
         "5123cf1171bbf2a16ddc81bf351ebaff1c8aa4f26bdec70f846f81f1a1b68ce9",
     ),
     _location(
-        21, "manual.fatigue.concrete.strength-2023", "C8-6",
+        22, "manual.fatigue.concrete.strength-2023", "C8-6",
         "Grouped fatigue", "Concrete compression fatigue",
         "85e38c135904be5a3507e919a0649d9c209549ebb4ee3f0875ac978984e09eda",
     ),
     _location(
-        22, "manual.fatigue.concrete.life", "C8-7", "Grouped fatigue",
+        23, "manual.fatigue.concrete.life", "C8-7", "Grouped fatigue",
         "Concrete compression fatigue",
         "5a8cca7a9e50c8a23d37882d0fb575d459dcd187d9fd4e2a4c580da5cf154528",
     ),
     _location(
-        23, "manual.fatigue.concrete.equivalent", "C8-8",
+        24, "manual.fatigue.concrete.equivalent", "C8-8",
         "Grouped fatigue", "Concrete compression fatigue",
         "4a70d70fdded41c242471c53a26554257d8444562547f5763c882c00a137bdcf",
     ),
     _location(
-        24, "manual.shear.no-links.variable", "C9-1",
+        25, "manual.shear.no-links.variable", "C9-1",
         "Shear resistance without shear reinforcement", "",
         "e5a101ffeb8ed99a3ad22d269c843d73ab17a4830858ddcec135b958a9d0ee6c",
     ),
     _location(
-        25, "manual.shear.no-links.minimum", "C9-2",
+        26, "manual.shear.no-links.minimum", "C9-2",
         "Shear resistance without shear reinforcement", "",
         "1279f09a95518892baa612be76e48350f9cf565aed5efd94aecadcf165c7cc67",
     ),
     _location(
-        26, "manual.shear.action-factor-2023", "C9-3",
+        27, "manual.shear.action-factor-2023", "C9-3",
         "Shear resistance without shear reinforcement", "",
         "57910d0569783bc00ef2c62b0755400dc51059b6ffd96017e3f7b50d92a5190d",
     ),
     _location(
-        27, "manual.shear.links-2005", "C9-4",
+        28, "manual.shear.links-2005", "C9-4",
         "Shear resistance without shear reinforcement",
         "Members with shear reinforcement (links)",
         "8bbbf0a6261d72eea45965ba33b6b45bb65ff56f67fa308f8020f7f01598aed7",
     ),
     _location(
-        28, "manual.shear.links-2023", "C9-5",
+        29, "manual.shear.links-2023", "C9-5",
         "Shear resistance without shear reinforcement",
         "Members with shear reinforcement (links)",
         "85cfe8d83d492a4af5a911a3a7c1dc332f88dcf75ae2b1434c6ed6fef91d3439",
     ),
     _location(
-        29, "manual.torsion.resistance", "C10-1",
+        30, "manual.torsion.resistance", "C10-1",
         "Torsion (thin-walled tube)", "",
         "a5291e17e74a23e3ec4f59d6a894be40eb72247ab67a266cb5f0a7d14667bff6",
     ),
     _location(
-        30, "manual.torsion.strut-interaction", "C10-2",
+        31, "manual.torsion.strut-interaction", "C10-2",
         "Torsion (thin-walled tube)", "",
         "0fde836b7555c3d5e63a45cc971b43eb8b53aeb68405c7294673b1704575b79b",
     ),
     _location(
-        31, "manual.combined.strut-interaction", "C11-1",
+        32, "manual.combined.strut-interaction", "C11-1",
         "Combined M-V-T interaction", "",
         "0fde836b7555c3d5e63a45cc971b43eb8b53aeb68405c7294673b1704575b79b",
     ),
     _location(
-        32, "manual.combined.utilisation", "C11-2",
+        33, "manual.combined.utilisation", "C11-2",
         "Combined M-V-T interaction", "",
         "850bd52dcea64b9e779bc904fa701d42d2d47657af17ea0f1ab0f32263f3ab8b",
     ),
@@ -327,15 +333,15 @@ def _extract_part_c(
 
 
 def _validate_catalogue() -> None:
-    if len(MANUAL_EQUATION_LOCATIONS) != 32:
-        raise RuntimeError("Expected exactly 32 manual equation locations.")
+    if len(MANUAL_EQUATION_LOCATIONS) != 33:
+        raise RuntimeError("Expected exactly 33 manual equation locations.")
     if tuple(item.ordinal for item in MANUAL_EQUATION_LOCATIONS) != tuple(
-        range(1, 33)
+        range(1, 34)
     ):
         raise RuntimeError("Manual equation ordinals must be contiguous.")
     keys = tuple(item.key for item in MANUAL_EQUATION_LOCATIONS)
     numbers = tuple(item.number for item in MANUAL_EQUATION_LOCATIONS)
-    if len(set(keys)) != 32 or len(set(numbers)) != 32:
+    if len(set(keys)) != 33 or len(set(numbers)) != 33:
         raise RuntimeError("Manual equation keys and numbers must be unique.")
     for item in MANUAL_EQUATION_LOCATIONS:
         if not _KEY.fullmatch(item.key):
@@ -374,9 +380,9 @@ def register_manual_equation_locations(
         raise ValueError("Canonical manual equation location catalogue changed.")
 
     extracted = _extract_part_c(blocks)
-    if len(extracted) != 32:
+    if len(extracted) != 33:
         raise ValueError(
-            f"Part C equation cardinality changed: expected 32, got {len(extracted)}."
+            f"Part C equation cardinality changed: expected 33, got {len(extracted)}."
         )
 
     located: list[LocatedManualEquation] = []

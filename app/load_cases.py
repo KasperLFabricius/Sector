@@ -31,6 +31,12 @@ CASE_TABLE_KEYS = (PLASTIC_TABLE_KEY, ELASTIC_TABLE_KEY)
 NAME = "name"
 DESCRIPTION = "description"
 
+
+def ordinary_crack_criterion_source(case_name: object) -> str:
+    """Return the stable provenance label for one Elastic-case criterion."""
+
+    return f"User input - Elastic case {str(case_name).strip()}"
+
 # The stored values are deliberately coordinate-neutral.  The UI presents the
 # matching physical face for each component (Vx: left/right; Vy: bottom/top).
 FACE_AUTO = "auto"
@@ -70,9 +76,19 @@ ELASTIC_COLUMNS = (
     "mx_short_ed_knm",
     "my_short_ed_knm",
     "calculate_crack_width",
+    "ordinary_crack_criterion_mm",
 )
-ELASTIC_NUMERIC = ELASTIC_COLUMNS[2:8]
-ELASTIC_FLAGS = ELASTIC_COLUMNS[8:]
+ELASTIC_ACTION_NUMERIC = (
+    "n_long_ed_kn",
+    "mx_long_ed_knm",
+    "my_long_ed_knm",
+    "n_short_ed_kn",
+    "mx_short_ed_knm",
+    "my_short_ed_knm",
+)
+ELASTIC_NULLABLE_NUMERIC = ("ordinary_crack_criterion_mm",)
+ELASTIC_NUMERIC = (*ELASTIC_ACTION_NUMERIC, *ELASTIC_NULLABLE_NUMERIC)
+ELASTIC_FLAGS = ("calculate_crack_width",)
 
 TABLE_COLUMNS = {
     PLASTIC_TABLE_KEY: PLASTIC_COLUMNS,
@@ -81,6 +97,10 @@ TABLE_COLUMNS = {
 NUMERIC_COLUMNS = {
     PLASTIC_TABLE_KEY: PLASTIC_NUMERIC,
     ELASTIC_TABLE_KEY: ELASTIC_NUMERIC,
+}
+NULLABLE_NUMERIC_COLUMNS = {
+    PLASTIC_TABLE_KEY: (),
+    ELASTIC_TABLE_KEY: ELASTIC_NULLABLE_NUMERIC,
 }
 FLAG_COLUMNS = {
     PLASTIC_TABLE_KEY: ("check_minimum_reinforcement",),
@@ -121,7 +141,7 @@ def _number(
     *,
     blank,
     prior_issue: str | None = None,
-) -> tuple[float, str | None]:
+) -> tuple[float | None, str | None]:
     """Return a canonical number and optional malformed-source ledger entry."""
 
     if prior_issue and is_invalid_decimal_sentinel(value):
@@ -133,14 +153,12 @@ def _number(
             # No load-case numeric field is currently required, but fail closed
             # if a future registry field adopts that policy.
             return math.nan, None
-        return float(number), None
+        return (None if number is None else float(number)), None
     try:
         number = parse_decimal(value, blank=blank)
     except DecimalParseError:
         return invalid_decimal_sentinel(), _issue_text(value)
-    if number is None:  # pragma: no cover - no nullable load actions today
-        return math.nan, None
-    return float(number), None
+    return (None if number is None else float(number)), None
 
 
 def _flag(value) -> bool:
@@ -179,8 +197,16 @@ def empty_table(key: str) -> pd.DataFrame:
         NAME: pd.Series(dtype="string"),
         DESCRIPTION: pd.Series(dtype="string"),
     }
-    data.update({column: pd.Series(dtype="float64")
-                 for column in NUMERIC_COLUMNS[key]})
+    data.update({
+        column: pd.Series(
+            dtype=(
+                "object"
+                if column in NULLABLE_NUMERIC_COLUMNS[key]
+                else "float64"
+            )
+        )
+        for column in NUMERIC_COLUMNS[key]
+    })
     for column in TEXT_COLUMNS[key]:
         data.setdefault(column, pd.Series(dtype="string"))
     data.update({column: pd.Series(dtype="bool")
@@ -193,11 +219,13 @@ def empty_table(key: str) -> pd.DataFrame:
 def normalise_table(value, key: str) -> pd.DataFrame:
     """Coerce a table-like value to the canonical columns and dtypes.
 
-    Unknown columns are discarded. Blank force cells become zero; invalid
-    nonblank values remain invalid so :func:`validation_errors` can reject them
-    before calculation.  A canonical frame carries an attrs ledger plus a tagged
-    NaN sentinel: repeated validation retains malformed text, while replacing the
-    cell with an ordinary editor NaN is a genuine clear and therefore becomes zero.
+    Unknown columns are discarded. Blank force cells become zero and the
+    optional ordinary crack criterion becomes ``None``; invalid nonblank values
+    remain invalid so :func:`validation_errors` can reject them before
+    calculation. A canonical frame carries an attrs ledger plus a tagged NaN
+    sentinel: repeated validation retains malformed text, while replacing the
+    cell with an ordinary editor NaN is a genuine clear and therefore adopts the
+    field's declared blank policy.
     """
     key = _kind(key)
     if value is None:
@@ -225,7 +253,19 @@ def normalise_table(value, key: str) -> pd.DataFrame:
         mapper = _face if column in PLASTIC_FACE_COLUMNS else _text
         result[column] = source.map(mapper).astype("string")
     for column in NUMERIC_COLUMNS[key]:
-        source = frame[column] if column in frame else pd.Series(0.0, index=frame.index)
+        source = (
+            frame[column]
+            if column in frame
+            else pd.Series(
+                None if column in NULLABLE_NUMERIC_COLUMNS[key] else 0.0,
+                index=frame.index,
+                dtype=(
+                    "object"
+                    if column in NULLABLE_NUMERIC_COLUMNS[key]
+                    else "float64"
+                ),
+            )
+        )
         blank = field_definition(key, column).blank
         values = []
         for position, value_at_position in enumerate(source.tolist()):
@@ -237,7 +277,15 @@ def normalise_table(value, key: str) -> pd.DataFrame:
             values.append(number)
             if issue is not None:
                 issues[(position, column)] = issue
-        result[column] = pd.Series(values, index=frame.index, dtype="float64")
+        result[column] = pd.Series(
+            values,
+            index=frame.index,
+            dtype=(
+                "object"
+                if column in NULLABLE_NUMERIC_COLUMNS[key]
+                else "float64"
+            ),
+        )
     for column in FLAG_COLUMNS[key]:
         source = frame[column] if column in frame else pd.Series(False, index=frame.index)
         result[column] = source.map(_flag).astype("bool")
@@ -261,6 +309,9 @@ def editor_table(value, key: str) -> pd.DataFrame:
             if issue is not None:
                 values.append(issue)
                 continue
+            if decimal_is_blank(value_at_position):
+                values.append("")
+                continue
             number = float(value_at_position)
             values.append(repr(number) if math.isfinite(number) else "")
         display[column] = pd.Series(
@@ -281,7 +332,10 @@ def _row_is_blank(row: Mapping, key: str) -> bool:
         not _text(row.get(NAME))
         and not _text(row.get(DESCRIPTION))
         and all(_is_finite_zero(row.get(column))
-                for column in NUMERIC_COLUMNS[key])
+                for column in NUMERIC_COLUMNS[key]
+                if column not in NULLABLE_NUMERIC_COLUMNS[key])
+        and all(decimal_is_blank(row.get(column))
+                for column in NULLABLE_NUMERIC_COLUMNS[key])
         and all(_face(row.get(column)) == FACE_AUTO
                 for column in PLASTIC_FACE_COLUMNS if column in TABLE_COLUMNS[key])
         and not any(_flag(row.get(column)) for column in FLAG_COLUMNS[key])
@@ -330,15 +384,37 @@ def table_records(value, key: str) -> list[dict]:
                     "negative or positive"
                 )
         for column in NUMERIC_COLUMNS[key]:
+            if (
+                column in NULLABLE_NUMERIC_COLUMNS[key]
+                and decimal_is_blank(row[column])
+            ):
+                record[column] = None
+                continue
             try:
                 number = float(row[column])
             except (TypeError, ValueError) as exc:
+                requirement = (
+                    "a positive finite number"
+                    if column in NULLABLE_NUMERIC_COLUMNS[key]
+                    else "a finite number"
+                )
                 raise ValueError(
-                    f"{key} row {row_number}: {column} must be a finite number"
+                    f"{key} row {row_number}: {column} must be {requirement}"
                 ) from exc
-            if not math.isfinite(number):
+            if (
+                not math.isfinite(number)
+                or (
+                    column in NULLABLE_NUMERIC_COLUMNS[key]
+                    and number <= 0.0
+                )
+            ):
+                requirement = (
+                    "a positive finite number"
+                    if column in NULLABLE_NUMERIC_COLUMNS[key]
+                    else "a finite number"
+                )
                 raise ValueError(
-                    f"{key} row {row_number}: {column} must be a finite number"
+                    f"{key} row {row_number}: {column} must be {requirement}"
                 )
             record[column] = number
         record.update({column: _flag(row[column]) for column in FLAG_COLUMNS[key]})
@@ -379,6 +455,7 @@ def default_tables() -> dict[str, pd.DataFrame]:
         "mx_short_ed_knm": 0.0,
         "my_short_ed_knm": 0.0,
         "calculate_crack_width": False,
+        "ordinary_crack_criterion_mm": None,
     }], ELASTIC_TABLE_KEY)
     return {PLASTIC_TABLE_KEY: plastic, ELASTIC_TABLE_KEY: elastic}
 
@@ -421,6 +498,11 @@ def head_inputs(tables: Mapping | None) -> dict:
         "el_short_Mx": float(e["mx_short_ed_knm"]),
         "el_short_My": float(e["my_short_ed_knm"]),
         "sls_cw": bool(e["calculate_crack_width"]),
+        "ordinary_crack_criterion_mm": (
+            None
+            if decimal_is_blank(e["ordinary_crack_criterion_mm"])
+            else float(e["ordinary_crack_criterion_mm"])
+        ),
     }
 
 
@@ -457,9 +539,26 @@ def validation_errors(plastic, elastic, *, require_plastic=False,
                 else:
                     seen[folded] = (label, number)
             for column in NUMERIC_COLUMNS[key]:
-                if not math.isfinite(float(row[column])):
+                if (
+                    column in NULLABLE_NUMERIC_COLUMNS[key]
+                    and decimal_is_blank(row[column])
+                ):
+                    continue
+                try:
+                    number_at_position = float(row[column])
+                except (TypeError, ValueError):
+                    number_at_position = math.nan
+                invalid = not math.isfinite(number_at_position)
+                if column in NULLABLE_NUMERIC_COLUMNS[key]:
+                    invalid = invalid or number_at_position <= 0.0
+                if invalid:
+                    requirement = (
+                        "a positive finite number"
+                        if column in NULLABLE_NUMERIC_COLUMNS[key]
+                        else "a finite number"
+                    )
                     errors.append(
-                        f"{label} row {number}: {column} must be a finite number"
+                        f"{label} row {number}: {column} must be {requirement}"
                     )
             if key == PLASTIC_TABLE_KEY:
                 for column in PLASTIC_FACE_COLUMNS:

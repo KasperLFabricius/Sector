@@ -45,6 +45,7 @@ from sector import (
     torsion,
 )
 from sector.design_standards import DesignBasisKey
+from sector.heightened_crack_control import calculate_heightened_crack_control
 from sector.materials import Concrete
 from sector.section import Section
 from tools.publication_preflight import (
@@ -82,13 +83,13 @@ _REPORT_CROPS = (
         "report overview",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "b65332482da8ad1429aee2e1f3b57a8c91688c1d6d3088c2871436c75769a661",
+        "9917e7c48b22ababeed48a8cd89af25236e5cb4d6897eeeb84c5957eab143e28",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "aed8ddb13b51957b1c778e994b218d0ff6dbb9d3fd7198b158918d3a58be91a5",
+        "a2e5e5360412464da7cd404d80f09cde3c10b123cd0d3d9d246a8067f997c7c0",
     ),
 )
 
@@ -168,6 +169,7 @@ def _inputs() -> dict:
             "mx_short_ed_knm": 20.0,
             "my_short_ed_knm": 0.0,
             "calculate_crack_width": True,
+            "ordinary_crack_criterion_mm": 0.30,
         },
         {
             "name": "EL-QA-2",
@@ -179,6 +181,7 @@ def _inputs() -> dict:
             "mx_short_ed_knm": 10.0,
             "my_short_ed_knm": 0.0,
             "calculate_crack_width": False,
+            "ordinary_crack_criterion_mm": None,
         },
     ]
     mild_catalogue, second_id = material_catalog.add_entry(
@@ -342,6 +345,17 @@ def _inputs() -> dict:
         "conc_Ec": 33.0,
         "sls_fctm": 2.9,
         "sls_cw": True,
+        "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+        "sls_member": "Beam",
+        "sls_heightened_on": True,
+        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reinforcement_surface": "smooth",
+        "sls_heightened_bar_diameter_mm": 16.0,
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
+        "sls_heightened_permitted_crack_width_mm": 0.20,
+        "sls_heightened_effective_tension_area_mm2": 60_000.0,
+        "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
         "v_min": 0.0,
         "v_max": 360.0,
         "v_inc": 90.0,
@@ -759,7 +773,14 @@ def _results(inp: dict | None = None) -> dict:
             "case": "Long-term",
             "governing": "bar 1",
             "unit": "mm",
-            "calculation_state": "CALCULATED",
+            "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
+            "criterion_mm": 0.30,
+            "ratio": 0.71,
+            "criterion_source": "User input - Elastic case EL-QA-1",
+            "reason": (
+                "The calculated crack width is within the user-specified limit."
+            ),
+            "comparison_equation": "w_k / w_k,criterion",
         },
         "crack_code": "EN 1992-1-1:2005",
         "crack_member": None,
@@ -974,6 +995,22 @@ def _results(inp: dict | None = None) -> dict:
     plastic_2.update(util=1.25, applied=(125.0, 0.0))
     elastic_2 = copy.deepcopy(elastic)
     elastic_2["show_cw"] = False
+    elastic_2["crack"] = None
+    elastic_2["crack_short"] = None
+    elastic_2["crack_output"] = {
+        "value": None,
+        "case": None,
+        "governing": None,
+        "unit": "mm",
+        "calculation_state": "NOT REQUESTED",
+        "criterion_mm": None,
+        "ratio": None,
+        "criterion_source": None,
+        "reason": (
+            "Crack-width calculation was not requested for this Elastic case."
+        ),
+        "comparison_equation": None,
+    }
     elastic_2["max_steel"] = 245.0
     elastic_2["elements"][0]["total_mpa"] = 245.0
     elastic_2["stress_outputs"]["reinforcement"]["value"] = 245.0
@@ -1073,6 +1110,29 @@ def _results(inp: dict | None = None) -> dict:
         "combined": combined_payload,
         "transverse_reinforcement": transverse_detailing,
         "clear_spacing": spacing,
+        "heightened_crack_control": asdict(calculate_heightened_crack_control(
+            basis=inp["sls_code"],
+            crack_system=inp["sls_heightened_crack_system"],
+            reinforcement_surface=inp[
+                "sls_heightened_reinforcement_surface"
+            ],
+            bar_diameter_mm=inp["sls_heightened_bar_diameter_mm"],
+            effective_tensile_strength_mpa=inp[
+                "sls_heightened_effective_tensile_strength_mpa"
+            ],
+            reinforcement_modulus_mpa=inp[
+                "sls_heightened_reinforcement_modulus_mpa"
+            ],
+            permitted_crack_width_mm=inp[
+                "sls_heightened_permitted_crack_width_mm"
+            ],
+            effective_tension_area_mm2=inp[
+                "sls_heightened_effective_tension_area_mm2"
+            ],
+            provided_reinforcement_area_mm2=inp[
+                "sls_heightened_provided_reinforcement_area_mm2"
+            ],
+        )),
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
              "signature": case_analysis.case_signature(
@@ -1250,6 +1310,28 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         "crack width",
         crack["wk"],
         spacing["selected_spacing"] * mean["selected_esm_ecm"],
+    )
+    heightened = out["heightened_crack_control"]
+    close(
+        "heightened base reinforcement ratio",
+        heightened["base_reinforcement_ratio"],
+        math.sqrt(
+            heightened["bar_diameter_mm"]
+            * heightened["effective_tensile_strength_mpa"]
+            / (
+                4.0
+                * heightened["reinforcement_modulus_mpa"]
+                * heightened["crack_system_factor"]
+                * heightened["permitted_crack_width_mm"]
+            )
+        ),
+    )
+    close(
+        "heightened required reinforcement area",
+        heightened["required_reinforcement_area_mm2"],
+        heightened["reinforcement_surface_multiplier"]
+        * heightened["base_reinforcement_ratio"]
+        * heightened["effective_tension_area_mm2"],
     )
 
     case = next(
@@ -1541,6 +1623,9 @@ def validate_worked_example_text(text: str) -> None:
         "Step 3 - accepted instantaneous combined state",
         "Crack width worked - governing case",
         "Formula (7.11) selected",
+        "User-specified crack-width comparison - critical case",
+        "DK heightened crack-control minimum",
+        "Formula 7.100 NA",
     ):
         if expected not in text and expected not in flat_text:
             raise AssertionError(

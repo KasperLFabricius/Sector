@@ -105,6 +105,7 @@ def project_tables() -> dict[str, pd.DataFrame]:
                 "mx_short_ed_knm": 55.0,
                 "my_short_ed_knm": 0.0,
                 "calculate_crack_width": True,
+                "ordinary_crack_criterion_mm": 0.30,
             }],
             load_cases.ELASTIC_TABLE_KEY,
         ),
@@ -196,8 +197,17 @@ def project_scalars() -> dict:
         "sls_phi": 0.0,
         "sls_bond": "Ribbed / high bond (k1 = 0.8)",
         "sls_tendon_xi": 0.0,
-        "sls_code": "DS/EN 1992-1-1 + DK NA",
+        "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "sls_member": "Beam",
+        "sls_heightened_on": True,
+        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reinforcement_surface": "smooth",
+        "sls_heightened_bar_diameter_mm": 16.0,
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
+        "sls_heightened_permitted_crack_width_mm": 0.20,
+        "sls_heightened_effective_tension_area_mm2": 60_000.0,
+        "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
         "fatigue_on": True,
         "fatigue_edition": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "fatigue_check_steel": True,
@@ -291,7 +301,11 @@ def checking_pack() -> str:
         - Plastic case PL-COMPLETE: N=0 kN, Mx=80 kNm, My=10 kNm,
           Vy=30 kN and T=20 kNm.
         - Elastic case EL-COMPLETE: short-term Mx=55 kNm; all other
-          long/short actions are zero; crack width is enabled.
+          long/short actions are zero; crack width is enabled with the
+          user-specified criterion wk,criterion=0.30 mm.
+        - Separate DK NA heightened check: fine crack system, smooth
+          reinforcement, phi=16 mm, fct,eff=2.9 MPa, Esk=200000 MPa,
+          permitted wk=0.20 mm, Ac,eff=60000 mm2 and As,provided=1600 mm2.
         - Fatigue spectrum Road reference: sustained Mx=5 kNm, increments
           4 kNm for 100000 cycles and 2 kNm for 1000000 cycles.
 
@@ -322,7 +336,21 @@ def checking_pack() -> str:
         The fine short-term DK crack branch has phi=25.23132522 mm,
         clear cover=17.38433739 mm, Ac,eff=15000 mm2, rho_p,eff=1/15,
         sr,max=139.645079986 mm and eps_sm-eps_cm=0.000962424042.
-        Therefore wk=0.1343977823 mm, governed by R1 (CALCULATED).
+        Therefore wk=0.1343977823 mm, governed by R1. The retained comparison is
+        0.1343977823/0.30=0.4479926077, so the exact state is WITHIN
+        USER-SPECIFIED LIMIT. Its source is User input - Elastic case
+        EL-COMPLETE; no exposure, durability or owner limit is inferred.
+
+        ## DK NA heightened crack-control minimum
+
+        Formula 7.100 NA uses k=1 for the selected fine system. The independent
+        base ratio is sqrt(16 x 2.9/(4 x 200000 x 1 x 0.20))
+        =0.0170293863659. Smooth reinforcement applies sqrt(2), giving
+        rho_s,min=0.0240831891576. Therefore As,required
+        =0.0240831891576 x 60000=1444.991349455 mm2 and the retained
+        required/provided ratio is 1444.991349455/1600=0.903119593409.
+        Since 1600 >= 1444.991349455, the exact bounded state is PROVIDED AREA
+        AT LEAST CALCULATED REQUIREMENT. Applicability remains user-declared.
 
         ## Detailing and member resistance
 
@@ -369,9 +397,10 @@ def checking_pack() -> str:
 
         A calculated report must contain Section and materials, Basis of analysis,
         Plastic section capacity, Elastic section response, Cracking and crack
-        width, Grouped fatigue, Shear resistance, Torsion, M-V-T interaction,
-        minimum reinforcement, link detailing, clear spacing, explicit equations,
-        numerical substitutions, source notes,
+        width, the user-specified critical crack-width comparison, the DK NA
+        heightened crack-control minimum, Grouped fatigue, Shear resistance,
+        Torsion, M-V-T interaction, minimum reinforcement, link detailing, clear
+        spacing, explicit equations, numerical substitutions, source notes,
         units and genuine demand/resistance verdicts. The saved input SHA-256 above
         identifies the exact project used for these independent comparisons.
 

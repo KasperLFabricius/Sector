@@ -462,6 +462,22 @@ def test_manual_uses_exact_elastic_state_and_crack_example_terminology():
         assert expected in text
 
 
+def test_manual_documents_optional_crack_criterion_and_dk_heightened_boundary():
+    text = "\n".join(
+        item
+        for block in manual.manual_blocks()
+        for item in block
+        if isinstance(item, str)
+    )
+
+    assert "An optional positive criterion belongs to that named Elastic row" in text
+    assert "does not infer exposure, durability, prestress category" in text
+    assert "DK NA heightened crack-control minimum" in text
+    assert r"m_s=\sqrt{2}" in text
+    assert "option is unavailable for the 2023 basis" in text
+    assert "largest calculated ordinary width -- never the largest ratio" in text
+
+
 def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
     result, properties, gamma_s = manual.example_fatigue_reinforcement()
     assert result["element_id"] == "R1"

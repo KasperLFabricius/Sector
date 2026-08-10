@@ -71,6 +71,9 @@ mp = deferred_module("sector.material_presets")
 plastic_core = deferred_module("sector.plastic")
 section_core = deferred_module("sector.section")
 serviceability_core = deferred_module("sector.serviceability")
+heightened_crack_control_core = deferred_module(
+    "sector.heightened_crack_control"
+)
 shear = deferred_module("sector.shear")
 sls_core = deferred_module("sector.sls")
 templates = deferred_module("sector.templates")
@@ -104,6 +107,10 @@ def combined_cracking(*args, **kwargs):
 def crack_width(*args, **kwargs):
     return serviceability_core.crack_width(*args, **kwargs)
 
+
+def evaluate_crack_width(*args, **kwargs):
+    return serviceability_core.evaluate_crack_width(*args, **kwargs)
+
 # The tool version comes from the sector package (the single source of truth); it
 # shows in the title, the browser tab, the About panel and the report footer.
 APP_VERSION = sector_version
@@ -123,23 +130,6 @@ _DEG = chr(0x00B0)
 
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
 _BOND_K1 = {"Ribbed / high bond (k1 = 0.8)": 0.8, "Plain round (k1 = 1.6)": 1.6}
-
-# Crack-width code edition -> the crack-spacing flags. edition: "2004" (EC2 7.3.4)
-# or "2023" (EC2 9.2.3 refined). dk_na: cover-dependent k3 and the (h-x)/3
-# effective-height term only for slabs/prestressed; the DK NA option reports BOTH
-# the fine and the coarse crack system (7.3.4(1)) -- the coarse effective area is
-# the band whose centroid matches the tension reinforcement (figure 7.100 NA) and
-# its wk is halved -- for both the long-term and the short-term load.
-_CRACK_CODES = {
-    "EN 1992-1-1:2005": dict(dk_na=False, edition="2004"),
-    "DS/EN 1992-1-1 + DK NA": dict(dk_na=True, edition="2004"),
-    "EN 1992-1-1:2023": dict(dk_na=False, edition="2023"),
-}
-# Old saved values for the (now merged) fine/coarse DK NA options.
-_CRACK_CODE_ALIASES = {
-    "DS/EN 1992-1-1 + DK NA (fine crack system)": "DS/EN 1992-1-1 + DK NA",
-    "DS/EN 1992-1-1 + DK NA (coarse crack system)": "DS/EN 1992-1-1 + DK NA",
-}
 
 # Lightweight UI identities for the optional fatigue controls. The active
 # fatigue adapter validates these exact retained solver identities again when a
@@ -1906,6 +1896,16 @@ def _case_column_config(key):
             help=definition("calculate_crack_width").help,
             default=False, width="small",
         ),
+        "ordinary_crack_criterion_mm": st.column_config.TextColumn(
+            "Criterion wk [mm]",
+            help=(
+                f"{definition('ordinary_crack_criterion_mm').help} Enter a dot "
+                "or comma decimal; blank means no acceptance assessment."
+            ),
+            required=False,
+            default=None,
+            width="small",
+        ),
     }
 
 
@@ -1974,7 +1974,8 @@ def _load_case_editors(box):
     box.caption(
         "Long and short action parts share the global creep coefficient below. "
         "Stresses are always reported. Crack width is an optional calculation "
-        "for each user-defined action; no combination completeness is inferred."
+        "for each user-defined action. Its optional row criterion is assessed "
+        "only when specified; no combination completeness is inferred."
     )
     _table_field_guide(box, load_cases.ELASTIC_TABLE_KEY)
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
@@ -2132,8 +2133,17 @@ def _case_table_signature(value, key):
         for column in load_cases.TABLE_COLUMNS[key]:
             cell = record[column]
             if column in load_cases.NUMERIC_COLUMNS[key]:
-                number = float(cell)
-                cell = number if math.isfinite(number) else "<invalid>"
+                if (
+                    column in load_cases.NULLABLE_NUMERIC_COLUMNS[key]
+                    and load_cases.decimal_is_blank(cell)
+                ):
+                    cell = None
+                else:
+                    try:
+                        number = float(cell)
+                    except (TypeError, ValueError, OverflowError):
+                        number = math.nan
+                    cell = number if math.isfinite(number) else "<invalid>"
             elif column in load_cases.FLAG_COLUMNS[key]:
                 cell = bool(cell)
             else:
@@ -2236,6 +2246,15 @@ def _snapshot_input_state(inp=None) -> None:
             st.session_state[base] = _current_table(base, ed, cols).copy(deep=True)
     if inp is not None:
         st.session_state["_latest_inputs"] = inp
+
+
+def _retained_input_scalar(key, default):
+    """Read a conditionally unmounted input without erasing its durable value."""
+
+    durable = st.session_state.get(_INPUT_STATE_KEY, {})
+    if key in st.session_state or key in durable:
+        return live_fragment_value(st.session_state, durable, key)
+    return default
 
 
 def _snapshot_completed_input_state() -> None:
@@ -2612,8 +2631,15 @@ def _apply_pending_project() -> None:
     # A valid project load is an explicit whole-input replacement. Do not replay
     # uncommitted browser events from the project that was open previously.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
-    # A current project load replaces all fatigue settings from the prior session.
-    for key in project_io.FATIGUE_SCALAR_KEYS:
+    # A current project load replaces every optional calculation family from the
+    # prior session.  These fields may be absent from a valid current project, so
+    # they must be cleared before the loaded scalars are applied; otherwise an
+    # omitted family can inherit a previously enabled check.
+    replaced_optional_scalar_keys = (
+        *project_io.FATIGUE_SCALAR_KEYS,
+        *project_io.HEIGHTENED_CRACK_SCALAR_KEYS,
+    )
+    for key in replaced_optional_scalar_keys:
         st.session_state.pop(key, None)
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
@@ -2674,7 +2700,7 @@ def _apply_pending_project() -> None:
     durable = {
         key: value
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
-        if key not in project_io.FATIGUE_SCALAR_KEYS
+        if key not in replaced_optional_scalar_keys
     }
     durable.update(scalars)
     st.session_state[_INPUT_STATE_KEY] = durable
@@ -2945,11 +2971,12 @@ def _generate_report(inp):
                                            "resolve any void or reinforcement error) "
                                            "before generating a report.")
         st.rerun()
-    case_errors = (
+    case_errors = list(
         case_analysis.validation_errors(inp)
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
+    case_errors.extend(_heightened_crack_control_validation_errors(inp))
     if case_errors:
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
@@ -3452,6 +3479,14 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
+    "sls_heightened_on", "sls_heightened_crack_system",
+    "sls_heightened_reinforcement_surface",
+    "sls_heightened_bar_diameter_mm",
+    "sls_heightened_effective_tensile_strength_mpa",
+    "sls_heightened_reinforcement_modulus_mpa",
+    "sls_heightened_permitted_crack_width_mm",
+    "sls_heightened_effective_tension_area_mm2",
+    "sls_heightened_provided_reinforcement_area_mm2",
 )
 # Shear inputs. Folded into the overall signature (not the plastic/elastic split)
 # so a shear-only change marks the results stale without forcing the bending
@@ -3807,9 +3842,37 @@ def build_inputs(host=st):
 
     scw.caption(
         "Concrete and reinforcement stresses are always reported for every "
-        "Elastic action. Crack width is a numerical output only and is enabled "
-        "per action in the Loads table."
+        "Elastic action. Ordinary crack width is enabled per action in the Loads "
+        "table; its criterion is optional and user specified."
     )
+    crack_basis_options = tuple(
+        basis.key.value
+        for basis in design_standards.basis_options(
+            design_standards.Capability.ORDINARY_CRACK_WIDTH
+        )
+    )
+    sls_code = _seeded_selectbox(
+        scw,
+        "Crack-width design basis",
+        crack_basis_options,
+        design_standards.DesignBasisKey.FIRST_GEN_BASE.value,
+        "sls_code",
+        format_func=lambda value: design_standards.get_design_basis(value).label,
+        disabled=not elastic_on,
+        help=(
+            "Selects a capability-backed ordinary crack-width route. The stable "
+            "basis key controls dispatch; labels never select a solver."
+        ),
+    )
+    sls_basis = design_standards.get_design_basis(sls_code)
+    ordinary_binding = design_standards.capability_binding(
+        sls_code,
+        design_standards.Capability.ORDINARY_CRACK_WIDTH,
+    )
+    ordinary_route = ordinary_binding.ordinary_crack_width_route
+    if ordinary_route is None:
+        raise ValueError("The selected basis has no ordinary crack-width route")
+    scw.caption(sls_basis.disclosure)
     sls_phi = _seeded_number(
         scw, r"Crack-width element diameter $\phi$ (mm, 0 = auto)",
         0.0, 60.0, 0.0, 1.0, "sls_phi",
@@ -3852,42 +3915,171 @@ def build_inputs(host=st):
             "zero leaves it unspecified."
         ),
     )
-    # Migrate the pre-coarse-system saved value before the selectbox reads it.
-    if st.session_state.get("sls_code") in _CRACK_CODE_ALIASES:
-        st.session_state["sls_code"] = _CRACK_CODE_ALIASES[st.session_state["sls_code"]]
-    sls_code = scw.selectbox(
-        "Crack-width code",
-        list(_CRACK_CODES),
-        key="sls_code",
-        **_input_widget_kwargs(
-            "sls_code",
-            {
-                "disabled": not (elastic_on and sls_cw),
-                "help": (
-                    "Crack-spacing method. The DK NA reports fine and coarse "
-                    "systems; the 2023 option uses the refined model in 9.2.3. "
-                    "See the manual for equations and applicability."
-                ),
-            },
-        ),
-    )
-    sls_dk_na = _CRACK_CODES[sls_code]["dk_na"]
-    sls_edition = _CRACK_CODES[sls_code]["edition"]
-    sls_member = scw.selectbox(
+    sls_dk_na = ordinary_route.report_coarse_system
+    sls_edition = ordinary_route.edition
+    sls_member = _seeded_selectbox(
+        scw,
         "Member type",
         ["Beam", "Slab"],
-        key="sls_member",
-        **_input_widget_kwargs(
-            "sls_member",
-            {
-                "disabled": not (elastic_on and sls_cw and sls_dk_na),
-                "help": (
-                    "DK NA fine-system selection for the (h-x)/3 "
-                    "effective-height term. Ignored by other methods."
-                ),
-            },
+        "Beam",
+        "sls_member",
+        disabled=not (elastic_on and sls_cw and sls_dk_na),
+        help=(
+            "DK NA fine-system selection for the (h-x)/3 effective-height "
+            "term. Ignored by other methods."
         ),
     )
+
+    heightened_basis = (
+        sls_basis.key
+        is design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024
+    )
+    if heightened_basis:
+        scw.markdown("**Optional DK NA heightened crack control**")
+        scw.caption(
+            "Separate section-level Formula 7.100 NA calculation. Sector does "
+            "not infer whether it applies; every operand is supplied directly."
+        )
+        sls_heightened_on = _seeded_toggle(
+            scw,
+            "Calculate heightened crack control",
+            False,
+            "sls_heightened_on",
+            disabled=not elastic_on,
+            help=(
+                "Opt in to one section-level DS/EN 1992-1-1 DK NA:2024 "
+                "Formula 7.100 NA calculation."
+            ),
+        )
+        sls_heightened_crack_system = _seeded_selectbox(
+            scw,
+            "Heightened crack system",
+            ["fine", "coarse"],
+            "fine",
+            "sls_heightened_crack_system",
+            format_func=lambda value: (
+                "Fine crack system" if value == "fine" else "Coarse crack system"
+            ),
+            disabled=not (elastic_on and sls_heightened_on),
+        )
+        sls_heightened_reinforcement_surface = _seeded_selectbox(
+            scw,
+            "Reinforcement surface",
+            ["ribbed", "smooth"],
+            "ribbed",
+            "sls_heightened_reinforcement_surface",
+            format_func=lambda value: (
+                "Ribbed / high bond" if value == "ribbed" else "Smooth"
+            ),
+            disabled=not (elastic_on and sls_heightened_on),
+        )
+        hc1, hc2 = scw.columns(2)
+        sls_heightened_bar_diameter_mm = _seeded_number(
+            hc1,
+            r"Bar diameter $\phi$ (mm)",
+            0.0,
+            1000.0,
+            0.0,
+            1.0,
+            "sls_heightened_bar_diameter_mm",
+            disabled=not (elastic_on and sls_heightened_on),
+            help="Direct Formula 7.100 NA bar-diameter operand.",
+        )
+        sls_heightened_effective_tensile_strength_mpa = _seeded_number(
+            hc2,
+            r"Effective tensile strength $f_{ct,eff}$ (MPa)",
+            0.0,
+            100.0,
+            0.0,
+            0.1,
+            "sls_heightened_effective_tensile_strength_mpa",
+            disabled=not (elastic_on and sls_heightened_on),
+            help=(
+                "Dedicated user-specified Formula 7.100 NA operand; it is not "
+                "inferred from the concrete grade or ordinary fctm input."
+            ),
+        )
+        sls_heightened_reinforcement_modulus_mpa = _seeded_number(
+            hc1,
+            r"Reinforcement modulus $E_{sk}$ (MPa)",
+            0.0,
+            500000.0,
+            0.0,
+            1000.0,
+            "sls_heightened_reinforcement_modulus_mpa",
+            disabled=not (elastic_on and sls_heightened_on),
+        )
+        sls_heightened_permitted_crack_width_mm = _seeded_number(
+            hc2,
+            r"Permitted crack width $w_k$ (mm)",
+            0.0,
+            10.0,
+            0.0,
+            0.01,
+            "sls_heightened_permitted_crack_width_mm",
+            disabled=not (elastic_on and sls_heightened_on),
+            help="Mandatory user-specified Formula 7.100 NA operand.",
+        )
+        sls_heightened_effective_tension_area_mm2 = _seeded_number(
+            hc1,
+            r"Effective tension area $A_{c,eff}$ (mm2)",
+            0.0,
+            1.0e12,
+            0.0,
+            100.0,
+            "sls_heightened_effective_tension_area_mm2",
+            disabled=not (elastic_on and sls_heightened_on),
+            help="Direct effective concrete tension-area operand.",
+        )
+        sls_heightened_provided_reinforcement_area_mm2 = _seeded_number(
+            hc2,
+            r"Provided reinforcement area $A_s$ (mm2)",
+            0.0,
+            1.0e12,
+            0.0,
+            100.0,
+            "sls_heightened_provided_reinforcement_area_mm2",
+            disabled=not (elastic_on and sls_heightened_on),
+            help=(
+                "Direct provided-area operand for the bounded required/provided "
+                "comparison."
+            ),
+        )
+    else:
+        # Do not mount unsupported controls. Retain any prior DK operands so a
+        # basis switch does not erase user input. An enabled incompatible state is
+        # rejected by the shared calculation/report validation below.
+        sls_heightened_on = _retained_input_scalar("sls_heightened_on", False)
+        sls_heightened_crack_system = _retained_input_scalar(
+            "sls_heightened_crack_system", "fine"
+        )
+        sls_heightened_reinforcement_surface = _retained_input_scalar(
+            "sls_heightened_reinforcement_surface", "ribbed"
+        )
+        sls_heightened_bar_diameter_mm = _retained_input_scalar(
+            "sls_heightened_bar_diameter_mm", 0.0
+        )
+        sls_heightened_effective_tensile_strength_mpa = _retained_input_scalar(
+            "sls_heightened_effective_tensile_strength_mpa", 0.0
+        )
+        sls_heightened_reinforcement_modulus_mpa = _retained_input_scalar(
+            "sls_heightened_reinforcement_modulus_mpa", 0.0
+        )
+        sls_heightened_permitted_crack_width_mm = _retained_input_scalar(
+            "sls_heightened_permitted_crack_width_mm", 0.0
+        )
+        sls_heightened_effective_tension_area_mm2 = _retained_input_scalar(
+            "sls_heightened_effective_tension_area_mm2", 0.0
+        )
+        sls_heightened_provided_reinforcement_area_mm2 = _retained_input_scalar(
+            "sls_heightened_provided_reinforcement_area_mm2", 0.0
+        )
+        if sls_heightened_on:
+            scw.error(
+                "Stored heightened crack control is enabled, but the selected "
+                "design basis does not implement it. Select the DK NA:2024 basis "
+                "to review or disable the calculation."
+            )
 
     detailing_member_type = _seeded_selectbox(
         det,
@@ -5089,6 +5281,35 @@ def build_inputs(host=st):
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_tendon_xi=sls_tendon_xi,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
+                ordinary_crack_criterion_mm=case_head[
+                    "ordinary_crack_criterion_mm"
+                ],
+                ordinary_crack_criterion_source=(
+                    load_cases.ordinary_crack_criterion_source(el_case_id)
+                ),
+                sls_heightened_on=sls_heightened_on,
+                sls_heightened_crack_system=sls_heightened_crack_system,
+                sls_heightened_reinforcement_surface=(
+                    sls_heightened_reinforcement_surface
+                ),
+                sls_heightened_bar_diameter_mm=(
+                    sls_heightened_bar_diameter_mm
+                ),
+                sls_heightened_effective_tensile_strength_mpa=(
+                    sls_heightened_effective_tensile_strength_mpa
+                ),
+                sls_heightened_reinforcement_modulus_mpa=(
+                    sls_heightened_reinforcement_modulus_mpa
+                ),
+                sls_heightened_permitted_crack_width_mm=(
+                    sls_heightened_permitted_crack_width_mm
+                ),
+                sls_heightened_effective_tension_area_mm2=(
+                    sls_heightened_effective_tension_area_mm2
+                ),
+                sls_heightened_provided_reinforcement_area_mm2=(
+                    sls_heightened_provided_reinforcement_area_mm2
+                ),
                 shear_on=shear_on,
                 shear_method=(combined_method if combined_on else shear_method),
                 shear_Vx=case_head["shear_Vx"], shear_Vy=case_head["shear_Vy"],
@@ -5995,10 +6216,26 @@ def _run_single_analysis(
         # prestressing tendons (folded into the bar set after the bars) always
         # use 1.6. Order matches sec.bar_arrays() (bars first, then tendons).
         k1_bars = [inp["sls_k1"]] * len(inp["bars"]) + [1.6] * len(inp["tendons"])
-        # DK NA crack-spacing rules: cover-dependent k3, and -- for an ordinary beam
-        # (not a slab or a prestressed member) -- dropping the (h-x)/3 hc,ef term.
-        dk_na = inp["sls_dk_na"]
-        include_hx = (not dk_na) or inp["sls_member"] == "Slab" or bool(inp["tendons"])
+        # Dispatch only through the immutable capability binding. Persisted labels
+        # and label substrings never select an engineering route.
+        ordinary_binding = design_standards.capability_binding(
+            inp["sls_code"],
+            design_standards.Capability.ORDINARY_CRACK_WIDTH,
+        )
+        ordinary_route = ordinary_binding.ordinary_crack_width_route
+        if ordinary_route is None:
+            raise ValueError("The selected basis has no ordinary crack-width route")
+        dk_na = ordinary_route.k3_cover_dependent
+        slabs_or_prestressed = (
+            inp["sls_member"] == "Slab" or bool(inp["tendons"])
+        )
+        include_hx = (
+            ordinary_route.include_hx_term_for_slabs_or_prestressed
+            if slabs_or_prestressed
+            else ordinary_route.include_hx_term_for_ordinary_beams
+        )
+        report_coarse = ordinary_route.report_coarse_system
+        crack_basis = design_standards.get_design_basis(inp["sls_code"])
         # Cracking is irreversible and is triggered by the maximum load the section
         # ever sees, so the section is cracked if EITHER the sustained (long-term) or
         # the peak (total) action exceeds the cracking stress. The peak check uses
@@ -6016,7 +6253,7 @@ def _run_single_analysis(
             beta=0.5, kt=0.4,
             bar_diameter=phi, k1=k1_bars,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
-            edition=inp["sls_edition"],
+            edition=ordinary_route.edition,
             n_mult=n_mult, prestress_stress=prestress_stress)
         sls_converged = (
             r.converged
@@ -6056,12 +6293,17 @@ def _run_single_analysis(
             props_un=_props_dict(props_un),
             props_cr=(_props_dict(props_cr) if props_cr is not None else None),
             crack=None, crack_short=None,
+            crack_basis_key=crack_basis.key.value,
+            crack_code=crack_basis.label,
+            crack_edition=ordinary_route.edition,
+            crack_member=(inp["sls_member"] if report_coarse else None),
         )
         # Crack width is its own opt-in, reported for both load cases once the
         # section has cracked. The short-term state reuses the combined creep solve
         # `r`: its instantaneous neutral axis with the displayed total steel stress
         # (s2 + RST1), so the crack-width sigma_s matches the Total column rather
         # than a raw (long+short)-at-ns solve. Each bar's cover comes from geometry.
+        crack_evaluations = {}
         if inp["sls_cw"] and cracked:
             # Crack width uses the load-induced steel stress, so strip the locked-in
             # tendon prestress back out of the reported total (mild bars unaffected).
@@ -6082,60 +6324,111 @@ def _run_single_analysis(
             )
 
             def _cw(state, n, kt, coarse):
-                return crack_width(sec, state, n, fctm=inp["sls_fctm"],
-                                   Es=[material.Es for material in all_laws],
-                                   kt=kt, bar_diameter=phi,
-                                   k1=k1_bars, k3_cover_dependent=dk_na,
-                                   include_hx_term=include_hx, coarse=coarse,
-                                   edition=inp["sls_edition"], n_mult=n_mult,
-                                   reinforcement_types=reinforcement_types,
-                                   bond_ratio_xi=tendon_xi)
+                return evaluate_crack_width(
+                    sec,
+                    state,
+                    n,
+                    fctm=inp["sls_fctm"],
+                    Es=[material.Es for material in all_laws],
+                    kt=kt,
+                    bar_diameter=phi,
+                    k1=k1_bars,
+                    k3_cover_dependent=dk_na,
+                    include_hx_term=include_hx,
+                    coarse=coarse,
+                    edition=ordinary_route.edition,
+                    n_mult=n_mult,
+                    reinforcement_types=reinforcement_types,
+                    bond_ratio_xi=tendon_xi,
+                )
 
             # Long-term crack width is on the cracked section under the user-entered
             # sustained action (kt = 0.4), computed directly from that state so it
             # is reported even when the long-term load alone would not cross the
             # cracking threshold. The short-term is the instantaneous total (kt = 0.6).
+            long_evaluation = _cw(
+                cr_l.cracked_state, inp["nl"], 0.4, False
+            )
+            short_evaluation = _cw(short_state, inp["ns"], 0.6, False)
+            long_crack = _crack_dict(
+                long_evaluation.result, bar_ids, tendon_ids
+            )
+            short_crack = _crack_dict(
+                short_evaluation.result, bar_ids, tendon_ids
+            )
+            crack_evaluations.update(
+                {
+                    "Long-term": {
+                        "status": long_evaluation.status,
+                        "reason": long_evaluation.reason,
+                        "result": long_crack,
+                    },
+                    "Short-term": {
+                        "status": short_evaluation.status,
+                        "reason": short_evaluation.reason,
+                        "result": short_crack,
+                    },
+                }
+            )
             out["elastic"].update(
-                crack=_crack_dict(
-                    _cw(cr_l.cracked_state, inp["nl"], 0.4, False),
-                    bar_ids, tendon_ids),
-                crack_short=_crack_dict(
-                    _cw(short_state, inp["ns"], 0.6, False),
-                    bar_ids, tendon_ids),
-                crack_code=inp["sls_code"],
-                crack_edition=inp["sls_edition"],
-                crack_member=(inp["sls_member"] if dk_na else None),
+                crack=long_crack,
+                crack_short=short_crack,
             )
             # The DK NA reports the coarse crack system alongside the fine one, for
             # both load cases (four crack widths in total).
-            if dk_na:
+            if report_coarse:
+                long_coarse_evaluation = _cw(
+                    cr_l.cracked_state, inp["nl"], 0.4, True
+                )
+                short_coarse_evaluation = _cw(
+                    short_state, inp["ns"], 0.6, True
+                )
+                long_coarse_crack = _crack_dict(
+                    long_coarse_evaluation.result, bar_ids, tendon_ids
+                )
+                short_coarse_crack = _crack_dict(
+                    short_coarse_evaluation.result, bar_ids, tendon_ids
+                )
+                crack_evaluations = {
+                    "Long-term (fine)": crack_evaluations["Long-term"],
+                    "Short-term (fine)": crack_evaluations["Short-term"],
+                    "Long-term (coarse)": {
+                        "status": long_coarse_evaluation.status,
+                        "reason": long_coarse_evaluation.reason,
+                        "result": long_coarse_crack,
+                    },
+                    "Short-term (coarse)": {
+                        "status": short_coarse_evaluation.status,
+                        "reason": short_coarse_evaluation.reason,
+                        "result": short_coarse_crack,
+                    },
+                }
                 out["elastic"].update(
-                    crack_coarse=_crack_dict(
-                        _cw(cr_l.cracked_state, inp["nl"], 0.4, True),
-                        bar_ids, tendon_ids),
-                    crack_short_coarse=_crack_dict(
-                        _cw(short_state, inp["ns"], 0.6, True),
-                        bar_ids, tendon_ids),
+                    crack_coarse=long_coarse_crack,
+                    crack_short_coarse=short_coarse_crack,
                 )
         eout = out["elastic"]
-        if (
-            eout.get("crack_coarse") is not None
-            or eout.get("crack_short_coarse") is not None
-        ):
+        if report_coarse:
             crack_cases = {
-                "Long-term (fine)": eout.get("crack"),
-                "Short-term (fine)": eout.get("crack_short"),
-                "Long-term (coarse)": eout.get("crack_coarse"),
-                "Short-term (coarse)": eout.get("crack_short_coarse"),
+                name: crack_evaluations.get(name)
+                for name in (
+                    "Long-term (fine)",
+                    "Short-term (fine)",
+                    "Long-term (coarse)",
+                    "Short-term (coarse)",
+                )
             }
         else:
             crack_cases = {
-                "Long-term": eout.get("crack"),
-                "Short-term": eout.get("crack_short"),
+                name: crack_evaluations.get(name)
+                for name in ("Long-term", "Short-term")
             }
         eout["crack_output"] = sls_core.crack_outputs(
             crack_cases,
             valid=eout["converged"],
+            requested=bool(inp["sls_cw"]),
+            criterion_mm=inp.get("ordinary_crack_criterion_mm"),
+            criterion_source=inp.get("ordinary_crack_criterion_source"),
         )
     if inp.get("minimum_reinforcement_on"):
         if inp.get("detailing_edition") == detailing.EC2_2023:
@@ -6178,6 +6471,108 @@ def _run_fatigue_or_invalid(inp):
     )
 
 
+_HEIGHTENED_POSITIVE_INPUTS = (
+    ("sls_heightened_bar_diameter_mm", "Bar diameter"),
+    (
+        "sls_heightened_effective_tensile_strength_mpa",
+        "Effective tensile strength",
+    ),
+    ("sls_heightened_reinforcement_modulus_mpa", "Reinforcement modulus"),
+    ("sls_heightened_permitted_crack_width_mm", "Permitted crack width"),
+    ("sls_heightened_effective_tension_area_mm2", "Effective tension area"),
+    (
+        "sls_heightened_provided_reinforcement_area_mm2",
+        "Provided reinforcement area",
+    ),
+)
+
+
+def _heightened_crack_control_validation_errors(inp):
+    """Validate the separate DK calculation without evaluating its formula."""
+
+    enabled = inp.get("sls_heightened_on", False)
+    if type(enabled) is not bool:
+        return ["Heightened crack control must be explicitly true or false"]
+    if not enabled:
+        return []
+
+    errors = []
+    try:
+        design_standards.capability_binding(
+            inp.get("sls_code"),
+            design_standards.Capability.HEIGHTENED_CRACK_CONTROL,
+        )
+    except ValueError:
+        errors.append(
+            "Heightened crack control requires the registered first-generation "
+            "DK NA:2024 design basis"
+        )
+    if inp.get("sls_heightened_crack_system") not in {"fine", "coarse"}:
+        errors.append("Heightened crack system must be fine or coarse")
+    if inp.get("sls_heightened_reinforcement_surface") not in {
+        "ribbed",
+        "smooth",
+    }:
+        errors.append("Heightened reinforcement surface must be ribbed or smooth")
+    for key, label in _HEIGHTENED_POSITIVE_INPUTS:
+        value = inp.get(key)
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            number = math.nan
+        if (
+            isinstance(value, bool)
+            or type(value).__name__ == "bool_"
+            or not math.isfinite(number)
+            or number <= 0.0
+        ):
+            errors.append(f"{label} must be a positive finite number")
+    return errors
+
+
+def _heightened_crack_control_payload(inp):
+    """Return the complete family-owned section result without recomputation."""
+
+    result = heightened_crack_control_core.calculate_heightened_crack_control(
+        basis=inp["sls_code"],
+        crack_system=inp["sls_heightened_crack_system"],
+        reinforcement_surface=inp["sls_heightened_reinforcement_surface"],
+        bar_diameter_mm=inp["sls_heightened_bar_diameter_mm"],
+        effective_tensile_strength_mpa=inp[
+            "sls_heightened_effective_tensile_strength_mpa"
+        ],
+        reinforcement_modulus_mpa=inp[
+            "sls_heightened_reinforcement_modulus_mpa"
+        ],
+        permitted_crack_width_mm=inp[
+            "sls_heightened_permitted_crack_width_mm"
+        ],
+        effective_tension_area_mm2=inp[
+            "sls_heightened_effective_tension_area_mm2"
+        ],
+        provided_reinforcement_area_mm2=inp[
+            "sls_heightened_provided_reinforcement_area_mm2"
+        ],
+    )
+    payload = dataclasses.asdict(result)
+    payload.update(
+        basis_key=result.basis_key.value,
+        crack_system=result.crack_system.value,
+        reinforcement_surface=result.reinforcement_surface.value,
+        status=result.status.value,
+    )
+    return payload
+
+
+def _attach_heightened_crack_control(inp, result):
+    """Attach exactly one section-level heightened result when requested."""
+
+    if inp.get("sls_heightened_on"):
+        result["heightened_crack_control"] = (
+            _heightened_crack_control_payload(inp)
+        )
+
+
 def run_analysis(
     inp,
     *,
@@ -6189,6 +6584,9 @@ def run_analysis(
     reuse_fatigue=None,
 ):
     """Run every current named action and enabled calculation."""
+    heightened_errors = _heightened_crack_control_validation_errors(inp)
+    if heightened_errors:
+        raise ValueError("; ".join(heightened_errors))
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
@@ -6218,6 +6616,7 @@ def run_analysis(
                 else _run_fatigue_or_invalid(inp)
             )
         result.update(shared_results)
+        _attach_heightened_crack_control(inp, result)
         result["worked_example_selection"] = (
             presentation.worked_example_selection(inp, result)
         )
@@ -6253,6 +6652,7 @@ def run_analysis(
             else _run_fatigue_or_invalid(inp)
         )
     result.update(shared_results)
+    _attach_heightened_crack_control(inp, result)
     result["worked_example_selection"] = (
         presentation.worked_example_selection(inp, result)
     )
@@ -7496,6 +7896,10 @@ def results_overview_view(inp, results, *, stale=False):
               for status in {
                   "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
                   "NOT APPLICABLE", "REVIEW", "CALCULATED",
+                  "NOT REQUESTED", "CALCULATED - ACCEPTANCE NOT ASSESSED",
+                  "WITHIN USER-SPECIFIED LIMIT", "EXCEEDS USER-SPECIFIED LIMIT",
+                  "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
+                  "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
               }}
     case_register = []
     for family, label in (("plastic", "Plastic / capacity"),
@@ -7587,12 +7991,21 @@ def results_overview_view(inp, results, *, stale=False):
         st.dataframe(case_register, hide_index=True, width="stretch")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Calculated outputs", counts.get("CALCULATED", 0))
+    c1.metric(
+        "Calculated outputs",
+        counts.get("CALCULATED", 0)
+        + counts.get("CALCULATED - ACCEPTANCE NOT ASSESSED", 0)
+        + counts.get("WITHIN USER-SPECIFIED LIMIT", 0)
+        + counts.get("EXCEEDS USER-SPECIFIED LIMIT", 0)
+        + counts.get("PROVIDED AREA AT LEAST CALCULATED REQUIREMENT", 0)
+        + counts.get("PROVIDED AREA BELOW CALCULATED REQUIREMENT", 0),
+    )
     c2.metric("Pass / fail", counts.get("PASS", 0) + counts.get("FAIL", 0))
     c3.metric(
         "Review / not evaluated",
         counts.get("REVIEW", 0)
         + counts.get("NOT ASSESSED", 0)
+        + counts.get("NOT REQUESTED", 0)
         + counts.get("NOT RUN", 0)
         + counts.get("NOT APPLICABLE", 0)
         + counts.get("INVALID", 0),
@@ -7637,6 +8050,22 @@ def results_overview_view(inp, results, *, stale=False):
         "REVIEW": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
         "NOT APPLICABLE": "background-color: #EEF2F6; color: #374151",
         "CALCULATED": "background-color: #E8F0FE; color: #174EA6",
+        "NOT REQUESTED": "background-color: #EEF2F6; color: #374151",
+        "CALCULATED - ACCEPTANCE NOT ASSESSED": (
+            "background-color: #E8F0FE; color: #174EA6"
+        ),
+        "WITHIN USER-SPECIFIED LIMIT": (
+            "background-color: #E8F0FE; color: #174EA6; font-weight: 600"
+        ),
+        "EXCEEDS USER-SPECIFIED LIMIT": (
+            "background-color: #FFF4D6; color: #7A4E00; font-weight: 600"
+        ),
+        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT": (
+            "background-color: #E8F0FE; color: #174EA6; font-weight: 600"
+        ),
+        "PROVIDED AREA BELOW CALCULATED REQUIREMENT": (
+            "background-color: #FFF4D6; color: #7A4E00; font-weight: 600"
+        ),
     }
     styled = summary.style.map(
         lambda value: status_colours.get(str(value), ""),
@@ -8295,11 +8724,16 @@ def _calculation_output_metric(box, label, output):
     box.caption(note)
 
 
-def elastic_view(inp, results):
+def elastic_view(inp, results, *, global_results=None):
     """Cracked-section elastic stresses: peak concrete, neutral axis, the section
     diagnostic and per-bar stresses, matching the handcalc verification."""
+    global_results = results if global_results is None else global_results
+    heightened = (global_results or {}).get("heightened_crack_control")
     if not results or "elastic" not in results:
-        st.info("Run an Elastic or Both analysis, then press Calculate.")
+        if heightened:
+            _heightened_crack_control_panel(heightened)
+        else:
+            st.info("Run an Elastic or Both analysis, then press Calculate.")
         return
     e = results["elastic"]
     if not e.get("converged", True):
@@ -8451,6 +8885,8 @@ def elastic_view(inp, results):
                        "stress is reported as zero.")
 
     _elastic_sls_section(inp, e)
+    if heightened:
+        _heightened_crack_control_panel(heightened)
 
 
 def _elastic_sls_section(inp, e):
@@ -8504,6 +8940,46 @@ def _elastic_sls_section(inp, e):
             _crack_width_panel(e)
 
 
+def _heightened_crack_control_panel(result):
+    """Render the one retained section-level Formula 7.100 NA result."""
+
+    st.divider()
+    st.markdown("#### DK NA heightened crack control")
+    st.caption(
+        f"{result.get('formula_identity', 'Formula 7.100 NA')} | Section-level "
+        "calculation shown once, independently of the Elastic case picker."
+    )
+    required = result.get("required_reinforcement_area_mm2")
+    provided = result.get("provided_reinforcement_area_mm2")
+    ratio = result.get("comparison_ratio")
+    h1, h2, h3 = st.columns(3)
+    h1.metric(
+        "Calculated required area",
+        "-" if required is None else f"{required:.1f} mm2",
+    )
+    h2.metric(
+        "User-specified provided area",
+        "-" if provided is None else f"{provided:.1f} mm2",
+    )
+    h3.metric(
+        "Required / provided",
+        "-" if ratio is None else f"{ratio:.3f}",
+    )
+    status = str(result.get("status") or "NOT ASSESSED")
+    if status == "PROVIDED AREA BELOW CALCULATED REQUIREMENT":
+        st.warning(status)
+    else:
+        st.info(status)
+    basis_label = design_standards.get_design_basis(
+        result["basis_key"]
+    ).label
+    st.caption(
+        f"Basis: {basis_label}. Crack system: {result.get('crack_system')}; "
+        f"reinforcement surface: {result.get('reinforcement_surface')}. "
+        "This bounded area comparison is not a global compliance verdict."
+    )
+
+
 def _crack_width_panel(e):
     """Crack width (EC2 7.3.4) for the long-term and short-term load cases, side
     by side. The DK NA reports the fine and the coarse crack system (four columns);
@@ -8518,17 +8994,38 @@ def _crack_width_panel(e):
     case = output.get("case") or "-"
     governing = output.get("governing") or "-"
     state = output.get("calculation_state", "NOT CALCULATED")
+    criterion = output.get("criterion_mm")
+    criterion_source = output.get("criterion_source")
+    ratio = output.get("ratio")
+    reason = str(output.get("reason") or "").strip()
     st.metric(
         "Governing calculated crack width",
         "-" if value is None else f"{value:.3f} mm",
     )
-    st.caption(
-        f"{state}; action part {case}; longitudinal element {governing}. "
-        "No crack-width limit, exposure acceptance or combination-completeness "
-        "criterion is applied."
-    )
+    identity = f"action part {case}; longitudinal element {governing}"
+    if criterion is None:
+        comparison = "Criterion: not specified; acceptance is not assessed."
+    else:
+        comparison = (
+            f"User-specified criterion: {criterion:.3f} mm"
+            + (f" ({criterion_source})" if criterion_source else "")
+            + (
+                f"; retained wk / criterion ratio = {ratio:.3f}."
+                if ratio is not None
+                else "."
+            )
+        )
+    st.caption(f"{state}; {identity}. {comparison}")
+    if reason:
+        (st.warning if state == "EXCEEDS USER-SPECIFIED LIMIT" else st.info)(
+            reason
+        )
     if no_results:
-        st.info("No crack width: section uncracked or no reinforcement in tension.")
+        if not reason:
+            st.info(
+                "No calculated crack-width value is available; Sector does not "
+                "infer a physical reason."
+            )
         return
     quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
               f"{_SIGMA}s (MPa)", f"{_RHO}p,eff", "hc,ef (m)", "cover c (mm)",
@@ -10547,6 +11044,12 @@ def _render_selected_case_actions(family, actions):
         hide_index=True,
         width="stretch",
     )
+    criterion = actions.get("ordinary_crack_criterion_mm")
+    criterion_text = (
+        "not specified; acceptance is not assessed"
+        if criterion is None or pd.isna(criterion)
+        else f"user-specified {float(criterion):.3f} mm"
+    )
     st.caption(
         "Stresses are reported for this action. Crack width: "
         + (
@@ -10554,7 +11057,7 @@ def _render_selected_case_actions(family, actions):
             if actions.get("calculate_crack_width")
             else "not requested"
         )
-        + "."
+        + f". Criterion: {criterion_text}."
     )
 
 
@@ -10628,11 +11131,12 @@ def _analysis_workspace(inp):
         "Calculate", type="primary", key="calculate", width="stretch",
         help="Run the selected analysis for the current inputs.",
     )
-    case_errors = (
+    case_errors = list(
         case_analysis.validation_errors(inp)
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
+    case_errors.extend(_heightened_crack_control_validation_errors(inp))
     if calc and case_errors:
         st.session_state["_case_error"] = "; ".join(case_errors) + "."
         calc = False
@@ -10823,7 +11327,7 @@ def _analysis_workspace(inp):
     elif view == "M-V-T Combined":
         combined_view(view_inp, view_results)
     else:
-        elastic_view(view_inp, view_results)
+        elastic_view(view_inp, view_results, global_results=results)
     app_run_probe.close_fragment_run(st.session_state)
 
 
