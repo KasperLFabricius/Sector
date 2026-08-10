@@ -46,13 +46,13 @@ _MANUAL_CROPS = (
         "manual cover and contents",
         1,
         (0.10, 0.07, 0.90, 0.45),
-        "10aad607a58a645a6806d7cc985ca78dd6048eb0faf8413f3f8045b96cb21b52",
+        "519762e88c23a1d390b48fd42cd08dba5b1a79ee6f5523aca893abf918fe4c39",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "65670a97c289821a7d4e065f9a361772c63670f32d2e82fe8ad756ec6d9bfabd",
+        "b554f384d82478917683441db78f2b950f26a64921dba999d3aea0cd1324e83f",
     ),
 )
 
