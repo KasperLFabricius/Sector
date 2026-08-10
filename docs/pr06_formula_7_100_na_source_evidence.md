@@ -8,7 +8,7 @@ source without redistributing licensed standard content.
 
 - Designation: `DS/EN 1992-1-1 DK NA:2024`
 - Library-relative location:
-  `01_Denmark_Eurocodes/03_Concrete/00_Current/DS-EN 1992-1-1 - DK NA (2024, rev 2024-02-01) [DA].pdf`
+  `01_Standards/01_Denmark_Eurocodes/03_Concrete/00_Current/DS-EN 1992-1-1 - DK NA (2024, rev 2024-02-01) [DA].pdf`
 - File size: 1,167,264 bytes
 - Page count: 50
 - Encryption state: unencrypted at inspection

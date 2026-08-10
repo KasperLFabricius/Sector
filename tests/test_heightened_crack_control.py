@@ -168,6 +168,11 @@ def test_dual_visual_source_benchmark_closes_fine_coarse_and_smooth_routes():
         rel=0.0,
         abs=1e-12,
     )
+    assert fine.required_reinforcement_ratio == pytest.approx(
+        0.01390443574307614,
+        rel=0.0,
+        abs=1e-12,
+    )
     assert fine.required_reinforcement_area_mm2 == pytest.approx(
         834.26614458456845,
         rel=0.0,
@@ -180,6 +185,11 @@ def test_dual_visual_source_benchmark_closes_fine_coarse_and_smooth_routes():
     )
 
     assert coarse.base_reinforcement_ratio == pytest.approx(
+        0.00983192080250175,
+        rel=0.0,
+        abs=1e-12,
+    )
+    assert coarse.required_reinforcement_ratio == pytest.approx(
         0.00983192080250175,
         rel=0.0,
         abs=1e-12,
@@ -219,10 +229,28 @@ def test_dual_visual_source_benchmark_closes_fine_coarse_and_smooth_routes():
     assert smooth.required_reinforcement_ratio / (
         fine.required_reinforcement_ratio
     ) == pytest.approx(math.sqrt(2.0), rel=0.0, abs=1e-15)
+    assert fine.required_reinforcement_ratio / (
+        coarse.required_reinforcement_ratio
+    ) == pytest.approx(math.sqrt(2.0), rel=0.0, abs=1e-15)
+    assert smooth_coarse.base_reinforcement_ratio == pytest.approx(
+        coarse.base_reinforcement_ratio,
+        rel=0.0,
+        abs=1e-15,
+    )
     assert smooth_coarse.required_reinforcement_ratio == pytest.approx(
         fine.required_reinforcement_ratio,
         rel=0.0,
         abs=1e-15,
+    )
+    assert smooth_coarse.required_reinforcement_area_mm2 == pytest.approx(
+        834.26614458456845,
+        rel=0.0,
+        abs=1e-9,
+    )
+    assert smooth_coarse.comparison_ratio == pytest.approx(
+        0.52141634036535534,
+        rel=0.0,
+        abs=1e-12,
     )
 
 
