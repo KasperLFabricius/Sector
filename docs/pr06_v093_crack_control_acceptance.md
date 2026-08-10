@@ -4,22 +4,20 @@ Status: candidate acceptance contract for the PR-06 development branch.
 GitHub records the eventual pull request, exact candidate, tree and squash
 identities; this document does not invent evidence that has not been run.
 
-## Upstream base pending PR-05 merge
+## Accepted upstream base
 
-- Upstream candidate revision: `22bccddda637ab272fe295e2d8642b917db91281`
-- Upstream candidate tree: `bf2c8184d5289d1f1e7a17eb69c0e591aa16403a`
+- Upstream PR-05 squash revision: `e622dd1de7649fe2af974120922bd8ba8aec067a`
+- Accepted upstream tree: `bf2c8184d5289d1f1e7a17eb69c0e591aa16403a`
 - Programme branch: `codex/pr06-v093-crack-criterion-heightened`
 - Governing identity: [Sector product identity](product_identity.md)
 - Living programme: [Sector v0.93 PR programme](v093_pr_programme.md)
 - Decision register: [Sector v0.93 decision register](v093_decision_register.md)
 - Upstream acceptance: [PR-05 navigation and modelled-direction acceptance](pr05_v093_navigation_direction_acceptance.md)
 
-The upstream revision is the exact corrected PR-05 candidate, not yet its
-accepted squash revision. PR-06 is not publishable until the PR-05 exact-head
-gate and two-build unsigned-package job pass, PR-05 is squash-merged, this
-branch is transplanted onto that squash, and the squash tree is verified equal
-to the candidate tree above. This section must then record the accepted squash
-revision before PR-06 is pushed for review.
+PR-05 exact-head Sector QA and its two-build unsigned-package reproducibility
+gate passed before merge. PR-05 was squash-merged, its squash tree was verified
+exactly equal to the accepted candidate tree above, and this PR-06 branch was
+then transplanted onto that squash revision before publication.
 
 ## Owner-confirmed objective
 
