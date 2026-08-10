@@ -191,6 +191,16 @@ now publishes one canonical-first `Modelled reinforcement direction` row, and
 browser-free PDF-text regressions cover both an enabled calculation and the
 minimum-check-off case.
 
+The first exact-head GitHub gate, run `31345580007`, confirmed 3,013 passed,
+one skipped, 91.34% coverage, all policy/static checks and the real report
+render. It stopped only because the manual cover/contents crop still carried
+its pre-PR-05 fingerprint. Evidence artifact `9047703619`, whose downloaded
+ZIP independently matched GitHub's SHA-256 digest, contained the exact 47-page
+manual. PDFium inspection found the cover, contents and `Page 1 of 47` footer
+sharp, aligned and unclipped. The independently reproduced cover and footer
+fingerprints are now pinned; the corrected exact head must pass the complete
+gate and two-build unsigned-package reproducibility job before merge.
+
 The first sandboxed pytest attempts encountered the known Python 3.13 Windows
 temporary-directory ACL error before any test body ran. Identical commands on
 verified-new external temporary roots produced the passing results above. No
