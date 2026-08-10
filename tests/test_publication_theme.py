@@ -40,9 +40,9 @@ MANUAL_MATRIX = {
     "h3": (11, None, 6, 3, None, True, True),
     "body": (9.5, 13, 0, 4, None, False, False),
     "math": (11, 15, 6, 6, None, False, False),
-    "small": (8, 11, 0, 0, "#808080", False, False),
-    "publication_ref": (8, 10, 2, 2, "#808080", False, True),
-    "publication_caption": (8, 10, 2, 3, "#2c2c2a", False, True),
+    "small": (9.5, 12, 0, 0, "#5a5a5a", False, False),
+    "publication_ref": (9.5, 12, 2, 2, "#5a5a5a", False, True),
+    "publication_caption": (9.5, 12, 2, 3, "#2c2c2a", False, True),
 }
 
 

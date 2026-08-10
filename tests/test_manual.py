@@ -365,13 +365,16 @@ def test_manual_documents_native_case_tables_results_and_report():
         "Results overview",
         "Select a Plastic/capacity case",
         "Select an Elastic case",
-        "All calculated cases remain in compact summaries",
-        "global governing or extremal calculation",
+        "Every profile publishes the complete requested-calculation status register",
+        "globally governing or extremal calculation",
         "one global fine-system and one global coarse-system example",
         "separate governing reinforcement and concrete examples",
-        "Default report + QA appendix",
+        "Brief",
+        "Standard",
+        "Audit does not mean approved, compliant or certified",
     ):
         assert expected in text
+    assert "Default report + QA appendix" not in text
 
 
 def test_manual_editable_table_matrix_is_generated_from_shared_registry():
@@ -644,9 +647,13 @@ def test_manual_pdf_builds_tables_only():
         reader.pages[reader.get_destination_page_number(item)].indirect_reference.idnum
         for item in part_destinations
     }
+    first_part_page = min(
+        reader.get_destination_page_number(item) for item in part_destinations
+    )
     linked_pages = {
         annotation.get_object()["/Dest"][0].idnum
-        for annotation in (reader.pages[0].get("/Annots") or [])
+        for page in reader.pages[:first_part_page]
+        for annotation in (page.get("/Annots") or [])
         if annotation.get_object().get("/Subtype") == "/Link"
         and annotation.get_object().get("/Dest")
     }
@@ -708,6 +715,31 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     assert not at.exception
     assert not any(button.key == "manual_close" for button in at.button)
     assert not any(item.key == "manual_part" for item in at.selectbox)
+
+
+def test_manual_generation_exposes_pdf_and_accessible_html_downloads(monkeypatch):
+    """The untagged PDF is always paired with its semantic HTML companion."""
+    pdf = b"%PDF-browser-free-test"
+    accessible_html = b'<!doctype html><html lang="en"><body>Manual</body></html>'
+    monkeypatch.setattr(manual, "build_manual_pdf_bytes", lambda: pdf)
+    monkeypatch.setattr(manual, "build_manual_html_bytes", lambda: accessible_html)
+
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    at.session_state["_input_tab"] = "Project & report"
+    at.run()
+    at.button(key="open_manual").click().run()
+    at.button(key="manual_gen_pdf").click().run()
+
+    assert not at.exception
+    assert at.session_state["manual_pdf"] == pdf
+    assert at.session_state["manual_html"] == accessible_html
+    download_keys = {
+        getattr(element, "key", None)
+        for element in at._tree
+        if element.type == "download_button"
+    }
+    assert {"manual_dl_pdf", "manual_dl_html"} <= download_keys
 
 
 def test_native_manual_dismissal_event_closes_and_stays_closed():

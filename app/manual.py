@@ -22,6 +22,7 @@ the same small subset to its own markup.
 
 from __future__ import annotations
 
+import html
 import io
 import re
 import threading
@@ -39,10 +40,13 @@ from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
 import publication_theme
 import reproducible_example
+from app import manual_information_architecture as manual_ia
+from app import report_profiles
 from app import table_field_definitions as table_fields
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
+from sector.build_info import source_revision
 from sector import material_presets, templates
 from sector.codes import fctm
 from sector.fatigue import steel_fatigue_life
@@ -470,6 +474,25 @@ def editable_table_reference_rows() -> list[list[str]]:
     return rows
 
 
+def editable_field_reference_rows() -> list[list[str]]:
+    """Build the complete field-by-field input reference from shared metadata."""
+
+    rows = []
+    for table_key in table_fields.TABLE_KEYS:
+        for definition in table_fields.table_fields(table_key):
+            rows.append([
+                table_fields.TABLE_TITLES[table_key],
+                _manual_field_notation(definition),
+                f"{definition.definition} Sign: {definition.sign}",
+                (
+                    f"{table_fields.input_rule(definition)}. "
+                    f"{table_fields.validation_rule(definition)}"
+                ),
+                table_fields.method_dependency(table_key, definition),
+            ])
+    return rows
+
+
 def _strip_num(text: str) -> str:
     """Drop a leading hardcoded section number so headings can be auto-numbered
     (lets a section be inserted without renumbering every following heading)."""
@@ -536,6 +559,31 @@ def manual_blocks() -> list:
        "are included in a QA PDF with formulas and code references. A project file "
        "saves the whole input set.")
 
+    h1("Start here")
+    md("Choose the shortest reading path for the task. Every destination below is "
+       "the same stable destination in the PDF outline and the accessible HTML "
+       "manual.")
+    table(
+        ["Reading path", "Use it when", "Destination"],
+        [
+            [
+                "Quick calculation",
+                "You want to define one section, calculate and review a result.",
+                "[Open Quick start](#manual-quick-calculation)",
+            ],
+            [
+                "Input reference",
+                "You need one field, default, validation rule or warning.",
+                "[Open Input reference](#manual-input-reference)",
+            ],
+            [
+                "Method reference",
+                "You need an implemented equation, assumption, branch or limitation.",
+                "[Open Method reference](#manual-method-reference)",
+            ],
+        ],
+    )
+
     h1("Quick start")
     md("1. **Define the section.** Open the *Section* panel and either edit the "
        "point tables (concrete corners, voids, bars and tendons, all in mm) or "
@@ -555,6 +603,27 @@ def manual_blocks() -> list:
     fig(fig_beam_section, "The rectangular worked example as Sector draws it: the "
         "concrete corners and bars are numbered. Use the *Display* controls beside "
         "your Section inputs to adjust label size and spacing.")
+
+    h1("Task workflows")
+    md("Each row states the intended outcome, prerequisite, action path, expected "
+       "state and the troubleshooting entry to use when the expected state is not "
+       "reached.")
+    table(
+        ["Workflow / outcome", "Prerequisite and action", "Expected state", "If blocked"],
+        [
+            [
+                f"[{workflow.label}](#{manual_ia.destination(workflow.destination_key).anchor}) - "
+                f"{workflow.outcome}",
+                f"{workflow.prerequisite}. Open "
+                f"[{manual_ia.destination(workflow.destination_key).label}]"
+                f"(#{manual_ia.destination(workflow.destination_key).anchor}), complete "
+                "the shown inputs and calculate or review as applicable.",
+                workflow.expected_state,
+                manual_ia.warning_reference(workflow.warning_key).correction,
+            ]
+            for workflow in manual_ia.WORKFLOWS
+        ],
+    )
 
     h1("The worked examples")
     md("Two sections are threaded through this manual. Every worked derivation in "
@@ -596,6 +665,18 @@ def manual_blocks() -> list:
     # =====================================================================
     part("Part B - Features & options")
 
+    h1("Input reference")
+    md("The reference follows the same five stages as the application. Select a "
+       "stage below, then use the shared field definitions and troubleshooting "
+       "entries in this part.")
+    table(
+        ["Application stage", "Manual destination"],
+        [
+            [stage.label, f"[Open {stage.label}](#{stage.anchor})"]
+            for stage in manual_ia.INPUT_STAGES
+        ],
+    )
+
     h1("The workspace")
     md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
        "parameters*, *Loads* and *Project & report* in full-width tabs. The "
@@ -618,7 +699,8 @@ def manual_blocks() -> list:
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
          "$E_s$, $E_p$ and creep automatically.")
 
-    h1("Project files and autosave")
+    h1("Project & report")
+    h2("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
        "earlier results; press *Calculate* to create current results. The "
@@ -1043,6 +1125,17 @@ def manual_blocks() -> list:
         ["Editable table", "Fields / notation", "Blank / default"],
         editable_table_reference_rows(),
     )
+    h2("Editable table field definitions")
+    table(
+        [
+            "Table",
+            "Field / notation",
+            "Definition and sign",
+            "Blank/default and validation",
+            "Method dependency",
+        ],
+        editable_field_reference_rows(),
+    )
     md("The seven editable-table definitions above are the same definitions used "
        "by the input screens. Open the guide immediately above a table for each "
        "field's meaning, unit, sign convention, source and blank behaviour. The "
@@ -1080,6 +1173,11 @@ def manual_blocks() -> list:
        "**Neutral-axis state** selector steps through the swept angles and reports "
        "the strains, the compression resultant and lever arm, and the neutral-axis "
        "intercepts at each. The full per-angle table sits below.")
+    h2("N-M Interaction results")
+    md("Select the same named Plastic/capacity case to review axial force against "
+       "the moment-resistance boundaries. This view uses the retained capacity "
+       "sweep; it does not start a second solver or create a separate acceptance "
+       "decision.")
     h2("Elastic results")
     md("Select an Elastic case at the top of the view. The cracked-section "
        "stresses are reported per bar for the long-term, "
@@ -1119,24 +1217,55 @@ def manual_blocks() -> list:
        "reinforcement. The detailed blocks retain each contribution and the selected "
        "member strut angle.")
     h2("PDF report")
-    md("In the Report panel, select **Default report** or **Default report + QA "
-       "appendix** before generating the PDF. Both options reproduce the complete "
-       "named case register, descriptions, signed actions, per-Elastic-row crack-width "
-       "choice and every fatigue spectrum bin. The overview keeps individual genuine "
-       "demand/resistance verdicts and gives output-only quantities no verdict. All "
-       "calculated cases remain in compact summaries; complete worked derivations are "
-       "limited to the global governing or extremal calculation in each family. The "
-       "DK/NA crack method shows one global fine-system and one global coarse-system "
-       "example, while fatigue may show separate governing reinforcement and concrete "
-       "examples. Zero-action checks remain "
-       "visible as not applicable and are not given a false result. The optional "
-       "QA appendix adds one consolidated chapter of standards references and "
-       "implementation notes.")
+    md("Choose **Brief**, **Standard** or **Audit** in the Report panel. Standard "
+       "is the default. The profile changes presentation depth only: retained "
+       "engineering values, rounding policy, statuses, warnings and sources are "
+       "identical, and figures remain a separate choice.")
+    table(
+        ["Profile", "Purpose", "Declared omitted detail", "Page policy"],
+        [
+            [
+                policy.label,
+                policy.description,
+                policy.omitted_detail,
+                (
+                    f"Hard limit {policy.hard_page_limit} pages"
+                    if policy.hard_page_limit is not None
+                    else (
+                        f"Target {policy.target_page_limit} pages; an excess needs "
+                        "a recorded content reason and visual approval"
+                        if policy.target_page_limit is not None
+                        else "No hard cap; sparse pages are reviewed"
+                    )
+                ),
+            ]
+            for policy in report_profiles.REPORT_PROFILES.values()
+        ],
+    )
+    md("Every profile publishes the complete requested-calculation status register. "
+       "Worked numerical derivations are limited to the globally governing or "
+       "extremal calculation in each family. The DK/NA crack method retains one "
+       "global fine-system and one global coarse-system example, and fatigue may "
+       "retain separate governing reinforcement and concrete examples. Audit adds "
+       "complete retained evidence and provenance; **Audit does not mean approved, "
+       "compliant or certified**.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
     # =====================================================================
     part("Part C - Theory & methodology")
+
+    h1("Method reference")
+    md("Methods are grouped by engineering task. Each destination states the "
+       "implemented scope, edition, assumptions, equations, selected branches and "
+       "explicit non-goals.")
+    table(
+        ["Engineering task", "Method destination"],
+        [
+            [method.label, f"[Open {method.label}](#{method.anchor})"]
+            for method in manual_ia.METHODS
+        ],
+    )
 
     h1("Conventions and sign convention")
     md("Coordinates are entered and reported in millimetres about the section "
@@ -1821,7 +1950,12 @@ def manual_blocks() -> list:
            ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"],
            ["Combined M-V-T", "DS/EN 1992-1-1 6.3.2(4) + DK NA 6.3.2(6)"]])
 
-    h1("Key assumptions & limitations")
+    h1("Limitations & troubleshooting")
+    md("Use this indexed chapter for explicit model boundaries and for the "
+       "symptom/cause/correction path shown by the application. A blank ordinary "
+       "crack criterion is an intentional no-comparison state; a blank enabled "
+       "heightened criterion is invalid and must be corrected.")
+    h2("Key assumptions & limitations")
     md("- **One plane section.** Plane sections remain plane; the strain field is "
        "linear across the section.\n"
        "- **Perfect bond.** Reinforcement strain equals the concrete strain at the "
@@ -1850,6 +1984,14 @@ def manual_blocks() -> list:
          "direction, so the crack width is reported for the governing bar along the "
          "combined N+Mx+My cracked-state strain gradient. No separate crack-system "
          "interaction layer is applied.")
+    h2("Troubleshooting index")
+    table(
+        ["Symptom", "Likely cause", "Correction"],
+        [
+            [warning.symptom, warning.cause, warning.correction]
+            for warning in manual_ia.WARNINGS
+        ],
+    )
 
     h1("Glossary")
     table(["Symbol / term", "Meaning"],
@@ -2036,6 +2178,11 @@ def _inline_md_to_rl(text: str) -> str:
     The literal ``<``/``>``/``&`` are escaped first so the introduced tags stay
     valid, then the supported spans reintroduce real markup."""
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = re.sub(
+        r"\[([^\]]+)\]\(#([A-Za-z0-9_-]+)\)",
+        r'<link href="#\2">\1</link>',
+        text,
+    )
     text = re.sub(r"\$([^$]+)\$", lambda m: _latex_to_rl(m.group(1)), text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
@@ -2044,6 +2191,21 @@ def _inline_md_to_rl(text: str) -> str:
 
 def _manual_equation_anchor(number: str) -> str:
     return "equation-" + number.casefold()
+
+
+def _manual_heading_key(
+    outline: str,
+    level: int,
+    ordinal: int,
+    used: set[str],
+) -> str:
+    """Return one stable PDF/HTML destination for an authored heading."""
+
+    key = manual_ia.heading_anchor(_strip_num(outline), level)
+    if key is None or key in used:
+        key = f"manual-section-{ordinal}"
+    used.add(key)
+    return key
 
 
 def _manual_equation_results_markdown(equation) -> str:
@@ -2217,7 +2379,7 @@ def _compile_manual_equation_pdf_flowables(published_blocks, frame_width):
 
     style = replace(
         publication_equation_layout.DEFAULT_EQUATION_STYLE,
-        font_size=8.7,
+        font_size=9.5,
         left_indent=0.0,
         right_indent=0.0,
         top_padding=6.0,
@@ -2365,7 +2527,7 @@ def build_manual_pdf(buffer, figures=True):
     )
     # ReportLab's default frame consumes 6 pt of padding at each side in
     # addition to the document margins. Preflight the exact usable width.
-    equation_frame_w = A4[0] - 4.4 * cm - 12.0
+    equation_frame_w = A4[0] - 3.7 * cm - 12.0
     compiled_equations = _compile_manual_equation_pdf_flowables(
         published_blocks,
         equation_frame_w,
@@ -2374,9 +2536,17 @@ def build_manual_pdf(buffer, figures=True):
     styles = _manual_pdf_styles(
         report, colors, ParagraphStyle, getSampleStyleSheet, TA_CENTER
     )
-    toc_style = ParagraphStyle(
+    toc_part_style = ParagraphStyle(
         "MTOCPart", parent=styles["MBody"], fontSize=9.5, leading=12,
         leftIndent=0, firstLineIndent=0, spaceBefore=5, spaceAfter=3,
+    )
+    toc_h1_style = ParagraphStyle(
+        "MTOCH1", parent=toc_part_style, leftIndent=12, spaceBefore=2,
+        spaceAfter=2,
+    )
+    toc_h2_style = ParagraphStyle(
+        "MTOCH2", parent=toc_part_style, leftIndent=24, fontSize=9.5,
+        leading=12, spaceBefore=1, spaceAfter=1,
     )
 
     class _ManualDocTemplate(SimpleDocTemplate):
@@ -2392,32 +2562,45 @@ def build_manual_pdf(buffer, figures=True):
                 )
                 if getattr(flowable, "_manual_toc_entry", False):
                     title = getattr(flowable, "_manual_outline", key)
-                    summary = _PART_SUMMARIES.get(title, "")
-                    entry = (
-                        f"<b>{_inline_md_to_rl(title)}</b><br/>"
-                        f"<font size=\"8\" color=\"#666666\">"
-                        f"{_inline_md_to_rl(summary)}</font>"
-                    )
+                    level = min(int(getattr(flowable, "_manual_level", 0)), 2)
+                    summary = _PART_SUMMARIES.get(title, "") if level == 0 else ""
+                    entry = f"<b>{_inline_md_to_rl(title)}</b>"
+                    if summary:
+                        entry += (
+                            "<br/><font size=\"9.5\" color=\"#5A5A5A\">"
+                            f"{_inline_md_to_rl(summary)}</font>"
+                        )
                     self.notify(
-                        "TOCEntry", (0, entry, self.page, key)
+                        "TOCEntry", (level, entry, self.page, key)
+                    )
+                if getattr(flowable, "_manual_level", None) == 0:
+                    self.canv._header = getattr(
+                        flowable, "_manual_outline", "Sector user manual"
                     )
 
     bookmark_no = 0
+    bookmark_keys = set()
 
     def _heading(text, style, outline, level, toc_entry=False):
         nonlocal bookmark_no
         bookmark_no += 1
         paragraph = Paragraph(text, style)
-        paragraph._manual_bookmark = f"manual-section-{bookmark_no}"
-        paragraph._manual_outline = _strip_num(outline)
+        plain_outline = _strip_num(outline)
+        key = _manual_heading_key(
+            plain_outline, level, bookmark_no, bookmark_keys
+        )
+        paragraph._manual_bookmark = key
+        paragraph._manual_outline = plain_outline
         paragraph._manual_level = level
         paragraph._manual_toc_entry = toc_entry
         return paragraph
 
     page_w = 16.5 * cm
+    revision = source_revision()
     flow = [
         Paragraph("Sector user manual", styles["MTitle"]),
         Paragraph(f"Version {APP_VERSION}", styles["MSmall"]),
+        Paragraph(f"Source revision: {revision}", styles["MSmall"]),
         Paragraph(f"Author: {APP_AUTHOR}", styles["MSmall"]),
         Paragraph(f"Proprietary software; licensed to {APP_LICENSEE} for internal use.",
                   styles["MSmall"]),
@@ -2427,7 +2610,9 @@ def build_manual_pdf(buffer, figures=True):
         Spacer(1, 0.4 * cm),
     ]
     contents = TableOfContents(
-        levelStyles=[toc_style], dotsMinLevel=0, rightColumnWidth=1.2 * cm
+        levelStyles=[toc_part_style, toc_h1_style, toc_h2_style],
+        dotsMinLevel=0,
+        rightColumnWidth=1.2 * cm,
     )
     flow.extend([
         Paragraph("Contents", styles["MH1"]),
@@ -2453,6 +2638,8 @@ def build_manual_pdf(buffer, figures=True):
         item = published.item
         kind = block[0]
         if kind == "part":
+            if n1 or n2:
+                flow.append(PageBreak())
             flow.append(Spacer(1, 0.3 * cm))
             flow.append(_heading(
                 _inline_md_to_rl(block[1]), styles["MPart"], block[1], 0,
@@ -2463,11 +2650,20 @@ def build_manual_pdf(buffer, figures=True):
             n1 += 1
             n2 = 0
             title = f"{n1}. " + _inline_md_to_rl(_strip_num(block[1]))
-            flow.append(_heading(title, styles["MH1"], block[1], 1))
+            flow.append(_heading(
+                title, styles["MH1"], block[1], 1, toc_entry=True
+            ))
         elif kind == "h2":
             n2 += 1
             title = f"{n1}.{n2} " + _inline_md_to_rl(_strip_num(block[1]))
-            flow.append(_heading(title, styles["MH2"], block[1], 2))
+            flow.append(_heading(
+                title,
+                styles["MH2"],
+                block[1],
+                2,
+                toc_entry=manual_ia.heading_anchor(_strip_num(block[1]), 2)
+                is not None,
+            ))
         elif kind == "h3":
             flow.append(_heading(
                 _inline_md_to_rl(_strip_num(block[1])),
@@ -2581,9 +2777,10 @@ def build_manual_pdf(buffer, figures=True):
             t = report._PaginatedReportTable(
                 data,
                 colWidths=[page_w / ncol] * ncol,
+                hAlign="LEFT",
                 repeatRows=2,
                 splitByRow=1,
-                splitInRow=1,
+                splitInRow=0,
                 spaceBefore=2,
             )
             t._sector_caption_row = 0
@@ -2594,6 +2791,7 @@ def build_manual_pdf(buffer, figures=True):
             t._sector_publication_label = item.label
             t._sector_header_row = 1
             t._sector_data_start = 2
+            t._sector_force_page_break_between_fragments = True
             t.setStyle(TableStyle([
                 ("SPAN", (0, 0), (-1, 0)),
                 ("GRID", (0, 1), (-1, -1), 0.4, colors.HexColor(
@@ -2607,17 +2805,33 @@ def build_manual_pdf(buffer, figures=True):
                 )),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, 0), 0),
                 ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
             flow.append(t)
             flow.append(Spacer(1, 0.2 * cm))
 
     footer = f"Sector v{APP_VERSION} - user manual"
-    doc = _ManualDocTemplate(buffer, pagesize=A4, leftMargin=2.2 * cm,
-                             rightMargin=2.2 * cm, topMargin=2 * cm,
+    doc = _ManualDocTemplate(buffer, pagesize=A4, leftMargin=1.85 * cm,
+                             rightMargin=1.85 * cm, topMargin=2 * cm,
                              bottomMargin=2 * cm,
-                             title=f"Sector user manual v{APP_VERSION}")
+                             title=f"Sector user manual v{APP_VERSION}",
+                             author=APP_AUTHOR,
+                             subject=(
+                                 "Sector cross-section analysis user manual, input "
+                                 "reference, methods and limitations"
+                             ),
+                             keywords=(
+                                 "Sector, structural engineering, cross-section, "
+                                 "reinforced concrete, user manual"
+                             ),
+                             lang="en")
     doc.multiBuild(flow, canvasmaker=lambda *a, **k: report._NumberedCanvas(
-        *a, footer=footer, **k))
+        *a,
+        footer=footer,
+        header="Sector user manual",
+        revision=revision,
+        **k,
+    ))
 
 
 def build_manual_pdf_bytes(figures=True):
@@ -2625,6 +2839,347 @@ def build_manual_pdf_bytes(figures=True):
     build_manual_pdf(buf, figures=figures)
     buf.seek(0)
     return buf.getvalue()
+
+
+# ==========================================================================
+# ACCESSIBLE HTML RENDERER -- same governed content, no JavaScript
+# ==========================================================================
+
+
+def _inline_md_to_html(text: str) -> str:
+    """Render the manual's bounded inline Markdown subset as safe HTML."""
+
+    rendered = html.escape(str(text), quote=True)
+    rendered = re.sub(
+        r"\[([^\]]+)\]\(#([A-Za-z0-9_-]+)\)",
+        r'<a href="#\2">\1</a>',
+        rendered,
+    )
+    rendered = re.sub(
+        r"`([^`]+)`",
+        r"<code>\1</code>",
+        rendered,
+    )
+
+    def _math(match):
+        expression = match.group(1)
+        return (
+            '<code class="math" aria-label="mathematical expression '
+            + expression.replace('"', "&quot;")
+            + '">'
+            + expression
+            + "</code>"
+        )
+
+    rendered = re.sub(r"\$([^$]+)\$", _math, rendered)
+    rendered = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", rendered)
+    rendered = re.sub(
+        r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", rendered
+    )
+    return rendered
+
+
+def _markdown_block_html(text: str) -> str:
+    """Render paragraphs, lists and standalone equations without a JS runtime."""
+
+    output = []
+    paragraph = []
+    list_kind = None
+    list_items = []
+
+    def flush_paragraph():
+        if paragraph:
+            output.append(
+                "<p>" + _inline_md_to_html(" ".join(paragraph).strip()) + "</p>"
+            )
+            paragraph.clear()
+
+    def flush_list():
+        nonlocal list_kind
+        if list_kind is not None:
+            output.append(
+                f"<{list_kind}>"
+                + "".join(
+                    "<li>" + _inline_md_to_html(item) + "</li>"
+                    for item in list_items
+                )
+                + f"</{list_kind}>"
+            )
+            list_kind = None
+            list_items.clear()
+
+    for line in str(text).splitlines():
+        stripped = line.strip()
+        if not stripped:
+            flush_paragraph()
+            flush_list()
+            continue
+        display = re.match(r"^\$\$(.+)\$\$([.,;:]?)$", stripped)
+        if display:
+            flush_paragraph()
+            flush_list()
+            expression = html.escape(display.group(1).strip(), quote=True)
+            output.append(
+                '<div class="display-math" role="math" aria-label="'
+                + expression.replace('"', "&quot;")
+                + '"><code>'
+                + expression
+                + "</code>"
+                + html.escape(display.group(2))
+                + "</div>"
+            )
+            continue
+        bullet = re.match(r"^[-*]\s+(.*)", stripped)
+        numbered = re.match(r"^\d+\.\s+(.*)", stripped)
+        if bullet or numbered:
+            flush_paragraph()
+            target_kind = "ul" if bullet else "ol"
+            if list_kind not in (None, target_kind):
+                flush_list()
+            list_kind = target_kind
+            list_items.append((bullet or numbered).group(1))
+            continue
+        flush_list()
+        paragraph.append(stripped)
+    flush_paragraph()
+    flush_list()
+    return "\n".join(output)
+
+
+def _manual_html_heading_records(published_blocks):
+    """Return PDF-identical heading identities plus the visible TOC entries."""
+
+    records = {}
+    toc = []
+    used = set()
+    ordinal = 0
+    n1 = n2 = 0
+    for index, published in enumerate(published_blocks):
+        block = published.block
+        kind = block[0]
+        if kind not in ("part", "h1", "h2", "h3"):
+            continue
+        ordinal += 1
+        if kind == "part":
+            n1 = n2 = 0
+            level = 0
+            display = block[1]
+        elif kind == "h1":
+            n1 += 1
+            n2 = 0
+            level = 1
+            display = f"{n1}. {_strip_num(block[1])}"
+        elif kind == "h2":
+            n2 += 1
+            level = 2
+            display = f"{n1}.{n2} {_strip_num(block[1])}"
+        else:
+            level = 3
+            display = _strip_num(block[1])
+        key = _manual_heading_key(block[1], level, ordinal, used)
+        toc_entry = kind in ("part", "h1") or (
+            kind == "h2"
+            and manual_ia.heading_anchor(_strip_num(block[1]), 2) is not None
+        )
+        record = (level, key, display)
+        records[index] = record
+        if toc_entry:
+            toc.append(record)
+    return records, tuple(toc)
+
+
+def _manual_equation_html(equation) -> str:
+    """Publish one governed equation with selectable semantic alternatives."""
+
+    number = equation.contract.number
+    expression = html.escape(
+        equation.equation.equation.expression, quote=True
+    )
+    results = "".join(
+        "<dt><code>"
+        + html.escape(term.markup)
+        + "</code></dt><dd>"
+        + html.escape(term.meaning)
+        + " ["
+        + html.escape(term.unit)
+        + "]</dd>"
+        for term in equation.contract.results
+    )
+    dependencies = dependency_numbers(equation)
+    uses = ""
+    if dependencies:
+        uses = (
+            '<p class="equation-uses"><strong>Uses:</strong> '
+            + ", ".join(
+                f'<a href="#{_manual_equation_anchor(value)}">Equation '
+                f"{html.escape(value)}</a>"
+                for value in dependencies
+            )
+            + "</p>"
+        )
+    symbols = "".join(
+        "<tr><th scope=\"row\"><code>"
+        + html.escape(term.markup)
+        + "</code></th><td>"
+        + html.escape(term.meaning)
+        + "</td><td>"
+        + html.escape(term.unit)
+        + "</td></tr>"
+        for term in equation.contract.symbols
+    )
+    return (
+        f'<section class="equation" id="{_manual_equation_anchor(number)}">'
+        f'<p class="equation-heading"><strong>Equation '
+        f"{html.escape(number)}</strong></p>"
+        '<p class="equation-text"><span class="sr-only">Mathematical expression: '
+        + expression
+        + ". </span><code>"
+        + expression
+        + "</code></p>"
+        + ("<dl class=\"equation-results\">" + results + "</dl>" if results else "")
+        + uses
+        + '<details><summary>Symbols and units</summary><table><thead><tr>'
+        '<th scope="col">Symbol</th><th scope="col">Meaning</th>'
+        '<th scope="col">Unit</th></tr></thead><tbody>'
+        + symbols
+        + "</tbody></table></details>"
+        + '<p class="source"><strong>'
+        + html.escape(source_kind_label(equation))
+        + ":</strong> "
+        + html.escape(equation.equation.source.source_text)
+        + "</p></section>"
+    )
+
+
+def build_manual_html_bytes() -> bytes:
+    """Build the self-contained, JavaScript-free accessible manual companion."""
+
+    published_blocks = tuple(
+        publish_manual_blocks(manual_publication_blocks(manual_blocks()))
+    )
+    heading_records, toc = _manual_html_heading_records(published_blocks)
+    revision = source_revision()
+    body = []
+    for index, published in enumerate(published_blocks):
+        block = published.block
+        item = published.item
+        kind = block[0]
+        if kind in ("part", "h1", "h2", "h3"):
+            level, key, display = heading_records[index]
+            tag = ("h2", "h3", "h4", "h5")[level]
+            body.append(
+                f'<{tag} id="{key}">{_inline_md_to_html(display)}</{tag}>'
+            )
+        elif kind == "md":
+            body.append(_markdown_block_html(block[1]))
+        elif kind == EQUATION_BLOCK:
+            body.append(_manual_equation_html(block[1]))
+        elif kind == "callout":
+            _icon, title = _CALLOUT.get(block[1], ("", "Note"))
+            body.append(
+                f'<aside class="callout {html.escape(block[1])}"><strong>'
+                + html.escape(title)
+                + ":</strong> "
+                + _inline_md_to_html(block[2])
+                + "</aside>"
+            )
+        elif kind == "figure":
+            if item is None:
+                raise ValueError("A published manual figure has no identity.")
+            caption = _inline_md_to_html(item.caption)
+            body.append(
+                f'<figure id="{item.anchor}"><div class="figure-alternative" '
+                f'role="img" aria-label="{html.escape(item.caption, quote=True)}">'
+                "Text alternative for the manual diagram: "
+                + caption
+                + "</div><figcaption><strong>"
+                + html.escape(item.label)
+                + ".</strong> "
+                + caption
+                + "</figcaption></figure>"
+            )
+        elif kind == "table":
+            if item is None:
+                raise ValueError("A published manual table has no identity.")
+            headers, rows = block[1], block[2]
+            header_html = "".join(
+                '<th scope="col">' + _inline_md_to_html(value) + "</th>"
+                for value in headers
+            )
+            row_html = "".join(
+                "<tr>"
+                + "".join(
+                    "<td>" + _inline_md_to_html(str(value)) + "</td>"
+                    for value in row
+                )
+                + "</tr>"
+                for row in rows
+            )
+            body.append(
+                f'<figure class="table-figure" id="{item.anchor}"><figcaption>'
+                f"<strong>{html.escape(item.label)}.</strong> "
+                + _inline_md_to_html(item.caption)
+                + "</figcaption><div class=\"table-scroll\"><table><thead><tr>"
+                + header_html
+                + "</tr></thead><tbody>"
+                + row_html
+                + "</tbody></table></div></figure>"
+            )
+        else:
+            raise ValueError(f"Unsupported published manual block: {kind!r}.")
+
+    toc_html = "".join(
+        f'<li class="toc-level-{level}"><a href="#{key}">'
+        f"{_inline_md_to_html(display)}</a></li>"
+        for level, key, display in toc
+    )
+    document = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="{html.escape(APP_AUTHOR, quote=True)}">
+<meta name="description" content="Sector cross-section analysis user manual, input reference, methods and limitations">
+<meta name="keywords" content="Sector, structural engineering, cross-section, reinforced concrete, user manual">
+<meta name="sector-version" content="{html.escape(APP_VERSION, quote=True)}">
+<meta name="sector-source-revision" content="{html.escape(revision, quote=True)}">
+<title>Sector user manual v{html.escape(APP_VERSION)}</title>
+<style>
+:root {{ color-scheme: light; --ink:#2c2c2a; --muted:#5a5a5a; --blue:#1f3b66; --surface:#eef2f7; --rule:#9fb3c8; }}
+* {{ box-sizing:border-box; }}
+body {{ margin:0 auto; padding:2rem; max-width:82ch; color:var(--ink); background:#fff; font:16px/1.5 Arial, sans-serif; }}
+h1,h2,h3,h4,h5 {{ color:var(--blue); line-height:1.25; scroll-margin-top:1rem; }}
+h1 {{ font-size:2rem; }} h2 {{ border-top:2px solid var(--rule); padding-top:1rem; }}
+a {{ color:#0d4f8b; text-decoration-thickness:.1em; }}
+.document-control,.source,figcaption {{ color:var(--muted); }}
+nav {{ border:1px solid var(--rule); background:var(--surface); padding:1rem 1.25rem; }}
+nav ol {{ padding-left:1.5rem; }} .toc-level-1 {{ margin-left:1rem; }} .toc-level-2 {{ margin-left:2rem; }}
+table {{ width:100%; border-collapse:collapse; margin:.5rem 0 1.25rem; }}
+th,td {{ border:1px solid #b5bdc6; padding:.45rem; text-align:left; vertical-align:top; }}
+th {{ background:var(--surface); }} .table-scroll {{ overflow-x:auto; }}
+.callout,.equation,figure {{ border:1px solid var(--rule); padding:1rem; margin:1rem 0; break-inside:avoid; }}
+.display-math,.equation-text {{ overflow-wrap:anywhere; padding:.5rem; background:#f7f8fa; }}
+.math,code {{ font-family:"Courier New", monospace; }}
+.figure-alternative {{ padding:1rem; border:2px dashed var(--rule); background:#f7f8fa; }}
+.sr-only {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
+@media print {{ body {{ max-width:none; padding:1cm; }} a {{ color:inherit; }} }}
+</style>
+</head>
+<body>
+<header>
+<h1>Sector user manual</h1>
+<p class="document-control"><strong>Version:</strong> {html.escape(APP_VERSION)}<br>
+<strong>Source revision:</strong> {html.escape(revision)}<br>
+<strong>Author:</strong> {html.escape(APP_AUTHOR)}<br>
+Proprietary software; licensed to {html.escape(APP_LICENSEE)} for internal use.</p>
+<p>What Sector computes, the theory it applies, its features, and how to use it.</p>
+</header>
+<nav aria-label="Manual contents"><h2>Contents</h2><ol>{toc_html}</ol></nav>
+<main>{''.join(body)}</main>
+</body>
+</html>
+"""
+    return document.encode("utf-8")
 
 
 # ==========================================================================
@@ -2658,17 +3213,28 @@ def render_manual_streamlit():
         if st.button(
             "Generate PDF", key="manual_gen_pdf", icon=":material/picture_as_pdf:"
         ):
-            with st.spinner("Building the PDF manual..."):
+            with st.spinner("Building the PDF and accessible HTML manuals..."):
                 try:
                     st.session_state["manual_pdf"] = build_manual_pdf_bytes()
+                    st.session_state["manual_html"] = build_manual_html_bytes()
                 except Exception as e:                   # never break the dialog
                     st.session_state["manual_pdf"] = None
-                    st.error(f"PDF build failed: {e}")
+                    st.session_state["manual_html"] = None
+                    st.error(f"Manual build failed: {e}")
         if st.session_state.get("manual_pdf"):
             st.download_button(
                 "Download PDF", st.session_state["manual_pdf"],
                 file_name="Sector_User_Manual.pdf", mime="application/pdf",
                 key="manual_dl_pdf", icon=":material/download:",
+            )
+        if st.session_state.get("manual_html"):
+            st.download_button(
+                "Download accessible HTML",
+                st.session_state["manual_html"],
+                file_name="Sector_User_Manual.html",
+                mime="text/html",
+                key="manual_dl_html",
+                icon=":material/download:",
             )
         if st.button("Close", key="manual_close", icon=":material/close:"):
             st.session_state["_manual_open"] = False

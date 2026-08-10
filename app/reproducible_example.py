@@ -260,7 +260,7 @@ def project_scalars() -> dict:
         "rep_rev": "Reference input set 1",
         "rep_author": "Sector reference calculation",
         "rep_comments": "All main report calculation families enabled.",
-        "rep_report_content": "Default report + QA appendix",
+        "rep_report_content": "Audit",
         "autosave_on": True,
         "autosave_min": 5,
     }

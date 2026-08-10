@@ -36,9 +36,9 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from reportlab.platypus import (Flowable, Image, KeepTogether, NotAtTopPageBreak,
-                                Paragraph, SimpleDocTemplate, Spacer, Table,
-                                TableStyle)
+from reportlab.platypus import (CondPageBreak, Flowable, Image, KeepTogether,
+                                NotAtTopPageBreak, Paragraph, SimpleDocTemplate,
+                                Spacer, Table, TableStyle)
 
 import case_analysis
 import fatigue_inputs
@@ -46,6 +46,7 @@ import fatigue_presentation
 import material_catalog
 from app import modelled_direction
 from app import publication_equation_layout as publication_equations
+from app import report_profiles
 from app import table_field_definitions as table_fields
 from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
@@ -58,6 +59,7 @@ from sector import detailing
 from sector import fatigue as fatigue_core
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
+from sector.design_standards import get_design_basis
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -122,6 +124,112 @@ def _steel_standard_reference(preset):
     if code.key == "EC2-2023":
         return "EN 1992-1-1:2023 &#167;5.2.4"
     return f"{code.label} &#167;3.2.7"
+
+
+def _report_basis_summary(inp):
+    """Return ordered, user-facing selected bases and methods for the dashboard."""
+
+    values = []
+    for key in ("sls_code", "fatigue_edition"):
+        value = inp.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            label = get_design_basis(value).label
+        except (TypeError, ValueError):
+            label = str(value)
+        values.append(label)
+    for key in (
+        "detailing_edition",
+        "shear_method",
+        "torsion_method",
+        "combined_method",
+    ):
+        value = inp.get(key)
+        if value not in (None, ""):
+            values.append(str(value))
+    return "; ".join(dict.fromkeys(values)) or "Not declared"
+
+
+def _catalogue_presets_for_ids(catalogue, material_ids):
+    """Return presets for assigned catalogue IDs, preserving catalogue order."""
+
+    if not isinstance(catalogue, Mapping):
+        return ()
+    items = catalogue.get("items") or ()
+    if isinstance(items, Mapping):
+        items = (items,)
+    wanted = {str(value) for value in material_ids if value not in (None, "")}
+    return tuple(
+        str(item.get("preset"))
+        for item in items
+        if isinstance(item, Mapping)
+        and str(item.get("id")) in wanted
+        and item.get("preset") not in (None, "")
+    )
+
+
+def _used_material_presets(inp):
+    """Return material presets that participate in the current calculation."""
+
+    presets = []
+    concrete_preset = inp.get("concrete_preset")
+    if concrete_preset not in (None, ""):
+        presets.append(str(concrete_preset))
+
+    mild_ids = [
+        item.get("material_id")
+        for item in (inp.get("bar_elements") or ())
+        if isinstance(item, Mapping)
+    ]
+    if inp.get("shear_on") or inp.get("torsion_on"):
+        mild_ids.append(inp.get("capacity_steel_material_id"))
+    mild_presets = _catalogue_presets_for_ids(
+        inp.get("mild_material_catalog"), mild_ids
+    )
+    if mild_presets:
+        presets.extend(mild_presets)
+    elif inp.get("bars") or mild_ids:
+        mild_preset = inp.get("mild_preset")
+        if mild_preset not in (None, ""):
+            presets.append(str(mild_preset))
+
+    prestress_ids = [
+        item.get("material_id")
+        for item in (inp.get("tendon_elements") or ())
+        if isinstance(item, Mapping)
+    ]
+    prestress_presets = _catalogue_presets_for_ids(
+        inp.get("prestress_material_catalog"), prestress_ids
+    )
+    if prestress_presets:
+        presets.extend(prestress_presets)
+    elif inp.get("tendons") or prestress_ids:
+        prestress_preset = inp.get("prestress_preset")
+        if prestress_preset not in (None, ""):
+            presets.append(str(prestress_preset))
+
+    return tuple(dict.fromkeys(presets))
+
+
+def _report_adoption_warning(inp):
+    """Return explicit adoption/applicability warnings for the dashboard."""
+
+    basis = _report_basis_summary(inp)
+    warnings = []
+    if "2023" in basis or any(
+        "2023" in preset for preset in _used_material_presets(inp)
+    ):
+        warnings.append(
+            "The 2023 reference option requires project adoption; no Danish "
+            "National Annex is applied."
+        )
+    if inp.get("sls_heightened_on"):
+        warnings.append(
+            "The DK heightened crack-control applicability is user-selected; "
+            "Sector does not infer it."
+        )
+    return " ".join(warnings)
 
 
 def _steel_reference_set(presets):
@@ -286,16 +394,44 @@ class _PaginatedReportTable(Table):
         repeat_count = min(repeat_count, len(self._rowHeights))
         data_count = len(self._rowHeights) - repeat_count
 
+        # Never leave a repeated caption/header fragment without one complete
+        # data row. If that minimum group fits an ordinary page but not the
+        # current remainder, ask ReportLab to move the table to the next page.
+        minimum_fragment_height = (
+            sum(self._rowHeights[: repeat_count + 1])
+            if data_count > 0
+            else 0.0
+        )
+        if (
+            data_count > 0
+            and minimum_fragment_height <= _A4_FRAME_USABLE_HEIGHT + 1e-7
+            and availHeight + 1e-7 < minimum_fragment_height
+        ):
+            return []
+
         row_split_range = None
-        if data_count >= 6:
+        # Prefer three complete data rows at both edges.  If a tall-row table
+        # cannot fit three trailing rows on an ordinary page, retain two rather
+        # than falling back to an orphan one-row continuation.
+        for edge_rows in (3, 2):
+            if data_count < 2 * edge_rows:
+                continue
             repeated_height = sum(self._rowHeights[:repeat_count])
-            leading_height = sum(self._rowHeights[:repeat_count + 3])
-            trailing_height = repeated_height + sum(self._rowHeights[-3:])
+            leading_height = sum(
+                self._rowHeights[: repeat_count + edge_rows]
+            )
+            trailing_height = repeated_height + sum(
+                self._rowHeights[-edge_rows:]
+            )
             if (
                 leading_height <= _A4_FRAME_USABLE_HEIGHT + 1e-7
                 and trailing_height <= _A4_FRAME_USABLE_HEIGHT + 1e-7
             ):
-                row_split_range = (repeat_count + 3, -3)
+                row_split_range = (
+                    repeat_count + edge_rows,
+                    -edge_rows,
+                )
+                break
 
         self._rowSplitRange = row_split_range
         self._sector_row_split_range = row_split_range
@@ -315,6 +451,7 @@ class _PaginatedReportTable(Table):
             "_sector_data_start",
             "_sector_context_count",
             "_sector_context_labels",
+            "_sector_force_page_break_between_fragments",
         )
         already_continued = bool(
             getattr(self, "_sector_is_continuation", False)
@@ -340,6 +477,16 @@ class _PaginatedReportTable(Table):
             fragment._cellvalues[caption_row][0] = Paragraph(
                 markup, self._sector_caption_style
             )
+        if (
+            getattr(self, "_sector_force_page_break_between_fragments", False)
+            and len(fragments) > 1
+        ):
+            separated = []
+            for index, fragment in enumerate(fragments):
+                if index:
+                    separated.append(NotAtTopPageBreak())
+                separated.append(fragment)
+            return separated
         return fragments
 
 
@@ -844,7 +991,8 @@ class ReportBuilder:
         version="",
         figures=True,
         progress=None,
-        qa_appendix=True,
+        qa_appendix=None,
+        profile=None,
     ):
         self.buffer = buffer
         self.meta = meta or {}
@@ -856,7 +1004,13 @@ class ReportBuilder:
         self._base_out = out or {}
         self.version = version
         self.figures = figures
-        self.qa_appendix = bool(qa_appendix)
+        self.profile = report_profiles.resolve_profile(
+            profile,
+            qa_appendix=qa_appendix,
+        )
+        # Preserve the historical attribute for bounded downstream compatibility.
+        # The immutable profile policy is now the authority.
+        self.qa_appendix = self.profile.include_qa_appendix
         self._progress = progress
         self.s = _styles()
         self.flow = []
@@ -964,6 +1118,11 @@ class ReportBuilder:
     def _case_register(self, family):
         """Escaped case register for cover-page document control."""
         contexts = self._case_contexts(family)
+        if self.profile.key == "Brief":
+            return _LiteralReportText(", ".join(
+                presentation.action_set(case_inp, family)["id"] or "ID NOT SET"
+                for case_inp, _ in contexts
+            ))
         return _LiteralReportText("; ".join(
             _report_action_set_text(case_inp, family)
             for case_inp, _ in contexts
@@ -974,7 +1133,7 @@ class ReportBuilder:
             self._progress(frac, text)
 
     # -- flowable helpers --------------------------------------------------
-    def _h1(self, text):
+    def _h1(self, text, *, reserve=0):
         self._chapter += 1
         self._subsection = 0
         self._equation_number = 0
@@ -995,14 +1154,24 @@ class ReportBuilder:
         # Reuse the Paragraph's decoded plain text so escaped user identifiers
         # appear in bookmarks exactly as they do on the page.
         heading._sector_outline = heading.getPlainText()
+        if reserve:
+            self.flow.append(CondPageBreak(reserve))
         self.flow.append(heading)
 
-    def _h2(self, text):
+    def _h2(self, text, *, reserve=170):
         self._subsection += 1
         self._table_subsection_context = _greek(f"Subsection: {text}")
         self._publication_subsection_title = Paragraph(
             _greek(str(text)), self.s["small"]
         ).getPlainText().strip()
+        # ``keepWithNext`` can be defeated when the following object is a
+        # nested indivisible equation/table wrapper. Reserve enough space before
+        # placing the heading for at least one substantive following row.
+        # Reserve enough room for the heading and the first indivisible
+        # equation/table block.  A smaller guard still allowed a heading plus
+        # its tiny identity row to fit while the actual calculation moved to
+        # the next page.
+        self.flow.append(CondPageBreak(reserve))
         self.flow.append(Paragraph(_greek(text), self.s["h2"]))
 
     def _p(self, text):
@@ -1102,11 +1271,17 @@ class ReportBuilder:
     def _table_context_rows(self, column_count, row_offset=0):
         """Freeze active publication context as complete-width table rows."""
         entries = []
-        if self._table_section_context is not None:
+        # Standard tables already sit directly below their visible section and
+        # subsection headings. Repeating both headings inside every table costs
+        # substantial vertical space without adding review context. Audit retains
+        # the complete in-table context; Standard retains the assessment/status
+        # row, which is the material context a detached continuation page needs.
+        include_full_context = self.profile.key == "Audit"
+        if include_full_context and self._table_section_context is not None:
             entries.append((
                 "section", self._table_section_context, _HEAD_BG, _BLUE,
             ))
-        if self._table_subsection_context is not None:
+        if include_full_context and self._table_subsection_context is not None:
             entries.append((
                 "subsection", self._table_subsection_context,
                 colors.HexColor("#F7F8FA"), _GREY,
@@ -1159,24 +1334,56 @@ class ReportBuilder:
         data = [[
             "Check", "Action set", "Status", "Result", "Criterion", "Gov."
         ]]
-        data.extend([
-            [
-                _html_escape(row["check"]), _html_escape(row["case"]),
-                row["status"],
-                row["result"], row["criterion"], "YES" if is_governing else "-",
-            ]
-            for row, is_governing in zip(rows, governing)
-        ])
+        scope_states = {"NOT REQUESTED", "NOT APPLICABLE", "NOT RUN"}
+        attention_states = {"FAIL", "INVALID", "REVIEW", "NOT ASSESSED"}
+
+        def _overview_group(row):
+            status = str(row["status"]).upper()
+            if status in scope_states:
+                return "Scope and not-run states"
+            if status == "CALCULATED" or row["criterion"] == "Output only":
+                return "Calculated outputs"
+            return "Acceptance checks"
+
+        grouped = {
+            "Acceptance checks": [],
+            "Calculated outputs": [],
+            "Scope and not-run states": [],
+        }
+        for original_index, (row, is_governing) in enumerate(zip(rows, governing)):
+            grouped[_overview_group(row)].append((original_index, row, is_governing))
+        grouped["Acceptance checks"].sort(key=lambda item: (
+            str(item[1]["status"]).upper() not in attention_states,
+            item[0],
+        ))
+
+        group_rows = []
+        status_rows = []
+        for group_label, entries in grouped.items():
+            if not entries:
+                continue
+            group_rows.append((len(data), group_label))
+            data.append([group_label, "", "", "", "", ""])
+            for _original_index, row, is_governing in entries:
+                status_rows.append((len(data), row["status"]))
+                data.append([
+                    _html_escape(row["check"]), _html_escape(row["case"]),
+                    row["status"], row["result"], row["criterion"],
+                    "YES" if is_governing else "-",
+                ])
+        summary_font = 8.5 if self.profile.key == "Standard" else 7.2
         body = ParagraphStyle(
-            "summary-cell", parent=self.s["body"], fontSize=7.2,
-            fontName=_FONT, leading=8.8,
+            "summary-cell", parent=self.s["body"], fontSize=summary_font,
+            fontName=_FONT, leading=summary_font + 1.6,
         )
         head = ParagraphStyle(
             "summary-head", parent=body, fontName=_FONT_BOLD,
         )
         formatted = []
         for index, row in enumerate(data):
-            style = head if index == 0 else body
+            style = head if index == 0 or any(
+                index == group_index for group_index, _label in group_rows
+            ) else body
             formatted.append([
                 Paragraph(_greek(str(cell)), style) for cell in row
             ])
@@ -1214,6 +1421,7 @@ class ReportBuilder:
             splitByRow=1,
             splitInRow=1,
         )
+        vertical_padding = 0.45 if self.profile.key == "Brief" else 0.7
         style = [
             ("SPAN", (0, 0), (-1, 0)),
             ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
@@ -1221,10 +1429,27 @@ class ReportBuilder:
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("LEFTPADDING", (0, 0), (-1, -1), 2),
             ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-            ("TOPPADDING", (0, 0), (-1, -1), 0.7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.7),
+            ("TOPPADDING", (0, 0), (-1, -1), vertical_padding),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), vertical_padding),
         ]
         style.extend(context_style)
+        group_padding = 1.2 if self.profile.key == "Brief" else 3
+        for data_index, _group_label in group_rows:
+            table_index = header_row + data_index
+            style.extend([
+                ("SPAN", (0, table_index), (-1, table_index)),
+                ("BACKGROUND", (0, table_index), (-1, table_index),
+                 colors.HexColor("#F1F4F8")),
+                ("TEXTCOLOR", (0, table_index), (-1, table_index), _BLUE),
+                (
+                    "TOPPADDING", (0, table_index), (-1, table_index),
+                    group_padding,
+                ),
+                (
+                    "BOTTOMPADDING", (0, table_index), (-1, table_index),
+                    group_padding,
+                ),
+            ])
         fills = {
             "PASS": colors.HexColor("#E8F5E9"),
             "FAIL": colors.HexColor("#FDECEC"),
@@ -1234,8 +1459,9 @@ class ReportBuilder:
             "NOT RUN": colors.HexColor("#EEF2F6"),
             "NOT APPLICABLE": colors.HexColor("#EEF2F6"),
         }
-        for row_index, row in enumerate(rows, start=header_row + 1):
-            fill = fills.get(row["status"])
+        for data_index, status in status_rows:
+            row_index = header_row + data_index
+            fill = fills.get(status)
             if fill is not None:
                 style.append(("BACKGROUND", (2, row_index), (2, row_index), fill))
         table.setStyle(TableStyle(style))
@@ -1250,12 +1476,22 @@ class ReportBuilder:
         table._sector_header_row = header_row
         table._sector_data_start = header_row + 1
         table._sector_results_overview = True
+        table._sector_overview_groups = tuple(
+            label for _index, label in group_rows
+        )
         table.keepWithNext = 1
         self.flow.append(table)
-        self._small(
-            "Gov. marks the highest PASS/FAIL utilisation for each check; ties "
-            "remain marked. NOT APPLICABLE means the row action is zero."
-        )
+        if self.profile.key == "Brief":
+            governing_note = (
+                "Gov. marks the highest PASS/FAIL utilisation per check; ties "
+                "remain marked. NOT APPLICABLE means zero action."
+            )
+        else:
+            governing_note = (
+                "Gov. marks the highest PASS/FAIL utilisation for each check; "
+                "ties remain marked. NOT APPLICABLE means the row action is zero."
+            )
+        self._small(governing_note)
         self._gap(4)
 
     def _gap(self, h=4):
@@ -1416,10 +1652,16 @@ class ReportBuilder:
         }
 
         public = f"EQ-{equation_key.upper()}"
-        identity = (
-            f"Equation ({number}) | {public}"
-            if number is not None else public
-        )
+        if self.profile.key == "Audit":
+            identity = (
+                f"Equation ({number}) | {public}"
+                if number is not None else public
+            )
+        else:
+            # Internal contract keys remain sealed on the equation flowable and
+            # registry. Ordinary readers receive the user-facing publication
+            # number only; the Audit profile exposes the internal key inventory.
+            identity = f"Equation ({number})" if number is not None else "Method relation"
         symbolic_plain_text = Paragraph(
             f"<b>Symbolic expression:</b> {_equation_math(expr)}",
             self.s["formula"],
@@ -1674,7 +1916,8 @@ class ReportBuilder:
             raise ValueError("Every report table row must retain the same columns.")
         if len(widths) != column_count:
             raise ValueError("Report table widths must match the column count.")
-        font = max(float(font), _MIN_REPORT_TABLE_FONT)
+        profile_floor = 8.5 if self.profile.key == "Standard" else 0.0
+        font = max(float(font), _MIN_REPORT_TABLE_FONT, profile_floor)
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
                               fontName=_FONT, leading=font + 2)
         head = ParagraphStyle("ch", parent=body, fontName=_FONT_BOLD)
@@ -1892,12 +2135,18 @@ class ReportBuilder:
             ensure_image_server()
         self._tick(0.05, "Cover and conventions...")
         self._cover()
+        if self.profile.key == "Brief":
+            self._brief_governing_register()
+            self._write_pdf()
+            return
         self._conventions()
-        self._theory()
+        if self.profile.key == "Audit":
+            self._theory()
         self._tick(0.2, "Section and materials...")
         self._inputs()
         if self._base_out.get("clear_spacing") is not None:
-            self.flow.append(NotAtTopPageBreak())
+            if self.profile.key == "Audit":
+                self.flow.append(NotAtTopPageBreak())
             self.inp, self.out = self._base_inp, self._base_out
             self._clear_spacing()
         jobs = []
@@ -1944,6 +2193,8 @@ class ReportBuilder:
                 "_torsion_minimum_reinforcement_example",
             ),
         ):
+            if self.profile.key != "Audit":
+                continue
             selection = self._selected_torsion_subchecks.get(key)
             if not isinstance(selection, Mapping):
                 continue
@@ -2000,7 +2251,7 @@ class ReportBuilder:
                 self.inp, self.out = case_inp, case_out
                 fraction = 0.42 + 0.5 * (index / max(len(jobs), 1))
                 self._tick(fraction, label)
-                if new_page:
+                if new_page and self.profile.key == "Audit":
                     self.flow.append(NotAtTopPageBreak())
                 getattr(self, method)()
         finally:
@@ -2013,14 +2264,22 @@ class ReportBuilder:
                 self._base_out.get("heightened_crack_control"), Mapping
             )
         ):
-            self.flow.append(NotAtTopPageBreak())
+            if self.profile.key == "Audit":
+                self.flow.append(NotAtTopPageBreak())
             self._heightened_crack_control()
         if self._base_out.get("fatigue") is not None:
             self._tick(0.88, "Grouped fatigue...")
-            self.flow.append(NotAtTopPageBreak())
+            if self.profile.key == "Audit":
+                self.flow.append(NotAtTopPageBreak())
             self._fatigue()
         if self.qa_appendix:
             self._appendix()
+
+        self._write_pdf()
+
+    def _write_pdf(self):
+        """Write the already assembled presentation flow without recalculation."""
+
         self._tick(0.92, "Writing PDF...")
         revision_id = short_revision(self.meta.get("source_revision"))
         footer = f"Sector {self.version}  -  {revision_id}  -  {SECTOR_LICENSEE}".strip()
@@ -2051,6 +2310,21 @@ class ReportBuilder:
         header = (
             f"Project: {project}  |  Section: {section}  |  Cases: {case_text}"
         )
+        if pdfmetrics.stringWidth(header, _FONT, 7.5) > 136 * mm:
+            summary = []
+            for family in active_families:
+                summary.append(
+                    f"{family.title()} {len(self._case_contexts(family))}"
+                )
+            fatigue_count = len(fatigue_presentation.items(
+                self._base_out.get("fatigue"), "spectra"
+            ))
+            if fatigue_count:
+                summary.append(f"Fatigue {fatigue_count}")
+            header = (
+                f"Project: {project}  |  Section: {section}  |  Cases: "
+                + "; ".join(summary)
+            )
         title = f"Sector cross-section report - {project} - {section}"
         doc = _ReportDocTemplate(self.buffer, pagesize=A4,
                                  leftMargin=20 * mm, rightMargin=20 * mm,
@@ -2067,6 +2341,83 @@ class ReportBuilder:
         self._tick(1.0, "Done")
 
     # -- sections ----------------------------------------------------------
+    def _brief_governing_register(self):
+        """Publish retained critical-example identities on the third Brief page."""
+
+        self._h1("Governing calculation register")
+        self._p(
+            "This rapid-review profile retains every requested result and status "
+            "in the overview. The register below identifies the precomputed "
+            "globally critical worked examples; no report-side ranking or "
+            "calculation is performed. Generate Standard or Audit for the full "
+            "numerical derivations."
+        )
+        rows = [["Calculation", "Selected case / branch"]]
+        labels = {
+            "plastic": "Plastic capacity",
+            "minimum_reinforcement": "Minimum reinforcement",
+            "transverse_reinforcement": "Link detailing",
+            "shear": "Shear resistance",
+            "torsion": "Torsion resistance",
+            "combined": "Combined M-V-T",
+            "elastic": "Elastic response",
+        }
+        for family in (
+            "plastic",
+            "minimum_reinforcement",
+            "transverse_reinforcement",
+            "shear",
+            "torsion",
+            "combined",
+            "elastic",
+        ):
+            selected = self._selected_families.get(family)
+            if not isinstance(selected, Mapping):
+                continue
+            identity = str(selected.get("case_id") or "-")
+            component = selected.get("component")
+            if component is not None:
+                identity += " / " + str(component)
+            rows.append([labels[family], _html_escape(identity)])
+        for selected in self._selected_crack_examples:
+            rows.append([
+                "Crack width",
+                _html_escape(
+                    f"{selected.get('case_id') or '-'} / "
+                    f"{selected.get('label') or selected.get('branch') or '-'}"
+                ),
+            ])
+        if isinstance(self._selected_crack_comparison, Mapping):
+            rows.append([
+                "User crack criterion",
+                _html_escape(str(
+                    self._selected_crack_comparison.get("case_id") or "-"
+                )),
+            ])
+        if isinstance(self._selected_cracking_threshold, Mapping):
+            rows.append([
+                "Cracking threshold",
+                _html_escape(str(
+                    self._selected_cracking_threshold.get("case_id") or "-"
+                )),
+            ])
+        if isinstance(self._selected_heightened_crack_control, Mapping):
+            rows.append(["DK heightened crack control", "Global result"])
+        if self._base_out.get("fatigue") is not None:
+            rows.append([
+                "Grouped fatigue",
+                "Governing reinforcement and concrete results in overview",
+            ])
+        if len(rows) == 1:
+            rows.append(["Worked example selection", "Not available"])
+        self._table(rows, [70 * mm, 95 * mm], font=8.5, keep=False)
+        self._small(
+            "Brief omits complete non-governing derivations, full method theory, "
+            "branch inventories, hashes and exhaustive provenance. Figures are a "
+            "separate export choice. Audit is evidence depth, not approval, "
+            "compliance or certification."
+        )
+
     def _cover(self):
         m = self.meta
         self.flow.append(Paragraph("Cross-section analysis report", self.s["title"]))
@@ -2084,12 +2435,23 @@ class ReportBuilder:
                 ["Tool version", self.version or "-"],
                 ["Source revision", short_revision(m.get("source_revision"))],
                 [
-                    "Report content",
-                    (
-                        "Default report + QA appendix"
-                        if self.qa_appendix else "Default report"
-                    ),
+                    "Calculation state",
+                    _html_escape(m.get("calculation_state", "Not supplied")),
+                ],
+                [
+                    "Input SHA-256",
+                    _html_escape(m.get("input_sha256", "Not supplied")),
+                ],
+                ["Selected basis / methods", _report_basis_summary(self.inp)],
+                [
+                    "Report profile",
+                    self.profile.label,
                 ]]
+        adoption_warning = _report_adoption_warning(self.inp)
+        if adoption_warning:
+            rows.append(["Adoption / applicability warning", adoption_warning])
+        rows.append(["Profile scope", self.profile.description])
+        rows.append(["Detail omitted", self.profile.omitted_detail])
         direction_alias = modelled_direction.normalise_alias(
             self.inp.get(modelled_direction.ALIAS_KEY)
         )
@@ -2127,7 +2489,7 @@ class ReportBuilder:
         self._table(rows, [55 * mm, 110 * mm])
         if m.get("comments"):
             self._h2("Comments")
-            self._p(str(m["comments"]))
+            self._p(_html_escape(m["comments"]))
         mode = self.inp.get("mode", "")
         labels = []
         for key, label in (
@@ -2176,7 +2538,7 @@ class ReportBuilder:
         self._table(rows, [120 * mm, 45 * mm])
 
     def _inputs(self):
-        self._h1("Section and materials")
+        self._h1("Section and materials", reserve=240)
         inp = self.inp
         # Geometry drawing.
         self._h2("Geometry")
@@ -2192,7 +2554,7 @@ class ReportBuilder:
         self._concrete_section_properties_block()
         # Materials are reported only when the section actually uses them: mild
         # steel when there are bars, prestress when there are tendons.
-        self._h2("Concrete")
+        self._h2("Concrete", reserve=320)
         self._concrete_block()
         if inp.get("bars") or inp.get("shear_on") or inp.get("torsion_on"):
             start = len(self.flow)
@@ -5655,6 +6017,7 @@ class ReportBuilder:
             )
         elif tr is not None:
             self._h2("Shared stirrup (shear + torsion transverse steel)")
+            stirrup_start = len(self.flow)
             vv = _demand_resistance_verdict(viz.util_ok(tr["u_stirrup"]))
             if tr["shear_credited"]:
                 note = (f"V<sub>Ed</sub> = {_fmt(tr['v_ed'], 1)} &#8804; V<sub>Rd,c</sub>"
@@ -5676,9 +6039,13 @@ class ReportBuilder:
                         f"(theta = {_fmt(tr['theta_deg'], 1)}&#176;) -- "
                         "the one angle shared by every shear and torsion check "
                         "(6.3.2(2)), selected to minimise the governing utilisation.")
+            self._keep_measured_calculation_from(stirrup_start)
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
-            if cr is not None or tr is not None:
+            if (
+                self.profile.key == "Audit"
+                and (cr is not None or tr is not None)
+            ):
                 # Keep the complete governing chord derivation together. Without
                 # this semantic break, its final utilisation equation is commonly
                 # orphaned by the preceding strut/stirrup blocks.
@@ -6369,7 +6736,7 @@ class ReportBuilder:
             self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
                         "Figur 5.100 NA: closed stirrups round the periphery and "
                         "distributed longitudinal steel on both faces.")
-        self._h2("Resistances")
+        self._h2("Resistances", reserve=240)
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
             "cot theta",
@@ -7519,6 +7886,8 @@ class ReportBuilder:
 
     def _crack_candidates(self, cases):
         """Append the complete sorted per-element crack-width audit table."""
+        if self.profile.key != "Audit":
+            return
         rows = [["Case<br/>(LT/ST)", "#<br/>(G/N)", "Element",
                  "x<br/>(mm)", "y<br/>(mm)", "c<br/>(mm)",
                  "phi<br/>(mm)", "sigma<sub>s</sub><br/>(MPa)",
@@ -7765,6 +8134,7 @@ class ReportBuilder:
 
     def _fatigue(self):
         payload = self._base_out["fatigue"]
+        audit_detail = self.profile.key == "Audit"
         status = fatigue_presentation.overall_status(payload)
         errors = tuple(payload.get("errors") or ())
         governing_name = str(payload.get("governing_spectrum") or "-")
@@ -7895,7 +8265,7 @@ class ReportBuilder:
                 keep=False,
             )
         details = payload.get("fatigue_detail_basis") or ()
-        if details:
+        if details and audit_detail:
             self._h2("Assigned fatigue details")
             rows = [[
                 "ID", "Name", "Type", "Preset", "N<super>*</super>", "k<sub>1</sub>",
@@ -7992,7 +8362,8 @@ class ReportBuilder:
             )
             # Only spectra containing a globally governing family example become
             # detailed report units. Every other spectrum remains in the summary.
-            self.flow.append(NotAtTopPageBreak())
+            if self.profile.key == "Audit":
+                self.flow.append(NotAtTopPageBreak())
             spectrum_status = fatigue_presentation.result_status(spectrum)
             self._h2("Spectrum - " + _html_escape(spectrum_name))
             self._status_block(
@@ -8061,7 +8432,7 @@ class ReportBuilder:
                 )
 
             state_rows = fatigue_presentation.spectrum_bin_rows(spectrum)
-            if state_rows:
+            if state_rows and audit_detail:
                 self._h2("Elastic solver states")
                 rows = [[
                     "Bin", "Description", "Cycles", "Status",
@@ -8181,6 +8552,14 @@ class ReportBuilder:
                     bin_rows = fatigue_presentation.reinforcement_bin_rows(
                         result
                     )
+                    if not audit_detail:
+                        selected_bin_name = str(
+                            reinforcement_example.get("bin_name") or ""
+                        )
+                        bin_rows = [
+                            row for row in bin_rows
+                            if row["bin"] == selected_bin_name
+                        ]
                     rows = [[
                         "Bin", "Cycles", "Status", "Long stress",
                         "Fatigue total", "Design total", "Design elastic &#916;sigma",
@@ -8401,6 +8780,14 @@ class ReportBuilder:
                         font=5.3,
                     )
                 bin_rows = fatigue_presentation.concrete_bin_rows(result)
+                if not audit_detail:
+                    selected_bin_name = str(
+                        concrete_example.get("bin_name") or ""
+                    )
+                    bin_rows = [
+                        row for row in bin_rows
+                        if row["bin"] == selected_bin_name
+                    ]
                 rows = [[
                     "Bin", "Cycles", "Status", "Long comp.", "Total comp.",
                     "Design min", "Design max", "Ratio", "E<sub>cd,min</sub>",
@@ -9249,13 +9636,15 @@ def build_report(
     version="",
     figures=True,
     progress=None,
-    qa_appendix=True,
+    qa_appendix=None,
+    profile=None,
 ) -> bytes:
     """Build the PDF report and return its bytes.
 
     ``progress`` is an optional ``callable(fraction, text)`` invoked as the report
-    is assembled, so the UI can show a progress bar. ``qa_appendix`` adds the
-    consolidated references-and-notes chapter.
+    is assembled, so the UI can show a progress bar. ``profile`` selects the
+    immutable presentation policy; figures remain a separate choice. The legacy
+    ``qa_appendix`` flag maps ``False`` to Standard and ``True`` to Audit.
     """
     buffer = io.BytesIO()
     ReportBuilder(
@@ -9266,6 +9655,7 @@ def build_report(
         version=version,
         figures=figures,
         progress=progress,
+        profile=profile,
         qa_appendix=qa_appendix,
     ).build()
     buffer.seek(0)

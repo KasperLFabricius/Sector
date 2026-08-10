@@ -24,7 +24,7 @@ import sector_report  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "f916064417871ca87e9c623a2d6b6626dbb30634d6e6f5dd5a406f0bc39c6f03"
+    "7b22d40622278204b6a77251460477bc3c4dd23e807baffa17e62b9c5b658624"
 )
 
 

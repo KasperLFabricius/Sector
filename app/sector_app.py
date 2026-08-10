@@ -28,6 +28,8 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import app_run_probe  # noqa: E402
+from app import manual_information_architecture as manual_ia  # noqa: E402
+from app import report_profiles  # noqa: E402
 from deferred_import import deferred_module  # noqa: E402
 from input_stage_host import (  # noqa: E402
     input_stages,
@@ -230,6 +232,13 @@ def _input_widget_kwargs(key, kwargs):
     return options
 
 
+def _manual_warning(box, warning_key, message):
+    """Publish one warning tied to an indexed manual troubleshooting entry."""
+
+    manual_ia.warning_reference(warning_key)
+    return box.warning(message)
+
+
 def _number(box, prefix, field, meta, help_map=None, disabled=False):
     label, lo, hi, step = meta[field]
     key = f"{prefix}_{field}"
@@ -292,6 +301,22 @@ def _seeded_selectbox(box, label, options, default, key, **kw):
     )
 
 
+def _seeded_segmented_control(box, label, options, default, key, **kw):
+    """A required single-choice segmented control with durable widget state."""
+
+    st.session_state.setdefault(key, default)
+    if st.session_state[key] not in options:
+        raise ValueError(f"unknown persisted selection for {key!r}")
+    return box.segmented_control(
+        label,
+        options,
+        selection_mode="single",
+        required=True,
+        key=key,
+        **_input_widget_kwargs(key, kw),
+    )
+
+
 def _seeded_text(box, label, default, key, **kw):
     """A persisted text input that does not conflict with loaded session state."""
     st.session_state.setdefault(key, default)
@@ -351,7 +376,9 @@ def _safe_build(box, builder, curve, vals, **extra):
     try:
         return builder(curve=curve, **vals, **extra)
     except ValueError as exc:
-        box.warning(f"Adjusted for this curve: {exc}")
+        _manual_warning(
+            box, "input-invalid", f"Adjusted for this curve: {exc}"
+        )
         v = dict(vals)
         for f in ("fytk", "futk"):
             if v.get(f, 1.0) <= 0.0:
@@ -372,8 +399,12 @@ def _clamp_eut(box, vals, fields):
         if "ey0t" in fields:
             ey += vals.get("ey0t", 0.0)           # second-yield (total) strain
         if vals["eut"] < ey:
-            box.warning("eut must be at least the yield strain (ey0t + fytk/Es); "
-                        "using that value for the diagram and analysis.")
+            _manual_warning(
+                box,
+                "input-invalid",
+                "eut must be at least the yield strain (ey0t + fytk/Es); "
+                "using that value for the diagram and analysis.",
+            )
             vals["eut"] = ey
 
 
@@ -418,7 +449,9 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
                  "design-loading conditions apply.",
         )
         if math.isclose(k_tc, 1.0):
-            box.warning(
+            _manual_warning(
+                box,
+                "method-applicability",
                 r"$k_{tc}=1.00$ is applicable only for $t_{\mathrm{ref}}\leq28$ days "
                 r"(CR/CN) or $\leq56$ days (CS) when design loading is not expected until at least "
                 "3 months after casting, unless the governing National Annex states "
@@ -492,8 +525,12 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     # (the law would reject it). Cross-validate here and lift eps_cu2 to the peak
     # strain so a half-finished edit shows a warning instead of aborting the run.
     if eps_cu2 < eps_c2:
-        box.warning(r"$\varepsilon_{cu2}$ must be at least $\varepsilon_{c2}$ (the peak "
-                    "strain); using that value for the diagram and analysis.")
+        _manual_warning(
+            box,
+            "input-invalid",
+            r"$\varepsilon_{cu2}$ must be at least $\varepsilon_{c2}$ (the peak "
+            "strain); using that value for the diagram and analysis.",
+        )
         eps_cu2 = eps_c2
 
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
@@ -1590,7 +1627,11 @@ def _reinforcement_editor(box, base_key, ed_key):
     issues = rebar_table.row_issues(frame, kind)
     if issues:
         details = "; ".join(f"{element_id}: {reason}" for element_id, reason in issues)
-        box.warning(f"Incomplete element rows are not analysed ({details}).")
+        _manual_warning(
+            box,
+            "geometry-invalid",
+            f"Incomplete element rows are not analysed ({details}).",
+        )
     points_mm = [
         (item["x_mm"], item["y_mm"], item["area_mm2"])
         for item in elements
@@ -1762,8 +1803,12 @@ def _void_editor(box, base_key, ed_key, id_start=1):
     edited = _render_point_table(box, base_key, ed_key, _CORNER_COLS, id_start)
     rings = [g for g in _void_groups(edited, _CORNER_COLS) if len(g) >= 3]
     if len(rings) > _MAX_VOIDS:
-        box.warning(f"Only the first {_MAX_VOIDS} voids are used; "
-                    f"{len(rings) - _MAX_VOIDS} extra ignored.")
+        _manual_warning(
+            box,
+            "geometry-invalid",
+            f"Only the first {_MAX_VOIDS} voids are used; "
+            f"{len(rings) - _MAX_VOIDS} extra ignored.",
+        )
     return rings[:_MAX_VOIDS]
 
 
@@ -2213,6 +2258,8 @@ def _record_input_event(
     cleared only after a complete Inputs render.
     """
 
+    if key == project_io.REPORT_PROFILE_KEY:
+        st.session_state.pop("_report_profile_error", None)
     if (
         st.session_state.get("_main_page", "Inputs") == "Inputs"
         and key in st.session_state
@@ -2830,9 +2877,9 @@ _REPORT_FIELDS = [
     ("rev", "Revision"),
     ("author", "Prepared by"),
 ]
-_REPORT_DEFAULT = "Default report"
-_REPORT_QA_APPENDIX = "Default report + QA appendix"
-_REPORT_CONTENT_OPTIONS = (_REPORT_DEFAULT, _REPORT_QA_APPENDIX)
+_REPORT_DEFAULT = report_profiles.DEFAULT_PROFILE.label
+_REPORT_CONTENT_OPTIONS = report_profiles.REPORT_PROFILE_KEYS
+_REPORT_PROFILE_ERROR_KEY = "_report_profile_error"
 
 # The progress placeholder lives in the Report panel; report generation (which runs
 # later in the same script run) fills it.
@@ -2851,7 +2898,51 @@ def _report_meta():
     return meta
 
 
-def _report_signature(input_signature, meta=None, report_content=None):
+def _normalise_report_profile_session_state() -> None:
+    """Migrate exact pre-profile labels before a keyed widget can mount.
+
+    Streamlit sessions survive code hot reloads and keep an off-screen widget's
+    durable mirror. Normalise the live, durable and interrupted-event copies in
+    one place. An unknown value is removed with an explicit UI error and any old
+    report is cleared; it is never silently treated as Standard.
+    """
+
+    containers = [st.session_state]
+    for container_key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
+        container = st.session_state.get(container_key)
+        if isinstance(container, dict):
+            containers.append(container)
+
+    invalid = []
+    for container in containers:
+        if project_io.REPORT_PROFILE_KEY not in container:
+            continue
+        value = container[project_io.REPORT_PROFILE_KEY]
+        try:
+            container[project_io.REPORT_PROFILE_KEY] = (
+                project_io.normalise_report_profile(value)
+            )
+        except ValueError:
+            invalid.append(value)
+            container.pop(project_io.REPORT_PROFILE_KEY, None)
+
+    if invalid:
+        _clear_report_artifact()
+        values = ", ".join(sorted({repr(value) for value in invalid}))
+        st.session_state[_REPORT_PROFILE_ERROR_KEY] = (
+            f"Stored report profile {values} is not recognised and was not "
+            "used. Select Brief, Standard or Audit before generating a report."
+        )
+
+
+def _report_signature(
+    input_signature,
+    meta=None,
+    report_content=None,
+    *,
+    product_version=None,
+    revision=None,
+):
     """Identify the complete input and document-control state behind a PDF."""
     meta = _report_meta() if meta is None else meta
     report_content = (
@@ -2866,7 +2957,15 @@ def _report_signature(input_signature, meta=None, report_content=None):
             meta.get(modelled_direction.ALIAS_KEY)
         ),
     )
-    return repr(input_signature), document_values
+    if revision is None:
+        revision = meta.get("source_revision")
+        if revision is None:
+            revision = source_revision()
+    product_identity = (
+        str(APP_VERSION if product_version is None else product_version),
+        str(revision),
+    )
+    return repr(input_signature), document_values, product_identity
 
 
 def _safe_filename_part(value, fallback):
@@ -2911,18 +3010,24 @@ def _report_panel(input_signature):
     _seeded_text(c1, "Revision", "", "rep_rev")
     _seeded_text(c2, "Prepared by", "", "rep_author")
     _seeded_text_area(box, "Comments", "", "rep_comments", height=80)
-    _seeded_selectbox(
+    profile_error = st.session_state.get(_REPORT_PROFILE_ERROR_KEY)
+    if profile_error:
+        box.error(profile_error)
+    report_profile = _seeded_segmented_control(
         box,
-        "Report content",
+        "Report profile",
         list(_REPORT_CONTENT_OPTIONS),
         _REPORT_DEFAULT,
         "rep_report_content",
+        width="stretch",
         help=(
-            "The QA appendix adds one chapter of standards references and "
-            "implementation notes. Inputs, results and case evidence are "
-            "included in both options."
+            "Brief is a rapid-review summary, Standard is the default design-"
+            "review report, and Audit adds complete retained evidence. The "
+            "profile changes presentation depth only; figures remain separate."
         ),
     )
+    policy = report_profiles.resolve_profile(report_profile)
+    box.caption(policy.description + " " + policy.omitted_detail)
     # Flag the request and start a full rerun. The report is then built at the end
     # of that run, once build_inputs has rendered every panel and assembled the
     # complete material, section and load payload.
@@ -2952,9 +3057,11 @@ def _report_panel(input_signature):
                 width="stretch",
             )
         else:
-            box.warning(
+            _manual_warning(
+                box,
+                "results-stale",
                 "Report out of date: inputs or report metadata changed. "
-                "Generate it again before downloading."
+                "Generate it again before downloading.",
             )
     app_run_probe.close_fragment_run(st.session_state)
 
@@ -2998,12 +3105,13 @@ def _generate_report(inp):
             "rep_report_content", _REPORT_DEFAULT
         )
         out = run_analysis(inp)
+        meta.update({
+            "calculation_state": "CURRENT - generated from this input payload",
+            "input_sha256": _calculation_input_hash(inp),
+        })
         pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
                                          figures=figs, progress=_on_progress,
-                                         qa_appendix=(
-                                             report_content
-                                             == _REPORT_QA_APPENDIX
-                                         ))
+                                         profile=report_content)
         st.session_state["report_buffer"] = pdf
         st.session_state["report_signature"] = _report_signature(
             inp.get("signature"),
@@ -3561,12 +3669,13 @@ def build_inputs(host=st):
     # Panels carry calculation methodology (Elastic / Plastic), not a limit
     # state -- the same analysis can serve several load combinations.
     _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
+    stage_labels = tuple(stage.label for stage in manual_ia.INPUT_STAGES)
     input_tab_labels = [
-        f"1 {_dot} Analysis settings",
-        f"2 {_dot} Section",
-        f"3 {_dot} Material parameters",
-        f"4 {_dot} Loads",
-        "Project & report",
+        f"1 {_dot} {stage_labels[0]}",
+        f"2 {_dot} {stage_labels[1]}",
+        f"3 {_dot} {stage_labels[2]}",
+        f"4 {_dot} {stage_labels[3]}",
+        stage_labels[4],
     ]
     aset, sec_tab, mat_tab, loads, project = stateful_input_tabs(
         s,
@@ -4596,9 +4705,11 @@ def build_inputs(host=st):
              r"$f_{ywk}$ here; Sector assumes anchorage and applies no hidden category "
              "multiplier.")
     if transverse_detailing_on and not _stirrups:
-        sts.warning(
+        _manual_warning(
+            sts,
+            "calculation-warning",
             "Link detailing is selected, but no links are defined for the active "
-            "shear/torsion actions."
+            "shear/torsion actions.",
         )
 
     # Pre-flight for the combined check (it needs several things at once): flag what
@@ -4616,8 +4727,12 @@ def build_inputs(host=st):
         if all(met for met, _ in reqs):
             combined_warn.success("Combined M-V-T requirements met:  \n" + lines)
         else:
-            combined_warn.warning("Combined M-V-T needs all of these (it is not "
-                                  "evaluated until then):  \n" + lines)
+            _manual_warning(
+                combined_warn,
+                "calculation-warning",
+                "Combined M-V-T needs all of these (it is not evaluated until "
+                "then):  \n" + lines,
+            )
 
     # (Section / Material / Loads tabs were created at the top; fill them now.)
     sec.caption("The section is a set of explicit points (the source of truth). "
@@ -4685,7 +4800,11 @@ def build_inputs(host=st):
     if sec.open and st.session_state.get("_clear_section_confirm"):
         confirm_slot = sec.empty()
         with confirm_slot.container():
-            st.warning("Clear all section point tables?")
+            _manual_warning(
+                st,
+                "confirmation-required",
+                "Clear all section point tables?",
+            )
             confirm_col, cancel_col = st.columns(2)
             confirm_clear = confirm_col.button(
                 "Confirm clear", key="confirm_clear_pts", type="primary",
@@ -4731,8 +4850,12 @@ def build_inputs(host=st):
         # No valid outline. Leave it empty (do NOT fall back to the Quick Section,
         # or Clear Section would silently revert to the template) and let the
         # downstream treat the section as blank.
-        sec.warning("The section has no concrete outline. Add at least 3 corners, "
-                    "or open the Quick Section builder.")
+        _manual_warning(
+            sec,
+            "geometry-invalid",
+            "The section has no concrete outline. Add at least 3 corners, or "
+            "open the Quick Section builder.",
+        )
     sec.markdown("_Concrete voids_")
     sec.caption("Several voids share this table, each separated by a blank row "
                 "(each void needs 3 or more corners).")
@@ -4859,10 +4982,12 @@ def build_inputs(host=st):
             fatigue_assignment_error = (
                 "Undefined fatigue assignment(s): " + "; ".join(parts) + "."
             )
-            sec.warning(
+            _manual_warning(
+                sec,
+                "input-invalid",
                 fatigue_assignment_error
                 + " Other requested analyses can still be calculated; fatigue "
-                "will be reported as INVALID until every assignment is resolved."
+                "will be reported as INVALID until every assignment is resolved.",
             )
     label_scale, label_min_gap = _section_input_preview(
         sec_preview,
@@ -7736,17 +7861,7 @@ def _transverse_detailing_result(inp, out):
 
 # View order follows the checking workflow: consolidated status first, then the
 # plastic, elastic, shear, torsion and combined details.
-VIEWS = [
-    "Results Overview",
-    "Plastic Results",
-    "N-M Interaction",
-    "Elastic Results",
-    "Fatigue Results",
-    "Detailing",
-    "Shear",
-    "Torsion",
-    "M-V-T Combined",
-]
+VIEWS = [view.label for view in manual_ia.RESULT_VIEWS]
 _RESULT_VIEWS = tuple(VIEWS)
 
 
@@ -8086,7 +8201,7 @@ def _detailing_status_callout(status, message):
     elif status == "NOT APPLICABLE":
         st.info(text)
     else:
-        st.warning(text)
+        _manual_warning(st, "calculation-warning", text)
 
 
 def detailing_view(inp, results, *, global_results=None):
@@ -8451,7 +8566,7 @@ def plastic_view(inp, results):
     elif status in {"FAIL", "INVALID"}:
         st.error(verdict)
     else:
-        st.warning(verdict)
+        _manual_warning(st, "calculation-warning", verdict)
 
     st.markdown("#### Applied actions")
     a1, a2, a3 = st.columns(3)
@@ -8905,8 +9020,12 @@ def _elastic_sls_section(inp, e):
         st.error("INVALID - Cracking classification | Elastic solve did not "
                  "converge; values are diagnostic only.")
     elif e["cracked"]:
-        st.warning(f"CRACKED | $\\lambda_{{cr}}$ {e['lambda_cr']:.3f} | "
-                   "governing long-term/total action")
+        _manual_warning(
+            st,
+            "calculation-warning",
+            f"CRACKED | $\\lambda_{{cr}}$ {e['lambda_cr']:.3f} | "
+            "governing long-term/total action",
+        )
     else:
         lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}"
         st.success(f"UNCRACKED | $\\sigma_{{ct}}$ {e['sigma_ct']:.3f} MPa < "
@@ -8967,7 +9086,7 @@ def _heightened_crack_control_panel(result):
     )
     status = str(result.get("status") or "NOT ASSESSED")
     if status == "PROVIDED AREA BELOW CALCULATED REQUIREMENT":
-        st.warning(status)
+        _manual_warning(st, "calculation-warning", status)
     else:
         st.info(status)
     basis_label = design_standards.get_design_basis(
@@ -9141,7 +9260,7 @@ def _fatigue_status_callout(status, text):
     elif status in {"FAIL", "INVALID"}:
         st.error(message)
     else:
-        st.warning(message)
+        _manual_warning(st, "calculation-warning", message)
 
 
 def _fatigue_map_signature(inp, spectrum):
@@ -9918,9 +10037,13 @@ def shear_view(inp, results):
                 else r"$V_{x,Ed}$ along x; paired with $M_{y,Ed}$")
     face_lbl = viz.tension_face_label(sh["tension_low"], sh["axis"])
     if not res["valid"]:
-        st.warning(r"$V_{Rd,c}$ is zero - there is no tension reinforcement on the chosen "
-                   "face, or the derived effective depth / web width is zero. Add "
-                   r"tension bars on that face and check the geometry (or enter $b_w$).")
+        _manual_warning(
+            st,
+            "calculation-warning",
+            r"$V_{Rd,c}$ is zero - there is no tension reinforcement on the "
+            "chosen face, or the derived effective depth / web width is zero. "
+            r"Add tension bars on that face and check the geometry (or enter $b_w$).",
+        )
     util = sh["util"]
     ok = viz.util_ok(util)
     m1, m2, m3 = st.columns(3)
@@ -10075,19 +10198,27 @@ def shear_view(inp, results):
         st.divider()
         st.markdown("**Shear reinforcement (links)**")
         if not lk["valid"]:
-            st.warning("The link resistance could not be computed -- check the leg "
-                       "count, diameter and spacing (Asw/s must be > 0).")
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "The link resistance could not be computed -- check the leg "
+                "count, diameter and spacing (Asw/s must be > 0).",
+            )
         if links["out_of_limits"]:
             limit_ref = (
                 (links.get("angle_limits") or {}).get("clause")
                 or "EN 1992-1-1 6.7N / DK NA 6.7a NA"
             )
-            st.warning(f"The strut angle bounds (cot {_THETA} in "
-                       f"[{links['cot_min']:.2f}, {links['cot_max']:.2f}]) fall "
-                       f"outside the selected method's default range "
-                       f"[{links['cot_limit_lo']:.1f}, "
-                       f"{links['cot_limit_hi']:.1f}] ({limit_ref}). The actual "
-                       "values are retained in the reported calculations.")
+            _manual_warning(
+                st,
+                "method-applicability",
+                f"The strut angle bounds (cot {_THETA} in "
+                f"[{links['cot_min']:.2f}, {links['cot_max']:.2f}]) fall outside "
+                f"the selected method's default range "
+                f"[{links['cot_limit_lo']:.1f}, "
+                f"{links['cot_limit_hi']:.1f}] ({limit_ref}). The actual values "
+                "are retained in the reported calculations.",
+            )
         req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if links["required"]
                    else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
                         "reinforcement rules still apply")
@@ -10268,7 +10399,9 @@ def shear_view(inp, results):
                     "negative" if fallback.get("tension_low", True)
                     else "positive"
                 )
-                st.warning(
+                _manual_warning(
+                    st,
+                    "calculation-warning",
                     f"The required {fallback_axis}-axis {fallback_face} face uses "
                     "a pure-axis fallback because its conditional capacity solve "
                     "did not converge. The complete longitudinal chord check can "
@@ -10280,7 +10413,9 @@ def shear_view(inp, results):
                            "chord's torsion share is not evaluated here; the "
                            + chr(0x03A3) + "(SEd/SRd) check covers the interaction.")
             elif coverage == "not_solved":
-                st.warning(
+                _manual_warning(
+                    st,
+                    "calculation-warning",
                     "One or more chord faces that carry the torsion share could "
                     "not be evaluated (a conditional capacity solve did not "
                     "converge or a face has no tension steel), so they are NOT "
@@ -10426,21 +10561,31 @@ def torsion_view(inp, results):
     tube = t["tube"]
     if not t["valid"]:
         if t.get("reason") == "multi-cell (2+ voids)":
-            st.warning("Torsion is not available for a multi-cell section (two or "
-                       "more voids): the thin-walled single-tube idealisation does "
-                       "not model the internal webs, so its TRd would be "
-                       "unconservative (EN 1992-1-1 6.3.2(1) requires sub-dividing "
-                       "into separate tubes). Use a solid or single-cell outline.")
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "Torsion is not available for a multi-cell section (two or more "
+                "voids): the thin-walled single-tube idealisation does not model "
+                "the internal webs, so its TRd would be unconservative "
+                "(EN 1992-1-1 6.3.2(1) requires sub-dividing into separate tubes). "
+                "Use a solid or single-cell outline.",
+            )
         elif t.get("reason") == "compound outline requires subdivision":
-            st.warning("Torsion is not evaluated for this re-entrant/compound "
-                       "(for example T, L or I) outline as one tube. EN 1992-1-1 "
-                       "6.3.1(3) requires component sub-sections: enable 'Subdivide "
-                       "into sub-tubes' and enter rectangles that partition the "
-                       "section before a resistance or verdict is issued.")
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "Torsion is not evaluated for this re-entrant/compound (for "
+                "example T, L or I) outline as one tube. EN 1992-1-1 6.3.1(3) "
+                "requires component sub-sections: enable 'Subdivide into "
+                "sub-tubes' and enter rectangles that partition the section "
+                "before a resistance or verdict is issued.",
+            )
         elif str(t.get("reason") or "").startswith("invalid sub-tube partition:"):
             detail = (t.get("subdivision_reason")
                       or str(t["reason"]).split(":", 1)[-1].strip())
-            st.warning(
+            _manual_warning(
+                st,
+                "geometry-invalid",
                 "Torsion is not evaluated because the positioned sub-rectangles "
                 f"do not form the concrete section: {detail}. Adjust each centre "
                 "x/y and b/h so the rectangles cover the net concrete area without "
@@ -10448,17 +10593,24 @@ def torsion_view(inp, results):
                 "a void. No torsion or dependent interaction verdict is issued."
             )
         else:
-            st.warning("The torsion tube could not be formed from the outline (a "
-                       "degenerate or too-thin section). Enter a wall thickness tef "
-                       "to override, or check the geometry.")
+            _manual_warning(
+                st,
+                "geometry-invalid",
+                "The torsion tube could not be formed from the outline (a "
+                "degenerate or too-thin section). Enter a wall thickness tef to "
+                "override, or check the geometry.",
+            )
         return
     if t["out_of_limits"]:
-        st.warning(f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "
-                   f"{t['cot_max']:.2f}]) fall outside the selected method's "
-                   "default range "
-                   f"[{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
-                   "(6.7N / 6.7a NA). The actual values are retained in the "
-                   "reported torsion and interaction calculations.")
+        _manual_warning(
+            st,
+            "method-applicability",
+            f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "
+            f"{t['cot_max']:.2f}]) fall outside the selected method's default "
+            f"range [{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
+            "(6.7N / 6.7a NA). The actual values are retained in the reported "
+            "torsion and interaction calculations.",
+        )
     util = t["util"]
     ok = viz.util_ok(util)
     util_txt = _pct(util)
@@ -10612,7 +10764,9 @@ def torsion_view(inp, results):
     if inter is not None and not inter.get("valid"):
         st.divider()
         st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
-        st.warning(_no_common_angle_msg(inter))
+        _manual_warning(
+            st, "calculation-warning", _no_common_angle_msg(inter)
+        )
     elif inter is not None:
         st.divider()
         st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
@@ -10740,8 +10894,12 @@ def combined_view(inp, results):
             missing.append("a valid shear check (V)")
         if not c.get("have_t"):
             missing.append("a valid torsion check (T)")
-        st.warning("The combined check needs all three actions. Missing: "
-                   + "; ".join(missing) + ".")
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The combined check needs all three actions. Missing: "
+            + "; ".join(missing) + ".",
+        )
         return
     st.caption(f"Selected calculation method: {c['method']}.")
     if c.get("governing_face"):
@@ -10757,9 +10915,13 @@ def combined_view(inp, results):
             f"{angle_note}."
         )
     if c.get("outside_default_range"):
-        st.warning("The selected compression-strut bounds fall outside the "
-                   "selected method's default range. The actual values are "
-                   "retained in every combined calculation.")
+        _manual_warning(
+            st,
+            "method-applicability",
+            "The selected compression-strut bounds fall outside the selected "
+            "method's default range. The actual values are retained in every "
+            "combined calculation.",
+        )
     m1, m2, m3 = st.columns(3)
     m1.metric(r"Bending $M$", _pct(c["r_m"]))
     m2.metric(r"Shear $V$", _pct(c["r_v"]))
@@ -10828,7 +10990,7 @@ def combined_view(inp, results):
             show_verdict=True),
             width="stretch")
     elif cr is not None and not cr.get("valid"):
-        st.warning(_no_common_angle_msg(cr))
+        _manual_warning(st, "calculation-warning", _no_common_angle_msg(cr))
     else:
         st.caption("The shear+torsion crushing interaction (6.29) needs shear links "
                    "(for VRd,max); enable them in the shear block.")
@@ -10837,7 +10999,7 @@ def combined_view(inp, results):
     if tr is not None and not tr.get("valid"):
         st.divider()
         st.markdown("**Shared stirrup: shear + torsion transverse steel**")
-        st.warning(_no_common_angle_msg(tr))
+        _manual_warning(st, "calculation-warning", _no_common_angle_msg(tr))
     elif tr is not None:
         st.divider()
         st.markdown("**Shared stirrup: shear + torsion transverse steel**")
@@ -10939,7 +11101,9 @@ def combined_view(inp, results):
                 "negative" if fallback.get("tension_low", True)
                 else "positive"
             )
-            st.warning(
+            _manual_warning(
+                st,
+                "calculation-warning",
                 f"The required {fallback_axis}-axis {fallback_face} face uses a "
                 "pure-axis fallback because its conditional capacity solve did "
                 "not converge. The complete longitudinal chord check can therefore "
@@ -10952,7 +11116,9 @@ def combined_view(inp, results):
                        "share is not evaluated; the " + chr(0x03A3) + "(SEd/SRd) "
                        "sum above covers the interaction.")
         elif coverage == "not_solved":
-            st.warning(
+            _manual_warning(
+                st,
+                "calculation-warning",
                 "One or more chord faces that carry the torsion share could not be "
                 "evaluated (a conditional capacity solve did not converge or a face "
                 "has no tension steel), so they are NOT checked here and the "
@@ -11245,7 +11411,11 @@ def _analysis_workspace(inp):
     else:
         c_calc.caption(":green[Results up to date]")
     if stale and view in _RESULT_VIEWS:
-        st.warning("Inputs changed since the last calculation - press Calculate to update.")
+        _manual_warning(
+            st,
+            "results-stale",
+            "Inputs changed since the last calculation - press Calculate to update.",
+        )
     result_snapshot = st.session_state.get("result_input_snapshot")
     if stale and view in _RESULT_VIEWS and result_snapshot is None:
         # Sessions can survive a Streamlit hot reload. A result payload without
@@ -11270,10 +11440,12 @@ def _analysis_workspace(inp):
         if section_err:
             st.error(section_err)
     if inp.get("fatigue_assignment_error"):
-        st.warning(
+        _manual_warning(
+            st,
+            "input-invalid",
             inp["fatigue_assignment_error"]
             + " Other requested analyses remain available; the fatigue result "
-            "will be INVALID until the assignments are resolved."
+            "will be INVALID until the assignments are resolved.",
         )
     fatigue_errors = tuple(
         ((results or {}).get("fatigue") or {}).get("errors") or ()
@@ -11342,6 +11514,7 @@ _v093_state_purged = (
 )
 _autosave_startup()        # restore the last autosaved session (BriCoS-style) on launch
 _apply_pending_project()   # restore an uploaded project before any widget is built
+_normalise_report_profile_session_state()
 # Migrate renamed workspace choices even while Inputs is selected; otherwise an old
 # widget value can survive indefinitely until the engineer first opens Analysis.
 if st.session_state.get("view") in _VIEW_ALIASES:

@@ -51,6 +51,11 @@ def _build_report_with_selection(meta, inp, out, *args, **kwargs):
         "worked_example_selection",
         result_presentation.worked_example_selection(inp, completed),
     )
+    # This legacy module exercises the exhaustive equation/evidence surface.
+    # Product-default Standard and cross-profile equality are covered in the
+    # dedicated PR-07B profile integration suite.
+    if "profile" not in kwargs and "qa_appendix" not in kwargs:
+        kwargs["profile"] = "Audit"
     return _build_report_from_completed_payload(
         meta, inp, completed, *args, **kwargs
     )
@@ -1307,6 +1312,101 @@ def test_report_preserves_notation_like_case_and_cover_identities():
         assert literal in text
 
 
+def test_report_escapes_hostile_comments_without_activating_link_markup():
+    import pypdf
+
+    url = "https://attacker.invalid/review?left=1&right=2"
+    comments = f'Check A < B & C; <link href="{url}">open review</link>'
+    pdf = sector_report.build_report(
+        {"comments": comments}, _inp(), _out(), figures=False, profile="Brief"
+    )
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    text = " ".join(
+        " ".join((page.extract_text() or "").split()) for page in reader.pages
+    )
+    uri_actions = []
+    for page in reader.pages:
+        for reference in page.get("/Annots", ()):
+            annotation = reference.get_object()
+            action = annotation.get("/A")
+            if action is not None:
+                action = action.get_object()
+                if action.get("/URI") is not None:
+                    uri_actions.append(str(action["/URI"]))
+
+    assert comments in text
+    assert uri_actions == []
+
+
+def test_report_adoption_warning_covers_used_2023_material_catalogues():
+    concrete = _inp()
+    concrete["concrete_preset"] = "EN 1992-1-1:2023"
+
+    reinforcement = _inp()
+    reinforcement.update({
+        "bar_elements": [{"material_id": "M2"}],
+        "mild_material_catalog": {
+            "items": [
+                {"id": "M1", "preset": "EN 1992-1-1:2005"},
+                {"id": "M2", "preset": "EN 1992-1-1:2023"},
+            ],
+        },
+    })
+
+    prestress = _inp()
+    prestress.update({
+        "bars": [],
+        "tendons": [(0.0, -0.12, 5.0e-4)],
+        "tendon_elements": [{"material_id": "P2"}],
+        "prestress_material_catalog": {
+            "items": [
+                {"id": "P1", "preset": "EN 1992-1-1:2005"},
+                {"id": "P2", "preset": "EN 1992-1-1:2023"},
+            ],
+        },
+    })
+
+    for inp in (concrete, reinforcement, prestress):
+        assert "2023 reference option requires project adoption" in (
+            sector_report._report_adoption_warning(inp)
+        )
+
+
+def test_report_adoption_warning_ignores_unused_2023_catalogue_entries():
+    inp = _inp()
+    inp.update({
+        "bar_elements": [{"material_id": "M2"}],
+        "mild_material_catalog": {
+            "items": [
+                {"id": "M1", "preset": "EN 1992-1-1:2023"},
+                {"id": "M2", "preset": "EN 1992-1-1:2005"},
+            ],
+        },
+    })
+
+    assert sector_report._report_adoption_warning(inp) == ""
+
+
+def test_report_api_retains_legacy_qa_appendix_positional_slot():
+    build_parameters = tuple(
+        inspect.signature(_build_report_from_completed_payload).parameters
+    )
+    builder_parameters = tuple(inspect.signature(
+        sector_report.ReportBuilder
+    ).parameters)
+
+    assert build_parameters[6:8] == ("qa_appendix", "profile")
+    assert builder_parameters[7:9] == ("qa_appendix", "profile")
+    standard = sector_report.ReportBuilder(
+        io.BytesIO(), {}, {}, {}, "", False, None, False
+    )
+    audit = sector_report.ReportBuilder(
+        io.BytesIO(), {}, {}, {}, "", False, None, True
+    )
+    assert standard.profile.key == "Standard"
+    assert audit.profile.key == "Audit"
+
+
 def test_report_outline_decodes_literal_engineering_token_case_id():
     import io
     import pypdf
@@ -2246,7 +2346,7 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "Elastic section response and stresses - EL-02" in flat
     assert "Cracking threshold - EL-02" not in flat
     assert "Crack width was not requested for this run." not in flat
-    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
+    assert "EQ-CRACKING.THRESHOLD" in flat
     assert "the project as a whole have no verdict" in flat
     assert "125.0 %" in flat
     assert "456.000 MPa" in flat
@@ -2314,11 +2414,11 @@ def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
     assert flat.count("Crack width worked - governing case") == 2
-    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
+    assert "EQ-CRACKING.THRESHOLD" not in flat
     assert "governing case (long-term (fine))" in flat
     assert "governing case (long-term (coarse))" in flat
-    assert "Candidate summary for governing crack example" in flat
-    assert "Case (LT/ST)" in flat
+    assert "Candidate summary for governing crack example" not in flat
+    assert "Case (LT/ST)" not in flat
     assert "EL-03" in flat
     assert "Governing crack width - EL-03" not in flat
     assert "Cracking threshold and governing crack width - EL-03" not in flat
@@ -2595,7 +2695,8 @@ def test_crack_2023_tension_zone_cap_is_a_supported_worked_branch():
     )).split())
 
     assert "selected: tension-zone-cap" in text
-    assert "EQ-CRACK.2023.SPACING" in text
+    assert "EQ-CRACK.2023.SPACING" not in text
+    assert "Equation (" in text
     assert "Worked calculation unavailable" not in text
 
 
@@ -2722,7 +2823,7 @@ def test_report_publishes_one_globally_critical_cracking_threshold():
     assert "Cracking threshold - EL-B" in flat
     assert "Cracking threshold - EL-A" not in flat
     assert "Cracking threshold - EL-C" not in flat
-    assert flat.count("EQ-CRACKING.THRESHOLD") == 1
+    assert "EQ-CRACKING.THRESHOLD" not in flat
     assert "lambda_cr 0.800; cracked" in flat
 
 
@@ -2756,7 +2857,7 @@ def test_report_mirrors_the_views():
     assert "Max / Min" in txt                      # both extremes for Mx and My
 
 
-def test_report_qa_appendix_is_optional_and_identified_on_the_cover():
+def test_legacy_qa_appendix_flag_maps_to_standard_and_audit_profiles():
     default_text = _pdf_text(sector_report.build_report(
         {}, _inp(), _out(), figures=False, qa_appendix=False
     ))
@@ -2764,9 +2865,12 @@ def test_report_qa_appendix_is_optional_and_identified_on_the_cover():
         {}, _inp(), _out(), figures=False, qa_appendix=True
     ))
 
-    assert "Report content Default report" in " ".join(default_text.split())
+    assert "Report profile Standard" in " ".join(default_text.split())
     assert "QA appendix - references and notes" not in default_text
-    assert "Default report + QA appendix" in " ".join(qa_text.split())
+    assert "Report profile Audit" in " ".join(qa_text.split())
+    assert "Audit does not mean approved, compliant or certified" in " ".join(
+        qa_text.split()
+    )
     assert "QA appendix - references and notes" in qa_text
 
 
@@ -2932,7 +3036,7 @@ def test_report_publishes_one_retained_critical_user_crack_comparison():
     )).split())
 
     assert flat.count("User-specified crack-width comparison - critical case") == 1
-    assert flat.count("EQ-CRACK.USER-LIMIT.COMPARISON") == 1
+    assert "EQ-CRACK.USER-LIMIT.COMPARISON" not in flat
     assert "0.213 mm / 0.3 mm" in flat
     assert "u w = 0.71" in flat or "uw = 0.71" in flat
     assert "WITHIN USER-SPECIFIED LIMIT" in flat
@@ -3078,10 +3182,10 @@ def test_report_publishes_singleton_heightened_crack_chain_from_retained_values(
     )).split())
 
     assert "DK heightened crack-control minimum" in flat
-    assert flat.count("EQ-CRACK.HEIGHTENED.BASE-RATIO") == 1
-    assert flat.count("EQ-CRACK.HEIGHTENED.REQUIRED-RATIO") == 1
-    assert flat.count("EQ-CRACK.HEIGHTENED.REQUIRED-AREA") == 1
-    assert flat.count("EQ-CRACK.HEIGHTENED.AREA-COMPARISON") == 1
+    assert "EQ-CRACK.HEIGHTENED.BASE-RATIO" not in flat
+    assert "EQ-CRACK.HEIGHTENED.REQUIRED-RATIO" not in flat
+    assert "EQ-CRACK.HEIGHTENED.REQUIRED-AREA" not in flat
+    assert "EQ-CRACK.HEIGHTENED.AREA-COMPARISON" not in flat
     assert "1.414" in flat
     assert "1445" in flat
     assert "PROVIDED AREA BELOW CALCULATED REQUIREMENT" in flat
@@ -4295,9 +4399,9 @@ def test_report_publishes_only_governing_transverse_family_worked_examples():
     assert "Shear resistance - PL-LOW" not in flat
     assert "Torsion (thin-walled tube) - PL-LOW" not in flat
     assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in flat
-    assert flat.count("EQ-SHEAR.2005.VRDC") == 1
-    assert flat.count("EQ-TORSION.RESISTANCE.GOVERNING") == 1
-    assert flat.count("EQ-COMBINED.DK-NA.SUM") == 1
+    assert "EQ-SHEAR.2005.VRDC" not in flat
+    assert "EQ-TORSION.RESISTANCE.GOVERNING" not in flat
+    assert "EQ-COMBINED.DK-NA.SUM" not in flat
     assert flat.count("The complete shear worked example is published only") == 1
     assert flat.count("The complete torsion worked example is published only") == 1
     assert flat.count("complete combined M-V-T worked example is published only") == 1

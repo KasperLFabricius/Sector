@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+from html.parser import HTMLParser
 import pathlib
 import re
 import sys
@@ -17,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 import manual  # noqa: E402
 
+from app import manual_information_architecture as manual_ia  # noqa: E402
 from sector import __version__  # noqa: E402
 from tools.publication_preflight import (  # noqa: E402
     MANUAL_FURNITURE,
@@ -65,6 +67,113 @@ def build_fixture_pdf() -> bytes:
     return manual.build_manual_pdf_bytes(figures=True)
 
 
+@functools.lru_cache(maxsize=1)
+def build_fixture_html() -> bytes:
+    return manual.build_manual_html_bytes()
+
+
+class _HTMLInventory(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.lang = None
+        self.ids = []
+        self.hrefs = []
+        self.scripts = 0
+        self.external_resources = []
+        self.heading_levels = []
+        self.table_header_scopes = []
+        self.figure_alternatives = 0
+        self.figcaptions = 0
+        self.equations = 0
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if "id" in values:
+            self.ids.append(values["id"])
+        if tag == "html":
+            self.lang = values.get("lang")
+        if tag == "a" and values.get("href"):
+            self.hrefs.append(values["href"])
+        if tag == "script":
+            self.scripts += 1
+        if tag in {"img", "script", "iframe", "link"}:
+            target = values.get("src") or values.get("href")
+            if target:
+                self.external_resources.append((tag, target))
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self.heading_levels.append(int(tag[1]))
+        if tag == "th":
+            self.table_header_scopes.append(values.get("scope"))
+        if tag == "div" and "figure-alternative" in values.get("class", ""):
+            if values.get("role") != "img" or not values.get("aria-label"):
+                raise AssertionError("manual figure alternative is incomplete")
+            self.figure_alternatives += 1
+        if tag == "figcaption":
+            self.figcaptions += 1
+        if tag == "section" and "equation" in values.get("class", ""):
+            self.equations += 1
+
+
+def validate_html_content(html: bytes) -> str:
+    """Validate the semantic HTML companion without starting a browser."""
+    text = html.decode("utf-8")
+    parser = _HTMLInventory()
+    parser.feed(text)
+    if not text.startswith("<!doctype html>") or parser.lang != "en":
+        raise AssertionError("manual HTML lacks its HTML5 language contract")
+    if parser.scripts or parser.external_resources:
+        raise AssertionError("manual HTML is not self-contained and script-free")
+    if len(parser.ids) != len(set(parser.ids)):
+        raise AssertionError("manual HTML contains duplicate destinations")
+    internal = [href[1:] for href in parser.hrefs if href.startswith("#")]
+    if not internal or set(internal) - set(parser.ids):
+        raise AssertionError("manual HTML contains an unresolved internal link")
+    if [href for href in parser.hrefs if not href.startswith("#")]:
+        raise AssertionError("manual HTML contains an external link")
+    if not parser.heading_levels or parser.heading_levels[0] != 1:
+        raise AssertionError("manual HTML lacks its top-level heading")
+    if any(
+        current > previous + 1
+        for previous, current in zip(
+            parser.heading_levels, parser.heading_levels[1:]
+        )
+    ):
+        raise AssertionError("manual HTML skips a heading level")
+    if set(parser.table_header_scopes) != {"col", "row"}:
+        raise AssertionError("manual HTML table headers lack scope semantics")
+    if parser.figure_alternatives != _EXPECTED_FIGURE_COUNT:
+        raise AssertionError(
+            "manual HTML figure-alternative inventory changed: "
+            f"{parser.figure_alternatives}"
+        )
+    if parser.figcaptions < parser.figure_alternatives:
+        raise AssertionError("manual HTML figure captions are incomplete")
+    if parser.equations != 33:
+        raise AssertionError(
+            f"manual HTML equation inventory changed: {parser.equations}"
+        )
+    for destination in manual_ia.ALL_DESTINATIONS:
+        if destination.anchor not in parser.ids:
+            raise AssertionError(
+                f"manual HTML destination is missing: {destination.anchor}"
+            )
+    for expected in (
+        "Sector user manual",
+        "Source revision:",
+        "Start here",
+        "Quick calculation",
+        "Input reference",
+        "Method reference",
+        "Brief",
+        "Standard",
+        "Audit",
+        "Limitations &amp; troubleshooting",
+    ):
+        if expected not in text:
+            raise AssertionError(f"expected manual HTML content is missing: {expected}")
+    return text
+
+
 def _unrendered_math_token(text: str) -> str | None:
     """Return a standalone leaked math command without matching prose substrings."""
     visible_text = "\n".join(
@@ -80,6 +189,33 @@ def _unrendered_math_token(text: str) -> str | None:
         ):
             return token
     return None
+
+
+def validate_visible_contents_destinations(reader, outline_entries) -> None:
+    """Require every Part link across the complete visible contents pages."""
+
+    page_ids = {
+        page.indirect_reference.idnum: number
+        for number, page in enumerate(reader.pages, start=1)
+    }
+    part_pages = {
+        page for title, page in outline_entries
+        if title in manual._PART_SUMMARIES
+    }
+    if not part_pages:
+        raise AssertionError("the manual outline contains no Parts")
+    contents_links = set()
+    first_part_page = min(part_pages)
+    for contents_page in reader.pages[: first_part_page - 1]:
+        for reference in contents_page.get("/Annots") or []:
+            annotation = reference.get_object()
+            destination = annotation.get("/Dest")
+            if annotation.get("/Subtype") == "/Link" and destination:
+                contents_links.add(page_ids.get(destination[0].idnum))
+    if not part_pages.issubset(contents_links):
+        raise AssertionError(
+            "the visible manual contents does not link to every part"
+        )
 
 
 def validate_pdf_content(pdf: bytes) -> str:
@@ -126,30 +262,40 @@ def validate_pdf_content(pdf: bytes) -> str:
         raise AssertionError(
             f"expected detailed manual bookmarks, found {len(outline_titles)}"
         )
-
-    page_ids = {
-        page.indirect_reference.idnum: number
-        for number, page in enumerate(reader.pages, start=1)
+    required_titles = {
+        *(item.heading for item in manual_ia.INPUT_STAGES),
+        *(item.heading for item in manual_ia.RESULT_VIEWS),
+        *(item.heading for item in manual_ia.METHODS),
     }
-    contents_links = set()
-    for reference in reader.pages[0].get("/Annots") or []:
-        annotation = reference.get_object()
-        destination = annotation.get("/Dest")
-        if annotation.get("/Subtype") == "/Link" and destination:
-            contents_links.add(page_ids.get(destination[0].idnum))
-    part_pages = {
-        page for title, page in outline_entries
-        if title in manual._PART_SUMMARIES
-    }
-    if not part_pages.issubset(contents_links):
+    missing_titles = required_titles - set(outline_titles)
+    if missing_titles:
         raise AssertionError(
-            "the visible manual contents does not link to every part"
+            "manual detailed bookmarks are missing: "
+            + ", ".join(sorted(missing_titles))
         )
+
+    metadata = reader.metadata
+    if metadata.title != f"Sector user manual v{__version__}":
+        raise AssertionError("manual PDF title metadata changed")
+    if metadata.author != manual.APP_AUTHOR:
+        raise AssertionError("manual PDF author metadata changed")
+    if "input reference" not in str(metadata.subject or "").lower():
+        raise AssertionError("manual PDF subject metadata is incomplete")
+    if "structural engineering" not in str(
+        metadata.get("/Keywords", "")
+    ).lower():
+        raise AssertionError("manual PDF keyword metadata is incomplete")
+    if reader.trailer["/Root"].get("/Lang") != "en":
+        raise AssertionError("manual PDF language metadata changed")
+
+    validate_visible_contents_destinations(reader, outline_entries)
 
     for number, page in enumerate(reader.pages, start=1):
         page_text = page.extract_text() or ""
         if f"Sector v{__version__} - user manual" not in page_text:
             raise AssertionError(f"page {number} is missing the manual footer")
+        if "Rev:" not in page_text:
+            raise AssertionError(f"page {number} is missing the manual revision")
 
     for expected in (
         "Sector user manual",
@@ -196,14 +342,18 @@ def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     output.mkdir(parents=True, exist_ok=True)
     pdf = build_fixture_pdf()
     validate_pdf_content(pdf)
+    html = build_fixture_html()
+    validate_html_content(html)
     pdf_path = output / "sector-manual-reference.pdf"
     pdf_path.write_bytes(pdf)
+    html_path = output / "sector-manual-reference.html"
+    html_path.write_bytes(html)
     pages = render_pdf(pdf)
     validate_raster_pages(
         pages, min_pages=6, furniture=MANUAL_FURNITURE
     )
     validate_crops(pages, _MANUAL_CROPS)
-    paths = [pdf_path]
+    paths = [pdf_path, html_path]
     for index, page in enumerate(pages, start=1):
         path = output / f"sector-manual-page-{index:02d}.png"
         page.save(path, format="PNG")
@@ -216,7 +366,10 @@ def main() -> int:
     parser.add_argument("--output", type=pathlib.Path, required=True)
     args = parser.parse_args()
     paths = write_fixture(args.output)
-    print(f"Rendered {len(paths) - 1} manual pages to {args.output}")
+    print(
+        f"Rendered {len(paths) - 2} manual pages and accessible HTML to "
+        f"{args.output}"
+    )
     return 0
 
 

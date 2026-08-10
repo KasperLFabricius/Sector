@@ -3,9 +3,10 @@
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
 Released Sector 0.92 projects used schema 23. The in-development Sector 0.93
-line accepts only current schema version 24 and carries no legacy project
-migration. Retired component-mapped bridge inputs are deliberately absent from
-the schema.
+line accepts only current schema version 24 and carries no legacy schema
+migration. An exact in-schema migration retains the two report labels written
+by early schema-24 builds. Retired component-mapped bridge inputs are
+deliberately absent from the schema.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import numpy as np
 import pandas as pd
 import reinforcement_table as rebar_table
 
-from app import modelled_direction
+from app import modelled_direction, report_profiles
 from app.table_field_definitions import decimal_issue_ledger
 from sector import __version__ as sector_version
 from sector import capacity, design_standards, geometry, heightened_crack_control
@@ -149,14 +150,19 @@ SCALAR_KEYS = [
     "capacity_steel_material_id", "label_scale", "label_min_gap",
     # Project/report metadata. No checker/approver sign-off fields.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev",
-    "rep_author", "rep_comments", "rep_report_content",
+    "rep_author", "rep_comments",
     # Local application preferences that are meaningful on restore.
     "autosave_on", "autosave_min",
 ]
 
-# Project-owned wording that must survive save/load without becoming a
-# calculation input or changing the calculation-input hash.
-PRESENTATION_SCALAR_KEYS = (modelled_direction.ALIAS_KEY,)
+# Project-owned presentation choices that must survive save/load without
+# becoming calculation inputs or changing the calculation-input hash.
+REPORT_PROFILE_KEY = "rep_report_content"
+PRESENTATION_SCALAR_KEYS = (modelled_direction.ALIAS_KEY, REPORT_PROFILE_KEY)
+_LEGACY_REPORT_PROFILE_LABELS = {
+    "Default report": report_profiles.STANDARD_PROFILE.label,
+    "Default report + QA appendix": report_profiles.AUDIT_PROFILE.label,
+}
 
 PREV_MARKERS = {
     "conc_prev": "conc_preset",
@@ -565,8 +571,27 @@ def _canonical_presentation(scalars: Mapping) -> dict:
     return {
         modelled_direction.ALIAS_KEY: modelled_direction.normalise_alias(
             scalars.get(modelled_direction.ALIAS_KEY)
-        )
+        ),
+        REPORT_PROFILE_KEY: normalise_report_profile(
+            scalars.get(REPORT_PROFILE_KEY)
+        ),
     }
+
+
+def normalise_report_profile(value=None) -> str:
+    """Return one exact current report-profile label.
+
+    Early schema-24 builds persisted two exact labels before Brief, Standard and
+    Audit were introduced. Only those two spellings migrate; every other unknown
+    or inexact value fails closed instead of silently selecting Standard.
+    """
+
+    if isinstance(value, str) and value in _LEGACY_REPORT_PROFILE_LABELS:
+        return _LEGACY_REPORT_PROFILE_LABELS[value]
+    try:
+        return report_profiles.resolve_profile(value).label
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unknown persisted report profile {value!r}") from exc
 
 
 def _input_digest(content: Mapping) -> str:
@@ -866,7 +891,10 @@ def parse_project(text: str):
         for key in PROJECT_TABLE_KEYS
     }
     raw_scalars = data["scalars"]
-    unknown_scalars = set(raw_scalars) - set(SCALAR_KEYS)
+    legacy_report_profile = raw_scalars.get(REPORT_PROFILE_KEY)
+    unknown_scalars = (
+        set(raw_scalars) - set(SCALAR_KEYS) - {REPORT_PROFILE_KEY}
+    )
     if unknown_scalars:
         raise ValueError(
             "unknown current-schema inputs: "
@@ -886,6 +914,19 @@ def parse_project(text: str):
         modelled_direction.normalise_alias(
             raw_presentation.get(modelled_direction.ALIAS_KEY)
         )
+    )
+    current_report_profile = raw_presentation.get(REPORT_PROFILE_KEY)
+    if current_report_profile is None:
+        current_report_profile = legacy_report_profile
+    elif legacy_report_profile is not None:
+        if normalise_report_profile(current_report_profile) != (
+            normalise_report_profile(legacy_report_profile)
+        ):
+            raise ValueError(
+                "conflicting report profiles in scalars and presentation"
+            )
+    scalars[REPORT_PROFILE_KEY] = normalise_report_profile(
+        current_report_profile
     )
     _validate_geometry(tables)
     return tables, scalars

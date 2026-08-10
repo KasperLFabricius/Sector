@@ -19,7 +19,7 @@ class Palette:
     primary_dark: str = "#0D2440"
     ink: str = "#2C2C2A"
     muted: str = "#5A5A5A"
-    manual_muted: str = "#808080"
+    manual_muted: str = "#5A5A5A"
     publication_reference: str = "#5A5A56"
     rule: str = "#9AA5B1"
     report_header: str = "#E8ECF2"
@@ -78,13 +78,13 @@ MANUAL_TEXT = MappingProxyType({
     "h3": TextStyle(11, before=6, after=3, bold=True, keep_next=True),
     "body": TextStyle(9.5, leading=13, after=4),
     "math": TextStyle(11, leading=15, before=6, after=6),
-    "small": TextStyle(8, leading=11, color=PALETTE.manual_muted),
+    "small": TextStyle(9.5, leading=12, color=PALETTE.manual_muted),
     "publication_ref": TextStyle(
-        8, leading=10, before=2, after=2, color=PALETTE.manual_muted,
+        9.5, leading=12, before=2, after=2, color=PALETTE.manual_muted,
         keep_next=True,
     ),
     "publication_caption": TextStyle(
-        8, leading=10, before=2, after=3, color=PALETTE.ink,
+        9.5, leading=12, before=2, after=3, color=PALETTE.ink,
         keep_next=True,
     ),
 })
