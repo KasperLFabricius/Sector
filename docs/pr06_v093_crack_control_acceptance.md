@@ -190,6 +190,12 @@ The final correction then received its own current-candidate evidence:
 - focused Ruff runtime checks, the full Ruff policy, the strict mypy policy and
   `git diff --check` passed.
 
+After transplant onto the accepted PR-05 squash, an exact-head browser-free
+matrix across all changed core, persistence, design-basis, SLS, manual, report,
+equation-inventory, reproducible-example and presentation test files produced
+1,120 passed. The programme, ASCII and retired-trace group separately produced
+198 passed on that restacked candidate.
+
 The controlled-source review independently confirmed the pinned source
 metadata and every numerical benchmark, then returned clean after two bounded
 P2 evidence corrections. The full restack review preserved symmetric project
