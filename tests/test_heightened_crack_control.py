@@ -148,6 +148,84 @@ def test_smooth_multiplier_applies_outside_the_complete_base_ratio():
     )
 
 
+def test_dual_visual_source_benchmark_closes_fine_coarse_and_smooth_routes():
+    common = {
+        "permitted_crack_width_mm": 0.30,
+        "effective_tension_area_mm2": 60_000.0,
+        "provided_reinforcement_area_mm2": 1_600.0,
+    }
+    fine = _calculate(**common)
+    coarse = _calculate(crack_system="coarse", **common)
+    smooth = _calculate(reinforcement_surface="smooth", **common)
+    smooth_coarse = _calculate(
+        crack_system="coarse",
+        reinforcement_surface="smooth",
+        **common,
+    )
+
+    assert fine.base_reinforcement_ratio == pytest.approx(
+        0.01390443574307614,
+        rel=0.0,
+        abs=1e-12,
+    )
+    assert fine.required_reinforcement_area_mm2 == pytest.approx(
+        834.26614458456845,
+        rel=0.0,
+        abs=1e-9,
+    )
+    assert fine.comparison_ratio == pytest.approx(
+        0.52141634036535534,
+        rel=0.0,
+        abs=1e-12,
+    )
+
+    assert coarse.base_reinforcement_ratio == pytest.approx(
+        0.00983192080250175,
+        rel=0.0,
+        abs=1e-12,
+    )
+    assert coarse.required_reinforcement_area_mm2 == pytest.approx(
+        589.91524815010496,
+        rel=0.0,
+        abs=1e-9,
+    )
+    assert coarse.comparison_ratio == pytest.approx(
+        0.3686970300938156,
+        rel=0.0,
+        abs=1e-12,
+    )
+
+    assert smooth.base_reinforcement_ratio == pytest.approx(
+        fine.base_reinforcement_ratio,
+        rel=0.0,
+        abs=1e-15,
+    )
+    assert smooth.required_reinforcement_ratio == pytest.approx(
+        0.019663841605003504,
+        rel=0.0,
+        abs=1e-12,
+    )
+    assert smooth.required_reinforcement_area_mm2 == pytest.approx(
+        1179.8304963002101,
+        rel=0.0,
+        abs=1e-9,
+    )
+    assert smooth.comparison_ratio == pytest.approx(
+        0.73739406018763132,
+        rel=0.0,
+        abs=1e-12,
+    )
+
+    assert smooth.required_reinforcement_ratio / (
+        fine.required_reinforcement_ratio
+    ) == pytest.approx(math.sqrt(2.0), rel=0.0, abs=1e-15)
+    assert smooth_coarse.required_reinforcement_ratio == pytest.approx(
+        fine.required_reinforcement_ratio,
+        rel=0.0,
+        abs=1e-15,
+    )
+
+
 def test_exact_area_tie_is_at_least_the_calculated_requirement():
     result = _calculate(
         bar_diameter_mm=4.0,
