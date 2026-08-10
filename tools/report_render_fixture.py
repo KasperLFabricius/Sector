@@ -62,6 +62,7 @@ from tools.publication_preflight import (
 
 __all__ = (
     "render_pdf",
+    "validate_equation_source_colocation",
     "validate_outline_destinations",
     "validate_rendered_pages",
     "validate_report_page_semantics",
@@ -1014,6 +1015,13 @@ def _results(inp: dict | None = None) -> dict:
     elastic_2["max_steel"] = 245.0
     elastic_2["elements"][0]["total_mpa"] = 245.0
     elastic_2["stress_outputs"]["reinforcement"]["value"] = 245.0
+    minimum_strength_coefficient = 0.26 * 2.9 / 500.0
+    minimum_floor_coefficient = 0.0013
+    minimum_selected_coefficient = max(
+        minimum_strength_coefficient,
+        minimum_floor_coefficient,
+    )
+    minimum_area_mm2 = minimum_selected_coefficient * 200.0 * 270.0
     minimum = {
         "status": "PASS",
         "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
@@ -1024,9 +1032,14 @@ def _results(inp: dict | None = None) -> dict:
         "checks": [{
             "type": "minimum area", "status": "PASS",
             "axis": "x", "face": "bottom",
-            "as_provided_mm2": 500.0, "as_min_mm2": 320.0,
-            "utilisation": 0.64, "bt_mm": 200.0, "d_mm": 270.0,
+            "as_provided_mm2": 500.0, "as_min_mm2": minimum_area_mm2,
+            "utilisation": minimum_area_mm2 / 500.0,
+            "bt_mm": 200.0, "d_mm": 270.0,
             "fctm_mpa": 2.9, "fyk_mpa": 500.0, "bar_ids": ["R1"],
+            "strength_coefficient": minimum_strength_coefficient,
+            "floor_coefficient": minimum_floor_coefficient,
+            "selected_coefficient": minimum_selected_coefficient,
+            "governing_coefficient": "0.26 fctm / fyk",
             "tension_direction": [0.0, -1.0], "neutral_c_m": 0.0,
             "neutral_point_m": [0.0, 0.0],
             "model": "gross-concrete resultant tension half-plane",
@@ -1036,21 +1049,21 @@ def _results(inp: dict | None = None) -> dict:
             "Ordinary reinforcement is assumed anchored to develop the entered fyk.",
         ],
     }
-    spacing_pair = {
-        "status": "PASS", "first_id": "R1", "second_id": "R2",
-        "first_kind": "bar", "second_kind": "bar", "clear_mm": 216.1,
-        "required_mm": 25.23, "margin_mm": 190.87,
-        "centre_distance_mm": 240.0, "phi_first_mm": 25.23,
-        "phi_second_mm": 22.57,
-    }
-    spacing = {
-        "status": "PASS",
-        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
-        "clause": "8.2(2)", "d_upper_mm": 16.0,
-        "include_tendons": False, "pairs": [spacing_pair],
-        "governing": spacing_pair, "reason": None,
-        "limitations": ["Pairwise edge-to-edge distance is checked."],
-    }
+    spacing = detailing.clear_spacing(
+        [
+            {
+                "id": "R1", "kind": "bar", "x_mm": 0.0, "y_mm": 0.0,
+                "diameter_mm": 25.23,
+            },
+            {
+                "id": "R2", "kind": "bar", "x_mm": 240.0, "y_mm": 0.0,
+                "diameter_mm": 22.57,
+            },
+        ],
+        d_upper_mm=16.0,
+        edition=inp["detailing_edition"],
+        include_tendons=False,
+    )
     transverse_detailing = detailing.transverse_reinforcement(
         edition=inp["detailing_edition"],
         fck_mpa=inp["concrete"].fck,
@@ -1633,6 +1646,38 @@ def validate_worked_example_text(text: str) -> None:
             )
 
 
+def validate_equation_source_colocation(
+    page_texts: list[str],
+    *,
+    expected_equation_count: int = 88,
+) -> None:
+    """Require every governed equation identity and source on the same page."""
+    equation_count = 0
+    for page_number, page_text in enumerate(page_texts, start=1):
+        identities = re.findall(
+            r"(?m)^(?:Equation \([^\n]+\) \| )?"
+            r"EQ-[A-Z0-9][A-Z0-9.\-]+\s*$",
+            page_text,
+        )
+        sources = re.findall(r"(?m)^Source / method note:", page_text)
+        source_ends = re.findall(
+            r"SECTOR-SOURCE-END\[sector-equation-[^\]]+\]",
+            page_text,
+        )
+        if not (len(identities) == len(sources) == len(source_ends)):
+            raise AssertionError(
+                f"equation/source page split on page {page_number}: "
+                f"{len(identities)} identities, {len(sources)} source starts "
+                f"and {len(source_ends)} source ends"
+            )
+        equation_count += len(identities)
+    if equation_count != expected_equation_count:
+        raise AssertionError(
+            f"expected {expected_equation_count} governed equations, "
+            f"found {equation_count}"
+        )
+
+
 def validate_pdf_content(
     pdf: bytes,
     *,
@@ -1641,6 +1686,7 @@ def validate_pdf_content(
     """Reject a report that lost expected figures or core engineering content."""
     reader, page_texts = preflight_pdf(pdf, min_pages=6)
     text = "\n".join(page_texts)
+    validate_equation_source_colocation(page_texts)
     if "figure unavailable" in text.lower():
         raise AssertionError("the report contains an unavailable-figure placeholder")
     validate_worked_example_text(text)

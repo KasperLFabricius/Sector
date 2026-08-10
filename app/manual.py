@@ -2115,6 +2115,7 @@ def _render_md_pdf(text, flow, styles, Paragraph):
 
 def _render_manual_equation_pdf(
     equation,
+    compiled_equation,
     flow,
     styles,
     Paragraph,
@@ -2128,6 +2129,11 @@ def _render_manual_equation_pdf(
     """Render one exact contracted equation as a standard PDF block."""
 
     contract = equation.contract
+    compiled_source, equation_flowable = compiled_equation
+    if compiled_source != equation:
+        raise ValueError(
+            f"Compiled manual equation identity changed for {contract.key!r}."
+        )
     anchor = _manual_equation_anchor(contract.number)
     heading = (
         f'<a name="{anchor}"/><b>Equation {contract.number}</b> | '
@@ -2141,10 +2147,7 @@ def _render_manual_equation_pdf(
     dependencies = dependency_numbers(equation)
     metadata = [
         Paragraph(heading, styles["MBody"]),
-        Paragraph(
-            _latex_to_rl(equation.equation.equation.expression),
-            styles["MMath"],
-        ),
+        equation_flowable,
         Paragraph(f"<b>Result:</b> {results}", styles["MSmall"]),
     ]
     if dependencies:
@@ -2197,6 +2200,70 @@ def _render_manual_equation_pdf(
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
     flow.extend((table, Spacer(1, 6)))
+
+
+def _compile_manual_equation_pdf_flowables(published_blocks, frame_width):
+    """Compile and preflight every governed display before publication starts.
+
+    The import is intentionally canonical and local: opening the Streamlit manual
+    must not pull ReportLab's equation renderer into the application startup path.
+    The returned association retains each complete contracted publication object,
+    so a key cannot silently select a flowable compiled from another equation.
+    """
+
+    from dataclasses import replace
+
+    from app import publication_equation_layout
+
+    style = replace(
+        publication_equation_layout.DEFAULT_EQUATION_STYLE,
+        font_size=8.7,
+        left_indent=0.0,
+        right_indent=0.0,
+        top_padding=6.0,
+        bottom_padding=6.0,
+        ink=publication_theme.PALETTE.ink,
+        muted_ink=publication_theme.PALETTE.manual_muted,
+    )
+    compiled = {}
+    governed_count = 0
+    for published in published_blocks:
+        block = published.block
+        if block[0] != EQUATION_BLOCK:
+            continue
+        governed_count += 1
+        equation = block[1]
+        key = equation.contract.key
+        if key in compiled:
+            raise ValueError(f"Duplicate governed manual equation key: {key!r}.")
+        expression = publication_equation_layout.compile_manual_math(
+            equation.equation.equation.expression
+        )
+        equation_block = publication_equation_layout.EquationBlock(
+            (
+                publication_equation_layout.EquationLine(
+                    "manual-expression",
+                    expression,
+                ),
+            )
+        )
+        # Font, glyph, width and height failures are publication failures too.
+        # Preflight all of them before a figure server or output canvas can start.
+        publication_equation_layout.layout_equation(
+            equation_block,
+            frame_width,
+            style=style,
+        )
+        compiled[key] = (
+            equation,
+            publication_equation_layout.EquationFlowable(
+                equation_block,
+                style=style,
+            ),
+        )
+    if len(compiled) != governed_count:
+        raise ValueError("Governed manual equation compilation is incomplete.")
+    return compiled
 
 
 _FIG_EXPORT_TIMEOUT_S = 30.0
@@ -2293,6 +2360,17 @@ def build_manual_pdf(buffer, figures=True):
                                     SimpleDocTemplate, Spacer, Table, TableStyle)
     from reportlab.platypus.tableofcontents import TableOfContents
 
+    published_blocks = tuple(
+        publish_manual_blocks(manual_publication_blocks(manual_blocks()))
+    )
+    # ReportLab's default frame consumes 6 pt of padding at each side in
+    # addition to the document margins. Preflight the exact usable width.
+    equation_frame_w = A4[0] - 4.4 * cm - 12.0
+    compiled_equations = _compile_manual_equation_pdf_flowables(
+        published_blocks,
+        equation_frame_w,
+    )
+
     styles = _manual_pdf_styles(
         report, colors, ParagraphStyle, getSampleStyleSheet, TA_CENTER
     )
@@ -2370,9 +2448,7 @@ def build_manual_pdf(buffer, figures=True):
         if _call_with_timeout(report.ensure_image_server,
                               _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
             figures_hung = True
-    for published in publish_manual_blocks(
-        manual_publication_blocks(manual_blocks())
-    ):
+    for published in published_blocks:
         block = published.block
         item = published.item
         kind = block[0]
@@ -2400,8 +2476,14 @@ def build_manual_pdf(buffer, figures=True):
         elif kind == "md":
             _render_md_pdf(block[1], flow, styles, Paragraph)
         elif kind == EQUATION_BLOCK:
+            key = block[1].contract.key
+            if key not in compiled_equations:
+                raise ValueError(
+                    f"Governed manual equation was not precompiled: {key!r}."
+                )
             _render_manual_equation_pdf(
-                block[1], flow, styles, Paragraph, Table, TableStyle,
+                block[1], compiled_equations[key], flow, styles,
+                Paragraph, Table, TableStyle,
                 KeepTogether, Spacer, colors, page_w,
             )
         elif kind == "callout":

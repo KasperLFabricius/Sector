@@ -21,7 +21,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import publication_equation_layout as equations  # noqa: E402
+import publication_equation_layout as equations
 
 SQRT = chr(0x221A)
 LE = chr(0x2264)
@@ -240,6 +240,7 @@ def test_report_corpus_aliases_entities_groups_and_radical_dialects_compile() ->
 
 def test_role_specific_report_compilers_accept_fragments_and_verdicts_only_explicitly() -> None:
     fragment = equations.compile_report_fragment("= max(13.4 / (1 + 2.0), 0.123) MPa")
+    percentage = equations.compile_report_fragment("= 83.2%")
     cracked = equations.compile_report_math(
         "lambda<sub>cr</sub> = 0.925  ->  section is cracked "
         "(cracks when lambda<sub>cr</sub> &lt;= 1)"
@@ -254,6 +255,9 @@ def test_role_specific_report_compilers_accept_fragments_and_verdicts_only_expli
 
     assert isinstance(fragment, equations.RelationFragment)
     assert equations.linear_math_text(fragment).startswith("= max(")
+    assert equations.linear_math_text(percentage) == "= 83.2%"
+    with pytest.raises(equations.EquationLayoutError, match="duplicate postfix percent"):
+        equations.compile_report_fragment("= 83.2%%")
     assert "section is cracked" in equations.linear_math_text(cracked)
     assert "INVALID; no verified" in equations.linear_math_text(invalid)
     assert isinstance(literal, equations.LiteralText)
@@ -261,6 +265,27 @@ def test_role_specific_report_compilers_accept_fragments_and_verdicts_only_expli
         equations.compile_report_math("= 13.4 / (1 + 2.0)")
     with pytest.raises(equations.EquationLayoutError, match="raw markup"):
         equations.compile_report_literal("<b>untrusted</b>")
+
+
+def test_equation_line_semantic_text_accepts_relations_but_rejects_markup_and_tex() -> None:
+    expression = equations.compile_report_math("x = y")
+
+    for semantic in ("x < y", "x -> y"):
+        line = equations.EquationLine(
+            "symbolic",
+            expression,
+            "Symbolic:",
+            semantic,
+        )
+        assert line.semantic_text == semantic
+    for semantic in ("<b>x</b>", r"\frac{x}{y}", "$x$"):
+        with pytest.raises(equations.EquationLayoutError):
+            equations.EquationLine(
+                "symbolic",
+                expression,
+                "Symbolic:",
+                semantic,
+            )
 
 
 def test_relation_alignment_preserves_internal_authored_spaces() -> None:
@@ -285,6 +310,84 @@ def test_relation_alignment_preserves_internal_authored_spaces() -> None:
     assert spaced_axis > compact_axis
 
 
+def test_long_unbreakable_rhs_hangs_below_the_aligned_relation_without_clipping() -> None:
+    block = equations.EquationBlock(
+        (
+            equations.EquationLine(
+                "reference",
+                equations.compile_report_math(
+                    "sigma<sub>total,Ed,el,reinforcement,candidate</sub> = 1.0"
+                ),
+                "Reference:",
+            ),
+            equations.EquationLine(
+                "symbolic",
+                equations.compile_report_math(
+                    "eta<sub>cc</sub> = min(1.10064242, 1.00000000)"
+                ),
+                "Symbolic expression:",
+            ),
+        )
+    )
+
+    geometry = equations.layout_equation(block, 380.0)
+
+    symbolic_rows = [row for row in geometry.rows if row.role == "symbolic"]
+    assert len(symbolic_rows) == 2
+    assert symbolic_rows[0].relation_x is not None
+    assert symbolic_rows[1].relation_x is None
+    assert all(
+        0.0 <= node.bounds.x
+        and node.bounds.right <= geometry.width + 1e-7
+        for node in geometry.nodes
+    )
+
+
+def test_long_result_label_moves_above_math_and_remains_visible_once() -> None:
+    label = (
+        "Result - retained resistance "
+        "[dimensionless; displayed as percent]:"
+    )
+    block = equations.EquationBlock(
+        (
+            equations.EquationLine(
+                "symbolic",
+                equations.compile_report_math("u = R<sub>Ed</sub>/R<sub>Rd</sub>"),
+                "Symbolic expression:",
+            ),
+            equations.EquationLine(
+                "substitution",
+                equations.compile_report_fragment("= 0.832"),
+                "Numerical substitution:",
+            ),
+            equations.EquationLine(
+                "result",
+                equations.compile_report_math("u = 83.2%"),
+                label,
+            ),
+        )
+    )
+
+    geometry = equations.layout_equation(block, 300.0)
+
+    label_rows = [
+        placement.text
+        for placement in geometry.texts
+        if placement.role == "label-result"
+    ]
+    assert " ".join(label_rows) == label
+    relation_axes = [
+        row.relation_x for row in geometry.rows if row.relation_x is not None
+    ]
+    assert len(relation_axes) == 3
+    assert relation_axes == pytest.approx([relation_axes[0]] * 3)
+    assert all(
+        0.0 <= node.bounds.x
+        and node.bounds.right <= geometry.width + 1e-7
+        for node in geometry.nodes
+    )
+
+
 def test_every_governed_manual_expression_compiles_without_migration_loss() -> None:
     import manual
     import manual_equation_publication as publication
@@ -295,7 +398,7 @@ def test_every_governed_manual_expression_compiles_without_migration_loss() -> N
         if block[0] == publication.EQUATION_BLOCK
     )
 
-    assert len(governed) == 32
+    assert len(governed) == 33
     assert all(
         isinstance(equations.compile_manual_math(source), equations.MathNode)
         for source in governed

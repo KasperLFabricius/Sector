@@ -850,6 +850,8 @@ schema, AppTest, report/manual/equation inventories and stale-result tests.
 
 ### PR-07A - Eurocode-style shared equation renderer
 
+Acceptance record: [PR-07A shared equation-renderer acceptance](pr07a_v093_equation_renderer_acceptance.md).
+
 Scope:
 
 - implement the constrained shared math layout model;

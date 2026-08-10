@@ -245,6 +245,25 @@ def _require_plain_text(value: str, label: str, *, allow_empty: bool = False) ->
         raise EquationLayoutError(f"{label} contains raw markup or TeX.")
 
 
+def _require_semantic_text(value: str, label: str) -> None:
+    """Validate already-normalized searchable text that is never markup-parsed."""
+
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be text.")
+    if not value.strip():
+        raise EquationLayoutError(f"{label} must not be empty.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise EquationLayoutError(f"{label} contains a control character.")
+    if "\\" in value or "$" in value:
+        raise EquationLayoutError(f"{label} contains raw TeX.")
+    if re.search(
+        r"</?(?:a|b|br|font|i|link|sub|sup|super)\b[^>]*>",
+        value,
+        flags=re.IGNORECASE,
+    ):
+        raise EquationLayoutError(f"{label} contains raw markup.")
+
+
 @dataclass(frozen=True, slots=True)
 class EquationFonts:
     """Required embedded faces plus the deliberate scalar slant transform."""
@@ -552,6 +571,7 @@ class EquationLine:
     role: str
     expression: MathNode
     label: str | None = None
+    semantic_text: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, str) or _PLAIN_ROLE_RE.fullmatch(self.role) is None:
@@ -560,6 +580,11 @@ class EquationLine:
             raise TypeError("an equation line requires a MathNode expression.")
         if self.label is not None:
             _require_plain_text(self.label, "equation-line label")
+        if self.semantic_text is not None:
+            _require_semantic_text(
+                self.semantic_text,
+                "equation-line semantic text",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1497,11 +1522,21 @@ class _Parser:
                 f"empty mathematical operand at position {self.current.position}."
             )
         left = self._prefix(stops)
+        postfix_percent = False
         while True:
             self._skip_spaces()
             token = self.current
             if token.kind in stops or token.kind == "EOF":
                 break
+            if token.kind == "OP" and token.value == "%":
+                if postfix_percent:
+                    raise EquationLayoutError(
+                        f"duplicate postfix percent at position {token.position}."
+                    )
+                self._advance()
+                left = math_sequence(left, Operator("%"))
+                postfix_percent = True
+                continue
             if token.kind == "OP" and token.value in _BINARY_PRECEDENCE:
                 precedence = _BINARY_PRECEDENCE[token.value]
                 if precedence < minimum:
@@ -1923,6 +1958,8 @@ class _RowPlan:
     x_positions: tuple[float, ...]
     label: MathLayout | None
     relation_x: float | None
+    separate_label_rows: tuple[MathLayout, ...] = ()
+    math_offset: float = 0.0
 
 
 def _plain_layout(
@@ -1979,10 +2016,67 @@ def _wrap_plain_text(
     return tuple(rows)
 
 
+def _wrap_label_text(
+    text: str,
+    maximum_width: float,
+    size: float,
+    style: EquationStyle,
+    role: str,
+) -> tuple[MathLayout, ...]:
+    words = text.split()
+    if not words:
+        return ()
+    rows: list[MathLayout] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = current + " " + word
+        layout = _plain_layout(
+            candidate,
+            size,
+            style,
+            bold=True,
+            role=f"label-{role}",
+            muted=False,
+        )
+        if layout.width <= maximum_width + 1e-7:
+            current = candidate
+            continue
+        row = _plain_layout(
+            current,
+            size,
+            style,
+            bold=True,
+            role=f"label-{role}",
+            muted=False,
+        )
+        if row.width > maximum_width + 1e-7:
+            raise EquationLayoutError(
+                "an unbreakable equation-label token exceeds the frame width."
+            )
+        rows.append(row)
+        current = word
+    final = _plain_layout(
+        current,
+        size,
+        style,
+        bold=True,
+        role=f"label-{role}",
+        muted=False,
+    )
+    if final.width > maximum_width + 1e-7:
+        raise EquationLayoutError(
+            "an unbreakable equation-label token exceeds the frame width."
+        )
+    rows.append(final)
+    return tuple(rows)
+
+
 def _line_plans(
     block: EquationBlock,
     math_width: float,
     label_width: float,
+    content_width: float,
+    inline_math_offset: float,
     style: EquationStyle,
 ) -> tuple[_RowPlan, ...]:
     relations = [_split_relation(line.expression) for line in block.lines]
@@ -2016,31 +2110,135 @@ def _line_plans(
             if line.label is not None
             else None
         )
+        separate_label_rows: tuple[MathLayout, ...] = ()
         if label is not None and label.width > label_width + 1e-7:
-            raise EquationLayoutError("equation label width changed during layout.")
+            assert line.label is not None
+            separate_label_rows = _wrap_label_text(
+                line.label,
+                content_width,
+                style.label_size,
+                style,
+                line.role,
+            )
+            label = None
         if parts is None:
-            layouts = _wrap_math(line.expression, math_width, style.font_size, style)
+            plan_math_width = (
+                content_width if separate_label_rows else math_width
+            )
+            plan_math_offset = (
+                0.0 if separate_label_rows else inline_math_offset
+            )
+            layouts = _wrap_math(
+                line.expression,
+                plan_math_width,
+                style.font_size,
+                style,
+            )
             x_positions = tuple(0.0 for _layout in layouts)
             plans.append(
                 _RowPlan(
                     line.role,
-                    linear_math_text(line.expression),
+                    line.semantic_text or linear_math_text(line.expression),
                     layouts,
                     x_positions,
                     label,
                     None,
+                    separate_label_rows,
+                    plan_math_offset,
                 )
             )
             continue
         assert relation is not None
+        # A wrapped label sits above the equation, but it must not change the
+        # shared relation axis.  All relation-bearing rows retain the common
+        # mathematical column used by symbolic, substitution and result rows.
+        plan_math_width = math_width
+        plan_math_offset = inline_math_offset
         relation_gap = style.font_size * 0.24
         right_x = relation_x + relation.width + 2.0 * relation_gap
-        right_width = math_width - right_x
-        if relation_x + relation.width > math_width + 1e-7:
+        right_width = plan_math_width - right_x
+        if relation_x + relation.width > plan_math_width + 1e-7:
             raise EquationLayoutError("aligned relation leaves no usable equation width.")
-        right_rows = _wrap_math(parts[2], right_width, style.font_size, style)
+        try:
+            right_rows = _wrap_math(
+                parts[2], right_width, style.font_size, style
+            )
+        except EquationLayoutError as aligned_error:
+            # A long but otherwise valid right-hand atom (for example a
+            # two-candidate min/max expression) may not fit after the shared
+            # relation axis. Keep the aligned left operand and relation on the
+            # first row, then hang the complete right operand below using the
+            # full mathematical column. Unsupported or frame-wide atoms still
+            # fail closed in the second _wrap_math call.
+            hanging_offset = 0.0
+            try:
+                hanging_rows = _wrap_math(
+                    parts[2], plan_math_width, style.font_size, style
+                )
+            except EquationLayoutError:
+                try:
+                    hanging_rows = _wrap_math(
+                        parts[2], content_width, style.font_size, style
+                    )
+                except EquationLayoutError:
+                    raise aligned_error
+                # The first row keeps the shared relation axis.  A genuinely
+                # oversized continuation may reclaim the label column below,
+                # where no label is drawn.
+                hanging_offset = -inline_math_offset
+            aligned = tuple(
+                layout
+                for layout in (left, relation)
+                if layout is not None
+            )
+            first_height, baseline = _aligned_metrics(aligned)
+            moved_left = (
+                _translate_layout(
+                    left, relation_x - left.width, baseline - left.baseline
+                )
+                if left is not None
+                else None
+            )
+            moved_relation = _translate_layout(
+                relation,
+                relation_x + relation_gap,
+                baseline - relation.baseline,
+            )
+            first_layout = MathLayout(
+                relation_x + relation_gap + relation.width,
+                first_height,
+                baseline,
+                (
+                    *(moved_left.texts if moved_left is not None else ()),
+                    *moved_relation.texts,
+                ),
+                (
+                    *(moved_left.rules if moved_left is not None else ()),
+                    *moved_relation.rules,
+                ),
+                (
+                    *(moved_left.nodes if moved_left is not None else ()),
+                    *moved_relation.nodes,
+                ),
+            )
+            plans.append(
+                _RowPlan(
+                    line.role,
+                    line.semantic_text or linear_math_text(line.expression),
+                    (first_layout, *hanging_rows),
+                    (
+                        0.0,
+                        *(hanging_offset for _layout in hanging_rows),
+                    ),
+                    label,
+                    relation_x + relation_gap,
+                    separate_label_rows,
+                    plan_math_offset,
+                )
+            )
+            continue
         first = MathLayout(
-            math_width,
+            plan_math_width,
             max(
                 left.height if left is not None else 0.0,
                 relation.height,
@@ -2100,11 +2298,13 @@ def _line_plans(
         plans.append(
             _RowPlan(
                 line.role,
-                linear_math_text(line.expression),
+                line.semantic_text or linear_math_text(line.expression),
                 layouts,
                 x_positions,
                 label,
                 relation_x + relation_gap,
+                separate_label_rows,
+                plan_math_offset,
             )
         )
     return tuple(plans)
@@ -2141,12 +2341,20 @@ def layout_equation(
         for line in block.lines
         if line.label is not None
     ]
-    label_width = max((label.width for label in labels), default=0.0)
+    maximum_label_width = max((label.width for label in labels), default=0.0)
+    label_width = min(maximum_label_width, content_width * 0.34)
     math_x = style.left_indent + (label_width + style.label_gap if labels else 0.0)
     math_width = available_width - style.right_indent - math_x
     if math_width <= style.font_size:
         raise EquationLayoutError("equation labels leave no usable mathematical width.")
-    plans = _line_plans(block, math_width, label_width, style)
+    plans = _line_plans(
+        block,
+        math_width,
+        label_width,
+        content_width,
+        math_x - style.left_indent,
+        style,
+    )
     identity = (
         _plain_layout(
             block.identity,
@@ -2170,7 +2378,11 @@ def layout_equation(
             default=0.0,
         )
         identity_separate = (
-            math_x + first_right + style.identity_gap + identity.width
+            style.left_indent
+            + plans[0].math_offset
+            + first_right
+            + style.identity_gap
+            + identity.width
             > available_width - style.right_indent
         )
         if identity.width > content_width + 1e-7:
@@ -2185,6 +2397,8 @@ def layout_equation(
     if identity is not None and identity_separate:
         item_heights.append(("identity", identity.height, identity))
     for plan_index, plan in enumerate(plans):
+        for label_row in plan.separate_label_rows:
+            item_heights.append(("line-label", label_row.height, label_row))
         for index, layout in enumerate(plan.layouts):
             label = plan.label if index == 0 else None
             inline_identity = (
@@ -2236,6 +2450,12 @@ def layout_equation(
             )
             texts.extend(moved.texts)
             nodes.extend(moved.nodes)
+        elif kind == "line-label":
+            assert isinstance(payload, MathLayout)
+            moved = _translate_layout(payload, style.left_indent, y)
+            texts.extend(moved.texts)
+            rules.extend(moved.rules)
+            nodes.extend(moved.nodes)
         elif kind == "math":
             assert isinstance(payload, tuple)
             plan, index, label, inline_identity = payload
@@ -2249,7 +2469,11 @@ def layout_equation(
             )
             _row_height, baseline = _aligned_metrics(aligned)
             math_y = y + baseline - math_layout.baseline
-            math_dx = math_x + plan.x_positions[index]
+            math_dx = (
+                style.left_indent
+                + plan.math_offset
+                + plan.x_positions[index]
+            )
             moved_math = _translate_layout(math_layout, math_dx, math_y)
             texts.extend(moved_math.texts)
             rules.extend(moved_math.rules)
@@ -2300,7 +2524,7 @@ def layout_equation(
                         available_width - style.left_indent - style.right_indent,
                         item_height,
                     ),
-                    math_x + plan.relation_x
+                    style.left_indent + plan.math_offset + plan.relation_x
                     if plan.relation_x is not None and index == 0
                     else None,
                     index > 0,
@@ -2382,6 +2606,9 @@ class EquationFlowable(Flowable):
         if self.block.identity is not None:
             parts.append(self.block.identity)
         for line in self.block.lines:
+            if line.semantic_text is not None:
+                parts.append(line.semantic_text)
+                continue
             prefix = f"{line.label} " if line.label is not None else ""
             parts.append(prefix + linear_math_text(line.expression))
         if self.block.source is not None:
@@ -2419,8 +2646,8 @@ class EquationFlowable(Flowable):
 
 
 __all__ = (
-    "Bounds",
     "DEFAULT_EQUATION_STYLE",
+    "Bounds",
     "Delimited",
     "EquationBlock",
     "EquationFlowable",

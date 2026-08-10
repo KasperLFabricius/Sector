@@ -1472,11 +1472,12 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
         "Step 4 - combine the retained element stresses",
     ):
         assert heading in text
-    assert "0.003500000 / 0.175000000" in text
+    assert "3.5e-3" in text
+    assert "0.175 m" in text
     assert "Bisection iterations 8" in text
-    assert "250.000000 + -250.000000 + 0.000000 kN" in text
-    assert "100.000000000 MPa" in text
-    assert "59.595959596 MPa" in text
+    assert "250 + -250 + 0 kN" in text
+    assert "100 MPa" in text
+    assert "59.596 MPa" in text
     assert "internal bisection sequence and integration bands are not published" in (
         text.casefold()
     )
@@ -1695,9 +1696,11 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "A s,min" in text or "As,min" in text
     assert "Reinforcement clear spacing" in text
     assert "R1 - R2" in text
-    assert "0.0015080" in text
+    assert "1.508e-3" in text
+    assert "1.3e-3" in text
+    assert "81.432 mm" in text
     assert "aggregate allowance" in text
-    assert "80.000" in text and "60.000 mm" in text
+    assert "80" in text and "60 mm" in text
     assert "Lap / bundle ID" not in text
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
 
@@ -2930,8 +2933,8 @@ def test_report_publishes_one_retained_critical_user_crack_comparison():
 
     assert flat.count("User-specified crack-width comparison - critical case") == 1
     assert flat.count("EQ-CRACK.USER-LIMIT.COMPARISON") == 1
-    assert "0.213 mm / 0.300 mm" in flat
-    assert "u w = 0.710" in flat or "uw = 0.710" in flat
+    assert "0.213 mm / 0.3 mm" in flat
+    assert "u w = 0.71" in flat or "uw = 0.71" in flat
     assert "WITHIN USER-SPECIFIED LIMIT" in flat
     assert "No user-specified crack-width criterion" not in flat
 
@@ -3079,8 +3082,8 @@ def test_report_publishes_singleton_heightened_crack_chain_from_retained_values(
     assert flat.count("EQ-CRACK.HEIGHTENED.REQUIRED-RATIO") == 1
     assert flat.count("EQ-CRACK.HEIGHTENED.REQUIRED-AREA") == 1
     assert flat.count("EQ-CRACK.HEIGHTENED.AREA-COMPARISON") == 1
-    assert "1.414214" in flat
-    assert "1445.0" in flat
+    assert "1.414" in flat
+    assert "1445" in flat
     assert "PROVIDED AREA BELOW CALCULATED REQUIREMENT" in flat
     assert "watertightness" in flat
 
@@ -3127,7 +3130,7 @@ def test_report_crack_example_publishes_every_retained_interim_selection():
     assert "formula-7.9" in flat
     assert "close-centre threshold" in flat
     assert "Formula (7.11) selected" in flat
-    assert "235.000 mm" in flat
+    assert "235 mm" in flat
 
 
 def test_report_reinforcement_areas_are_already_square_millimetres():
@@ -3638,7 +3641,7 @@ def test_concrete_table_and_design_strength_equation_share_one_layout_group():
     ]
     equation_pages = [
         index for index, text in enumerate(pages)
-        if "= 20.000 MPa" in text
+        if "= 20 MPa" in text
     ]
     assert table_pages == equation_pages
     assert table_pages and table_pages[0] > 0
@@ -4535,12 +4538,12 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback():
 
     assert "pure-axis fallback" in txt
     assert (
-        "utilisation = 42.0 % "
+        "utilisation = 42 % "
         "(NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
         in txt
     )
     assert (
-        "utilisation = 33.0 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+        "utilisation = 33 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
         in txt
     )
 
