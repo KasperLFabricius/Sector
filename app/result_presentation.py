@@ -229,11 +229,12 @@ def _worked_crack_selection(out):
 
 
 def _worked_crack_comparison_selection(out):
-    """Select one user-limit example by largest retained crack width.
+    """Select a comparison only when the global retained width is assessed.
 
     The optional comparison must not change which physical crack result is
     critical.  In particular, a smaller width paired with a tighter user limit
-    must not displace the largest calculated width.
+    must not displace the largest calculated width or create another worked
+    chapter when that global width has no user criterion.
     """
     best = None
     assessed_states = {
@@ -244,14 +245,14 @@ def _worked_crack_comparison_selection(out):
         elastic = case_out.get("elastic") or {}
         output = elastic.get("crack_output") or {}
         value = _publication_metric(output.get("value"))
-        if output.get("calculation_state") not in assessed_states:
-            continue
         if value is None or value < 0.0:
             continue
         score = (value, -order)
         if best is None or score > best[0]:
-            best = (score, {"case_id": case_id})
-    return None if best is None else best[1]
+            best = (score, case_id, output.get("calculation_state"))
+    if best is None or best[2] not in assessed_states:
+        return None
+    return {"case_id": best[1]}
 
 
 def _cracking_threshold_selection(out):

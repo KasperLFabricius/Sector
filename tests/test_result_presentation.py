@@ -141,6 +141,51 @@ def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():
     }
 
 
+def test_unassessed_global_crack_width_suppresses_noncritical_comparison():
+    out = {
+        "elastic_cases": [
+            {
+                "name": "EL-GLOBAL-WIDTH",
+                "results": {"elastic": {
+                    "converged": True,
+                    "crack": {"wk": 0.40},
+                    "crack_output": {
+                        "calculation_state": (
+                            "CALCULATED - ACCEPTANCE NOT ASSESSED"
+                        ),
+                        "value": 0.40,
+                        "criterion_mm": None,
+                        "ratio": None,
+                    },
+                }},
+            },
+            {
+                "name": "EL-NONCRITICAL-LIMIT",
+                "results": {"elastic": {
+                    "converged": True,
+                    "crack": {"wk": 0.20},
+                    "crack_output": {
+                        "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                        "value": 0.20,
+                        "criterion_mm": 0.10,
+                        "ratio": 2.0,
+                    },
+                }},
+            },
+        ],
+    }
+
+    selection = presentation.worked_example_selection({}, out)
+
+    assert selection["crack_examples"] == [{
+        "case_id": "EL-GLOBAL-WIDTH",
+        "system": "governing",
+        "branch": "crack",
+        "label": "long-term",
+    }]
+    assert selection["crack_comparison"] is None
+
+
 @pytest.mark.parametrize(
     ("state", "criterion", "expected_criterion"),
     [

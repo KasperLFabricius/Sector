@@ -98,15 +98,19 @@ the [Formula 7.100 NA controlled-source evidence](pr06_formula_7_100_na_source_e
 OCR was used only to locate the relevant pages and was not an implementation or
 transcription authority.
 
-The repository contains only the source metadata, reviewer method,
-transcription digest and numerical benchmark evidence. It does not redistribute
-the confidential source, screenshots, prose or formula transcription. Current
-publisher listing does not replace project-specific applicability review.
+The controlled-source evidence record contains only source metadata, reviewer
+method, the private-transcription digest and numerical benchmarks. It does not
+redistribute the confidential PDF, screenshots, standard prose or the
+reviewers' private pixel transcription. The application necessarily contains
+the independently reconciled normalized algebra needed to calculate and
+publish the check; that implementation is not a substitute for the licensed
+standard. Current publisher listing does not replace project-specific
+applicability review.
 
 Independent fine/coarse and ribbed/smooth benchmark rows pin every retained
 base ratio, required ratio, required area and comparison value. The benchmark
 also locks the fine/coarse and smooth/ribbed `sqrt(2)` relationships, positivity,
-finite results, monotonic response and the exact area-tie boundary.
+finite results and the exact area-tie boundary.
 
 ## Persistence, replacement and freshness
 
@@ -162,7 +166,8 @@ claims.
 
 ## Verification evidence
 
-The affected-surface gates on the PR-05-restacked candidate produced:
+Before the final publication-density correction, the affected-surface gates on
+the PR-05-restacked candidate produced:
 
 - 931 passed across project I/O, publication objects, design-basis routing,
   SLS, case/load/table contracts, result presentation, reproducible example and
@@ -175,6 +180,17 @@ The affected-surface gates on the PR-05-restacked candidate produced:
 - 65 passed across complete result presentation and the visible section-level
   heightened attribution AppTest; and
 - Ruff policy, strict owned-mypy policy and `git diff --check` passed.
+
+The final correction then received its own current-candidate evidence:
+
+- 4 focused selector/report regressions passed, including the unassessed global
+  width versus smaller assessed-width case;
+- 215 passed across the complete result-presentation and browser-free semantic
+  report suites;
+- 198 passed across the whole-tree ASCII, programme and retired-trace guards;
+  and
+- focused Ruff runtime checks, the full Ruff policy, the strict mypy policy and
+  `git diff --check` passed.
 
 The controlled-source review independently confirmed the pinned source
 metadata and every numerical benchmark, then returned clean after two bounded
