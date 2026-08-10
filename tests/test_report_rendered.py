@@ -84,17 +84,22 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     assert len(heading_pages) == 1
     assert "NA intercepts" in heading_pages[0]
     overview_pages = [
-        index
-        for index, page_text in enumerate(page_texts)
+        page_text
+        for page_text in page_texts
         if "Results overview across calculated checks" in page_text
     ]
-    governing_note_pages = [
-        index
-        for index, page_text in enumerate(page_texts)
-        if "Gov. marks the highest PASS/FAIL utilisation" in page_text
-    ]
-    assert overview_pages == governing_note_pages
     assert len(overview_pages) == 1
+    overview_page, = overview_pages
+    overview_text = " ".join(overview_page.split())
+    for expected in (
+        "Results overview",
+        "Demand-versus-resistance checks retain their individual verdicts",
+        "Plastic bending",
+        "DK heightened crack-control minimum",
+        "Fatigue",
+        "Gov. marks the highest PASS/FAIL utilisation",
+    ):
+        assert expected in overview_text
 
 
 def test_worked_example_text_rejects_any_unavailable_placeholder():

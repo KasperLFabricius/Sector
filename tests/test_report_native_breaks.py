@@ -98,6 +98,13 @@ def test_results_overview_retains_type_and_dense_padding(monkeypatch):
     )
     header = table._cellvalues[table._sector_header_row][0]
     assert header.style.fontSize == pytest.approx(7.2)
+    assert header.style.leading == pytest.approx(8.8)
+    assert sum(table._colWidths) == pytest.approx(170 * mm)
     for cell_style in table._cellStyles[0]:
-        assert cell_style.topPadding == pytest.approx(0.8)
-        assert cell_style.bottomPadding == pytest.approx(0.8)
+        assert cell_style.leftPadding == pytest.approx(2)
+        assert cell_style.rightPadding == pytest.approx(2)
+        assert cell_style.topPadding == pytest.approx(0.7)
+        assert cell_style.bottomPadding == pytest.approx(0.7)
+    heading, introduction = builder.flow[:2]
+    assert heading.getKeepWithNext()
+    assert introduction.getKeepWithNext()

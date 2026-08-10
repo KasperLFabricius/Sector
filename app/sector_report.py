@@ -1016,6 +1016,9 @@ class ReportBuilder:
             "Demand-versus-resistance checks retain their individual verdicts. "
             "Output-only quantities and the project as a whole have no verdict."
         )
+        # Keep the explanatory lead-in with the table's first page.  This still
+        # lets genuinely oversized project overviews use the native row splitter.
+        self.flow[-1].keepWithNext = 1
         data = [[
             "Check", "Action set", "Status", "Result", "Criterion", "Gov."
         ]]
@@ -1029,7 +1032,7 @@ class ReportBuilder:
         ])
         body = ParagraphStyle(
             "summary-cell", parent=self.s["body"], fontSize=7.2,
-            fontName=_FONT, leading=9.2,
+            fontName=_FONT, leading=8.8,
         )
         head = ParagraphStyle(
             "summary-head", parent=body, fontName=_FONT_BOLD,
@@ -1065,7 +1068,10 @@ class ReportBuilder:
         header_row = 1 + context_count
         table = _PaginatedReportTable(
             formatted,
-            colWidths=[42 * mm, 25 * mm, 23 * mm, 31 * mm, 36 * mm, 13 * mm],
+            colWidths=[
+                41 * mm, 24 * mm, 27 * mm,
+                33 * mm, 35 * mm, 10 * mm,
+            ],
             repeatRows=1 + context_count + 1,
             hAlign="LEFT",
             splitByRow=1,
@@ -1076,8 +1082,10 @@ class ReportBuilder:
             ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
             ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 0.8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 0.7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.7),
         ]
         style.extend(context_style)
         fills = {
