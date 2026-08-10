@@ -7,6 +7,7 @@ import io
 import pypdf
 
 from tools.manual_render_fixture import (
+    _MANUAL_CROPS,
     _unrendered_math_token,
     build_fixture_html,
     build_fixture_pdf,
@@ -32,6 +33,13 @@ def test_manual_math_token_guard_ignores_canonical_semantic_rows_only():
         "x = \u221ay"
     ) is None
     assert _unrendered_math_token("Visible fallback: sqrt(y)") == "sqrt"
+
+
+def test_manual_visual_crop_excludes_commit_dependent_revision_text():
+    contents_crop, footer_crop = _MANUAL_CROPS
+    assert contents_crop.name == "manual contents navigation"
+    assert contents_crop.box[1] >= 0.18
+    assert footer_crop.name == "manual cover footer"
 
 
 def test_browser_free_manual_semantics_keep_radicals_without_raw_math_leaks():

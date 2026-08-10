@@ -41,12 +41,15 @@ _UNRENDERED_MATH_TOKENS = (
     "quadf",
     "kN.m",
 )
+# The source revision printed above the contents changes with every commit and
+# is already checked semantically and in PDF metadata.  Keep the stable visual
+# fingerprint below that line so updating this digest cannot change its pixels.
 _MANUAL_CROPS = (
     RasterCrop(
-        "manual cover and contents",
+        "manual contents navigation",
         1,
-        (0.10, 0.07, 0.90, 0.45),
-        "519762e88c23a1d390b48fd42cd08dba5b1a79ee6f5523aca893abf918fe4c39",
+        (0.09, 0.18, 0.92, 0.45),
+        "2bc633db1eed1c2ae60d1728eefaea767f7734b06ae4d6f223d7cdd28b7e5452",
     ),
     RasterCrop(
         "manual cover footer",
