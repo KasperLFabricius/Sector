@@ -5298,6 +5298,17 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
         "heightened_crack_control" not in entry["results"]
         for entry in results["elastic_cases"]
     )
+    overview = next(
+        frame.value
+        for frame in at.dataframe
+        if {"Check", "Action set", "Status", "Governing"}.issubset(
+            frame.value.columns
+        )
+    )
+    heightened_summary = overview.loc[
+        overview["Check"] == "DK heightened crack-control minimum"
+    ]
+    assert heightened_summary["Action set"].tolist() == ["-"]
 
     _select_view(at, "Elastic Results")
     assert sum(

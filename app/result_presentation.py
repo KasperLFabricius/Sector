@@ -522,7 +522,7 @@ def _ordinary_crack_summary_row(inp, output):
     )
 
 
-def _heightened_crack_summary_row(inp, result):
+def _heightened_crack_summary_row(result):
     """Format the singleton retained Formula 7.100 NA area comparison."""
     required = _publication_metric(result.get("required_reinforcement_area_mm2"))
     provided = _publication_metric(result.get("provided_reinforcement_area_mm2"))
@@ -544,7 +544,7 @@ def _heightened_crack_summary_row(inp, result):
         None,
         "Elastic Results",
         note,
-        inp,
+        None,
     )
 
 
@@ -1353,7 +1353,7 @@ def result_summary_rows(inp, results, *, stale=False):
 
     heightened = results.get("heightened_crack_control")
     if isinstance(heightened, Mapping):
-        rows.append(_heightened_crack_summary_row(inp, heightened))
+        rows.append(_heightened_crack_summary_row(heightened))
 
     if stale and results:
         for row in rows:
@@ -1480,7 +1480,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
         ))
     heightened = results.get("heightened_crack_control")
     if isinstance(heightened, Mapping):
-        row = _heightened_crack_summary_row(inp, heightened)
+        row = _heightened_crack_summary_row(heightened)
         if stale:
             previous = row["status"]
             row["status"] = "STALE"

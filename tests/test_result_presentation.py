@@ -195,16 +195,26 @@ def test_heightened_crack_summary_is_singleton_and_not_global_utilisation():
         "comparison_ratio": 1.2,
         "disclosure": "User-declared applicability.",
     }
+    misleading_input = _inp(
+        mode="",
+        plastic_cases=[],
+        elastic_cases=[],
+        elastic_case={
+            "id": "EL-NOT-APPLICABLE",
+            "type": "Must not be inherited",
+            "source": "Must not be inherited",
+        },
+    )
     rows = presentation.multi_case_summary_rows(
-        _inp(
-            mode="",
-            plastic_cases=[],
-            elastic_cases=[],
-        ),
+        misleading_input,
         {
             "elastic_cases": [],
             "heightened_crack_control": heightened,
         },
+    )
+    direct_rows = presentation.result_summary_rows(
+        misleading_input,
+        {"heightened_crack_control": heightened},
     )
     selected = presentation.worked_example_selection(
         {}, {"heightened_crack_control": heightened},
@@ -214,6 +224,15 @@ def test_heightened_crack_summary_is_singleton_and_not_global_utilisation():
     assert len(rows) == 1
     assert rows[0]["status"] == "PROVIDED AREA BELOW CALCULATED REQUIREMENT"
     assert rows[0]["util"] is None
+    assert rows[0]["case"] == "-"
+    assert rows[0]["case_type"] == "-"
+    assert rows[0]["source"] == "-"
+    direct = next(
+        row
+        for row in direct_rows
+        if row["check"] == "DK heightened crack-control minimum"
+    )
+    assert direct["case"] == direct["case_type"] == direct["source"] == "-"
     assert selected["heightened_crack_control"] == {
         "result_key": "heightened_crack_control",
     }
