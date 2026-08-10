@@ -1,16 +1,16 @@
 # PR-07A Sector v0.93 shared equation renderer acceptance
 
 Status: candidate acceptance contract for the PR-07A development branch.
-PR-06 remains in progress and PR-07A remains planned. GitHub must record the
-eventual accepted base, exact candidate, tree, checks and squash identity; this
-document does not invent remote or final evidence that has not been run.
+PR-06 is merged and PR-07A is in progress. GitHub must record the exact
+candidate, tree, checks and eventual squash identity; this document does not
+invent remote or final evidence that has not been run.
 
-## Provisional development lineage
+## Accepted upstream base
 
 - Programme branch: `codex/pr07a-v093-equation-renderer`
-- Provisional parent revision: `fbcd4917654fb4ed23465c4a554d1d208c80d5c3`
-- Provisional parent tree: `f941158eab1f3caa7a61db066236269d69c7a83e`
-- Local renderer-core checkpoint: `9801a605d13e32cd96bf8cdd6695fd59799b10e6`
+- Upstream PR-06 squash revision: `1cf8cf536cc562998fd663a6b082021ace7aa7fb`
+- Accepted upstream tree: `f941158eab1f3caa7a61db066236269d69c7a83e`
+- Local renderer-core checkpoint: `7ccaa4cbe8a8294076cba548a6ab880327831d4f`
 - Local renderer-core tree: `dda487fd44f2a5671013ea80dd5cc62f4f14f842`
 - Governing identity: [Sector product identity](product_identity.md)
 - Living programme: [Sector v0.93 PR programme](v093_pr_programme.md)
@@ -18,14 +18,12 @@ document does not invent remote or final evidence that has not been run.
 - Upstream candidate contract: [PR-06 crack-control acceptance](pr06_v093_crack_control_acceptance.md)
 - Worked-publication authority: [PR-03 textbook-publication acceptance](pr03_v093_textbook_calculation_publication_acceptance.md)
 
-The parent revision and tree above identify the unmerged PR-06 candidate on
-which local PR-07A development began. They are not an accepted upstream base.
-The renderer-core checkpoint identifies the first committed shared layout-core
-slice. The manual/report integration and tests are also committed locally on
-the programme branch, but neither local checkpoint is a final acceptance
-identity. After PR-06 is objectively merged, PR-07A must be restacked onto the
-verified PR-06 squash revision and this section must be replaced with the
-accepted base and final candidate identities.
+PR-06's exact-head full test/report and two-build unsigned-package gates passed
+before merge. PR-06 was squash-merged, the squash tree was verified exactly
+equal to the reviewed candidate tree above, and PR-07A's two local publication
+commits were then transplanted onto that squash without changing their combined
+tree. The renderer-core checkpoint identifies the first shared layout-core
+slice. GitHub must still record the final PR-07A candidate and checks.
 
 ## Owner-confirmed objective
 
@@ -134,7 +132,7 @@ does not add a compliance, certification or authority-applicability claim.
 ## Current local evidence and open gates
 
 The local counts below overlap and must not be summed. They describe the
-working candidate before final restack and exact-head qualification:
+PR-06-restacked candidate contents before final GitHub qualification:
 
 - 34 shared-renderer tests passed;
 - 563 manual publication/layout tests passed with one deliberate real-figure
@@ -145,6 +143,9 @@ working candidate before final restack and exact-head qualification:
   passed with one deliberate real-figure case excluded;
 - the final consolidated report, renderer and production-route regression gate
   passed 394 tests with that same one real-figure case excluded;
+- the same 394-test gate passed after its export-failure regression explicitly
+  poisoned figure-server startup, with no browser, Chrome, Electron, Kaleido or
+  JavaScript process launched by the test run;
 - 28 focused numerical-publication tests passed, covering fixed and scientific
   display forms, adjacent variables and units, negative zero, visible vector
   text, searchable PDF text, retained-scope isolation, and the live elastic and
@@ -181,19 +182,14 @@ identity. The reference report remains the realistic retained-result layout
 fixture; the catalogue render is a bounded renderer/layout proof and does not
 pretend that synthetic values are engineering examples.
 
-Before PR-07A may be accepted:
+The complete 143-identity layout and production-route matrices passed on the
+restacked contents. Independent code, acceptance-record and rendered-page
+reviews closed without a remaining product-code P0-P2 defect. Git and GitHub,
+rather than this self-referential candidate document, record the immutable
+candidate and remote evidence.
 
-1. PR-06 must be objectively merged and its squash tree verified against the
-   accepted PR-06 candidate tree.
-2. PR-07A must be restacked onto that exact squash revision without importing
-   unrelated changes.
-3. The complete 143-identity report layout and production-route matrices must
-   pass again on the final restacked candidate.
-4. Independent diff and rendered-page review must close without a remaining
-   P0-P2 defect.
-5. GitHub must record the exact PR-07A head/tree and pass complete coverage,
-   real report/manual rendering and the required two-build unsigned Windows
-   package workflow on that same head.
-
-Only then may this record replace its provisional lineage with accepted
-identities and final, reproducible evidence.
+Before PR-07A may be merged, GitHub must record the exact PR-07A head/tree and
+pass complete coverage, real report/manual rendering and the required two-build
+unsigned Windows package workflow on that same head. The merge record must then
+retain the accepted squash identity and verify squash-tree parity with the
+reviewed candidate tree.

@@ -4817,6 +4817,7 @@ def test_report_stops_exporting_after_a_timeout():
 
 
 def test_report_fails_when_a_requested_figure_cannot_be_exported(monkeypatch):
+    monkeypatch.setattr(sector_report, "ensure_image_server", lambda: None)
     monkeypatch.setattr(sector_report, "_fig_png",
                         lambda fig, width, height: (None, False))
     with pytest.raises(sector_report.ReportFigureError, match="report not created"):
