@@ -134,7 +134,9 @@ does not add a compliance, certification or authority-applicability claim.
 The local counts below overlap and must not be summed. They describe the
 PR-06-restacked candidate contents before final GitHub qualification:
 
-- 34 shared-renderer tests passed;
+- 51 shared-renderer tests passed, including contextual classification of
+  single-letter `N` and `m` as italic quantities or upright numerical units
+  across the governed manual and report forms;
 - 563 manual publication/layout tests passed with one deliberate real-figure
   case excluded from the browser-free local group;
 - 150 complete browser-free report-module tests passed;
@@ -142,8 +144,8 @@ PR-06-restacked candidate contents before final GitHub qualification:
   real-production-route tests
   passed with one deliberate real-figure case excluded;
 - the final consolidated report, renderer and production-route regression gate
-  passed 394 tests with that same one real-figure case excluded;
-- the same 394-test gate passed after its export-failure regression explicitly
+  passed 411 tests with that same one real-figure case excluded;
+- the same 411-test gate passed after its export-failure regression explicitly
   poisoned figure-server startup, with no browser, Chrome, Electron, Kaleido or
   JavaScript process launched by the test run;
 - 28 focused numerical-publication tests passed, covering fixed and scientific

@@ -207,6 +207,7 @@ _UNIT_NAMES: Final = frozenset(
         "permille",
     )
 )
+_AMBIGUOUS_UNIT_NAMES: Final = frozenset(("N", "m"))
 _RELATIONS: Final = frozenset(("=", _LE, _GE, "<", ">", _NE, _APPROX, _ARROW))
 _BREAK_OPERATORS: Final = frozenset(
     ("+", "-", _PLUS_MINUS, ",", ";", ".", *_RELATIONS)
@@ -1472,6 +1473,7 @@ class _Parser:
     def __init__(self, tokens: tuple[_Token, ...]):
         self._tokens = tokens
         self._index = 0
+        self._unit_identifier_indices: set[int] = set()
 
     @property
     def current(self) -> _Token:
@@ -1485,6 +1487,89 @@ class _Parser:
     def _skip_spaces(self) -> None:
         while self.current.kind == "SPACE":
             self._advance()
+
+    def _previous_non_space_index(self, index: int) -> int | None:
+        candidate = index - 1
+        while candidate >= 0 and self._tokens[candidate].kind == "SPACE":
+            candidate -= 1
+        return candidate if candidate >= 0 else None
+
+    def _next_non_space_index(self, index: int) -> int | None:
+        candidate = index + 1
+        while (
+            candidate < len(self._tokens)
+            and self._tokens[candidate].kind == "SPACE"
+        ):
+            candidate += 1
+        return candidate if candidate < len(self._tokens) else None
+
+    def _superscript_is_star(self, marker_index: int) -> bool:
+        operand_index = self._next_non_space_index(marker_index)
+        if operand_index is None:
+            return False
+        if self._tokens[operand_index].kind == "LBRACE":
+            operand_index = self._next_non_space_index(operand_index)
+            if operand_index is None:
+                return False
+        operand = self._tokens[operand_index]
+        return operand.kind == "OP" and operand.value == "*"
+
+    def _ambiguous_identifier_is_unit(self, index: int) -> bool:
+        """Recognise N/m only in explicit numerical unit suffixes.
+
+        Both letters are ordinary engineering quantity symbols throughout the
+        governed corpus. They become units only after a numerical value, in a
+        reciprocal such as ``1/m``, or as the continuation of an unambiguous
+        unit product such as ``kN*m``. Semantic subscripts, ``N*`` and relation
+        operands without a numerical unit context remain variables.
+        """
+
+        token = self._tokens[index]
+        if token.value not in _AMBIGUOUS_UNIT_NAMES:
+            return False
+
+        next_index = self._next_non_space_index(index)
+        if next_index is not None:
+            following = self._tokens[next_index]
+            if following.kind == "SUB":
+                return False
+            if following.kind == "SUPER" and self._superscript_is_star(next_index):
+                return False
+
+        previous_index = self._previous_non_space_index(index)
+        if previous_index is None:
+            return False
+        previous = self._tokens[previous_index]
+        if previous.kind == "NUMBER":
+            return previous_index < index - 1
+        if previous.kind == "IDENT":
+            return (
+                previous.value in _UNIT_NAMES - _AMBIGUOUS_UNIT_NAMES
+                or previous_index in self._unit_identifier_indices
+            )
+        if previous.kind != "OP" or previous.value not in {
+            "*",
+            "/",
+            _DOT,
+            _TIMES,
+        }:
+            return False
+
+        unit_left_index = self._previous_non_space_index(previous_index)
+        if unit_left_index is None:
+            return False
+        unit_left = self._tokens[unit_left_index]
+        if unit_left.kind == "IDENT":
+            return (
+                unit_left.value in _UNIT_NAMES - _AMBIGUOUS_UNIT_NAMES
+                or unit_left_index in self._unit_identifier_indices
+            )
+        return (
+            previous.value == "/"
+            and token.value == "m"
+            and unit_left.kind == "NUMBER"
+            and unit_left.value == "1"
+        )
 
     def parse(self) -> MathNode:
         self._skip_spaces()
@@ -1595,8 +1680,12 @@ class _Parser:
             operand = self._expression(6, stops)
             return math_sequence(Operator(token.value), operand)
         if token.kind == "IDENT":
+            token_index = self._index
+            ambiguous_unit = self._ambiguous_identifier_is_unit(token_index)
             self._advance()
-            node = _identifier_node(token.value)
+            node = _identifier_node(token.value, ambiguous_unit=ambiguous_unit)
+            if isinstance(node, Unit):
+                self._unit_identifier_indices.add(token_index)
         elif token.kind == "NUMBER":
             self._advance()
             node = Number(token.value)
@@ -1750,7 +1839,7 @@ class _Parser:
         return math_sequence(left, spacing, Operator(operator), spacing, right)
 
 
-def _identifier_node(value: str) -> MathNode:
+def _identifier_node(value: str, *, ambiguous_unit: bool = False) -> MathNode:
     if value in _GREEK_NAMES:
         return Variable(_GREEK_NAMES[value])
     if value == _SUM:
@@ -1763,6 +1852,8 @@ def _identifier_node(value: str) -> MathNode:
         return Operator(_PER_MILLE)
     if value in _FUNCTION_NAMES:
         return Upright(value)
+    if value in _AMBIGUOUS_UNIT_NAMES:
+        return Unit(value) if ambiguous_unit else Variable(value)
     if value in _UNIT_NAMES:
         return Unit(value)
     if len(value) == 1 and value.isalpha():

@@ -238,6 +238,158 @@ def test_report_corpus_aliases_entities_groups_and_radical_dialects_compile() ->
     assert equations.linear_math_text(manual_root).startswith("sqrt[3](")
 
 
+@pytest.mark.parametrize(
+    ("compiler_name", "source", "symbol", "expected_count"),
+    (
+        (
+            "compile_report_math",
+            "N<sub>int</sub> = F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub>",
+            "N",
+            1,
+        ),
+        (
+            "compile_report_math",
+            "rho<sub>s,min</sub> = m<sub>s</sub> rho<sub>s,min,base</sub>",
+            "m",
+            1,
+        ),
+        (
+            "compile_report_math",
+            (
+                "N<sub>R,i</sub> = N<super>*</super> "
+                "(Delta sigma<sub>Rd</sub> / Delta sigma<sub>Ed,i</sub>)"
+                "<super>k</super>"
+            ),
+            "N",
+            2,
+        ),
+        (
+            "compile_manual_math",
+            r"\rho_{s,\min}=m_s\sqrt{\frac{\phi f_{ct,eff}}{4E_{sk}kw_k}}",
+            "m",
+            1,
+        ),
+        (
+            "compile_manual_math",
+            (
+                r"N_{R,i}=N^*\left(\frac{\Delta\sigma_{Rd}}"
+                r"{\Delta\sigma_{Ed,i}}\right)^{k}"
+            ),
+            "N",
+            2,
+        ),
+        (
+            "compile_manual_math",
+            r"\log_{10}N_R=C\frac{1-E_{max}}{\sqrt{1-R}}",
+            "N",
+            1,
+        ),
+        (
+            "compile_report_math",
+            "sigma<sub>N,v</sub> = sigma<sub>N</sub> + sigma<sub>M</sub>",
+            "N",
+            2,
+        ),
+        (
+            "compile_report_math",
+            "s<sub>r,m,cal</sub> = 1.5 c",
+            "m",
+            1,
+        ),
+        (
+            "compile_manual_math",
+            r"s_{r,m,cal}=1.5c",
+            "m",
+            1,
+        ),
+    ),
+)
+def test_ambiguous_single_letter_quantity_symbols_remain_italic(
+    compiler_name: str,
+    source: str,
+    symbol: str,
+    expected_count: int,
+) -> None:
+    compiler = getattr(equations, compiler_name)
+    layout = equations.layout_math(compiler(source))
+    placements = [text for text in layout.texts if text.text == symbol]
+
+    assert len(placements) == expected_count
+    assert all(text.role == "variable" for text in placements)
+    assert all(
+        text.slant
+        == pytest.approx(equations.DEFAULT_EQUATION_STYLE.fonts.scalar_slant)
+        for text in placements
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "symbol"),
+    (
+        ("= 0.175 m", "m"),
+        ("= 0.18 m<super>2</super>", "m"),
+        ("= 0.0035 1/m", "m"),
+        ("= 14 N", "N"),
+        ("= 76.4 kN&#183;m", "m"),
+    ),
+)
+def test_ambiguous_single_letter_numeric_units_remain_upright(
+    source: str,
+    symbol: str,
+) -> None:
+    layout = equations.layout_math(equations.compile_report_fragment(source))
+    placements = [text for text in layout.texts if text.text == symbol]
+
+    assert len(placements) == 1
+    assert placements[0].role == "unit"
+    assert placements[0].slant == 0.0
+
+
+def test_same_single_letter_is_contextual_on_both_sides_of_a_relation() -> None:
+    layout = equations.layout_math(
+        equations.compile_report_math("m = 0.175 m")
+    )
+    placements = [text for text in layout.texts if text.text == "m"]
+
+    assert [text.role for text in placements] == ["variable", "unit"]
+    assert placements[0].slant == pytest.approx(
+        equations.DEFAULT_EQUATION_STYLE.fonts.scalar_slant
+    )
+    assert placements[1].slant == 0.0
+
+
+def test_ambiguous_unit_chain_and_relation_suffix_remain_upright() -> None:
+    chain = equations.layout_math(
+        equations.compile_report_fragment("= 14 N&#183;m")
+    )
+    equality = equations.layout_math(
+        equations.compile_report_math("14 m = 14000 mm")
+    )
+
+    chain_units = [
+        text for text in chain.texts if text.text in {"N", "m"}
+    ]
+    metre = next(text for text in equality.texts if text.text == "m")
+    assert [text.role for text in chain_units] == ["unit", "unit"]
+    assert all(text.slant == 0.0 for text in chain_units)
+    assert metre.role == "unit"
+    assert metre.slant == 0.0
+
+
+def test_unseparated_coefficient_and_reciprocal_force_remain_variables() -> None:
+    layout = equations.layout_math(
+        equations.compile_report_math("R = 2m + 1/N")
+    )
+    placements = [text for text in layout.texts if text.text in {"m", "N"}]
+
+    assert [text.role for text in placements] == ["variable", "variable"]
+    assert all(
+        text.slant
+        == pytest.approx(equations.DEFAULT_EQUATION_STYLE.fonts.scalar_slant)
+        for text in placements
+    )
+
+
 def test_role_specific_report_compilers_accept_fragments_and_verdicts_only_explicitly() -> None:
     fragment = equations.compile_report_fragment("= max(13.4 / (1 + 2.0), 0.123) MPa")
     percentage = equations.compile_report_fragment("= 83.2%")
