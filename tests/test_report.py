@@ -2914,6 +2914,136 @@ def test_tables_only_report_does_not_start_the_image_server(monkeypatch):
     assert calls["n"] == 0
 
 
+def test_report_uses_the_canonical_input_table_registry_module():
+    assert sector_report.table_fields is sys.modules[
+        "app.table_field_definitions"
+    ]
+    assert "table_field_definitions" not in sys.modules
+
+
+@pytest.mark.parametrize(
+    ("table_key", "field_key", "expected"),
+    (
+        (
+            sector_report.table_fields.PLASTIC_CASES_TABLE_KEY,
+            "n_ed_kn",
+            "N<sub>Ed</sub>",
+        ),
+        (
+            sector_report.table_fields.PLASTIC_CASES_TABLE_KEY,
+            "mx_ed_knm",
+            "M<sub>x,Ed</sub>",
+        ),
+        (
+            sector_report.table_fields.FATIGUE_SPECTRUM_TABLE_KEY,
+            "n_short_ed_kn",
+            "&#916; N<sub>Ed</sub>",
+        ),
+    ),
+)
+def test_report_input_table_symbols_are_registered_markup(
+    table_key, field_key, expected
+):
+    markup = sector_report._input_table_symbol(table_key, field_key)
+    assert markup == expected
+    assert not any(token in markup for token in ("\\", "{", "}"))
+
+
+def test_tables_only_load_tables_publish_input_policy_without_raw_tex():
+    inp = _inp()
+    plastic = {
+        "name": "PL-INPUT",
+        "description": "Input publication",
+        "n_ed_kn": 0.0,
+        "mx_ed_knm": 1.23456789,
+        "my_ed_knm": 0.0,
+        "vx_ed_kn": 0.0,
+        "vy_ed_kn": 0.0,
+        "vx_face": "auto",
+        "vy_face": "auto",
+        "t_ed_knm": 0.0,
+        "check_minimum_reinforcement": False,
+    }
+    elastic = {
+        "name": "EL-INPUT",
+        "description": "Input publication",
+        "n_long_ed_kn": 0.0,
+        "mx_long_ed_knm": 2.34567891,
+        "my_long_ed_knm": 0.0,
+        "n_short_ed_kn": 0.0,
+        "mx_short_ed_knm": 0.0,
+        "my_short_ed_knm": 0.0,
+        "calculate_crack_width": False,
+    }
+    inp.update({
+        "plastic_cases": [plastic],
+        "elastic_cases": [elastic],
+        "fatigue_on": True,
+        fatigue_inputs.SPECTRUM_TABLE_KEY:
+            fatigue_inputs.normalise_spectrum_table([{
+                "spectrum": "Spectrum A",
+                "name": "FAT-INPUT",
+                "description": "Input publication",
+                "cycles": 12345.0,
+                "n_long_ed_kn": 0.0,
+                "mx_long_ed_knm": 0.0,
+                "my_long_ed_knm": 0.0,
+                "n_short_ed_kn": 3.45678912,
+                "mx_short_ed_knm": 0.0,
+                "my_short_ed_knm": 0.0,
+            }]),
+    })
+    out = {
+        "plastic_cases": [{
+            "actions": plastic, "evaluated": False, "results": {},
+        }],
+        "elastic_cases": [{
+            "actions": elastic, "evaluated": False, "results": {},
+        }],
+    }
+
+    text = _pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    ))
+    flat = " ".join(text.split())
+    policy = (
+        "Load-table input accepts a dot or comma as the decimal separator; "
+        "blank action cells canonicalize to zero; calculations retain the "
+        "parsed numeric precision."
+    )
+    assert flat.count(policy) == 1
+    assert chr(0x394) in text
+    assert not any(token in text for token in (r"\Delta", "_{", "}"))
+
+
+def test_fatigue_action_headers_use_registry_in_loads_and_detail(monkeypatch):
+    inp, out = _fatigue_report_fixture()
+    # Enter the current table-based Loads route without adding calculation
+    # results for either ordinary case family.
+    inp["plastic_cases"] = []
+    inp["elastic_cases"] = []
+    calls = []
+    original = sector_report._input_table_symbol
+
+    def registered_symbol(table_key, field_key):
+        calls.append((table_key, field_key))
+        return original(table_key, field_key)
+
+    monkeypatch.setattr(
+        sector_report, "_input_table_symbol", registered_symbol
+    )
+    text = _pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, qa_appendix=False,
+    ))
+    table_key = sector_report.table_fields.FATIGUE_SPECTRUM_TABLE_KEY
+    for field_key in fatigue_inputs.ACTION_COLUMNS:
+        # Once in Loads and again in each selected detailed spectrum unit.
+        assert calls.count((table_key, field_key)) >= 2
+    assert chr(0x394) in text
+    assert r"\Delta" not in text
+    assert "_{" not in text
+
+
 def test_report_includes_the_nm_interaction_when_present():
     # An opt-in N-M interaction payload (both bending axes) adds titled sections to
     # the plastic part.

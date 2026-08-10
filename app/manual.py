@@ -39,6 +39,7 @@ from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
 import publication_theme
 import reproducible_example
+from app import table_field_definitions as table_fields
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
@@ -425,6 +426,48 @@ _CALLOUT = {
     "tip":      (":bulb:", "Tip"),
     "limit":    (":warning:", "Assumption / limitation"),
 }
+
+
+def _manual_field_notation(definition) -> str:
+    """Return one compact field label backed by the shared table registry."""
+
+    text = definition.label
+    if definition.math_symbol != "-":
+        text += f" ${definition.math_symbol}$"
+    if definition.unit != "-":
+        text += f" [${table_fields.latex_unit(definition.unit)}$]"
+    return text
+
+
+def _manual_blank_summary(table_key: str) -> str:
+    """Summarise every field's registry-owned blank/default contract."""
+
+    grouped: dict[str, list[str]] = {}
+    for definition in table_fields.table_fields(table_key):
+        rule = table_fields.input_rule(definition)
+        if rule == "Blank = False":
+            rule = "Blank = off"
+        elif rule == "Blank = True":
+            rule = "Blank = on"
+        grouped.setdefault(rule, []).append(definition.label)
+
+    return "; ".join(
+        f"{rule}: {', '.join(labels)}" for rule, labels in grouped.items()
+    )
+
+
+def editable_table_reference_rows() -> list[list[str]]:
+    """Build the seven-row manual matrix from the canonical field registry."""
+
+    rows = []
+    for table_key in table_fields.TABLE_KEYS:
+        fields = table_fields.table_fields(table_key)
+        rows.append([
+            table_fields.TABLE_TITLES[table_key],
+            "; ".join(_manual_field_notation(field) for field in fields),
+            _manual_blank_summary(table_key),
+        ])
+    return rows
 
 
 def _strip_num(text: str) -> str:
@@ -977,6 +1020,20 @@ def manual_blocks() -> list:
             "Stresses are always output; optionally calculate crack width"],
            ["Grouped fatigue", "Spectrum, bin name, cycles; long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$",
             "Repeated Spectrum labels form one Miner sum; each spectrum is independent"]])
+    table(
+        ["Editable table", "Fields / notation", "Blank / default"],
+        editable_table_reference_rows(),
+    )
+    md("The seven editable-table definitions above are the same definitions used "
+       "by the input screens. Open the guide immediately above a table for each "
+       "field's meaning, unit, sign convention, source and blank behaviour. The "
+       "Plastic/capacity and Elastic action fields, and grouped-fatigue numeric "
+       "fields, accept either a dot or comma as the decimal separator; ambiguous "
+       "grouped or mixed separators are rejected. Blank ordinary action cells are "
+       "normalised to canonical zero. Optional-null fields remain absent rather "
+       "than becoming zero, while required identity and cycle fields must be "
+       "entered. Sector retains the entered numeric precision internally; display "
+       "rounding does not change the calculation value.")
     md("The Elastic long-term and short-term components are solved together. The "
        "single global creep coefficient $\\varphi$ applies to all Elastic rows. "
        "Concrete, reinforcement and tendon stresses are outputs for every row. "
@@ -1870,7 +1927,7 @@ _LATEX_CMD = {
 
 _LATEX_LAYOUT_COMMANDS = (
     r"\left", r"\right", r"\Big", r"\big", r"\Bigg", r"\bigg",
-    r"\!", r"\,", r"\;",
+    r"\mathrm", r"\!", r"\,", r"\;",
 )
 _LATEX_WORD_OPERATORS = ("min", "max", "ln", "log", "sin", "cos", "tan", "cot")
 

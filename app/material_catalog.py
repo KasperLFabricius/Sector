@@ -13,8 +13,8 @@ import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 
-from sector import codes, material_presets as mp
-
+from sector import codes
+from sector import material_presets as mp
 
 VERSION = 1
 KINDS = ("mild", "prestress")
@@ -196,45 +196,87 @@ def _normalise_entry(raw: Mapping, kind: str, material_id: str) -> dict:
     return base
 
 
-def normalise_catalog(value, kind: str) -> dict:
-    """Return a canonical catalogue with stable, unique material IDs."""
+def _valid_reserved_ids(values: Sequence[str], kind: str) -> set[str]:
+    """Return normalised same-kind IDs that must not be newly allocated."""
+    prefix = id_prefix(kind)
+    pattern = re.compile(rf"^{prefix}[1-9][0-9]*$")
+    return {
+        material_id
+        for value in values
+        if pattern.fullmatch(material_id := _text(value))
+    }
+
+
+def _lowest_available_number(prefix: str, unavailable: set[str]) -> int:
+    number = 1
+    while f"{prefix}{number}" in unavailable:
+        number += 1
+    return number
+
+
+def normalise_catalog(
+    value,
+    kind: str,
+    *,
+    reserved_ids: Sequence[str] = (),
+) -> dict:
+    """Return a canonical catalogue with stable, unique material IDs.
+
+    ``reserved_ids`` protects identifiers referenced outside the catalogue.  A
+    damaged or duplicate imported entry must not silently acquire one of those
+    identifiers and thereby become bound to an unrelated element.
+    """
     kind = _kind(kind)
     source = _source_items(value)
     if not source:
-        return default_catalog(kind)
+        prefix = id_prefix(kind)
+        reserved = _valid_reserved_ids(reserved_ids, kind)
+        number = _lowest_available_number(prefix, reserved)
+        material_id = f"{prefix}{number}"
+        next_number = _lowest_available_number(prefix, {material_id})
+        return {
+            "version": VERSION,
+            "next_id": next_number,
+            "items": [default_entry(kind, material_id=material_id)],
+        }
     prefix = id_prefix(kind)
     pattern = re.compile(rf"^{prefix}([1-9][0-9]*)$")
-    valid_numbers = [int(match.group(1)) for item in source
-                     if (match := pattern.fullmatch(_text(item.get("id"))))]
-    next_number = max(valid_numbers, default=0) + 1
+    valid_source_ids = {
+        material_id
+        for item in source
+        if pattern.fullmatch(material_id := _text(item.get("id")))
+    }
+    unavailable = valid_source_ids | _valid_reserved_ids(reserved_ids, kind)
     used: set[str] = set()
     items = []
     for raw in source:
         material_id = _text(raw.get("id"))
         if not pattern.fullmatch(material_id) or material_id in used:
-            while f"{prefix}{next_number}" in used:
-                next_number += 1
+            next_number = _lowest_available_number(prefix, unavailable)
             material_id = f"{prefix}{next_number}"
-            next_number += 1
+            unavailable.add(material_id)
         used.add(material_id)
         items.append(_normalise_entry(raw, kind, material_id))
-    requested_next = value.get("next_id") if isinstance(value, Mapping) else None
-    try:
-        requested_next = int(requested_next)
-    except (TypeError, ValueError):
-        requested_next = 1
-    next_number = max(next_number, requested_next, 1)
-    while f"{prefix}{next_number}" in used:
-        next_number += 1
+    # ``next_id`` remains in schema version 1 for compatibility, but is derived
+    # from the actual catalogue on every normalisation.  Persisted counters are
+    # deliberately ignored so deletion makes the lowest gap reusable.
+    next_number = _lowest_available_number(prefix, used)
     return {"version": VERSION, "next_id": next_number, "items": items}
 
 
-def ensure_catalog(scalars: Mapping, kind: str) -> dict:
+def ensure_catalog(
+    scalars: Mapping,
+    kind: str,
+    *,
+    reserved_ids: Sequence[str] = (),
+) -> dict:
     """Return the current catalogue or initialise a current-schema default."""
     key = catalog_key(kind)
     if key in scalars:
-        return normalise_catalog(scalars[key], kind)
-    return default_catalog(kind)
+        return normalise_catalog(
+            scalars[key], kind, reserved_ids=reserved_ids
+        )
+    return normalise_catalog(None, kind, reserved_ids=reserved_ids)
 
 
 def entries(catalog, kind: str) -> list[dict]:
@@ -267,19 +309,33 @@ def invalid_assignments(material_ids_: Sequence[str], catalog, kind: str) -> lis
                    if str(value).strip() not in available})
 
 
-def _next_id(catalog: Mapping, kind: str) -> tuple[str, int]:
-    canonical = normalise_catalog(catalog, kind)
+def _next_id(
+    catalog: Mapping,
+    kind: str,
+    *,
+    reserved_ids: Sequence[str] = (),
+) -> tuple[str, int]:
+    canonical = normalise_catalog(catalog, kind, reserved_ids=reserved_ids)
     used = {item["id"] for item in canonical["items"]}
-    number = int(canonical["next_id"])
     prefix = id_prefix(kind)
-    while f"{prefix}{number}" in used:
-        number += 1
-    return f"{prefix}{number}", number + 1
+    unavailable = used | _valid_reserved_ids(reserved_ids, kind)
+    number = _lowest_available_number(prefix, unavailable)
+    material_id = f"{prefix}{number}"
+    next_number = _lowest_available_number(prefix, used | {material_id})
+    return material_id, next_number
 
 
-def add_entry(catalog, kind: str, *, preset: str | None = None) -> tuple[dict, str]:
-    canonical = normalise_catalog(catalog, kind)
-    material_id, next_number = _next_id(canonical, kind)
+def add_entry(
+    catalog,
+    kind: str,
+    *,
+    preset: str | None = None,
+    reserved_ids: Sequence[str] = (),
+) -> tuple[dict, str]:
+    canonical = normalise_catalog(catalog, kind, reserved_ids=reserved_ids)
+    material_id, next_number = _next_id(
+        canonical, kind, reserved_ids=reserved_ids
+    )
     item = default_entry(kind, material_id=material_id, preset=preset)
     ordinal = len(canonical["items"]) + 1
     item["name"] = (f"Reinforcement material {ordinal}" if _kind(kind) == "mild"
@@ -289,13 +345,21 @@ def add_entry(catalog, kind: str, *, preset: str | None = None) -> tuple[dict, s
     return canonical, material_id
 
 
-def duplicate_entry(catalog, kind: str, material_id: str) -> tuple[dict, str]:
-    canonical = normalise_catalog(catalog, kind)
+def duplicate_entry(
+    catalog,
+    kind: str,
+    material_id: str,
+    *,
+    reserved_ids: Sequence[str] = (),
+) -> tuple[dict, str]:
+    canonical = normalise_catalog(catalog, kind, reserved_ids=reserved_ids)
     source = next((item for item in canonical["items"]
                    if item["id"] == material_id), None)
     if source is None:
         raise KeyError(material_id)
-    new_id, next_number = _next_id(canonical, kind)
+    new_id, next_number = _next_id(
+        canonical, kind, reserved_ids=reserved_ids
+    )
     item = copy.deepcopy(source)
     item["id"] = new_id
     item["name"] = f"{source['name']} copy"
@@ -306,7 +370,7 @@ def duplicate_entry(catalog, kind: str, material_id: str) -> tuple[dict, str]:
 
 def delete_entry(catalog, kind: str, material_id: str,
                  *, assigned_ids: Sequence[str] = ()) -> dict:
-    canonical = normalise_catalog(catalog, kind)
+    canonical = normalise_catalog(catalog, kind, reserved_ids=assigned_ids)
     if len(canonical["items"]) <= 1:
         raise ValueError("at least one material must remain")
     if material_id in {str(value).strip() for value in assigned_ids}:
@@ -315,6 +379,9 @@ def delete_entry(catalog, kind: str, material_id: str,
     if len(kept) == len(canonical["items"]):
         raise KeyError(material_id)
     canonical["items"] = kept
+    canonical["next_id"] = _lowest_available_number(
+        id_prefix(kind), {item["id"] for item in kept}
+    )
     return canonical
 
 
@@ -365,7 +432,7 @@ def build_material(entry: Mapping, kind: str):
 
 def signature(catalog, kind: str) -> tuple:
     canonical = normalise_catalog(catalog, kind)
-    keys = ("id", "name", "description", "preset", "curve")
+    keys: tuple[str, ...] = ("id", "name", "description", "preset", "curve")
     if _kind(kind) == "mild":
         keys += ("active_in_compression",)
     keys += fields(kind)

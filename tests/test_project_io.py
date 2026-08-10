@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_inputs
 import load_cases
+import material_catalog
 import project_io
 import reinforcement_table
 
@@ -147,6 +148,253 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert json.loads(first)["version"] == project_io.VERSION
     assert json.loads(second)["version"] == project_io.VERSION
+
+
+def test_project_round_trip_preserves_decimal_precision_and_blank_action_zero():
+    tables, scalars = _current_project()
+    tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table(
+        [{
+            "name": "Decimal input",
+            "n_ed_kn": "1,23456789012345",
+            "mx_ed_knm": "",
+        }],
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+
+    text = project_io.dump_project(tables, scalars)
+    loaded, _loaded_scalars = project_io.parse_project(text)
+    row = loaded[load_cases.PLASTIC_TABLE_KEY].iloc[0]
+
+    assert row["n_ed_kn"] == pytest.approx(1.23456789012345)
+    assert row["mx_ed_knm"] == 0.0
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+
+
+@pytest.mark.parametrize(
+    ("table_key", "row", "match"),
+    [
+        (
+            load_cases.ELASTIC_TABLE_KEY,
+            {"name": "Bad", "mx_short_ed_knm": "12abc"},
+            "elastic_cases_base row 1: mx_short_ed_knm",
+        ),
+        (
+            fatigue_inputs.SPECTRUM_TABLE_KEY,
+            {
+                "spectrum": "Traffic",
+                "name": "Bad bin",
+                "cycles": "10",
+                "n_short_ed_kn": "12abc",
+            },
+            "fatigue_spectrum_base row 1: n_short_ed_kn",
+        ),
+    ],
+)
+def test_project_dump_rejects_malformed_nonblank_decimal_without_json_null(
+    table_key, row, match
+):
+    tables, scalars = _current_project()
+    tables[table_key] = (
+        load_cases.normalise_table([row], table_key)
+        if table_key in load_cases.CASE_TABLE_KEYS
+        else fatigue_inputs.normalise_spectrum_table([row])
+    )
+
+    with pytest.raises(ValueError, match=match):
+        project_io.dump_project(tables, scalars)
+
+
+@pytest.mark.parametrize(
+    ("table_key", "column", "entered"),
+    [
+        (load_cases.PLASTIC_TABLE_KEY, "n_ed_kn", "12abc"),
+        (load_cases.ELASTIC_TABLE_KEY, "mx_short_ed_knm", True),
+        (fatigue_inputs.SPECTRUM_TABLE_KEY, "cycles", "10 cycles"),
+    ],
+)
+def test_project_parse_rejects_hash_valid_malformed_nonblank_decimal(
+    table_key,
+    column,
+    entered,
+):
+    tables, scalars = _current_project()
+    if table_key == fatigue_inputs.SPECTRUM_TABLE_KEY:
+        tables[table_key] = fatigue_inputs.normalise_spectrum_table(
+            [{"spectrum": "Traffic", "name": "Bin 1", "cycles": 10.0}]
+        )
+    data = json.loads(project_io.dump_project(tables, scalars))
+    encoded = data["tables"][table_key]
+    encoded["rows"][0][encoded["columns"].index(column)] = entered
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(
+        ValueError,
+        match=rf"{re.escape(table_key)} row 1: {re.escape(column)} contains "
+        r"malformed decimal input",
+    ):
+        project_io.parse_project(json.dumps(data))
+
+
+def test_project_dump_allows_a_wholly_blank_fatigue_editor_row():
+    tables, scalars = _current_project()
+    tables[fatigue_inputs.SPECTRUM_TABLE_KEY] = (
+        fatigue_inputs.normalise_spectrum_table([{}])
+    )
+
+    text = project_io.dump_project(tables, scalars)
+    loaded, _loaded_scalars = project_io.parse_project(text)
+
+    assert len(loaded[fatigue_inputs.SPECTRUM_TABLE_KEY]) == 1
+    assert pd.isna(
+        loaded[fatigue_inputs.SPECTRUM_TABLE_KEY].loc[0, "cycles"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("table_key", "kind", "assigned_id", "catalog_key", "catalog"),
+    [
+        (
+            "bars_base",
+            "bar",
+            "M2",
+            material_catalog.MILD_CATALOG_KEY,
+            {
+                "items": [
+                    material_catalog.default_entry("mild", material_id="M1"),
+                    material_catalog.default_entry("mild", material_id="bad"),
+                ]
+            },
+        ),
+        (
+            "tendons_base",
+            "tendon",
+            "P2",
+            material_catalog.PRESTRESS_CATALOG_KEY,
+            {
+                "items": [
+                    material_catalog.default_entry(
+                        "prestress", material_id="P1"
+                    ),
+                    material_catalog.default_entry(
+                        "prestress", material_id="bad"
+                    ),
+                ]
+            },
+        ),
+    ],
+)
+def test_project_catalog_repair_never_rebinds_assigned_material_gap(
+    table_key, kind, assigned_id, catalog_key, catalog
+):
+    tables, scalars = _current_project()
+    tables[table_key] = reinforcement_table.normalise_table(
+        [{
+            reinforcement_table.X: 0.0,
+            reinforcement_table.Y: 0.0,
+            reinforcement_table.SIZE_MODE: reinforcement_table.AREA_MODE,
+            reinforcement_table.AREA: 100.0,
+            reinforcement_table.MATERIAL_ID: assigned_id,
+        }],
+        kind,
+    )
+    scalars[catalog_key] = catalog
+
+    with pytest.raises(ValueError, match=assigned_id):
+        project_io.dump_project(tables, scalars)
+
+
+def test_project_catalog_repair_never_rebinds_active_capacity_material_gap():
+    tables, scalars = _current_project()
+    scalars.update(
+        shear_on=True,
+        capacity_steel_material_id="M2",
+        mild_material_catalog={
+            "items": [
+                material_catalog.default_entry("mild", material_id="M1"),
+                material_catalog.default_entry("mild", material_id="bad"),
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="M2"):
+        project_io.dump_project(tables, scalars)
+
+
+def test_project_catalog_repair_never_rebinds_assigned_fatigue_gap():
+    tables, scalars = _current_project()
+    tables["bars_base"] = reinforcement_table.normalise_table(
+        [{
+            reinforcement_table.X: 0.0,
+            reinforcement_table.Y: 0.0,
+            reinforcement_table.SIZE_MODE: reinforcement_table.AREA_MODE,
+            reinforcement_table.AREA: 100.0,
+            reinforcement_table.MATERIAL_ID: "M1",
+            reinforcement_table.FATIGUE_DETAIL_ID: "F2",
+        }],
+        "bar",
+    )
+    scalars[material_catalog.MILD_CATALOG_KEY] = (
+        material_catalog.default_catalog("mild")
+    )
+    scalars[fatigue_inputs.DETAIL_CATALOG_KEY] = {
+        "items": [
+            fatigue_inputs.default_entry(detail_id="F1"),
+            fatigue_inputs.default_entry(detail_id="bad"),
+        ]
+    }
+
+    with pytest.raises(ValueError, match="F2"):
+        project_io.dump_project(tables, scalars)
+
+
+def test_parse_rejects_hash_valid_project_with_missing_assigned_material():
+    tables, scalars = _current_project()
+    tables["bars_base"] = reinforcement_table.normalise_table(
+        [{
+            reinforcement_table.X: 0.0,
+            reinforcement_table.Y: 0.0,
+            reinforcement_table.SIZE_MODE: reinforcement_table.AREA_MODE,
+            reinforcement_table.AREA: 100.0,
+            reinforcement_table.MATERIAL_ID: "M1",
+        }],
+        "bar",
+    )
+    scalars[material_catalog.MILD_CATALOG_KEY] = (
+        material_catalog.default_catalog("mild")
+    )
+    data = json.loads(project_io.dump_project(tables, scalars))
+    bar_table = data["tables"]["bars_base"]
+    material_column = bar_table["columns"].index(
+        reinforcement_table.MATERIAL_ID
+    )
+    bar_table["rows"][0][material_column] = "M2"
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(ValueError, match="M2"):
+        project_io.parse_project(json.dumps(data))
+
+
+def test_parse_rejects_hash_valid_project_with_missing_capacity_material():
+    tables, scalars = _current_project()
+    scalars.update(shear_on=True, capacity_steel_material_id="M1")
+    scalars[material_catalog.MILD_CATALOG_KEY] = (
+        material_catalog.default_catalog("mild")
+    )
+    data = json.loads(project_io.dump_project(tables, scalars))
+    data["scalars"]["capacity_steel_material_id"] = "M2"
+    data["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": data["tables"],
+        "scalars": data["scalars"],
+    })
+
+    with pytest.raises(ValueError, match="M2"):
+        project_io.parse_project(json.dumps(data))
 
 
 @pytest.mark.parametrize(

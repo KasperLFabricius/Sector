@@ -16,14 +16,29 @@ def test_default_catalogue_builds_one_stable_material():
     assert mc.build_material(prestress["items"][0], "prestress").Es == 195000.0
 
 
-def test_add_duplicate_delete_never_reuses_an_id():
+def test_mild_delete_then_add_reuses_lowest_available_suffix():
     catalogue, second = mc.add_entry(mc.default_catalog("mild"), "mild")
     catalogue, third = mc.duplicate_entry(catalogue, "mild", "M1")
     catalogue = mc.delete_entry(catalogue, "mild", second)
+    assert catalogue["next_id"] == 2
     catalogue, fourth = mc.add_entry(catalogue, "mild")
 
-    assert (second, third, fourth) == ("M2", "M3", "M4")
-    assert mc.material_ids(catalogue, "mild") == ["M1", "M3", "M4"]
+    assert (second, third, fourth) == ("M2", "M3", "M2")
+    assert mc.material_ids(catalogue, "mild") == ["M1", "M3", "M2"]
+    assert catalogue["next_id"] == 4
+
+
+def test_prestress_delete_then_duplicate_reuses_lowest_available_suffix():
+    catalogue, second = mc.add_entry(
+        mc.default_catalog("prestress"), "prestress"
+    )
+    catalogue, third = mc.add_entry(catalogue, "prestress")
+    catalogue = mc.delete_entry(catalogue, "prestress", second)
+    catalogue, duplicate = mc.duplicate_entry(catalogue, "prestress", "P1")
+
+    assert (second, third, duplicate) == ("P2", "P3", "P2")
+    assert mc.material_ids(catalogue, "prestress") == ["P1", "P3", "P2"]
+    assert catalogue["next_id"] == 4
 
 
 def test_delete_rejects_last_or_assigned_material():
@@ -46,8 +61,102 @@ def test_normalise_repairs_invalid_and_duplicate_ids_deterministically():
     }
     out = mc.normalise_catalog(raw, "mild")
 
-    assert mc.material_ids(out, "mild") == ["M4", "M5", "M6"]
-    assert out["next_id"] == 7
+    assert mc.material_ids(out, "mild") == ["M4", "M1", "M2"]
+    assert out["next_id"] == 3
+
+
+def test_stale_persisted_next_id_does_not_skip_a_mild_gap():
+    raw = {
+        "next_id": 99,
+        "items": [
+            {**mc.default_entry("mild"), "id": "M1"},
+            {**mc.default_entry("mild"), "id": "M3"},
+        ],
+    }
+
+    canonical = mc.normalise_catalog(raw, "mild")
+    updated, material_id = mc.add_entry(canonical, "mild")
+
+    assert canonical["next_id"] == 2
+    assert material_id == "M2"
+    assert updated["next_id"] == 4
+
+
+def test_stale_persisted_next_id_does_not_skip_a_prestress_gap():
+    raw = {
+        "next_id": 500,
+        "items": [
+            {**mc.default_entry("prestress"), "id": "P1"},
+            {**mc.default_entry("prestress"), "id": "P4"},
+        ],
+    }
+
+    canonical = mc.normalise_catalog(raw, "prestress")
+    updated, material_id = mc.add_entry(canonical, "prestress")
+
+    assert canonical["next_id"] == 2
+    assert material_id == "P2"
+    assert updated["next_id"] == 3
+
+
+def test_assignment_reservations_protect_orphan_ids_during_repair_and_add():
+    raw = {
+        "next_id": 200,
+        "items": [
+            {**mc.default_entry("mild"), "id": "M1"},
+            {**mc.default_entry("mild"), "id": "damaged"},
+        ],
+    }
+
+    canonical = mc.normalise_catalog(raw, "mild", reserved_ids=[" M2 "])
+    updated, material_id = mc.add_entry(
+        canonical, "mild", reserved_ids=["M2", "bad", "P4"]
+    )
+
+    assert mc.material_ids(canonical, "mild") == ["M1", "M3"]
+    assert material_id == "M4"
+    assert mc.material_ids(updated, "mild") == ["M1", "M3", "M4"]
+
+
+def test_assignment_reservation_protects_id_when_catalogue_is_missing():
+    canonical = mc.normalise_catalog(None, "prestress", reserved_ids=["P1"])
+
+    assert mc.material_ids(canonical, "prestress") == ["P2"]
+    assert canonical["next_id"] == 1
+
+
+def test_reserved_normalisation_round_trip_is_stable():
+    raw = {
+        "version": 999,
+        "next_id": 88,
+        "items": [
+            {**mc.default_entry("prestress"), "id": "P3", "name": "A"},
+            {**mc.default_entry("prestress"), "id": "P3", "name": "B"},
+            {**mc.default_entry("prestress"), "id": "broken", "name": "C"},
+        ],
+    }
+
+    first = mc.normalise_catalog(raw, "prestress", reserved_ids=["P1"])
+    second = mc.normalise_catalog(first, "prestress", reserved_ids=["P1"])
+
+    assert mc.material_ids(first, "prestress") == ["P3", "P2", "P4"]
+    assert first["next_id"] == 1
+    assert second == first
+
+
+def test_add_result_has_a_stable_normalisation_round_trip():
+    raw = {
+        "next_id": 900,
+        "items": [
+            {**mc.default_entry("mild"), "id": "M1"},
+            {**mc.default_entry("mild"), "id": "M3"},
+        ],
+    }
+
+    updated, material_id = mc.add_entry(raw, "mild")
+
+    assert material_id == "M2"
+    assert mc.normalise_catalog(updated, "mild") == updated
 
 
 def test_invalid_imported_curve_is_repaired_before_ui_use():
@@ -78,6 +187,22 @@ def test_missing_current_catalogue_initialises_current_default():
     out = mc.ensure_catalog({"mild_fytk": 412.0}, "mild")
     assert mc.material_ids(out, "mild") == ["M1"]
     assert out["items"][0]["fytk"] == 550.0
+
+
+def test_ensure_catalog_reserves_assignments_before_default_or_repair():
+    assert mc.material_ids(
+        mc.ensure_catalog({}, "mild", reserved_ids=["M1"]), "mild"
+    ) == ["M2"]
+
+    damaged = {
+        mc.MILD_CATALOG_KEY: {
+            "version": mc.VERSION,
+            "items": [{**mc.default_entry("mild"), "id": "bad"}],
+        }
+    }
+    assert mc.material_ids(
+        mc.ensure_catalog(damaged, "mild", reserved_ids=["M1"]), "mild"
+    ) == ["M2"]
 
 
 def test_apply_preset_keeps_identity_and_description():

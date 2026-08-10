@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import functools
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import manual  # noqa: E402
+
 from sector import __version__  # noqa: E402
 from tools.publication_preflight import (  # noqa: E402
     MANUAL_FURNITURE,
@@ -27,18 +29,28 @@ from tools.publication_preflight import (  # noqa: E402
 from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
 _EXPECTED_FIGURE_COUNT = 16
+_UNRENDERED_MATH_TOKENS = (
+    "sqrt",
+    "Cfrac",
+    "Big",
+    "varepsilon",
+    "rightarrow",
+    "qquadk",
+    "quadf",
+    "kN.m",
+)
 _MANUAL_CROPS = (
     RasterCrop(
         "manual cover and contents",
         1,
         (0.10, 0.07, 0.90, 0.45),
-        "91b33433aafdc22aef60647649212db0b0b215bbf70f6ecdf5c2cc47263a439c",
+        "5fc1cde55bdd5d9d5a7de7ce6a1de3e1e264cc6c332e7a6949f27d0b873959f6",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "be77a57d0e8a84a9669af5d8ed0bb63b79b239bdc56f4a38d61f655eec15f9c5",
+        "cdad9c115fc43b44ca625d530b8b838614042f1ba876acb6a94c9aa1c3b43c24",
     ),
 )
 
@@ -53,20 +65,30 @@ def build_fixture_pdf() -> bytes:
     return manual.build_manual_pdf_bytes(figures=True)
 
 
+def _unrendered_math_token(text: str) -> str | None:
+    """Return a standalone leaked math command without matching prose substrings."""
+    for token in _UNRENDERED_MATH_TOKENS:
+        if re.search(
+            rf"(?<![A-Za-z]){re.escape(token)}(?![A-Za-z])",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return token
+    return None
+
+
 def validate_pdf_content(pdf: bytes) -> str:
     reader, page_texts = preflight_pdf(pdf, min_pages=6)
     text = "\n".join(page_texts)
     flat_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
-    for token in (
-        "sqrt", "Cfrac", "Big", "varepsilon", "rightarrow",
-        "qquadk", "quadf", "kN.m",
-    ):
-        if token.casefold() in text.casefold():
-            raise AssertionError(
-                f"the manual exposes an unrendered mathematics token: {token}"
-            )
+    leaked_token = _unrendered_math_token(text)
+    if leaked_token is not None:
+        raise AssertionError(
+            "the manual exposes an unrendered mathematics token: "
+            f"{leaked_token}"
+        )
     for symbol in (chr(0x221A), chr(0x2211), chr(0x03B8), chr(0x03B2)):
         if symbol not in text:
             raise AssertionError(
@@ -143,6 +165,12 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Governing",
         "PDF report",
         "All calculated cases remain in compact summaries",
+        "Editable table",
+        "Plastic/capacity and Elastic action fields",
+        "accept either a dot or comma as the decimal separator",
+        "Blank ordinary action cells are normalised to canonical zero",
+        "Optional-null fields remain absent rather than becoming zero",
+        "retains the entered numeric precision internally",
         "current project schema version 24",
         "in-development Sector v0.93 line",
         "Released Sector 0.92 projects used schema version 23",
