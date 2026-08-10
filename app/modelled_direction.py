@@ -20,6 +20,7 @@ TRANSVERSE = "transverse"
 CANONICAL_DIRECTIONS = (LONGITUDINAL, TRANSVERSE)
 
 ALIAS_KEY = "modelled_direction_alias"
+MAX_ALIAS_CHARS = 60
 
 _LINE_BREAKS = frozenset("\r\n\v\f\x85\u2028\u2029")
 _MARKDOWN_PUNCTUATION = frozenset(string.punctuation)
@@ -91,7 +92,12 @@ def normalise_alias(value: object = None) -> str:
         raise ValueError("modelled direction alias must be text")
     if any(character in _LINE_BREAKS for character in value):
         raise ValueError("modelled direction alias must be a single line")
-    return " ".join(value.split())
+    normalised = " ".join(value.split())
+    if len(normalised) > MAX_ALIAS_CHARS:
+        raise ValueError(
+            "modelled direction alias must be at most 60 characters"
+        )
+    return normalised
 
 
 def label(direction: object, alias: object = None) -> str:

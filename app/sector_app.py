@@ -3922,7 +3922,7 @@ def build_inputs(host=st):
         "Project direction alias (optional)",
         "",
         modelled_direction.ALIAS_KEY,
-        max_chars=60,
+        max_chars=modelled_direction.MAX_ALIAS_CHARS,
         help=(
             "Optional project wording shown after Sector's canonical longitudinal "
             "or transverse direction. It changes presentation only, not the model."

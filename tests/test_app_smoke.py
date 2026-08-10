@@ -3183,6 +3183,28 @@ def test_direction_alias_is_visible_before_checks_and_follows_the_cut():
     assert not at.exception
 
 
+def test_pending_project_rejects_overlong_alias_before_widget_mount():
+    import modelled_direction
+    import project_io
+
+    payload = json.loads(project_io.dump_project({}, {}))
+    too_long = "x" * (modelled_direction.MAX_ALIAS_CHARS + 1)
+    payload["presentation"][modelled_direction.ALIAS_KEY] = too_long
+
+    at = _fresh()
+    at.session_state["_pending_project"] = json.dumps(payload)
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["_project_msg"] == (
+        "error",
+        "Could not load project: modelled direction alias must be at most "
+        "60 characters.",
+    )
+    assert at.text_input(key=modelled_direction.ALIAS_KEY).value == ""
+    assert at.session_state[modelled_direction.ALIAS_KEY] == ""
+
+
 def test_direction_alias_changes_only_the_report_document_signature():
     import sector_app
 
@@ -4081,6 +4103,8 @@ def test_detailing_controls_run_selected_case_and_section_wide_spacing():
 
     at = _fresh()
     at.run()
+    alias = ":red[span] [deck](https://example.test) **critical**"
+    at.text_input(key="modelled_direction_alias").set_value(alias).run()
     _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [{
         "name": "PL-DETAIL",
         "mx_ed_knm": 50.0,
@@ -4107,6 +4131,14 @@ def test_detailing_controls_run_selected_case_and_section_wide_spacing():
     )
     assert not minimum.empty
     assert not spacing.empty
+    assert any(
+        item.value == (
+            "**Longitudinal (project alias: "
+            r"\:red\[span\] \[deck\]\(https\:\/\/example\.test\) "
+            r"\*\*critical\*\*) minimum reinforcement**"
+        )
+        for item in at.markdown
+    )
     assert not at.exception
 
 

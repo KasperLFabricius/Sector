@@ -186,6 +186,26 @@ def test_direction_alias_validation_is_separate_from_input_integrity():
         project_io.parse_project(json.dumps(payload))
 
 
+def test_direction_alias_length_limit_is_symmetric_and_presentation_only():
+    tables, scalars = _current_project()
+    too_long = "x" * (modelled_direction.MAX_ALIAS_CHARS + 1)
+    message = "^modelled direction alias must be at most 60 characters$"
+
+    with pytest.raises(ValueError, match=message):
+        project_io.dump_project(
+            tables,
+            {**scalars, modelled_direction.ALIAS_KEY: too_long},
+        )
+
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["presentation"][modelled_direction.ALIAS_KEY] = too_long
+    text = json.dumps(payload)
+
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+    with pytest.raises(ValueError, match=message):
+        project_io.parse_project(text)
+
+
 def test_project_round_trip_preserves_decimal_precision_and_blank_action_zero():
     tables, scalars = _current_project()
     tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table(

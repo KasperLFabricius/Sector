@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import sys
 
@@ -525,32 +526,52 @@ def test_disabled_live_app_creates_no_probe_state(monkeypatch):
     assert all(key not in app.session_state for key in app_run_probe.state_keys())
 
 
-def test_enabled_live_app_seals_complete_record(monkeypatch):
+def test_enabled_live_app_seals_complete_active_stage_records(monkeypatch):
     monkeypatch.setenv(app_run_probe.ENABLE_ENV, "1")
     monkeypatch.delenv(app_run_probe.OUTPUT_ENV, raising=False)
 
     app = AppTest.from_file(APP).run(timeout=30)
 
     assert not app.exception
-    history = app.session_state[app_run_probe.state_keys()[2]]
-    assert len(history) == 1
-    record = history[0]
-    assert record["kind"] == "app"
-    assert record["workspace"] == "Inputs"
-    assert record["input_stage"] == "1 " + chr(0x00B7) + " Analysis settings"
-    assert record["material_family"] == "Concrete"
-    assert record["forward_message_count"] > 0
-    assert record["forward_message_bytes"] > 0
-    assert record["largest_forward_message_bytes"] > 0
-    assert record["byte_accounting"] is True
-    assert record["interrupted"] is False
-    assert {
-        "startup",
-        "pane_construction",
-        "normalization",
-        "input_assembly",
-        "autosave",
-    }.issubset(record["phases"])
+    stages = (
+        "1 " + chr(0x00B7) + " Analysis settings",
+        "2 " + chr(0x00B7) + " Section",
+        "3 " + chr(0x00B7) + " Material parameters",
+        "4 " + chr(0x00B7) + " Loads",
+        "Project & report",
+    )
+    for index, stage in enumerate(stages):
+        if index:
+            app.session_state["_input_tab"] = stage
+            app.run(timeout=30)
+            assert not app.exception
+
+        history = app.session_state[app_run_probe.state_keys()[2]]
+        assert len(history) == index + 1
+        record = history[-1]
+        assert record["kind"] == "app"
+        assert record["workspace"] == "Inputs"
+        assert record["input_stage"] == stage
+        assert record["material_family"] == "Concrete"
+        assert record["forward_message_count"] > 0
+        assert record["forward_message_bytes"] > 0
+        assert record["largest_forward_message_bytes"] > 0
+        assert record["byte_accounting"] is True
+        assert record["interrupted"] is False
+        assert math.isfinite(record["duration_ms"])
+        assert record["duration_ms"] >= 0.0
+        assert {
+            "startup",
+            "pane_construction",
+            "normalization",
+            "input_assembly",
+            "autosave",
+        }.issubset(record["phases"])
+        pane = record["phases"]["pane_construction"]
+        assert pane["count"] == 1
+        for field in ("total_ms", "max_ms", "last_ms"):
+            assert math.isfinite(pane[field])
+            assert pane[field] >= 0.0
 
 
 def test_probe_state_is_excluded_from_current_project_schema():

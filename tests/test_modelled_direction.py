@@ -53,6 +53,19 @@ def test_alias_is_optional_single_line_and_canonical_direction_stays_first():
     ) == "Longitudinal (project alias: span direction)"
 
 
+def test_alias_normalises_before_enforcing_the_shared_character_limit():
+    exact_limit = "x" * modelled_direction.MAX_ALIAS_CHARS
+
+    assert modelled_direction.normalise_alias(
+        f"  {exact_limit}  "
+    ) == exact_limit
+    with pytest.raises(
+        ValueError,
+        match="^modelled direction alias must be at most 60 characters$",
+    ):
+        modelled_direction.normalise_alias(f"{exact_limit}x")
+
+
 def test_html_label_escapes_user_alias_without_hiding_canonical_direction():
     assert modelled_direction.resolved_html_label(
         {"modelled_reinforcement_direction": "longitudinal"},
