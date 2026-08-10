@@ -2386,6 +2386,7 @@ def _compile_manual_equation_pdf_flowables(published_blocks, frame_width):
         bottom_padding=6.0,
         ink=publication_theme.PALETTE.ink,
         muted_ink=publication_theme.PALETTE.manual_muted,
+        wrap_delimited_arguments=True,
     )
     compiled = {}
     governed_count = 0

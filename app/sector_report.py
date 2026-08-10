@@ -1271,12 +1271,10 @@ class ReportBuilder:
     def _table_context_rows(self, column_count, row_offset=0):
         """Freeze active publication context as complete-width table rows."""
         entries = []
-        # Standard tables already sit directly below their visible section and
-        # subsection headings. Repeating both headings inside every table costs
-        # substantial vertical space without adding review context. Audit retains
-        # the complete in-table context; Standard retains the assessment/status
-        # row, which is the material context a detached continuation page needs.
-        include_full_context = self.profile.key == "Audit"
+        # Standard and Audit continuations must remain independently reviewable.
+        # Brief retains its compact assessment-only context to satisfy the hard
+        # three-page representative-fixture limit without dropping result rows.
+        include_full_context = self.profile.key != "Brief"
         if include_full_context and self._table_section_context is not None:
             entries.append((
                 "section", self._table_section_context, _HEAD_BG, _BLUE,

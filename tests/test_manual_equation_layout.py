@@ -17,6 +17,8 @@ from PIL import Image, ImageChops
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 
+from tools.publication_preflight import validate_raster_pages
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
@@ -160,6 +162,17 @@ def test_manual_structural_fraction_radical_and_script_geometry_is_measured() ->
     assert {"fraction", "script", "radical", "radical-sign"} <= heightened_kinds
     assert geometry_by_number["C4-1"].rules
     assert geometry_by_number["C7-5"].rules
+    curvature_rows = geometry_by_number["C4-1"].rows
+    assert len(curvature_rows) == 4
+    assert tuple(row.continuation for row in curvature_rows) == (
+        False,
+        True,
+        True,
+        True,
+    )
+    assert not {
+        node.kind for node in geometry_by_number["C4-1"].nodes
+    } & {"literal"}
 
 
 def test_manual_pdf_is_searchable_vector_math_without_image_equations(
@@ -288,11 +301,11 @@ def test_complex_manual_pages_are_visible_and_unclipped_in_both_rasters(
                 ).getbbox(),
             )
             assert all(box is not None for box in boxes)
-            for box, size in zip(boxes, (colour.size, grayscale.size)):
+            validate_raster_pages([colour])
+            validate_raster_pages([grayscale.convert("RGB")])
+            for box in boxes:
                 assert box is not None
                 left, top, right, bottom = box
-                assert left >= 40 and top >= 40
-                assert right <= size[0] - 40 and bottom <= size[1] - 40
                 assert right - left > 500 and bottom - top > 500
             assert all(
                 abs(boxes[0][coordinate] - boxes[1][coordinate]) <= 2

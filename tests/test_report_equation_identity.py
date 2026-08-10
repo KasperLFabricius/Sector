@@ -58,9 +58,9 @@ LE = chr(0x2264)
 TIMES = chr(0x00D7)
 
 
-def _builder():
+def _builder(*, profile="Standard"):
     builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, {}, {}, figures=False, qa_appendix=False
+        io.BytesIO(), {}, {}, {}, figures=False, profile=profile
     )
     formula = builder._formula
 
@@ -201,7 +201,7 @@ def test_equation_compaction_does_not_change_symbolic_source_note_or_table():
 
 
 def test_equation_flowable_seals_public_identity_number_and_source():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Resistance")
     builder._h2("Direction x")
     builder._formula(
@@ -409,7 +409,7 @@ def test_equation_anchor_encoding_preserves_dot_and_hyphen_identity():
 
 
 def test_grouping_preserves_equation_and_existing_direct_child_audit_text():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Combined")
     start = len(builder.flow)
     builder._h2("Directional screen")
@@ -474,7 +474,7 @@ def test_grouping_still_flattens_an_ordinary_keep_together_wrapper():
 
 
 def test_oversized_outer_group_releases_without_splitting_equation_text():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Long grouped section")
     start = len(builder.flow)
     builder._h2("Evidence")

@@ -75,12 +75,12 @@ deliberately compact 7.2 pt overview with reduced cell padding to meet its hard
 three-page limit without dropping a row.
 
 The frozen browser-free reference fixture currently produces 3 Brief pages,
-44 Standard pages and 57 Audit pages. Standard exceeds its 30-page target
+46 Standard pages and 57 Audit pages. Standard exceeds its 30-page target
 because the representative fixture intentionally enables every calculation
 family and retains the complete used-input/result tables plus one globally
 critical derivation per implemented method. Shrinking below the accepted type
 floor or removing a requested result would be worse than the excess. Final
-browser-free review inspected all 44 pages in colour and grayscale and approved
+browser-free review inspected all 46 pages in colour and grayscale and approved
 the exception: content is unclipped and legible, headings remain with their
 first substantive row, and reducing to 30 pages would require a result/detail
 omission or a type-size breach. The final real-figure CI artifact remains a
@@ -161,8 +161,8 @@ implement the current programme's PR-08 portable packaging scope.
 Current overlapping local receipts, which must not be summed, include:
 
 - 31 immutable report-profile policy tests passed;
-- the final consolidated browser-free report/manual/profile/persistence matrix
-  passed 477 nodes,
+- the final post-CI corrective browser-free report/manual/profile/persistence
+  matrix passed 538 nodes,
   with only the two deliberate real-figure artifact nodes deselected;
 - the focused final pagination matrix passed 31 nodes and the final manual
   split/navigation slice passed 14 nodes, both overlapping the consolidated
@@ -177,7 +177,7 @@ Current overlapping local receipts, which must not be summed, include:
 - the final independent post-fix Codex review returned CLEAN with no P0-P2
   findings across profile persistence, migration, provenance, comment escaping,
   adoption warnings, legacy API compatibility and acceptance wording; and
-- the frozen no-figure artifacts contain exactly 3 Brief, 44 Standard, 57 Audit
+- the frozen no-figure artifacts contain exactly 3 Brief, 46 Standard, 57 Audit
   and 58 manual pages.
 
 The recorded browser-free visual receipt is:
@@ -185,7 +185,7 @@ The recorded browser-free visual receipt is:
 | Artifact | Colour pages | Grayscale pages | Review decision |
 | --- | ---: | ---: | --- |
 | Brief report | 3 | 3 | Clean; hard three-page limit met without dropping a requested row. |
-| Standard report | 44 | 44 | Clean; 30-page target exception approved for the all-families QA fixture. |
+| Standard report | 46 | 46 | Clean; 30-page target exception approved for the all-families QA fixture. |
 | Audit report | 57 | 57 | Clean; reviewed sparse non-openers on pages 3 and 17 are semantically justified. |
 | User manual | 58 | 58 | Clean; Part transitions, continued tables, typography and furniture are legible. |
 

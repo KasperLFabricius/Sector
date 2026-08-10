@@ -315,7 +315,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Bulk assignments",
         "Governing",
         "PDF report",
-        "All calculated cases remain in compact summaries",
+        "Worked numerical derivations are limited to the globally governing or "
+        "extremal calculation in each family",
         "Editable table",
         "Plastic/capacity and Elastic action fields",
         "accept either a dot or comma as the decimal separator",
