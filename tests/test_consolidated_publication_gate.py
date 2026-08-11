@@ -59,6 +59,20 @@ def test_live_workflow_is_one_fail_closed_publication_chain():
     ].index(_step(test_job, "Validate dependency audit policy"))
 
 
+def test_real_figure_render_tests_share_one_xdist_group():
+    workflow = _workflow()
+    full_suite = _step(workflow["jobs"]["test"], "Run complete test suite with coverage")
+    assert "--dist loadgroup" in full_suite["run"]
+
+    marker = '@pytest.mark.xdist_group(name="publication-real-figures")'
+    for relative_path in (
+        "tests/test_report_rendered.py",
+        "tests/test_manual_rendered.py",
+    ):
+        source = (ROOT / relative_path).read_text(encoding="utf-8")
+        assert source.count(marker) == 1
+
+
 @pytest.mark.parametrize(
     ("step_name", "mutation"),
     [

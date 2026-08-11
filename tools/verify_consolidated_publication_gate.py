@@ -28,7 +28,7 @@ RELEASE_WORKFLOW_CONTRACT_SHA256 = (
     "5e960d3746b2f4b2a9a11999d61a0733a3c673fd19e44c13471a9ea350e5d959"
 )
 JOB_CONTRACT_SHA256 = {
-    "test": "7978803bda191391334819e75b2afb28704202385f30160c5d73b4bfcad3447f",
+    "test": "39cdde5e29c6e182fc326da39eac460f9cf81534c2532469c8461609ed1b0f2a",
     "windows-package": (
         "dfd54d58039aff9ada9d67a47aa0a89f0b8489641731dedbdb90a560b56503e8"
     ),
@@ -146,6 +146,7 @@ if (Test-Path -LiteralPath $baseTemp) {
   throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
 }
 python -m pytest tests -n 4 `
+  --dist loadgroup `
   --basetemp $baseTemp `
   --cov=app `
   --cov=sector `

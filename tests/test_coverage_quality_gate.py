@@ -60,6 +60,7 @@ def test_exact_contract_and_workflow_are_aligned():
     assert expected_validator_command().endswith(
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
     )
+    assert "--dist loadgroup" in expected_coverage_command(data)
     assert "--basetemp $baseTemp" in expected_coverage_command(data)
     assert "--cov=app" in expected_coverage_command(data)
     assert "--cov=sector" in expected_coverage_command(data)

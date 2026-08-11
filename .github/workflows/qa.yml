@@ -86,6 +86,7 @@ jobs:
             throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
           }
           python -m pytest tests -n 4 `
+            --dist loadgroup `
             --basetemp $baseTemp `
             --cov=app `
             --cov=sector `

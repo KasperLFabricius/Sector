@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 
 import pypdf
+import pytest
 
 from tools.manual_render_fixture import (
     _MANUAL_CROPS,
@@ -102,6 +103,7 @@ def test_accessible_html_fixture_is_self_contained_and_semantic():
     assert "Audit does not mean approved, compliant or certified" in text
 
 
+@pytest.mark.xdist_group(name="publication-real-figures")
 def test_issued_manual_renders_every_page_and_retains_navigation():
     pdf = build_fixture_pdf()
     validate_pdf_content(pdf)

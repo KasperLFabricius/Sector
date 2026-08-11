@@ -217,6 +217,7 @@ if (Test-Path -LiteralPath $baseTemp) {{
   throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
 }}
 python -m pytest tests -n 4 `
+  --dist loadgroup `
   --basetemp $baseTemp `
 {targets}
   --cov-report=term-missing:skip-covered `

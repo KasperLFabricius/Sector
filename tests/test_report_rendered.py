@@ -142,6 +142,7 @@ def test_equation_source_colocation_rejects_a_page_split():
         )
 
 
+@pytest.mark.xdist_group(name="publication-real-figures")
 def test_issued_report_renders_every_page_and_retains_expected_content():
     """Exercise the issued artifact once so Kaleido is never run concurrently.
 
