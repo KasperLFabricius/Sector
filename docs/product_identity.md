@@ -25,18 +25,26 @@ and are rejected rather than treated as coefficients.
 
 PASS/FAIL is reserved for an implemented demand-versus-resistance equation.
 Stresses, crack widths and other output-only quantities carry no acceptance
-verdict. Sector does not issue a global compliance verdict.
+verdict when no criterion is supplied. An optional user-specified crack-width
+criterion produces only `WITHIN USER-SPECIFIED LIMIT` or
+`EXCEEDS USER-SPECIFIED LIMIT`, publishes the criterion source and does not
+become a code-compliance conclusion. Sector does not issue a global compliance
+verdict.
 
 Published results retain only the provenance needed to reproduce the
 calculation: application/source version, actual inputs, selected
 method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
-Sector 0.92 was released as source/application code with current-only project
-schema 23. The in-development v0.93 line supports only current schema 24 and
-rejects schema 23 rather than migrating or silently dropping inputs. Earlier
-app/project/schema versions and their compliance, cover-calculator or authority
-metadata remain deliberately unsupported and are not carried forward.
+Sector 0.93 is the current release candidate: provenance-bearing
+source/application code and a separate verified unsigned portable Windows
+application with current-only project schema 24. Its guarded workflow prepares
+an authenticated draft GitHub release; that draft is not a publicly published
+user release. Sector 0.93 rejects released Sector 0.92 schema 23 rather than
+migrating or silently dropping inputs. Earlier app/project/schema versions and
+their compliance, cover-calculator or authority metadata remain deliberately
+unsupported and are not carried forward. No signed installer, trusted-publisher
+reputation or administrator approval is claimed.
 
 Sector does not infer semantic bridge regions, walls, webs or flanges. A
 calculation that cites a bridge source remains bounded to its implemented

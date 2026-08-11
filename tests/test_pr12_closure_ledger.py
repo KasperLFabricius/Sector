@@ -7,9 +7,6 @@ from pathlib import Path
 import re
 
 import pytest
-import sector
-
-
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER = ROOT / "docs" / "qa_v0.92_closure.md"
 CLOSURE_MAP = ROOT / "docs" / "pr12d_pr12_closure_map.md"
@@ -154,7 +151,6 @@ def test_finding_map_uses_each_accepted_slice_without_scope_expansion() -> None:
     assert "makes no zero-long-task claim" in contract
     assert "PR-13 and PR-14 remain planned" in contract
     assert "changes no solver, formula, result, project schema" in contract
-    assert sector.__version__ == "0.92"
 
 
 @pytest.mark.parametrize(

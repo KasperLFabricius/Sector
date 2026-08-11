@@ -1,8 +1,9 @@
 # PR-03 Sector v0.93 textbook-calculation publication acceptance
 
-Status: candidate acceptance contract for the PR-03 development branch.
-GitHub records the eventual pull-request, candidate, tree and squash identities;
-this document does not invent evidence that does not yet exist.
+Status: accepted and merged as PR #384. Reviewed head
+`9fdb4839fa2778e67e6d2c2324640f1c0755ff6c` passed Sector QA run
+`31335521261`; squash `115d78a5fec33bc6d7a614f6a526a17ab32c22e2`
+has accepted tree `14ff5582bb6669d902e0ae4be32fd3bd9d626c84`.
 
 ## Exact accepted base
 

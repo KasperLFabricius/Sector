@@ -44,7 +44,7 @@ jobs:
         run: New-Item -ItemType Directory -Path qa-artifacts -Force | Out-Null
 
       - name: Validate consolidated publication gate
-        run: python tools/verify_consolidated_publication_gate.py .github/workflows/qa.yml
+        run: python tools/verify_consolidated_publication_gate.py .github/workflows/qa.yml .github/workflows/release-v093.yml
 
       - name: Validate dependency audit policy
         env:
@@ -76,7 +76,23 @@ jobs:
         run: python tools/verify_mypy_policy.py quality-mypy-policy.toml --execute
 
       - name: Run complete test suite with coverage
-        run: python -m pytest tests -n 4 --cov=app --cov=sector --cov-report=term-missing:skip-covered --cov-report=xml:qa-artifacts/coverage.xml --cov-fail-under=90 --junitxml=qa-artifacts/test-results.xml
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $baseTemp = Join-Path $env:RUNNER_TEMP (
+            "sector-pytest-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+          )
+          if (Test-Path -LiteralPath $baseTemp) {
+            throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
+          }
+          python -m pytest tests -n 4 `
+            --basetemp $baseTemp `
+            --cov=app `
+            --cov=sector `
+            --cov-report=term-missing:skip-covered `
+            --cov-report=xml:qa-artifacts/coverage.xml `
+            --cov-fail-under=90 `
+            --junitxml=qa-artifacts/test-results.xml
 
       - name: Render report fixture with real figures
         if: always()
@@ -90,7 +106,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sector-qa-evidence
+          name: sector-qa-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: qa-artifacts/
           if-no-files-found: error
           retention-days: 14
@@ -180,8 +196,8 @@ jobs:
           $expectedVersionInfo = [ordered]@{
             ProductName = "Sector"
             FileDescription = "Structural-analysis and design calculation tool"
-            FileVersion = "0.92.0.0"
-            ProductVersion = "0.92.0.0"
+            FileVersion = "0.93.0.0"
+            ProductVersion = "0.93.0.0"
             OriginalFilename = "Sector.exe"
             LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
           }
@@ -213,7 +229,7 @@ jobs:
       - name: Upload unsigned QA reproducibility evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Sector-Windows-unsigned-QA
+          name: Sector-Windows-unsigned-QA-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.SECTOR_PACKAGE_ROOT_A }}/
             ${{ env.SECTOR_PACKAGE_ROOT_B }}/
@@ -983,7 +999,7 @@ jobs:
       - name: Upload unsigned portable Windows evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Sector-Windows-portable-unsigned-QA
+          name: Sector-Windows-portable-unsigned-QA-${{ github.run_id }}-${{ github.run_attempt }}
           path: qa-artifacts/portable-windows/
           if-no-files-found: error
           include-hidden-files: true

@@ -61,7 +61,7 @@ SourceReleaseError = _SOURCE_RELEASE.SourceReleaseError
 verify_source_release_directory = _SOURCE_RELEASE.verify_source_release_directory
 
 EXPECTED_SOURCE_IDENTITY = {
-    "__version__": "0.92",
+    "__version__": "0.93",
     "__product_name__": "Sector",
     "__description__": "Structural-analysis and design calculation tool",
     "__author__": "Kasper Lindskov Fabricius",

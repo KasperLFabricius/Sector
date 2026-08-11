@@ -168,7 +168,9 @@ def test_evidence_retention_and_unsigned_secret_boundary_cannot_drift():
         "Upload unsigned portable Windows evidence",
     )
     portable_upload["with"]["path"] = "dist/portable"
-    with pytest.raises(ConsolidatedPublicationGateError, match="structured contract"):
+    with pytest.raises(
+        ConsolidatedPublicationGateError, match="final portable artifact"
+    ):
         validate_workflow(_workflow_text(workflow))
 
     workflow = _workflow()

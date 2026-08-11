@@ -548,8 +548,9 @@ def manual_blocks() -> list:
        "stresses from long- and short-term action components, on the cracked "
        "(tension-ignored) section, with creep through the modular ratio.\n"
        "- **Elastic and crack outputs.** Cracking threshold, transformed section "
-       "properties, stresses and optional crack width, without specified-limit "
-       "inputs or output-only verdicts.\n"
+       "properties, stresses and optional crack width. With no criterion the "
+       "width remains a calculated output; an entered user criterion produces "
+       "only a specified-limit comparison with its source.\n"
        "- **Grouped fatigue.** Reinforcement S-N/Miner and concrete compression "
        "checks from named spectra of sustained states and cyclic increments.\n"
        "- **Longitudinal detailing.** Edition-specific minimum-reinforcement "
@@ -709,8 +710,8 @@ def manual_blocks() -> list:
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
        "earlier results; press *Calculate* to create current results. The "
-       "in-development Sector v0.93 line supports only current project schema "
-       "version 24. Released Sector 0.92 projects used schema version 23 and are "
+       "Sector v0.93 supports only current project schema version 24. Released "
+       "Sector 0.92 projects used schema version 23 and are "
        "rejected rather than migrated.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
@@ -931,7 +932,7 @@ def manual_blocks() -> list:
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
-    call("standard", "The DK NA reports the fine and the coarse crack system side "
+    call("standard", "Sector 0.93 reports the DK NA fine and coarse crack systems side "
        "by side, each for the long-term and short-term load (four crack widths). "
        "An optional positive criterion belongs to that named Elastic row. Blank "
        "means the width is calculated without an acceptance assessment; when a "
@@ -1188,8 +1189,10 @@ def manual_blocks() -> list:
        "stresses are reported per bar for the long-term, "
        "short-term and total states, with the peak concrete compression and the "
        "neutral-axis position. The cracking threshold and section properties are "
-       "always reported; optional crack width is a numerical output with no "
-       "specified-limit verdict.")
+       "always reported. Without a criterion, optional crack width is a numerical "
+       "output without an acceptance verdict. With a criterion, Sector reports "
+       "**WITHIN USER-SPECIFIED LIMIT** or **EXCEEDS USER-SPECIFIED LIMIT** and "
+       "the criterion source; this is not a code-compliance conclusion.")
     h2("Fatigue results")
     md("The **Fatigue Results** view first lists every spectrum and its governing "
        "utilisation. Select a spectrum to see the section utilisation map, then "

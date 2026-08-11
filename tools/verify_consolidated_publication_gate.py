@@ -24,10 +24,13 @@ DOWNLOAD_ACTION = (
 )
 FULL_COMMIT_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
 SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
+RELEASE_WORKFLOW_CONTRACT_SHA256 = (
+    "5e960d3746b2f4b2a9a11999d61a0733a3c673fd19e44c13471a9ea350e5d959"
+)
 JOB_CONTRACT_SHA256 = {
-    "test": "4b220d25de52b376ed6ce47f1b123be8989ba7832835f992e9aee4bca91c805f",
+    "test": "7978803bda191391334819e75b2afb28704202385f30160c5d73b4bfcad3447f",
     "windows-package": (
-        "b1d2dc20ddfbbe626296637a3c240c38873bccc18e118c664acde1ffc9e0f8a1"
+        "dfd54d58039aff9ada9d67a47aa0a89f0b8489641731dedbdb90a560b56503e8"
     ),
     "portable-producer-a": (
         "306df289c5a8abe9a35c1719d8aaaa0ba42f30ffdbf81327b390a5d902a357ff"
@@ -42,7 +45,7 @@ JOB_CONTRACT_SHA256 = {
         "529d95c0e9575b698eb1be2a9c903d3312f0b3aadf9a9366bd12151de79577ab"
     ),
     "windows-portable": (
-        "5246e79094eb9b85dfaf72a03280592eeee75dc3bf06ec1f87e8271b97719786"
+        "bff53e37b694747caafe2846c93a4143176baf3f5a02aaa4c09aa19099cc8e18"
     ),
 }
 
@@ -122,6 +125,35 @@ PORTABLE_STEPS = (
     "Re-verify immutable distributions for final publication",
     "Upload unsigned portable Windows evidence",
 )
+
+RELEASE_STEPS = (
+    "Authenticate completed QA authority before checkout",
+    "Check out authenticated QA source",
+    "Establish exact current-main boundary before repository code",
+    "Set up pinned Python",
+    "Download and safely extract only the qualified portable artifact",
+    "Assemble and verify exact v0.93 release assets",
+    "Recheck QA authority and current main immediately before mutation",
+    "Create or resume exact annotated tag and draft release",
+    "Freshly download and reverify all seven draft assets",
+)
+
+FULL_TEST_RUN = """$ErrorActionPreference = "Stop"
+$baseTemp = Join-Path $env:RUNNER_TEMP (
+  "sector-pytest-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+)
+if (Test-Path -LiteralPath $baseTemp) {
+  throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
+}
+python -m pytest tests -n 4 `
+  --basetemp $baseTemp `
+  --cov=app `
+  --cov=sector `
+  --cov-report=term-missing:skip-covered `
+  --cov-report=xml:qa-artifacts/coverage.xml `
+  --cov-fail-under=90 `
+  --junitxml=qa-artifacts/test-results.xml
+"""
 
 
 class ConsolidatedPublicationGateError(ValueError):
@@ -265,10 +297,20 @@ def _validate_test_job(job: Mapping[str, Any]) -> list:
         "name": CONSOLIDATED_STEP,
         "run": (
             "python tools/verify_consolidated_publication_gate.py "
-            ".github/workflows/qa.yml"
+            ".github/workflows/qa.yml .github/workflows/release-v093.yml"
         ),
     }:
         raise ConsolidatedPublicationGateError("consolidated validator command differs")
+
+    full_test = _named_step(steps, "Run complete test suite with coverage")
+    if full_test != {
+        "name": "Run complete test suite with coverage",
+        "shell": "pwsh",
+        "run": FULL_TEST_RUN,
+    }:
+        raise ConsolidatedPublicationGateError(
+            "full test gate must use one previously nonexistent run-attempt basetemp"
+        )
 
     report = _named_step(steps, "Render report fixture with real figures")
     if report != {
@@ -292,7 +334,10 @@ def _validate_test_job(job: Mapping[str, Any]) -> list:
         "if": "always()",
         "uses": UPLOAD_ACTION,
         "with": {
-            "name": "sector-qa-evidence",
+            "name": (
+                "sector-qa-evidence-"
+                "${{ github.run_id }}-${{ github.run_attempt }}"
+            ),
             "path": "qa-artifacts/",
             "if-no-files-found": "error",
             "retention-days": 14,
@@ -332,7 +377,11 @@ def _validate_package_job(job: Mapping[str, Any]) -> list:
     if (
         upload.get("uses") != UPLOAD_ACTION
         or set(upload) != {"name", "uses", "with"}
-        or upload_with.get("name") != "Sector-Windows-unsigned-QA"
+        or upload_with.get("name")
+        != (
+            "Sector-Windows-unsigned-QA-"
+            "${{ github.run_id }}-${{ github.run_attempt }}"
+        )
         or upload_with.get("if-no-files-found") != "error"
         or upload_with.get("retention-days") != 7
         or str(upload_with.get("path", "")).splitlines() != expected_paths
@@ -380,6 +429,25 @@ def _validate_portable_job(
         if step.get("if") != expected_if:
             raise ConsolidatedPublicationGateError(
                 f"{step['name']!r} execution condition differs"
+            )
+    if label == "windows-portable job":
+        upload = _named_step(steps, "Upload unsigned portable Windows evidence")
+        if upload != {
+            "name": "Upload unsigned portable Windows evidence",
+            "uses": UPLOAD_ACTION,
+            "with": {
+                "name": (
+                    "Sector-Windows-portable-unsigned-QA-"
+                    "${{ github.run_id }}-${{ github.run_attempt }}"
+                ),
+                "path": "qa-artifacts/portable-windows/",
+                "if-no-files-found": "error",
+                "include-hidden-files": True,
+                "retention-days": 7,
+            },
+        }:
+            raise ConsolidatedPublicationGateError(
+                "final portable artifact upload contract differs"
             )
     return steps
 
@@ -482,12 +550,156 @@ def validate_workflow(workflow_text: str) -> None:
         )
 
 
+def validate_release_workflow(workflow_text: str) -> None:
+    try:
+        workflow = yaml.safe_load(workflow_text)
+    except yaml.YAMLError as exc:
+        raise ConsolidatedPublicationGateError(
+            f"cannot parse release workflow YAML: {exc}"
+        ) from exc
+    workflow = _mapping(workflow, "release workflow")
+    if _contains_secret_context(workflow):
+        raise ConsolidatedPublicationGateError(
+            "v0.93 release workflow must not expose signing authority"
+        )
+    if set(workflow) != {"name", True, "permissions", "concurrency", "jobs"}:
+        raise ConsolidatedPublicationGateError(
+            "release workflow differs from its exact top-level contract"
+        )
+    if workflow.get("name") != "Sector v0.93 release":
+        raise ConsolidatedPublicationGateError("release workflow name differs")
+    if workflow.get(True) != {
+        "workflow_run": {
+            "workflows": ["Sector QA"],
+            "types": ["completed"],
+        }
+    }:
+        raise ConsolidatedPublicationGateError(
+            "release workflow trigger must be only completed Sector QA runs"
+        )
+    if workflow.get("permissions") != {}:
+        raise ConsolidatedPublicationGateError(
+            "release workflow default permissions must remain empty"
+        )
+    if workflow.get("concurrency") != {
+        "group": "sector-v093-release",
+        "cancel-in-progress": False,
+    }:
+        raise ConsolidatedPublicationGateError(
+            "release workflow concurrency boundary differs"
+        )
+
+    jobs = _mapping(workflow.get("jobs"), "release workflow jobs")
+    if set(jobs) != {"release"}:
+        raise ConsolidatedPublicationGateError(
+            "release workflow must contain exactly one release job"
+        )
+    job = _mapping(jobs["release"], "release job")
+    if set(job) != {
+        "name",
+        "if",
+        "runs-on",
+        "timeout-minutes",
+        "permissions",
+        "steps",
+    }:
+        raise ConsolidatedPublicationGateError(
+            "release job differs from its failure-propagating contract"
+        )
+    if job.get("name") != "Publish verified v0.93 draft release":
+        raise ConsolidatedPublicationGateError("release job identity differs")
+    if job.get("if") != (
+        "github.event.workflow_run.name == 'Sector QA' && "
+        "github.event.workflow_run.conclusion == 'success' && "
+        "github.event.workflow_run.event == 'push' && "
+        "github.event.workflow_run.head_branch == 'main' && "
+        "github.event.workflow_run.head_repository.full_name == github.repository"
+    ):
+        raise ConsolidatedPublicationGateError(
+            "release job same-repository successful-main-push guard differs"
+        )
+    if (
+        job.get("runs-on") != "ubuntu-latest"
+        or job.get("timeout-minutes") != 30
+        or job.get("permissions")
+        != {"actions": "read", "contents": "write"}
+    ):
+        raise ConsolidatedPublicationGateError(
+            "release job runner or minimal write boundary differs"
+        )
+    steps = _steps(job, RELEASE_STEPS, "release job")
+    if any("if" in step for step in steps):
+        raise ConsolidatedPublicationGateError(
+            "release steps must remain unconditional after the job guard"
+        )
+    _validate_action_pins(steps)
+    _validate_action_identities(steps)
+
+    checkout = _named_step(steps, "Check out authenticated QA source")
+    if checkout != {
+        "name": "Check out authenticated QA source",
+        "uses": CHECKOUT_ACTION,
+        "with": {
+            "ref": "${{ github.event.workflow_run.head_sha }}",
+            "fetch-depth": 0,
+            "persist-credentials": False,
+        },
+    }:
+        raise ConsolidatedPublicationGateError(
+            "release checkout must remain exact-source and credentialless"
+        )
+    setup = _named_step(steps, "Set up pinned Python")
+    if setup != {
+        "name": "Set up pinned Python",
+        "uses": SETUP_PYTHON_ACTION,
+        "with": {"python-version-file": ".python-version"},
+    }:
+        raise ConsolidatedPublicationGateError("release Python setup differs")
+
+    collapsed = workflow_text
+    for forbidden in (
+        "Sector.exe",
+        "workflow_dispatch",
+        "pull_request",
+        "environment",
+        "sign_and_verify",
+        "SECTOR_SIGNING",
+        "actions/download-artifact",
+        "actions/upload-artifact",
+        "Start-Process",
+        "Invoke-Item",
+        "browser",
+        "chrome",
+        "electron",
+        "kaleido",
+    ):
+        if forbidden.casefold() in collapsed.casefold():
+            raise ConsolidatedPublicationGateError(
+                f"release workflow contains forbidden capability {forbidden!r}"
+            )
+    release_contract = {
+        "name": workflow["name"],
+        "on": workflow[True],
+        "permissions": workflow["permissions"],
+        "concurrency": workflow["concurrency"],
+        "jobs": workflow["jobs"],
+    }
+    if _structured_sha256(release_contract) != RELEASE_WORKFLOW_CONTRACT_SHA256:
+        raise ConsolidatedPublicationGateError(
+            "release workflow differs from its exact structured contract"
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workflow", type=Path)
+    parser.add_argument("release_workflow", type=Path)
     arguments = parser.parse_args(argv)
     try:
         validate_workflow(arguments.workflow.read_text(encoding="utf-8"))
+        validate_release_workflow(
+            arguments.release_workflow.read_text(encoding="utf-8")
+        )
     except (OSError, ConsolidatedPublicationGateError) as exc:
         print(f"consolidated publication gate failed: {exc}", file=sys.stderr)
         return 2

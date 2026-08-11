@@ -6,9 +6,6 @@ from collections import defaultdict
 from pathlib import Path
 import re
 
-import sector
-
-
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER = ROOT / "docs" / "qa_v0.92_closure.md"
 CLOSURE_MAP = ROOT / "docs" / "pr11d2_pr09_pr11_closure_map.md"
@@ -115,4 +112,3 @@ def test_reconciliation_preserves_scope_and_programme_identity() -> None:
     assert "PR-12 through PR-14 remain planned" in normalized_map
     assert "Calculation-trace retirement is reconciled separately" in normalized_map
     assert "Removed trace files and surfaces are not evidence" in normalized_map
-    assert sector.__version__ == "0.92"

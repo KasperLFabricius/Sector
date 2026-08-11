@@ -1,9 +1,9 @@
 # PR-07B Sector v0.93 manual/report profiles acceptance
 
-Status: candidate acceptance contract for the PR-07B development branch.
-PR-07A is merged. GitHub must record the final PR-07B candidate, accepted tree,
-checks and squash identity; this document does not invent the remote real-
-figure or package gates that have not yet run.
+Status: accepted and merged as PR #389. Reviewed head
+`af908b0f7a1b8b954a02a4982947588a97b516b6` passed Sector QA run
+`31443362231`; squash `47be3326fa4abad5acdc356435dbeeed28d31d95`
+has accepted tree `56266e0868093bc26e7bedcd1472721f3b60fb6d`.
 
 ## Accepted upstream base
 
@@ -189,8 +189,7 @@ The recorded browser-free visual receipt is:
 | Audit report | 57 | 57 | Clean; reviewed sparse non-openers on pages 3 and 17 are semantically justified. |
 | User manual | 58 | 58 | Clean; Part transitions, continued tables, typography and furniture are legible. |
 
-The final exact candidate must still pass GitHub's complete test, real
-report/manual and two-build unsigned-package workflows on the same exact head.
-The real-figure artifacts must receive their final visual/crop approval. GitHub
-and the merge record, not this candidate document, record the final head/tree,
-evidence artifacts, squash identity and tree parity.
+GitHub's complete test, real report/manual and two-build unsigned-package
+workflows passed on the exact head recorded above. The real-figure artifacts
+received final visual/crop approval before squash merge, and the accepted tree
+matches the squash tree.

@@ -6,8 +6,6 @@ import ast
 import re
 from pathlib import Path
 
-from sector import __version__
-
 ROOT = Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "docs" / "qa_v0.92_closure.md"
 CONTRACT = ROOT / "docs" / "pr11d1_trace_retirement_reconciliation.md"
@@ -200,12 +198,11 @@ def test_trace_findings_are_retired_with_exact_closure_columns() -> None:
         }
 
 
-def test_retirement_is_complete_and_current_release_is_0_92() -> None:
+def test_retirement_is_complete() -> None:
     contract = " ".join(CONTRACT.read_text(encoding="ascii").split())
     assert "no calculation-trace data contract" in contract
     assert "trace switch" in contract
     assert "direct calculations and results" in contract
-    assert __version__ == "0.92"
 
 
 def test_pr03_acceptance_is_bound_to_the_retirement_authority() -> None:
@@ -235,7 +232,6 @@ def test_pr03_acceptance_is_bound_to_the_retirement_authority() -> None:
     missing = sorted(fragment for fragment in required if fragment not in acceptance)
     assert not missing
     assert _literal_assignment(PROJECT_IO, "VERSION") == 24
-    assert __version__ == "0.92"
 
 
 def test_pr03_does_not_restore_retired_contract_payload_or_product_surfaces() -> None:

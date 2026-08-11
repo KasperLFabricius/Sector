@@ -1,6 +1,25 @@
 # Sector changelog
 
-## Unreleased
+## 0.93 release candidate - 2026-08-11
+
+Sector 0.93 prepares the governed implementation, publication and unsigned
+portable-release programme for exact-head qualification while retaining
+Sector's calculation-tool identity.
+
+- Advanced projects to current-only schema 24, retired unsupported
+  component-mapped bridge workflows and added a capability-scoped standards
+  registry with explicit adoption and exclusion disclosures.
+- Hardened editable decimal/blank handling, reusable material and fatigue IDs,
+  table-field guidance, stateful input navigation and explicit modelled
+  reinforcement direction through persistence and reporting.
+- Added optional ordinary crack-width criteria and the bounded first-generation
+  Danish Formula 7.100 NA heightened check, with user-limit statuses that do not
+  claim code compliance.
+- Rendered globally governing or extremal worked examples through one shared
+  Eurocode-style vector equation renderer; the Danish fine/coarse heightened
+  pair remains the deliberate separate-example exception.
+- Added Brief, Standard and Audit report profiles, reorganised the manual around
+  task/input/method reading paths, and added its accessible HTML counterpart.
 
 - Added a separate double-click portable Windows builder for provenance-bearing
   extracted source releases. It produces a verified complete unsigned ONEDIR
@@ -18,6 +37,11 @@
   changed, missing or extra files fail closed. Git-checkout builds retain their
   raw-object export path, and no signing, launch or distribution authority was
   added.
+
+Project schema is version 24. The release candidate is implementation QA, not
+engineering certification, code-completeness approval or a global compliance
+verdict. The proposed Windows deliverable is a verified unsigned portable ZIP;
+no signed installer or trusted-publisher claim is included.
 
 ## 0.92 - 2026-08-08
 

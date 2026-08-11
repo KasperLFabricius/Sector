@@ -1,8 +1,9 @@
 # PR-06 Sector v0.93 crack-control acceptance
 
-Status: candidate acceptance contract for the PR-06 development branch.
-GitHub records the eventual pull request, exact candidate, tree and squash
-identities; this document does not invent evidence that has not been run.
+Status: accepted and merged as PR #387. Reviewed head
+`fbcd4917654fb4ed23465c4a554d1d208c80d5c3` passed Sector QA run
+`31353275467`; squash `1cf8cf536cc562998fd663a6b082021ace7aa7fb`
+has accepted tree `f941158eab1f3caa7a61db066236269d69c7a83e`.
 
 ## Accepted upstream base
 
@@ -205,6 +206,6 @@ the heightened summary cannot inherit an Elastic action-set identity. Final
 bounded re-review found no remaining P0-P2 issue.
 
 All local PDF tests were browser-free. No browser, Chrome, Electron, Kaleido or
-JavaScript runtime was launched. GitHub must record the final exact candidate
-revision/tree and pass the complete coverage, real report/manual render and
-two-build unsigned Windows package workflows on that same head before merge.
+JavaScript runtime was launched. GitHub recorded the exact revision/tree above;
+complete coverage, real report/manual render and two-build unsigned Windows
+package workflows passed on that head before merge.

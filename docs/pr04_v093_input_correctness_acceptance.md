@@ -1,8 +1,9 @@
 # PR-04 Sector v0.93 input-correctness acceptance
 
-Status: candidate acceptance contract for the PR-04 development branch.
-GitHub records the eventual pull request, candidate, tree and squash identities;
-this document does not invent verification evidence that has not yet been run.
+Status: accepted and merged as PR #385. Reviewed head
+`afdd5dd5af7447a592044b029c29d82f2ca4bf18` passed Sector QA run
+`31343111358`; squash `d653ba66478425093a10e893ce5cc38447f2db85`
+has accepted tree `23514088b253f5e9f81dcec5301fc4498487d23d`.
 
 ## Exact accepted base
 
@@ -200,6 +201,6 @@ glyph, alignment and margin defects. The accepted contents and footer crops are
 now pinned to those independently reproduced pixels.
 
 No local browser, JavaScript runtime or real Windows package build was launched.
-GitHub must record the exact candidate revision/tree and pass the complete
-coverage, real report/manual render and unsigned Windows package workflows on
-that same head before merge.
+GitHub recorded the exact revision/tree above and the complete coverage, real
+report/manual render and unsigned Windows package workflows passed on that head
+before merge.
