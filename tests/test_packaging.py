@@ -512,6 +512,135 @@ def test_kaleido_cli_mocker_is_excluded_from_the_frozen_runtime():
     assert 'name.startswith("kaleido.mocker")' in spec
 
 
+def _uvicorn_runtime_hidden_imports() -> tuple[str, ...]:
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="sector.spec")
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "UVICORN_RUNTIME_HIDDEN_IMPORTS"
+    )
+    value = ast.literal_eval(assignment.value)
+    assert isinstance(value, tuple)
+    assert all(isinstance(module, str) for module in value)
+    return value
+
+
+def test_uvicorn_runtime_hidden_imports_are_explicit_and_narrow():
+    expected = (
+        "uvicorn.lifespan.on",
+        "uvicorn.loops.asyncio",
+        "uvicorn.loops.auto",
+        "uvicorn.protocols.http.auto",
+        "uvicorn.protocols.http.h11_impl",
+        "uvicorn.protocols.http.httptools_impl",
+        "uvicorn.protocols.websockets.websockets_sansio_impl",
+    )
+
+    assert _uvicorn_runtime_hidden_imports() == expected
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    tree = ast.parse(
+        (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    )
+    broad_uvicorn_collections = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"collect_all", "collect_submodules"}
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "uvicorn"
+    ]
+    assert not broad_uvicorn_collections
+
+    bindings = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AugAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "hiddenimports"
+        and isinstance(node.op, ast.Add)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "UVICORN_RUNTIME_HIDDEN_IMPORTS"
+    ]
+    assert len(bindings) == 1
+
+    analysis_calls = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "Analysis"
+    ]
+    assert len(analysis_calls) == 1
+    analysis = analysis_calls[0]
+    hiddenimports_keywords = [
+        keyword
+        for keyword in analysis.value.keywords
+        if keyword.arg == "hiddenimports"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "hiddenimports"
+    ]
+    assert len(hiddenimports_keywords) == 1
+    assert bindings[0].lineno < analysis.lineno
+
+
+def test_uvicorn_runtime_hidden_imports_cover_the_locked_server_routes():
+    import inspect
+
+    import uvicorn
+    from streamlit.web.server.starlette.starlette_server import (
+        _get_websocket_protocol,
+    )
+    from uvicorn import config as uvicorn_config
+
+    parameters = inspect.signature(uvicorn.Config).parameters
+    defaults = {
+        name: parameters[name].default
+        for name in ("http", "lifespan", "loop")
+    }
+    assert defaults == {"http": "auto", "lifespan": "auto", "loop": "auto"}
+    assert _get_websocket_protocol() == "websockets-sansio"
+
+    registry_targets = {
+        uvicorn_config.HTTP_PROTOCOLS[defaults["http"]],
+        uvicorn_config.LIFESPAN[defaults["lifespan"]],
+        uvicorn_config.LOOP_FACTORIES[defaults["loop"]],
+        uvicorn_config.WS_PROTOCOLS[_get_websocket_protocol()],
+    }
+    routed_modules = {target.partition(":")[0] for target in registry_targets}
+    assert routed_modules <= set(_uvicorn_runtime_hidden_imports())
+
+    # HTTP auto conditionally imports either locked implementation. Parse its
+    # source so an upstream branch change fails closed instead of silently
+    # producing another incomplete executable.
+    uvicorn_root = pathlib.Path(uvicorn_config.__file__).resolve().parent
+    http_auto = ast.parse(
+        (uvicorn_root / "protocols" / "http" / "auto.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    http_implementations = {
+        node.module
+        for node in ast.walk(http_auto)
+        if isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and node.module.startswith("uvicorn.protocols.http.")
+    }
+    assert http_implementations == {
+        "uvicorn.protocols.http.h11_impl",
+        "uvicorn.protocols.http.httptools_impl",
+    }
+    assert http_implementations <= set(_uvicorn_runtime_hidden_imports())
+
+
 def test_only_path_bound_installer_record_metadata_is_omitted():
     root = pathlib.Path(__file__).resolve().parent.parent
     source = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
