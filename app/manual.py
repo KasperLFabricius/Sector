@@ -612,12 +612,17 @@ def manual_blocks() -> list:
         ["Workflow / outcome", "Prerequisite and action", "Expected state", "If blocked"],
         [
             [
-                f"[{workflow.label}](#{manual_ia.destination(workflow.destination_key).anchor}) - "
-                f"{workflow.outcome}",
-                f"{workflow.prerequisite}. Open "
-                f"[{manual_ia.destination(workflow.destination_key).label}]"
-                f"(#{manual_ia.destination(workflow.destination_key).anchor}), complete "
-                "the shown inputs and calculate or review as applicable.",
+                (
+                    f"[{workflow.label}](#{manual_ia.destination(workflow.destination_key).anchor}) - "
+                    f"{workflow.outcome}"
+                ),
+                workflow.action
+                or (
+                    f"{workflow.prerequisite}. Open "
+                    f"[{manual_ia.destination(workflow.destination_key).label}]"
+                    f"(#{manual_ia.destination(workflow.destination_key).anchor}), complete "
+                    "the shown inputs and calculate or review as applicable."
+                ),
                 workflow.expected_state,
                 manual_ia.warning_reference(workflow.warning_key).correction,
             ]

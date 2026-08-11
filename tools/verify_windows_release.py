@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import ast
 import importlib.util
+import itertools
 import json
 import os
+import re
 import stat
 import sys
 import unicodedata
@@ -23,7 +25,30 @@ def _load_exporter():
         raise RuntimeError("cannot load the accepted exact-commit exporter")
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
-    specification.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
+
+
+def _load_source_release():
+    path = Path(__file__).resolve().with_name("build_source_release.py")
+    specification = importlib.util.spec_from_file_location(
+        "sector_release_source_archive", path
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError("cannot load the accepted source-release verifier")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
@@ -31,6 +56,9 @@ _EXPORTER = _load_exporter()
 CommitTreeError = _EXPORTER.CommitTreeError
 CommitSnapshot = _EXPORTER.CommitSnapshot
 snapshot_commit = _EXPORTER.snapshot_commit
+_SOURCE_RELEASE = _load_source_release()
+SourceReleaseError = _SOURCE_RELEASE.SourceReleaseError
+verify_source_release_directory = _SOURCE_RELEASE.verify_source_release_directory
 
 EXPECTED_SOURCE_IDENTITY = {
     "__version__": "0.92",
@@ -42,6 +70,7 @@ EXPECTED_SOURCE_IDENTITY = {
         "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."
     ),
 }
+_SECTOR_VERSION = re.compile(r"^[0-9]+\.[0-9]+$")
 SOURCE_IDENTITY_KEYS = {
     "source_revision",
     "source_tree",
@@ -61,6 +90,13 @@ EXPECTED_MANIFEST_KEYS = {
     "built_at_utc",
     *SOURCE_IDENTITY_KEYS,
 }
+_READ_BLOCK = 1024 * 1024
+_MAX_RELEASE_METADATA_BYTES = 16 * 1024 * 1024
+_MAX_RELEASE_EXECUTABLE_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_RELEASE_FILES = 50_000
+_MAX_RELEASE_DIRECTORIES = 50_000
+_MAX_RELEASE_TREE_ENTRIES = _MAX_RELEASE_FILES + _MAX_RELEASE_DIRECTORIES
+MAX_SECTOR_VERSION_BYTES = 32
 
 
 class ReleaseVerificationError(ValueError):
@@ -68,12 +104,21 @@ class ReleaseVerificationError(ValueError):
 
 
 def _snapshot(repository: Path, source_revision: str) -> CommitSnapshot:
+    repository = _lexical_source_root(repository)
+    if _EXPORTER.OBJECT_ID.fullmatch(source_revision) is None:
+        raise ReleaseVerificationError(
+            "source revision must be an exact lowercase 40-hex SHA-1"
+        )
     try:
         return snapshot_commit(repository, source_revision)
-    except CommitTreeError as exc:
-        raise ReleaseVerificationError(
-            f"cannot authenticate exact source commit: {exc}"
-        ) from exc
+    except CommitTreeError as git_error:
+        try:
+            return verify_source_release_directory(repository, source_revision)
+        except SourceReleaseError as release_error:
+            raise ReleaseVerificationError(
+                "cannot authenticate exact source as a Git commit or verified "
+                f"source release: Git: {git_error}; source release: {release_error}"
+            ) from release_error
 
 
 def _snapshot_files(snapshot: CommitSnapshot) -> dict[str, Any]:
@@ -131,13 +176,27 @@ def _literal_assignments(
     return values
 
 
-def _validate_product_identity(snapshot: CommitSnapshot) -> None:
+def _product_identity(snapshot: CommitSnapshot) -> dict[str, str]:
     values = _literal_assignments(
         _decode_source(snapshot, "sector/__init__.py"),
         "sector/__init__.py",
         set(EXPECTED_SOURCE_IDENTITY),
     )
-    if values != EXPECTED_SOURCE_IDENTITY:
+    expected_nonversion = {
+        key: value
+        for key, value in EXPECTED_SOURCE_IDENTITY.items()
+        if key != "__version__"
+    }
+    actual_nonversion = {
+        key: value for key, value in values.items() if key != "__version__"
+    }
+    version = values.get("__version__", "")
+    if (
+        set(values) != set(EXPECTED_SOURCE_IDENTITY)
+        or actual_nonversion != expected_nonversion
+        or len(version) > MAX_SECTOR_VERSION_BYTES
+        or _SECTOR_VERSION.fullmatch(version) is None
+    ):
         raise ReleaseVerificationError("Sector source identity is incomplete or changed")
 
     resource_text = _decode_source(snapshot, "packaging/windows_version_info.txt")
@@ -147,11 +206,13 @@ def _validate_product_identity(snapshot: CommitSnapshot) -> None:
         raise ReleaseVerificationError(
             f"Windows version resource is invalid: {exc}"
         ) from exc
+    major, minor = (int(component) for component in version.split("."))
+    dotted_version = f"{major}.{minor}.0.0"
     required_tokens = (
-        "filevers=(0, 92, 0, 0)",
-        "prodvers=(0, 92, 0, 0)",
-        "StringStruct('FileVersion', '0.92.0.0')",
-        "StringStruct('ProductVersion', '0.92.0.0')",
+        f"filevers=({major}, {minor}, 0, 0)",
+        f"prodvers=({major}, {minor}, 0, 0)",
+        f"StringStruct('FileVersion', '{dotted_version}')",
+        f"StringStruct('ProductVersion', '{dotted_version}')",
         "StringStruct('ProductName', 'Sector')",
         "StringStruct('OriginalFilename', 'Sector.exe')",
         "Licensed to Sweco Danmark A/S for internal organisational use only.",
@@ -163,17 +224,26 @@ def _validate_product_identity(snapshot: CommitSnapshot) -> None:
             )
     if "CompanyName" in resource_text or "Publisher" in resource_text:
         raise ReleaseVerificationError("Windows resource advertises a company identity")
+    return values
+
+
+def _validate_product_identity(snapshot: CommitSnapshot) -> None:
+    _product_identity(snapshot)
 
 
 def _canonical_json(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("ascii")
 
 
-def _read_json_object(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
+def _read_json_object(
+    path: Path, label: str, *, boundary: Path | None = None
+) -> tuple[dict[str, Any], bytes]:
     try:
-        raw = path.read_bytes()
+        raw = _read_regular_file(path, label, boundary=boundary)
         value = json.loads(raw)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except ReleaseVerificationError:
+        raise
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise ReleaseVerificationError(f"cannot read {label}: {exc}") from exc
     if not isinstance(value, dict):
         raise ReleaseVerificationError(f"{label} must be an object")
@@ -183,7 +253,11 @@ def _read_json_object(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
 def _authenticate_evidence(
     source_identity_path: Path, snapshot: CommitSnapshot
 ) -> None:
-    value, raw = _read_json_object(source_identity_path, "source identity evidence")
+    value, raw = _read_json_object(
+        source_identity_path,
+        "source identity evidence",
+        boundary=source_identity_path.parent,
+    )
     expected = _source_identity_object(snapshot)
     if set(value) != SOURCE_IDENTITY_KEYS or value != expected:
         raise ReleaseVerificationError(
@@ -195,13 +269,14 @@ def _authenticate_evidence(
 
 def _manifest_object(snapshot: CommitSnapshot) -> dict[str, Any]:
     source = _source_identity_object(snapshot)
+    identity = _product_identity(snapshot)
     return {
-        "product_name": EXPECTED_SOURCE_IDENTITY["__product_name__"],
-        "description": EXPECTED_SOURCE_IDENTITY["__description__"],
-        "sector_version": EXPECTED_SOURCE_IDENTITY["__version__"],
-        "author": EXPECTED_SOURCE_IDENTITY["__author__"],
-        "licensee": EXPECTED_SOURCE_IDENTITY["__licensee__"],
-        "copyright": EXPECTED_SOURCE_IDENTITY["__copyright__"],
+        "product_name": identity["__product_name__"],
+        "description": identity["__description__"],
+        "sector_version": identity["__version__"],
+        "author": identity["__author__"],
+        "licensee": identity["__licensee__"],
+        "copyright": identity["__copyright__"],
         "built_at_utc": source["source_committed_at_utc"],
         **source,
     }
@@ -212,73 +287,279 @@ def _is_reparse(status: os.stat_result) -> bool:
     return bool(getattr(status, "st_file_attributes", 0) & attribute)
 
 
+def _status_signature(status: os.stat_result) -> tuple[int, ...]:
+    return (
+        status.st_dev,
+        status.st_ino,
+        stat.S_IFMT(status.st_mode),
+        status.st_size,
+        status.st_mtime_ns,
+        getattr(status, "st_file_attributes", 0),
+    )
+
+
+def _lstat(path: Path, label: str) -> os.stat_result:
+    try:
+        return os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ReleaseVerificationError(f"cannot inspect {label}") from exc
+
+
+def _require_regular_directory(path: Path, label: str) -> os.stat_result:
+    status = _lstat(path, label)
+    if stat.S_ISLNK(status.st_mode) or _is_reparse(status):
+        raise ReleaseVerificationError(f"{label} is a link or reparse point")
+    if not stat.S_ISDIR(status.st_mode):
+        raise ReleaseVerificationError(f"{label} is not a regular directory")
+    return status
+
+
+def _lexical_source_root(root: Path) -> Path:
+    """Reject a linked repository-root entry before exporter resolution."""
+    lexical = Path(os.path.abspath(root))
+    _require_regular_directory(lexical, "release source root")
+    return lexical
+
+
+def _directory_chain(
+    directory: Path, boundary: Path, label: str
+) -> tuple[tuple[Path, os.stat_result], ...]:
+    directory = Path(os.path.abspath(directory))
+    boundary = Path(os.path.abspath(boundary))
+    try:
+        relative = directory.relative_to(boundary)
+    except ValueError as exc:
+        raise ReleaseVerificationError(f"{label} escapes the package boundary") from exc
+    paths = [boundary]
+    for component in relative.parts:
+        paths.append(paths[-1] / component)
+    return tuple(
+        (path, _require_regular_directory(path, f"{label} ancestor"))
+        for path in paths
+    )
+
+
+def _same_status_chain(
+    first: tuple[tuple[Path, os.stat_result], ...],
+    second: tuple[tuple[Path, os.stat_result], ...],
+) -> bool:
+    return len(first) == len(second) and all(
+        first_path == second_path
+        and _status_signature(first_status) == _status_signature(second_status)
+        for (first_path, first_status), (second_path, second_status) in zip(
+            first, second, strict=True
+        )
+    )
+
+
+def _consume_regular_file(
+    path: Path,
+    label: str,
+    *,
+    boundary: Path | None,
+    limit: int,
+    collect: bool,
+    expected: bytes | None = None,
+    mismatch_message: str | None = None,
+) -> tuple[bytes, int]:
+    path = Path(os.path.abspath(path))
+    ancestor_before = (
+        _directory_chain(path.parent, boundary, label)
+        if boundary is not None
+        else ()
+    )
+    before = _lstat(path, label)
+    if stat.S_ISLNK(before.st_mode) or _is_reparse(before):
+        raise ReleaseVerificationError(f"{label} is a link or reparse point")
+    if not stat.S_ISREG(before.st_mode):
+        raise ReleaseVerificationError(f"{label} is not a regular file")
+    mismatch = expected is not None and before.st_size != len(expected)
+    if mismatch:
+        raise ReleaseVerificationError(
+            mismatch_message or f"{label} differs from authenticated bytes"
+        )
+    if before.st_size > limit:
+        raise ReleaseVerificationError(f"{label} exceeds the release resource limit")
+
+    flags = os.O_RDONLY
+    for flag_name in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NOFOLLOW"):
+        flags |= getattr(os, flag_name, 0)
+    chunks: list[bytes] = []
+    total = 0
+    descriptor = -1
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            opened_before = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(opened_before.st_mode)
+                or _is_reparse(opened_before)
+                or _status_signature(opened_before) != _status_signature(before)
+            ):
+                raise ReleaseVerificationError(f"{label} changed while it was opened")
+            while True:
+                block = stream.read(_READ_BLOCK)
+                if not block:
+                    break
+                end = total + len(block)
+                if end > limit:
+                    raise ReleaseVerificationError(
+                        f"{label} exceeds the release resource limit"
+                    )
+                if expected is not None and block != expected[total:end]:
+                    mismatch = True
+                total = end
+                if collect:
+                    chunks.append(block)
+            opened_after = os.fstat(stream.fileno())
+        after = _lstat(path, label)
+        ancestor_after = (
+            _directory_chain(path.parent, boundary, label)
+            if boundary is not None
+            else ()
+        )
+    except ReleaseVerificationError:
+        raise
+    except OSError as exc:
+        raise ReleaseVerificationError(f"cannot read {label}") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    signatures = (before, opened_before, opened_after, after)
+    if any(
+        _status_signature(left) != _status_signature(right)
+        for left, right in itertools.pairwise(signatures)
+    ):
+        raise ReleaseVerificationError(f"{label} changed while it was read")
+    if total != before.st_size:
+        raise ReleaseVerificationError(f"{label} byte count changed while it was read")
+    if not _same_status_chain(ancestor_before, ancestor_after):
+        raise ReleaseVerificationError(f"{label} ancestor changed while it was read")
+    if expected is not None and (mismatch or total != len(expected)):
+        raise ReleaseVerificationError(
+            mismatch_message or f"{label} differs from authenticated bytes"
+        )
+    return (b"".join(chunks) if collect else b""), total
+
+
+def _read_regular_file(
+    path: Path,
+    label: str,
+    *,
+    boundary: Path | None = None,
+    limit: int = _MAX_RELEASE_METADATA_BYTES,
+) -> bytes:
+    payload, _size = _consume_regular_file(
+        path,
+        label,
+        boundary=boundary,
+        limit=limit,
+        collect=True,
+    )
+    return payload
+
+
+def _verify_regular_file(
+    path: Path,
+    label: str,
+    *,
+    boundary: Path | None = None,
+    limit: int,
+    expected: bytes | None = None,
+    mismatch_message: str | None = None,
+) -> int:
+    _payload, size = _consume_regular_file(
+        path,
+        label,
+        boundary=boundary,
+        limit=limit,
+        collect=False,
+        expected=expected,
+        mismatch_message=mismatch_message,
+    )
+    return size
+
+
 def _regular_tree(
     root: Path, *, boundary: Path | None = None
 ) -> dict[str, Path]:
     root = Path(os.path.abspath(root))
     boundary = root if boundary is None else Path(os.path.abspath(boundary))
-    try:
-        relative_root = root.relative_to(boundary)
-    except ValueError as exc:
-        raise ReleaseVerificationError(
-            "package source tree escapes the package boundary"
-        ) from exc
-    ancestors = [boundary]
-    for component in relative_root.parts:
-        ancestors.append(ancestors[-1] / component)
-    for ancestor in ancestors:
-        try:
-            status = os.stat(ancestor, follow_symlinks=False)
-        except OSError as exc:
-            raise ReleaseVerificationError(
-                f"package source tree is missing: {ancestor.name}"
-            ) from exc
-        if stat.S_ISLNK(status.st_mode) or _is_reparse(status):
-            raise ReleaseVerificationError(
-                f"package source contains a link or reparse point: {ancestor}"
-            )
-        if not stat.S_ISDIR(status.st_mode):
-            raise ReleaseVerificationError(
-                f"package source ancestor is not a directory: {ancestor}"
-            )
+    root_chain_before = _directory_chain(root, boundary, "package source")
     pending: list[tuple[Path, tuple[str, ...]]] = [(root, ())]
     files: dict[str, Path] = {}
     normalized_paths: set[str] = set()
+    entry_count = 0
+    file_count = 0
+    directory_count = 0
     while pending:
         directory, parts = pending.pop()
+        directory_before = _require_regular_directory(
+            directory, "package source directory"
+        )
         try:
-            entries = list(os.scandir(directory))
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    entry_count += 1
+                    if entry_count > _MAX_RELEASE_TREE_ENTRIES:
+                        raise ReleaseVerificationError(
+                            "package source tree exceeds the entry limit"
+                        )
+                    try:
+                        status = entry.stat(follow_symlinks=False)
+                    except OSError as exc:
+                        raise ReleaseVerificationError(
+                            f"cannot inspect package source entry: {entry.name}"
+                        ) from exc
+                    child = (*parts, entry.name)
+                    relative = PurePosixPath(*child).as_posix()
+                    if entry.is_symlink() or _is_reparse(status):
+                        raise ReleaseVerificationError(
+                            "package source contains a link or reparse point: "
+                            f"{relative}"
+                        )
+                    key = unicodedata.normalize("NFC", relative).casefold()
+                    if key in normalized_paths:
+                        raise ReleaseVerificationError(
+                            f"package source contains colliding paths: {relative}"
+                        )
+                    normalized_paths.add(key)
+                    if stat.S_ISDIR(status.st_mode):
+                        directory_count += 1
+                        if directory_count > _MAX_RELEASE_DIRECTORIES:
+                            raise ReleaseVerificationError(
+                                "package source tree exceeds the directory limit"
+                            )
+                        pending.append((Path(entry.path), child))
+                    elif stat.S_ISREG(status.st_mode):
+                        file_count += 1
+                        if file_count > _MAX_RELEASE_FILES:
+                            raise ReleaseVerificationError(
+                                "package source tree exceeds the file limit"
+                            )
+                        files[relative] = Path(entry.path)
+                    else:
+                        raise ReleaseVerificationError(
+                            f"package source contains a nonregular entry: {relative}"
+                        )
         except OSError as exc:
             raise ReleaseVerificationError(
                 f"cannot inspect package source tree: {directory}"
             ) from exc
-        for entry in entries:
-            try:
-                status = entry.stat(follow_symlinks=False)
-            except OSError as exc:
-                raise ReleaseVerificationError(
-                    f"cannot inspect package source entry: {entry.name}"
-                ) from exc
-            child = (*parts, entry.name)
-            relative = PurePosixPath(*child).as_posix()
-            if entry.is_symlink() or _is_reparse(status):
-                raise ReleaseVerificationError(
-                    f"package source contains a link or reparse point: {relative}"
-                )
-            if stat.S_ISDIR(status.st_mode):
-                pending.append((Path(entry.path), child))
-            elif stat.S_ISREG(status.st_mode):
-                key = unicodedata.normalize("NFC", relative).casefold()
-                if key in normalized_paths:
-                    raise ReleaseVerificationError(
-                        f"package source contains colliding paths: {relative}"
-                    )
-                normalized_paths.add(key)
-                files[relative] = Path(entry.path)
-            else:
-                raise ReleaseVerificationError(
-                    f"package source contains a nonregular entry: {relative}"
-                )
+        directory_after = _require_regular_directory(
+            directory, "package source directory"
+        )
+        if _status_signature(directory_before) != _status_signature(directory_after):
+            raise ReleaseVerificationError(
+                f"package source directory changed while inspected: {directory}"
+            )
+    root_chain_after = _directory_chain(root, boundary, "package source")
+    if not _same_status_chain(root_chain_before, root_chain_after):
+        raise ReleaseVerificationError(
+            "package source ancestor changed while the tree was inspected"
+        )
     return files
 
 
@@ -308,16 +589,18 @@ def _require_raw_snapshot_tree(
                 f"packaged {source_prefix} inventory differs from raw source commit"
             )
         for relative, item in expected.items():
-            try:
-                payload = actual[relative].read_bytes()
-            except OSError as exc:
-                raise ReleaseVerificationError(
-                    f"cannot read packaged source file: {source_prefix}/{relative}"
-                ) from exc
-            if payload != item.payload:
-                raise ReleaseVerificationError(
-                    f"packaged source differs from raw commit: {source_prefix}/{relative}"
-                )
+            mismatch = (
+                "packaged source differs from raw commit: "
+                f"{source_prefix}/{relative}"
+            )
+            _verify_regular_file(
+                actual[relative],
+                f"packaged source file: {source_prefix}/{relative}",
+                boundary=boundary,
+                limit=len(item.payload),
+                expected=item.payload,
+                mismatch_message=mismatch,
+            )
 
 
 def verify_source(repository: Path, source_revision: str) -> None:
@@ -337,6 +620,9 @@ def verify_package(
         raise ReleaseVerificationError(
             "package verification requires source identity evidence"
         )
+    package = Path(os.path.abspath(package))
+    source_identity_path = Path(os.path.abspath(source_identity_path))
+    package_before = _require_regular_directory(package, "package root")
     snapshot = _snapshot(repository, source_revision)
     _validate_product_identity(snapshot)
     _authenticate_evidence(source_identity_path, snapshot)
@@ -347,26 +633,43 @@ def verify_package(
         "license": package / "LICENSE.txt",
         "notices": package / "THIRD_PARTY_NOTICES.txt",
     }
-    missing = [label for label, path in required.items() if not path.is_file()]
+    missing = [
+        label for label, path in required.items() if not os.path.lexists(path)
+    ]
     if missing:
         raise ReleaseVerificationError(
             f"package is missing required files: {', '.join(sorted(missing))}"
         )
-    if required["executable"].stat().st_size <= 0:
+    executable_size = _verify_regular_file(
+        required["executable"],
+        "Sector.exe",
+        boundary=package,
+        limit=_MAX_RELEASE_EXECUTABLE_BYTES,
+    )
+    if executable_size <= 0:
         raise ReleaseVerificationError("Sector.exe is empty")
 
     files = _snapshot_files(snapshot)
     try:
         expected_license = files["LICENSE"].payload
-        packaged_license = required["license"].read_bytes()
-    except (KeyError, OSError) as exc:
+    except KeyError as exc:
         raise ReleaseVerificationError("cannot authenticate packaged license") from exc
-    if packaged_license != expected_license:
-        raise ReleaseVerificationError("packaged license differs from raw source commit")
+    _verify_regular_file(
+        required["license"],
+        "packaged license",
+        boundary=package,
+        limit=len(expected_license),
+        expected=expected_license,
+        mismatch_message="packaged license differs from raw source commit",
+    )
 
     try:
-        notices = required["notices"].read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
+        notices = _read_regular_file(
+            required["notices"],
+            "third-party notices",
+            boundary=package,
+        ).decode("utf-8")
+    except UnicodeError as exc:
         raise ReleaseVerificationError("cannot read third-party notices") from exc
     for token in ("SECTOR THIRD-PARTY NOTICES", "numpy", "streamlit"):
         if token.casefold() not in notices.casefold():
@@ -375,7 +678,7 @@ def verify_package(
             )
 
     manifest, raw_manifest = _read_json_object(
-        required["manifest"], "package manifest"
+        required["manifest"], "package manifest", boundary=package
     )
     expected_manifest = _manifest_object(snapshot)
     if set(manifest) != EXPECTED_MANIFEST_KEYS or manifest != expected_manifest:
@@ -399,6 +702,9 @@ def verify_package(
     _require_raw_snapshot_tree(
         snapshot, "assets", internal / "assets", boundary=package
     )
+    package_after = _require_regular_directory(package, "package root")
+    if _status_signature(package_before) != _status_signature(package_after):
+        raise ReleaseVerificationError("package root changed during verification")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -413,7 +719,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    root = args.root.resolve()
+    root = _lexical_source_root(args.root)
     if args.preflight:
         if args.package is not None or args.source_identity is not None:
             raise ReleaseVerificationError(
@@ -429,7 +735,7 @@ def main(argv: list[str] | None = None) -> int:
             root,
             Path(os.path.abspath(args.package)),
             args.source_revision,
-            args.source_identity.resolve(),
+            Path(os.path.abspath(args.source_identity)),
         )
     return 0
 

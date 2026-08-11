@@ -34,20 +34,38 @@ def _user_data_dir() -> pathlib.Path:
 # Sector runs on 8502 (Streamlit's default 8501 is used by BriCoS), so both can
 # be open at once. Override with the SECTOR_PORT environment variable.
 _DEFAULT_PORT = "8502"
+_HEADLESS_ENV = "SECTOR_HEADLESS"
 
 
 def _port() -> str:
     return os.environ.get("SECTOR_PORT") or _DEFAULT_PORT
 
 
-def _streamlit_argv(app_path, port) -> list:
+def _headless() -> bool:
+    """Return the explicit acceptance-smoke browser suppression setting.
+
+    Ordinary portable launches do not set this variable and retain the normal
+    browser-opening behaviour.  A set value is deliberately strict so a typo
+    cannot silently change the packaged launch boundary.
+    """
+    value = os.environ.get(_HEADLESS_ENV)
+    if value is None:
+        return False
+    if value != "1":
+        raise ValueError(f"{_HEADLESS_ENV} must be exactly '1' when set")
+    return True
+
+
+def _streamlit_argv(
+    app_path: str | os.PathLike[str], port: str, *, headless: bool = False
+) -> list[str]:
     """The ``streamlit run`` argv the launcher runs (isolated so it is testable)."""
     return [
         "streamlit", "run", str(app_path),
         f"--server.port={port}",
         "--server.address=127.0.0.1",      # desktop app: never expose on the LAN
         "--global.developmentMode=false",
-        "--server.headless=false",          # open the browser on launch
+        f"--server.headless={'true' if headless else 'false'}",
         # Frozen application files never change at runtime. Watching the large
         # bundled _internal tree adds filesystem/antivirus traffic and can stall
         # reruns without providing hot-reload value.
@@ -75,7 +93,7 @@ def main() -> None:
     os.environ.setdefault("SECTOR_AUTOSAVE_DIR", str(data))
     os.environ.setdefault("NUMBA_CACHE_DIR", str(data / "numba_cache"))
 
-    sys.argv = _streamlit_argv(app, _port())
+    sys.argv = _streamlit_argv(app, _port(), headless=_headless())
     from streamlit.web import cli as stcli
     sys.exit(stcli.main())
 

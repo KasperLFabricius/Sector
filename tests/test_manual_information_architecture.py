@@ -88,6 +88,31 @@ def test_required_workflow_and_troubleshooting_inventories_are_complete():
         ia.warning_reference("missing")
 
 
+def test_portable_workflow_names_the_real_double_click_and_unsigned_boundary():
+    workflow = next(item for item in ia.WORKFLOWS if item.key == "portable-build")
+    warning = ia.warning_reference(workflow.warning_key)
+    assert workflow.action is not None
+    combined = (
+        f"{workflow.prerequisite} {workflow.expected_state} {workflow.action} "
+        f"{warning.symptom} {warning.cause} {warning.correction}"
+    )
+    for token in (
+        "official Sector source ZIP",
+        "SHA-256",
+        "64-bit CPython 3.13.0",
+        "BUILD_SECTOR_PORTABLE.bat",
+        "administrator",
+        "portable ZIP",
+        "Sector.exe alone",
+        "SmartScreen",
+        "README-PORTABLE.txt",
+    ):
+        assert token in combined
+
+    manual_text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert workflow.action in manual_text
+
+
 def test_every_streamlit_warning_routes_through_the_manual_registry():
     source = (ROOT / "app" / "sector_app.py").read_text("utf-8")
     tree = ast.parse(source)

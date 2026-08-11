@@ -6,7 +6,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
 
@@ -146,7 +145,8 @@ def test_ordinary_build_surfaces_forbid_unsigned_launch_and_distribution():
 
 
 def test_ordinary_qa_surface_contains_no_signing_or_launch_authority():
-    workflow = WORKFLOW.read_text(encoding="utf-8").casefold()
+    package_job = _workflow()["jobs"]["windows-package"]
+    workflow = yaml.safe_dump(package_job, sort_keys=False).casefold()
     for forbidden in (
         "${{ secrets.",
         "signtool",

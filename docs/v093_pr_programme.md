@@ -36,8 +36,8 @@ slices stay planned.
 | 5 | PR-05 - Stateful input tabs and explicit modelled direction | PR-04 | Merged |
 | 6 | PR-06 - Optional crack criterion and DK/NA heightened check | PR-03, PR-04, PR-05 | Merged |
 | 7 | PR-07A - Eurocode-style shared equation renderer | PR-03 | Merged |
-| 8 | PR-07B - Manual/report information architecture and profiles | PR-06, PR-07A | In progress |
-| 9 | PR-08 - Double-click portable Windows packaging | PR-07B | Planned |
+| 8 | PR-07B - Manual/report information architecture and profiles | PR-06, PR-07A | Merged |
+| 9 | PR-08 - Double-click portable Windows packaging | PR-07B | In progress |
 | 10 | PR-09 - Full qualification and Sector 0.93 release | PR-01 through PR-08 | Planned |
 
 Historical v0.92 acceptance documents and preserved QA artifacts remain
@@ -609,11 +609,12 @@ One click does not mean zero prerequisites. Building from source requires
 hash-locked packages or an already populated package cache. The produced
 portable application requires neither Python nor administrator access. Its
 report-figure path also depends on a Chromium-family browser; Microsoft Edge is
-the supported Windows platform prerequisite and is exercised in packaging QA.
+the supported Windows platform prerequisite and its presence/version are
+detected and recorded in packaging QA.
 Bundling a browser is not implied by this programme.
 
 PR-08 creates a separate portable-distribution contract. From an extracted
-official v0.93 source ZIP, the user double-clicks the named BAT and the script:
+official Sector source ZIP, the user double-clicks the named BAT and the script:
 
 1. locates its source root independently of the current working directory;
 2. validates the embedded exact-source manifest and inventory;
@@ -622,9 +623,11 @@ official v0.93 source ZIP, the user double-clicks the named BAT and the script:
 4. creates a unique isolated build environment without administrator access;
 5. installs only hash-locked dependencies;
 6. builds and verifies the complete ONEDIR application;
-7. writes an obvious `dist` output containing the portable folder and ZIP;
-8. writes SHA-256, source revision/tree, version, timestamp, inventory and
-   unsigned-status receipts;
+7. writes an obvious new output directory containing the portable folder and
+   ZIP;
+8. writes SHA-256, source revision/tree, version, deterministic source-commit
+   time, inventory and unsigned-status receipts, without a wall-clock build
+   time;
 9. performs a controlled loopback startup/health smoke in the acceptance gate
    and terminates it cleanly; and
 10. leaves the console open with the exact output paths and warning text.
@@ -638,7 +641,7 @@ environment after static verification.
 The portable archive contains at least:
 
 ```text
-Sector-v0.93-windows-portable-unsigned/
+Sector-v<version>-windows-portable-unsigned/
   Sector.exe
   _internal/
   README-PORTABLE.txt
@@ -900,6 +903,8 @@ contracts, bookmark/link tests, full structural preflight, raster comparison and
 human page checklist.
 
 ### PR-08 - Double-click portable Windows packaging
+
+Acceptance record: [PR-08 portable Windows packaging acceptance](pr08_v093_portable_windows_acceptance.md).
 
 Scope:
 

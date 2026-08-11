@@ -10,6 +10,7 @@ import yaml
 
 from tools.verify_consolidated_publication_gate import (
     CONSOLIDATED_STEP,
+    PORTABLE_STEPS,
     ConsolidatedPublicationGateError,
     validate_workflow,
 )
@@ -36,7 +37,23 @@ def test_live_workflow_is_one_fail_closed_publication_chain():
 
     test_job = workflow["jobs"]["test"]
     package_job = workflow["jobs"]["windows-package"]
+    producer_a = workflow["jobs"]["portable-producer-a"]
+    producer_b = workflow["jobs"]["portable-producer-b"]
+    comparison = workflow["jobs"]["portable-compare"]
+    smoke = workflow["jobs"]["portable-smoke"]
+    portable_job = workflow["jobs"]["windows-portable"]
     assert package_job["needs"] == "test"
+    assert producer_a["needs"] == "test"
+    assert producer_b["needs"] == "test"
+    assert comparison["needs"] == ["portable-producer-a", "portable-producer-b"]
+    assert smoke["needs"] == ["portable-producer-a", "portable-compare"]
+    assert portable_job["needs"] == [
+        "portable-producer-a",
+        "portable-producer-b",
+        "portable-compare",
+        "portable-smoke",
+    ]
+    assert tuple(step["name"] for step in portable_job["steps"]) == PORTABLE_STEPS
     assert test_job["steps"].index(_step(test_job, CONSOLIDATED_STEP)) < test_job[
         "steps"
     ].index(_step(test_job, "Validate dependency audit policy"))
@@ -89,6 +106,11 @@ def test_gate_order_and_package_dependency_are_exact():
     with pytest.raises(ConsolidatedPublicationGateError, match="successful test job"):
         validate_workflow(_workflow_text(workflow))
 
+    workflow = _workflow()
+    workflow["jobs"]["portable-producer-a"]["needs"] = "windows-package"
+    with pytest.raises(ConsolidatedPublicationGateError, match="dependency"):
+        validate_workflow(_workflow_text(workflow))
+
 
 @pytest.mark.parametrize(
     ("step_name", "field", "value"),
@@ -138,6 +160,15 @@ def test_evidence_retention_and_unsigned_secret_boundary_cannot_drift():
     )
     package_upload["with"]["path"] = "dist/Sector"
     with pytest.raises(ConsolidatedPublicationGateError, match="package evidence"):
+        validate_workflow(_workflow_text(workflow))
+
+    workflow = _workflow()
+    portable_upload = _step(
+        workflow["jobs"]["windows-portable"],
+        "Upload unsigned portable Windows evidence",
+    )
+    portable_upload["with"]["path"] = "dist/portable"
+    with pytest.raises(ConsolidatedPublicationGateError, match="structured contract"):
         validate_workflow(_workflow_text(workflow))
 
     workflow = _workflow()
@@ -213,6 +244,11 @@ def test_inherited_workflow_execution_settings_are_rejected(
         ("test", "Set up pinned Python"),
         ("windows-package", "Check out source"),
         ("windows-package", "Set up pinned Python"),
+        ("portable-producer-a", "Check out source for producer A"),
+        ("portable-producer-b", "Set up producer B Python"),
+        ("portable-compare", "Download immutable producer A"),
+        ("portable-smoke", "Check out source for isolated smoke"),
+        ("windows-portable", "Download producer A for final publication"),
     ],
 )
 def test_every_action_identity_is_exact(job_name: str, step_name: str):

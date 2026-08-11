@@ -7,18 +7,30 @@ import ast
 import base64
 import hashlib
 import importlib.util
-import io
+import itertools
 import json
 import os
 import re
+import stat
+import struct
 import sys
+import tempfile
 import unicodedata
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any, BinaryIO, cast
+
+if TYPE_CHECKING:
+    from tools.export_commit_tree import (
+        CommitSnapshot,
+        ExportEvidence,
+        SnapshotFile,
+    )
 
 
-def _load_exporter():
+def _load_exporter() -> Any:
     path = Path(__file__).resolve().with_name("export_commit_tree.py")
     specification = importlib.util.spec_from_file_location(
         "sector_source_release_commit_exporter", path
@@ -27,16 +39,27 @@ def _load_exporter():
         raise RuntimeError("cannot load the accepted exact-commit exporter")
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
-    specification.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(specification.name, None)
+        raise
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
 _EXPORTER = _load_exporter()
 CommitTreeError = _EXPORTER.CommitTreeError
-CommitSnapshot = _EXPORTER.CommitSnapshot
-ExportEvidence = _EXPORTER.ExportEvidence
-SnapshotFile = _EXPORTER.SnapshotFile
-snapshot_commit = _EXPORTER.snapshot_commit
+if not TYPE_CHECKING:
+    CommitSnapshot = _EXPORTER.CommitSnapshot
+    ExportEvidence = _EXPORTER.ExportEvidence
+    SnapshotFile = _EXPORTER.SnapshotFile
+snapshot_commit = cast(
+    "Callable[[Path, str], CommitSnapshot]", _EXPORTER.snapshot_commit
+)
 
 _MANIFEST_PATH = PurePosixPath("sector/sector_build_info.json")
 _MANIFEST_SCHEMA = 2
@@ -53,6 +76,26 @@ _IDENTITY_NAMES = {
     "__licensee__",
     "__copyright__",
 }
+
+MAX_SOURCE_FILES = 50_000
+MAX_SOURCE_DIRECTORIES = 50_000
+MAX_SOURCE_FILE_BYTES = 256 * 1024 * 1024
+MAX_SOURCE_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_SOURCE_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_COMMIT_BYTES = 1 * 1024 * 1024
+MAX_SOURCE_ARCHIVE_MEMBERS = MAX_SOURCE_FILES + 1
+MAX_SOURCE_ARCHIVE_MEMBER_BYTES = MAX_SOURCE_FILE_BYTES
+MAX_SOURCE_ARCHIVE_EXPANDED_BYTES = (
+    MAX_SOURCE_TOTAL_BYTES + MAX_SOURCE_MANIFEST_BYTES
+)
+MAX_SOURCE_ARCHIVE_BYTES = 600 * 1024 * 1024
+MAX_SECTOR_VERSION_BYTES = 11
+MAX_SECTOR_VERSION_COMPONENT = 65_535
+MAX_SOURCE_ARCHIVE_NAME_BYTES = 65_535
+_READ_BLOCK_BYTES = 1024 * 1024
+_ZIP_LOCAL_HEADER_BYTES = 30
+_ZIP_CENTRAL_HEADER_BYTES = 46
+_ZIP_END_BYTES = 22
 
 
 class SourceReleaseError(ValueError):
@@ -74,18 +117,55 @@ class SourceReleaseEvidence:
 
 def _snapshot(repository: Path, source_revision: str) -> CommitSnapshot:
     try:
-        return snapshot_commit(repository, source_revision)
+        snapshot = snapshot_commit(repository, source_revision)
     except CommitTreeError as exc:
         raise SourceReleaseError(
             f"cannot authenticate exact source commit: {exc}"
         ) from exc
+    _validate_snapshot_bounds(snapshot)
+    return snapshot
+
+
+def _validate_snapshot_bounds(snapshot: CommitSnapshot) -> None:
+    files = snapshot.files
+    evidence = snapshot.evidence
+    if len(files) > MAX_SOURCE_FILES:
+        raise SourceReleaseError("source snapshot exceeds the file-count limit")
+    total = 0
+    for item in files:
+        size = len(item.payload)
+        if size > MAX_SOURCE_FILE_BYTES:
+            raise SourceReleaseError(
+                f"source snapshot file exceeds the byte limit: {item.path}"
+            )
+        total += size
+        if total > MAX_SOURCE_TOTAL_BYTES:
+            raise SourceReleaseError("source snapshot exceeds the total-byte limit")
+    if evidence.file_count != len(files) or evidence.total_bytes != total:
+        raise SourceReleaseError("source snapshot resource evidence differs")
+    if len(snapshot.commit_payload) > MAX_SOURCE_COMMIT_BYTES:
+        raise SourceReleaseError("source commit object exceeds the byte limit")
 
 
 def _snapshot_file(snapshot: CommitSnapshot, path: str) -> bytes:
     matches = [item.payload for item in snapshot.files if item.path == path]
     if len(matches) != 1:
         raise SourceReleaseError(f"exact source file is missing or duplicated: {path}")
-    return matches[0]
+    return cast(bytes, matches[0])
+
+
+def _validate_sector_version(version: str) -> None:
+    try:
+        encoded = version.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise SourceReleaseError("Sector version is not ASCII") from exc
+    if len(encoded) > MAX_SECTOR_VERSION_BYTES or _VERSION.fullmatch(version) is None:
+        raise SourceReleaseError("Sector version format or length is invalid")
+    if any(
+        int(component) > MAX_SECTOR_VERSION_COMPONENT
+        for component in version.split(".")
+    ):
+        raise SourceReleaseError("Sector version component exceeds the limit")
 
 
 def _source_identity(snapshot: CommitSnapshot) -> dict[str, str]:
@@ -108,12 +188,19 @@ def _source_identity(snapshot: CommitSnapshot) -> dict[str, str]:
         if not isinstance(value, str) or not value:
             raise SourceReleaseError("Sector source identity must be non-empty text")
         values[target.id] = value
-    if set(values) != _IDENTITY_NAMES or _VERSION.fullmatch(values["__version__"]) is None:
+    if set(values) != _IDENTITY_NAMES:
         raise SourceReleaseError("Sector source identity is incomplete or invalid")
+    _validate_sector_version(values["__version__"])
     return values
 
 
-def _manifest(snapshot: CommitSnapshot, identity: dict[str, str]) -> bytes:
+def _canonical_json(value: object) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("ascii")
+
+
+def _manifest(
+    snapshot: CommitSnapshot, identity: dict[str, str]
+) -> dict[str, object]:
     evidence = snapshot.evidence
     value: dict[str, object] = {
         "source_release_schema": _MANIFEST_SCHEMA,
@@ -144,7 +231,7 @@ def _manifest(snapshot: CommitSnapshot, identity: dict[str, str]) -> bytes:
             for item in snapshot.files
         ],
     }
-    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("ascii")
+    return value
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -156,14 +243,143 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def _read_manifest(root: Path) -> dict[str, object]:
-    path = root.joinpath(*_MANIFEST_PATH.parts)
-    if path.is_symlink() or not path.is_file():
-        raise SourceReleaseError("source release provenance manifest is missing")
+def _is_reparse(status: os.stat_result) -> bool:
+    attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(getattr(status, "st_file_attributes", 0) & attribute)
+
+
+def _status_signature(status: os.stat_result) -> tuple[int, ...]:
+    return (
+        status.st_dev,
+        status.st_ino,
+        stat.S_IFMT(status.st_mode),
+        status.st_size,
+        status.st_mtime_ns,
+        getattr(status, "st_file_attributes", 0),
+    )
+
+
+def _nonfollowing_status(path: Path, label: str) -> os.stat_result:
     try:
-        raw = path.read_bytes()
+        return os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise SourceReleaseError(f"cannot inspect {label}") from exc
+
+
+def _require_regular_directory(path: Path, label: str) -> os.stat_result:
+    status = _nonfollowing_status(path, label)
+    if stat.S_ISLNK(status.st_mode) or _is_reparse(status):
+        raise SourceReleaseError(f"{label} is a linked or reparse path")
+    if not stat.S_ISDIR(status.st_mode):
+        raise SourceReleaseError(f"{label} is not a regular directory")
+    return status
+
+
+def _read_regular_file(
+    path: Path,
+    label: str,
+    *,
+    limit: int,
+    expected_size: int | None = None,
+) -> bytes:
+    before = _nonfollowing_status(path, label)
+    if stat.S_ISLNK(before.st_mode) or _is_reparse(before):
+        raise SourceReleaseError(f"{label} is a linked or reparse path")
+    if not stat.S_ISREG(before.st_mode):
+        raise SourceReleaseError(f"{label} is not a regular file")
+    if before.st_size > limit:
+        raise SourceReleaseError(f"{label} exceeds the byte limit")
+    if expected_size is not None and before.st_size != expected_size:
+        raise SourceReleaseError(f"{label} byte count differs from its manifest")
+    chunks: list[bytes] = []
+    count = 0
+    try:
+        with path.open("rb") as stream:
+            opened_before = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(opened_before.st_mode)
+                or _status_signature(opened_before) != _status_signature(before)
+            ):
+                raise SourceReleaseError(f"{label} changed while it was opened")
+            while True:
+                block = stream.read(_READ_BLOCK_BYTES)
+                if not block:
+                    break
+                count += len(block)
+                if count > limit:
+                    raise SourceReleaseError(f"{label} exceeds the byte limit")
+                chunks.append(block)
+            opened_after = os.fstat(stream.fileno())
+        after = _nonfollowing_status(path, label)
+    except SourceReleaseError:
+        raise
+    except OSError as exc:
+        raise SourceReleaseError(f"cannot read {label}") from exc
+    signatures = (before, opened_before, opened_after, after)
+    if any(
+        _status_signature(first) != _status_signature(second)
+        for first, second in itertools.pairwise(signatures)
+    ):
+        raise SourceReleaseError(f"{label} changed while it was read")
+    payload = b"".join(chunks)
+    if count != before.st_size or (
+        expected_size is not None and count != expected_size
+    ):
+        raise SourceReleaseError(f"{label} byte count changed while it was read")
+    return payload
+
+
+def _require_regular_file_bytes(path: Path, label: str, expected: bytes) -> None:
+    before = _nonfollowing_status(path, label)
+    if stat.S_ISLNK(before.st_mode) or _is_reparse(before):
+        raise SourceReleaseError(f"{label} is a linked or reparse path")
+    if not stat.S_ISREG(before.st_mode):
+        raise SourceReleaseError(f"{label} is not a regular file")
+    if before.st_size != len(expected) or before.st_size > MAX_SOURCE_FILE_BYTES:
+        raise SourceReleaseError(f"{label} byte count differs from its manifest")
+    expected_view = memoryview(expected)
+    count = 0
+    try:
+        with path.open("rb") as stream:
+            opened_before = os.fstat(stream.fileno())
+            if _status_signature(opened_before) != _status_signature(before):
+                raise SourceReleaseError(f"{label} changed while it was opened")
+            while True:
+                block = stream.read(_READ_BLOCK_BYTES)
+                if not block:
+                    break
+                end = count + len(block)
+                if end > len(expected) or memoryview(block) != expected_view[count:end]:
+                    raise SourceReleaseError(f"{label} bytes changed")
+                count = end
+            opened_after = os.fstat(stream.fileno())
+        after = _nonfollowing_status(path, label)
+    except SourceReleaseError:
+        raise
+    except OSError as exc:
+        raise SourceReleaseError(f"cannot read {label}") from exc
+    signatures = (before, opened_before, opened_after, after)
+    if any(
+        _status_signature(first) != _status_signature(second)
+        for first, second in itertools.pairwise(signatures)
+    ):
+        raise SourceReleaseError(f"{label} changed while it was read")
+    if count != len(expected):
+        raise SourceReleaseError(f"{label} byte count changed while it was read")
+
+
+def _read_manifest(root: Path) -> tuple[dict[str, object], bytes]:
+    path = root.joinpath(*_MANIFEST_PATH.parts)
+    try:
+        raw = _read_regular_file(
+            path,
+            "source release provenance manifest",
+            limit=MAX_SOURCE_MANIFEST_BYTES,
+        )
         value = json.loads(raw.decode("ascii"), object_pairs_hook=_unique_object)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except SourceReleaseError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise SourceReleaseError("source release provenance manifest is invalid") from exc
     if not isinstance(value, dict):
         raise SourceReleaseError("source release provenance manifest must be an object")
@@ -190,7 +406,7 @@ def _read_manifest(root: Path) -> dict[str, object]:
         raise SourceReleaseError("source release provenance manifest schema differs")
     if value["source_release_schema"] != _MANIFEST_SCHEMA:
         raise SourceReleaseError("source release provenance manifest schema is unsupported")
-    return value
+    return value, raw
 
 
 def _manifest_text(value: dict[str, object], name: str) -> str:
@@ -207,13 +423,22 @@ def _manifest_integer(value: dict[str, object], name: str) -> int:
     return candidate
 
 
-def _source_records(value: dict[str, object]) -> list[dict[str, object]]:
+def _source_records(
+    value: dict[str, object], *, declared_count: int, declared_total: int
+) -> list[dict[str, object]]:
     raw_records = value["source_files"]
     if not isinstance(raw_records, list) or not raw_records:
         raise SourceReleaseError("source manifest file inventory is invalid")
+    if declared_count > MAX_SOURCE_FILES:
+        raise SourceReleaseError("source manifest exceeds the file-count limit")
+    if declared_total > MAX_SOURCE_TOTAL_BYTES:
+        raise SourceReleaseError("source manifest exceeds the total-byte limit")
+    if len(raw_records) != declared_count:
+        raise SourceReleaseError("source manifest file count differs")
     records: list[dict[str, object]] = []
     path_kinds: dict[str, str] = {}
     prior_path: str | None = None
+    total = 0
     for raw in raw_records:
         if not isinstance(raw, dict) or set(raw) != {"path", "mode", "object_id", "bytes"}:
             raise SourceReleaseError("source manifest file record is invalid")
@@ -238,6 +463,13 @@ def _source_records(value: dict[str, object]) -> list[dict[str, object]]:
             raise SourceReleaseError(f"source manifest object identity is invalid: {path}")
         if type(size) is not int or size < 0:
             raise SourceReleaseError(f"source manifest byte count is invalid: {path}")
+        if size > MAX_SOURCE_FILE_BYTES:
+            raise SourceReleaseError(
+                f"source manifest file exceeds the byte limit: {path}"
+            )
+        total += size
+        if total > MAX_SOURCE_TOTAL_BYTES:
+            raise SourceReleaseError("source manifest exceeds the total-byte limit")
         if prior_path is not None and path <= prior_path:
             raise SourceReleaseError("source manifest file inventory is not canonical")
         prior_path = path
@@ -252,6 +484,8 @@ def _source_records(value: dict[str, object]) -> list[dict[str, object]]:
                 raise SourceReleaseError("source manifest has colliding file paths")
             path_kinds[key] = kind
         records.append(raw)
+    if total != declared_total:
+        raise SourceReleaseError("source manifest total byte count differs")
     return records
 
 
@@ -292,7 +526,7 @@ def _tree_identity(records: list[dict[str, object]]) -> str:
             entry = mode + b" " + raw_name + b"\0" + bytes.fromhex(object_id)
             entries.append((order, entry))
         payload = b"".join(entry for _order, entry in sorted(entries))
-        return _EXPORTER._object_digest("tree", payload)
+        return str(_EXPORTER._object_digest("tree", payload))
 
     return digest(root)
 
@@ -303,22 +537,57 @@ def _source_paths(root: Path) -> tuple[dict[str, Path], set[str]]:
     pending: list[tuple[Path, tuple[str, ...]]] = [(root, ())]
     while pending:
         directory, parts = pending.pop()
+        before = _require_regular_directory(directory, "source release directory")
         try:
-            entries = list(os.scandir(directory))
+            iterator = os.scandir(directory)
+            entries: list[os.DirEntry[str]] = []
+            try:
+                for entry in iterator:
+                    if (
+                        len(files) + len(directories) + len(entries)
+                        >= MAX_SOURCE_FILES + MAX_SOURCE_DIRECTORIES + 1
+                    ):
+                        raise SourceReleaseError(
+                            "source release exceeds the path-count limit"
+                        )
+                    entries.append(entry)
+            finally:
+                close = getattr(iterator, "close", None)
+                if close is not None:
+                    close()
+        except SourceReleaseError:
+            raise
         except OSError as exc:
             raise SourceReleaseError(f"cannot inventory source release directory: {exc}") from exc
+        after = _require_regular_directory(directory, "source release directory")
+        if _status_signature(before) != _status_signature(after):
+            raise SourceReleaseError("source release directory changed during inventory")
         for entry in entries:
             child_parts = (*parts, entry.name)
             relative = PurePosixPath(*child_parts).as_posix()
             path = Path(entry.path)
-            if entry.is_symlink() or (
-                hasattr(path, "is_junction") and path.is_junction()
-            ):
-                raise SourceReleaseError(f"source release contains a linked path: {relative}")
-            if entry.is_dir(follow_symlinks=False):
+            try:
+                status = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise SourceReleaseError(
+                    f"cannot inspect source release path: {relative}"
+                ) from exc
+            if stat.S_ISLNK(status.st_mode) or _is_reparse(status):
+                raise SourceReleaseError(
+                    f"source release contains a linked or reparse path: {relative}"
+                )
+            if stat.S_ISDIR(status.st_mode):
+                if len(directories) >= MAX_SOURCE_DIRECTORIES:
+                    raise SourceReleaseError(
+                        "source release exceeds the directory-count limit"
+                    )
                 directories.add(relative)
                 pending.append((path, child_parts))
-            elif entry.is_file(follow_symlinks=False):
+            elif stat.S_ISREG(status.st_mode):
+                if len(files) >= MAX_SOURCE_FILES + 1:
+                    raise SourceReleaseError(
+                        "source release exceeds the file-count limit"
+                    )
                 files[relative] = path
             else:
                 raise SourceReleaseError(f"source release contains a special path: {relative}")
@@ -329,13 +598,14 @@ def verify_source_release_directory(
     root: Path, expected_revision: str | None = None
 ) -> CommitSnapshot:
     """Authenticate one extracted source release without requiring Git metadata."""
+    lexical_root = Path(os.path.abspath(root))
+    _require_regular_directory(lexical_root, "source release root")
     try:
-        root = root.resolve(strict=True)
+        root = lexical_root.resolve(strict=True)
     except OSError as exc:
         raise SourceReleaseError("source release directory does not exist") from exc
-    if not root.is_dir() or root.is_symlink():
-        raise SourceReleaseError("source release root is not a regular directory")
-    manifest = _read_manifest(root)
+    _require_regular_directory(root, "source release root")
+    manifest, raw_manifest = _read_manifest(root)
     revision = _manifest_text(manifest, "source_revision")
     tree = _manifest_text(manifest, "source_tree")
     inventory = _manifest_text(manifest, "source_inventory_sha256")
@@ -345,13 +615,24 @@ def verify_source_release_directory(
         raise SourceReleaseError("source manifest inventory identity is invalid")
     if expected_revision is not None and revision != expected_revision:
         raise SourceReleaseError("source manifest revision differs from the requested revision")
+    declared_count = _manifest_integer(manifest, "source_file_count")
+    declared_total = _manifest_integer(manifest, "source_total_bytes")
+    if declared_count > MAX_SOURCE_FILES:
+        raise SourceReleaseError("source manifest exceeds the file-count limit")
+    if declared_total > MAX_SOURCE_TOTAL_BYTES:
+        raise SourceReleaseError("source manifest exceeds the total-byte limit")
+    encoded_commit = _manifest_text(manifest, "source_commit_payload_base64")
+    if len(encoded_commit) > ((MAX_SOURCE_COMMIT_BYTES + 2) // 3) * 4:
+        raise SourceReleaseError("source manifest commit object exceeds the byte limit")
     try:
         commit_payload = base64.b64decode(
-            _manifest_text(manifest, "source_commit_payload_base64"), validate=True
+            encoded_commit, validate=True
         )
         parsed_commit = _EXPORTER._parse_commit(commit_payload)
     except (ValueError, CommitTreeError) as exc:
         raise SourceReleaseError("source manifest commit object is invalid") from exc
+    if len(commit_payload) > MAX_SOURCE_COMMIT_BYTES:
+        raise SourceReleaseError("source manifest commit object exceeds the byte limit")
     if _EXPORTER._object_digest("commit", commit_payload) != revision:
         raise SourceReleaseError("source manifest commit object does not match its revision")
     epoch = _manifest_integer(manifest, "source_committer_epoch")
@@ -364,15 +645,13 @@ def verify_source_release_directory(
     ):
         raise SourceReleaseError("source manifest commit metadata differs")
 
-    records = _source_records(manifest)
+    records = _source_records(
+        manifest,
+        declared_count=declared_count,
+        declared_total=declared_total,
+    )
     if _tree_identity(records) != tree:
         raise SourceReleaseError("source manifest file inventory does not match its Git tree")
-    if len(records) != _manifest_integer(manifest, "source_file_count"):
-        raise SourceReleaseError("source manifest file count differs")
-    if sum(int(item["bytes"]) for item in records) != _manifest_integer(
-        manifest, "source_total_bytes"
-    ):
-        raise SourceReleaseError("source manifest total byte count differs")
     digest = hashlib.sha256()
     for item in records:
         record = [item["path"], item["mode"], item["object_id"], item["bytes"]]
@@ -397,25 +676,68 @@ def verify_source_release_directory(
     snapshot_files: list[SnapshotFile] = []
     for item in records:
         path = str(item["path"])
-        try:
-            payload = actual_files[path].read_bytes()
-        except OSError as exc:
-            raise SourceReleaseError(f"cannot read source release file: {path}") from exc
+        payload = _read_regular_file(
+            actual_files[path],
+            f"source release file: {path}",
+            limit=MAX_SOURCE_FILE_BYTES,
+            expected_size=cast(int, item["bytes"]),
+        )
         if len(payload) != item["bytes"] or _EXPORTER._object_digest("blob", payload) != item["object_id"]:
             raise SourceReleaseError(f"source release file differs from its manifest: {path}")
         snapshot_files.append(
             SnapshotFile(str(item["mode"]), path, str(item["object_id"]), payload)
         )
-    evidence = ExportEvidence(
-        revision,
-        tree,
-        epoch,
-        committed_at,
-        len(records),
-        sum(len(item.payload) for item in snapshot_files),
-        inventory,
+    snapshot = CommitSnapshot(
+        ExportEvidence(
+            revision,
+            tree,
+            epoch,
+            committed_at,
+            len(records),
+            declared_total,
+            inventory,
+        ),
+        commit_payload,
+        tuple(snapshot_files),
     )
-    return CommitSnapshot(evidence, commit_payload, tuple(snapshot_files))
+    identity = _source_identity(snapshot)
+    expected_manifest = _manifest(snapshot, identity)
+    parsed_identity = {
+        "product_name": manifest["product_name"],
+        "description": manifest["description"],
+        "sector_version": manifest["sector_version"],
+        "author": manifest["author"],
+        "licensee": manifest["licensee"],
+        "copyright": manifest["copyright"],
+    }
+    expected_identity = {
+        "product_name": identity["__product_name__"],
+        "description": identity["__description__"],
+        "sector_version": identity["__version__"],
+        "author": identity["__author__"],
+        "licensee": identity["__licensee__"],
+        "copyright": identity["__copyright__"],
+    }
+    if parsed_identity != expected_identity or manifest != expected_manifest:
+        raise SourceReleaseError(
+            "source manifest identity differs from the authenticated source"
+        )
+    if raw_manifest != _canonical_json(expected_manifest):
+        raise SourceReleaseError("source release provenance manifest is not canonical")
+    final_files, final_directories = _source_paths(root)
+    if set(final_files) != set(actual_files) or final_directories != actual_directories:
+        raise SourceReleaseError("source release directory changed during authentication")
+    final_manifest, final_raw_manifest = _read_manifest(root)
+    if final_manifest != manifest or final_raw_manifest != raw_manifest:
+        raise SourceReleaseError("source release manifest changed during authentication")
+    for snapshot_file in snapshot_files:
+        _require_regular_file_bytes(
+            final_files[snapshot_file.path],
+            f"source release file: {snapshot_file.path}",
+            snapshot_file.payload,
+        )
+    _validate_snapshot_bounds(snapshot)
+    return snapshot
 
 
 def materialize_source_release(
@@ -424,11 +746,13 @@ def materialize_source_release(
     """Verify and copy an extracted release into one new isolated source tree."""
     if os.path.lexists(output):
         raise SourceReleaseError(f"source materialization output already exists: {output}")
-    resolved_root = root.resolve(strict=True)
+    lexical_root = Path(os.path.abspath(root))
+    _require_regular_directory(lexical_root, "source release root")
+    resolved_root = lexical_root.resolve(strict=True)
     lexical_output = Path(os.path.abspath(output))
     if lexical_output == resolved_root or resolved_root in lexical_output.parents:
         raise SourceReleaseError("source materialization output cannot be inside the release")
-    snapshot = verify_source_release_directory(resolved_root, expected_revision)
+    snapshot = verify_source_release_directory(lexical_root, expected_revision)
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.mkdir()
@@ -446,6 +770,7 @@ def materialize_source_release(
 def _archive_entries(
     snapshot: CommitSnapshot,
 ) -> tuple[str, list[tuple[str, str, bytes]]]:
+    _validate_snapshot_bounds(snapshot)
     identity = _source_identity(snapshot)
     prefix = f"Sector-v{identity['__version__']}"
     if any(
@@ -454,18 +779,21 @@ def _archive_entries(
         raise SourceReleaseError("source release commit contains a Windows binary")
     if any(PurePosixPath(item.path) == _MANIFEST_PATH for item in snapshot.files):
         raise SourceReleaseError("generated source-release manifest path is tracked")
-    entries = [
-        (f"{prefix}/{item.path}", item.mode, item.payload)
-        for item in snapshot.files
+    manifest = _canonical_json(_manifest(snapshot, identity))
+    if len(manifest) > MAX_SOURCE_MANIFEST_BYTES:
+        raise SourceReleaseError("source release manifest exceeds the byte limit")
+    relative_entries = [
+        (item.path, item.mode, item.payload) for item in snapshot.files
     ]
-    entries.append(
-        (
-            f"{prefix}/{_MANIFEST_PATH.as_posix()}",
-            "100644",
-            _manifest(snapshot, identity),
-        )
-    )
-    return prefix, sorted(entries, key=lambda item: item[0])
+    relative_entries.append((_MANIFEST_PATH.as_posix(), "100644", manifest))
+    _preflight_relative_archive_layout(prefix, relative_entries)
+    entries = [
+        (f"{prefix}/{relative}", mode, payload)
+        for relative, mode, payload in relative_entries
+    ]
+    entries.sort(key=lambda item: item[0])
+    _validate_archive_entry_bounds(entries)
+    return prefix, entries
 
 
 def _zip_info(name: str, mode: str) -> zipfile.ZipInfo:
@@ -476,27 +804,245 @@ def _zip_info(name: str, mode: str) -> zipfile.ZipInfo:
     return info
 
 
-def _canonical_archive(entries: list[tuple[str, str, bytes]]) -> bytes:
-    stream = io.BytesIO()
-    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as bundle:
+def _zip_name_bytes(name: str) -> bytes:
+    try:
+        raw = name.encode("ascii")
+    except UnicodeEncodeError:
+        raw = name.encode("utf-8")
+    if not raw or len(raw) > MAX_SOURCE_ARCHIVE_NAME_BYTES:
+        raise SourceReleaseError("source archive member name exceeds the byte limit")
+    return raw
+
+
+def _checked_archive_size(current: int, name_bytes: int, payload_bytes: int) -> int:
+    size = (
+        current
+        + _ZIP_LOCAL_HEADER_BYTES
+        + name_bytes
+        + payload_bytes
+        + _ZIP_CENTRAL_HEADER_BYTES
+        + name_bytes
+    )
+    if size > MAX_SOURCE_ARCHIVE_BYTES:
+        raise SourceReleaseError("source archive exceeds the final-byte limit")
+    return size
+
+
+def _preflight_relative_archive_layout(
+    prefix: str, entries: list[tuple[str, str, bytes]]
+) -> int:
+    prefix_bytes = _zip_name_bytes(prefix)
+    size = _ZIP_END_BYTES
+    for relative, _mode, payload in entries:
+        relative_bytes = _zip_name_bytes(relative)
+        name_bytes = len(prefix_bytes) + 1 + len(relative_bytes)
+        if name_bytes > MAX_SOURCE_ARCHIVE_NAME_BYTES:
+            raise SourceReleaseError(
+                "source archive member name exceeds the byte limit"
+            )
+        size = _checked_archive_size(size, name_bytes, len(payload))
+    return size
+
+
+def _validate_archive_entry_bounds(
+    entries: list[tuple[str, str, bytes]],
+) -> int:
+    if not entries or len(entries) > MAX_SOURCE_ARCHIVE_MEMBERS:
+        raise SourceReleaseError("source archive exceeds the member-count limit")
+    prior_name: str | None = None
+    total = 0
+    final_size = _ZIP_END_BYTES
+    for name, _mode, payload in entries:
+        if prior_name is not None and name <= prior_name:
+            raise SourceReleaseError(
+                "source archive member inventory is not canonical"
+            )
+        prior_name = name
+        size = len(payload)
+        if size > MAX_SOURCE_ARCHIVE_MEMBER_BYTES:
+            raise SourceReleaseError(
+                f"source archive member exceeds the byte limit: {name}"
+            )
+        total += size
+        if total > MAX_SOURCE_ARCHIVE_EXPANDED_BYTES:
+            raise SourceReleaseError("source archive exceeds the expanded-byte limit")
+        final_size = _checked_archive_size(
+            final_size, len(_zip_name_bytes(name)), size
+        )
+    return final_size
+
+
+def _write_canonical_archive(
+    stream: BinaryIO, entries: list[tuple[str, str, bytes]]
+) -> int:
+    expected_size = _validate_archive_entry_bounds(entries)
+    with zipfile.ZipFile(
+        stream,
+        "w",
+        compression=zipfile.ZIP_STORED,
+        allowZip64=False,
+    ) as bundle:
         for name, mode, payload in entries:
             bundle.writestr(_zip_info(name, mode), payload)
-    return stream.getvalue()
+    stream.flush()
+    stream.seek(0, os.SEEK_END)
+    size = stream.tell()
+    if size != expected_size:
+        raise SourceReleaseError("source archive final byte count is noncanonical")
+    return int(size)
 
 
-def _sha256(path: Path) -> str:
+def _preflight_archive_stream(stream: BinaryIO, size: int) -> int:
+    if size < 22 or size > MAX_SOURCE_ARCHIVE_BYTES:
+        raise SourceReleaseError("source archive final byte count is invalid")
+    stream.seek(size - 22)
+    footer = stream.read(22)
+    if len(footer) != 22 or footer[:4] != b"PK\x05\x06":
+        raise SourceReleaseError(
+            "complete source archive bytes differ from the canonical release"
+        )
+    (
+        _signature,
+        disk,
+        central_disk,
+        disk_entries,
+        total_entries,
+        central_size,
+        central_offset,
+        comment_length,
+    ) = struct.unpack("<4s4H2LH", footer)
+    if total_entries > MAX_SOURCE_ARCHIVE_MEMBERS:
+        raise SourceReleaseError("source archive exceeds the member-count limit")
+    if (
+        disk != 0
+        or central_disk != 0
+        or disk_entries != total_entries
+        or total_entries < 1
+        or central_size == 0xFFFFFFFF
+        or central_offset == 0xFFFFFFFF
+        or comment_length != 0
+        or central_offset + central_size != size - 22
+    ):
+        raise SourceReleaseError(
+            "complete source archive bytes differ from the canonical release"
+        )
+    return int(total_entries)
+
+
+def _validate_archive_infos(
+    infos: list[zipfile.ZipInfo],
+    expected_by_name: dict[str, tuple[str, bytes]],
+) -> None:
+    if not infos or len(infos) > MAX_SOURCE_ARCHIVE_MEMBERS:
+        raise SourceReleaseError("source archive exceeds the member-count limit")
+    expanded = 0
+    for info in infos:
+        if info.file_size > MAX_SOURCE_ARCHIVE_MEMBER_BYTES:
+            raise SourceReleaseError(
+                f"source archive member exceeds the byte limit: {info.filename}"
+            )
+        expanded += info.file_size
+        if expanded > MAX_SOURCE_ARCHIVE_EXPANDED_BYTES:
+            raise SourceReleaseError("source archive exceeds the expanded-byte limit")
+
+    names = [item.filename for item in infos]
+    if names != list(expected_by_name):
+        raise SourceReleaseError(
+            "complete source archive bytes differ from the canonical release"
+        )
+    if len(names) != len(set(names)):
+        raise SourceReleaseError("source archive contains duplicate entries")
+    for info in infos:
+        mode, payload = expected_by_name[info.filename]
+        expected_mode = 0o100755 if mode == "100755" else 0o100644
+        actual_mode = (info.external_attr >> 16) & 0xFFFF
+        if (
+            info.is_dir()
+            or info.compress_type != zipfile.ZIP_STORED
+            or info.compress_size != info.file_size
+            or info.file_size != len(payload)
+            or info.date_time != _ZIP_TIME
+            or info.create_system != 3
+            or actual_mode != expected_mode
+            or info.extra
+            or info.comment
+            or info.flag_bits & 0x1
+        ):
+            raise SourceReleaseError(
+                f"source archive metadata differs: {info.filename}"
+            )
+
+
+def _require_archive_member_bytes(
+    bundle: zipfile.ZipFile, info: zipfile.ZipInfo, expected: bytes
+) -> None:
+    expected_view = memoryview(expected)
+    count = 0
+    try:
+        with bundle.open(info, "r") as member:
+            while True:
+                block = member.read(_READ_BLOCK_BYTES)
+                if not block:
+                    break
+                end = count + len(block)
+                if (
+                    end > len(expected)
+                    or end > MAX_SOURCE_ARCHIVE_MEMBER_BYTES
+                    or memoryview(block) != expected_view[count:end]
+                ):
+                    raise SourceReleaseError(
+                        f"source archive bytes differ: {info.filename}"
+                    )
+                count = end
+    except SourceReleaseError:
+        raise
+    except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+        raise SourceReleaseError(
+            f"cannot read source archive member: {info.filename}"
+        ) from exc
+    if count != info.file_size or count != len(expected):
+        raise SourceReleaseError(f"source archive bytes differ: {info.filename}")
+
+
+def _streams_equal(left: BinaryIO, right: BinaryIO) -> bool:
+    left.seek(0)
+    right.seek(0)
+    total = 0
+    while True:
+        left_block = left.read(_READ_BLOCK_BYTES)
+        right_block = right.read(_READ_BLOCK_BYTES)
+        if left_block != right_block:
+            return False
+        if not left_block:
+            return True
+        total += len(left_block)
+        if total > MAX_SOURCE_ARCHIVE_BYTES:
+            raise SourceReleaseError("source archive exceeds the final-byte limit")
+
+
+def _stream_sha256(stream: BinaryIO, expected_size: int) -> tuple[int, str]:
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    count = 0
+    stream.seek(0)
+    while True:
+        block = stream.read(_READ_BLOCK_BYTES)
+        if not block:
+            break
+        count += len(block)
+        if count > MAX_SOURCE_ARCHIVE_BYTES:
+            raise SourceReleaseError("source archive exceeds the final-byte limit")
+        digest.update(block)
+    if count != expected_size:
+        raise SourceReleaseError("source release archive byte count changed")
+    return count, digest.hexdigest()
 
 
 def _evidence(
     snapshot: CommitSnapshot,
     version: str,
-    archive: Path,
     entries: int,
+    archive_bytes: int,
+    archive_sha256: str,
 ) -> SourceReleaseEvidence:
     source = snapshot.evidence
     return SourceReleaseEvidence(
@@ -507,8 +1053,8 @@ def _evidence(
         source_total_bytes=source.total_bytes,
         source_inventory_sha256=source.inventory_sha256,
         archive_entries=entries,
-        archive_bytes=archive.stat().st_size,
-        archive_sha256=_sha256(archive),
+        archive_bytes=archive_bytes,
+        archive_sha256=archive_sha256,
     )
 
 
@@ -521,54 +1067,80 @@ def verify_source_release(
     snapshot = _snapshot(repository, source_revision)
     prefix, expected = _archive_entries(snapshot)
     expected_by_name = {name: (mode, payload) for name, mode, payload in expected}
+    before = _nonfollowing_status(archive, "source release archive")
+    if stat.S_ISLNK(before.st_mode) or _is_reparse(before):
+        raise SourceReleaseError("source release archive is a linked or reparse path")
+    if not stat.S_ISREG(before.st_mode):
+        raise SourceReleaseError("source release archive is not a regular file")
+    if before.st_size > MAX_SOURCE_ARCHIVE_BYTES:
+        raise SourceReleaseError("source archive exceeds the final-byte limit")
     try:
-        archive_bytes = archive.read_bytes()
-    except OSError as exc:
-        raise SourceReleaseError(f"cannot read source release archive: {exc}") from exc
-    if archive_bytes != _canonical_archive(expected):
-        raise SourceReleaseError(
-            "complete source archive bytes differ from the canonical release"
-        )
-    try:
-        with zipfile.ZipFile(archive, "r") as bundle:
-            infos = bundle.infolist()
-            names = [item.filename for item in infos]
-            if bundle.comment:
-                raise SourceReleaseError("source archive comment is not canonical")
-            if names != list(expected_by_name):
+        with archive.open("rb") as stream:
+            opened_before = os.fstat(stream.fileno())
+            if _status_signature(opened_before) != _status_signature(before):
                 raise SourceReleaseError(
-                    "source archive inventory differs from the exact commit contract"
+                    "source release archive changed while it was opened"
                 )
-            if len(names) != len(set(names)):
-                raise SourceReleaseError("source archive contains duplicate entries")
-            for info in infos:
-                mode, payload = expected_by_name[info.filename]
-                expected_mode = 0o100755 if mode == "100755" else 0o100644
-                actual_mode = (info.external_attr >> 16) & 0xFFFF
+            declared_members = _preflight_archive_stream(stream, before.st_size)
+            stream.seek(0)
+            with zipfile.ZipFile(stream, "r") as bundle:
+                infos = bundle.infolist()
+                if len(infos) != declared_members:
+                    raise SourceReleaseError(
+                        "source archive member count differs from its footer"
+                    )
+                if bundle.comment:
+                    raise SourceReleaseError(
+                        "source archive comment is not canonical"
+                    )
+                _validate_archive_infos(infos, expected_by_name)
+                for info in infos:
+                    _require_archive_member_bytes(
+                        bundle, info, expected_by_name[info.filename][1]
+                    )
+            with tempfile.SpooledTemporaryFile(
+                max_size=MAX_SOURCE_MANIFEST_BYTES,
+                mode="w+b",
+            ) as canonical:
+                canonical_stream = cast(BinaryIO, canonical)
+                canonical_size = _write_canonical_archive(
+                    canonical_stream, expected
+                )
                 if (
-                    info.is_dir()
-                    or info.compress_type != zipfile.ZIP_STORED
-                    or info.date_time != _ZIP_TIME
-                    or info.create_system != 3
-                    or actual_mode != expected_mode
-                    or info.extra
-                    or info.comment
-                    or info.flag_bits & 0x1
+                    canonical_size != before.st_size
+                    or not _streams_equal(stream, canonical_stream)
                 ):
                     raise SourceReleaseError(
-                        f"source archive metadata differs: {info.filename}"
+                        "complete source archive bytes differ from the canonical release"
                     )
-                if bundle.read(info) != payload:
-                    raise SourceReleaseError(
-                        f"source archive bytes differ: {info.filename}"
-                    )
-    except (OSError, zipfile.BadZipFile) as exc:
+            archive_bytes, archive_sha256 = _stream_sha256(
+                stream, before.st_size
+            )
+            opened_after = os.fstat(stream.fileno())
+        after = _nonfollowing_status(archive, "source release archive")
+    except SourceReleaseError:
+        raise
+    except (OSError, ValueError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
         raise SourceReleaseError(f"cannot read source release archive: {exc}") from exc
+    signatures = (before, opened_before, opened_after, after)
+    if any(
+        _status_signature(first) != _status_signature(second)
+        for first, second in itertools.pairwise(signatures)
+    ):
+        raise SourceReleaseError(
+            "source release archive changed during authentication"
+        )
     identity = _source_identity(snapshot)
     marker = f"{prefix}/{_MANIFEST_PATH.as_posix()}"
     if marker not in expected_by_name:
         raise SourceReleaseError("source release provenance manifest is missing")
-    return _evidence(snapshot, identity["__version__"], archive, len(expected))
+    return _evidence(
+        snapshot,
+        identity["__version__"],
+        len(expected),
+        archive_bytes,
+        archive_sha256,
+    )
 
 
 def build_source_release(
@@ -586,8 +1158,10 @@ def build_source_release(
     try:
         archive.parent.mkdir(parents=True, exist_ok=True)
         with archive.open("xb") as stream:
-            stream.write(_canonical_archive(entries))
-    except OSError as exc:
+            _write_canonical_archive(stream, entries)
+    except SourceReleaseError:
+        raise
+    except (OSError, ValueError, zipfile.LargeZipFile) as exc:
         raise SourceReleaseError(f"cannot write source release archive: {exc}") from exc
     return verify_source_release(repository, source_revision, archive)
 

@@ -19,12 +19,30 @@ SETUP_PYTHON_ACTION = (
     "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
 )
 UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+DOWNLOAD_ACTION = (
+    "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+)
 FULL_COMMIT_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
 SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
 JOB_CONTRACT_SHA256 = {
     "test": "4b220d25de52b376ed6ce47f1b123be8989ba7832835f992e9aee4bca91c805f",
     "windows-package": (
         "b1d2dc20ddfbbe626296637a3c240c38873bccc18e118c664acde1ffc9e0f8a1"
+    ),
+    "portable-producer-a": (
+        "4e53795652b6fa619232dab5dbe74a1bffe2ccb51bbaca0e5f42b4960ca441d7"
+    ),
+    "portable-producer-b": (
+        "38173306a03b17a478f17d0124ff5e0b4ae8da922a730a2a81150f5de4fdd27a"
+    ),
+    "portable-compare": (
+        "bed676a36a87127959f1b64443533a9d7a62fcd6ca0bb5cdf1c0b5f63550c6a0"
+    ),
+    "portable-smoke": (
+        "529d95c0e9575b698eb1be2a9c903d3312f0b3aadf9a9366bd12151de79577ab"
+    ),
+    "windows-portable": (
+        "5246e79094eb9b85dfaf72a03280592eeee75dc3bf06ec1f87e8271b97719786"
     ),
 }
 
@@ -56,6 +74,53 @@ PACKAGE_STEPS = (
     "Verify both unsigned QA package identities",
     "Compare independent unsigned QA package builds",
     "Upload unsigned QA reproducibility evidence",
+)
+
+PORTABLE_PRODUCER_A_STEPS = (
+    "Check out source for producer A",
+    "Set up producer A Python",
+    "Prepare authenticated Gitless source for producer A",
+    "Record Microsoft Edge prerequisite",
+    "Build producer A through root BAT",
+    "Verify and stage producer A immutable distribution",
+    "Upload immutable producer A distribution",
+)
+
+PORTABLE_PRODUCER_B_STEPS = (
+    "Check out source for producer B",
+    "Set up producer B Python",
+    "Prepare authenticated Gitless source for producer B",
+    "Build producer B through root BAT",
+    "Verify and stage producer B immutable distribution",
+    "Upload immutable producer B distribution",
+)
+
+PORTABLE_COMPARE_STEPS = (
+    "Check out source for portable comparison",
+    "Set up portable comparison Python",
+    "Download immutable producer A",
+    "Download immutable producer B",
+    "Verify and compare downloaded portable distributions",
+    "Upload portable comparison evidence",
+)
+
+PORTABLE_SMOKE_STEPS = (
+    "Check out source for isolated smoke",
+    "Set up isolated smoke Python",
+    "Download verified producer A only",
+    "Run controlled Job Object startup smoke",
+    "Upload isolated smoke evidence",
+)
+
+PORTABLE_STEPS = (
+    "Check out source for final portable verification",
+    "Set up final portable verification Python",
+    "Download producer A for final publication",
+    "Download producer B for final publication",
+    "Download portable comparison evidence",
+    "Download isolated smoke evidence",
+    "Re-verify immutable distributions for final publication",
+    "Upload unsigned portable Windows evidence",
 )
 
 
@@ -103,54 +168,20 @@ def _validate_action_pins(*step_groups: list) -> None:
                 )
 
 
-def _validate_action_identities(test_steps: list, package_steps: list) -> None:
-    expected_steps = (
-        (
-            test_steps,
-            "Check out source",
-            {
-                "name": "Check out source",
-                "uses": CHECKOUT_ACTION,
-                "with": {"fetch-depth": 0},
-            },
-        ),
-        (
-            test_steps,
-            "Set up pinned Python",
-            {
-                "name": "Set up pinned Python",
-                "uses": SETUP_PYTHON_ACTION,
-                "with": {
-                    "python-version-file": ".python-version",
-                    "cache": "pip",
-                    "cache-dependency-path": "requirements-dev.txt",
-                },
-            },
-        ),
-        (
-            package_steps,
-            "Check out source",
-            {"name": "Check out source", "uses": CHECKOUT_ACTION},
-        ),
-        (
-            package_steps,
-            "Set up pinned Python",
-            {
-                "name": "Set up pinned Python",
-                "uses": SETUP_PYTHON_ACTION,
-                "with": {
-                    "python-version-file": ".python-version",
-                    "cache": "pip",
-                    "cache-dependency-path": "requirements-build.txt",
-                },
-            },
-        ),
-    )
-    for steps, name, expected in expected_steps:
-        if _named_step(steps, name) != expected:
-            raise ConsolidatedPublicationGateError(
-                f"{name!r} must retain its approved action identity and inputs"
-            )
+def _validate_action_identities(*step_groups: list) -> None:
+    approved = {
+        CHECKOUT_ACTION,
+        DOWNLOAD_ACTION,
+        SETUP_PYTHON_ACTION,
+        UPLOAD_ACTION,
+    }
+    for steps in step_groups:
+        for step in steps:
+            action = step.get("uses")
+            if action is not None and action not in approved:
+                raise ConsolidatedPublicationGateError(
+                    "workflow uses an action outside the approved action identity set"
+                )
 
 
 def _structured_sha256(value: object) -> str:
@@ -310,6 +341,49 @@ def _validate_package_job(job: Mapping[str, Any]) -> list:
     return steps
 
 
+def _validate_portable_job(
+    job: Mapping[str, Any],
+    *,
+    label: str,
+    display_name: str,
+    needs: object,
+    timeout_minutes: int,
+    expected_steps: tuple[str, ...],
+) -> list:
+    if set(job) != {
+        "name",
+        "needs",
+        "runs-on",
+        "timeout-minutes",
+        "permissions",
+        "steps",
+    }:
+        raise ConsolidatedPublicationGateError(
+            f"{label} must retain its isolated failure-propagating context"
+        )
+    if job.get("name") != display_name or job.get("needs") != needs:
+        raise ConsolidatedPublicationGateError(f"{label} dependency or identity differs")
+    if (
+        job.get("runs-on") != "windows-latest"
+        or job.get("timeout-minutes") != timeout_minutes
+        or job.get("permissions") != {"contents": "read"}
+    ):
+        raise ConsolidatedPublicationGateError(
+            f"{label} runner or minimal permission boundary differs"
+        )
+
+    steps = _steps(job, expected_steps, label)
+    for step in steps:
+        expected_if = (
+            "always()" if step["name"] == "Upload isolated smoke evidence" else None
+        )
+        if step.get("if") != expected_if:
+            raise ConsolidatedPublicationGateError(
+                f"{step['name']!r} execution condition differs"
+            )
+    return steps
+
+
 def validate_workflow(workflow_text: str) -> None:
     try:
         workflow = yaml.safe_load(workflow_text)
@@ -326,19 +400,86 @@ def validate_workflow(workflow_text: str) -> None:
             "workflow permissions must remain exactly contents: read"
         )
     jobs = _mapping(workflow.get("jobs"), "workflow jobs")
-    if set(jobs) != {"test", "windows-package"}:
+    expected_jobs = {
+        "test",
+        "windows-package",
+        "portable-producer-a",
+        "portable-producer-b",
+        "portable-compare",
+        "portable-smoke",
+        "windows-portable",
+    }
+    if set(jobs) != expected_jobs:
         raise ConsolidatedPublicationGateError("workflow job inventory differs")
 
     test_steps = _validate_test_job(_mapping(jobs["test"], "test job"))
     package_steps = _validate_package_job(
         _mapping(jobs["windows-package"], "package job")
     )
-    _validate_action_pins(test_steps, package_steps)
-    _validate_action_identities(test_steps, package_steps)
+    portable_contracts = (
+        (
+            "portable-producer-a",
+            "Unsigned portable producer A",
+            "test",
+            60,
+            PORTABLE_PRODUCER_A_STEPS,
+        ),
+        (
+            "portable-producer-b",
+            "Unsigned portable producer B",
+            "test",
+            60,
+            PORTABLE_PRODUCER_B_STEPS,
+        ),
+        (
+            "portable-compare",
+            "Compare immutable portable producers",
+            ["portable-producer-a", "portable-producer-b"],
+            30,
+            PORTABLE_COMPARE_STEPS,
+        ),
+        (
+            "portable-smoke",
+            "Isolated verified portable startup smoke",
+            ["portable-producer-a", "portable-compare"],
+            20,
+            PORTABLE_SMOKE_STEPS,
+        ),
+        (
+            "windows-portable",
+            "Unsigned portable Windows distribution",
+            [
+                "portable-producer-a",
+                "portable-producer-b",
+                "portable-compare",
+                "portable-smoke",
+            ],
+            30,
+            PORTABLE_STEPS,
+        ),
+    )
+    portable_step_groups = [
+        _validate_portable_job(
+            _mapping(jobs[job_name], f"{job_name} job"),
+            label=f"{job_name} job",
+            display_name=display_name,
+            needs=needs,
+            timeout_minutes=timeout_minutes,
+            expected_steps=expected_steps,
+        )
+        for job_name, display_name, needs, timeout_minutes, expected_steps in portable_contracts
+    ]
+    all_step_groups = [test_steps, package_steps, *portable_step_groups]
+    _validate_action_pins(*all_step_groups)
+    _validate_action_identities(*all_step_groups)
     _validate_exact_job_contract(_mapping(jobs["test"], "test job"), "test")
     _validate_exact_job_contract(
         _mapping(jobs["windows-package"], "package job"), "windows-package"
     )
+    for job_name, *_rest in portable_contracts:
+        _validate_exact_job_contract(
+            _mapping(jobs[job_name], f"{job_name} job"), job_name
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

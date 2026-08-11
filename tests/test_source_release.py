@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import tools.build_source_release as source_release
 from tools.build_exact_commit import prepare_exact_build
 from tools.build_source_release import (
     SourceReleaseError,
@@ -41,6 +46,14 @@ def extracted_source_release(tmp_path_factory):
     return root / "extracted" / "Sector-v0.92"
 
 
+@pytest.fixture(scope="module")
+def accepted_source_archive(tmp_path_factory):
+    root = tmp_path_factory.mktemp("accepted-source-archive")
+    archive = root / "Sector-v0.92-source.zip"
+    build_source_release(ROOT, COMMIT, archive)
+    return archive
+
+
 def _git(root: Path, *arguments: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(root), *arguments],
@@ -50,6 +63,23 @@ def _git(root: Path, *arguments: str) -> str:
     )
     assert result.returncode == 0, result.stderr
     return result.stdout.strip()
+
+
+def test_git_snapshot_limits_match_source_release_ceilings():
+    assert source_release._EXPORTER.MAX_SNAPSHOT_FILES == source_release.MAX_SOURCE_FILES
+    assert (
+        source_release._EXPORTER.MAX_SNAPSHOT_DIRECTORIES
+        == source_release.MAX_SOURCE_DIRECTORIES
+    )
+    assert source_release._EXPORTER.MAX_BLOB_BYTES == source_release.MAX_SOURCE_FILE_BYTES
+    assert (
+        source_release._EXPORTER.MAX_SNAPSHOT_TOTAL_BYTES
+        == source_release.MAX_SOURCE_TOTAL_BYTES
+    )
+    assert (
+        source_release._EXPORTER.MAX_COMMIT_OBJECT_BYTES
+        == source_release.MAX_SOURCE_COMMIT_BYTES
+    )
 
 
 def _source_build_script_repository(tmp_path: Path) -> tuple[Path, str]:
@@ -196,6 +226,296 @@ def test_extracted_source_release_rejects_the_wrong_requested_revision(
 ):
     with pytest.raises(SourceReleaseError, match="requested revision"):
         verify_source_release_directory(extracted_source_release, "0" * 40)
+
+
+def _altered_release(extracted_source_release: Path, tmp_path: Path) -> Path:
+    altered = tmp_path / "altered-release"
+    shutil.copytree(extracted_source_release, altered)
+    return altered
+
+
+def _manifest_path(root: Path) -> Path:
+    return root / "sector" / "sector_build_info.json"
+
+
+def _canonical_manifest(value: dict[str, object]) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("ascii")
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("product_name", "Sector lookalike"),
+        ("sector_version", "9.99"),
+        ("author", "Untrusted author"),
+    ),
+)
+def test_gitless_release_rejects_manifest_identity_mutations(
+    extracted_source_release, tmp_path, field, replacement
+):
+    altered = _altered_release(extracted_source_release, tmp_path)
+    manifest_path = _manifest_path(altered)
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest[field] = replacement
+    manifest_path.write_bytes(_canonical_manifest(manifest))
+
+    with pytest.raises(SourceReleaseError, match="identity differs"):
+        verify_source_release_directory(altered, COMMIT)
+
+
+def test_gitless_release_rejects_noncanonical_manifest_formatting(
+    extracted_source_release, tmp_path
+):
+    altered = _altered_release(extracted_source_release, tmp_path)
+    manifest_path = _manifest_path(altered)
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest_path.write_bytes(
+        (json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "ascii"
+        )
+    )
+
+    with pytest.raises(SourceReleaseError, match="manifest is not canonical"):
+        verify_source_release_directory(altered, COMMIT)
+
+
+def test_manifest_byte_limit_is_checked_before_manifest_allocation(
+    extracted_source_release, monkeypatch
+):
+    size = _manifest_path(extracted_source_release).stat().st_size
+    monkeypatch.setattr(source_release, "MAX_SOURCE_MANIFEST_BYTES", size - 1)
+
+    with pytest.raises(SourceReleaseError, match="manifest exceeds the byte limit"):
+        verify_source_release_directory(extracted_source_release, COMMIT)
+
+
+@pytest.mark.parametrize(
+    ("constant", "manifest_field", "limit_error"),
+    (
+        ("MAX_SOURCE_FILES", "source_file_count", "file-count limit"),
+        ("MAX_SOURCE_TOTAL_BYTES", "source_total_bytes", "total-byte limit"),
+        ("MAX_SOURCE_FILE_BYTES", None, "file exceeds the byte limit"),
+    ),
+)
+def test_manifest_resource_bounds_are_checked_before_source_file_reads(
+    extracted_source_release,
+    monkeypatch,
+    constant,
+    manifest_field,
+    limit_error,
+):
+    manifest = json.loads(_manifest_path(extracted_source_release).read_bytes())
+    if manifest_field is None:
+        declared = max(record["bytes"] for record in manifest["source_files"])
+    else:
+        declared = manifest[manifest_field]
+    assert declared > 0
+    monkeypatch.setattr(source_release, constant, declared - 1)
+    original = source_release._read_regular_file
+
+    def reject_source_file_reads(path, label, **kwargs):
+        if label.startswith("source release file:"):
+            raise AssertionError("source payload was read before manifest bounds")
+        return original(path, label, **kwargs)
+
+    monkeypatch.setattr(source_release, "_read_regular_file", reject_source_file_reads)
+
+    with pytest.raises(SourceReleaseError, match=limit_error):
+        verify_source_release_directory(extracted_source_release, COMMIT)
+
+
+def _archive_infos(archive: Path) -> list[zipfile.ZipInfo]:
+    with zipfile.ZipFile(archive, "r") as bundle:
+        return bundle.infolist()
+
+
+def test_archive_final_size_bound_precedes_zip_inventory_allocation(
+    accepted_source_archive, monkeypatch
+):
+    size = accepted_source_archive.stat().st_size
+    monkeypatch.setattr(source_release, "MAX_SOURCE_ARCHIVE_BYTES", size - 1)
+    with accepted_source_archive.open("rb") as stream, pytest.raises(
+        SourceReleaseError, match="final byte count"
+    ):
+        source_release._preflight_archive_stream(stream, size)
+
+
+def test_archive_member_count_bound_precedes_zip_inventory_allocation(
+    accepted_source_archive, monkeypatch
+):
+    infos = _archive_infos(accepted_source_archive)
+    monkeypatch.setattr(
+        source_release, "MAX_SOURCE_ARCHIVE_MEMBERS", len(infos) - 1
+    )
+    with accepted_source_archive.open("rb") as stream, pytest.raises(
+        SourceReleaseError, match="member-count limit"
+    ):
+        source_release._preflight_archive_stream(
+            stream, accepted_source_archive.stat().st_size
+        )
+
+
+def test_archive_member_size_bound_precedes_member_reads(
+    accepted_source_archive, monkeypatch
+):
+    infos = _archive_infos(accepted_source_archive)
+    largest = max(info.file_size for info in infos)
+    assert largest > 0
+    monkeypatch.setattr(
+        source_release, "MAX_SOURCE_ARCHIVE_MEMBER_BYTES", largest - 1
+    )
+
+    with pytest.raises(SourceReleaseError, match="member exceeds the byte limit"):
+        source_release._validate_archive_infos(infos, {})
+
+
+def test_archive_expanded_size_bound_precedes_member_reads(
+    accepted_source_archive, monkeypatch
+):
+    infos = _archive_infos(accepted_source_archive)
+    expanded = sum(info.file_size for info in infos)
+    assert expanded > 0
+    monkeypatch.setattr(
+        source_release, "MAX_SOURCE_ARCHIVE_EXPANDED_BYTES", expanded - 1
+    )
+
+    with pytest.raises(SourceReleaseError, match="expanded-byte limit"):
+        source_release._validate_archive_infos(infos, {})
+
+
+def test_exact_archive_overhead_is_bounded_before_writer_allocation(monkeypatch):
+    snapshot = source_release._snapshot(ROOT, COMMIT)
+    _prefix, entries = source_release._archive_entries(snapshot)
+    exact_size = source_release._validate_archive_entry_bounds(entries)
+    stream = io.BytesIO()
+    monkeypatch.setattr(source_release, "MAX_SOURCE_ARCHIVE_BYTES", exact_size - 1)
+
+    with pytest.raises(SourceReleaseError, match="final-byte limit"):
+        source_release._write_canonical_archive(stream, entries)
+
+    assert stream.getvalue() == b""
+
+
+@pytest.mark.parametrize(
+    ("version", "message"),
+    (
+        ("65536.1", "component"),
+        ("000000000000.1", "length"),
+    ),
+)
+def test_source_version_bounds_precede_archive_name_amplification(
+    tmp_path, version, message
+):
+    repository, _commit = _source_build_script_repository(tmp_path)
+    identity = repository / "sector" / "__init__.py"
+    identity.write_bytes(
+        identity.read_bytes().replace(
+            b'__version__ = "0.92"',
+            f'__version__ = "{version}"'.encode("ascii"),
+        )
+    )
+    _git(repository, "add", "sector/__init__.py")
+    _git(repository, "commit", "--quiet", "-m", "adversarial version")
+    commit = _git(repository, "rev-parse", "HEAD")
+    archive = tmp_path / "bounded-version.zip"
+
+    with pytest.raises(SourceReleaseError, match=message):
+        build_source_release(repository, commit, archive)
+
+    assert not archive.exists()
+
+
+def test_verification_evidence_uses_the_authenticated_open_stream(
+    accepted_source_archive, tmp_path, monkeypatch
+):
+    archive = tmp_path / "accepted.zip"
+    shutil.copyfile(accepted_source_archive, archive)
+    authenticated = archive.read_bytes()
+    expected_digest = hashlib.sha256(authenticated).hexdigest()
+    replacement = b"replacement after final pathname status\n"
+    original_status = source_release._nonfollowing_status
+    archive_status_calls = 0
+
+    def swap_after_final_status(path, label):
+        nonlocal archive_status_calls
+        status = original_status(path, label)
+        if Path(path) == archive:
+            archive_status_calls += 1
+            if archive_status_calls == 2:
+                archive.replace(tmp_path / "authenticated-original.zip")
+                archive.write_bytes(replacement)
+        return status
+
+    monkeypatch.setattr(
+        source_release, "_nonfollowing_status", swap_after_final_status
+    )
+
+    evidence = verify_source_release(ROOT, COMMIT, archive)
+
+    assert archive.read_bytes() == replacement
+    assert evidence.archive_bytes == len(authenticated)
+    assert evidence.archive_sha256 == expected_digest
+
+
+def _with_reparse_attribute(status):
+    return SimpleNamespace(
+        st_dev=status.st_dev,
+        st_ino=status.st_ino,
+        st_mode=status.st_mode,
+        st_size=status.st_size,
+        st_mtime_ns=status.st_mtime_ns,
+        st_file_attributes=(
+            getattr(status, "st_file_attributes", 0)
+            | getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        ),
+    )
+
+
+def test_extracted_source_release_rejects_a_reparse_root_before_resolution(
+    extracted_source_release, monkeypatch
+):
+    real_stat = os.stat
+    lexical_root = Path(os.path.abspath(extracted_source_release))
+
+    def report_reparse(path, *, dir_fd=None, follow_symlinks=True):
+        status = real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        if Path(path) == lexical_root and not follow_symlinks:
+            return _with_reparse_attribute(status)
+        return status
+
+    monkeypatch.setattr(os, "stat", report_reparse)
+
+    with pytest.raises(SourceReleaseError, match="root is a linked or reparse"):
+        verify_source_release_directory(extracted_source_release, COMMIT)
+
+
+def test_extracted_source_release_rejects_a_generic_child_reparse_point(
+    extracted_source_release, monkeypatch
+):
+    real_scandir = os.scandir
+    target = extracted_source_release / "LICENSE"
+
+    class EntryProxy:
+        def __init__(self, entry):
+            self._entry = entry
+
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
+
+        def stat(self, *, follow_symlinks=True):
+            status = self._entry.stat(follow_symlinks=follow_symlinks)
+            if Path(self._entry.path) == target and not follow_symlinks:
+                return _with_reparse_attribute(status)
+            return status
+
+    def report_child_reparse(path):
+        with real_scandir(path) as entries:
+            return [EntryProxy(entry) for entry in entries]
+
+    monkeypatch.setattr(os, "scandir", report_child_reparse)
+
+    with pytest.raises(SourceReleaseError, match="linked or reparse path: LICENSE"):
+        verify_source_release_directory(extracted_source_release, COMMIT)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell resolver contract is Windows-only")
