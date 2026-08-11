@@ -11,13 +11,13 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
-# Loading the standard-library provenance helpers must not mutate an extracted
-# source release before its closed inventory is authenticated.
-sys.dont_write_bytecode = True
+if TYPE_CHECKING:
+    from tools.export_commit_tree import ExportEvidence
 
 
-def _load_exporter():
+def _load_exporter() -> Any:
     path = Path(__file__).resolve().with_name("export_commit_tree.py")
     specification = importlib.util.spec_from_file_location(
         "sector_exact_commit_exporter", path
@@ -26,11 +26,19 @@ def _load_exporter():
         raise RuntimeError("cannot load the accepted exact-commit exporter")
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
-    specification.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(specification.name, None)
+        raise
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
-def _load_source_release():
+def _load_source_release() -> Any:
     path = Path(__file__).resolve().with_name("build_source_release.py")
     specification = importlib.util.spec_from_file_location(
         "sector_verified_source_release", path
@@ -39,21 +47,70 @@ def _load_source_release():
         raise RuntimeError("cannot load the accepted source-release verifier")
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
-    specification.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        specification.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(specification.name, None)
+        raise
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
 _EXPORTER = _load_exporter()
 CommitTreeError = _EXPORTER.CommitTreeError
-ExportEvidence = _EXPORTER.ExportEvidence
-export_commit = _EXPORTER.export_commit
+if not TYPE_CHECKING:
+    ExportEvidence = _EXPORTER.ExportEvidence
+export_commit = cast(
+    "Callable[[Path, str, Path], ExportEvidence]", _EXPORTER.export_commit
+)
 _SOURCE_RELEASE = _load_source_release()
 SourceReleaseError = _SOURCE_RELEASE.SourceReleaseError
-materialize_source_release = _SOURCE_RELEASE.materialize_source_release
+materialize_source_release = cast(
+    "Callable[[Path, str, Path], ExportEvidence]",
+    _SOURCE_RELEASE.materialize_source_release,
+)
 
 
 class ExactBuildError(RuntimeError):
     """The exact-source build could not be prepared or executed safely."""
+
+
+_BUILD_RUNTIME_ENVIRONMENT = (
+    "COMSPEC",
+    "NUMBER_OF_PROCESSORS",
+    "OS",
+    "PATH",
+    "PATHEXT",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER",
+    "PROCESSOR_LEVEL",
+    "PROCESSOR_REVISION",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "WINDIR",
+)
+
+_PIP_NETWORK_ENVIRONMENT = (
+    "ALL_PROXY",
+    "CURL_CA_BUNDLE",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+)
+
+
+def _inherited_allowlist(names: tuple[str, ...]) -> dict[str, str]:
+    """Copy only explicitly accepted host values under canonical names."""
+    return {name: os.environ[name] for name in names if name in os.environ}
 
 
 @dataclass(frozen=True)
@@ -90,6 +147,7 @@ class ExactBuildEvidence:
 
 def _build_environment(
     *,
+    isolated_home: Path,
     source_revision: str,
     source_tree: str,
     source_committer_epoch: int,
@@ -98,11 +156,12 @@ def _build_environment(
     source_total_bytes: int,
     source_inventory_sha256: str,
 ) -> dict[str, str]:
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.upper().startswith(("GIT_", "PYTHON"))
-    }
+    environment = _inherited_allowlist(_BUILD_RUNTIME_ENVIRONMENT)
+    # Windows' pathlib.Path.home() requires USERPROFILE (or the less direct
+    # HOMEDRIVE/HOMEPATH pair).  Never inherit the runner's profile into an
+    # exact-source build; give every child process the same run-local home.
+    environment["HOME"] = str(isolated_home)
+    environment["USERPROFILE"] = str(isolated_home)
     environment["PYTHONNOUSERSITE"] = "1"
     environment["SECTOR_SOURCE_REVISION"] = source_revision
     environment["SECTOR_SOURCE_TREE"] = source_tree
@@ -117,6 +176,13 @@ def _build_environment(
     # the seed so an inherited value cannot make controlled builds diverge.
     environment["PYTHONHASHSEED"] = "1"
     return environment
+
+
+def _pip_environment(environment: dict[str, str]) -> dict[str, str]:
+    """Add only network and CA settings justified for the dependency fetch."""
+    result = dict(environment)
+    result.update(_inherited_allowlist(_PIP_NETWORK_ENVIRONMENT))
+    return result
 
 
 def source_identity_object(evidence: ExportEvidence) -> dict[str, str | int]:
@@ -174,7 +240,15 @@ def prepare_exact_build(
 
     source_identity_path = run_root / "source-identity.json"
     _write_source_identity(source_identity_path, source_evidence)
+    isolated_home = run_root / "build-home"
+    try:
+        isolated_home.mkdir()
+    except OSError as exc:
+        raise ExactBuildError(
+            f"cannot create isolated build home: {isolated_home}"
+        ) from exc
     environment = _build_environment(
+        isolated_home=isolated_home,
         source_revision=source_evidence.source_revision,
         source_tree=source_evidence.source_tree,
         source_committer_epoch=source_evidence.source_committer_epoch,
@@ -197,6 +271,11 @@ def prepare_exact_build(
             )
     work_path = run_root / "pyinstaller-work"
     dist_path = run_root / "dist"
+    pip_environment = _pip_environment(environment)
+    pyinstaller_environment = dict(environment)
+    pyinstaller_environment["PYINSTALLER_CONFIG_DIR"] = str(
+        run_root / "pyinstaller-config"
+    )
     commands = (
         _command(
             (
@@ -215,13 +294,16 @@ def prepare_exact_build(
                 "-I",
                 "-m",
                 "pip",
+                "--isolated",
+                "--disable-pip-version-check",
+                "--no-input",
                 "install",
                 "--require-hashes",
                 "-r",
                 str(source_root / "requirements-build.txt"),
             ),
             source_root,
-            environment,
+            pip_environment,
         ),
         _command(
             (
@@ -252,7 +334,7 @@ def prepare_exact_build(
                 str(source_root / "packaging" / "sector.spec"),
             ),
             source_root,
-            environment,
+            pyinstaller_environment,
         ),
     )
     return ExactBuildPlan(

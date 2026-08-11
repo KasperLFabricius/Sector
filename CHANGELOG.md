@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added a separate double-click portable Windows builder for provenance-bearing
+  extracted source releases. It produces a verified complete unsigned ONEDIR
+  folder, deterministic ZIP, SHA-256 sidecar and canonical receipt without
+  administrator elevation; user guidance states the SmartScreen/corporate-
+  policy and proprietary-licence boundaries. The existing unsigned-QA and
+  protected signing paths remain separate.
+- Hardened extracted-source and portable-package authentication against
+  symlinks, junctions, generic Windows reparse points, special files, archive
+  traversal/collisions and mutation during verification. Added a controlled
+  headless loopback startup/termination gate for the exact portable ZIP.
 - Corrected unsigned QA builds from the official extracted source archive. The
   source-release manifest now seals the commit object and every source file, so
   `packaging/build.bat` can authenticate and isolate an archive without `.git`;

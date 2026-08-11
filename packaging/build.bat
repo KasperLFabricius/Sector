@@ -10,7 +10,8 @@ REM Requires Python on PATH. Git is required for a checkout but not for an
 REM official Sector source release. A unique sibling qa-artifacts directory is
 REM created automatically from an authenticated isolated source copy.
 REM The output is for static QA inspection only. Never launch, zip or distribute
-REM it. A distributable build requires the separately authorised signing path.
+REM it. Use root BUILD_SECTOR_PORTABLE.bat for the separate user-facing unsigned
+REM portable distribution; signed releases use the authorised signing path.
 REM ===========================================================================
 
 setlocal

@@ -1,4 +1,57 @@
-# Inspecting an unsigned Sector Windows QA build
+# Sector Windows packaging
+
+Sector has three deliberately separate Windows packaging paths:
+
+1. the user-facing **unsigned portable** folder/ZIP built through the root
+   `BUILD_SECTOR_PORTABLE.bat`;
+2. the internal, non-distributable **unsigned QA** witnesses built through
+   `packaging/build.bat`; and
+3. the separately authorised protected signing workflow, which has no unsigned
+   fallback.
+
+## Building the unsigned portable distribution
+
+From a complete provenance-bearing official Sector source ZIP, retain the whole
+extracted source directory and double-click `BUILD_SECTOR_PORTABLE.bat` at its
+root. The BAT locates that root independently of the current directory and
+invokes `packaging/build_portable.ps1` itself with an execution-policy bypass.
+Do not open a separate PowerShell window and do not run as administrator.
+
+The one-time build prerequisite is exact 64-bit CPython 3.13.0 plus sufficient
+disk space and access to the hash-locked build dependencies (from the network
+or an existing package cache). The script authenticates the extracted commit,
+tree and complete file inventory, builds from an isolated copy, then prints a
+new sibling output directory containing:
+
+```text
+Sector-v<version>-windows-portable-unsigned/
+Sector-v<version>-windows-portable-unsigned.zip
+Sector-v<version>-windows-portable-unsigned.zip.sha256
+Sector-v<version>-windows-portable-unsigned.portable-distribution.json
+```
+
+The folder contains `Sector.exe`, its required `_internal` tree,
+`README-PORTABLE.txt`, the Sector licence, third-party notices, exact source
+identity, a complete package manifest and `SHA256SUMS.txt`. Distribute or
+extract the whole folder/ZIP, never `Sector.exe` alone. The application requires
+neither Python, installation nor administrator elevation at runtime.
+
+This portable package is deliberately unsigned. Windows SmartScreen or
+organisational policy may warn or block it. It claims no digital signature,
+trusted publisher, reputation, installer registration or managed production
+approval, and it may be shared only as permitted by the proprietary Sector
+licence. Use the release channel's published source/archive SHA-256 as the
+external trust anchor; the embedded manifest proves internal exact-source
+consistency but is not itself a publisher signature.
+
+The builder never launches `Sector.exe`. Exact-head CI alone safely extracts an
+already verified ZIP, starts it headlessly on a temporary `127.0.0.1` port,
+checks Streamlit's health response and terminates the owned process. Normal use
+opens the local interface in the browser. Report figures require a supported
+Chromium-family browser; Microsoft Edge is the supported Windows prerequisite
+and is not bundled.
+
+## Inspecting the unsigned QA build
 
 The ordinary build scripts and the `Sector QA` workflow produce an **unsigned,
 non-distributable QA artifact** for static package inspection. Each run first
@@ -13,11 +66,12 @@ The run also preserves a canonical `source-identity.json` seal whose commit,
 tree, committer epoch, UTC time, file/byte counts, and raw inventory digest are
 derived from the authenticated exact source. Package time is the commit epoch;
 the spec has no checkout, `GITHUB_SHA`, or wall-clock fallback.
-Do not launch, zip or distribute this artifact. A distributable Sector package
-requires the separately authorised signing workflow; there is no unsigned
-fallback.
+Do not launch, zip or distribute this QA artifact. A signed Sector package
+requires the separately authorised signing workflow; this QA path has no
+unsigned distribution fallback. The separate user-facing unsigned portable
+distribution is built from the source root with `BUILD_SECTOR_PORTABLE.bat`.
 
-## Build
+### QA build
 
 The easiest inspection build is to **double-click `packaging/build.bat`**. It
 resolves the exact current Git commit or the verified source-release revision,
@@ -67,10 +121,11 @@ comparison evidence is written create-only outside both build roots. Both
 unsigned QA witnesses and their identity records are retained by the QA
 artifact; neither executable is launched.
 
-## Signed-package runtime design
+## Portable and signed-package runtime design
 
-After a package has passed the separately authorised signing gate, `Sector.exe`
-launches the Streamlit app exactly as `streamlit run app/sector_app.py` does
+For the verified unsigned portable package, and after a signed package has
+passed the separately authorised signing gate, `Sector.exe` launches the
+Streamlit app exactly as `streamlit run app/sector_app.py` does
 (`packaging/run_sector.py` is the entry point) and opens the browser at the local
 URL. A console window stays open to show that URL and any messages.
 
@@ -104,7 +159,8 @@ the console for support.
   launcher), so a read-only install location (e.g. Program Files) does not break
   startup.
 - **Report figures need a browser engine.** The PDF report exports its plots with
-  kaleido, which needs Chrome/Chromium at runtime. If a requested figure cannot be
-  embedded, report generation fails visibly instead of issuing an incomplete PDF.
+  kaleido, which needs a Chromium-family browser at runtime. Microsoft Edge is
+  the supported Windows prerequisite. If a requested figure cannot be embedded,
+  report generation fails visibly instead of issuing an incomplete PDF.
 - **numba** speeds up the plastic solver but is optional -- if it cannot load in the
   frozen build the app falls back to the (slower) pure-Python kernels.

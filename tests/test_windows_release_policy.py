@@ -13,6 +13,8 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+import tools.verify_windows_release as windows_release
+from tools.export_commit_tree import snapshot_commit
 from tools.verify_windows_release import (
     EXPECTED_SOURCE_IDENTITY,
     ReleaseVerificationError,
@@ -20,7 +22,6 @@ from tools.verify_windows_release import (
     verify_package,
     verify_source,
 )
-from tools.export_commit_tree import snapshot_commit
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "release-windows.yml"
@@ -270,6 +271,68 @@ def test_source_preflight_rejects_non_exact_commit_identity(revision):
         verify_source(ROOT, revision)
 
 
+def test_release_cli_rejects_lexical_reparse_root_before_resolve(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "lexical source"
+    root.mkdir()
+    real_stat = os.stat
+    real_resolve = Path.resolve
+
+    def report_reparse(path, *, dir_fd=None, follow_symlinks=True):
+        if not follow_symlinks and Path(path) == root:
+            status = real_stat(path, dir_fd=dir_fd, follow_symlinks=False)
+            return SimpleNamespace(
+                st_mode=status.st_mode,
+                st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT,
+            )
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    def forbid_early_resolve(path, *args, **kwargs):
+        if Path(path) == root:
+            raise AssertionError("source root resolved before lexical lstat")
+        return real_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", report_reparse)
+    monkeypatch.setattr(Path, "resolve", forbid_early_resolve)
+    with pytest.raises(ReleaseVerificationError, match="link or reparse"):
+        windows_release.main(
+            [
+                "--root",
+                str(root),
+                "--source-revision",
+                "a" * 40,
+                "--preflight",
+            ]
+        )
+
+
+def test_release_version_and_tree_resource_caps_are_independent(
+    tmp_path, monkeypatch
+):
+    assert windows_release.MAX_SECTOR_VERSION_BYTES == 32
+    identity = dict(EXPECTED_SOURCE_IDENTITY)
+    identity["__version__"] = (
+        "1" * windows_release.MAX_SECTOR_VERSION_BYTES + ".0"
+    )
+    source = "\n".join(
+        f"{name} = {value!r}" for name, value in identity.items()
+    )
+    monkeypatch.setattr(
+        windows_release,
+        "_decode_source",
+        lambda _snapshot, _relative: source,
+    )
+    with pytest.raises(ReleaseVerificationError, match="identity"):
+        windows_release._product_identity(SimpleNamespace())
+
+    tree = tmp_path / "package" / "_internal" / "app"
+    (tree / "child").mkdir(parents=True)
+    monkeypatch.setattr(windows_release, "_MAX_RELEASE_DIRECTORIES", 0)
+    with pytest.raises(ReleaseVerificationError, match="directory limit"):
+        _regular_tree(tree, boundary=tmp_path / "package")
+
+
 def _package(
     tmp_path: Path, *, revision: str = COMMIT, repository: Path = ROOT
 ) -> Path:
@@ -367,6 +430,42 @@ def test_package_gate_accepts_complete_source_bound_fixture(tmp_path):
     verify_package(
         ROOT, _package(tmp_path), COMMIT, tmp_path / "source-identity.json"
     )
+
+
+@pytest.mark.parametrize(
+    "required_name",
+    ("executable", "manifest", "license", "notices", "source_identity"),
+)
+def test_package_gate_rejects_reparse_required_files(
+    tmp_path, monkeypatch, required_name
+):
+    package = _package(tmp_path)
+    evidence = tmp_path / "source-identity.json"
+    paths = {
+        "executable": package / "Sector.exe",
+        "manifest": package
+        / "_internal"
+        / "sector"
+        / "sector_build_info.json",
+        "license": package / "LICENSE.txt",
+        "notices": package / "THIRD_PARTY_NOTICES.txt",
+        "source_identity": evidence,
+    }
+    reparse_path = paths[required_name]
+    real_stat = os.stat
+
+    def report_reparse(path, *, dir_fd=None, follow_symlinks=True):
+        if not follow_symlinks and Path(path) == reparse_path:
+            return SimpleNamespace(
+                st_mode=stat.S_IFREG,
+                st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT,
+            )
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, "stat", report_reparse)
+
+    with pytest.raises(ReleaseVerificationError, match="link or reparse point"):
+        verify_package(ROOT, package, COMMIT, evidence)
 
 
 def test_matching_worktree_and_package_mutation_cannot_reseal_raw_snapshot(tmp_path):

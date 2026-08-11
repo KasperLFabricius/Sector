@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import tools.export_commit_tree as exporter
 from tools.export_commit_tree import (
     CommitTreeError,
     _git_environment,
@@ -27,8 +28,7 @@ def _git(root: Path, *arguments: str, input_bytes: bytes | None = None) -> str:
     result = subprocess.run(
         ["git", "-C", str(root), *arguments],
         input=input_bytes,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
@@ -146,6 +146,86 @@ def test_snapshot_preserves_raw_commit_bytes_and_epoch_identity(tmp_path):
     assert evidence.source_committed_at_utc.endswith("+00:00")
     payloads = {item.path: item.payload for item in snapshot.files}
     assert payloads["app/tracked.txt"] == b"accepted:app\n"
+
+
+def test_commit_size_header_is_rejected_before_payload_read(tmp_path, monkeypatch):
+    root, commit = _repository(tmp_path)
+    monkeypatch.setattr(exporter, "MAX_COMMIT_OBJECT_BYTES", 0)
+    monkeypatch.setattr(
+        exporter,
+        "_read_batch_payloads",
+        lambda *_args, **_kwargs: pytest.fail(
+            "commit payload was read before its header bound"
+        ),
+    )
+
+    with pytest.raises(CommitTreeError, match="commit object exceeds the byte limit"):
+        snapshot_commit(root, commit)
+
+
+def test_tree_size_header_is_rejected_before_tree_payload_read(tmp_path, monkeypatch):
+    root, commit = _repository(tmp_path)
+    original = exporter._read_batch_payloads
+
+    def reject_tree_payload(repository, object_ids, headers):
+        if any(header.kind == "tree" for header in headers):
+            pytest.fail("tree payload was read before its header bound")
+        return original(repository, object_ids, headers)
+
+    monkeypatch.setattr(exporter, "MAX_TREE_OBJECT_BYTES", 0)
+    monkeypatch.setattr(exporter, "_read_batch_payloads", reject_tree_payload)
+
+    with pytest.raises(CommitTreeError, match="tree object exceeds the byte limit"):
+        snapshot_commit(root, commit)
+
+
+def test_blob_size_header_is_rejected_before_blob_payload_read(tmp_path, monkeypatch):
+    root, commit = _repository(tmp_path)
+    original = exporter._read_batch_payloads
+
+    def reject_blob_payload(repository, object_ids, headers):
+        if any(header.kind == "blob" for header in headers):
+            pytest.fail("blob payload was read before its header bound")
+        return original(repository, object_ids, headers)
+
+    monkeypatch.setattr(exporter, "MAX_BLOB_BYTES", 0)
+    monkeypatch.setattr(exporter, "_read_batch_payloads", reject_blob_payload)
+
+    with pytest.raises(CommitTreeError, match="blob object exceeds the byte limit"):
+        snapshot_commit(root, commit)
+
+
+@pytest.mark.parametrize(
+    ("constant", "message"),
+    (
+        ("MAX_SNAPSHOT_FILES", "file-count limit"),
+        ("MAX_SNAPSHOT_DIRECTORIES", "directory-count limit"),
+    ),
+)
+def test_commit_graph_count_limits_are_inherited_by_snapshot_callers(
+    tmp_path, monkeypatch, constant, message
+):
+    root, commit = _repository(tmp_path)
+    monkeypatch.setattr(exporter, constant, 0)
+
+    with pytest.raises(CommitTreeError, match=message):
+        snapshot_commit(root, commit)
+
+
+def test_referenced_total_is_rejected_before_blob_payload_read(tmp_path, monkeypatch):
+    root, commit = _repository(tmp_path)
+    original = exporter._read_batch_payloads
+
+    def reject_blob_payload(repository, object_ids, headers):
+        if any(header.kind == "blob" for header in headers):
+            pytest.fail("blob payload was read before the referenced-total bound")
+        return original(repository, object_ids, headers)
+
+    monkeypatch.setattr(exporter, "MAX_SNAPSHOT_TOTAL_BYTES", 0)
+    monkeypatch.setattr(exporter, "_read_batch_payloads", reject_blob_payload)
+
+    with pytest.raises(CommitTreeError, match="total-byte limit"):
+        snapshot_commit(root, commit)
 
 
 @pytest.mark.parametrize("timestamp", (b"-1", b"01"))

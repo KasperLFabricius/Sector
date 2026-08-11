@@ -10,9 +10,11 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import BinaryIO, cast
 
 OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
 HEADER_NAME = re.compile(rb"^[a-z][a-z0-9-]*$")
@@ -31,6 +33,19 @@ WINDOWS_RESERVED = frozenset(
     }
 )
 
+# These are hard defaults for every caller of snapshot_commit/export_commit.
+# Keep the payload ceilings aligned with the source-release contract so a Git
+# repository cannot make a downstream caller allocate an object graph that the
+# source archive would subsequently reject.
+MAX_SNAPSHOT_FILES = 50_000
+MAX_SNAPSHOT_DIRECTORIES = 50_000
+MAX_BLOB_BYTES = 256 * 1024 * 1024
+MAX_SNAPSHOT_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_COMMIT_OBJECT_BYTES = 1 * 1024 * 1024
+MAX_TREE_OBJECT_BYTES = 16 * 1024 * 1024
+MAX_TREE_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_BATCH_HEADER_BYTES = 256
+
 
 class CommitTreeError(ValueError):
     """The requested commit cannot be exported under the closed contract."""
@@ -41,6 +56,13 @@ class RawObject:
     object_id: str
     kind: str
     payload: bytes
+
+
+@dataclass(frozen=True)
+class ObjectHeader:
+    object_id: str
+    kind: str
+    size: int
 
 
 @dataclass(frozen=True)
@@ -169,25 +191,54 @@ def _object_digest(kind: str, payload: bytes) -> str:
     return hashlib.sha1(header + payload).hexdigest()
 
 
+def _parse_object_header(raw: bytes, expected: str) -> ObjectHeader:
+    if raw == expected.encode("ascii") + b" missing":
+        raise CommitTreeError(f"Git object inspection failed: missing object {expected}")
+    try:
+        actual, kind, raw_size = raw.decode("ascii").split(" ")
+        if not raw_size or (len(raw_size) > 1 and raw_size.startswith("0")):
+            raise ValueError
+        size = int(raw_size)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise CommitTreeError("Git object inspection failed: malformed batch header") from exc
+    if actual != expected or kind not in {"blob", "commit", "tree"} or size < 0:
+        raise CommitTreeError("Git object inspection failed: unexpected batch object")
+    return ObjectHeader(actual, kind, size)
+
+
+def _object_size_limit(kind: str) -> int:
+    return {
+        "blob": MAX_BLOB_BYTES,
+        "commit": MAX_COMMIT_OBJECT_BYTES,
+        "tree": MAX_TREE_OBJECT_BYTES,
+    }[kind]
+
+
+def _object_size_error(kind: str) -> str:
+    return f"Git {kind} object exceeds the byte limit"
+
+
 def _parse_batch_response(raw: bytes, requested: list[str]) -> list[RawObject]:
     """Parse and independently authenticate an ordered cat-file batch."""
     objects: list[RawObject] = []
     cursor = 0
+    totals = {"blob": 0, "commit": 0, "tree": 0}
     for expected in requested:
         header_end = raw.find(b"\n", cursor)
         if header_end < 0:
             raise CommitTreeError("Git object inspection failed: missing batch header")
         header = raw[cursor:header_end]
         cursor = header_end + 1
-        if header == expected.encode("ascii") + b" missing":
-            raise CommitTreeError(f"Git object inspection failed: missing object {expected}")
-        try:
-            actual, kind, raw_size = header.decode("ascii").split(" ")
-            size = int(raw_size)
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise CommitTreeError("Git object inspection failed: malformed batch header") from exc
-        if actual != expected or kind not in {"blob", "commit", "tree"} or size < 0:
-            raise CommitTreeError("Git object inspection failed: unexpected batch object")
+        inspected = _parse_object_header(header, expected)
+        kind, size = inspected.kind, inspected.size
+        if size > _object_size_limit(kind):
+            raise CommitTreeError(_object_size_error(kind))
+        totals[kind] += size
+        total_limit = (
+            MAX_SNAPSHOT_TOTAL_BYTES if kind == "blob" else MAX_TREE_TOTAL_BYTES
+        )
+        if kind != "commit" and totals[kind] > total_limit:
+            raise CommitTreeError(f"Git {kind} objects exceed the total-byte limit")
         end = cursor + size
         if end > len(raw):
             raise CommitTreeError("Git object inspection failed: truncated batch object")
@@ -203,14 +254,167 @@ def _parse_batch_response(raw: bytes, requested: list[str]) -> list[RawObject]:
     return objects
 
 
-def _read_objects(root: Path, object_ids: list[str]) -> list[RawObject]:
+def _read_object_headers(root: Path, object_ids: list[str]) -> list[ObjectHeader]:
     if not object_ids:
         return []
     if any(OBJECT_ID.fullmatch(object_id) is None for object_id in object_ids):
         raise CommitTreeError("internal object request is not an exact lowercase SHA-1")
     requests = b"".join(object_id.encode("ascii") + b"\n" for object_id in object_ids)
-    response = _run_git(root, "cat-file", "--batch", input_bytes=requests)
-    return _parse_batch_response(response, object_ids)
+    response = _run_git(
+        root,
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+        input_bytes=requests,
+    )
+    if len(response) > len(object_ids) * (MAX_BATCH_HEADER_BYTES + 1):
+        raise CommitTreeError("Git object inspection failed: oversized batch header")
+    lines = response.splitlines(keepends=True)
+    if len(lines) != len(object_ids) or any(
+        not line.endswith(b"\n") or len(line) > MAX_BATCH_HEADER_BYTES + 1
+        for line in lines
+    ):
+        raise CommitTreeError("Git object inspection failed: malformed batch header")
+    return [
+        _parse_object_header(line[:-1], expected)
+        for line, expected in zip(lines, object_ids)
+    ]
+
+
+def _validate_object_headers(
+    headers: list[ObjectHeader],
+    *,
+    expected_kind: str,
+    per_object_limit: int,
+    total_limit: int,
+    kind_error: str,
+    size_error: str,
+    total_error: str,
+) -> int:
+    total = 0
+    for header in headers:
+        if header.kind != expected_kind:
+            raise CommitTreeError(kind_error)
+        if header.size > per_object_limit:
+            raise CommitTreeError(size_error)
+        total += header.size
+        if total > total_limit:
+            raise CommitTreeError(total_error)
+    return total
+
+
+def _read_batch_payloads_from_stream(
+    root: Path,
+    object_ids: list[str],
+    headers: list[ObjectHeader],
+    requests: bytes,
+    request_stream: BinaryIO,
+) -> list[RawObject]:
+    request_stream.write(requests)
+    request_stream.seek(0)
+    try:
+        process = subprocess.Popen(
+            _git_command(root, "cat-file", "--batch"),
+            stdin=request_stream,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=_git_environment(),
+        )
+    except OSError as exc:
+        raise CommitTreeError("cannot execute Git object inspection") from exc
+    try:
+        if process.stdout is None or process.stderr is None:
+            raise CommitTreeError("Git object inspection pipes are unavailable")
+        objects: list[RawObject] = []
+        for expected, inspected in zip(object_ids, headers):
+            raw_header = process.stdout.readline(MAX_BATCH_HEADER_BYTES + 2)
+            if (
+                not raw_header.endswith(b"\n")
+                or len(raw_header) > MAX_BATCH_HEADER_BYTES + 1
+            ):
+                raise CommitTreeError(
+                    "Git object inspection failed: malformed batch header"
+                )
+            actual = _parse_object_header(raw_header[:-1], expected)
+            if actual != inspected:
+                raise CommitTreeError("Git object header changed during inspection")
+            payload = process.stdout.read(actual.size)
+            if len(payload) != actual.size:
+                raise CommitTreeError("Git object inspection failed: truncated batch object")
+            if process.stdout.read(1) != b"\n":
+                raise CommitTreeError(
+                    "Git object inspection failed: missing batch terminator"
+                )
+            if _object_digest(actual.kind, payload) != expected:
+                raise CommitTreeError(f"Git object hash mismatch: {expected}")
+            objects.append(RawObject(expected, actual.kind, payload))
+        if process.stdout.read(1):
+            raise CommitTreeError("Git object inspection failed: trailing batch output")
+        error = process.stderr.read(4097)
+        return_code = process.wait()
+        if return_code != 0:
+            detail = error[:4096].decode("utf-8", errors="replace").strip()
+            suffix = f": {detail}" if detail else ""
+            raise CommitTreeError(f"Git object inspection failed{suffix}")
+        return objects
+    except CommitTreeError:
+        raise
+    except (BrokenPipeError, OSError) as exc:
+        raise CommitTreeError("Git object inspection failed") from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def _read_batch_payloads(
+    root: Path, object_ids: list[str], headers: list[ObjectHeader]
+) -> list[RawObject]:
+    requests = b"".join(object_id.encode("ascii") + b"\n" for object_id in object_ids)
+    try:
+        with tempfile.TemporaryFile() as request_stream:
+            return _read_batch_payloads_from_stream(
+                root,
+                object_ids,
+                headers,
+                requests,
+                cast(BinaryIO, request_stream),
+            )
+    except CommitTreeError:
+        raise
+    except OSError as exc:
+        raise CommitTreeError("Git object inspection failed") from exc
+
+
+def _read_objects(
+    root: Path,
+    object_ids: list[str],
+    *,
+    expected_kind: str,
+    per_object_limit: int,
+    total_limit: int,
+    kind_error: str,
+    size_error: str,
+    total_error: str,
+    headers: list[ObjectHeader] | None = None,
+) -> list[RawObject]:
+    if not object_ids:
+        return []
+    inspected = _read_object_headers(root, object_ids) if headers is None else headers
+    if len(inspected) != len(object_ids) or any(
+        header.object_id != expected
+        for header, expected in zip(inspected, object_ids)
+    ):
+        raise CommitTreeError("Git object inspection returned an unexpected inventory")
+    _validate_object_headers(
+        inspected,
+        expected_kind=expected_kind,
+        per_object_limit=per_object_limit,
+        total_limit=total_limit,
+        kind_error=kind_error,
+        size_error=size_error,
+        total_error=total_error,
+    )
+    return _read_batch_payloads(root, object_ids, inspected)
 
 
 def _parse_headers(payload: bytes) -> list[tuple[bytes, bytes]]:
@@ -387,6 +591,8 @@ def _inventory_tree(root: Path, tree_id: str) -> list[SourceFile]:
     ]
     files: list[SourceFile] = []
     path_kinds: dict[str, tuple[str, str]] = {}
+    directory_count = 0
+    tree_bytes = 0
 
     def register(parts: tuple[str, ...], kind: str) -> None:
         path = PurePosixPath(*parts).as_posix()
@@ -402,7 +608,18 @@ def _inventory_tree(root: Path, tree_id: str) -> list[SourceFile]:
         level = pending
         pending = []
         identities = _unique([object_id for _parts, object_id, _seen in level])
-        raw_by_id = {item.object_id: item for item in _read_objects(root, identities)}
+        raw_objects = _read_objects(
+            root,
+            identities,
+            expected_kind="tree",
+            per_object_limit=MAX_TREE_OBJECT_BYTES,
+            total_limit=MAX_TREE_TOTAL_BYTES - tree_bytes,
+            kind_error="commit tree references a non-tree object",
+            size_error="Git tree object exceeds the byte limit",
+            total_error="Git tree objects exceed the total-byte limit",
+        )
+        tree_bytes += sum(len(item.payload) for item in raw_objects)
+        raw_by_id = {item.object_id: item for item in raw_objects}
         for parts, object_id, ancestors in level:
             if object_id in ancestors:
                 raise CommitTreeError("commit tree contains an object cycle")
@@ -413,9 +630,16 @@ def _inventory_tree(root: Path, tree_id: str) -> list[SourceFile]:
             for item in _parse_tree_object(raw_object.payload):
                 child = (*parts, item.name)
                 if item.is_tree:
+                    if directory_count >= MAX_SNAPSHOT_DIRECTORIES:
+                        raise CommitTreeError(
+                            "commit tree exceeds the directory-count limit"
+                        )
+                    directory_count += 1
                     register(child, "directory")
                     pending.append((child, item.object_id, next_ancestors))
                 else:
+                    if len(files) >= MAX_SNAPSHOT_FILES:
+                        raise CommitTreeError("commit tree exceeds the file-count limit")
                     register(child, "file")
                     files.append(
                         SourceFile(item.mode, PurePosixPath(*child).as_posix(), item.object_id)
@@ -456,15 +680,46 @@ def _snapshot_from_resolved_root(
 ) -> CommitSnapshot:
     if OBJECT_ID.fullmatch(source_revision) is None:
         raise CommitTreeError("source revision must be an exact lowercase 40-hex SHA-1")
-    commit = _read_objects(root, [source_revision])[0]
-    if commit.kind != "commit":
-        raise CommitTreeError("source revision must be a commit object")
+    commit = _read_objects(
+        root,
+        [source_revision],
+        expected_kind="commit",
+        per_object_limit=MAX_COMMIT_OBJECT_BYTES,
+        total_limit=MAX_COMMIT_OBJECT_BYTES,
+        kind_error="source revision must be a commit object",
+        size_error="Git commit object exceeds the byte limit",
+        total_error="Git commit object exceeds the byte limit",
+    )[0]
     parsed = _parse_commit(commit.payload)
     files = _inventory_tree(root, parsed.tree_id)
     blob_ids = _unique([item.object_id for item in files])
-    blobs = _read_objects(root, blob_ids)
-    if any(item.kind != "blob" for item in blobs):
-        raise CommitTreeError("commit regular-file entry references a non-blob object")
+    blob_headers = _read_object_headers(root, blob_ids)
+    _validate_object_headers(
+        blob_headers,
+        expected_kind="blob",
+        per_object_limit=MAX_BLOB_BYTES,
+        total_limit=MAX_SNAPSHOT_TOTAL_BYTES,
+        kind_error="commit regular-file entry references a non-blob object",
+        size_error="Git blob object exceeds the byte limit",
+        total_error="Git blob objects exceed the total-byte limit",
+    )
+    sizes = {item.object_id: item.size for item in blob_headers}
+    total_bytes = 0
+    for item in files:
+        total_bytes += sizes[item.object_id]
+        if total_bytes > MAX_SNAPSHOT_TOTAL_BYTES:
+            raise CommitTreeError("commit snapshot exceeds the total-byte limit")
+    blobs = _read_objects(
+        root,
+        blob_ids,
+        expected_kind="blob",
+        per_object_limit=MAX_BLOB_BYTES,
+        total_limit=MAX_SNAPSHOT_TOTAL_BYTES,
+        kind_error="commit regular-file entry references a non-blob object",
+        size_error="Git blob object exceeds the byte limit",
+        total_error="Git blob objects exceed the total-byte limit",
+        headers=blob_headers,
+    )
     payloads = {item.object_id: item.payload for item in blobs}
     evidence = ExportEvidence(
         source_revision=source_revision,
@@ -472,7 +727,7 @@ def _snapshot_from_resolved_root(
         source_committer_epoch=parsed.committer_epoch,
         source_committed_at_utc=parsed.committed_at_utc,
         file_count=len(files),
-        total_bytes=sum(len(payloads[item.object_id]) for item in files),
+        total_bytes=total_bytes,
         inventory_sha256=_inventory_digest(files, payloads),
     )
     return CommitSnapshot(

@@ -17,6 +17,29 @@ WINDOWS_VERSION_INFO = os.path.join(SPECPATH, "windows_version_info.txt")
 
 datas, binaries, hiddenimports = [], [], []
 
+# Uvicorn selects these modules from string registries while Streamlit starts
+# its ASGI server, so PyInstaller cannot discover them from normal imports. Keep
+# this list scoped to the locked Windows runtime instead of collecting all of
+# Uvicorn (including reload, worker and optional protocol implementations).
+UVICORN_RUNTIME_HIDDEN_IMPORTS = (
+    "uvicorn.lifespan.on",
+    "uvicorn.loops.asyncio",
+    "uvicorn.loops.auto",
+    "uvicorn.protocols.http.auto",
+    "uvicorn.protocols.http.h11_impl",
+    "uvicorn.protocols.http.httptools_impl",
+    "uvicorn.protocols.websockets.websockets_sansio_impl",
+)
+
+# AnyIO resolves the active async backend through importlib while Starlette runs
+# Streamlit's lifespan inside Uvicorn's asyncio event loop. PyInstaller cannot
+# see that formatted module name. The packaged server never selects AnyIO's
+# optional Trio backend, so retain only the locked runtime route instead of
+# collecting every AnyIO backend.
+ANYIO_RUNTIME_HIDDEN_IMPORTS = (
+    "anyio._backends._asyncio",
+)
+
 
 def _commit_revision(value):
     """Return one canonical lowercase SHA-1 identity."""
@@ -168,6 +191,8 @@ hiddenimports += [
     "streamlit.runtime.scriptrunner.magic_funcs",
     "streamlit.web.cli",
 ]
+hiddenimports += UVICORN_RUNTIME_HIDDEN_IMPORTS
+hiddenimports += ANYIO_RUNTIME_HIDDEN_IMPORTS
 
 a = Analysis(
     [os.path.join(SPECPATH, "run_sector.py")],

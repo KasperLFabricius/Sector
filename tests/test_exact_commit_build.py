@@ -10,9 +10,11 @@ from pathlib import Path
 
 import pytest
 
+import tools.build_exact_commit as exact_build
 from tools.build_exact_commit import (
     ExactBuildError,
     _build_environment,
+    _pip_environment,
     execute_exact_build,
     prepare_exact_build,
 )
@@ -58,7 +60,18 @@ def _repository(tmp_path: Path):
     return root, _git(root, "rev-parse", "HEAD"), files
 
 
-def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path):
+def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://accepted-pip-proxy.invalid")
+    monkeypatch.setenv("SSL_CERT_FILE", "accepted-pip-ca.pem")
+    monkeypatch.setenv("PIP_INDEX_URL", "https://hostile-index.invalid")
+    monkeypatch.setenv("PIP_CONFIG_FILE", "hostile-pip.ini")
+    monkeypatch.setenv("PYINSTALLER_CONFIG_DIR", "hostile-pyinstaller-config")
+    monkeypatch.setenv("CSC_LINK", "must-not-reach-build")
+    monkeypatch.setenv("PFX_DATA", "must-not-reach-build")
+    monkeypatch.setenv("GH_PAT", "must-not-reach-build")
+    monkeypatch.setenv("HOME", "hostile-host-home")
+    monkeypatch.setenv("USERPROFILE", "hostile-host-profile")
+    monkeypatch.setenv("ARBITRARY_HOST_CONTROL", "must-not-reach-build")
     root, commit, accepted = _repository(tmp_path)
     for relative in (
         "requirements-build.txt",
@@ -87,6 +100,12 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path):
         "-r",
         str(plan.source_root / "requirements-build.txt"),
     )
+    assert plan.commands[1].arguments[4:8] == (
+        "--isolated",
+        "--disable-pip-version-check",
+        "--no-input",
+        "install",
+    )
     assert plan.commands[2].arguments[1] == str(
         plan.source_root / "tools" / "generate_third_party_notices.py"
     )
@@ -104,10 +123,60 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path):
         assert command.cwd == plan.source_root
         assert command.environment["SECTOR_SOURCE_REVISION"] == commit
         assert command.environment["PYTHONHASHSEED"] == "1"
+        assert command.environment["HOME"] == str(plan.run_root / "build-home")
+        assert command.environment["USERPROFILE"] == str(
+            plan.run_root / "build-home"
+        )
         assert str(root) not in command.arguments
+        for forbidden in (
+            "PIP_INDEX_URL",
+            "PIP_CONFIG_FILE",
+            "CSC_LINK",
+            "PFX_DATA",
+            "GH_PAT",
+            "ARBITRARY_HOST_CONTROL",
+        ):
+            assert forbidden not in command.environment
+    assert plan.commands[1].environment["HTTPS_PROXY"] == (
+        "http://accepted-pip-proxy.invalid"
+    )
+    assert plan.commands[1].environment["SSL_CERT_FILE"] == "accepted-pip-ca.pem"
+    for command in (plan.commands[0], plan.commands[2], plan.commands[3]):
+        assert "HTTPS_PROXY" not in command.environment
+        assert "SSL_CERT_FILE" not in command.environment
+    for command in plan.commands[:3]:
+        assert "PYINSTALLER_CONFIG_DIR" not in command.environment
+    assert plan.commands[3].environment["PYINSTALLER_CONFIG_DIR"] == str(
+        plan.run_root / "pyinstaller-config"
+    )
+    assert (plan.run_root / "build-home").is_dir()
+
+    with monkeypatch.context() as isolated_process:
+        isolated_process.setattr(os, "environ", plan.commands[3].environment)
+        assert Path.home() == plan.run_root / "build-home"
 
 
-def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
+def test_plan_inherits_exporter_blob_header_limit(tmp_path, monkeypatch):
+    root, commit, _accepted = _repository(tmp_path)
+    output = tmp_path / "bounded-build"
+    monkeypatch.setattr(exact_build._EXPORTER, "MAX_BLOB_BYTES", 0)
+
+    with pytest.raises(ExactBuildError, match="blob object exceeds the byte limit"):
+        prepare_exact_build(root, commit, output)
+
+    assert not output.exists()
+
+
+def test_dynamic_loaders_restore_the_host_bytecode_policy(monkeypatch):
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+
+    exact_build._load_exporter()
+    assert sys.dont_write_bytecode is False
+    exact_build._load_source_release()
+    assert sys.dont_write_bytecode is False
+
+
+def test_build_environment_uses_a_strict_inherited_allowlist(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_DIR", "hostile")
     monkeypatch.setenv("git_config_global", "hostile")
     monkeypatch.setenv("PYTHONPATH", "hostile")
@@ -118,8 +187,33 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     monkeypatch.setenv("PYTHONWARNINGS", "error")
     monkeypatch.setenv("SECTOR_SOURCE_REVISION", "wrong")
     monkeypatch.setenv("SECTOR_KEEP", "yes")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-reach-build")
+    monkeypatch.setenv("GH_TOKEN", "must-not-reach-build")
+    monkeypatch.setenv("SECTOR_SIGNING_PASSWORD", "must-not-reach-build")
+    monkeypatch.setenv("SECTOR_SIGNING_CERTIFICATE", "must-not-reach-build")
+    monkeypatch.setenv("PRIVATE_API_KEY", "must-not-reach-build")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "must-not-reach-build")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "must-not-reach-build")
+    monkeypatch.setenv("PFX_PASSWORD", "must-not-reach-build")
+    monkeypatch.setenv("PIP_INDEX_URL", "https://hostile-index.invalid")
+    monkeypatch.setenv("PIP_CONFIG_FILE", "hostile-pip.ini")
+    monkeypatch.setenv("PYINSTALLER_CONFIG_DIR", "hostile-pyinstaller-config")
+    monkeypatch.setenv("CSC_LINK", "must-not-reach-build")
+    monkeypatch.setenv("PFX_DATA", "must-not-reach-build")
+    monkeypatch.setenv("GH_PAT", "must-not-reach-build")
+    monkeypatch.setenv("HOME", "hostile-host-home")
+    monkeypatch.setenv("USERPROFILE", "hostile-host-profile")
+    monkeypatch.setenv("ARBITRARY_HOST_CONTROL", "must-not-reach-build")
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+    monkeypatch.setenv("TEMP", r"C:\accepted-temp")
+    monkeypatch.setenv("SSL_CERT_FILE", "ordinary-tls-trust.pem")
+    monkeypatch.setenv("HTTPS_PROXY", "http://accepted-pip-proxy.invalid")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
 
+    isolated_home = tmp_path / "isolated-home"
     environment = _build_environment(
+        isolated_home=isolated_home,
         source_revision="a" * 40,
         source_tree="b" * 40,
         source_committer_epoch=123,
@@ -135,6 +229,8 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     } == {"PYTHONHASHSEED", "PYTHONNOUSERSITE"}
     assert environment["PYTHONNOUSERSITE"] == "1"
     assert environment["PYTHONHASHSEED"] == "1"
+    assert environment["HOME"] == str(isolated_home)
+    assert environment["USERPROFILE"] == str(isolated_home)
     assert environment["SECTOR_SOURCE_REVISION"] == "a" * 40
     assert environment["SECTOR_SOURCE_TREE"] == "b" * 40
     assert environment["SECTOR_SOURCE_COMMITTER_EPOCH"] == "123"
@@ -145,7 +241,36 @@ def test_build_environment_removes_inherited_code_and_git_controls(monkeypatch):
     assert environment["SECTOR_SOURCE_FILE_COUNT"] == "7"
     assert environment["SECTOR_SOURCE_TOTAL_BYTES"] == "11"
     assert environment["SECTOR_SOURCE_INVENTORY_SHA256"] == "c" * 64
-    assert environment["SECTOR_KEEP"] == "yes"
+    assert environment["SYSTEMROOT"] == r"C:\Windows"
+    assert environment["COMSPEC"] == r"C:\Windows\System32\cmd.exe"
+    assert environment["TEMP"] == r"C:\accepted-temp"
+    assert "SECTOR_KEEP" not in environment
+    assert "SSL_CERT_FILE" not in environment
+    assert "HTTPS_PROXY" not in environment
+    assert "NO_PROXY" not in environment
+    pip_environment = _pip_environment(environment)
+    assert pip_environment["SSL_CERT_FILE"] == "ordinary-tls-trust.pem"
+    assert pip_environment["HTTPS_PROXY"] == "http://accepted-pip-proxy.invalid"
+    assert pip_environment["NO_PROXY"] == "127.0.0.1"
+    for forbidden in (
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "SECTOR_SIGNING_PASSWORD",
+        "SECTOR_SIGNING_CERTIFICATE",
+        "PRIVATE_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "PFX_PASSWORD",
+        "PIP_INDEX_URL",
+        "PIP_CONFIG_FILE",
+        "PYINSTALLER_CONFIG_DIR",
+        "CSC_LINK",
+        "PFX_DATA",
+        "GH_PAT",
+        "ARBITRARY_HOST_CONTROL",
+    ):
+        assert forbidden not in environment
+        assert forbidden not in pip_environment
 
 
 def test_pyinstaller_safe_flags_honor_the_fixed_build_hash_seed():

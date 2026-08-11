@@ -85,6 +85,32 @@ named rows to the Plastic/capacity and Elastic load tables, pick the analysis
 mode, and press **Calculate**. The section drawing updates live as you type;
 results update when you calculate.
 
+## Portable Windows build
+
+The v0.93 programme adds a separate, unsigned portable Windows distribution.
+When a provenance-bearing official Sector source ZIP contains the root
+`BUILD_SECTOR_PORTABLE.bat`, keep the complete extracted source folder and
+double-click that file. The one-time build requires exact 64-bit CPython 3.13.0
+and enough disk space; it invokes its internal PowerShell orchestration itself,
+does not require administrator elevation, and prints the resulting portable
+folder and ZIP paths. No separately entered PowerShell command is part of the
+user procedure.
+
+The generated artifact is a complete ONEDIR folder and matching ZIP. Keep or
+share the whole folder/ZIP under the Sector licence; `Sector.exe` does not work
+as a standalone copied file. The portable application needs neither Python nor
+installation at runtime. It is deliberately unsigned, so Windows SmartScreen
+or organisational policy may warn or block it; Sector claims no digital
+signature, trusted-publisher reputation, installer registration or managed
+approval. Do not bypass organisational security policy. Report figures require
+a supported Chromium-family browser; Microsoft Edge is the supported Windows
+prerequisite and is not bundled.
+
+The portable artifact name is derived from the authenticated source version.
+Until PR-09 performs the coordinated 0.93 identity transition and release
+qualification, this repository does not claim that a v0.93 portable release
+asset has been published.
+
 The solver's inner loops are compiled with Numba, which the app warms up once at
 startup (a few seconds, cached on disk thereafter) so every calculation after
 that is near-instant. If Numba is not installed the solver still runs, just more
@@ -162,3 +188,7 @@ provenance without `.git`. Use that asset rather than GitHub's automatic source
 snapshots when revision traceability is required. The release contains no
 Windows executable or installer. Unsigned Windows QA packages are test evidence
 only and must not be launched or distributed.
+
+That internal QA artifact is distinct from the separately named portable
+folder/ZIP described above. The protected signing workflow remains a separate,
+explicitly authorised path and has no unsigned fallback.

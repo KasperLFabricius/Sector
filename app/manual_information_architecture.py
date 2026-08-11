@@ -40,6 +40,7 @@ class Workflow:
     prerequisite: str
     expected_state: str
     warning_key: str
+    action: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,9 +230,9 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
     ),
     WarningReference(
         "portable-prerequisites",
-        "The portable Windows build does not start or cannot be produced.",
-        "The release bundle is incomplete, blocked, or not the verified unsigned package.",
-        "Use the complete PR-08 release bundle and follow its launch/readme instructions.",
+        "The portable Windows build does not produce its verified output, or Windows blocks the unsigned application.",
+        "The extracted source is incomplete or unauthenticated, exact 64-bit CPython 3.13.0 is unavailable, the build failed, or local SmartScreen/corporate policy blocks unsigned software.",
+        "Use the complete official Sector source ZIP from its trusted release channel, compare its published SHA-256, retain the whole extracted source, install exact 64-bit CPython 3.13.0 when building, and double-click BUILD_SECTOR_PORTABLE.bat. Read the final console message and README-PORTABLE.txt; do not bypass organisational security policy.",
     ),
 )
 
@@ -293,8 +294,10 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
     Workflow(
         "portable-build", "Use the portable Windows application",
         "Verified unsigned portable release", "limitations-troubleshooting",
-        "Complete PR-08 bundle", "Double-click launch reaches the Sector app",
+        "Complete extracted official Sector source ZIP and exact 64-bit CPython 3.13.0 for the one-time build",
+        "The printed output path contains the complete unsigned portable folder, matching ZIP, SHA-256 sidecar and canonical receipt; running Sector.exe from the complete extracted portable folder reaches the local Sector app",
         "portable-prerequisites",
+        "From the extracted source root, double-click BUILD_SECTOR_PORTABLE.bat. No separately entered PowerShell command or administrator elevation is required. Distribute or extract the whole generated portable ZIP, never Sector.exe alone.",
     ),
 )
 
