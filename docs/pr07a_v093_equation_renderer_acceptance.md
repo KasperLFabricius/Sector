@@ -1,17 +1,17 @@
 # PR-07A Sector v0.93 shared equation renderer acceptance
 
-Status: candidate acceptance contract for the PR-07A development branch.
-PR-06 is merged and PR-07A is in progress. GitHub must record the exact
-candidate, tree, checks and eventual squash identity; this document does not
-invent remote or final evidence that has not been run.
+Status: accepted and merged as PR #388. The squash revision and accepted tree
+below are the immutable programme hand-off to PR-07B.
 
 ## Accepted upstream base
 
 - Programme branch: `codex/pr07a-v093-equation-renderer`
 - Upstream PR-06 squash revision: `1cf8cf536cc562998fd663a6b082021ace7aa7fb`
 - Accepted upstream tree: `f941158eab1f3caa7a61db066236269d69c7a83e`
-- Local renderer-core checkpoint: `7ccaa4cbe8a8294076cba548a6ab880327831d4f`
-- Local renderer-core tree: `dda487fd44f2a5671013ea80dd5cc62f4f14f842`
+- PR-07A squash revision: `0b2ec0735a5f65b3889f2b5ec906f30399ccec11`
+- Accepted PR-07A tree: `934a288ed67d6f2d6c43b6f201f5e012eef054d1`
+- Renderer-core checkpoint: `7ccaa4cbe8a8294076cba548a6ab880327831d4f`
+- Renderer-core tree: `dda487fd44f2a5671013ea80dd5cc62f4f14f842`
 - Governing identity: [Sector product identity](product_identity.md)
 - Living programme: [Sector v0.93 PR programme](v093_pr_programme.md)
 - Decision register: [Sector v0.93 decision register](v093_decision_register.md)
@@ -19,11 +19,10 @@ invent remote or final evidence that has not been run.
 - Worked-publication authority: [PR-03 textbook-publication acceptance](pr03_v093_textbook_calculation_publication_acceptance.md)
 
 PR-06's exact-head full test/report and two-build unsigned-package gates passed
-before merge. PR-06 was squash-merged, the squash tree was verified exactly
-equal to the reviewed candidate tree above, and PR-07A's two local publication
-commits were then transplanted onto that squash without changing their combined
-tree. The renderer-core checkpoint identifies the first shared layout-core
-slice. GitHub must still record the final PR-07A candidate and checks.
+before merge. PR-06 was squash-merged and PR-07A was qualified on that accepted
+base. PR #388 then passed its exact-head complete test, real report/manual and
+two-build unsigned-package gates. The squash tree was verified as the accepted
+PR-07A tree above before PR-07B started from it.
 
 ## Owner-confirmed objective
 
@@ -129,7 +128,7 @@ Project schema remains 24 and runtime/publication version remains 0.92. PR-09
 owns the transition to version 0.93 after the complete programme gate. PR-07A
 does not add a compliance, certification or authority-applicability claim.
 
-## Current local evidence and open gates
+## Accepted verification evidence
 
 The local counts below overlap and must not be summed. They describe the
 PR-06-restacked candidate contents before final GitHub qualification:
@@ -190,8 +189,8 @@ reviews closed without a remaining product-code P0-P2 defect. Git and GitHub,
 rather than this self-referential candidate document, record the immutable
 candidate and remote evidence.
 
-Before PR-07A may be merged, GitHub must record the exact PR-07A head/tree and
-pass complete coverage, real report/manual rendering and the required two-build
-unsigned Windows package workflow on that same head. The merge record must then
-retain the accepted squash identity and verify squash-tree parity with the
-reviewed candidate tree.
+GitHub recorded PR #388's final reviewed candidate with no remaining P0-P2
+finding. The complete suite passed with 3,315 tests and one deliberate skip;
+the real report and manual render gates passed; and the dependent unsigned
+Windows workflow passed both independent builds, identity checks and byte-for-
+byte comparison. The accepted squash revision and tree are recorded above.

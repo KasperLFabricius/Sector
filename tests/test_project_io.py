@@ -273,7 +273,8 @@ def test_direction_alias_round_trips_outside_calculation_inputs():
     payload = json.loads(text)
 
     assert payload["presentation"] == {
-        modelled_direction.ALIAS_KEY: "span direction"
+        modelled_direction.ALIAS_KEY: "span direction",
+        project_io.REPORT_PROFILE_KEY: "Standard",
     }
     assert modelled_direction.ALIAS_KEY not in payload["scalars"]
     assert loaded_scalars[modelled_direction.ALIAS_KEY] == "span direction"
@@ -283,6 +284,69 @@ def test_direction_alias_round_trips_outside_calculation_inputs():
     assert project_io.persistence_sha256(
         loaded_tables, loaded_scalars
     ) != without_alias_persistence
+
+
+def test_report_profile_is_presentation_only_but_changes_persistence_identity():
+    tables, scalars = _current_project()
+    standard = {**scalars, project_io.REPORT_PROFILE_KEY: "Standard"}
+    audit = {**scalars, project_io.REPORT_PROFILE_KEY: "Audit"}
+
+    assert project_io.input_sha256(tables, standard) == (
+        project_io.input_sha256(tables, audit)
+    )
+    assert project_io.persistence_sha256(tables, standard) != (
+        project_io.persistence_sha256(tables, audit)
+    )
+
+    payload = json.loads(project_io.dump_project(tables, audit))
+    _, loaded = project_io.parse_project(json.dumps(payload))
+    assert project_io.REPORT_PROFILE_KEY not in payload["scalars"]
+    assert payload["presentation"][project_io.REPORT_PROFILE_KEY] == "Audit"
+    assert loaded[project_io.REPORT_PROFILE_KEY] == "Audit"
+
+
+@pytest.mark.parametrize(
+    ("legacy_label", "expected"),
+    (
+        ("Default report", "Standard"),
+        ("Default report + QA appendix", "Audit"),
+        ("Brief", "Brief"),
+        ("Standard", "Standard"),
+        ("Audit", "Audit"),
+    ),
+)
+def test_schema_24_migrates_exact_legacy_report_labels_and_scalar_placement(
+    legacy_label,
+    expected,
+):
+    tables, scalars = _current_project()
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["presentation"].pop(project_io.REPORT_PROFILE_KEY)
+    payload["scalars"][project_io.REPORT_PROFILE_KEY] = legacy_label
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    text = json.dumps(payload)
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+    _, loaded = project_io.parse_project(text)
+    assert loaded[project_io.REPORT_PROFILE_KEY] == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    ("default report", "Default report ", "Unknown", 1, ["Audit"]),
+)
+def test_unknown_or_inexact_persisted_report_profile_fails_closed(value):
+    tables, scalars = _current_project()
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["presentation"][project_io.REPORT_PROFILE_KEY] = value
+    text = json.dumps(payload)
+
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+    with pytest.raises(ValueError, match="unknown persisted report profile"):
+        project_io.parse_project(text)
 
 
 def test_direction_alias_validation_is_separate_from_input_integrity():

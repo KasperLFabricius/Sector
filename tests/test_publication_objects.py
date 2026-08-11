@@ -12,7 +12,13 @@ import plotly.graph_objects as go
 import pypdf
 import pytest
 from reportlab.lib.units import mm
-from reportlab.platypus import KeepTogether, Paragraph, Table
+from reportlab.platypus import (
+    KeepTogether,
+    NotAtTopPageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Table,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
@@ -29,17 +35,17 @@ import sector_report
 
 
 EXPECTED_LABELS = (
-    "Figure A2-1",
-    "Figure A3-1", "Figure A3-2", "Table A3-1",
-    "Table B1-1", "Table B3-1", "Table B3-2",
-    "Figure B4-1", "Figure B4-2", "Figure B4-3",
-    "Figure B5-1", "Table B5-1", "Table B5-2", "Table B5-3",
-    "Table B5-4", "Table B5-5", "Table B5-6", "Table B5-7", "Table B5-8",
-    "Table B6-1", "Table B6-2", "Figure C1-1",
-    "Figure C2-1", "Figure C2-2", "Figure C2-3",
-    "Figure C3-1", "Figure C3-2", "Figure C5-1", "Table C6-1",
-    "Figure C7-1", "Figure C7-2", "Table C7-1",
-    "Table D1-1", "Table D3-1",
+    "Table A2-1", "Figure A3-1", "Table A4-1",
+    "Figure A5-1", "Figure A5-2", "Table A5-1",
+    "Table B1-1", "Table B2-1", "Table B4-1", "Table B4-2",
+    "Figure B5-1", "Figure B5-2", "Figure B5-3",
+    "Figure B6-1", "Table B6-1", "Table B6-2", "Table B6-3",
+    "Table B6-4", "Table B6-5", "Table B6-6", "Table B6-7", "Table B6-8",
+    "Table B7-1", "Table B7-2", "Table B7-3", "Table B8-1",
+    "Table C1-1", "Figure C2-1", "Figure C3-1", "Figure C3-2",
+    "Figure C3-3", "Figure C4-1", "Figure C4-2", "Figure C6-1",
+    "Table C7-1", "Figure C8-1", "Figure C8-2", "Table C8-1",
+    "Table D1-1", "Table D2-1", "Table D3-1",
 )
 
 
@@ -91,7 +97,7 @@ def test_manual_inventory_has_exact_objects_labels_and_destinations():
 
     assert tuple(item.label for item in items) == EXPECTED_LABELS
     assert len(MANUAL_FIGURE_SPECS) == 16
-    assert len(MANUAL_TABLE_SPECS) == 18
+    assert len(MANUAL_TABLE_SPECS) == 25
     assert len({item.label for item in items}) == len(items)
     assert len({item.anchor for item in items}) == len(items)
     assert all(item.caption.strip() for item in items)
@@ -104,7 +110,7 @@ def test_same_cardinality_manual_reorder_fails_before_caption_publication(kind):
     # Swap two objects inside one unchanged part/section. Cardinality, section
     # numbering and surrounding structure therefore remain valid; only the
     # object-to-caption identity is hostile.
-    left, right = ((1, 2) if kind == "figure" else (4, 5))
+    left, right = ((1, 2) if kind == "figure" else (5, 6))
     blocks[positions[left]], blocks[positions[right]] = (
         blocks[positions[right]], blocks[positions[left]]
     )
@@ -201,16 +207,16 @@ def test_streamlit_manual_uses_matching_reference_heading_and_caption(monkeypatc
 
     manual.render_manual_streamlit()
 
-    assert "[See Figure A2-1](#figure-a2-1)." in fake.markdowns
-    assert "##### Figure A2-1" in fake.markdowns
-    assert "[See Table A3-1](#table-a3-1)." in fake.markdowns
-    assert "##### Table A3-1" in fake.markdowns
+    assert "[See Figure A3-1](#figure-a3-1)." in fake.markdowns
+    assert "##### Figure A3-1" in fake.markdowns
+    assert "[See Table A5-1](#table-a5-1)." in fake.markdowns
+    assert "##### Table A5-1" in fake.markdowns
     assert any("Worked-example section" in text for text in fake.captions)
 
 
 def test_report_table_reference_caption_and_fragments_share_one_identity():
     builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, {}, {}, figures=False, qa_appendix=False
+        io.BytesIO(), {}, {}, {}, figures=False, profile="Audit"
     )
     builder._h1("Actions")
     builder._h2("Design values")
@@ -240,6 +246,43 @@ def test_report_table_reference_caption_and_fragments_share_one_identity():
             _cell_text(cell)
             for cell in fragment._cellvalues[fragment._sector_header_row]
         ] == ["Force (kN)", "Moment (kNm)"]
+
+
+def test_manual_long_table_repeats_caption_and_header_when_forced_to_split(
+    monkeypatch,
+):
+    flow = []
+    monkeypatch.setattr(
+        SimpleDocTemplate,
+        "multiBuild",
+        lambda _self, items, **_kwargs: flow.extend(items),
+    )
+    manual.build_manual_pdf(io.BytesIO(), figures=False)
+    table = next(
+        item
+        for item in flow
+        if getattr(item, "_sector_publication_label", None) == "Table B7-3"
+    )
+    leading, page_break, trailing = table.split(170 * mm, 120 * mm)
+    assert table.repeatRows == 2
+    assert table.splitInRow == 0
+    assert isinstance(page_break, NotAtTopPageBreak)
+    assert "(continued)" not in leading._cellvalues[0][0].getPlainText()
+    assert "Table B7-3 (continued)." in (
+        trailing._cellvalues[0][0].getPlainText()
+    )
+    expected_header = [
+        "Table",
+        "Field / notation",
+        "Definition and sign",
+        "Blank/default and validation",
+        "Method dependency",
+    ]
+    for fragment in (leading, trailing):
+        assert [
+            _cell_text(cell)
+            for cell in fragment._cellvalues[fragment._sector_header_row]
+        ] == expected_header
 
 
 def test_report_figure_reference_image_and_caption_are_indivisible(monkeypatch):

@@ -71,7 +71,7 @@ def test_small_tables_retain_the_minimum_type_and_authored_order():
     )
 
     table, = _tables(builder)
-    assert table._sector_font_size == pytest.approx(7.2)
+    assert table._sector_font_size == pytest.approx(8.5)
     assert table._sector_source_columns == (0, 1)
     assert table._sector_panel_number == 1
     assert table._sector_panel_count == 1
@@ -180,7 +180,7 @@ def test_dense_tables_form_ordered_panels_with_repeated_identity_columns():
 
     tables = _tables(builder)
     assert len(tables) > 1
-    assert all(table._sector_font_size == pytest.approx(7.2) for table in tables)
+    assert all(table._sector_font_size == pytest.approx(8.5) for table in tables)
     assert all(table._sector_source_columns[:2] == (0, 1) for table in tables)
     emitted = [
         column

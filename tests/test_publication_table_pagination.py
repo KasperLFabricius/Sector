@@ -140,7 +140,9 @@ def test_structurally_tall_first_or_last_group_relaxes_fragment_range(tall_index
 @pytest.mark.parametrize("near_frame_edge", ["first", "last"])
 def test_frame_padding_boundary_uses_the_fresh_usable_height(near_frame_edge):
     # The group fits inside the margin-derived document height but not the actual
-    # fresh frame after ReportLab removes its 6 pt top and bottom padding.
+    # fresh frame after ReportLab removes its 6 pt top and bottom padding. The
+    # intentional fallback retains two data rows at both fragment edges instead
+    # of producing an orphan one-row continuation.
     repeated_height = 10.0
     group_height = sector_report._A4_FRAME_USABLE_HEIGHT + 1.0
     tall_height = (group_height - repeated_height) / 3.0
@@ -160,8 +162,9 @@ def test_frame_padding_boundary_uses_the_fresh_usable_height(near_frame_edge):
     )
 
     fragments = table.split(80 * mm, sector_report._A4_FRAME_USABLE_HEIGHT)
-    assert table._sector_row_split_range is None
+    assert table._sector_row_split_range == (3, -2)
     assert fragments
+    assert all(len(fragment._cellvalues) - 1 >= 2 for fragment in fragments)
 
 
 def test_one_oversized_row_repeats_frozen_context_without_token_loss():
@@ -281,7 +284,7 @@ def test_results_overview_offsets_status_fills_after_context(monkeypatch):
         for command, start, end, _colour in overview._bkgrndcmds
         if command == "BACKGROUND" and start[0] == end[0] == 2
     }
-    assert status_fill_rows == {5, 6}
+    assert status_fill_rows == {6, 7}
 
 
 def test_headerless_tables_repeat_context_without_promoting_first_data_row():

@@ -138,9 +138,19 @@ MANUAL_FIGURE_SPECS = (
 
 
 MANUAL_TABLE_SPECS = (
+    ManualTableSpec("Part A - Get started", "Start here",
+                    ("Reading path", "Use it when", "Destination"),
+                    "Manual reading paths"),
+    ManualTableSpec("Part A - Get started", "Task workflows",
+                    ("Workflow / outcome", "Prerequisite and action",
+                     "Expected state", "If blocked"),
+                    "Task workflows and expected states"),
     ManualTableSpec("Part A - Get started", "The worked examples",
                     ("Example", "Section", "Reinforcement", "Demonstrates"),
                     "Worked-example section and reinforcement comparison"),
+    ManualTableSpec("Part B - Features & options", "Input reference",
+                    ("Application stage", "Manual destination"),
+                    "Application input stages and manual destinations"),
     ManualTableSpec("Part B - Features & options", "The workspace",
                     ("View", "Shows"),
                     "Analysis result views and their published evidence"),
@@ -178,6 +188,16 @@ MANUAL_TABLE_SPECS = (
     ManualTableSpec("Part B - Features & options", "Loads",
                     ("Editable table", "Fields / notation", "Blank / default"),
                     "Editable-table fields, notation and blank/default contracts"),
+    ManualTableSpec("Part B - Features & options", "Loads",
+                    ("Table", "Field / notation", "Definition and sign",
+                     "Blank/default and validation", "Method dependency"),
+                    "Editable-table field definitions, validation and dependencies"),
+    ManualTableSpec("Part B - Features & options", "Reading the results",
+                    ("Profile", "Purpose", "Declared omitted detail", "Page policy"),
+                    "Report profiles and presentation-depth policies"),
+    ManualTableSpec("Part C - Theory & methodology", "Method reference",
+                    ("Engineering task", "Method destination"),
+                    "Engineering method reference destinations"),
     ManualTableSpec("Part C - Theory & methodology", "Serviceability: cracking and crack width",
                     ("Crack-width edition", "$s_{r,max}$ (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"),
                     "Worked crack-width comparison by edition"),
@@ -186,6 +206,9 @@ MANUAL_TABLE_SPECS = (
                     "Fatigue editions, reinforcement scope and concrete scope"),
     ManualTableSpec("Part D - Reference", "Standards", ("Topic", "Reference"),
                     "Standards and reference sources"),
+    ManualTableSpec("Part D - Reference", "Limitations & troubleshooting",
+                    ("Symptom", "Likely cause", "Correction"),
+                    "Troubleshooting symptoms, causes and corrections"),
     ManualTableSpec("Part D - Reference", "Glossary", ("Symbol / term", "Meaning"),
                     "Glossary of symbols and terms"),
 )
@@ -195,7 +218,10 @@ MANUAL_TABLE_SPECS = (
 # base. Headers keep the contract reviewable; the digest also rejects a
 # same-header replacement or row reorder that would otherwise look identical.
 MANUAL_TABLE_CONTENT_SHA256 = (
+    "be08991cf6c78e87a479cb56daf4b0d37bd0d95186bf1bde11f9a80768db09ab",
+    "46e538c9a3f362f2191417e89d901801c617dd0195fa741d105a9d325cbc8712",
     "dfc12f2afad4b9961ecc50234ff2717edd71655ce2bee317fa560d7b697525b6",
+    "4732703cb9e90f0cf248a7440ea45a6477383fadf69460f8d3bd8ff8814f528d",
     "41d5e6ca0aa102ed274644a46c181ce4fd36feff6b57aae2f84857f4ac27e998",
     "b972bfbfeb72f66d02898862d2af8e0ec6837629130b1fd333213cbd26ece414",
     "f662166b2b933f6fb95a347996ad85a631c780d8e28afa1cc3ce044f5d2059d5",
@@ -209,9 +235,13 @@ MANUAL_TABLE_CONTENT_SHA256 = (
     "ad5dc6287681973d22542ffb4f93e5bd2fa229d6f7389c6848c4d53967edfeff",
     "7626d90edb81ce4dad70867b5573a36e1ff97730314b6cdd74297084eef78f9c",
     "5938251c3fba70bb9dd6ba1cea978cca5b1537664bf38b5ff052e0969b04ae28",
+    "ee747295684cb8214a9ef9100964368447f12cf37439579438c01643d07b91d2",
+    "f726a73044c9afe561d0b4e5738de10e2296eb49081e6f52d06aab34f6a752cf",
+    "0983c6e55bb7b8362d84908e942e1917eaf516c67844767ce7a6138caf6286e5",
     "f424e1860fa68c13ecf29d839b7c968fd8bf64d011338fa4e971c51ed7743422",
     "ff260782abd04f7e511a1726534b517456b4683769e849990d03a01acbf1548f",
     "b79bcee2d4538ceb2ba0d81bc56e8ec9599faef6a03a3fd8264f7e7b2d5171e1",
+    "651bba2238001bfc9840aa1846055c7dc7ef21e1b56a6e1d63e29d87d30a76af",
     "6187c05344524133ec80476e02ee939f5c9037a452a49ae94a5592dbec3273b3",
 )
 

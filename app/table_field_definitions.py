@@ -271,6 +271,56 @@ def input_rule(definition: FieldDefinition) -> str:
     return f"Blank = {definition.default}"
 
 
+_TABLE_METHOD_DEPENDENCIES = MappingProxyType({
+    CONCRETE_CORNERS_TABLE_KEY: "All section calculations and section figures",
+    CONCRETE_VOIDS_TABLE_KEY: "All section calculations and section figures",
+    BARS_TABLE_KEY: (
+        "Plastic, Elastic/crack, fatigue, detailing and resistance checks as used"
+    ),
+    TENDONS_TABLE_KEY: (
+        "Plastic, Elastic/crack, fatigue and resistance checks as used"
+    ),
+    PLASTIC_CASES_TABLE_KEY: (
+        "Plastic capacity, minimum reinforcement, shear, torsion and combined M-V-T"
+    ),
+    ELASTIC_CASES_TABLE_KEY: "Elastic stresses, cracking and ordinary crack width",
+    FATIGUE_SPECTRUM_TABLE_KEY: "Grouped reinforcement and concrete fatigue",
+})
+
+
+def validation_rule(definition: FieldDefinition) -> str:
+    """Return one explicit manual validation rule from the canonical field role."""
+
+    if definition.key == "ordinary_crack_criterion_mm":
+        return "Optional; when entered it must be finite and greater than zero."
+    if definition.key == "cycles":
+        return "Required finite number greater than zero."
+    if definition.key in {"name", "spectrum"}:
+        return "Required stable identity; uniqueness is enforced in its table scope."
+    if definition.key == "description":
+        return "Optional project text."
+    if definition.key == "material_id":
+        return "Required ID that must resolve to the matching material catalogue."
+    if definition.key == "area_mm2":
+        return "Required finite area greater than zero."
+    if definition.key == "calculate_crack_width":
+        return "Boolean request; off means crack width is not requested."
+    if definition.unit != "-" or definition.math_symbol != "-":
+        return "Finite unambiguous decimal; the field-specific sign rule applies."
+    return "Value must satisfy the table-owned type and identity contract."
+
+
+def method_dependency(table_key: str, definition: FieldDefinition) -> str:
+    """Return the calculation families that consume one registered table field."""
+
+    # Validate both identities before returning shared prose.
+    if definition not in table_fields(table_key):
+        raise ValueError(
+            f"field {definition.key!r} does not belong to editable table {table_key!r}"
+        )
+    return _TABLE_METHOD_DEPENDENCIES[table_key]
+
+
 def _field(
     key: str,
     label: str,

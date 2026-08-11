@@ -12,12 +12,14 @@ from tools.report_render_fixture import (
     _inputs,
     _results,
     build_fixture_pdf,
+    detect_sparse_report_pages,
     render_pdf,
     validate_equation_source_colocation,
     validate_fixture_engineering,
     validate_outline_destinations,
     validate_pdf_content,
     validate_rendered_pages,
+    validate_results_overview_pagination,
     validate_worked_example_text,
 )
 
@@ -92,25 +94,27 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     assert len(concrete_pages) == 1
     assert "EQ-MATERIALS.CONCRETE.FCD" in concrete_pages[0]
     assert "= 20 MPa" in concrete_pages[0]
-    overview_pages = [
-        page_text
-        for page_text in page_texts
-        if "Results overview across calculated checks" in page_text
-    ]
-    assert len(overview_pages) == 1
-    overview_page, = overview_pages
-    overview_text = " ".join(overview_page.split())
-    for expected in (
-        "Results overview",
-        "Demand-versus-resistance checks retain their individual verdicts",
-        "Plastic bending",
-        "DK heightened crack-control minimum",
-        "Fatigue",
-        "Gov. marks the highest PASS/FAIL utilisation",
-    ):
-        assert expected in overview_text
+    assert validate_results_overview_pagination(page_texts) == (2, 3)
 
     validate_equation_source_colocation(page_texts)
+
+
+def test_audit_fixture_flags_sparse_non_opener_pages_for_visual_review():
+    pdf = build_fixture_pdf(figures=False, profile="Audit")
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    opener_pages = {
+        reader.get_destination_page_number(item) + 1
+        for item in reader.outline
+        if not isinstance(item, list)
+    }
+    sparse = detect_sparse_report_pages(
+        render_pdf(pdf),
+        page_texts,
+        opener_pages=opener_pages,
+    )
+    assert tuple(page for page, _coverage in sparse) == (3, 17)
+    assert all(0.0 < coverage < 0.35 for _page, coverage in sparse)
 
 
 def test_worked_example_text_rejects_any_unavailable_placeholder():

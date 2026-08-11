@@ -15,6 +15,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
+    CondPageBreak,
     KeepTogether,
     NotAtTopPageBreak,
     Paragraph,
@@ -106,8 +107,10 @@ def test_loads_and_analysis_settings_start_on_distinct_pages(monkeypatch):
         index for index, item in enumerate(builder.flow)
         if isinstance(item, Paragraph) and item.getPlainText() == "Analysis settings"
     )
-    assert isinstance(builder.flow[loads_index - 1], NotAtTopPageBreak)
-    assert isinstance(builder.flow[settings_index - 1], NotAtTopPageBreak)
+    assert isinstance(builder.flow[loads_index - 2], NotAtTopPageBreak)
+    assert isinstance(builder.flow[settings_index - 2], NotAtTopPageBreak)
+    assert isinstance(builder.flow[loads_index - 1], CondPageBreak)
+    assert isinstance(builder.flow[settings_index - 1], CondPageBreak)
     assert not any(
         isinstance(item, KeepTogether)
         and "LOADS BODY" in " ".join(
@@ -179,8 +182,8 @@ def test_manual_pdf_styles_retain_lazy_dependency_boundary():
     assert styles["MH1"].fontSize == pytest.approx(15)
     assert styles["MH1"].spaceBefore == pytest.approx(14)
     assert styles["MH1"].spaceAfter == pytest.approx(8)
-    assert styles["MSmall"].fontSize == pytest.approx(8)
-    assert styles["MSmall"].leading == pytest.approx(11)
+    assert styles["MSmall"].fontSize == pytest.approx(9.5)
+    assert styles["MSmall"].leading == pytest.approx(12)
     assert styles["MMath"].alignment == TA_CENTER
 
 
@@ -223,9 +226,11 @@ def test_manual_data_tables_use_bounded_spacing_and_padding(monkeypatch):
     manual.build_manual_pdf(io.BytesIO(), figures=False)
     table = next(item for item in captured["flow"] if isinstance(item, Table))
     assert table.spaceBefore == pytest.approx(2)
-    for row in table._cellStyles:
+    for row_index, row in enumerate(table._cellStyles):
         for style in row:
-            assert style.leftPadding == pytest.approx(5)
+            assert style.leftPadding == pytest.approx(
+                0 if row_index == 0 else 5
+            )
             assert style.rightPadding == pytest.approx(5)
             assert style.topPadding == pytest.approx(5)
             assert style.bottomPadding == pytest.approx(5)
@@ -240,4 +245,4 @@ def test_manual_data_tables_use_bounded_spacing_and_padding(monkeypatch):
         and item.getPlainText().startswith("Version ")
     )
     assert contents.style.spaceAfter == pytest.approx(8)
-    assert version.style.leading == pytest.approx(11)
+    assert version.style.leading == pytest.approx(12)

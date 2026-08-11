@@ -302,6 +302,7 @@ class EquationStyle:
     maximum_height: float = 700.0
     ink: str = "#202020"
     muted_ink: str = "#5A5A5A"
+    wrap_delimited_arguments: bool = False
 
     def __post_init__(self) -> None:
         positive = (
@@ -331,6 +332,8 @@ class EquationStyle:
             raise EquationLayoutError("equation typography is below the legibility floor.")
         if not _COLOR_RE.fullmatch(self.ink) or not _COLOR_RE.fullmatch(self.muted_ink):
             raise EquationLayoutError("equation colours must be six-digit hex values.")
+        if type(self.wrap_delimited_arguments) is not bool:
+            raise TypeError("delimited-argument wrapping policy must be boolean.")
 
 
 DEFAULT_EQUATION_STYLE: Final = EquationStyle()
@@ -1978,6 +1981,159 @@ def _break_groups(node: MathNode) -> tuple[MathNode, ...]:
     return tuple(groups) or (node,)
 
 
+def _delimiter_argument_groups(node: MathNode) -> tuple[MathNode, ...]:
+    """Split a delimited argument list only at its top-level separators."""
+
+    if not isinstance(node, MathSequence):
+        return (node,)
+    groups: list[MathNode] = []
+    current: list[MathNode] = []
+    for item in node.items:
+        current.append(item)
+        if isinstance(item, Operator) and item.text in {",", ";"}:
+            complete = _trim_items(tuple(current))
+            if complete:
+                groups.append(math_sequence(*complete))
+            current = []
+    remaining = _trim_items(tuple(current))
+    if remaining:
+        groups.append(math_sequence(*remaining))
+    return tuple(groups) or (node,)
+
+
+def _combine_fragment_layouts(
+    children: tuple[MathLayout, ...],
+    *,
+    leading: float = 0.0,
+) -> MathLayout:
+    """Combine measured fragments, retaining an optional continuation indent."""
+
+    if not children:
+        raise EquationLayoutError("a wrapped equation row requires visible content.")
+    baseline = max(child.baseline for child in children)
+    above = max(child.height - child.baseline for child in children)
+    height = baseline + above
+    x = leading
+    texts: list[TextPlacement] = []
+    rules: list[RulePlacement] = []
+    nodes: list[NodePlacement] = []
+    for child in children:
+        moved = _translate_layout(child, x, baseline - child.baseline)
+        texts.extend(moved.texts)
+        rules.extend(moved.rules)
+        nodes.extend(moved.nodes)
+        x += child.width
+    nodes.append(NodePlacement("sequence", Bounds(0.0, 0.0, x, height)))
+    return MathLayout(x, height, baseline, tuple(texts), tuple(rules), tuple(nodes))
+
+
+def _delimiter_fragment(
+    character: str,
+    content_height: float,
+    size: float,
+    style: EquationStyle,
+) -> MathLayout:
+    """Measure one visible end of a structurally wrapped delimiter pair."""
+
+    return _text_layout(
+        character,
+        font_name=style.fonts.regular,
+        font_size=max(size, content_height * 1.08),
+        slant=0.0,
+        color=style.ink,
+        role="delimiter",
+        kind="delimiter",
+    )
+
+
+def _wrap_delimited_arguments(
+    node: MathNode,
+    maximum_width: float,
+    size: float,
+    style: EquationStyle,
+) -> tuple[MathLayout, ...] | None:
+    """Wrap one top-level function argument list without flattening its maths."""
+
+    if not isinstance(node, MathSequence):
+        return None
+    delimited_indexes = [
+        index for index, item in enumerate(node.items)
+        if isinstance(item, Delimited)
+    ]
+    if len(delimited_indexes) != 1:
+        return None
+    delimited_index = delimited_indexes[0]
+    delimited = node.items[delimited_index]
+    assert isinstance(delimited, Delimited)
+    arguments = _delimiter_argument_groups(delimited.content)
+    if len(arguments) < 2:
+        return None
+
+    prefix_items = _trim_items(node.items[:delimited_index])
+    suffix_items = _trim_items(node.items[delimited_index + 1 :])
+    prefix = (
+        _layout_math(math_sequence(*prefix_items), size, style)
+        if prefix_items
+        else None
+    )
+    suffix = (
+        _layout_math(math_sequence(*suffix_items), size, style)
+        if suffix_items
+        else None
+    )
+    argument_layouts = tuple(
+        _layout_math(argument, size, style) for argument in arguments
+    )
+    gap = _space_layout(MathSpace(0.08), size)
+    left = _delimiter_fragment(
+        delimited.left, argument_layouts[0].height, size, style
+    )
+    right = _delimiter_fragment(
+        delimited.right, argument_layouts[-1].height, size, style
+    )
+    first_children = (
+        *((prefix,) if prefix is not None else ()),
+        left,
+        gap,
+        argument_layouts[0],
+    )
+    first = _combine_fragment_layouts(first_children)
+    delimiter_x = prefix.width if prefix is not None else 0.0
+    first = replace(
+        first,
+        nodes=(
+            *first.nodes,
+            NodePlacement(
+                "delimited",
+                Bounds(
+                    delimiter_x,
+                    0.0,
+                    first.width - delimiter_x,
+                    first.height,
+                ),
+            ),
+        ),
+    )
+    continuation_indent = delimiter_x + left.width + gap.width
+    rows = [first]
+    for argument in argument_layouts[1:-1]:
+        rows.append(
+            _combine_fragment_layouts((argument,), leading=continuation_indent)
+        )
+    last_children = (
+        argument_layouts[-1],
+        gap,
+        right,
+        *((suffix,) if suffix is not None else ()),
+    )
+    rows.append(
+        _combine_fragment_layouts(last_children, leading=continuation_indent)
+    )
+    if any(row.width > maximum_width + 1e-7 for row in rows):
+        return None
+    return tuple(rows)
+
+
 def _wrap_math(
     node: MathNode, maximum_width: float, size: float, style: EquationStyle
 ) -> tuple[MathLayout, ...]:
@@ -1986,6 +2142,12 @@ def _wrap_math(
     whole = _layout_math(node, size, style)
     if whole.width <= maximum_width + 1e-7:
         return (whole,)
+    if style.wrap_delimited_arguments:
+        delimited_rows = _wrap_delimited_arguments(
+            node, maximum_width, size, style
+        )
+        if delimited_rows is not None:
+            return delimited_rows
     if isinstance(node, LiteralText):
         words = node.text.split()
         literal_rows: list[MathLayout] = []

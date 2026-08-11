@@ -3151,7 +3151,9 @@ def test_generate_report_produces_pdf():
     at.run()
     _goto_input_tab(at, "Project & report")
     at.session_state["_report_no_figures"] = True
-    assert at.selectbox(key="rep_report_content").value == "Default report"
+    profile = at.segmented_control(key="rep_report_content")
+    assert profile.value == "Standard"
+    assert profile.options == ["Brief", "Standard", "Audit"]
     _set(
         at,
         ("text_input", "rep_proj_no", "T-1"),
@@ -3195,10 +3197,101 @@ def test_report_download_becomes_stale_after_content_choice_change():
     at.button(key="gen_report").click().run()
     assert not any("Report out of date" in w.value for w in at.warning)
 
-    at.selectbox(key="rep_report_content").set_value(
-        "Default report + QA appendix"
-    ).run()
+    at.segmented_control(key="rep_report_content").set_value("Audit").run()
     assert any("Report out of date" in w.value for w in at.warning)
+
+
+def test_report_signature_seals_product_version_and_source_revision():
+    import sector_app
+
+    kwargs = {
+        "input_signature": ("same-input",),
+        "meta": {"modelled_direction_alias": ""},
+        "report_content": "Standard",
+    }
+    issued = sector_app._report_signature(
+        **kwargs,
+        product_version="0.92",
+        revision="a" * 40,
+    )
+    version_changed = sector_app._report_signature(
+        **kwargs,
+        product_version="0.93",
+        revision="a" * 40,
+    )
+    revision_changed = sector_app._report_signature(
+        **kwargs,
+        product_version="0.92",
+        revision="b" * 40,
+    )
+
+    assert issued[:2] == version_changed[:2] == revision_changed[:2]
+    assert issued[2] == ("0.92", "a" * 40)
+    assert issued != version_changed
+    assert issued != revision_changed
+
+
+def test_hot_reload_migrates_exact_legacy_report_profile_state():
+    at = _fresh()
+    legacy = "Default report + QA appendix"
+    at.session_state["rep_report_content"] = legacy
+    at.session_state["_durable_input_scalars"] = {
+        "rep_report_content": legacy,
+    }
+    at.session_state["_pending_input_events"] = {
+        "rep_report_content": legacy,
+    }
+    at.session_state["_input_tab"] = "Project & report"
+
+    at.run()
+
+    assert not at.exception
+    assert at.segmented_control(key="rep_report_content").value == "Audit"
+    assert at.session_state["rep_report_content"] == "Audit"
+    assert at.session_state["_durable_input_scalars"][
+        "rep_report_content"
+    ] == "Audit"
+    assert "_pending_input_events" not in at.session_state
+
+
+def test_hot_reload_surfaces_unknown_report_profile_and_clears_old_report():
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Project & report")
+    at.session_state["rep_report_content"] = "Unexpected report"
+    at.session_state["_durable_input_scalars"][
+        "rep_report_content"
+    ] = "Unexpected report"
+    at.session_state["report_buffer"] = b"old report"
+    at.session_state["report_signature"] = ("old",)
+
+    at.run()
+
+    assert not at.exception
+    assert at.segmented_control(key="rep_report_content").value == "Standard"
+    assert "report_buffer" not in at.session_state
+    assert "report_signature" not in at.session_state
+    assert any(
+        "not recognised and was not used" in item.value
+        for item in at.error
+    )
+
+
+def test_autosave_detects_report_profile_only_change(tmp_path, monkeypatch):
+    import project_io
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Project & report")
+    at.segmented_control(key="rep_report_content").set_value("Audit").run()
+    at.session_state["_autosave_t"] = 0.0
+    at.run()
+
+    saved = tmp_path / "autosave.json"
+    assert saved.exists()
+    _, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert scalars[project_io.REPORT_PROFILE_KEY] == "Audit"
 
 
 def test_report_download_becomes_stale_after_analysis_input_change():
@@ -3272,12 +3365,12 @@ def test_direction_alias_changes_only_the_report_document_signature():
     without_alias = sector_app._report_signature(
         input_signature,
         meta={"modelled_direction_alias": ""},
-        report_content="Default report",
+        report_content="Standard",
     )
     with_alias = sector_app._report_signature(
         input_signature,
         meta={"modelled_direction_alias": "span direction"},
-        report_content="Default report",
+        report_content="Standard",
     )
 
     assert without_alias[0] == with_alias[0] == repr(input_signature)
@@ -3295,9 +3388,13 @@ def test_calculation_fallback_hash_excludes_direction_alias(monkeypatch):
     )
     base = {"mode": "Plastic", "modelled_direction_alias": "span"}
     renamed = {**base, "modelled_direction_alias": "deck north"}
+    audit = {**base, "rep_report_content": "Audit"}
 
     assert sector_app._calculation_input_hash(base) == (
         sector_app._calculation_input_hash(renamed)
+    )
+    assert sector_app._calculation_input_hash(base) == (
+        sector_app._calculation_input_hash(audit)
     )
 
 

@@ -12,6 +12,7 @@ import argparse
 import copy
 import datetime
 import functools
+import io
 import math
 import pathlib
 import re
@@ -61,14 +62,19 @@ from tools.publication_preflight import (
 )
 
 __all__ = (
+    "detect_sparse_report_pages",
     "render_pdf",
     "validate_equation_source_colocation",
     "validate_outline_destinations",
     "validate_rendered_pages",
     "validate_report_page_semantics",
     "validate_report_table_colocation",
+    "validate_results_overview_pagination",
     "validate_worked_example_text",
 )
+
+_AUDIT_SPARSE_BODY_BOX = (0.08, 0.10, 0.92, 0.92)
+_AUDIT_SPARSE_BODY_THRESHOLD = 0.35
 
 # Geometry, concrete law, two steel laws, clear-spacing and minimum-reinforcement
 # geometry, derived shear geometry, shear truss, torsion tube, two V-T interaction
@@ -84,13 +90,13 @@ _REPORT_CROPS = (
         "report overview",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "8c32be2950505ae06411278468dcdefa8deeb78dfac555335ea97a716ef830e9",
+        "65fb3a07aa11f478d3863308513dfc7e8ce20f108b7518fd909eb678fecd0c9a",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "41e00c1996dce99ee71a6f925876248321ad894d5904cd66ea154af3d6845516",
+        "3878045f4df7e08eb396210ef3e4fb2133f26ba24f96534c79fc80201cf24c4c",
     ),
 )
 
@@ -1585,9 +1591,14 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         )
 
 
-@functools.lru_cache(maxsize=2)
-def build_fixture_pdf(*, figures: bool = True) -> bytes:
-    """Build the report with stable time and an optional figure-export path."""
+@functools.lru_cache(maxsize=8)
+def build_fixture_pdf(*, figures: bool = True, profile: str = "Audit") -> bytes:
+    """Build the exhaustive QA report with stable time and selected profile.
+
+    Audit remains the default for this publication fixture because its purpose is
+    exhaustive equation/provenance coverage. The product default is Standard and
+    receives its own profile-specific acceptance gates.
+    """
     original_datetime = sector_report.datetime.datetime
     sector_report.datetime.datetime = _FixedDateTime
     try:
@@ -1604,11 +1615,14 @@ def build_fixture_pdf(*, figures: bool = True) -> bytes:
                 "section": "Reference section",
                 "author": "Sector QA",
                 "source_revision": "fixture000000000000000000000000000000000",
+                "calculation_state": "CURRENT - frozen QA fixture",
+                "input_sha256": "f" * 64,
             },
             inp,
             out,
             version=__version__,
             figures=figures,
+            profile=profile,
         )
     finally:
         sector_report.datetime.datetime = original_datetime
@@ -1860,21 +1874,65 @@ def validate_pdf_content(
             )
 
     validate_report_page_semantics(page_texts)
-    overview_pages = [
-        number
-        for number, page_text in enumerate(page_texts, start=1)
-        if "Results overview across calculated checks" in page_text
-    ]
-    governing_note_pages = [
-        number
-        for number, page_text in enumerate(page_texts, start=1)
-        if "Gov. marks the highest PASS/FAIL utilisation" in page_text
-    ]
-    if overview_pages != governing_note_pages or len(overview_pages) != 1:
-        raise AssertionError(
-            "the stable results overview no longer fits one complete page"
-        )
+    validate_results_overview_pagination(page_texts)
     return text
+
+
+def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ...]:
+    """Require one readable overview, with at most one semantic continuation."""
+    caption = "Results overview across calculated checks"
+    intro = (
+        "Demand-versus-resistance checks retain their individual verdicts"
+    )
+    note = "Gov. marks the highest PASS/FAIL utilisation"
+    overview_indexes = [
+        index
+        for index, page_text in enumerate(page_texts)
+        if caption in page_text
+    ]
+    if not 1 <= len(overview_indexes) <= 2:
+        raise AssertionError(
+            "the stable results overview must occupy one or two pages"
+        )
+    if overview_indexes != list(
+        range(overview_indexes[0], overview_indexes[-1] + 1)
+    ):
+        raise AssertionError("results-overview continuation pages are not contiguous")
+
+    first_index = overview_indexes[0]
+    final_index = overview_indexes[-1]
+    if intro not in page_texts[first_index]:
+        raise AssertionError("the results-overview lead-in left its first page")
+    note_indexes = [
+        index
+        for index, page_text in enumerate(page_texts)
+        if note in page_text
+    ]
+    if note_indexes != [final_index]:
+        raise AssertionError(
+            "the results-overview governing note left its final page"
+        )
+
+    overview_text = " ".join(
+        " ".join(page_texts[index].split()) for index in overview_indexes
+    )
+    for expected in (
+        "Acceptance checks",
+        "Calculated outputs",
+        "Scope and not-run states",
+        "Plastic bending",
+        "DK heightened crack-control minimum",
+        "Fatigue",
+    ):
+        if expected not in overview_text:
+            raise AssertionError(
+                f"results-overview content is missing: {expected}"
+            )
+    if len(overview_indexes) == 2 and "(continued)" not in " ".join(
+        page_texts[final_index].split()
+    ):
+        raise AssertionError("the second results-overview page lacks its continuation")
+    return tuple(index + 1 for index in overview_indexes)
 
 
 def validate_report_page_semantics(page_texts: list[str]) -> None:
@@ -1912,6 +1970,75 @@ def validate_rendered_pages(
     )
 
 
+def detect_sparse_report_pages(
+    pages,
+    page_texts: list[str],
+    *,
+    opener_pages=(),
+    threshold: float = _AUDIT_SPARSE_BODY_THRESHOLD,
+) -> tuple[tuple[int, float], ...]:
+    """Return non-opener pages below the Audit usable-body coverage threshold.
+
+    Coverage is the vertical span occupied by raster ink inside the usable body
+    box, rather than whole-page pixel density.  That makes ordinary text pages
+    comparable while excluding repeated header/footer furniture.  The result is
+    deliberately evidence, not an automatic layout rewrite: every returned page
+    requires an explicit colour/grayscale review before acceptance.
+    """
+    if len(pages) != len(page_texts):
+        raise ValueError("raster pages and extracted page text must have equal length")
+    if not 0.0 < threshold < 1.0:
+        raise ValueError("sparse-page threshold must be between zero and one")
+    excluded = {int(page) for page in opener_pages}
+    sparse = []
+    for number, image in enumerate(pages, start=1):
+        if number in excluded:
+            continue
+        width, height = image.size
+        left, top, right, bottom = _AUDIT_SPARSE_BODY_BOX
+        body = image.convert("L").crop(
+            (
+                int(left * width),
+                int(top * height),
+                int(right * width),
+                int(bottom * height),
+            )
+        )
+        getter = getattr(body, "get_flattened_data", body.getdata)
+        pixels = list(getter())
+        body_width, body_height = body.size
+        ink_rows = [
+            row
+            for row in range(body_height)
+            if sum(
+                pixels[row * body_width + column] < 245
+                for column in range(body_width)
+            )
+            >= 3
+        ]
+        coverage = (
+            (ink_rows[-1] - ink_rows[0] + 1) / body_height
+            if ink_rows
+            else 0.0
+        )
+        if coverage < threshold:
+            sparse.append((number, coverage))
+    return tuple(sparse)
+
+
+def _outline_opener_pages(reader: pypdf.PdfReader) -> tuple[int, ...]:
+    """Return one-based pages for top-level report outline destinations."""
+    return tuple(
+        sorted(
+            {
+                reader.get_destination_page_number(item) + 1
+                for item in reader.outline
+                if not isinstance(item, list)
+            }
+        )
+    )
+
+
 def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     """Write the stable PDF and rendered page PNG evidence."""
     output.mkdir(parents=True, exist_ok=True)
@@ -1923,6 +2050,18 @@ def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     validate_rendered_pages(
         pages, min_pages=6, furniture=REPORT_FURNITURE
     )
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    sparse = detect_sparse_report_pages(
+        pages,
+        page_texts,
+        opener_pages=_outline_opener_pages(reader),
+    )
+    if sparse:
+        summary = ", ".join(
+            f"{page} ({coverage:.1%})" for page, coverage in sparse
+        )
+        print(f"Audit sparse non-opener pages requiring review: {summary}")
     validate_crops(pages, _REPORT_CROPS)
     paths = [pdf_path]
     for index, page in enumerate(pages, start=1):
