@@ -31,6 +31,15 @@ UVICORN_RUNTIME_HIDDEN_IMPORTS = (
     "uvicorn.protocols.websockets.websockets_sansio_impl",
 )
 
+# AnyIO resolves the active async backend through importlib while Starlette runs
+# Streamlit's lifespan inside Uvicorn's asyncio event loop. PyInstaller cannot
+# see that formatted module name. The packaged server never selects AnyIO's
+# optional Trio backend, so retain only the locked runtime route instead of
+# collecting every AnyIO backend.
+ANYIO_RUNTIME_HIDDEN_IMPORTS = (
+    "anyio._backends._asyncio",
+)
+
 
 def _commit_revision(value):
     """Return one canonical lowercase SHA-1 identity."""
@@ -183,6 +192,7 @@ hiddenimports += [
     "streamlit.web.cli",
 ]
 hiddenimports += UVICORN_RUNTIME_HIDDEN_IMPORTS
+hiddenimports += ANYIO_RUNTIME_HIDDEN_IMPORTS
 
 a = Analysis(
     [os.path.join(SPECPATH, "run_sector.py")],

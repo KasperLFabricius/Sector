@@ -641,6 +641,169 @@ def test_uvicorn_runtime_hidden_imports_cover_the_locked_server_routes():
     assert http_implementations <= set(_uvicorn_runtime_hidden_imports())
 
 
+def _anyio_runtime_hidden_imports() -> tuple[str, ...]:
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="sector.spec")
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "ANYIO_RUNTIME_HIDDEN_IMPORTS"
+    )
+    value = ast.literal_eval(assignment.value)
+    assert isinstance(value, tuple)
+    assert all(isinstance(module, str) for module in value)
+    return value
+
+
+def test_anyio_runtime_hidden_imports_are_explicit_and_narrow():
+    expected = ("anyio._backends._asyncio",)
+
+    assert _anyio_runtime_hidden_imports() == expected
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    tree = ast.parse(
+        (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
+    )
+    broad_anyio_collections = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"collect_all", "collect_submodules"}
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "anyio"
+    ]
+    assert not broad_anyio_collections
+
+    bindings = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AugAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "hiddenimports"
+        and isinstance(node.op, ast.Add)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "ANYIO_RUNTIME_HIDDEN_IMPORTS"
+    ]
+    assert len(bindings) == 1
+
+    analysis_calls = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "Analysis"
+    ]
+    assert len(analysis_calls) == 1
+    analysis = analysis_calls[0]
+    hiddenimports_keywords = [
+        keyword
+        for keyword in analysis.value.keywords
+        if keyword.arg == "hiddenimports"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "hiddenimports"
+    ]
+    assert len(hiddenimports_keywords) == 1
+    assert bindings[0].lineno < analysis.lineno
+
+
+def test_anyio_runtime_hidden_imports_cover_locked_streamlit_asyncio_route():
+    import importlib
+    import importlib.metadata
+
+    import anyio
+    from anyio._core import _eventloop as anyio_eventloop
+    from streamlit.web.server.starlette import starlette_server
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    locked_versions = set()
+    for requirement_file in (
+        "requirements.txt",
+        "requirements-build.txt",
+        "requirements-dev.txt",
+    ):
+        entries = [
+            line.split()[0].partition("==")[2]
+            for line in (root / requirement_file).read_text(encoding="utf-8").splitlines()
+            if line.startswith("anyio==")
+        ]
+        assert len(entries) == 1
+        locked_versions.update(entries)
+    assert locked_versions == {importlib.metadata.version("anyio")}
+
+    anyio_root = pathlib.Path(anyio.__file__).resolve().parent
+    eventloop_tree = ast.parse(
+        (anyio_root / "_core" / "_eventloop.py").read_text(encoding="utf-8")
+    )
+    backends_assignment = next(
+        node
+        for node in eventloop_tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "BACKENDS"
+            for target in node.targets
+        )
+    )
+    backends = ast.literal_eval(backends_assignment.value)
+    assert backends == ("asyncio", "trio")
+
+    dynamic_imports = [
+        node
+        for node in ast.walk(eventloop_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "import_module"
+    ]
+    assert len(dynamic_imports) == 1
+    template = dynamic_imports[0].args[0]
+    assert isinstance(template, ast.JoinedStr)
+    assert len(template.values) == 2
+    assert isinstance(template.values[0], ast.Constant)
+    assert template.values[0].value == "anyio._backends._"
+    assert isinstance(template.values[1], ast.FormattedValue)
+    assert isinstance(template.values[1].value, ast.Name)
+    assert template.values[1].value.id == "asynclib_name"
+
+    backend_inventory = {
+        f"anyio._backends.{path.stem}"
+        for path in (anyio_root / "_backends").glob("_*.py")
+        if path.name != "__init__.py"
+    }
+    assert backend_inventory == {
+        f"anyio._backends._{backend}" for backend in backends
+    }
+
+    streamlit_tree = ast.parse(
+        pathlib.Path(starlette_server.__file__).read_text(encoding="utf-8")
+    )
+    assert any(
+        isinstance(node, ast.Import)
+        and any(alias.name == "asyncio" for alias in node.names)
+        for node in streamlit_tree.body
+    )
+    asyncio_calls = {
+        node.func.attr
+        for node in ast.walk(streamlit_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "asyncio"
+    }
+    assert {"Event", "create_task"} <= asyncio_calls
+
+    runtime_modules = ("anyio._backends._asyncio",)
+    assert runtime_modules == _anyio_runtime_hidden_imports()
+    assert set(runtime_modules) < backend_inventory
+    backend_module = importlib.import_module(runtime_modules[0])
+    assert backend_module.backend_class is anyio_eventloop.get_async_backend("asyncio")
+
+
 def test_only_path_bound_installer_record_metadata_is_omitted():
     root = pathlib.Path(__file__).resolve().parent.parent
     source = (root / "packaging" / "sector.spec").read_text(encoding="utf-8")
