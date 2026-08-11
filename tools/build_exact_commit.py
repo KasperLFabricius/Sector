@@ -147,6 +147,7 @@ class ExactBuildEvidence:
 
 def _build_environment(
     *,
+    isolated_home: Path,
     source_revision: str,
     source_tree: str,
     source_committer_epoch: int,
@@ -156,6 +157,11 @@ def _build_environment(
     source_inventory_sha256: str,
 ) -> dict[str, str]:
     environment = _inherited_allowlist(_BUILD_RUNTIME_ENVIRONMENT)
+    # Windows' pathlib.Path.home() requires USERPROFILE (or the less direct
+    # HOMEDRIVE/HOMEPATH pair).  Never inherit the runner's profile into an
+    # exact-source build; give every child process the same run-local home.
+    environment["HOME"] = str(isolated_home)
+    environment["USERPROFILE"] = str(isolated_home)
     environment["PYTHONNOUSERSITE"] = "1"
     environment["SECTOR_SOURCE_REVISION"] = source_revision
     environment["SECTOR_SOURCE_TREE"] = source_tree
@@ -234,7 +240,15 @@ def prepare_exact_build(
 
     source_identity_path = run_root / "source-identity.json"
     _write_source_identity(source_identity_path, source_evidence)
+    isolated_home = run_root / "build-home"
+    try:
+        isolated_home.mkdir()
+    except OSError as exc:
+        raise ExactBuildError(
+            f"cannot create isolated build home: {isolated_home}"
+        ) from exc
     environment = _build_environment(
+        isolated_home=isolated_home,
         source_revision=source_evidence.source_revision,
         source_tree=source_evidence.source_tree,
         source_committer_epoch=source_evidence.source_committer_epoch,

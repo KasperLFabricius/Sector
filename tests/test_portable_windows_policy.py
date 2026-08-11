@@ -128,6 +128,25 @@ def test_each_producer_builds_independently_from_authenticated_gitless_source(
 
 
 @pytest.mark.parametrize("producer", ["a", "b"])
+def test_each_producer_quotes_metacharacter_root_bat_path_via_cmd_call(
+    producer: str,
+) -> None:
+    job = _workflow()["jobs"][f"portable-producer-{producer}"]
+    upper = producer.upper()
+    prepare = _step(
+        job, f"Prepare authenticated Gitless source for producer {upper}"
+    )["run"]
+    build = _step(job, f"Build producer {upper} through root BAT")["run"]
+
+    assert (
+        f'"Portable wrapper caller {upper} [outside] & exact-{{0}}-{{1}}"'
+        in prepare
+    )
+    assert "& $env:ComSpec /d /s /c ('call \"{0}\"' -f $wrapper)" in build
+    assert "('\"\"{0}\"\"' -f $wrapper)" not in build
+
+
+@pytest.mark.parametrize("producer", ["a", "b"])
 def test_producer_upload_is_verified_create_only_and_immutable(producer: str) -> None:
     job = _workflow()["jobs"][f"portable-producer-{producer}"]
     upper = producer.upper()

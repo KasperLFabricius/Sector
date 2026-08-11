@@ -69,6 +69,8 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path, monkeypat
     monkeypatch.setenv("CSC_LINK", "must-not-reach-build")
     monkeypatch.setenv("PFX_DATA", "must-not-reach-build")
     monkeypatch.setenv("GH_PAT", "must-not-reach-build")
+    monkeypatch.setenv("HOME", "hostile-host-home")
+    monkeypatch.setenv("USERPROFILE", "hostile-host-profile")
     monkeypatch.setenv("ARBITRARY_HOST_CONTROL", "must-not-reach-build")
     root, commit, accepted = _repository(tmp_path)
     for relative in (
@@ -121,6 +123,10 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path, monkeypat
         assert command.cwd == plan.source_root
         assert command.environment["SECTOR_SOURCE_REVISION"] == commit
         assert command.environment["PYTHONHASHSEED"] == "1"
+        assert command.environment["HOME"] == str(plan.run_root / "build-home")
+        assert command.environment["USERPROFILE"] == str(
+            plan.run_root / "build-home"
+        )
         assert str(root) not in command.arguments
         for forbidden in (
             "PIP_INDEX_URL",
@@ -143,6 +149,11 @@ def test_plan_exports_first_and_uses_only_exact_source_paths(tmp_path, monkeypat
     assert plan.commands[3].environment["PYINSTALLER_CONFIG_DIR"] == str(
         plan.run_root / "pyinstaller-config"
     )
+    assert (plan.run_root / "build-home").is_dir()
+
+    with monkeypatch.context() as isolated_process:
+        isolated_process.setattr(os, "environ", plan.commands[3].environment)
+        assert Path.home() == plan.run_root / "build-home"
 
 
 def test_plan_inherits_exporter_blob_header_limit(tmp_path, monkeypatch):
@@ -165,7 +176,7 @@ def test_dynamic_loaders_restore_the_host_bytecode_policy(monkeypatch):
     assert sys.dont_write_bytecode is False
 
 
-def test_build_environment_uses_a_strict_inherited_allowlist(monkeypatch):
+def test_build_environment_uses_a_strict_inherited_allowlist(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_DIR", "hostile")
     monkeypatch.setenv("git_config_global", "hostile")
     monkeypatch.setenv("PYTHONPATH", "hostile")
@@ -190,6 +201,8 @@ def test_build_environment_uses_a_strict_inherited_allowlist(monkeypatch):
     monkeypatch.setenv("CSC_LINK", "must-not-reach-build")
     monkeypatch.setenv("PFX_DATA", "must-not-reach-build")
     monkeypatch.setenv("GH_PAT", "must-not-reach-build")
+    monkeypatch.setenv("HOME", "hostile-host-home")
+    monkeypatch.setenv("USERPROFILE", "hostile-host-profile")
     monkeypatch.setenv("ARBITRARY_HOST_CONTROL", "must-not-reach-build")
     monkeypatch.setenv("SYSTEMROOT", r"C:\Windows")
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
@@ -198,7 +211,9 @@ def test_build_environment_uses_a_strict_inherited_allowlist(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://accepted-pip-proxy.invalid")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
 
+    isolated_home = tmp_path / "isolated-home"
     environment = _build_environment(
+        isolated_home=isolated_home,
         source_revision="a" * 40,
         source_tree="b" * 40,
         source_committer_epoch=123,
@@ -214,6 +229,8 @@ def test_build_environment_uses_a_strict_inherited_allowlist(monkeypatch):
     } == {"PYTHONHASHSEED", "PYTHONNOUSERSITE"}
     assert environment["PYTHONNOUSERSITE"] == "1"
     assert environment["PYTHONHASHSEED"] == "1"
+    assert environment["HOME"] == str(isolated_home)
+    assert environment["USERPROFILE"] == str(isolated_home)
     assert environment["SECTOR_SOURCE_REVISION"] == "a" * 40
     assert environment["SECTOR_SOURCE_TREE"] == "b" * 40
     assert environment["SECTOR_SOURCE_COMMITTER_EPOCH"] == "123"

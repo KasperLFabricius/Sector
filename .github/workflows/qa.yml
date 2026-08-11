@@ -376,7 +376,7 @@ jobs:
           $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD_SECTOR_PORTABLE.bat"
           Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER
           try {
-            & $env:ComSpec /d /s /c ('""{0}""' -f $wrapper)
+            & $env:ComSpec /d /s /c ('call "{0}"' -f $wrapper)
             $exitCode = $LASTEXITCODE
           }
           finally {
@@ -565,7 +565,7 @@ jobs:
           $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD_SECTOR_PORTABLE.bat"
           Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER
           try {
-            & $env:ComSpec /d /s /c ('""{0}""' -f $wrapper)
+            & $env:ComSpec /d /s /c ('call "{0}"' -f $wrapper)
             $exitCode = $LASTEXITCODE
           }
           finally {
