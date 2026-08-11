@@ -1,11 +1,7 @@
-name: Sector v0.93 release
+name: Sector v0.93 draft recovery verification
 
 on:
-  workflow_run:
-    workflows:
-      - Sector QA
-    types:
-      - completed
+  workflow_dispatch: {}
 
 permissions: {}
 
@@ -14,241 +10,741 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Publish verified v0.93 draft release
-    if: >-
-      github.event.workflow_run.name == 'Sector QA' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+  recovery:
+    name: Verify existing v0.93 draft release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       actions: read
-      contents: write
+      contents: read
 
     steps:
-      - name: Authenticate completed QA authority before checkout
+      - name: Authenticate exact recovery state and original QA authority
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           SECTOR_REPOSITORY: ${{ github.repository }}
-          SECTOR_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
-          SECTOR_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
-          SECTOR_QA_EVENT: ${{ github.event.workflow_run.event }}
-          SECTOR_QA_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          SECTOR_QA_SHA: ${{ github.event.workflow_run.head_sha }}
-          SECTOR_QA_RUN_ID: ${{ github.event.workflow_run.id }}
-          SECTOR_QA_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-          SECTOR_QA_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SECTOR_EVENT_NAME: ${{ github.event_name }}
+          SECTOR_REF: ${{ github.ref }}
+          SECTOR_DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [[ ! "$SECTOR_QA_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "QA head SHA must be exact lowercase 40-hex" >&2
+          if [[ "$SECTOR_REPOSITORY" != "KasperLFabricius/Sector" ]] || \
+             [[ "$SECTOR_EVENT_NAME" != "workflow_dispatch" ]] || \
+             [[ "$SECTOR_REF" != "refs/heads/main" ]]; then
+            echo "Recovery must be dispatched from canonical repository main" >&2
             exit 1
           fi
-          if [[ ! "$SECTOR_QA_RUN_ID" =~ ^[1-9][0-9]*$ ]] || [[ ! "$SECTOR_QA_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
-            echo "QA run ID and attempt must be positive decimal integers" >&2
-            exit 1
-          fi
-          if [[ "$SECTOR_REPOSITORY" != "$SECTOR_HEAD_REPOSITORY" ]] || \
-             [[ "$SECTOR_WORKFLOW_NAME" != "Sector QA" ]] || \
-             [[ "$SECTOR_QA_EVENT" != "push" ]] || \
-             [[ "$SECTOR_QA_BRANCH" != "main" ]] || \
-             [[ "$SECTOR_QA_CONCLUSION" != "success" ]]; then
-            echo "QA workflow_run authority is not an accepted same-repository main push" >&2
+          if [[ ! "$SECTOR_DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]] || \
+             [[ ! "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || \
+             [[ ! "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Recovery identity is malformed" >&2
             exit 1
           fi
 
-          trust_root="$RUNNER_TEMP/sector-v093-trust-$SECTOR_QA_RUN_ID-$SECTOR_QA_RUN_ATTEMPT"
+          trust_root="$RUNNER_TEMP/sector-v093-recovery-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           if [[ -e "$trust_root" ]]; then
-            echo "Release trust root must be previously nonexistent" >&2
+            echo "Recovery trust root must be previously nonexistent" >&2
             exit 1
           fi
           mkdir "$trust_root"
-          gh api \
-            "/repos/$SECTOR_REPOSITORY/actions/runs/$SECTOR_QA_RUN_ID" \
-            > "$trust_root/run.json"
-          gh api \
-            "/repos/$SECTOR_REPOSITORY/actions/runs/$SECTOR_QA_RUN_ID/attempts/$SECTOR_QA_RUN_ATTEMPT/jobs?per_page=100" \
-            > "$trust_root/jobs.json"
-          gh api \
-            "/repos/$SECTOR_REPOSITORY/actions/runs/$SECTOR_QA_RUN_ID/artifacts?per_page=100" \
-            > "$trust_root/artifacts.json"
+          capture="$trust_root/capture-recovery-state.py"
+          cat > "$capture" <<'PY'
+          from __future__ import annotations
 
-          export SECTOR_TRUST_ROOT="$trust_root"
-          python - <<'PY'
+          import argparse
+          import hashlib
           import json
           import os
           import re
+          import subprocess
           from pathlib import Path
+          from typing import Any
 
-          root = Path(os.environ["SECTOR_TRUST_ROOT"])
-          repository = os.environ["SECTOR_REPOSITORY"]
-          revision = os.environ["SECTOR_QA_SHA"]
-          run_id = int(os.environ["SECTOR_QA_RUN_ID"])
-          run_attempt = int(os.environ["SECTOR_QA_RUN_ATTEMPT"])
-          expected_jobs = (
-              "Compare immutable portable producers",
-              "Full test and report gate",
-              "Isolated verified portable startup smoke",
-              "Unsigned QA Windows package",
-              "Unsigned portable Windows distribution",
-              "Unsigned portable producer A",
-              "Unsigned portable producer B",
+          REPOSITORY = "KasperLFabricius/Sector"
+          RELEASE_SOURCE = "d0f08295b528f42493f5e8dd4b438c17dc304ec4"
+          RELEASE_TREE = "9ac057f723ce8d6b0844541c3573e133fa1b5519"
+          TAG_NAME = "v0.93"
+          TAG_OBJECT = "d3bebfaf16f10f83e3da9bc804103b5eabf04331"
+          TAG_MESSAGE = "Sector v0.93"
+          RELEASE_ID = 368822456
+          RELEASE_NODE_ID = "RE_kwDOTFQLds4V-8i4"
+          RELEASE_NAME = "Sector v0.93"
+          RELEASE_BODY_SHA256 = (
+              "8bfe1d04e79d102d459d4333fa6feebb8d332d3e0e5332587526153d61b9dda6"
           )
-          expected_artifacts = (
-              "Sector-Windows-portable-unsigned-QA-"
-              f"{run_id}-{run_attempt}",
-              f"Sector-Windows-unsigned-QA-{run_id}-{run_attempt}",
-              f"sector-portable-comparison-{run_id}-{run_attempt}",
-              f"sector-portable-producer-a-{run_id}-{run_attempt}",
-              f"sector-portable-producer-b-{run_id}-{run_attempt}",
-              f"sector-portable-smoke-{run_id}-{run_attempt}",
-              f"sector-qa-evidence-{run_id}-{run_attempt}",
-          )
+          QA_RUN_ID = 31525047117
+          QA_RUN_ATTEMPT = 1
+          MAX_API_BYTES = 16 * 1024 * 1024
+          MAX_RELEASE_PAGES = 10
+          OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
+          ARTIFACT_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
-          run = json.loads((root / "run.json").read_text(encoding="utf-8"))
-          head_repository = run.get("head_repository") or {}
-          run_repository = run.get("repository") or {}
-          expected_run = {
-              "id": run_id,
-              "run_attempt": run_attempt,
-              "name": "Sector QA",
-              "event": "push",
-              "head_branch": "main",
-              "head_sha": revision,
-              "conclusion": "success",
-              "head_repository": repository,
-              "repository": repository,
+          EXPECTED_JOBS = {
+              "Compare immutable portable producers": 93904131230,
+              "Full test and report gate": 93891180278,
+              "Isolated verified portable startup smoke": 93905080229,
+              "Unsigned QA Windows package": 93901841194,
+              "Unsigned portable Windows distribution": 93905809165,
+              "Unsigned portable producer A": 93901841185,
+              "Unsigned portable producer B": 93901841206,
           }
-          actual_run = {
-              "id": run.get("id"),
-              "run_attempt": run.get("run_attempt"),
-              "name": run.get("name"),
-              "event": run.get("event"),
-              "head_branch": run.get("head_branch"),
-              "head_sha": run.get("head_sha"),
-              "conclusion": run.get("conclusion"),
+          EXPECTED_QA_ARTIFACTS = {
+              "Sector-Windows-portable-unsigned-QA-31525047117-1": {
+                  "id": 9116409657,
+                  "size_in_bytes": 325890257,
+                  "digest": "sha256:074ff74d8f53b287713f1a869d0ef03967a74210aec73342504b0f45beac5ab2",
+              },
+              "Sector-Windows-unsigned-QA-31525047117-1": {
+                  "id": 9116091097,
+                  "size_in_bytes": 341830075,
+                  "digest": "sha256:e8659cbbe8e4378185913c4cc70d88b6174ec50ea5c56a958b025967311d7cd1",
+              },
+              "sector-portable-comparison-31525047117-1": {
+                  "id": 9116190109,
+                  "size_in_bytes": 2067,
+                  "digest": "sha256:210e8eae2b367d166175329ed676ebe4431d38165856d2d88ed43cf210c1a3b2",
+              },
+              "sector-portable-producer-a-31525047117-1": {
+                  "id": 9116078390,
+                  "size_in_bytes": 325883006,
+                  "digest": "sha256:c26860a0d34b312a5bd5527c8ff2f70e019e3fd2f01af23aa9290d33b1d51b74",
+              },
+              "sector-portable-producer-b-31525047117-1": {
+                  "id": 9116050472,
+                  "size_in_bytes": 325882728,
+                  "digest": "sha256:1e78f1c5732dd62dfa00bbce1abdc5a4f1673f169d8a50a43f1e49472566b915",
+              },
+              "sector-portable-smoke-31525047117-1": {
+                  "id": 9116272667,
+                  "size_in_bytes": 1526,
+                  "digest": "sha256:1160816228b2123c834edec5db408b7ece9901e0b7bf573e234f96795a1d3669",
+              },
+              "sector-qa-evidence-31525047117-1": {
+                  "id": 9115805332,
+                  "size_in_bytes": 24263798,
+                  "digest": "sha256:e7944c2f1faffd20f23db3993b98114db0776990f694f480e9bc16f3a68387d0",
+              },
+          }
+          EXPECTED_RELEASE_ASSETS = {
+              "SHA256SUMS.txt": {
+                  "id": 510578229,
+                  "size": 647,
+                  "digest": "sha256:e835f18c43baa3abead46999a78c9fc6906f320266d38012ac14d3e1f1521a20",
+              },
+              "Sector-v0.93-release-qa-receipt.json": {
+                  "id": 510578240,
+                  "size": 3872,
+                  "digest": "sha256:e3fb413f2d7e60d631212d3992e98bc4825b07ffb196fdba07e9bc85ac3ee8f1",
+              },
+              "Sector-v0.93-source.zip": {
+                  "id": 510578248,
+                  "size": 8000728,
+                  "digest": "sha256:df94ced02726350f9c31baa0d5e88d0c0de78bd54d63504527c736ccc4a21d1a",
+              },
+              "Sector-v0.93-source.zip.sha256": {
+                  "id": 510578280,
+                  "size": 90,
+                  "digest": "sha256:33f9c24c3510999aebf8c668793e2ff73fdee88b093f2e307d03d6f447b5ef71",
+              },
+              "Sector-v0.93-windows-portable-unsigned.portable-distribution.json": {
+                  "id": 510578283,
+                  "size": 988,
+                  "digest": "sha256:e30d71f873945b3da16d92e58bded3d6764231d660571ea7654880ead7a106d0",
+              },
+              "Sector-v0.93-windows-portable-unsigned.zip": {
+                  "id": 510578287,
+                  "size": 431949189,
+                  "digest": "sha256:fe0fa0ba01d6203b83d6a0f00318a7b5c40301e46bc1fd63c86ca35105aa5bf8",
+              },
+              "Sector-v0.93-windows-portable-unsigned.zip.sha256": {
+                  "id": 510578521,
+                  "size": 109,
+                  "digest": "sha256:197c6e4946347b240263b3fd50e8134fd9b1d60e961fe47e3ac5efbd04cf4ad3",
+              },
+          }
+
+
+          def canonical_json(value: object) -> bytes:
+              return (
+                  json.dumps(value, ensure_ascii=True, indent=2, sort_keys=True)
+                  + "\n"
+              ).encode("ascii")
+
+
+          def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+              result: dict[str, object] = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise SystemExit(f"GitHub API JSON contains duplicate key: {key}")
+                  result[key] = value
+              return result
+
+
+          def request_json(endpoint: str) -> Any:
+              completed = subprocess.run(
+                  ["gh", "api", endpoint],
+                  check=False,
+                  capture_output=True,
+              )
+              if completed.returncode != 0:
+                  raise SystemExit(f"GitHub API read failed: {endpoint}")
+              if len(completed.stdout) > MAX_API_BYTES:
+                  raise SystemExit(f"GitHub API response exceeds byte limit: {endpoint}")
+              try:
+                  return json.loads(
+                      completed.stdout.decode("utf-8"),
+                      object_pairs_hook=unique_object,
+                  )
+              except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                  raise SystemExit(f"GitHub API response is invalid: {endpoint}") from exc
+
+
+          def create_file(path: Path, payload: bytes) -> None:
+              if path.exists():
+                  raise SystemExit(f"Recovery output already exists: {path}")
+              with path.open("xb") as stream:
+                  stream.write(payload)
+
+
+          parser = argparse.ArgumentParser()
+          parser.add_argument("--snapshot", required=True, type=Path)
+          parser.add_argument("--qa-evidence", type=Path)
+          parser.add_argument("--assets-tsv", type=Path)
+          arguments = parser.parse_args()
+
+          dispatch_sha = os.environ.get("SECTOR_DISPATCH_SHA", "")
+          if OBJECT_ID.fullmatch(dispatch_sha) is None:
+              raise SystemExit("Dispatch source must be an exact lowercase object ID")
+
+          main_ref = request_json(f"/repos/{REPOSITORY}/git/ref/heads/main")
+          tag_ref = request_json(f"/repos/{REPOSITORY}/git/ref/tags/{TAG_NAME}")
+          tag_object = request_json(
+              f"/repos/{REPOSITORY}/git/tags/{TAG_OBJECT}"
+          )
+          release_commit = request_json(
+              f"/repos/{REPOSITORY}/git/commits/{RELEASE_SOURCE}"
+          )
+          listed_releases = []
+          release_pages_scanned = 0
+          for page in range(1, MAX_RELEASE_PAGES + 1):
+              release_page = request_json(
+                  f"/repos/{REPOSITORY}/releases?per_page=100&page={page}"
+              )
+              if not isinstance(release_page, list):
+                  raise SystemExit("GitHub releases page is malformed")
+              release_pages_scanned = page
+              listed_releases.extend(release_page)
+              if len(release_page) < 100:
+                  break
+          else:
+              raise SystemExit("GitHub releases exceed bounded pagination")
+          listed_release_ids = [item.get("id") for item in listed_releases]
+          if (
+              any(type(item) is not int or item <= 0 for item in listed_release_ids)
+              or len(listed_release_ids) != len(set(listed_release_ids))
+          ):
+              raise SystemExit("GitHub releases pagination is ambiguous")
+          tag_release_matches = [
+              item for item in listed_releases if item.get("tag_name") == TAG_NAME
+          ]
+          if (
+              len(tag_release_matches) != 1
+              or tag_release_matches[0].get("id") != RELEASE_ID
+              or tag_release_matches[0].get("draft") is not True
+          ):
+              raise SystemExit("v0.93 must identify exactly the pinned draft release")
+          release = request_json(f"/repos/{REPOSITORY}/releases/{RELEASE_ID}")
+          release_assets = request_json(
+              f"/repos/{REPOSITORY}/releases/{RELEASE_ID}/assets?per_page=100"
+          )
+          qa_run = request_json(
+              f"/repos/{REPOSITORY}/actions/runs/{QA_RUN_ID}"
+          )
+          qa_jobs = request_json(
+              f"/repos/{REPOSITORY}/actions/runs/{QA_RUN_ID}/attempts/"
+              f"{QA_RUN_ATTEMPT}/jobs?per_page=100"
+          )
+          qa_artifacts = request_json(
+              f"/repos/{REPOSITORY}/actions/runs/{QA_RUN_ID}/artifacts?per_page=100"
+          )
+          current_qa_runs = request_json(
+              f"/repos/{REPOSITORY}/actions/workflows/qa.yml/runs?"
+              f"branch=main&event=push&status=success&head_sha={dispatch_sha}"
+              "&per_page=100"
+          )
+          current_runs = current_qa_runs.get("workflow_runs")
+          if (
+              current_qa_runs.get("total_count") != 1
+              or not isinstance(current_runs, list)
+              or len(current_runs) != 1
+          ):
+              raise SystemExit(
+                  "dispatch source must have exactly one successful Sector QA run"
+              )
+          current_qa_run = current_runs[0]
+          current_qa_run_id = current_qa_run.get("id")
+          current_qa_run_attempt = current_qa_run.get("run_attempt")
+          if (
+              type(current_qa_run_id) is not int
+              or current_qa_run_id <= 0
+              or type(current_qa_run_attempt) is not int
+              or current_qa_run_attempt <= 0
+          ):
+              raise SystemExit("dispatch-source QA identity is malformed")
+          current_qa_jobs = request_json(
+              f"/repos/{REPOSITORY}/actions/runs/{current_qa_run_id}/attempts/"
+              f"{current_qa_run_attempt}/jobs?per_page=100"
+          )
+          current_qa_artifacts = request_json(
+              f"/repos/{REPOSITORY}/actions/runs/{current_qa_run_id}/"
+              "artifacts?per_page=100"
+          )
+
+          if main_ref != {
+              "ref": "refs/heads/main",
+              "node_id": main_ref.get("node_id"),
+              "url": main_ref.get("url"),
+              "object": {
+                  "sha": dispatch_sha,
+                  "type": "commit",
+                  "url": main_ref.get("object", {}).get("url"),
+              },
+          }:
+              raise SystemExit("Canonical main no longer equals the dispatch source")
+          expected_tag_ref = {
+              "ref": "refs/tags/v0.93",
+              "node_id": "REF_kwDOTFQLdq9yZWZzL3RhZ3MvdjAuOTM",
+              "url": (
+                  "https://api.github.com/repos/KasperLFabricius/Sector/"
+                  "git/refs/tags/v0.93"
+              ),
+              "object": {
+                  "sha": TAG_OBJECT,
+                  "type": "tag",
+                  "url": (
+                      "https://api.github.com/repos/KasperLFabricius/Sector/"
+                      f"git/tags/{TAG_OBJECT}"
+                  ),
+              },
+          }
+          if tag_ref != expected_tag_ref:
+              raise SystemExit("v0.93 tag ref is not the pinned annotated tag object")
+          expected_tag_object = {
+              "node_id": (
+                  "TA_kwDOTFQLdtoAKGQzYmViZmFmMTZmMTBmODNlM2RhOWJjODA0MTAz"
+                  "YjVlYWJmMDQzMzE"
+              ),
+              "sha": TAG_OBJECT,
+              "url": (
+                  "https://api.github.com/repos/KasperLFabricius/Sector/"
+                  f"git/tags/{TAG_OBJECT}"
+              ),
+              "tagger": {
+                  "name": "github-actions[bot]",
+                  "email": (
+                      "41898282+github-actions[bot]@users.noreply.github.com"
+                  ),
+                  "date": "2026-08-11T19:51:41Z",
+              },
+              "object": {
+                  "sha": RELEASE_SOURCE,
+                  "type": "commit",
+                  "url": (
+                      "https://api.github.com/repos/KasperLFabricius/Sector/"
+                      f"git/commits/{RELEASE_SOURCE}"
+                  ),
+              },
+              "tag": TAG_NAME,
+              "message": TAG_MESSAGE,
+              "verification": {
+                  "verified": False,
+                  "reason": "unsigned",
+                  "signature": None,
+                  "payload": None,
+                  "verified_at": None,
+              },
+          }
+          if tag_object != expected_tag_object:
+              raise SystemExit("annotated v0.93 tag object differs from the pinned object")
+          if (
+              release_commit.get("sha") != RELEASE_SOURCE
+              or (release_commit.get("tree") or {}).get("sha") != RELEASE_TREE
+          ):
+              raise SystemExit("pinned release commit or tree differs")
+
+          release_body = release.get("body")
+          if not isinstance(release_body, str):
+              raise SystemExit("draft release body is missing")
+          body_sha256 = hashlib.sha256(release_body.encode("utf-8")).hexdigest()
+          release_record = {
+              "id": release.get("id"),
+              "node_id": release.get("node_id"),
+              "tag_name": release.get("tag_name"),
+              "target_commitish": release.get("target_commitish"),
+              "name": release.get("name"),
+              "draft": release.get("draft"),
+              "immutable": release.get("immutable"),
+              "prerelease": release.get("prerelease"),
+              "published_at": release.get("published_at"),
+              "body_sha256": body_sha256,
+              "author_login": (release.get("author") or {}).get("login"),
+              "author_id": (release.get("author") or {}).get("id"),
+              "created_at": release.get("created_at"),
+              "updated_at": release.get("updated_at"),
+          }
+          expected_release_record = {
+              "id": RELEASE_ID,
+              "node_id": RELEASE_NODE_ID,
+              "tag_name": TAG_NAME,
+              "target_commitish": RELEASE_SOURCE,
+              "name": RELEASE_NAME,
+              "draft": True,
+              "immutable": False,
+              "prerelease": False,
+              "published_at": None,
+              "body_sha256": RELEASE_BODY_SHA256,
+              "author_login": "github-actions[bot]",
+              "author_id": 41898282,
+              "created_at": "2026-08-11T19:51:41Z",
+              "updated_at": "2026-08-11T20:00:11Z",
+          }
+          if release_record != expected_release_record:
+              raise SystemExit("draft release metadata or body differs")
+
+          if not isinstance(release_assets, list) or len(release_assets) != 7:
+              raise SystemExit("draft release must contain exactly seven assets")
+          release_asset_records = []
+          for asset in release_assets:
+              name = asset.get("name")
+              if name not in EXPECTED_RELEASE_ASSETS:
+                  raise SystemExit("draft release contains an unexpected asset")
+              expected = EXPECTED_RELEASE_ASSETS[name]
+              record = {
+                  "name": name,
+                  "id": asset.get("id"),
+                  "size": asset.get("size"),
+                  "digest": asset.get("digest"),
+                  "state": asset.get("state"),
+                  "content_type": asset.get("content_type"),
+                  "label": asset.get("label"),
+                  "uploader_login": (asset.get("uploader") or {}).get("login"),
+                  "uploader_id": (asset.get("uploader") or {}).get("id"),
+                  "created_at": asset.get("created_at"),
+                  "updated_at": asset.get("updated_at"),
+              }
+              if (
+                  record["id"] != expected["id"]
+                  or record["size"] != expected["size"]
+                  or record["digest"] != expected["digest"]
+                  or record["state"] != "uploaded"
+                  or record["content_type"] != "application/octet-stream"
+                  or record["label"] != ""
+                  or record["uploader_login"] != "github-actions[bot]"
+                  or record["uploader_id"] != 41898282
+                  or ARTIFACT_DIGEST.fullmatch(str(record["digest"])) is None
+              ):
+                  raise SystemExit(f"draft release asset differs: {name}")
+              release_asset_records.append(record)
+          release_asset_records.sort(key=lambda item: item["name"])
+          if {item["name"] for item in release_asset_records} != set(
+              EXPECTED_RELEASE_ASSETS
+          ):
+              raise SystemExit("draft release asset names differ")
+
+          head_repository = qa_run.get("head_repository") or {}
+          run_repository = qa_run.get("repository") or {}
+          qa_run_record = {
+              "id": qa_run.get("id"),
+              "run_attempt": qa_run.get("run_attempt"),
+              "name": qa_run.get("name"),
+              "path": qa_run.get("path"),
+              "event": qa_run.get("event"),
+              "head_branch": qa_run.get("head_branch"),
+              "head_sha": qa_run.get("head_sha"),
+              "status": qa_run.get("status"),
+              "conclusion": qa_run.get("conclusion"),
               "head_repository": head_repository.get("full_name"),
               "repository": run_repository.get("full_name"),
           }
-          if actual_run != expected_run:
-              raise SystemExit("authenticated QA run metadata differs from the trigger")
+          expected_qa_run_record = {
+              "id": QA_RUN_ID,
+              "run_attempt": QA_RUN_ATTEMPT,
+              "name": "Sector QA",
+              "path": ".github/workflows/qa.yml",
+              "event": "push",
+              "head_branch": "main",
+              "head_sha": RELEASE_SOURCE,
+              "status": "completed",
+              "conclusion": "success",
+              "head_repository": REPOSITORY,
+              "repository": REPOSITORY,
+          }
+          if qa_run_record != expected_qa_run_record:
+              raise SystemExit("original QA run authority differs")
 
-          jobs_payload = json.loads(
-              (root / "jobs.json").read_text(encoding="utf-8")
-          )
-          jobs = jobs_payload.get("jobs")
-          if jobs_payload.get("total_count") != 7 or not isinstance(jobs, list) or len(jobs) != 7:
-              raise SystemExit("QA attempt must contain exactly seven jobs")
+          jobs = qa_jobs.get("jobs")
+          if qa_jobs.get("total_count") != 7 or not isinstance(jobs, list) or len(jobs) != 7:
+              raise SystemExit("original QA attempt must contain exactly seven jobs")
           job_records = []
           for job in jobs:
-              record = {
-                  "name": job.get("name"),
-                  "id": job.get("id"),
-                  "conclusion": job.get("conclusion"),
-              }
+              name = job.get("name")
               if (
-                  type(record["id"]) is not int
-                  or record["id"] <= 0
-                  or record["conclusion"] != "success"
-                  or job.get("run_attempt") != run_attempt
+                  name not in EXPECTED_JOBS
+                  or job.get("id") != EXPECTED_JOBS[name]
+                  or job.get("run_attempt") != QA_RUN_ATTEMPT
+                  or job.get("conclusion") != "success"
               ):
-                  raise SystemExit("QA job authority is incomplete or unsuccessful")
-              job_records.append(record)
+                  raise SystemExit("original QA job authority differs")
+              job_records.append(
+                  {
+                      "name": name,
+                      "id": job.get("id"),
+                      "conclusion": job.get("conclusion"),
+                  }
+              )
           job_records.sort(key=lambda item: item["name"])
-          if tuple(item["name"] for item in job_records) != expected_jobs:
-              raise SystemExit("QA job display-name authority differs")
+          if {item["name"] for item in job_records} != set(EXPECTED_JOBS):
+              raise SystemExit("original QA job names differ")
 
-          artifacts_payload = json.loads(
-              (root / "artifacts.json").read_text(encoding="utf-8")
-          )
-          artifacts = artifacts_payload.get("artifacts")
-          if not isinstance(artifacts, list):
-              raise SystemExit("QA artifact response is malformed")
+          artifacts = qa_artifacts.get("artifacts")
+          if (
+              qa_artifacts.get("total_count") != 7
+              or not isinstance(artifacts, list)
+              or len(artifacts) != 7
+          ):
+              raise SystemExit("original QA run must contain exactly seven artifacts")
           artifact_records = []
-          for name in expected_artifacts:
-              matches = [item for item in artifacts if item.get("name") == name]
-              if len(matches) != 1:
-                  raise SystemExit(f"QA artifact {name!r} is missing or ambiguous")
-              artifact = matches[0]
+          artifact_snapshot_records = []
+          for artifact in artifacts:
+              name = artifact.get("name")
+              if name not in EXPECTED_QA_ARTIFACTS:
+                  raise SystemExit("original QA run contains an unexpected artifact")
+              expected = EXPECTED_QA_ARTIFACTS[name]
               workflow_run = artifact.get("workflow_run") or {}
-              record = {
-                  "name": name,
-                  "id": artifact.get("id"),
-                  "digest": artifact.get("digest"),
-                  "expired": artifact.get("expired"),
-              }
               if (
-                  type(record["id"]) is not int
-                  or record["id"] <= 0
-                  or record["expired"] is not False
-                  or not isinstance(record["digest"], str)
-                  or re.fullmatch(r"sha256:[0-9a-f]{64}", record["digest"]) is None
-                  or workflow_run.get("id") != run_id
+                  artifact.get("id") != expected["id"]
+                  or artifact.get("size_in_bytes") != expected["size_in_bytes"]
+                  or artifact.get("digest") != expected["digest"]
+                  or artifact.get("expired") is not False
+                  or workflow_run.get("id") != QA_RUN_ID
+                  or ARTIFACT_DIGEST.fullmatch(str(artifact.get("digest"))) is None
               ):
-                  raise SystemExit(f"QA artifact {name!r} is not authenticated")
-              artifact_records.append(record)
+                  raise SystemExit("original QA artifact authority differs")
+              artifact_records.append(
+                  {
+                      "name": name,
+                      "id": artifact.get("id"),
+                      "digest": artifact.get("digest"),
+                      "expired": artifact.get("expired"),
+                  }
+              )
+              artifact_snapshot_records.append(
+                  {
+                      **artifact_records[-1],
+                      "size_in_bytes": artifact.get("size_in_bytes"),
+                  }
+              )
           artifact_records.sort(key=lambda item: item["name"])
+          artifact_snapshot_records.sort(key=lambda item: item["name"])
+          if {item["name"] for item in artifact_records} != set(
+              EXPECTED_QA_ARTIFACTS
+          ):
+              raise SystemExit("original QA artifact names differ")
 
-          evidence = {
+          current_head_repository = current_qa_run.get("head_repository") or {}
+          current_run_repository = current_qa_run.get("repository") or {}
+          current_qa_run_record = {
+              "id": current_qa_run_id,
+              "run_attempt": current_qa_run_attempt,
+              "name": current_qa_run.get("name"),
+              "path": current_qa_run.get("path"),
+              "event": current_qa_run.get("event"),
+              "head_branch": current_qa_run.get("head_branch"),
+              "head_sha": current_qa_run.get("head_sha"),
+              "status": current_qa_run.get("status"),
+              "conclusion": current_qa_run.get("conclusion"),
+              "head_repository": current_head_repository.get("full_name"),
+              "repository": current_run_repository.get("full_name"),
+          }
+          if current_qa_run_record != {
+              "id": current_qa_run_id,
+              "run_attempt": current_qa_run_attempt,
+              "name": "Sector QA",
+              "path": ".github/workflows/qa.yml",
+              "event": "push",
+              "head_branch": "main",
+              "head_sha": dispatch_sha,
+              "status": "completed",
+              "conclusion": "success",
+              "head_repository": REPOSITORY,
+              "repository": REPOSITORY,
+          }:
+              raise SystemExit("dispatch-source QA run authority differs")
+
+          current_jobs = current_qa_jobs.get("jobs")
+          if (
+              current_qa_jobs.get("total_count") != 7
+              or not isinstance(current_jobs, list)
+              or len(current_jobs) != 7
+          ):
+              raise SystemExit("dispatch-source QA attempt must contain seven jobs")
+          current_job_records = []
+          for job in current_jobs:
+              name = job.get("name")
+              job_id = job.get("id")
+              if (
+                  name not in EXPECTED_JOBS
+                  or type(job_id) is not int
+                  or job_id <= 0
+                  or job.get("run_attempt") != current_qa_run_attempt
+                  or job.get("conclusion") != "success"
+              ):
+                  raise SystemExit("dispatch-source QA job authority differs")
+              current_job_records.append(
+                  {"name": name, "id": job_id, "conclusion": "success"}
+              )
+          current_job_records.sort(key=lambda item: item["name"])
+          if {item["name"] for item in current_job_records} != set(EXPECTED_JOBS):
+              raise SystemExit("dispatch-source QA job names differ")
+
+          current_artifacts = current_qa_artifacts.get("artifacts")
+          current_qualifier = f"{current_qa_run_id}-{current_qa_run_attempt}"
+          current_artifact_names = {
+              f"Sector-Windows-portable-unsigned-QA-{current_qualifier}",
+              f"Sector-Windows-unsigned-QA-{current_qualifier}",
+              f"sector-portable-comparison-{current_qualifier}",
+              f"sector-portable-producer-a-{current_qualifier}",
+              f"sector-portable-producer-b-{current_qualifier}",
+              f"sector-portable-smoke-{current_qualifier}",
+              f"sector-qa-evidence-{current_qualifier}",
+          }
+          if (
+              current_qa_artifacts.get("total_count") != 7
+              or not isinstance(current_artifacts, list)
+              or len(current_artifacts) != 7
+          ):
+              raise SystemExit("dispatch-source QA run must contain seven artifacts")
+          current_artifact_records = []
+          for artifact in current_artifacts:
+              artifact_id = artifact.get("id")
+              artifact_size = artifact.get("size_in_bytes")
+              artifact_digest = artifact.get("digest")
+              workflow_run = artifact.get("workflow_run") or {}
+              if (
+                  artifact.get("name") not in current_artifact_names
+                  or type(artifact_id) is not int
+                  or artifact_id <= 0
+                  or type(artifact_size) is not int
+                  or artifact_size <= 0
+                  or ARTIFACT_DIGEST.fullmatch(str(artifact_digest)) is None
+                  or artifact.get("expired") is not False
+                  or workflow_run.get("id") != current_qa_run_id
+              ):
+                  raise SystemExit("dispatch-source QA artifact authority differs")
+              current_artifact_records.append(
+                  {
+                      "name": artifact.get("name"),
+                      "id": artifact_id,
+                      "size_in_bytes": artifact_size,
+                      "digest": artifact_digest,
+                      "expired": False,
+                  }
+              )
+          current_artifact_records.sort(key=lambda item: item["name"])
+          if {
+              item["name"] for item in current_artifact_records
+          } != current_artifact_names:
+              raise SystemExit("dispatch-source QA artifact names differ")
+
+          qa_evidence = {
               "qa_evidence_schema": 1,
-              "repository": repository,
-              "head_repository": repository,
+              "repository": REPOSITORY,
+              "head_repository": REPOSITORY,
               "workflow_name": "Sector QA",
               "event": "push",
               "head_branch": "main",
-              "head_sha": revision,
-              "run_id": run_id,
-              "run_attempt": run_attempt,
+              "head_sha": RELEASE_SOURCE,
+              "run_id": QA_RUN_ID,
+              "run_attempt": QA_RUN_ATTEMPT,
               "conclusion": "success",
               "jobs": job_records,
               "artifacts": artifact_records,
           }
-          (root / "qa-evidence.json").write_text(
-              json.dumps(evidence, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-              newline="\n",
-          )
-          final_name = (
-              f"Sector-Windows-portable-unsigned-QA-{run_id}-{run_attempt}"
-          )
-          final = next(item for item in artifact_records if item["name"] == final_name)
-          (root / "final-artifact-id.txt").write_text(
-              f"{final['id']}\n", encoding="ascii", newline="\n"
-          )
-          (root / "final-artifact-digest.txt").write_text(
-              f"{final['digest']}\n", encoding="ascii", newline="\n"
-          )
+          snapshot = {
+              "recovery_state_schema": 1,
+              "repository": REPOSITORY,
+              "dispatch_main_sha": dispatch_sha,
+              "release_source_sha": RELEASE_SOURCE,
+              "release_tree_sha": RELEASE_TREE,
+              "release_discovery": {
+                  "pages_scanned": release_pages_scanned,
+                  "matching_release_ids": [RELEASE_ID],
+              },
+              "tag_ref": expected_tag_ref,
+              "tag_object": expected_tag_object,
+              "release": release_record,
+              "release_assets": release_asset_records,
+              "qa_run": qa_run_record,
+              "qa_jobs": job_records,
+              "qa_artifacts": artifact_snapshot_records,
+              "dispatch_qa_run": current_qa_run_record,
+              "dispatch_qa_jobs": current_job_records,
+              "dispatch_qa_artifacts": current_artifact_records,
+          }
+          create_file(arguments.snapshot, canonical_json(snapshot))
+          if arguments.qa_evidence is not None:
+              create_file(arguments.qa_evidence, canonical_json(qa_evidence))
+          if arguments.assets_tsv is not None:
+              lines = [
+                  f"{name}\t{value['id']}\t{value['size']}\t{value['digest']}"
+                  for name, value in sorted(EXPECTED_RELEASE_ASSETS.items())
+              ]
+              create_file(arguments.assets_tsv, ("\n".join(lines) + "\n").encode("ascii"))
           PY
 
+          python "$capture" \
+            --snapshot "$trust_root/state-before.json" \
+            --qa-evidence "$trust_root/qa-evidence.json" \
+            --assets-tsv "$trust_root/release-assets.tsv"
           {
             echo "SECTOR_TRUST_ROOT=$trust_root"
+            echo "SECTOR_CAPTURE_STATE=$capture"
             echo "SECTOR_QA_EVIDENCE=$trust_root/qa-evidence.json"
-            echo "SECTOR_FINAL_ARTIFACT_ID=$(tr -d '\r\n' < "$trust_root/final-artifact-id.txt")"
-            echo "SECTOR_FINAL_ARTIFACT_DIGEST=$(tr -d '\r\n' < "$trust_root/final-artifact-digest.txt")"
-            echo "SECTOR_RELEASE_ASSETS=$RUNNER_TEMP/sector-v093-release-assets-$SECTOR_QA_RUN_ID-$SECTOR_QA_RUN_ATTEMPT"
+            echo "SECTOR_RELEASE_ASSETS_TSV=$trust_root/release-assets.tsv"
+            echo "SECTOR_RELEASE_SOURCE=d0f08295b528f42493f5e8dd4b438c17dc304ec4"
+            echo "SECTOR_RELEASE_TREE=9ac057f723ce8d6b0844541c3573e133fa1b5519"
           } >> "$GITHUB_ENV"
 
-      - name: Check out authenticated QA source
+      - name: Check out pinned v0.93 release source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: d0f08295b528f42493f5e8dd4b438c17dc304ec4
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Establish exact current-main boundary before repository code
+      - name: Verify pinned source and current-main boundary
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          SECTOR_QA_SHA: ${{ github.event.workflow_run.head_sha }}
+          SECTOR_REPOSITORY: ${{ github.repository }}
+          SECTOR_DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          head_revision="$(git rev-parse HEAD)"
-          if [[ "$head_revision" != "$SECTOR_QA_SHA" ]]; then
-            echo "Checked-out HEAD differs from authenticated QA source" >&2
+          if [[ "$(git rev-parse HEAD)" != "$SECTOR_RELEASE_SOURCE" ]] || \
+             [[ "$(git rev-parse 'HEAD^{tree}')" != "$SECTOR_RELEASE_TREE" ]]; then
+            echo "Checked-out source does not match the pinned v0.93 commit and tree" >&2
+            exit 1
+          fi
+          notes="docs/v093_release_notes.md"
+          if [[ ! -f "$notes" ]] || [[ -L "$notes" ]] || \
+             [[ "$(sha256sum "$notes" | cut -d ' ' -f 1)" != \
+                "8bfe1d04e79d102d459d4333fa6feebb8d332d3e0e5332587526153d61b9dda6" ]]; then
+            echo "Tagged release notes do not match the pinned draft body" >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Pinned v0.93 checkout is not clean" >&2
             exit 1
           fi
           set +e
@@ -263,14 +759,11 @@ jobs:
             echo "Checkout credentials remain despite persist-credentials false" >&2
             exit 1
           fi
-          basic_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic_auth" \
-            fetch --force --no-tags origin \
-            "+refs/heads/main:refs/remotes/origin/main"
-          unset basic_auth
-          main_revision="$(git rev-parse refs/remotes/origin/main)"
-          if [[ "$main_revision" != "$SECTOR_QA_SHA" ]]; then
-            echo "Authenticated QA source is no longer current origin/main" >&2
+          main_revision="$(
+            gh api "/repos/$SECTOR_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
+          )"
+          if [[ "$main_revision" != "$SECTOR_DISPATCH_SHA" ]]; then
+            echo "Canonical main moved after recovery authentication" >&2
             exit 1
           fi
 
@@ -279,632 +772,129 @@ jobs:
         with:
           python-version-file: .python-version
 
-      - name: Download and safely extract only the qualified portable artifact
+      - name: Freshly download and verify exact draft assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           SECTOR_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          archive="$SECTOR_TRUST_ROOT/final-portable-artifact.zip"
-          extract="$SECTOR_TRUST_ROOT/final-portable-artifact"
-          if [[ -e "$archive" ]] || [[ -e "$extract" ]]; then
-            echo "Portable input paths must be create-only" >&2
-            exit 1
-          fi
-          gh api \
-            "/repos/$SECTOR_REPOSITORY/actions/artifacts/$SECTOR_FINAL_ARTIFACT_ID/zip" \
-            > "$archive"
-          actual_digest="sha256:$(sha256sum "$archive" | cut -d ' ' -f 1)"
-          if [[ "$actual_digest" != "$SECTOR_FINAL_ARTIFACT_DIGEST" ]]; then
-            echo "Downloaded portable artifact digest differs from GitHub metadata" >&2
-            exit 1
-          fi
-          export SECTOR_PORTABLE_ARTIFACT_ARCHIVE="$archive"
-          export SECTOR_PORTABLE_ARTIFACT_EXTRACT="$extract"
-          python - <<'PY'
-          import os
-          import shutil
-          import stat
-          import unicodedata
-          import zipfile
-          from pathlib import Path, PurePosixPath
-
-          MAX_ARCHIVE_BYTES = 2 * 1024 ** 3
-          MAX_MEMBER_COUNT = 20_000
-          MAX_MEMBER_BYTES = 1024 ** 3
-          MAX_EXPANDED_BYTES = 4 * 1024 ** 3
-          COPY_CHUNK_BYTES = 1024 * 1024
-          WINDOWS_RESERVED_NAMES = {
-              "aux",
-              "com1",
-              "com2",
-              "com3",
-              "com4",
-              "com5",
-              "com6",
-              "com7",
-              "com8",
-              "com9",
-              "con",
-              "lpt1",
-              "lpt2",
-              "lpt3",
-              "lpt4",
-              "lpt5",
-              "lpt6",
-              "lpt7",
-              "lpt8",
-              "lpt9",
-              "nul",
-              "prn",
-          }
-
-          archive = Path(os.environ["SECTOR_PORTABLE_ARTIFACT_ARCHIVE"])
-          destination = Path(os.environ["SECTOR_PORTABLE_ARTIFACT_EXTRACT"])
-          if not archive.is_file() or archive.is_symlink():
-              raise SystemExit("portable artifact archive is not a regular file")
-          archive_bytes = archive.stat().st_size
-          if archive_bytes <= 0 or archive_bytes > MAX_ARCHIVE_BYTES:
-              raise SystemExit("portable artifact archive exceeds its byte limit")
-          if destination.exists():
-              raise SystemExit("portable extraction destination already exists")
-          try:
-              with zipfile.ZipFile(archive) as bundle:
-                  members = bundle.infolist()
-                  if not members:
-                      raise ValueError("portable artifact archive is empty")
-                  if len(members) > MAX_MEMBER_COUNT:
-                      raise ValueError("portable artifact exceeds its member-count limit")
-                  seen = set()
-                  file_paths = set()
-                  normalized = []
-                  declared_expanded_bytes = 0
-                  for member in members:
-                      name = member.filename
-                      if not name or "\\" in name or "\x00" in name:
-                          raise ValueError("portable artifact has an invalid member name")
-                      path = PurePosixPath(name)
-                      parts = path.parts
-                      if path.is_absolute() or not parts or any(part in {"", ".", ".."} for part in parts):
-                          raise ValueError("portable artifact member escapes extraction root")
-                      is_directory = member.is_dir()
-                      canonical_name = "/".join(parts) + ("/" if is_directory else "")
-                      if name != canonical_name:
-                          raise ValueError("portable artifact has a non-canonical member path")
-                      if any(
-                          part != part.rstrip(" .")
-                          or ":" in part
-                          or any(ord(character) < 32 for character in part)
-                          or part.split(".", 1)[0].casefold() in WINDOWS_RESERVED_NAMES
-                          for part in parts
-                      ):
-                          raise ValueError("portable artifact has a Windows-unsafe member path")
-                      key = tuple(
-                          unicodedata.normalize("NFC", part).casefold()
-                          for part in parts
-                      )
-                      if key in seen:
-                          raise ValueError("portable artifact has duplicate member paths")
-                      seen.add(key)
-                      mode = (member.external_attr >> 16) & 0xFFFF
-                      kind = stat.S_IFMT(mode)
-                      if kind not in {0, stat.S_IFREG, stat.S_IFDIR}:
-                          raise ValueError("portable artifact contains a non-regular member")
-                      if (is_directory and kind == stat.S_IFREG) or (
-                          not is_directory and kind == stat.S_IFDIR
-                      ):
-                          raise ValueError("portable artifact member type is inconsistent")
-                      if member.flag_bits & 1:
-                          raise ValueError("portable artifact contains an encrypted member")
-                      if member.file_size < 0 or member.compress_size < 0:
-                          raise ValueError("portable artifact member has a negative size")
-                      if member.compress_size > archive_bytes:
-                          raise ValueError("portable artifact member exceeds archive bytes")
-                      if is_directory:
-                          if member.file_size != 0:
-                              raise ValueError("portable artifact directory has expanded bytes")
-                      else:
-                          if member.file_size > MAX_MEMBER_BYTES:
-                              raise ValueError("portable artifact member exceeds its expanded-size limit")
-                          declared_expanded_bytes += member.file_size
-                          if declared_expanded_bytes > MAX_EXPANDED_BYTES:
-                              raise ValueError("portable artifact exceeds its cumulative expanded-size limit")
-                          file_paths.add(key)
-                      normalized.append((member, parts, is_directory))
-                  for key in file_paths:
-                      if any(key[:index] in file_paths for index in range(1, len(key))):
-                          raise ValueError("portable artifact nests content below a file")
-                  destination.mkdir(parents=False)
-                  streamed_expanded_bytes = 0
-                  for member, parts, is_directory in normalized:
-                      target = destination.joinpath(*parts)
-                      if is_directory:
-                          target.mkdir(parents=True, exist_ok=True)
-                          continue
-                      target.parent.mkdir(parents=True, exist_ok=True)
-                      with bundle.open(member) as source, target.open("xb") as output:
-                          member_bytes = 0
-                          while True:
-                              read_size = min(
-                                  COPY_CHUNK_BYTES,
-                                  member.file_size - member_bytes + 1,
-                                  MAX_MEMBER_BYTES - member_bytes + 1,
-                                  MAX_EXPANDED_BYTES - streamed_expanded_bytes + 1,
-                              )
-                              chunk = source.read(read_size)
-                              if not chunk:
-                                  break
-                              next_member_bytes = member_bytes + len(chunk)
-                              next_expanded_bytes = streamed_expanded_bytes + len(chunk)
-                              if (
-                                  next_member_bytes > member.file_size
-                                  or next_member_bytes > MAX_MEMBER_BYTES
-                                  or next_expanded_bytes > MAX_EXPANDED_BYTES
-                              ):
-                                  raise ValueError("portable artifact streaming output exceeds its limits")
-                              if output.write(chunk) != len(chunk):
-                                  raise OSError("portable artifact extraction wrote a partial chunk")
-                              member_bytes = next_member_bytes
-                              streamed_expanded_bytes = next_expanded_bytes
-                          if member_bytes != member.file_size:
-                              raise ValueError("portable artifact member size differs while streaming")
-                  if streamed_expanded_bytes != declared_expanded_bytes:
-                      raise ValueError("portable artifact cumulative size differs while streaming")
-              distribution = destination / "distribution"
-              if not distribution.is_dir():
-                  raise ValueError("qualified portable artifact lacks distribution/")
-          except Exception:
-              shutil.rmtree(destination, ignore_errors=True)
-              raise
-          PY
-          echo "SECTOR_PORTABLE_DISTRIBUTION=$extract/distribution" >> "$GITHUB_ENV"
-
-      - name: Assemble and verify exact v0.93 release assets
-        shell: bash
-        env:
-          SECTOR_QA_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-          if [[ -e "$SECTOR_RELEASE_ASSETS" ]]; then
-            echo "Release asset output must be previously nonexistent" >&2
-            exit 1
-          fi
-          python -I -S tools/verify_v093_release.py assemble \
-            --root . \
-            --source-revision "$SECTOR_QA_SHA" \
-            --qa-evidence "$SECTOR_QA_EVIDENCE" \
-            --portable-distribution "$SECTOR_PORTABLE_DISTRIBUTION" \
-            --output "$SECTOR_RELEASE_ASSETS"
-          python -I -S tools/verify_v093_release.py verify \
-            --root . \
-            --source-revision "$SECTOR_QA_SHA" \
-            --qa-evidence "$SECTOR_QA_EVIDENCE" \
-            --output "$SECTOR_RELEASE_ASSETS"
-
-      - name: Recheck QA authority and current main immediately before mutation
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SECTOR_REPOSITORY: ${{ github.repository }}
-          SECTOR_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
-          SECTOR_WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
-          SECTOR_QA_EVENT: ${{ github.event.workflow_run.event }}
-          SECTOR_QA_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          SECTOR_QA_SHA: ${{ github.event.workflow_run.head_sha }}
-          SECTOR_QA_RUN_ID: ${{ github.event.workflow_run.id }}
-          SECTOR_QA_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-          SECTOR_QA_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$SECTOR_QA_SHA" =~ ^[0-9a-f]{40}$ ]] || \
-             [[ ! "$SECTOR_QA_RUN_ID" =~ ^[1-9][0-9]*$ ]] || \
-             [[ ! "$SECTOR_QA_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || \
-             [[ "$SECTOR_REPOSITORY" != "$SECTOR_HEAD_REPOSITORY" ]] || \
-             [[ "$SECTOR_WORKFLOW_NAME" != "Sector QA" ]] || \
-             [[ "$SECTOR_QA_EVENT" != "push" ]] || \
-             [[ "$SECTOR_QA_BRANCH" != "main" ]] || \
-             [[ "$SECTOR_QA_CONCLUSION" != "success" ]]; then
-            echo "QA trigger authority changed before release mutation" >&2
-            exit 1
-          fi
-          recheck="$SECTOR_TRUST_ROOT/recheck"
-          if [[ -e "$recheck" ]]; then
-            echo "QA recheck root must be previously nonexistent" >&2
-            exit 1
-          fi
-          mkdir "$recheck"
-          gh api \
-            "/repos/$SECTOR_REPOSITORY/actions/runs/$SECTOR_QA_RUN_ID" \
-            > "$recheck/run.json"
-          gh api \
-            "/repos/$SECTOR_REPOSITORY/actions/runs/$SECTOR_QA_RUN_ID/attempts/$SECTOR_QA_RUN_ATTEMPT/jobs?per_page=100" \
-            > "$recheck/jobs.json"
-          gh api \
-            "/repos/$SECTOR_REPOSITORY/actions/runs/$SECTOR_QA_RUN_ID/artifacts?per_page=100" \
-            > "$recheck/artifacts.json"
-          export SECTOR_RECHECK_ROOT="$recheck"
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          expected = json.loads(Path(os.environ["SECTOR_QA_EVIDENCE"]).read_text(encoding="utf-8"))
-          root = Path(os.environ["SECTOR_RECHECK_ROOT"])
-          run = json.loads((root / "run.json").read_text(encoding="utf-8"))
-          actual_run = {
-              "repository": (run.get("repository") or {}).get("full_name"),
-              "head_repository": (run.get("head_repository") or {}).get("full_name"),
-              "workflow_name": run.get("name"),
-              "event": run.get("event"),
-              "head_branch": run.get("head_branch"),
-              "head_sha": run.get("head_sha"),
-              "run_id": run.get("id"),
-              "run_attempt": run.get("run_attempt"),
-              "conclusion": run.get("conclusion"),
-          }
-          for key, value in actual_run.items():
-              if expected.get(key) != value:
-                  raise SystemExit(f"authenticated QA run field {key!r} changed")
-
-          jobs = json.loads((root / "jobs.json").read_text(encoding="utf-8"))
-          job_items = jobs.get("jobs")
-          if jobs.get("total_count") != 7 or not isinstance(job_items, list) or len(job_items) != 7:
-              raise SystemExit("QA job authority changed before mutation")
-          actual_jobs = sorted(
-              (
-                  {
-                      "name": item.get("name"),
-                      "id": item.get("id"),
-                      "conclusion": item.get("conclusion"),
-                  }
-                  for item in job_items
-                  if item.get("run_attempt") == expected["run_attempt"]
-              ),
-              key=lambda item: item["name"],
-          )
-          if actual_jobs != expected["jobs"]:
-              raise SystemExit("QA job authority changed before mutation")
-
-          artifacts = json.loads(
-              (root / "artifacts.json").read_text(encoding="utf-8")
-          ).get("artifacts")
-          if not isinstance(artifacts, list):
-              raise SystemExit("QA artifact authority changed before mutation")
-          actual_artifacts = []
-          for expected_item in expected["artifacts"]:
-              matches = [item for item in artifacts if item.get("name") == expected_item["name"]]
-              if len(matches) != 1:
-                  raise SystemExit("QA artifact authority changed before mutation")
-              item = matches[0]
-              if (item.get("workflow_run") or {}).get("id") != expected["run_id"]:
-                  raise SystemExit("QA artifact run authority changed before mutation")
-              actual_artifacts.append(
-                  {
-                      "name": item.get("name"),
-                      "id": item.get("id"),
-                      "digest": item.get("digest"),
-                      "expired": item.get("expired"),
-                  }
-              )
-          actual_artifacts.sort(key=lambda item: item["name"])
-          if actual_artifacts != expected["artifacts"]:
-              raise SystemExit("QA artifact authority changed before mutation")
-          PY
-
-          head_revision="$(git rev-parse HEAD)"
-          basic_auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\r\n')"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic_auth" \
-            fetch --force --no-tags origin \
-            "+refs/heads/main:refs/remotes/origin/main"
-          unset basic_auth
-          main_revision="$(git rev-parse refs/remotes/origin/main)"
-          if [[ "$head_revision" != "$SECTOR_QA_SHA" ]] || [[ "$main_revision" != "$SECTOR_QA_SHA" ]]; then
-            echo "Authenticated QA source is not exact current main before mutation" >&2
-            exit 1
-          fi
-          if [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
-            echo "Repository changed while assembling release assets" >&2
-            exit 1
-          fi
-
-      - name: Create or resume exact annotated tag and draft release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SECTOR_REPOSITORY: ${{ github.repository }}
-          SECTOR_QA_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-          export SECTOR_RELEASE_NOTES="docs/v093_release_notes.md"
-          python - <<'PY'
-          import hashlib
-          import json
-          import os
-          import subprocess
-          import tempfile
-          import urllib.error
-          import urllib.parse
-          import urllib.request
-          from pathlib import Path
-
-          repository = os.environ["SECTOR_REPOSITORY"]
-          revision = os.environ["SECTOR_QA_SHA"]
-          token = os.environ["GH_TOKEN"]
-          assets_root = Path(os.environ["SECTOR_RELEASE_ASSETS"])
-          notes_path = Path(os.environ["SECTOR_RELEASE_NOTES"])
-          tag_name = "v0.93"
-          release_name = "Sector v0.93"
-          tag_message = "Sector v0.93"
-          expected_names = (
-              "SHA256SUMS.txt",
-              "Sector-v0.93-release-qa-receipt.json",
-              "Sector-v0.93-source.zip",
-              "Sector-v0.93-source.zip.sha256",
-              "Sector-v0.93-windows-portable-unsigned.portable-distribution.json",
-              "Sector-v0.93-windows-portable-unsigned.zip",
-              "Sector-v0.93-windows-portable-unsigned.zip.sha256",
-          )
-          actual_names = tuple(sorted(path.name for path in assets_root.iterdir() if path.is_file()))
-          if actual_names != expected_names or any(path.is_dir() for path in assets_root.iterdir()):
-              raise SystemExit("local release asset inventory is not the exact seven-file contract")
-          if not notes_path.is_file():
-              raise SystemExit("tracked v0.93 release notes are missing")
-          release_body = notes_path.read_text(encoding="utf-8")
-
-          api_root = "https://api.github.com"
-          headers = {
-              "Accept": "application/vnd.github+json",
-              "Authorization": f"Bearer {token}",
-              "User-Agent": "Sector-v093-release-workflow",
-              "X-GitHub-Api-Version": "2022-11-28",
-          }
-
-          def request_json(path, *, method="GET", payload=None, allow_404=False):
-              data = None
-              request_headers = dict(headers)
-              if payload is not None:
-                  data = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii")
-                  request_headers["Content-Type"] = "application/json"
-              request = urllib.request.Request(
-                  api_root + path,
-                  data=data,
-                  headers=request_headers,
-                  method=method,
-              )
-              try:
-                  with urllib.request.urlopen(request, timeout=60) as response:
-                      return json.loads(response.read().decode("utf-8"))
-              except urllib.error.HTTPError as error:
-                  if allow_404 and error.code == 404:
-                      return None
-                  detail = error.read(4096).decode("utf-8", errors="replace")
-                  raise RuntimeError(f"GitHub API {method} {path} failed with HTTP {error.code}: {detail}") from error
-
-          def download_asset(asset_id, destination):
-              with destination.open("xb") as output:
-                  completed = subprocess.run(
-                      [
-                          "gh",
-                          "api",
-                          f"/repos/{repository}/releases/assets/{asset_id}",
-                          "-H",
-                          "Accept: application/octet-stream",
-                      ],
-                      check=False,
-                      stdout=output,
-                      stderr=subprocess.PIPE,
-                  )
-              if completed.returncode != 0:
-                  destination.unlink(missing_ok=True)
-                  raise RuntimeError(
-                      "GitHub release-asset download failed: "
-                      + completed.stderr.decode("utf-8", errors="replace")
-                  )
-
-          def sha256(path):
-              digest = hashlib.sha256()
-              with path.open("rb") as source:
-                  for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                      digest.update(chunk)
-              return digest.digest()
-
-          tag_ref = request_json(
-              f"/repos/{repository}/git/ref/tags/{tag_name}", allow_404=True
-          )
-          if tag_ref is None:
-              tag_object = request_json(
-                  f"/repos/{repository}/git/tags",
-                  method="POST",
-                  payload={
-                      "tag": tag_name,
-                      "message": tag_message,
-                      "object": revision,
-                      "type": "commit",
-                  },
-              )
-              tag_sha = tag_object.get("sha")
-              if not isinstance(tag_sha, str):
-                  raise SystemExit("annotated tag object creation returned no SHA")
-              request_json(
-                  f"/repos/{repository}/git/refs",
-                  method="POST",
-                  payload={"ref": f"refs/tags/{tag_name}", "sha": tag_sha},
-              )
-              tag_ref = request_json(f"/repos/{repository}/git/ref/tags/{tag_name}")
-          tag_ref_object = tag_ref.get("object") or {}
-          if tag_ref_object.get("type") != "tag":
-              raise SystemExit("v0.93 must be an annotated tag, not a lightweight tag")
-          tag_object = request_json(
-              f"/repos/{repository}/git/tags/{tag_ref_object.get('sha')}"
-          )
-          if (
-              tag_object.get("tag") != tag_name
-              or tag_object.get("message") != tag_message
-              or (tag_object.get("object") or {}).get("type") != "commit"
-              or (tag_object.get("object") or {}).get("sha") != revision
-          ):
-              raise SystemExit("existing annotated v0.93 tag does not match exact release source")
-
-          release = request_json(
-              f"/repos/{repository}/releases/tags/{tag_name}", allow_404=True
-          )
-          if release is None:
-              release = request_json(
-                  f"/repos/{repository}/releases",
-                  method="POST",
-                  payload={
-                      "tag_name": tag_name,
-                      "target_commitish": revision,
-                      "name": release_name,
-                      "body": release_body,
-                      "draft": True,
-                      "prerelease": False,
-                      "generate_release_notes": False,
-                  },
-              )
-          if (
-              release.get("tag_name") != tag_name
-              or release.get("target_commitish") != revision
-              or release.get("name") != release_name
-              or release.get("body") != release_body
-              or release.get("draft") is not True
-              or release.get("prerelease") is not False
-          ):
-              raise SystemExit("existing v0.93 release is not the exact create-only draft")
-          release_id = release.get("id")
-          if type(release_id) is not int or release_id <= 0:
-              raise SystemExit("draft release returned no valid ID")
-
-          existing = request_json(
-              f"/repos/{repository}/releases/{release_id}/assets?per_page=100"
-          )
-          if not isinstance(existing, list):
-              raise SystemExit("draft release asset response is malformed")
-          by_name = {}
-          for asset in existing:
-              by_name.setdefault(asset.get("name"), []).append(asset)
-          if set(by_name) - set(expected_names) or any(len(items) != 1 for items in by_name.values()):
-              raise SystemExit("draft release contains unknown or duplicate assets")
-
-          with tempfile.TemporaryDirectory(prefix="sector-v093-existing-") as temporary:
-              temporary_root = Path(temporary)
-              for name in expected_names:
-                  items = by_name.get(name)
-                  if not items:
-                      continue
-                  asset = items[0]
-                  if asset.get("state") != "uploaded":
-                      raise SystemExit(f"existing release asset {name!r} is not uploaded")
-                  downloaded = temporary_root / name
-                  download_asset(asset.get("id"), downloaded)
-                  local = assets_root / name
-                  if downloaded.stat().st_size != local.stat().st_size:
-                      raise SystemExit(f"existing release asset {name!r} size differs")
-                  if sha256(downloaded) != sha256(local):
-                      raise SystemExit(f"existing release asset {name!r} bytes differ")
-
-          for name in expected_names:
-              if name in by_name:
-                  continue
-              encoded_name = urllib.parse.quote(name, safe="")
-              completed = subprocess.run(
-                  [
-                      "gh",
-                      "api",
-                      "--method",
-                      "POST",
-                      f"https://uploads.github.com/repos/{repository}/releases/{release_id}/assets?name={encoded_name}",
-                      "-H",
-                      "Content-Type: application/octet-stream",
-                      "--input",
-                      str(assets_root / name),
-                  ],
-                  check=False,
-                  stdout=subprocess.PIPE,
-                  stderr=subprocess.PIPE,
-              )
-              if completed.returncode != 0:
-                  raise RuntimeError(
-                      f"GitHub release-asset upload failed for {name!r}: "
-                      + completed.stderr.decode("utf-8", errors="replace")
-                  )
-
-          final_assets = request_json(
-              f"/repos/{repository}/releases/{release_id}/assets?per_page=100"
-          )
-          final_names = sorted(asset.get("name") for asset in final_assets)
-          if tuple(final_names) != expected_names:
-              raise SystemExit("draft release does not contain exactly the seven release assets")
-          PY
-
-      - name: Freshly download and reverify all seven draft assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SECTOR_REPOSITORY: ${{ github.repository }}
-          SECTOR_QA_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-          fresh="$RUNNER_TEMP/sector-v093-fresh-release-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}"
+          fresh="$RUNNER_TEMP/sector-v093-fresh-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           if [[ -e "$fresh" ]]; then
             echo "Fresh release verification root must be previously nonexistent" >&2
             exit 1
           fi
           mkdir "$fresh"
-          release_json="$fresh/release.json"
-          assets_json="$fresh/assets.json"
-          gh api "/repos/$SECTOR_REPOSITORY/releases/tags/v0.93" > "$release_json"
-          release_id="$(python -c 'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")); assert value.get("draft") is True and value.get("tag_name") == "v0.93"; print(value["id"])' "$release_json")"
-          gh api "/repos/$SECTOR_REPOSITORY/releases/$release_id/assets?per_page=100" > "$assets_json"
-          export SECTOR_FRESH_RELEASE_ROOT="$fresh"
-          export SECTOR_FRESH_ASSETS_JSON="$assets_json"
-          python - <<'PY'
-          import json
+          bounded_copy="$SECTOR_TRUST_ROOT/bounded-asset-copy.py"
+          if [[ -e "$bounded_copy" ]]; then
+            echo "Bounded asset-copy helper must be create-only" >&2
+            exit 1
+          fi
+          cat > "$bounded_copy" <<'PY'
+          from __future__ import annotations
+
+          import hashlib
           import os
+          import re
+          import sys
           from pathlib import Path
 
-          expected = (
-              "SHA256SUMS.txt",
-              "Sector-v0.93-release-qa-receipt.json",
-              "Sector-v0.93-source.zip",
-              "Sector-v0.93-source.zip.sha256",
-              "Sector-v0.93-windows-portable-unsigned.portable-distribution.json",
-              "Sector-v0.93-windows-portable-unsigned.zip",
-              "Sector-v0.93-windows-portable-unsigned.zip.sha256",
-          )
-          assets = json.loads(
-              Path(os.environ["SECTOR_FRESH_ASSETS_JSON"]).read_text(encoding="utf-8")
-          )
-          if not isinstance(assets, list) or tuple(sorted(item.get("name") for item in assets)) != expected:
-              raise SystemExit("fresh draft release inventory is not the exact seven assets")
-          root = Path(os.environ["SECTOR_FRESH_RELEASE_ROOT"])
-          lines = []
-          for item in assets:
-              asset_id = item.get("id")
-              if type(asset_id) is not int or asset_id <= 0 or item.get("state") != "uploaded":
-                  raise SystemExit("fresh draft release asset metadata is invalid")
-              lines.append(f"{item['name']}\t{asset_id}")
-          (root / "assets.tsv").write_text(
-              "\n".join(sorted(lines)) + "\n", encoding="utf-8", newline="\n"
-          )
+          CHUNK_BYTES = 1024 * 1024
+          SHA256 = re.compile(r"^sha256:([0-9a-f]{64})$")
+
+          if len(sys.argv) != 4:
+              raise SystemExit("usage: bounded-asset-copy TARGET SIZE SHA256")
+          target = Path(sys.argv[1])
+          try:
+              expected_size = int(sys.argv[2])
+          except ValueError as exc:
+              raise SystemExit("asset byte limit is malformed") from exc
+          digest_match = SHA256.fullmatch(sys.argv[3])
+          if expected_size <= 0 or digest_match is None:
+              raise SystemExit("asset byte limit or digest is invalid")
+          if not target.parent.is_dir() or target.exists():
+              raise SystemExit("asset output must be a new file in the fresh root")
+
+          digest = hashlib.sha256()
+          count = 0
+          try:
+              with target.open("xb") as output:
+                  while True:
+                      block = sys.stdin.buffer.read(
+                          min(CHUNK_BYTES, expected_size - count + 1)
+                      )
+                      if not block:
+                          break
+                      next_count = count + len(block)
+                      if next_count > expected_size:
+                          raise ValueError("downloaded asset exceeds its exact byte limit")
+                      output.write(block)
+                      digest.update(block)
+                      count = next_count
+                  output.flush()
+                  os.fsync(output.fileno())
+              if count != expected_size:
+                  raise ValueError("downloaded asset has an unexpected byte count")
+              if digest.hexdigest() != digest_match.group(1):
+                  raise ValueError("downloaded asset has an unexpected SHA-256")
+          except BaseException:
+              target.unlink(missing_ok=True)
+              raise
           PY
-          while IFS=$'\t' read -r name asset_id; do
-            if [[ -z "$name" ]] || [[ ! "$asset_id" =~ ^[1-9][0-9]*$ ]]; then
-              echo "Fresh release asset record is malformed" >&2
+
+          asset_count=0
+          while IFS=$'\t' read -r name asset_id size digest; do
+            if [[ -z "$name" ]] || [[ ! "$asset_id" =~ ^[1-9][0-9]*$ ]] || \
+               [[ ! "$size" =~ ^[1-9][0-9]*$ ]] || \
+               [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Pinned release asset record is malformed" >&2
               exit 1
             fi
-            gh api \
-              "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
-              -H "Accept: application/octet-stream" \
-              > "$fresh/$name"
-            if ! cmp --silent "$fresh/$name" "$SECTOR_RELEASE_ASSETS/$name"; then
-              echo "Fresh release asset $name differs from the verified local byte stream" >&2
-              exit 1
-            fi
-          done < "$fresh/assets.tsv"
-          rm "$fresh/assets.tsv" "$fresh/assets.json" "$fresh/release.json"
+            gh api "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
+              -H "Accept: application/octet-stream" | \
+              python "$bounded_copy" "$fresh/$name" "$size" "$digest"
+            asset_count=$((asset_count + 1))
+          done < "$SECTOR_RELEASE_ASSETS_TSV"
+          if [[ "$asset_count" -ne 7 ]] || \
+             [[ "$(find "$fresh" -maxdepth 1 -type f | wc -l | tr -d ' ')" -ne 7 ]]; then
+            echo "Fresh release root does not contain exactly seven files" >&2
+            exit 1
+          fi
+
           python -I -S tools/verify_v093_release.py verify \
             --root . \
-            --source-revision "$SECTOR_QA_SHA" \
+            --source-revision "$SECTOR_RELEASE_SOURCE" \
+            --qa-evidence "$SECTOR_QA_EVIDENCE" \
             --output "$fresh"
+
+      - name: Recheck exact recovery state and current main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SECTOR_DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python "$SECTOR_CAPTURE_STATE" \
+            --snapshot "$SECTOR_TRUST_ROOT/state-after.json"
+          if ! cmp --silent \
+            "$SECTOR_TRUST_ROOT/state-before.json" \
+            "$SECTOR_TRUST_ROOT/state-after.json"; then
+            echo "Pinned tag, draft, assets, QA authority or current main changed" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$SECTOR_RELEASE_SOURCE" ]] || \
+             [[ "$(git rev-parse 'HEAD^{tree}')" != "$SECTOR_RELEASE_TREE" ]] || \
+             [[ -n "$(git status --porcelain=v1 --untracked-files=all)" ]]; then
+            echo "Pinned v0.93 source changed during recovery verification" >&2
+            exit 1
+          fi
+          {
+            echo "### Sector v0.93 draft recovery verified"
+            echo "- Control main: \`$SECTOR_DISPATCH_SHA\` with completed successful Sector QA"
+            echo "- Release source: \`$SECTOR_RELEASE_SOURCE\`"
+            echo "- Release tree: \`$SECTOR_RELEASE_TREE\`"
+            echo "- Annotated tag object: \`d3bebfaf16f10f83e3da9bc804103b5eabf04331\`"
+            echo "- Draft release: \`368822456\`"
+            echo "- Original QA authority: \`31525047117/1\`"
+            echo "- Assets: 7 freshly downloaded by pinned ID and verified"
+          } >> "$GITHUB_STEP_SUMMARY"

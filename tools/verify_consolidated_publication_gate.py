@@ -15,17 +15,13 @@ import yaml
 
 CONSOLIDATED_STEP = "Validate consolidated publication gate"
 CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
-SETUP_PYTHON_ACTION = (
-    "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
-)
+SETUP_PYTHON_ACTION = "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
 UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-DOWNLOAD_ACTION = (
-    "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
-)
+DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
 FULL_COMMIT_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
 SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
 RELEASE_WORKFLOW_CONTRACT_SHA256 = (
-    "5e960d3746b2f4b2a9a11999d61a0733a3c673fd19e44c13471a9ea350e5d959"
+    "fbc64955df001ddaf28abc96d2d31af194262f51aad696b66c3783ec3e1f3b1d"
 )
 JOB_CONTRACT_SHA256 = {
     "test": "39cdde5e29c6e182fc326da39eac460f9cf81534c2532469c8461609ed1b0f2a",
@@ -127,15 +123,12 @@ PORTABLE_STEPS = (
 )
 
 RELEASE_STEPS = (
-    "Authenticate completed QA authority before checkout",
-    "Check out authenticated QA source",
-    "Establish exact current-main boundary before repository code",
+    "Authenticate exact recovery state and original QA authority",
+    "Check out pinned v0.93 release source",
+    "Verify pinned source and current-main boundary",
     "Set up pinned Python",
-    "Download and safely extract only the qualified portable artifact",
-    "Assemble and verify exact v0.93 release assets",
-    "Recheck QA authority and current main immediately before mutation",
-    "Create or resume exact annotated tag and draft release",
-    "Freshly download and reverify all seven draft assets",
+    "Freshly download and verify exact draft assets",
+    "Recheck exact recovery state and current main",
 )
 
 FULL_TEST_RUN = """$ErrorActionPreference = "Stop"
@@ -169,11 +162,15 @@ def _mapping(value: object, label: str) -> Mapping[str, Any]:
 
 def _steps(job: Mapping[str, Any], expected: tuple[str, ...], label: str) -> list:
     steps = job.get("steps")
-    if not isinstance(steps, list) or not all(isinstance(step, Mapping) for step in steps):
+    if not isinstance(steps, list) or not all(
+        isinstance(step, Mapping) for step in steps
+    ):
         raise ConsolidatedPublicationGateError(f"{label} steps must be mappings")
     names = tuple(step.get("name") for step in steps)
     if names != expected:
-        raise ConsolidatedPublicationGateError(f"{label} step inventory or order differs")
+        raise ConsolidatedPublicationGateError(
+            f"{label} step inventory or order differs"
+        )
     for step in steps:
         if "continue-on-error" in step or "working-directory" in step:
             raise ConsolidatedPublicationGateError(
@@ -185,7 +182,9 @@ def _steps(job: Mapping[str, Any], expected: tuple[str, ...], label: str) -> lis
 def _named_step(steps: list, name: str) -> Mapping[str, Any]:
     matches = [step for step in steps if step.get("name") == name]
     if len(matches) != 1:
-        raise ConsolidatedPublicationGateError(f"workflow must contain one {name!r} step")
+        raise ConsolidatedPublicationGateError(
+            f"workflow must contain one {name!r} step"
+        )
     return matches[0]
 
 
@@ -194,7 +193,8 @@ def _validate_action_pins(*step_groups: list) -> None:
         for step in steps:
             action = step.get("uses")
             if action is not None and (
-                not isinstance(action, str) or FULL_COMMIT_ACTION.fullmatch(action) is None
+                not isinstance(action, str)
+                or FULL_COMMIT_ACTION.fullmatch(action) is None
             ):
                 raise ConsolidatedPublicationGateError(
                     "every workflow action must be pinned to one full commit"
@@ -336,8 +336,7 @@ def _validate_test_job(job: Mapping[str, Any]) -> list:
         "uses": UPLOAD_ACTION,
         "with": {
             "name": (
-                "sector-qa-evidence-"
-                "${{ github.run_id }}-${{ github.run_attempt }}"
+                "sector-qa-evidence-${{ github.run_id }}-${{ github.run_attempt }}"
             ),
             "path": "qa-artifacts/",
             "if-no-files-found": "error",
@@ -364,7 +363,9 @@ def _validate_package_job(job: Mapping[str, Any]) -> list:
 
     steps = _steps(job, PACKAGE_STEPS, "package job")
     if any("if" in step for step in steps):
-        raise ConsolidatedPublicationGateError("package steps must not be conditionally skipped")
+        raise ConsolidatedPublicationGateError(
+            "package steps must not be conditionally skipped"
+        )
 
     upload = _named_step(steps, "Upload unsigned QA reproducibility evidence")
     expected_paths = [
@@ -379,10 +380,7 @@ def _validate_package_job(job: Mapping[str, Any]) -> list:
         upload.get("uses") != UPLOAD_ACTION
         or set(upload) != {"name", "uses", "with"}
         or upload_with.get("name")
-        != (
-            "Sector-Windows-unsigned-QA-"
-            "${{ github.run_id }}-${{ github.run_attempt }}"
-        )
+        != ("Sector-Windows-unsigned-QA-${{ github.run_id }}-${{ github.run_attempt }}")
         or upload_with.get("if-no-files-found") != "error"
         or upload_with.get("retention-days") != 7
         or str(upload_with.get("path", "")).splitlines() != expected_paths
@@ -412,7 +410,9 @@ def _validate_portable_job(
             f"{label} must retain its isolated failure-propagating context"
         )
     if job.get("name") != display_name or job.get("needs") != needs:
-        raise ConsolidatedPublicationGateError(f"{label} dependency or identity differs")
+        raise ConsolidatedPublicationGateError(
+            f"{label} dependency or identity differs"
+        )
     if (
         job.get("runs-on") != "windows-latest"
         or job.get("timeout-minutes") != timeout_minutes
@@ -457,7 +457,9 @@ def validate_workflow(workflow_text: str) -> None:
     try:
         workflow = yaml.safe_load(workflow_text)
     except yaml.YAMLError as exc:
-        raise ConsolidatedPublicationGateError(f"cannot parse workflow YAML: {exc}") from exc
+        raise ConsolidatedPublicationGateError(
+            f"cannot parse workflow YAML: {exc}"
+        ) from exc
     workflow = _mapping(workflow, "workflow")
     if _contains_secret_context(workflow):
         raise ConsolidatedPublicationGateError(
@@ -567,16 +569,11 @@ def validate_release_workflow(workflow_text: str) -> None:
         raise ConsolidatedPublicationGateError(
             "release workflow differs from its exact top-level contract"
         )
-    if workflow.get("name") != "Sector v0.93 release":
+    if workflow.get("name") != "Sector v0.93 draft recovery verification":
         raise ConsolidatedPublicationGateError("release workflow name differs")
-    if workflow.get(True) != {
-        "workflow_run": {
-            "workflows": ["Sector QA"],
-            "types": ["completed"],
-        }
-    }:
+    if workflow.get(True) != {"workflow_dispatch": {}}:
         raise ConsolidatedPublicationGateError(
-            "release workflow trigger must be only completed Sector QA runs"
+            "release recovery trigger must be input-free manual dispatch only"
         )
     if workflow.get("permissions") != {}:
         raise ConsolidatedPublicationGateError(
@@ -591,14 +588,13 @@ def validate_release_workflow(workflow_text: str) -> None:
         )
 
     jobs = _mapping(workflow.get("jobs"), "release workflow jobs")
-    if set(jobs) != {"release"}:
+    if set(jobs) != {"recovery"}:
         raise ConsolidatedPublicationGateError(
-            "release workflow must contain exactly one release job"
+            "release workflow must contain exactly one recovery job"
         )
-    job = _mapping(jobs["release"], "release job")
+    job = _mapping(jobs["recovery"], "release recovery job")
     if set(job) != {
         "name",
-        "if",
         "runs-on",
         "timeout-minutes",
         "permissions",
@@ -607,26 +603,15 @@ def validate_release_workflow(workflow_text: str) -> None:
         raise ConsolidatedPublicationGateError(
             "release job differs from its failure-propagating contract"
         )
-    if job.get("name") != "Publish verified v0.93 draft release":
+    if job.get("name") != "Verify existing v0.93 draft release":
         raise ConsolidatedPublicationGateError("release job identity differs")
-    if job.get("if") != (
-        "github.event.workflow_run.name == 'Sector QA' && "
-        "github.event.workflow_run.conclusion == 'success' && "
-        "github.event.workflow_run.event == 'push' && "
-        "github.event.workflow_run.head_branch == 'main' && "
-        "github.event.workflow_run.head_repository.full_name == github.repository"
-    ):
-        raise ConsolidatedPublicationGateError(
-            "release job same-repository successful-main-push guard differs"
-        )
     if (
         job.get("runs-on") != "ubuntu-latest"
         or job.get("timeout-minutes") != 30
-        or job.get("permissions")
-        != {"actions": "read", "contents": "write"}
+        or job.get("permissions") != {"actions": "read", "contents": "read"}
     ):
         raise ConsolidatedPublicationGateError(
-            "release job runner or minimal write boundary differs"
+            "release job runner or read-only permission boundary differs"
         )
     steps = _steps(job, RELEASE_STEPS, "release job")
     if any("if" in step for step in steps):
@@ -636,18 +621,18 @@ def validate_release_workflow(workflow_text: str) -> None:
     _validate_action_pins(steps)
     _validate_action_identities(steps)
 
-    checkout = _named_step(steps, "Check out authenticated QA source")
+    checkout = _named_step(steps, "Check out pinned v0.93 release source")
     if checkout != {
-        "name": "Check out authenticated QA source",
+        "name": "Check out pinned v0.93 release source",
         "uses": CHECKOUT_ACTION,
         "with": {
-            "ref": "${{ github.event.workflow_run.head_sha }}",
+            "ref": "d0f08295b528f42493f5e8dd4b438c17dc304ec4",
             "fetch-depth": 0,
             "persist-credentials": False,
         },
     }:
         raise ConsolidatedPublicationGateError(
-            "release checkout must remain exact-source and credentialless"
+            "release recovery checkout must remain pinned and credentialless"
         )
     setup = _named_step(steps, "Set up pinned Python")
     if setup != {
@@ -660,7 +645,7 @@ def validate_release_workflow(workflow_text: str) -> None:
     collapsed = workflow_text
     for forbidden in (
         "Sector.exe",
-        "workflow_dispatch",
+        "github.event.workflow_run",
         "pull_request",
         "environment",
         "sign_and_verify",
@@ -677,6 +662,18 @@ def validate_release_workflow(workflow_text: str) -> None:
         if forbidden.casefold() in collapsed.casefold():
             raise ConsolidatedPublicationGateError(
                 f"release workflow contains forbidden capability {forbidden!r}"
+            )
+    for forbidden_pattern in (
+        r"\bcontents\s*:\s*write\b",
+        r"\b(?:post|put|patch|delete)\b",
+        r"uploads\.github\.com",
+        r"\bgh\s+release\b",
+        r"/releases/tags/v0\.93\b",
+    ):
+        if re.search(forbidden_pattern, workflow_text, re.IGNORECASE):
+            raise ConsolidatedPublicationGateError(
+                "release recovery workflow contains a forbidden mutation or "
+                "published-only lookup"
             )
     release_contract = {
         "name": workflow["name"],
