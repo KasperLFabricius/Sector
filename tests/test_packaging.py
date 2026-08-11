@@ -81,6 +81,8 @@ def test_portable_powershell_checks_exact_python_before_any_output():
     assert "[int]$identity.version[0] -ne 3" in script
     assert "[int]$identity.version[1] -ne 13" in script
     assert "[int]$identity.version[2] -ne 0" in script
+    assert "{'bits': struct.calcsize('P') * 8" in script
+    assert '{"bits": struct.calcsize("P") * 8' not in script
     assert "Get-Command python.exe -CommandType Application -All" in script
     assert "foreach ($pythonCommand in $pythonCommands)" in script
     assert "Executable = $pythonSource" in script
@@ -93,6 +95,61 @@ def test_portable_powershell_checks_exact_python_before_any_output():
     assert "$env:SECTOR_PORTABLE_OUTPUT" in script
     assert "start-process" not in folded
     assert "-verb runas" not in folded
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell probe is Windows-only")
+def test_portable_probe_survives_windows_powershell_native_argument_rules(tmp_path):
+    if (
+        sys.implementation.name != "cpython"
+        or sys.version_info[:3] != (3, 13, 0)
+        or sys.maxsize <= 2**32
+    ):
+        pytest.skip("probe regression requires exact 64-bit CPython 3.13.0")
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    powershell = shutil.which("powershell")
+    assert powershell is not None
+    script = (root / "packaging" / "build_portable.ps1").read_text(
+        encoding="utf-8"
+    )
+    definitions = script.split(
+        "# Interpreter identity is checked before resolving or creating any output.",
+        maxsplit=1,
+    )[0]
+    harness = tmp_path / "probe-python-identity.ps1"
+    harness.write_text(
+        definitions
+        + r'''
+$accepted = Test-SectorPortablePython -Executable $env:SECTOR_TEST_PYTHON
+if ($null -eq $accepted) {
+    throw 'Exact Python identity probe was rejected'
+}
+Write-Output ([string]$accepted.Executable)
+''',
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["SECTOR_TEST_PYTHON"] = sys.executable
+
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(harness),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == sys.executable
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell resolver is Windows-only")

@@ -22,7 +22,7 @@ function Test-SectorPortablePython {
 
     $probe = @'
 import json, platform, struct, sys
-print(json.dumps({"bits": struct.calcsize("P") * 8, "implementation": platform.python_implementation(), "version": list(sys.version_info[:3])}, sort_keys=True))
+print(json.dumps({'bits': struct.calcsize('P') * 8, 'implementation': platform.python_implementation(), 'version': list(sys.version_info[:3])}, sort_keys=True))
 '@
     $probeArguments = @($PrefixArguments) + @("-I", "-S", "-c", $probe)
     try {
