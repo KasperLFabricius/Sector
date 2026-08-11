@@ -254,9 +254,12 @@ def test_complete_portable_build_is_dynamic_canonical_and_reverifiable(tmp_path)
 
 
 def test_tracked_readme_template_and_authenticated_version_render_together():
+    attributes = (ROOT / ".gitattributes").read_text(encoding="ascii").splitlines()
+    assert "packaging/README-PORTABLE.txt text eol=lf" in attributes
     template = (
         ROOT / "packaging" / "README-PORTABLE.txt"
     ).read_bytes()
+    assert b"\r" not in template
     snapshot = SimpleNamespace(
         files=(
             SimpleNamespace(
