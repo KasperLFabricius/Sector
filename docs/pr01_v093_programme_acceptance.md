@@ -1,8 +1,9 @@
 # PR-01 Sector v0.93 programme acceptance
 
-Status: candidate acceptance contract for pull request 382. GitHub records the
-eventual squash identity; this document does not invent or self-reference a
-commit that does not yet exist.
+Status: accepted and merged as PR #382. Reviewed head
+`f71ebb7aa6a901dbe443f90d62f50a2bb0113ffd` passed Sector QA run
+`31284648970`; squash `2f4934ec7c212fd39da9e3f19ba02292b5213c46`
+has accepted tree `ce17dde757e7eae76d0fa39c103d20d2049de8bb`.
 
 ## Exact planning base
 
@@ -110,6 +111,6 @@ version, packaging, Sector runtime manual/report publication-generation or
 release-behaviour change. Sector therefore remains version 0.92 and the
 historical v0.92 acceptance records stay unchanged.
 
-The focused automated gate and GitHub checks are recorded in pull request 382;
-merge is permitted only after they are green and the exact diff remains within
-this scope.
+The focused automated gate and exact-head GitHub checks passed before PR #382
+was squash-merged; the accepted identities are recorded at the top of this
+historical slice record.

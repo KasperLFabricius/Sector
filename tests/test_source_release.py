@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 import tools.build_source_release as source_release
+from sector import __version__ as SECTOR_VERSION
 from tools.build_exact_commit import prepare_exact_build
 from tools.build_source_release import (
     SourceReleaseError,
@@ -34,22 +35,24 @@ COMMIT = subprocess.run(
     capture_output=True,
     text=True,
 ).stdout.strip()
+SOURCE_ARCHIVE_NAME = f"Sector-v{SECTOR_VERSION}-source.zip"
+SOURCE_ROOT_NAME = f"Sector-v{SECTOR_VERSION}"
 
 
 @pytest.fixture(scope="module")
 def extracted_source_release(tmp_path_factory):
     root = tmp_path_factory.mktemp("verified-source-release")
-    archive = root / "Sector-v0.92-source.zip"
+    archive = root / SOURCE_ARCHIVE_NAME
     build_source_release(ROOT, COMMIT, archive)
     with zipfile.ZipFile(archive) as bundle:
         bundle.extractall(root / "extracted")
-    return root / "extracted" / "Sector-v0.92"
+    return root / "extracted" / SOURCE_ROOT_NAME
 
 
 @pytest.fixture(scope="module")
 def accepted_source_archive(tmp_path_factory):
     root = tmp_path_factory.mktemp("accepted-source-archive")
-    archive = root / "Sector-v0.92-source.zip"
+    archive = root / SOURCE_ARCHIVE_NAME
     build_source_release(ROOT, COMMIT, archive)
     return archive
 
@@ -119,21 +122,21 @@ def _source_build_script_repository(tmp_path: Path) -> tuple[Path, str]:
 
 
 def test_source_archive_is_exact_and_reports_revision_without_git(tmp_path):
-    archive = tmp_path / "Sector-v0.92-source.zip"
+    archive = tmp_path / SOURCE_ARCHIVE_NAME
     evidence = build_source_release(ROOT, COMMIT, archive)
     verified = verify_source_release(ROOT, COMMIT, archive)
 
     assert evidence == verified
     assert evidence.source_revision == COMMIT
-    assert evidence.sector_version == "0.92"
+    assert evidence.sector_version == SECTOR_VERSION
     assert evidence.archive_sha256
     with zipfile.ZipFile(archive) as bundle:
         names = bundle.namelist()
-        marker = "Sector-v0.92/sector/sector_build_info.json"
+        marker = f"{SOURCE_ROOT_NAME}/sector/sector_build_info.json"
         manifest = json.loads(bundle.read(marker))
         assert manifest["source_revision"] == COMMIT
         assert manifest["source_tree"] == evidence.source_tree
-        assert manifest["sector_version"] == "0.92"
+        assert manifest["sector_version"] == SECTOR_VERSION
         assert manifest["source_release_schema"] == 2
         assert manifest["source_commit_payload_base64"]
         assert len(manifest["source_files"]) == evidence.source_file_count
@@ -142,7 +145,7 @@ def test_source_archive_is_exact_and_reports_revision_without_git(tmp_path):
         )
         bundle.extractall(tmp_path / "extracted")
 
-    source_root = tmp_path / "extracted" / "Sector-v0.92"
+    source_root = tmp_path / "extracted" / SOURCE_ROOT_NAME
     result = subprocess.run(
         [
             sys.executable,
@@ -608,8 +611,8 @@ def test_github_style_snapshot_without_manifest_is_not_a_release_archive(tmp_pat
 
 
 def test_two_source_archive_builds_are_byte_identical(tmp_path):
-    first = tmp_path / "first" / "Sector-v0.92-source.zip"
-    second = tmp_path / "second" / "Sector-v0.92-source.zip"
+    first = tmp_path / "first" / SOURCE_ARCHIVE_NAME
+    second = tmp_path / "second" / SOURCE_ARCHIVE_NAME
 
     first_evidence = build_source_release(ROOT, COMMIT, first)
     second_evidence = build_source_release(ROOT, COMMIT, second)
@@ -635,7 +638,7 @@ def test_source_archive_rejects_bytes_outside_canonical_zip(tmp_path, position):
 
 
 def test_existing_source_archive_is_preserved(tmp_path):
-    archive = tmp_path / "Sector-v0.92-source.zip"
+    archive = tmp_path / SOURCE_ARCHIVE_NAME
     archive.write_bytes(b"preserve")
 
     with pytest.raises(SourceReleaseError, match="already exists"):

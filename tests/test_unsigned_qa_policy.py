@@ -55,7 +55,10 @@ def test_windows_job_is_explicitly_unsigned_qa_only():
     assert "python -m PyInstaller" not in script + second["run"]
 
     upload = _step(job, "Upload unsigned QA reproducibility evidence")
-    assert upload["with"]["name"] == "Sector-Windows-unsigned-QA"
+    assert upload["with"]["name"] == (
+        "Sector-Windows-unsigned-QA-"
+        "${{ github.run_id }}-${{ github.run_attempt }}"
+    )
     for token in (
         "${{ env.SECTOR_PACKAGE_ROOT_A }}/",
         "${{ env.SECTOR_PACKAGE_ROOT_B }}/",
@@ -79,8 +82,8 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
     for token in (
         'ProductName = "Sector"',
         'FileDescription = "Structural-analysis and design calculation tool"',
-        'FileVersion = "0.92.0.0"',
-        'ProductVersion = "0.92.0.0"',
+        'FileVersion = "0.93.0.0"',
+        'ProductVersion = "0.93.0.0"',
         'OriginalFilename = "Sector.exe"',
         'LegalCopyright = "Copyright (c) 2026 Kasper Lindskov Fabricius. All rights reserved."',
         "versionInfo.CompanyName",
@@ -107,7 +110,7 @@ def test_qa_verifies_complete_windows_and_manifest_identity_before_upload():
     for token in (
         '"__product_name__": "Sector"',
         '"__description__": "Structural-analysis and design calculation tool"',
-        '"__version__": "0.92"',
+        '"__version__": "0.93"',
         '"__author__": "Kasper Lindskov Fabricius"',
         '"__licensee__": "Sweco Danmark A/S"',
         '"source_revision"',

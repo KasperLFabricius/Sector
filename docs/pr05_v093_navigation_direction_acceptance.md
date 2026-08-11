@@ -1,8 +1,9 @@
 # PR-05 Sector v0.93 navigation and modelled-direction acceptance
 
-Status: candidate acceptance contract for the PR-05 development branch.
-GitHub records the eventual pull request, exact candidate, tree and squash
-identities; this document does not invent evidence that has not been run.
+Status: accepted and merged as PR #386. Reviewed head
+`22bccddda637ab272fe295e2d8642b917db91281` passed Sector QA run
+`31347533074`; squash `e622dd1de7649fe2af974120922bd8ba8aec067a`
+has accepted tree `bf2c8184d5289d1f1e7a17eb69c0e591aa16403a`.
 
 ## Exact accepted base
 
@@ -205,6 +206,6 @@ The first sandboxed pytest attempts encountered the known Python 3.13 Windows
 temporary-directory ACL error before any test body ran. Identical commands on
 verified-new external temporary roots produced the passing results above. No
 local browser, JavaScript runtime, raster renderer or Windows package build was
-launched. GitHub must record the exact candidate revision/tree and pass the
-complete coverage, real report/manual render and unsigned Windows package
-workflows on that same head before merge.
+launched. GitHub recorded the exact revision/tree above and the complete
+coverage, real report/manual render and unsigned Windows package workflows
+passed on that head before merge.

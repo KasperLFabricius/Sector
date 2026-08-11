@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DECISIONS = ROOT / "docs" / "v093_decision_register.md"
 PROGRAMME = ROOT / "docs" / "v093_pr_programme.md"
 ACCEPTANCE = ROOT / "docs" / "pr01_v093_programme_acceptance.md"
+RELEASE_ACCEPTANCE = ROOT / "docs" / "pr09_v093_release_acceptance.md"
+RELEASE_NOTES = ROOT / "docs" / "v093_release_notes.md"
 WORKBOOK = ROOT / "docs" / "sector_v093_decision_register.xlsx"
 WORKBOOK_BUILDER = ROOT / "tools" / "build_v093_decision_workbook.ps1"
 
@@ -416,6 +418,7 @@ def _markdown_table_after(
 
 def _expected_workbook_rows() -> dict[str, list[list[str]]]:
     decisions_text = _ascii(DECISIONS)
+    programme_text = _ascii(PROGRAMME)
     decisions = _markdown_rows(decisions_text, r"^\| D093-\d{3} \|", 5)
     decision_rows = [
         [
@@ -431,9 +434,15 @@ def _expected_workbook_rows() -> dict[str, list[list[str]]]:
         "Family",
         4,
     )
+    programme_rows = _markdown_table_after(
+        programme_text,
+        "Programme status is updated only after objective evidence exists.",
+        "Order",
+        4,
+    )
     return {
         "Decisions": [_DECISION_HEADERS, *decision_rows],
-        "PR Programme": [list(row) for row in _PR01_PROGRAMME_SNAPSHOT_ROWS],
+        "PR Programme": [_PROGRAMME_HEADERS, *programme_rows],
         "Standards": [_STANDARDS_HEADERS, *standards_rows],
         "Publication QA": [list(row) for row in _PR01_PUBLICATION_QA_SNAPSHOT_ROWS],
     }
@@ -530,6 +539,8 @@ def test_v093_programme_documents_are_ascii_and_linked_from_readme():
     decisions = _ascii(DECISIONS)
     programme = _ascii(PROGRAMME)
     acceptance = _ascii(ACCEPTANCE)
+    release_acceptance = _ascii(RELEASE_ACCEPTANCE)
+    release_notes = _ascii(RELEASE_NOTES)
     readme = _ascii(ROOT / "README.md")
 
     assert "[v0.93 decision register](docs/v093_decision_register.md)" in readme
@@ -537,10 +548,13 @@ def test_v093_programme_documents_are_ascii_and_linked_from_readme():
     assert (
         "[formatted Excel register](docs/sector_v093_decision_register.xlsx)" in readme
     )
-    assert "[programme acceptance](docs/pr01_v093_programme_acceptance.md)" in readme
+    assert "[v0.93 release acceptance](docs/pr09_v093_release_acceptance.md)" in readme
+    assert "[v0.93 release notes](docs/v093_release_notes.md)" in readme
     assert "[Sector product identity](product_identity.md)" in decisions
     assert "[v0.93 decision register](v093_decision_register.md)" in programme
     assert "[Sector product identity](product_identity.md)" in acceptance
+    assert "[Sector product identity](product_identity.md)" in release_acceptance
+    assert "Sector 0.93 release-candidate notes" in release_notes
     assert "immutable PR-01 planning snapshot" in programme
     assert "immutable PR-01 planning snapshot" in acceptance
     assert "routine programme-status changes do not regenerate it" in programme
@@ -669,6 +683,14 @@ def test_programme_status_lifecycle_supports_future_execution_updates():
 
     builder = _ascii(WORKBOOK_BUILDER)
     assert "(Merged|In progress|Planned)" in builder
+    assert (
+        '$decisionText = $decisionText.Replace("`r`n", "`n").Replace("`r", "`n")'
+        in builder
+    )
+    assert (
+        '$programmeText = $programmeText.Replace("`r`n", "`n").Replace("`r", "`n")'
+        in builder
+    )
 
 
 def test_excel_decision_register_package_is_publication_safe():
@@ -732,6 +754,7 @@ def test_excel_decision_register_package_is_publication_safe():
 
 def test_excel_decision_register_matches_every_canonical_row_and_formula():
     expected_rows = _expected_workbook_rows()
+    programme_statuses = [row[3] for row in expected_rows["PR Programme"][1:]]
 
     with zipfile.ZipFile(WORKBOOK) as archive:
         names = set(archive.namelist())
@@ -756,8 +779,14 @@ def test_excel_decision_register_matches_every_canonical_row_and_formula():
             "E5": ("27", "COUNTA(Decisions!A5:A31)"),
             "E6": ("26", 'COUNTIF(Decisions!G5:G31,"Implement")'),
             "E7": ("1", 'COUNTIF(Decisions!G5:G31,"Deferred")'),
-            "E8": ("9", "COUNTIF('PR Programme'!D5:D14,\"Planned\")"),
-            "E9": ("1", "COUNTIF('PR Programme'!D5:D14,\"In progress\")"),
+            "E8": (
+                str(programme_statuses.count("Planned")),
+                "COUNTIF('PR Programme'!D5:D14,\"Planned\")",
+            ),
+            "E9": (
+                str(programme_statuses.count("In progress")),
+                "COUNTIF('PR Programme'!D5:D14,\"In progress\")",
+            ),
         }
         assert {cell: read_me[cell] for cell in expected_summary} == expected_summary
 
@@ -837,7 +866,7 @@ def test_excel_decision_register_matches_every_canonical_row_and_formula():
             }
 
 
-def test_pr01_acceptance_hash_pins_the_generated_workbook_and_markdown():
+def test_historical_pr01_and_current_pr09_workbook_receipts_are_distinct():
     acceptance = _ascii(ACCEPTANCE)
     collapsed = " ".join(acceptance.split())
     workbook_match = re.search(
@@ -852,8 +881,12 @@ def test_pr01_acceptance_hash_pins_the_generated_workbook_and_markdown():
 
     assert workbook_match is not None
     assert markdown_match is not None
-    assert workbook_match.group(1) == _file_sha256(WORKBOOK)
-    assert markdown_match.group(1) == _canonical_markdown_sha256(DECISIONS)
+    assert workbook_match.group(1) == (
+        "0F6400E4C548334799BE795AB7F10E59FE34A33E85D9754C4A15EF029C5B4B4E"
+    )
+    assert markdown_match.group(1) == (
+        "4BA8FEA833BF453BE627C59B1828C70140C11453B9F0B7E16D5F8C67C46F88B8"
+    )
     decision_bytes = DECISIONS.read_bytes()
     crlf_bytes = _lf_normalized_bytes(decision_bytes).replace(b"\n", b"\r\n")
     assert hashlib.sha256(_lf_normalized_bytes(crlf_bytes)).hexdigest().upper() == (
@@ -862,6 +895,21 @@ def test_pr01_acceptance_hash_pins_the_generated_workbook_and_markdown():
     assert "All eight resulting pages were rendered at" in collapsed
     assert "no runtime, solver, Streamlit, project-schema" in collapsed
     assert "Sector therefore remains version 0.92" in collapsed
+
+    release_acceptance = _ascii(RELEASE_ACCEPTANCE)
+    release_workbook_match = re.search(
+        r"- Refreshed workbook SHA-256:\s+`([0-9A-F]{64})`",
+        release_acceptance,
+    )
+    release_markdown_match = re.search(
+        r"- Canonical decision Markdown SHA-256:\s+`([0-9A-F]{64})`",
+        release_acceptance,
+    )
+    assert release_workbook_match is not None
+    assert release_markdown_match is not None
+    assert release_workbook_match.group(1) == _file_sha256(WORKBOOK)
+    assert release_markdown_match.group(1) == _canonical_markdown_sha256(DECISIONS)
+    assert release_workbook_match.group(1) != workbook_match.group(1)
 
 
 def test_complete_calculation_not_only_crack_spacing_is_textbook_readable():
@@ -905,14 +953,18 @@ def test_complete_calculation_not_only_crack_spacing_is_textbook_readable():
     ) in collapsed
 
 
-def test_pr01_is_planning_only_and_current_release_remains_0_92():
+def test_pr01_remains_historical_and_current_candidate_is_0_93():
     programme = _ascii(PROGRAMME)
     readme = _ascii(ROOT / "README.md")
 
     pr01 = programme.split("### PR-01", 1)[1].split("### PR-02", 1)[0]
     assert "no runtime, solver, schema, version or packaging behaviour changes" in pr01
-    assert "Current release: **Sector 0.92**" in readme
-    assert "no Windows executable is published" in " ".join(readme.split())
+    assert "Current release candidate: **Sector 0.93**" in readme
+    assert "No signed installer is prepared" in " ".join(readme.split())
+    assert "Sector 0.92 remains the last publicly published release" in " ".join(
+        readme.split()
+    )
+    assert "Sector-v0.93-windows-portable-unsigned.zip" in readme
 
 
 def test_programme_preserves_product_and_release_boundaries():

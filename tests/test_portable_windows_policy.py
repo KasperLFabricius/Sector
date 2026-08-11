@@ -277,7 +277,10 @@ def test_final_gather_reverifies_downloads_and_never_executes_sector() -> None:
         "name": "Upload unsigned portable Windows evidence",
         "uses": UPLOAD_ACTION,
         "with": {
-            "name": "Sector-Windows-portable-unsigned-QA",
+            "name": (
+                "Sector-Windows-portable-unsigned-QA-"
+                "${{ github.run_id }}-${{ github.run_attempt }}"
+            ),
             "path": "qa-artifacts/portable-windows/",
             "if-no-files-found": "error",
             "include-hidden-files": True,

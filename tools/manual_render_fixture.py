@@ -31,6 +31,10 @@ from tools.publication_preflight import (  # noqa: E402
 from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
 _EXPECTED_FIGURE_COUNT = 16
+_CURRENT_SCHEMA_COMPATIBILITY = (
+    "Sector v0.93 supports only current project schema version 24"
+)
+_OBSOLETE_SCHEMA_COMPATIBILITY = "in-development Sector v0.93 line"
 _UNRENDERED_MATH_TOKENS = (
     "sqrt",
     "Cfrac",
@@ -55,7 +59,7 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "62b5b4c82e793356027bbc8717bbbdcffc84dab545ff30a97f221ee0bd7b7405",
+        "c5d3cc47ca5f472932288b954e51378b1f5b2c95b3a664266f19a05d61506d27",
     ),
 )
 
@@ -194,6 +198,18 @@ def _unrendered_math_token(text: str) -> str | None:
     return None
 
 
+def _validate_release_compatibility_wording(flat_text: str) -> None:
+    if _OBSOLETE_SCHEMA_COMPATIBILITY in flat_text:
+        raise AssertionError(
+            "the manual contains obsolete v0.93 development wording"
+        )
+    if _CURRENT_SCHEMA_COMPATIBILITY not in flat_text:
+        raise AssertionError(
+            "expected manual content is missing: "
+            f"{_CURRENT_SCHEMA_COMPATIBILITY}"
+        )
+
+
 def validate_visible_contents_destinations(reader, outline_entries) -> None:
     """Require every Part link across the complete visible contents pages."""
 
@@ -227,6 +243,7 @@ def validate_pdf_content(pdf: bytes) -> str:
     flat_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
+    _validate_release_compatibility_wording(flat_text)
     leaked_token = _unrendered_math_token(text)
     if leaked_token is not None:
         raise AssertionError(
@@ -327,7 +344,6 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Optional-null fields remain absent rather than becoming zero",
         "retains the entered numeric precision internally",
         "current project schema version 24",
-        "in-development Sector v0.93 line",
         "Released Sector 0.92 projects used schema version 23",
         "published project-adoption basis",
         "no Danish National Annex",

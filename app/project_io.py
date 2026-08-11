@@ -2,8 +2,8 @@
 
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
-Released Sector 0.92 projects used schema 23. The in-development Sector 0.93
-line accepts only current schema version 24 and carries no legacy schema
+Released Sector 0.92 projects used schema 23. Sector 0.93 accepts only current
+schema version 24 and carries no legacy schema
 migration. An exact in-schema migration retains the two report labels written
 by early schema-24 builds. Retired component-mapped bridge inputs are
 deliberately absent from the schema.

@@ -1,8 +1,9 @@
 # PR-02 Sector v0.93 bridge-scope and standards-registry acceptance
 
-Status: candidate acceptance contract for the PR-02 branch. GitHub records the
-eventual pull-request and squash identities; this document does not invent or
-self-reference a commit that does not yet exist.
+Status: accepted and merged as PR #383. Reviewed head
+`49450886491e7c23d97ff434ee00b2f9c6dc2e81` passed Sector QA run
+`31293520526`; squash `b328144abf175e0025c796da929dfe01fd843293`
+has accepted tree `b2edde56dc0b37dd19e3250011d04b1a3257f6cc`.
 
 ## Exact accepted base
 
@@ -129,7 +130,7 @@ also passed. An attempted full 216-test local Streamlit/lazy-startup run remaine
 CPU-active without a failure trace until the one-hour command wrapper ended; no
 pytest summary was recoverable, so that attempt is not counted as evidence and
 was not repeated. The focused affected UI gate above is green, while the full
-repository and unsigned Windows QA-package workflows remain mandatory on the
-exact committed GitHub head. Unrelated numerical solver and packaging suites
-were not duplicated locally because this slice does not change those kernels or
-the package boundary.
+repository and unsigned Windows QA-package workflows subsequently passed on the
+exact committed GitHub head recorded above. Unrelated numerical solver and
+packaging suites were not duplicated locally because this slice does not change
+those kernels or the package boundary.

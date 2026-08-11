@@ -8,6 +8,7 @@ import pytest
 import tomllib
 import yaml
 
+from tools.verify_consolidated_publication_gate import FULL_TEST_RUN
 from tools.verify_coverage_gate import (
     BASELINE_ENV,
     BASELINE_EXPRESSION,
@@ -59,8 +60,12 @@ def test_exact_contract_and_workflow_are_aligned():
     assert expected_validator_command().endswith(
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
     )
-    assert "--cov=app --cov=sector" in expected_coverage_command(data)
+    assert "--dist loadgroup" in expected_coverage_command(data)
+    assert "--basetemp $baseTemp" in expected_coverage_command(data)
+    assert "--cov=app" in expected_coverage_command(data)
+    assert "--cov=sector" in expected_coverage_command(data)
     assert "--cov-fail-under=90" in expected_coverage_command(data)
+    assert expected_coverage_command(data) == FULL_TEST_RUN
     assert data["waivers"] == []
 
 

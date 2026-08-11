@@ -1,9 +1,11 @@
 # PR-08 Sector v0.93 portable Windows packaging acceptance
 
-Status: candidate acceptance contract for the PR-08 development branch.
-GitHub must record the final candidate head, accepted tree, checks, portable
-artifact and squash identity. This document does not invent remote build or
-startup evidence that has not yet run.
+Status: accepted and merged as PR #390. Reviewed head
+`6847246b26fb7d598f909fac6a93628e8e914597` and accepted tree
+`b47d4acfe1112a512d31ece0e300e7837bb304e6` passed Sector QA run
+`31491022341`; squash `470bbfbc4a80be524d32d1fd6f9509a1c60deede`
+has the same tree. Final portable artifact ID `9103299450` has artifact digest
+`b581f70c7c29f28bf3cec2437563a4d3e49740aa2abd3c1d05b1403e22fc19dc`.
 
 ## Accepted upstream base
 
@@ -170,5 +172,6 @@ The final exact candidate must record:
 - an independent final Codex P0-P2 review plus the exact GitHub head, tree,
   workflow run, artifact IDs/digests, squash revision and merged-tree parity.
 
-Until those receipts exist, this document remains a candidate contract and the
-programme status remains `In progress`.
+All listed receipts exist on the exact accepted head recorded above. The full
+gate, both producers, immutable comparison, controlled startup smoke and final
+portable gather passed before squash merge; the programme status is `Merged`.

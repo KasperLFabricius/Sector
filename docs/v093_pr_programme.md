@@ -37,8 +37,8 @@ slices stay planned.
 | 6 | PR-06 - Optional crack criterion and DK/NA heightened check | PR-03, PR-04, PR-05 | Merged |
 | 7 | PR-07A - Eurocode-style shared equation renderer | PR-03 | Merged |
 | 8 | PR-07B - Manual/report information architecture and profiles | PR-06, PR-07A | Merged |
-| 9 | PR-08 - Double-click portable Windows packaging | PR-07B | In progress |
-| 10 | PR-09 - Full qualification and Sector 0.93 release | PR-01 through PR-08 | Planned |
+| 9 | PR-08 - Double-click portable Windows packaging | PR-07B | Merged |
+| 10 | PR-09 - Full qualification and Sector 0.93 release | PR-01 through PR-08 | In progress |
 
 Historical v0.92 acceptance documents and preserved QA artifacts remain
 evidence. They are not rewritten to make later policy look historical. Every
@@ -505,7 +505,7 @@ The reference report supplies concrete failure cases for the redesign:
 | 3-4 and 27 | Internal `EQ-*` keys and text equations are visible to ordinary readers. | Show user-facing publication numbers/titles; retain internal keys only as Audit metadata. |
 | 27 and 35 | Approximately 5 and 7 percent ink coverage follows over-broad keep-together rules. | Keep equation/substitution/result together but permit notation/prose to continue normally. |
 | 42 | The report honestly states that crack width was calculated without a criterion. | Preserve the distinction using the controlled `CALCULATED - ACCEPTANCE NOT ASSESSED` state. |
-| 43 | Crack spacing and mean-strain equations omit numerical substitution. | Retain the missing values in the existing crack result and publish every operand, substitution and interim result. |
+| 43 | Crack spacing and mean-strain equations omit numerical substitution. | Publish every operand, substitution and interim result from typed solver evidence. |
 | 49-54 | Fatigue detail is useful for audit but excessive for ordinary review. | Brief shows governing status; Standard shows spectrum/governing element; Audit retains bins and damage chains. |
 | 55 | Component-mapped bridge checks remain visible. | Remove them completely under PR-02. |
 | 56 | The QA appendix is a continuous bullet wall. | Replace it with a structured basis register: standard, edition, clause, option/NDP, assumption, limitation and affected result. |
@@ -941,8 +941,9 @@ Scope:
 - run the complete exact-head qualification matrix;
 - update version/resource/report/manual/package identity to 0.93;
 - build and verify exact source and portable application assets;
-- create annotated tags and the source/application GitHub release; and
-- publish hashes, limitations and QA receipts.
+- create the annotated tag and guarded draft source/application GitHub release;
+  and
+- attach hashes, limitations and QA receipts to that draft.
 
 Acceptance:
 
@@ -959,7 +960,8 @@ Acceptance:
 
 Tests: full suite with a new unique pytest base temp, consolidated publication
 gate, all PDF structural/raster gates, exact source archive verification, two
-Windows builds, portable startup smoke and post-publication asset revalidation.
+Windows builds, portable startup smoke and post-attachment draft-asset
+revalidation.
 
 ## 4. Risk-based development test policy
 
@@ -1035,6 +1037,7 @@ The v0.93 programme is complete only when:
 - the double-click BAT produces a verified complete unsigned portable ZIP from
   an extracted official source release;
 - the full exact-head qualification passes;
-- source and portable release assets are reverified after publication;
+- source and portable release assets are reverified after attachment to the
+  authenticated draft release;
 - the Excel decision workbook matches the accepted Markdown register; and
 - Sector 0.93 retains the exact product identity and responsibility boundary.

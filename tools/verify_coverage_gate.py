@@ -206,14 +206,25 @@ def expected_validator_command() -> str:
 
 def expected_coverage_command(data: Mapping[str, Any]) -> str:
     coverage = data["coverage"]
-    targets = " ".join(f"--cov={target}" for target in coverage["targets"])
-    return (
-        f"python -m pytest tests -n 4 {targets} "
-        "--cov-report=term-missing:skip-covered "
-        "--cov-report=xml:qa-artifacts/coverage.xml "
-        f"--cov-fail-under={coverage['minimum_percent']} "
-        "--junitxml=qa-artifacts/test-results.xml"
+    targets = "\n".join(
+        f"  --cov={target} `" for target in coverage["targets"]
     )
+    return f'''$ErrorActionPreference = "Stop"
+$baseTemp = Join-Path $env:RUNNER_TEMP (
+  "sector-pytest-{{0}}-{{1}}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+)
+if (Test-Path -LiteralPath $baseTemp) {{
+  throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
+}}
+python -m pytest tests -n 4 `
+  --dist loadgroup `
+  --basetemp $baseTemp `
+{targets}
+  --cov-report=term-missing:skip-covered `
+  --cov-report=xml:qa-artifacts/coverage.xml `
+  --cov-fail-under={coverage['minimum_percent']} `
+  --junitxml=qa-artifacts/test-results.xml
+'''
 
 
 def _workflow_mapping(workflow_text: str) -> Mapping[str, Any]:
@@ -291,10 +302,12 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         raise CoverageGateContractError("coverage validator command differs")
 
     coverage_step = _named_step(steps, COVERAGE_STEP_NAME)
-    if set(coverage_step) != {"name", "run"}:
+    if set(coverage_step) != {"name", "shell", "run"}:
         raise CoverageGateContractError(
             "coverage test step must be unconditional and failure-propagating"
         )
+    if coverage_step.get("shell") != "pwsh":
+        raise CoverageGateContractError("coverage test shell differs")
     if coverage_step.get("run") != expected_coverage_command(data):
         raise CoverageGateContractError("coverage test command differs")
 

@@ -25,6 +25,8 @@ if ((Test-Path -LiteralPath $outputPath) -and -not $ReplaceGenerated) {
 
 $decisionText = Get-Content -LiteralPath $decisionPath -Raw -Encoding UTF8
 $programmeText = Get-Content -LiteralPath $programmePath -Raw -Encoding UTF8
+$decisionText = $decisionText.Replace("`r`n", "`n").Replace("`r", "`n")
+$programmeText = $programmeText.Replace("`r`n", "`n").Replace("`r", "`n")
 
 function Get-NormalizedTextSha256 {
     param([Parameter(Mandatory)][string]$Text)
