@@ -81,12 +81,99 @@ def test_portable_powershell_checks_exact_python_before_any_output():
     assert "[int]$identity.version[0] -ne 3" in script
     assert "[int]$identity.version[1] -ne 13" in script
     assert "[int]$identity.version[2] -ne 0" in script
+    assert "Get-Command python.exe -CommandType Application -All" in script
+    assert "foreach ($pythonCommand in $pythonCommands)" in script
+    assert "Executable = $pythonSource" in script
+    assert "Get-Command py.exe -CommandType Application -All" in script
+    assert "foreach ($launcherCommand in $launcherCommands)" in script
+    assert "Executable = $launcherSource" in script
     assert "tools/build_portable_windows.py" in script
     assert '"-I"' in script and '"-S"' in script
     assert "$env:SECTOR_SOURCE_REVISION" in script
     assert "$env:SECTOR_PORTABLE_OUTPUT" in script
     assert "start-process" not in folded
     assert "-verb runas" not in folded
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PowerShell resolver is Windows-only")
+def test_portable_powershell_enumerates_application_candidates_as_scalars(tmp_path):
+    root = pathlib.Path(__file__).resolve().parent.parent
+    powershell = shutil.which("powershell")
+    assert powershell is not None
+    script = (root / "packaging" / "build_portable.ps1").read_text(
+        encoding="utf-8"
+    )
+    definitions = script.split(
+        "# Interpreter identity is checked before resolving or creating any output.",
+        maxsplit=1,
+    )[0]
+    harness = tmp_path / "resolve-python-candidates.ps1"
+    harness.write_text(
+        definitions
+        + r'''
+$script:seen = @()
+function Test-SectorPortablePython {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+        [string[]]$PrefixArguments = @()
+    )
+    $script:seen += $Executable
+    if ($Executable -cne 'C:\Exact Python\python.exe') {
+        return $null
+    }
+    return [PSCustomObject]@{
+        Executable = $Executable
+        PrefixArguments = @($PrefixArguments)
+    }
+}
+function Get-Command {
+    param(
+        [Parameter(Position = 0)]
+        [string]$Name,
+        [string]$CommandType,
+        [switch]$All
+    )
+    if ($Name -ceq 'python.exe') {
+        [PSCustomObject]@{ Source = 'C:\Rejected Python\python.exe' }
+        [PSCustomObject]@{ Source = 'C:\Exact Python\python.exe' }
+    }
+}
+$env:SECTOR_PORTABLE_PYTHON = $null
+$resolved = Resolve-SectorPortablePython
+[PSCustomObject]@{
+    Executable = [string]$resolved.Executable
+    Seen = @($script:seen)
+} | ConvertTo-Json -Compress
+''',
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(harness),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    evidence = json.loads(result.stdout.strip())
+    assert evidence == {
+        "Executable": r"C:\Exact Python\python.exe",
+        "Seen": [
+            r"C:\Rejected Python\python.exe",
+            r"C:\Exact Python\python.exe",
+        ],
+    }
 
 
 def test_portable_powershell_prefers_manifest_and_requires_a_root_git_marker():

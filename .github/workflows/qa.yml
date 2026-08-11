@@ -370,9 +370,13 @@ jobs:
           $env:SECTOR_PORTABLE_OUTPUT = [IO.Path]::GetFullPath(
             $env:SECTOR_PORTABLE_OUTPUT_ROOT
           )
-          $env:SECTOR_PORTABLE_PYTHON = (
-            Get-Command python.exe -CommandType Application
-          ).Source
+          $setupPython = [IO.Path]::GetFullPath(
+            (Join-Path $env:pythonLocation "python.exe")
+          )
+          if (-not (Test-Path -LiteralPath $setupPython -PathType Leaf)) {
+            throw "Producer A setup-python interpreter is missing"
+          }
+          $env:SECTOR_PORTABLE_PYTHON = $setupPython
           $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD_SECTOR_PORTABLE.bat"
           Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER
           try {
@@ -559,9 +563,13 @@ jobs:
           $env:SECTOR_PORTABLE_OUTPUT = [IO.Path]::GetFullPath(
             $env:SECTOR_PORTABLE_OUTPUT_ROOT
           )
-          $env:SECTOR_PORTABLE_PYTHON = (
-            Get-Command python.exe -CommandType Application
-          ).Source
+          $setupPython = [IO.Path]::GetFullPath(
+            (Join-Path $env:pythonLocation "python.exe")
+          )
+          if (-not (Test-Path -LiteralPath $setupPython -PathType Leaf)) {
+            throw "Producer B setup-python interpreter is missing"
+          }
+          $env:SECTOR_PORTABLE_PYTHON = $setupPython
           $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD_SECTOR_PORTABLE.bat"
           Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER
           try {

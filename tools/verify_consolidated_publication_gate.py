@@ -30,10 +30,10 @@ JOB_CONTRACT_SHA256 = {
         "b1d2dc20ddfbbe626296637a3c240c38873bccc18e118c664acde1ffc9e0f8a1"
     ),
     "portable-producer-a": (
-        "52b21221955ff18a6800e4e961eb6c7971c6ca38ad420ed8c548a254c6aa07b5"
+        "306df289c5a8abe9a35c1719d8aaaa0ba42f30ffdbf81327b390a5d902a357ff"
     ),
     "portable-producer-b": (
-        "19e4bb700f6baf2b44acaa396471329dafca686ed2af942f2b8c086e8cb069e9"
+        "8f40e301d03bd0c2cd3b143be3d40b325969fb923ebd3c07da6fd81efd64e481"
     ),
     "portable-compare": (
         "bed676a36a87127959f1b64443533a9d7a62fcd6ca0bb5cdf1c0b5f63550c6a0"

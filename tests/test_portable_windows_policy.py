@@ -117,7 +117,9 @@ def test_each_producer_builds_independently_from_authenticated_gitless_source(
     for token in (
         "SECTOR_PORTABLE_OUTPUT_ROOT",
         "SECTOR_PORTABLE_OUTPUT = [IO.Path]::GetFullPath",
-        "SECTOR_PORTABLE_PYTHON",
+        'Join-Path $env:pythonLocation "python.exe"',
+        "Test-Path -LiteralPath $setupPython -PathType Leaf",
+        "SECTOR_PORTABLE_PYTHON = $setupPython",
         '"BUILD_SECTOR_PORTABLE.bat"',
         "$env:ComSpec /d /s /c",
         "Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER",

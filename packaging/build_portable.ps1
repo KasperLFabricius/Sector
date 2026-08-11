@@ -55,23 +55,35 @@ function Resolve-SectorPortablePython {
     $candidates = @()
     if (-not [string]::IsNullOrWhiteSpace($env:SECTOR_PORTABLE_PYTHON)) {
         $candidates += [PSCustomObject]@{
-            Executable = $env:SECTOR_PORTABLE_PYTHON
+            Executable = [string]$env:SECTOR_PORTABLE_PYTHON
             PrefixArguments = @()
         }
     }
-    $pythonCommand = Get-Command python.exe -CommandType Application `
-        -ErrorAction SilentlyContinue
-    if ($null -ne $pythonCommand) {
+    $pythonCommands = @(
+        Get-Command python.exe -CommandType Application -All `
+            -ErrorAction SilentlyContinue
+    )
+    foreach ($pythonCommand in $pythonCommands) {
+        $pythonSource = [string]$pythonCommand.Source
+        if ([string]::IsNullOrWhiteSpace($pythonSource)) {
+            continue
+        }
         $candidates += [PSCustomObject]@{
-            Executable = $pythonCommand.Source
+            Executable = $pythonSource
             PrefixArguments = @()
         }
     }
-    $launcherCommand = Get-Command py.exe -CommandType Application `
-        -ErrorAction SilentlyContinue
-    if ($null -ne $launcherCommand) {
+    $launcherCommands = @(
+        Get-Command py.exe -CommandType Application -All `
+            -ErrorAction SilentlyContinue
+    )
+    foreach ($launcherCommand in $launcherCommands) {
+        $launcherSource = [string]$launcherCommand.Source
+        if ([string]::IsNullOrWhiteSpace($launcherSource)) {
+            continue
+        }
         $candidates += [PSCustomObject]@{
-            Executable = $launcherCommand.Source
+            Executable = $launcherSource
             PrefixArguments = @("-3.13-64")
         }
     }
