@@ -787,7 +787,8 @@ def test_recovery_has_no_github_mutation_or_unsafe_runtime_launch() -> None:
     assert release_text.count("unset GH_TOKEN") == 4
     assert release_text.count("GH_TOKEN") == 8
     assert release_text.count('["gh", "api", endpoint]') == 1
-    assert release_text.count('gh api "/repos/$SECTOR_REPOSITORY/') == 2
+    assert release_text.count('gh api "/repos/$SECTOR_REPOSITORY/') == 1
+    assert release_text.count('gh api "$1"') == 1
     assert "--method" not in release_text
     assert "for attempt in range(1, 4)" in release_text
     assert "timeout=30" in release_text
@@ -796,6 +797,8 @@ def test_recovery_has_no_github_mutation_or_unsafe_runtime_launch() -> None:
     assert "timeout 30 gh api" in release_text
     assert 'sleep "$api_attempt"' in release_text
     assert "for asset_attempt in 1 2 3" in release_text
+    assert "timeout --signal=TERM --kill-after=15s 360s" in release_text
+    assert "bash -o pipefail -c" in release_text
     assert 'rm -f -- "$asset_target"' in release_text
     assert 'sleep "$asset_attempt"' in release_text
     fresh = _step(job, "Freshly download and verify exact draft assets")["run"]

@@ -892,9 +892,11 @@ jobs:
             asset_target="$fresh/$name"
             asset_downloaded=0
             for asset_attempt in 1 2 3; do
-              if gh api "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
-                   -H "Accept: application/octet-stream" | \
-                   python "$bounded_copy" "$asset_target" "$size" "$digest"; then
+              if timeout --signal=TERM --kill-after=15s 360s \
+                   bash -o pipefail -c \
+                   'gh api "$1" -H "Accept: application/octet-stream" | python "$2" "$3" "$4" "$5"' \
+                   _ "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
+                   "$bounded_copy" "$asset_target" "$size" "$digest"; then
                 asset_downloaded=1
                 break
               fi
