@@ -792,6 +792,9 @@ def test_recovery_has_no_github_mutation_or_unsafe_runtime_launch() -> None:
     assert "for attempt in range(1, 4)" in release_text
     assert "timeout=30" in release_text
     assert "time.sleep(attempt)" in release_text
+    assert "for api_attempt in 1 2 3" in release_text
+    assert "timeout 30 gh api" in release_text
+    assert 'sleep "$api_attempt"' in release_text
     fresh = _step(job, "Freshly download and verify exact draft assets")["run"]
     assert fresh.index("unset GH_TOKEN") < fresh.index(
         "python -I -S tools/verify_v093_release.py"

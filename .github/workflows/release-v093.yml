@@ -786,10 +786,19 @@ jobs:
             echo "Checkout credentials remain despite persist-credentials false" >&2
             exit 1
           fi
-          main_revision="$(
-            gh api "/repos/$SECTOR_REPOSITORY/git/ref/heads/main" \
-              --jq '.object.sha'
-          )"
+          main_revision=""
+          for api_attempt in 1 2 3; do
+            if main_revision="$(
+              timeout 30 gh api "/repos/$SECTOR_REPOSITORY/git/ref/heads/main" \
+                --jq '.object.sha'
+            )"; then
+              break
+            fi
+            main_revision=""
+            if [[ "$api_attempt" -lt 3 ]]; then
+              sleep "$api_attempt"
+            fi
+          done
           unset GH_TOKEN
           if [[ "$main_revision" != "$SECTOR_DISPATCH_SHA" ]]; then
             echo "Canonical main moved after recovery authentication" >&2
