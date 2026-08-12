@@ -21,7 +21,7 @@ DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5
 FULL_COMMIT_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
 SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
 RELEASE_WORKFLOW_CONTRACT_SHA256 = (
-    "2b5ae1ffbb6c3f29027f83784aad918414159fa6122a03e4a8feaf7f92e27835"
+    "42706e9a1076f610c8f288a0d9d6f585d09d0014f0592bac590a401c4f9b7482"
 )
 JOB_CONTRACT_SHA256 = {
     "test": "39cdde5e29c6e182fc326da39eac460f9cf81534c2532469c8461609ed1b0f2a",
@@ -650,6 +650,9 @@ def validate_release_workflow(workflow_text: str) -> None:
         or workflow_text.count("for api_attempt in 1 2 3") != 1
         or workflow_text.count("timeout 30 gh api") != 1
         or workflow_text.count('sleep "$api_attempt"') != 1
+        or workflow_text.count("for asset_attempt in 1 2 3") != 1
+        or workflow_text.count('rm -f -- "$asset_target"') != 1
+        or workflow_text.count('sleep "$asset_attempt"') != 1
     ):
         raise ConsolidatedPublicationGateError(
             "release API calls or token lifetime differ from the GET-only contract"
