@@ -1,4 +1,4 @@
-"""Adversarial policy contract for the read-only v0.93 draft recovery."""
+"""Adversarial policy contract for the GET-only v0.93 draft recovery."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ import pytest
 import yaml
 
 from tools.verify_consolidated_publication_gate import (
-    CHECKOUT_ACTION,
     RELEASE_STEPS,
     SETUP_PYTHON_ACTION,
     ConsolidatedPublicationGateError,
@@ -353,9 +352,13 @@ import os
 import sys
 
 payloads = json.loads(open(os.environ["FAKE_GH_PAYLOADS"], encoding="utf-8").read())
-if len(sys.argv) != 3 or sys.argv[1] != "api" or sys.argv[2] not in payloads:
+if (
+    len(sys.argv) != 5
+    or sys.argv[1:4] != ["api", "--method", "GET"]
+    or sys.argv[4] not in payloads
+):
     raise SystemExit("unexpected fake gh request")
-sys.stdout.write(json.dumps(payloads[sys.argv[2]], ensure_ascii=True))
+sys.stdout.write(json.dumps(payloads[sys.argv[4]], ensure_ascii=True))
 """,
         encoding="utf-8",
         newline="\n",
@@ -366,11 +369,14 @@ sys.stdout.write(json.dumps(payloads[sys.argv[2]], ensure_ascii=True))
     script = _embedded_script(
         "Authenticate exact recovery state and original QA authority", "capture"
     )
-    exact_call = '["gh", "api", endpoint]'
+    exact_call = '["gh", "api", "--method", "GET", endpoint]'
     assert script.count(exact_call) == 1
     script = script.replace(
         exact_call,
-        '[os.environ["FAKE_PYTHON"], os.environ["FAKE_GH"], "api", endpoint]',
+        (
+            '[os.environ["FAKE_PYTHON"], os.environ["FAKE_GH"], '
+            '"api", "--method", "GET", endpoint]'
+        ),
     )
     environment = os.environ.copy()
     environment.update(
@@ -401,7 +407,7 @@ sys.stdout.write(json.dumps(payloads[sys.argv[2]], ensure_ascii=True))
     return completed, snapshot
 
 
-def test_live_recovery_workflow_is_exact_read_only_and_consolidated() -> None:
+def test_live_recovery_workflow_is_exact_get_only_and_consolidated() -> None:
     release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     qa_text = QA_WORKFLOW.read_text(encoding="utf-8")
     validate_release_workflow(release_text)
@@ -421,26 +427,33 @@ def test_live_recovery_workflow_is_exact_read_only_and_consolidated() -> None:
     assert "if" not in job
     assert job["runs-on"] == "ubuntu-latest"
     assert job["timeout-minutes"] == 30
-    assert job["permissions"] == {"actions": "read", "contents": "read"}
+    assert job["permissions"] == {"actions": "read", "contents": "write"}
     assert tuple(step["name"] for step in job["steps"]) == RELEASE_STEPS
     assert "environment" not in job
 
 
 def test_checkout_setup_and_current_main_boundaries_are_exact() -> None:
     job = _workflow()["jobs"]["recovery"]
-    assert _step(job, "Check out pinned v0.93 release source") == {
-        "name": "Check out pinned v0.93 release source",
-        "uses": CHECKOUT_ACTION,
-        "with": {
-            "ref": RELEASE_SOURCE,
-            "fetch-depth": 0,
-            "persist-credentials": False,
-        },
-    }
+    checkout = _step(job, "Check out pinned v0.93 release source")
+    assert set(checkout) == {"name", "shell", "env", "run"}
+    assert checkout["shell"] == "bash"
+    assert checkout["env"] == {"SECTOR_RELEASE_SOURCE": RELEASE_SOURCE}
+    checkout_run = checkout["run"]
+    assert "find . -mindepth 1 -maxdepth 1" in checkout_run
+    assert "git init --quiet ." in checkout_run
+    assert (
+        "git remote add origin https://github.com/KasperLFabricius/Sector.git"
+        in checkout_run
+    )
+    assert "GIT_TERMINAL_PROMPT=0 git -c credential.helper= fetch" in checkout_run
+    assert '--no-tags --depth=1 origin "$SECTOR_RELEASE_SOURCE"' in checkout_run
+    assert "git checkout --quiet --detach FETCH_HEAD" in checkout_run
+    assert 'git rev-parse HEAD)" != "$SECTOR_RELEASE_SOURCE"' in checkout_run
+    assert "github.token" not in checkout_run
     assert _step(job, "Set up pinned Python") == {
         "name": "Set up pinned Python",
         "uses": SETUP_PYTHON_ACTION,
-        "with": {"python-version-file": ".python-version"},
+        "with": {"python-version-file": ".python-version", "token": ""},
     }
 
     first = _step(job, "Authenticate exact recovery state and original QA authority")[
@@ -737,11 +750,47 @@ def test_bounded_asset_copy_accepts_exact_bytes_and_digest(tmp_path: Path) -> No
 
 
 def test_recovery_has_no_github_mutation_or_unsafe_runtime_launch() -> None:
-    collapsed = RELEASE_WORKFLOW.read_text(encoding="utf-8").casefold()
+    workflow = _workflow()
+    job = workflow["jobs"]["recovery"]
+    release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    collapsed = release_text.casefold()
+    token_steps = {
+        step["name"]
+        for step in job["steps"]
+        if (step.get("env") or {}).get("GH_TOKEN") == "${{ github.token }}"
+    }
+    assert token_steps == {
+        "Authenticate exact recovery state and original QA authority",
+        "Verify pinned source and current-main boundary",
+        "Freshly download and verify exact draft assets",
+        "Recheck exact recovery state and current main",
+    }
+    assert release_text.count("GH_TOKEN: ${{ github.token }}") == 4
+    assert release_text.count("unset GH_TOKEN") == 4
+    assert release_text.count("GH_TOKEN") == 8
+    assert release_text.count('["gh", "api", "--method", "GET", endpoint]') == 1
+    assert release_text.count("gh api --method GET") == 2
+    fresh = _step(job, "Freshly download and verify exact draft assets")["run"]
+    assert fresh.index("unset GH_TOKEN") < fresh.index(
+        "python -I -S tools/verify_v093_release.py"
+    )
     for forbidden in (
-        "contents: write",
         "actions: write",
-        "--method",
+        "--method post",
+        "--method put",
+        "--method patch",
+        "--method delete",
+        "--field",
+        "--raw-field",
+        "--input",
+        "git push",
+        "git tag",
+        "git update-ref",
+        "gh release",
+        "gh api graphql",
+        "curl ",
+        "wget ",
+        "invoke-webrequest",
         "uploads.github",
         "/releases/tags/",
         "create release",
@@ -762,6 +811,26 @@ def test_recovery_has_no_github_mutation_or_unsafe_runtime_launch() -> None:
         "actions/upload-artifact",
     ):
         assert forbidden not in collapsed
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement"),
+    [
+        ("--method GET", "--method POST"),
+        ("gh api --method GET", "gh api --method GET -f injected=value"),
+        ("gh api --method GET", "curl -X GET"),
+        ("unset GH_TOKEN", 'echo "$GH_TOKEN" >> "$GITHUB_OUTPUT"'),
+        ("unset GH_TOKEN", "git push origin HEAD:main"),
+    ],
+)
+def test_recovery_rejects_alternate_api_or_token_escape(
+    needle: str, replacement: str
+) -> None:
+    release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    mutated = release_text.replace(needle, replacement, 1)
+    assert mutated != release_text
+    with pytest.raises(ConsolidatedPublicationGateError):
+        validate_release_workflow(mutated)
 
 
 def test_qa_authority_remains_exactly_seven_jobs_and_artifacts() -> None:
@@ -809,10 +878,10 @@ def test_full_suite_has_unique_previously_nonexistent_basetemp() -> None:
     [
         "automatic-trigger",
         "default-write",
-        "job-write",
+        "job-read",
         "job-skip-guard",
         "canonical-guard",
-        "credential-persistence",
+        "authenticated-checkout",
         "floating-checkout",
         "draft-id",
         "skip-external-qa",
@@ -829,8 +898,8 @@ def test_recovery_authority_cannot_be_weakened(mutation: str) -> None:
         }
     elif mutation == "default-write":
         workflow["permissions"] = {"contents": "write"}
-    elif mutation == "job-write":
-        job["permissions"]["contents"] = "write"
+    elif mutation == "job-read":
+        job["permissions"]["contents"] = "read"
     elif mutation == "job-skip-guard":
         job["if"] = (
             "github.repository == 'KasperLFabricius/Sector' && "
@@ -844,12 +913,17 @@ def test_recovery_authority_cannot_be_weakened(mutation: str) -> None:
             '[[ "$SECTOR_REPOSITORY" != "KasperLFabricius/Sector" ]]',
             '[[ "$SECTOR_REPOSITORY" != "$SECTOR_REPOSITORY" ]]',
         )
-    elif mutation == "credential-persistence":
-        _step(job, "Check out pinned v0.93 release source")["with"][
-            "persist-credentials"
-        ] = True
+    elif mutation == "authenticated-checkout":
+        checkout = _step(job, "Check out pinned v0.93 release source")
+        checkout["run"] = checkout["run"].replace(
+            "https://github.com/KasperLFabricius/Sector.git",
+            "https://x-access-token:${{ github.token }}@github.com/"
+            "KasperLFabricius/Sector.git",
+        )
     elif mutation == "floating-checkout":
-        _step(job, "Check out pinned v0.93 release source")["with"]["ref"] = "main"
+        _step(job, "Check out pinned v0.93 release source")["env"][
+            "SECTOR_RELEASE_SOURCE"
+        ] = "main"
     elif mutation == "draft-id":
         authority = _step(
             job, "Authenticate exact recovery state and original QA authority"

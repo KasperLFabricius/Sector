@@ -21,7 +21,7 @@ DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5
 FULL_COMMIT_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
 SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
 RELEASE_WORKFLOW_CONTRACT_SHA256 = (
-    "fbc64955df001ddaf28abc96d2d31af194262f51aad696b66c3783ec3e1f3b1d"
+    "d67ca373afc479ae4b7d3914ebc8159004d09386a31672633a09763b92c0aebf"
 )
 JOB_CONTRACT_SHA256 = {
     "test": "39cdde5e29c6e182fc326da39eac460f9cf81534c2532469c8461609ed1b0f2a",
@@ -608,37 +608,86 @@ def validate_release_workflow(workflow_text: str) -> None:
     if (
         job.get("runs-on") != "ubuntu-latest"
         or job.get("timeout-minutes") != 30
-        or job.get("permissions") != {"actions": "read", "contents": "read"}
+        or job.get("permissions") != {"actions": "read", "contents": "write"}
     ):
         raise ConsolidatedPublicationGateError(
-            "release job runner or read-only permission boundary differs"
+            "release job runner or draft-readable permission boundary differs"
         )
     steps = _steps(job, RELEASE_STEPS, "release job")
     if any("if" in step for step in steps):
         raise ConsolidatedPublicationGateError(
             "release steps must remain unconditional after the job guard"
         )
+    expected_token_steps = {
+        "Authenticate exact recovery state and original QA authority",
+        "Verify pinned source and current-main boundary",
+        "Freshly download and verify exact draft assets",
+        "Recheck exact recovery state and current main",
+    }
+    actual_token_steps = {
+        str(step.get("name"))
+        for step in steps
+        if isinstance(step.get("env"), Mapping) and "GH_TOKEN" in step["env"]
+    }
+    if actual_token_steps != expected_token_steps or any(
+        step["env"].get("GH_TOKEN") != "${{ github.token }}"
+        for step in steps
+        if isinstance(step.get("env"), Mapping) and "GH_TOKEN" in step["env"]
+    ):
+        raise ConsolidatedPublicationGateError(
+            "write-capable recovery token escaped its exact API-reading steps"
+        )
+    if (
+        workflow_text.count("GH_TOKEN: ${{ github.token }}") != 4
+        or workflow_text.count("unset GH_TOKEN") != 4
+        or workflow_text.count("GH_TOKEN") != 8
+        or workflow_text.count('["gh", "api", "--method", "GET", endpoint]') != 1
+        or workflow_text.count("gh api --method GET") != 2
+    ):
+        raise ConsolidatedPublicationGateError(
+            "release API calls or token lifetime differ from the GET-only contract"
+        )
+    fresh_run = str(
+        _named_step(steps, "Freshly download and verify exact draft assets").get("run")
+    )
+    token_unset_index = fresh_run.find("unset GH_TOKEN")
+    verifier_index = fresh_run.find("python -I -S tools/verify_v093_release.py")
+    if (
+        token_unset_index < 0
+        or verifier_index < 0
+        or token_unset_index > verifier_index
+    ):
+        raise ConsolidatedPublicationGateError(
+            "write-capable recovery token reaches the standalone verifier"
+        )
     _validate_action_pins(steps)
     _validate_action_identities(steps)
 
     checkout = _named_step(steps, "Check out pinned v0.93 release source")
-    if checkout != {
-        "name": "Check out pinned v0.93 release source",
-        "uses": CHECKOUT_ACTION,
-        "with": {
-            "ref": "d0f08295b528f42493f5e8dd4b438c17dc304ec4",
-            "fetch-depth": 0,
-            "persist-credentials": False,
-        },
-    }:
+    checkout_run = str(checkout.get("run"))
+    if (
+        set(checkout) != {"name", "shell", "env", "run"}
+        or checkout.get("shell") != "bash"
+        or checkout.get("env")
+        != {"SECTOR_RELEASE_SOURCE": ("d0f08295b528f42493f5e8dd4b438c17dc304ec4")}
+        or "find . -mindepth 1 -maxdepth 1" not in checkout_run
+        or "git init --quiet ." not in checkout_run
+        or ("git remote add origin https://github.com/KasperLFabricius/Sector.git")
+        not in checkout_run
+        or "GIT_TERMINAL_PROMPT=0 git -c credential.helper= fetch" not in checkout_run
+        or '--no-tags --depth=1 origin "$SECTOR_RELEASE_SOURCE"' not in checkout_run
+        or "git checkout --quiet --detach FETCH_HEAD" not in checkout_run
+        or 'git rev-parse HEAD)" != "$SECTOR_RELEASE_SOURCE"' not in checkout_run
+        or "github.token" in checkout_run
+    ):
         raise ConsolidatedPublicationGateError(
-            "release recovery checkout must remain pinned and credentialless"
+            "release recovery checkout must remain anonymous, pinned and credentialless"
         )
     setup = _named_step(steps, "Set up pinned Python")
     if setup != {
         "name": "Set up pinned Python",
         "uses": SETUP_PYTHON_ACTION,
-        "with": {"python-version-file": ".python-version"},
+        "with": {"python-version-file": ".python-version", "token": ""},
     }:
         raise ConsolidatedPublicationGateError("release Python setup differs")
 
@@ -658,14 +707,25 @@ def validate_release_workflow(workflow_text: str) -> None:
         "chrome",
         "electron",
         "kaleido",
+        "git push",
+        "git tag",
+        "git update-ref",
+        "gh release",
+        "gh api graphql",
+        "curl ",
+        "wget ",
+        "invoke-webrequest",
+        "--field",
+        "--raw-field",
+        "--input",
     ):
         if forbidden.casefold() in collapsed.casefold():
             raise ConsolidatedPublicationGateError(
                 f"release workflow contains forbidden capability {forbidden!r}"
             )
     for forbidden_pattern in (
-        r"\bcontents\s*:\s*write\b",
         r"\b(?:post|put|patch|delete)\b",
+        r"gh\s+api[^\n]*(?:\s-f|\s-F)(?:\s|$)",
         r"uploads\.github\.com",
         r"\bgh\s+release\b",
         r"/releases/tags/v0\.93\b",
