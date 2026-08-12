@@ -2,9 +2,9 @@
 
 **Reinforced-concrete cross-section analysis for structural engineering.**
 
-Current release candidate: **Sector 0.93**. Its guarded release workflow prepares
-a provenance-bearing source/application ZIP and a separate verified **unsigned**
-portable Windows ZIP in a draft GitHub release. No signed installer is prepared.
+Current release candidate: **Sector 0.93**. Its authenticated draft contains a
+provenance-bearing source/application ZIP and a separate verified **unsigned**
+portable Windows ZIP. No signed installer is prepared.
 Sector 0.92 remains the last publicly published release until that draft is
 deliberately published. See [CHANGELOG.md](CHANGELOG.md) and the
 [v0.93 release notes](docs/v093_release_notes.md).
@@ -187,15 +187,16 @@ does not grant a personal or public licence. See [LICENSE](LICENSE). Windows bui
 include a generated third-party notice bundle beside `Sector.exe`; the source
 process is documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The guarded Sector v0.93 workflow prepares exactly identified source and
-unsigned portable assets in a draft GitHub release. The primary archives are
+The authenticated Sector v0.93 draft contains exactly identified source and
+unsigned portable assets. The primary archives are
 `Sector-v0.93-source.zip` and `Sector-v0.93-windows-portable-unsigned.zip`;
 their sidecars, the portable distribution receipt, the release QA receipt and
 `SHA256SUMS.txt` close the seven-asset draft set. The release receipt binds the
 exact source revision, the seven successful QA jobs and the immutable portable-
 build evidence. The portable archive is unsigned and is not an installer or a
-signed production package. Draft assets are not a publicly published user
-release until publication is deliberately authorized.
+signed production package. The draft and all seven assets were freshly
+downloaded and reverified after attachment. They are not a publicly published
+user release until publication is deliberately authorized.
 
 The earlier corrective Sector 0.92 source release, tagged `v0.92-source.1`,
 provides `Sector-v0.92-source.zip` as the historical runnable
