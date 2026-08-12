@@ -622,30 +622,49 @@ jobs:
               raise SystemExit("dispatch-source QA job names differ")
 
           current_artifacts = current_qa_artifacts.get("artifacts")
+          current_artifact_count = current_qa_artifacts.get("total_count")
           current_qualifier = f"{current_qa_run_id}-{current_qa_run_attempt}"
+          current_artifact_bases = {
+              "Sector-Windows-portable-unsigned-QA",
+              "Sector-Windows-unsigned-QA",
+              "sector-portable-comparison",
+              "sector-portable-producer-a",
+              "sector-portable-producer-b",
+              "sector-portable-smoke",
+              "sector-qa-evidence",
+          }
           current_artifact_names = {
-              f"Sector-Windows-portable-unsigned-QA-{current_qualifier}",
-              f"Sector-Windows-unsigned-QA-{current_qualifier}",
-              f"sector-portable-comparison-{current_qualifier}",
-              f"sector-portable-producer-a-{current_qualifier}",
-              f"sector-portable-producer-b-{current_qualifier}",
-              f"sector-portable-smoke-{current_qualifier}",
-              f"sector-qa-evidence-{current_qualifier}",
+              f"{base}-{current_qualifier}" for base in current_artifact_bases
           }
           if (
-              current_qa_artifacts.get("total_count") != 7
+              type(current_artifact_count) is not int
+              or not 7 <= current_artifact_count <= 100
               or not isinstance(current_artifacts, list)
-              or len(current_artifacts) != 7
+              or len(current_artifacts) != current_artifact_count
           ):
-              raise SystemExit("dispatch-source QA run must contain seven artifacts")
+              raise SystemExit("dispatch-source QA artifact inventory differs")
           current_artifact_records = []
           for artifact in current_artifacts:
+              artifact_name = artifact.get("name")
               artifact_id = artifact.get("id")
               artifact_size = artifact.get("size_in_bytes")
               artifact_digest = artifact.get("digest")
               workflow_run = artifact.get("workflow_run") or {}
+              artifact_attempt = None
+              for base in current_artifact_bases:
+                  prefix = f"{base}-{current_qa_run_id}-"
+                  if isinstance(artifact_name, str) and artifact_name.startswith(
+                      prefix
+                  ):
+                      suffix = artifact_name.removeprefix(prefix)
+                      if suffix.isascii() and suffix.isdigit() and not suffix.startswith(
+                          "0"
+                      ):
+                          artifact_attempt = int(suffix)
+                      break
               if (
-                  artifact.get("name") not in current_artifact_names
+                  artifact_attempt is None
+                  or artifact_attempt > current_qa_run_attempt
                   or type(artifact_id) is not int
                   or artifact_id <= 0
                   or type(artifact_size) is not int
@@ -655,20 +674,25 @@ jobs:
                   or workflow_run.get("id") != current_qa_run_id
               ):
                   raise SystemExit("dispatch-source QA artifact authority differs")
-              current_artifact_records.append(
-                  {
-                      "name": artifact.get("name"),
-                      "id": artifact_id,
-                      "size_in_bytes": artifact_size,
-                      "digest": artifact_digest,
-                      "expired": False,
-                  }
-              )
+              if artifact_attempt == current_qa_run_attempt:
+                  current_artifact_records.append(
+                      {
+                          "name": artifact_name,
+                          "id": artifact_id,
+                          "size_in_bytes": artifact_size,
+                          "digest": artifact_digest,
+                          "expired": False,
+                      }
+                  )
           current_artifact_records.sort(key=lambda item: item["name"])
-          if {
-              item["name"] for item in current_artifact_records
-          } != current_artifact_names:
-              raise SystemExit("dispatch-source QA artifact names differ")
+          if (
+              len(current_artifact_records) != 7
+              or {item["name"] for item in current_artifact_records}
+              != current_artifact_names
+          ):
+              raise SystemExit(
+                  "dispatch-source QA attempt must contain seven artifacts"
+              )
 
           qa_evidence = {
               "qa_evidence_schema": 1,
