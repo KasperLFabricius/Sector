@@ -58,6 +58,7 @@ jobs:
           import os
           import re
           import subprocess
+          import time
           from pathlib import Path
           from typing import Any
 
@@ -182,13 +183,25 @@ jobs:
 
 
           def request_json(endpoint: str) -> Any:
-              completed = subprocess.run(
-                  ["gh", "api", "--method", "GET", endpoint],
-                  check=False,
-                  capture_output=True,
-              )
-              if completed.returncode != 0:
-                  raise SystemExit(f"GitHub API read failed: {endpoint}")
+              completed: subprocess.CompletedProcess[bytes] | None = None
+              for attempt in range(1, 4):
+                  try:
+                      completed = subprocess.run(
+                          ["gh", "api", endpoint],
+                          check=False,
+                          capture_output=True,
+                          timeout=30,
+                      )
+                  except subprocess.TimeoutExpired:
+                      completed = None
+                  if completed is not None and completed.returncode == 0:
+                      break
+                  if attempt < 3:
+                      time.sleep(attempt)
+              if completed is None or completed.returncode != 0:
+                  raise SystemExit(
+                      f"GitHub API read failed after three attempts: {endpoint}"
+                  )
               if len(completed.stdout) > MAX_API_BYTES:
                   raise SystemExit(f"GitHub API response exceeds byte limit: {endpoint}")
               try:
@@ -774,8 +787,8 @@ jobs:
             exit 1
           fi
           main_revision="$(
-            gh api --method GET \
-              "/repos/$SECTOR_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
+            gh api "/repos/$SECTOR_REPOSITORY/git/ref/heads/main" \
+              --jq '.object.sha'
           )"
           unset GH_TOKEN
           if [[ "$main_revision" != "$SECTOR_DISPATCH_SHA" ]]; then
@@ -867,8 +880,7 @@ jobs:
               echo "Pinned release asset record is malformed" >&2
               exit 1
             fi
-            gh api --method GET \
-              "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
+            gh api "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
               -H "Accept: application/octet-stream" | \
               python "$bounded_copy" "$fresh/$name" "$size" "$digest"
             asset_count=$((asset_count + 1))
