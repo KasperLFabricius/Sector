@@ -38,8 +38,8 @@ input-mismatched results remain rejected.
 
 Sector 0.93 is the current release candidate: provenance-bearing
 source/application code and a separate verified unsigned portable Windows
-application with current-only project schema 24. Its guarded workflow prepares
-an authenticated draft GitHub release; that draft is not a publicly published
+application with current-only project schema 24. Its authenticated draft has
+been prepared and freshly reverified; that draft is not a publicly published
 user release. Sector 0.93 rejects released Sector 0.92 schema 23 rather than
 migrating or silently dropping inputs. Earlier app/project/schema versions and
 their compliance, cover-calculator or authority metadata remain deliberately

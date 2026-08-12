@@ -2,14 +2,16 @@
 
 ## 1. Programme outcome
 
-Sector 0.93 will be a robust source/application release with an additional
-unsigned portable Windows application. The programme corrects input behaviour,
+Sector 0.93 is a qualified source/application release candidate with an
+additional unsigned portable Windows application. The completed programme
+corrected input behaviour,
 removes component-mapped bridge calculations that Sector cannot support
 honestly, expands crack-control calculations, completes numerical substitutions,
 and redesigns the user interface, manual and reports for efficient
 engineering review.
 
-This is an implementation and publication programme. It does not make Sector a
+This was an implementation and publication-readiness programme. It does not
+make Sector a
 complete Eurocode, National Annex, bridge-owner, project-design-basis,
 certification or sign-off system. The immutable owner choices are in the
 [v0.93 decision register](v093_decision_register.md).
@@ -38,7 +40,7 @@ slices stay planned.
 | 7 | PR-07A - Eurocode-style shared equation renderer | PR-03 | Merged |
 | 8 | PR-07B - Manual/report information architecture and profiles | PR-06, PR-07A | Merged |
 | 9 | PR-08 - Double-click portable Windows packaging | PR-07B | Merged |
-| 10 | PR-09 - Full qualification and Sector 0.93 release | PR-01 through PR-08 | In progress |
+| 10 | PR-09 - Full qualification and Sector 0.93 release | PR-01 through PR-08 | Merged |
 
 Historical v0.92 acceptance documents and preserved QA artifacts remain
 evidence. They are not rewritten to make later policy look historical. Every
@@ -962,6 +964,11 @@ Tests: full suite with a new unique pytest base temp, consolidated publication
 gate, all PDF structural/raster gates, exact source archive verification, two
 Windows builds, portable startup smoke and post-attachment draft-asset
 revalidation.
+
+Acceptance record: [PR-09 Sector 0.93 release acceptance](pr09_v093_release_acceptance.md).
+
+Programme completion records qualified release readiness and an authenticated,
+reverified draft. It does not make that draft a publicly published user release.
 
 ## 4. Risk-based development test policy
 

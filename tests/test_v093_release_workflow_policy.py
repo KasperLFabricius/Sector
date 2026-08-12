@@ -1,4 +1,4 @@
-"""Adversarial policy contract for the GET-only v0.93 draft recovery."""
+"""Adversarial policy contract for the archived v0.93 draft recovery."""
 
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ from tools.verify_consolidated_publication_gate import (
 
 ROOT = Path(__file__).resolve().parents[1]
 QA_WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
-RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-v093.yml"
+LIVE_RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-v093.yml"
+RELEASE_WORKFLOW = ROOT / "docs" / "v093_release_recovery_workflow.yml"
 
 RELEASE_SOURCE = "d0f08295b528f42493f5e8dd4b438c17dc304ec4"
 RELEASE_TREE = "9ac057f723ce8d6b0844541c3573e133fa1b5519"
@@ -1002,8 +1003,13 @@ def test_full_suite_has_unique_previously_nonexistent_basetemp() -> None:
     assert "--basetemp $baseTemp" in run
     validator = _step(test_job, "Validate consolidated publication gate")["run"]
     assert validator.endswith(
-        ".github/workflows/qa.yml .github/workflows/release-v093.yml"
+        ".github/workflows/qa.yml docs/v093_release_recovery_workflow.yml"
     )
+
+
+def test_recovery_workflow_is_archived_and_not_dispatchable() -> None:
+    assert RELEASE_WORKFLOW.is_file()
+    assert not LIVE_RELEASE_WORKFLOW.exists()
 
 
 @pytest.mark.parametrize(

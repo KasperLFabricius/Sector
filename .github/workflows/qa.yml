@@ -44,7 +44,7 @@ jobs:
         run: New-Item -ItemType Directory -Path qa-artifacts -Force | Out-Null
 
       - name: Validate consolidated publication gate
-        run: python tools/verify_consolidated_publication_gate.py .github/workflows/qa.yml .github/workflows/release-v093.yml
+        run: python tools/verify_consolidated_publication_gate.py .github/workflows/qa.yml docs/v093_release_recovery_workflow.yml
 
       - name: Validate dependency audit policy
         env:

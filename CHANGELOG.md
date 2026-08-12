@@ -2,9 +2,10 @@
 
 ## 0.93 release candidate - 2026-08-11
 
-Sector 0.93 prepares the governed implementation, publication and unsigned
-portable-release programme for exact-head qualification while retaining
-Sector's calculation-tool identity.
+Sector 0.93 completes the governed implementation, publication-readiness and
+unsigned portable-release programme with exact-head qualification while
+retaining Sector's calculation-tool identity. Its authenticated seven-asset
+draft was freshly downloaded and reverified; it remains unpublished.
 
 - Advanced projects to current-only schema 24, retired unsupported
   component-mapped bridge workflows and added a capability-scoped standards

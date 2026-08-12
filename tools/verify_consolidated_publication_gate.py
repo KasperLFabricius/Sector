@@ -24,7 +24,7 @@ RELEASE_WORKFLOW_CONTRACT_SHA256 = (
     "17effb0cdad9607f6f251161e5cc24f612265f4af97e155b69a3568b6adfb84f"
 )
 JOB_CONTRACT_SHA256 = {
-    "test": "39cdde5e29c6e182fc326da39eac460f9cf81534c2532469c8461609ed1b0f2a",
+    "test": "b1831252179ee11a92419f2f45e201b3a8d9913af4052e81913e30240a0ce675",
     "windows-package": (
         "dfd54d58039aff9ada9d67a47aa0a89f0b8489641731dedbdb90a560b56503e8"
     ),
@@ -298,7 +298,7 @@ def _validate_test_job(job: Mapping[str, Any]) -> list:
         "name": CONSOLIDATED_STEP,
         "run": (
             "python tools/verify_consolidated_publication_gate.py "
-            ".github/workflows/qa.yml .github/workflows/release-v093.yml"
+            ".github/workflows/qa.yml docs/v093_release_recovery_workflow.yml"
         ),
     }:
         raise ConsolidatedPublicationGateError("consolidated validator command differs")

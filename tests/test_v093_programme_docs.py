@@ -658,7 +658,9 @@ def test_programme_slice_order_dependencies_and_status_lifecycle_are_controlled(
         "PR-01 through PR-08",
     ]
 
-    assert _programme_status_lifecycle_is_valid([row[3] for row in rows])
+    statuses = [row[3] for row in rows]
+    assert _programme_status_lifecycle_is_valid(statuses)
+    assert statuses == ["Merged"] * 10
 
 
 def test_programme_status_lifecycle_supports_future_execution_updates():
@@ -965,6 +967,22 @@ def test_pr01_remains_historical_and_current_candidate_is_0_93():
         readme.split()
     )
     assert "Sector-v0.93-windows-portable-unsigned.zip" in readme
+
+
+def test_pr09_final_acceptance_records_reverified_unpublished_draft() -> None:
+    programme = _ascii(PROGRAMME)
+    acceptance = _ascii(RELEASE_ACCEPTANCE)
+    combined = " ".join((programme + "\n" + acceptance).split())
+
+    assert "PR-09 Sector 0.93 release acceptance" in programme
+    assert "Status: accepted for release readiness" in acceptance
+    assert "31596775357" in acceptance
+    assert "94114107683" in acceptance
+    assert "368822456" in acceptance
+    assert "draft=true" in acceptance
+    assert "published_at=null" in acceptance
+    assert "docs/v093_release_recovery_workflow.yml" in acceptance
+    assert "publicly published user release" in combined
 
 
 def test_programme_preserves_product_and_release_boundaries():
