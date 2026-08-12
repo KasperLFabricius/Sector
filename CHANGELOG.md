@@ -1,5 +1,14 @@
 # Sector changelog
 
+## Unreleased
+
+- Make root `BUILD.bat` the obvious unsigned portable-distribution entry
+  point, retain `BUILD_SECTOR_PORTABLE.bat` and `packaging/build.bat` as
+  aliases, and move the internal non-distributable wrapper to
+  `packaging/build_qa.bat`. Explorer ZIP-preview and generic `Sector-main.zip`
+  launches now fail before PowerShell with exact **Extract All** and
+  official-source guidance.
+
 ## 0.93 release candidate - 2026-08-11
 
 Sector 0.93 completes the governed implementation, publication-readiness and

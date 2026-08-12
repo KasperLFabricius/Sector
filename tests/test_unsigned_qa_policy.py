@@ -128,7 +128,9 @@ def test_ordinary_build_surfaces_forbid_unsigned_launch_and_distribution():
         "PowerShell": (ROOT / "packaging" / "build.ps1").read_text(
             encoding="utf-8"
         ),
-        "batch": (ROOT / "packaging" / "build.bat").read_text(encoding="utf-8"),
+        "batch": (ROOT / "packaging" / "build_qa.bat").read_text(
+            encoding="utf-8"
+        ),
         "guide": (ROOT / "packaging" / "README.md").read_text(encoding="utf-8"),
     }
     for name, text in surfaces.items():

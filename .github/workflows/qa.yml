@@ -312,6 +312,7 @@ jobs:
             throw "Producer A source must be Gitless"
           }
           foreach ($required in @(
+            "BUILD.bat",
             "BUILD_SECTOR_PORTABLE.bat",
             "packaging/build_portable.ps1",
             "sector/sector_build_info.json"
@@ -394,7 +395,7 @@ jobs:
             throw "Producer A setup-python interpreter is missing"
           }
           $env:SECTOR_PORTABLE_PYTHON = $setupPython
-          $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD_SECTOR_PORTABLE.bat"
+          $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD.bat"
           Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER
           try {
             & $env:ComSpec /d /s /c ('call "{0}"' -f $wrapper)
@@ -542,6 +543,7 @@ jobs:
             throw "Producer B source must be Gitless"
           }
           foreach ($required in @(
+            "BUILD.bat",
             "BUILD_SECTOR_PORTABLE.bat",
             "packaging/build_portable.ps1",
             "sector/sector_build_info.json"
@@ -587,7 +589,7 @@ jobs:
             throw "Producer B setup-python interpreter is missing"
           }
           $env:SECTOR_PORTABLE_PYTHON = $setupPython
-          $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD_SECTOR_PORTABLE.bat"
+          $wrapper = Join-Path $env:SECTOR_PORTABLE_SOURCE "BUILD.bat"
           Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER
           try {
             & $env:ComSpec /d /s /c ('call "{0}"' -f $wrapper)

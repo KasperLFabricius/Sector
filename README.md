@@ -96,8 +96,12 @@ results update when you calculate.
 
 The v0.93 programme adds a separate, unsigned portable Windows distribution.
 When a provenance-bearing official Sector source ZIP contains the root
-`BUILD_SECTOR_PORTABLE.bat`, keep the complete extracted source folder and
-double-click that file. The one-time build requires exact 64-bit CPython 3.13.0
+`BUILD.bat`, choose **Extract All**, keep the complete extracted source folder,
+and double-click `BUILD.bat` there. Do not run a BAT directly inside Explorer's
+ZIP preview, and do not use GitHub's generic `Sector-main.zip`: neither supplies
+the complete authenticated source-release boundary. The legacy
+`BUILD_SECTOR_PORTABLE.bat` name remains an alias. The one-time build requires
+exact 64-bit CPython 3.13.0
 and enough disk space; it invokes its internal PowerShell orchestration itself,
 does not require administrator elevation, and prints the resulting portable
 folder and ZIP paths. No separately entered PowerShell command is part of the
