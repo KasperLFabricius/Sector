@@ -14,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -31,18 +32,30 @@ def test_packaging_files_are_in_the_repo():
     # .gitignore *.spec rule would drop (it is negated for this one). On a clean
     # checkout (CI) a missing file is simply absent, so this catches it.
     pkg = pathlib.Path(__file__).resolve().parent.parent / "packaging"
-    for name in ("sector.spec", "run_sector.py", "build.ps1", "build.bat",
-                 "README.md", "build_portable.ps1", "README-PORTABLE.txt"):
+    for name in (
+        "sector.spec",
+        "run_sector.py",
+        "build.ps1",
+        "build.bat",
+        "build_qa.bat",
+        "README.md",
+        "build_portable.ps1",
+        "README-PORTABLE.txt",
+    ):
         assert (pkg / name).is_file(), f"packaging/{name} missing from the repo"
+    assert (pkg.parent / "BUILD.bat").is_file()
     assert (pkg.parent / "BUILD_SECTOR_PORTABLE.bat").is_file()
 
 
 def test_portable_batch_is_a_quoted_nontelevated_self_relative_wrapper():
     root = pathlib.Path(__file__).resolve().parent.parent
-    wrapper = (root / "BUILD_SECTOR_PORTABLE.bat").read_text(encoding="utf-8")
+    wrapper = (root / "BUILD.bat").read_text(encoding="utf-8")
     folded = wrapper.casefold()
 
     assert "%~dp0packaging\\build_portable.ps1" in wrapper
+    assert "%~dp0tools\\build_portable_windows.py" in wrapper
+    assert "%~dp0requirements-build.txt" in wrapper
+    assert "%~dp0sector\\sector_build_info.json" in wrapper
     assert '"%SECTOR_POWERSHELL%"' in wrapper
     assert '"%SECTOR_BUILD_SCRIPT%"' in wrapper
     assert "-noprofile" in folded
@@ -52,18 +65,190 @@ def test_portable_batch_is_a_quoted_nontelevated_self_relative_wrapper():
     assert "sector.exe" not in folded
     assert "%*" not in wrapper
     assert "%~1" not in wrapper
-    assert "accepts no command-line arguments" in folded
+    assert "extract all" in folded
+    assert "sector-main.zip" in folded
+    assert "sector-v^<version^>-source.zip" in folded
+    assert "releases/latest" in folded
+    assert 'if exist "%~dp0.git" goto :build' in folded
+
+
+def test_legacy_and_packaging_build_names_route_to_root_build():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    legacy = (root / "BUILD_SECTOR_PORTABLE.bat").read_text(encoding="utf-8")
+    packaging = (root / "packaging" / "build.bat").read_text(encoding="utf-8")
+    qa = (root / "packaging" / "build_qa.bat").read_text(encoding="utf-8")
+
+    assert "%~dp0BUILD.bat" in legacy
+    assert "%~dp0..\\BUILD.bat" in packaging
+    for wrapper in (legacy, packaging):
+        folded = wrapper.casefold()
+        assert "extract all" in folded
+        assert "build_portable.ps1" not in folded
+        assert "build.ps1" not in folded
+    assert "%~dp0build.ps1" in qa
+    assert "unsigned qa package only" in qa.casefold()
+    assert "do not launch, zip or distribute" in qa.casefold()
 
 
 def test_portable_batch_suppresses_pause_only_for_explicit_ci_mode():
     root = pathlib.Path(__file__).resolve().parent.parent
-    wrapper = (root / "BUILD_SECTOR_PORTABLE.bat").read_text(encoding="utf-8")
+    wrapper = (root / "BUILD.bat").read_text(encoding="utf-8")
     folded = wrapper.casefold()
 
     pause = folded.index("\npause\n")
     assert folded.index("sector_portable_noninteractive") < pause
     assert folded.index('"%ci%"=="true"') < pause
     assert folded.index('"%ci%"=="1"') < pause
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe wrapper is Windows-only")
+def test_build_bat_rejects_an_incomplete_explorer_zip_preview(tmp_path):
+    root = pathlib.Path(__file__).resolve().parent.parent
+    preview = tmp_path / "Temp" / "Sector-main" / "packaging"
+    preview.mkdir(parents=True)
+    shutil.copy2(root / "packaging" / "build.bat", preview / "build.bat")
+    environment = dict(os.environ)
+    environment.update(CI="true", SECTOR_PORTABLE_NONINTERACTIVE="1")
+
+    result = subprocess.run(
+        [os.environ["COMSPEC"], "/d", "/s", "/c", "call build.bat"],
+        cwd=preview,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = f"{result.stdout}\n{result.stderr}".casefold()
+    assert result.returncode == 2
+    assert "incomplete zip preview" in output
+    assert "extract all" in output
+    assert "build.ps1" not in output
+    assert "windows powershell" not in output
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe wrapper is Windows-only")
+def test_root_build_rejects_github_download_zip_before_powershell(tmp_path):
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = tmp_path / "Sector-main"
+    (source / "packaging").mkdir(parents=True)
+    (source / "tools").mkdir()
+    shutil.copy2(root / "BUILD.bat", source / "BUILD.bat")
+    for relative in (
+        pathlib.Path("packaging/build_portable.ps1"),
+        pathlib.Path("tools/build_portable_windows.py"),
+        pathlib.Path("requirements-build.txt"),
+    ):
+        shutil.copy2(root / relative, source / relative)
+    environment = dict(os.environ)
+    environment.update(CI="true", SECTOR_PORTABLE_NONINTERACTIVE="1")
+
+    result = subprocess.run(
+        [os.environ["COMSPEC"], "/d", "/s", "/c", "call BUILD.bat"],
+        cwd=source,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = f"{result.stdout}\n{result.stderr}".casefold()
+    assert result.returncode == 3
+    assert "cannot authenticate this source folder" in output
+    assert "sector-main.zip" in output
+    assert "sector-v<version>-source.zip" in output
+    assert "windows powershell" not in output
+
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe wrapper is Windows-only")
+@pytest.mark.parametrize(
+    "relative_wrapper",
+    ("BUILD.bat", "BUILD_SECTOR_PORTABLE.bat", "packaging/build.bat"),
+)
+def test_build_names_reach_portable_script_from_complete_gitless_source(
+    tmp_path, relative_wrapper
+):
+    root = pathlib.Path(__file__).resolve().parent.parent
+    source = tmp_path / "Sector source [official] & exact"
+    (source / "packaging").mkdir(parents=True)
+    (source / "tools").mkdir()
+    (source / "sector").mkdir()
+    for relative in (
+        pathlib.Path("BUILD.bat"),
+        pathlib.Path("BUILD_SECTOR_PORTABLE.bat"),
+        pathlib.Path("packaging/build.bat"),
+    ):
+        shutil.copy2(root / relative, source / relative)
+    (source / "packaging" / "build_portable.ps1").write_text(
+        "Write-Output 'PORTABLE_SCRIPT_EXECUTED'\nexit 0\n", encoding="ascii"
+    )
+    (source / "tools" / "build_portable_windows.py").write_text(
+        "# portable driver fixture\n", encoding="ascii"
+    )
+    (source / "requirements-build.txt").write_text(
+        "# hashed lock fixture\n", encoding="ascii"
+    )
+    (source / "sector" / "sector_build_info.json").write_text(
+        '{"source_revision":"' + "a" * 40 + '"}\n', encoding="ascii"
+    )
+    caller = tmp_path / "unrelated caller"
+    caller.mkdir()
+    wrapper = source / pathlib.Path(relative_wrapper)
+    environment = dict(os.environ)
+    environment.update(
+        CI="true",
+        SECTOR_PORTABLE_NONINTERACTIVE="1",
+        SECTOR_TEST_WRAPPER=str(wrapper),
+    )
+
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            (
+                "$wrapper = $env:SECTOR_TEST_WRAPPER; "
+                "& $env:ComSpec /d /s /c ('call \"{0}\"' -f $wrapper); "
+                "exit $LASTEXITCODE"
+            ),
+        ],
+        cwd=caller,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode == 0, output
+    assert output.count("PORTABLE_SCRIPT_EXECUTED") == 1
+    assert "Sector portable build completed successfully." in output
+    assert "incomplete ZIP preview" not in output
+
+
+def test_github_download_zip_exposes_only_the_helpful_fail_closed_route(tmp_path):
+    root = pathlib.Path(__file__).resolve().parent.parent
+    archive = tmp_path / "Sector-main.zip"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for raw in tracked:
+            if not raw:
+                continue
+            relative = pathlib.PurePosixPath(os.fsdecode(raw))
+            bundle.write(root / pathlib.Path(relative), f"Sector-main/{relative}")
+
+    with zipfile.ZipFile(archive) as bundle:
+        names = set(bundle.namelist())
+    assert "Sector-main/BUILD.bat" in names
+    assert "Sector-main/packaging/build.bat" in names
+    assert "Sector-main/packaging/build_qa.bat" in names
+    assert "Sector-main/sector/sector_build_info.json" not in names
 
 
 def test_portable_powershell_checks_exact_python_before_any_output():
@@ -347,7 +532,10 @@ def test_portable_readme_sets_the_complete_unsigned_user_boundary():
     assert "<version>" not in readme
 
     for token in (
-        "double-click build_sector_portable.bat",
+        "double-click build.bat",
+        "build_sector_portable.bat remains a backward-compatible alias",
+        "explorer's zip preview",
+        "sector-main.zip",
         "64-bit cpython 3.13.0",
         "administrator rights",
         "whole folder or the whole zip",

@@ -1,7 +1,8 @@
 # Build a complete unsigned Sector portable Windows distribution.
 #
-# The supported user action is double-clicking BUILD_SECTOR_PORTABLE.bat in an
-# extracted official Sector source ZIP. This internal script is also callable
+# The supported user action is double-clicking root BUILD.bat in an extracted
+# official Sector source ZIP. BUILD_SECTOR_PORTABLE.bat remains an alias. This
+# internal script is also callable
 # by the exact-head CI acceptance job. It never launches Sector.exe, requests
 # elevation, signs code, installs software, or overwrites an existing output.
 

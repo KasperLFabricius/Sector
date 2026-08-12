@@ -7,7 +7,13 @@ Build from an official Sector source ZIP
 1. Extract the complete official Sector source ZIP.
 2. Confirm the source ZIP SHA-256 through the trusted release channel.
 3. Install exact 64-bit CPython 3.13.0 and make python.exe available on PATH.
-4. Double-click BUILD_SECTOR_PORTABLE.bat in the extracted source folder.
+4. Double-click BUILD.bat in the extracted source folder.
+
+Do not run a BAT directly inside Windows Explorer's ZIP preview. Explorer may
+copy only the clicked file to a temporary directory, without its required
+siblings. Do not substitute GitHub's generic Sector-main.zip: use the official
+provenance-bearing source ZIP release asset and its SHA-256 sidecar.
+BUILD_SECTOR_PORTABLE.bat remains a backward-compatible alias for BUILD.bat.
 
 No separately entered PowerShell command, administrator rights, installation,
 or elevation is required. The build downloads only the dependencies pinned by

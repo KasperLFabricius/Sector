@@ -3,17 +3,21 @@
 Sector has three deliberately separate Windows packaging paths:
 
 1. the user-facing **unsigned portable** folder/ZIP built through the root
-   `BUILD_SECTOR_PORTABLE.bat`;
+   `BUILD.bat` (`BUILD_SECTOR_PORTABLE.bat` remains an alias);
 2. the internal, non-distributable **unsigned QA** witnesses built through
-   `packaging/build.bat`; and
+   `packaging/build_qa.bat`; and
 3. the separately authorised protected signing workflow, which has no unsigned
    fallback.
 
 ## Building the unsigned portable distribution
 
-From a complete provenance-bearing official Sector source ZIP, retain the whole
-extracted source directory and double-click `BUILD_SECTOR_PORTABLE.bat` at its
-root. The BAT locates that root independently of the current directory and
+From a complete provenance-bearing official Sector source ZIP, choose
+**Extract All**, retain the whole extracted source directory and double-click
+`BUILD.bat` at its root. Do not run a BAT directly inside Explorer's ZIP
+preview, and do not use GitHub's generic `Sector-main.zip`, which has no
+authenticated source-release manifest. The legacy `BUILD_SECTOR_PORTABLE.bat`
+and `packaging/build.bat` names route to the same canonical root entry point.
+The BAT locates that root independently of the current directory and
 invokes `packaging/build_portable.ps1` itself with an execution-policy bypass.
 Do not open a separate PowerShell window and do not run as administrator.
 
@@ -69,11 +73,11 @@ the spec has no checkout, `GITHUB_SHA`, or wall-clock fallback.
 Do not launch, zip or distribute this QA artifact. A signed Sector package
 requires the separately authorised signing workflow; this QA path has no
 unsigned distribution fallback. The separate user-facing unsigned portable
-distribution is built from the source root with `BUILD_SECTOR_PORTABLE.bat`.
+distribution is built from the source root with `BUILD.bat`.
 
 ### QA build
 
-The easiest inspection build is to **double-click `packaging/build.bat`**. It
+The easiest inspection build is to **double-click `packaging/build_qa.bat`**. It
 resolves the exact current Git commit or the verified source-release revision,
 creates a uniquely named sibling `<source-folder>-qa-artifacts` run root, wraps
 the PowerShell build with an execution-policy bypass, and keeps the window open
@@ -147,7 +151,8 @@ the console for support.
 | `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
 | `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend); retains runtime distribution metadata while omitting pip `RECORD` installer inventories whose absent launcher hashes are build-path-bound. |
 | `build.ps1` | Convenience wrapper: selects an exact Git or source-release revision and unique sibling output before delegating to the isolated driver. |
-| `build.bat` | Double-click wrapper around `build.ps1` (execution-policy bypass). |
+| `build.bat` | Compatibility wrapper that routes to the root redistributable `BUILD.bat`. |
+| `build_qa.bat` | Internal double-click wrapper around QA-only `build.ps1`. |
 | `../tools/build_exact_commit.py` | Standard-library driver: exports an exact Git commit or materializes a verified source release, fixes the source epoch and PyInstaller build hash seed, uses safe-path/user-site isolation while honoring those controls, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
 | `../tools/verify_windows_release.py` | Standard-library gate: authenticates the raw commit, canonical evidence/manifest, and packaged source bytes before publication or signing. |
 | `../tools/verify_reproducible_windows_builds.py` | Independent two-build gate: checks distinct roots, reauthenticates both packages, compares all package bytes twice, and writes canonical create-only evidence. |

@@ -98,6 +98,7 @@ def test_each_producer_builds_independently_from_authenticated_gitless_source(
         "--source-revision $env:GITHUB_SHA",
         "Expand-Archive -LiteralPath $sourceArchive",
         'Join-Path $source ".git"',
+        '"BUILD.bat"',
         '"BUILD_SECTOR_PORTABLE.bat"',
         '"packaging/build_portable.ps1"',
         '"sector/sector_build_info.json"',
@@ -120,7 +121,7 @@ def test_each_producer_builds_independently_from_authenticated_gitless_source(
         'Join-Path $env:pythonLocation "python.exe"',
         "Test-Path -LiteralPath $setupPython -PathType Leaf",
         "SECTOR_PORTABLE_PYTHON = $setupPython",
-        '"BUILD_SECTOR_PORTABLE.bat"',
+        '"BUILD.bat"',
         "$env:ComSpec /d /s /c",
         "Push-Location -LiteralPath $env:SECTOR_PORTABLE_CALLER",
     ):
@@ -205,6 +206,7 @@ def test_comparison_consumes_both_remote_immutable_artifacts() -> None:
     assert "qa-inputs/producer-b/distribution" in compare
     for forbidden in (
         "verify_portable_startup.py",
+        "BUILD.bat",
         "BUILD_SECTOR_PORTABLE.bat",
         "Start-Process",
         "Invoke-Item",
@@ -267,6 +269,7 @@ def test_final_gather_reverifies_downloads_and_never_executes_sector() -> None:
         "verify_portable_startup.py",
         "Start-Process",
         "Invoke-Item",
+        "BUILD.bat",
         "BUILD_SECTOR_PORTABLE.bat",
     ):
         assert forbidden not in job_text

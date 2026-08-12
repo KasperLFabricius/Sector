@@ -1,33 +1,34 @@
 @echo off
-REM ===========================================================================
-REM Build an unsigned Sector QA package from authenticated exact source.
-REM
-REM Just double-click this file, or run it from a command prompt. It wraps
-REM build.ps1 with an ExecutionPolicy bypass so packaging works even when the
-REM system PowerShell execution policy would otherwise block the script.
-REM
-REM Requires Python on PATH. Git is required for a checkout but not for an
-REM official Sector source release. A unique sibling qa-artifacts directory is
-REM created automatically from an authenticated isolated source copy.
-REM The output is for static QA inspection only. Never launch, zip or distribute
-REM it. Use root BUILD_SECTOR_PORTABLE.bat for the separate user-facing unsigned
-REM portable distribution; signed releases use the authorised signing path.
-REM ===========================================================================
+setlocal EnableExtensions
 
-setlocal
-echo WARNING: UNSIGNED QA PACKAGE ONLY.
-echo Do not launch, zip or distribute the generated artifact.
+REM Compatibility entry point for users who expect packaging\build.bat.
+REM The redistributable build is canonical at the source root as BUILD.bat.
+set "SECTOR_CANONICAL_BUILD=%~dp0..\BUILD.bat"
+if exist "%SECTOR_CANONICAL_BUILD%" goto :run
+
 echo.
-echo Building Sector.exe -- this can take a few minutes...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build.ps1"
-set "RC=%ERRORLEVEL%"
+echo Sector portable build cannot start from an incomplete ZIP preview.
 echo.
-if not "%RC%"=="0" (
-    echo Build FAILED with exit code %RC%.
-) else (
-    echo Unsigned QA build complete in the unique path printed above.
-    echo Do not launch, zip or distribute this artifact.
-)
+echo Windows extracted only packaging\build.bat, without the rest of Sector.
+echo Return to the complete official source ZIP and choose "Extract All".
+echo Then run BUILD.bat from the extracted top-level Sector folder.
 echo.
-pause
-exit /b %RC%
+echo Verified release downloads:
+echo https://github.com/KasperLFabricius/Sector/releases/latest
+set "SECTOR_BUILD_RC=2"
+goto :finish
+
+:run
+call "%SECTOR_CANONICAL_BUILD%"
+set "SECTOR_BUILD_RC=%ERRORLEVEL%"
+
+:finish
+if not "%SECTOR_PORTABLE_NONINTERACTIVE%"=="1" goto :pause_for_user
+if /I "%CI%"=="true" goto :finished
+if "%CI%"=="1" goto :finished
+
+:pause_for_user
+if not exist "%SECTOR_CANONICAL_BUILD%" pause
+
+:finished
+exit /b %SECTOR_BUILD_RC%
