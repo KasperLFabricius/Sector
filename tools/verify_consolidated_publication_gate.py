@@ -21,7 +21,7 @@ DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5
 FULL_COMMIT_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
 SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
 RELEASE_WORKFLOW_CONTRACT_SHA256 = (
-    "f0dcaf225bbdb609b0e3537be3aca56191418e87fc093080f8426e1237d51acd"
+    "17effb0cdad9607f6f251161e5cc24f612265f4af97e155b69a3568b6adfb84f"
 )
 JOB_CONTRACT_SHA256 = {
     "test": "39cdde5e29c6e182fc326da39eac460f9cf81534c2532469c8461609ed1b0f2a",

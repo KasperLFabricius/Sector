@@ -566,7 +566,9 @@ def test_live_original_qa_evidence_is_reconstructed_for_tagged_verifier() -> Non
     assert 'current_qa_runs.get("total_count") != 1' in authority
     assert '"head_sha": dispatch_sha' in authority
     assert 'current_qa_jobs.get("total_count") != 7' in authority
-    assert 'current_qa_artifacts.get("total_count") != 7' in authority
+    assert "7 <= current_artifact_count <= 100" in authority
+    assert "artifact_attempt > current_qa_run_attempt" in authority
+    assert "len(current_artifact_records) != 7" in authority
     assert '"dispatch_qa_run": current_qa_run_record' in authority
 
 
@@ -644,6 +646,103 @@ def test_capture_helper_accepts_exact_mocked_github_authority(
     assert value["dispatch_qa_run"]["head_sha"] == "a" * 40
     assert len(value["dispatch_qa_jobs"]) == 7
     assert len(value["dispatch_qa_artifacts"]) == 7
+
+
+def test_capture_helper_ignores_recognised_prior_attempt_artifacts(
+    tmp_path: Path,
+) -> None:
+    payloads = _capture_payloads()
+    runs_endpoint = (
+        "/repos/KasperLFabricius/Sector/actions/workflows/qa.yml/runs?"
+        f"branch=main&event=push&status=success&head_sha={'a' * 40}&per_page=100"
+    )
+    runs = payloads[runs_endpoint]
+    assert isinstance(runs, dict)
+    workflow_runs = runs["workflow_runs"]
+    assert isinstance(workflow_runs, list)
+    workflow_runs[0]["run_attempt"] = 2
+    jobs_endpoint = (
+        "/repos/KasperLFabricius/Sector/actions/runs/40000000001/"
+        "attempts/1/jobs?per_page=100"
+    )
+    jobs = payloads.pop(jobs_endpoint)
+    assert isinstance(jobs, dict)
+    job_records = jobs["jobs"]
+    assert isinstance(job_records, list)
+    for job in job_records:
+        job["run_attempt"] = 2
+    payloads[jobs_endpoint.replace("attempts/1", "attempts/2")] = jobs
+    endpoint = (
+        "/repos/KasperLFabricius/Sector/actions/runs/40000000001/artifacts?per_page=100"
+    )
+    inventory = payloads[endpoint]
+    assert isinstance(inventory, dict)
+    artifacts = inventory["artifacts"]
+    assert isinstance(artifacts, list)
+    for artifact in artifacts:
+        artifact["name"] = artifact["name"].removesuffix("-1") + "-2"
+    artifacts.append(
+        {
+            "name": "sector-qa-evidence-40000000001-1",
+            "id": 95999999999,
+            "size_in_bytes": 1000,
+            "digest": f"sha256:{'f' * 64}",
+            "expired": False,
+            "workflow_run": {"id": 40000000001},
+        }
+    )
+    inventory["total_count"] = 8
+
+    completed, snapshot = _run_capture(tmp_path, payloads, "retained-prior-attempt")
+    assert completed.returncode == 0, completed.stderr
+    value = json.loads(snapshot.read_text(encoding="utf-8"))
+    assert len(value["dispatch_qa_artifacts"]) == 7
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "expected_error"),
+    [
+        (
+            "unrecognised-40000000001-1",
+            "dispatch-source QA artifact authority differs",
+        ),
+        (
+            "sector-qa-evidence-40000000001-3",
+            "dispatch-source QA artifact authority differs",
+        ),
+    ],
+)
+def test_capture_helper_rejects_unrecognised_or_future_attempt_artifacts(
+    tmp_path: Path,
+    artifact_name: str,
+    expected_error: str,
+) -> None:
+    payloads = _capture_payloads()
+    endpoint = (
+        "/repos/KasperLFabricius/Sector/actions/runs/40000000001/artifacts?per_page=100"
+    )
+    inventory = payloads[endpoint]
+    assert isinstance(inventory, dict)
+    artifacts = inventory["artifacts"]
+    assert isinstance(artifacts, list)
+    artifacts.append(
+        {
+            "name": artifact_name,
+            "id": 95999999999,
+            "size_in_bytes": 1000,
+            "digest": f"sha256:{'f' * 64}",
+            "expired": False,
+            "workflow_run": {"id": 40000000001},
+        }
+    )
+    inventory["total_count"] = 8
+
+    completed, snapshot = _run_capture(
+        tmp_path, payloads, artifact_name.split("-", 1)[0]
+    )
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
+    assert not snapshot.exists()
 
 
 @pytest.mark.parametrize(
