@@ -58,6 +58,7 @@ jobs:
           import os
           import re
           import subprocess
+          import time
           from pathlib import Path
           from typing import Any
 
@@ -182,13 +183,25 @@ jobs:
 
 
           def request_json(endpoint: str) -> Any:
-              completed = subprocess.run(
-                  ["gh", "api", "--method", "GET", endpoint],
-                  check=False,
-                  capture_output=True,
-              )
-              if completed.returncode != 0:
-                  raise SystemExit(f"GitHub API read failed: {endpoint}")
+              completed: subprocess.CompletedProcess[bytes] | None = None
+              for attempt in range(1, 4):
+                  try:
+                      completed = subprocess.run(
+                          ["gh", "api", endpoint],
+                          check=False,
+                          capture_output=True,
+                          timeout=30,
+                      )
+                  except subprocess.TimeoutExpired:
+                      completed = None
+                  if completed is not None and completed.returncode == 0:
+                      break
+                  if attempt < 3:
+                      time.sleep(attempt)
+              if completed is None or completed.returncode != 0:
+                  raise SystemExit(
+                      f"GitHub API read failed after three attempts: {endpoint}"
+                  )
               if len(completed.stdout) > MAX_API_BYTES:
                   raise SystemExit(f"GitHub API response exceeds byte limit: {endpoint}")
               try:
@@ -773,10 +786,19 @@ jobs:
             echo "Checkout credentials remain despite persist-credentials false" >&2
             exit 1
           fi
-          main_revision="$(
-            gh api --method GET \
-              "/repos/$SECTOR_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
-          )"
+          main_revision=""
+          for api_attempt in 1 2 3; do
+            if main_revision="$(
+              timeout 30 gh api "/repos/$SECTOR_REPOSITORY/git/ref/heads/main" \
+                --jq '.object.sha'
+            )"; then
+              break
+            fi
+            main_revision=""
+            if [[ "$api_attempt" -lt 3 ]]; then
+              sleep "$api_attempt"
+            fi
+          done
           unset GH_TOKEN
           if [[ "$main_revision" != "$SECTOR_DISPATCH_SHA" ]]; then
             echo "Canonical main moved after recovery authentication" >&2
@@ -867,10 +889,26 @@ jobs:
               echo "Pinned release asset record is malformed" >&2
               exit 1
             fi
-            gh api --method GET \
-              "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
-              -H "Accept: application/octet-stream" | \
-              python "$bounded_copy" "$fresh/$name" "$size" "$digest"
+            asset_target="$fresh/$name"
+            asset_downloaded=0
+            for asset_attempt in 1 2 3; do
+              if timeout --signal=TERM --kill-after=15s 360s \
+                   bash -o pipefail -c \
+                   'gh api "$1" -H "Accept: application/octet-stream" | python "$2" "$3" "$4" "$5"' \
+                   _ "/repos/$SECTOR_REPOSITORY/releases/assets/$asset_id" \
+                   "$bounded_copy" "$asset_target" "$size" "$digest"; then
+                asset_downloaded=1
+                break
+              fi
+              rm -f -- "$asset_target"
+              if [[ "$asset_attempt" -lt 3 ]]; then
+                sleep "$asset_attempt"
+              fi
+            done
+            if [[ "$asset_downloaded" -ne 1 ]]; then
+              echo "Pinned release asset download failed after three attempts" >&2
+              exit 1
+            fi
             asset_count=$((asset_count + 1))
           done < "$SECTOR_RELEASE_ASSETS_TSV"
           unset GH_TOKEN

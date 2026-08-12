@@ -340,6 +340,8 @@ def _run_capture(
     tmp_path: Path,
     payloads: dict[str, object],
     label: str,
+    *,
+    fail_first: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     fake_gh = tmp_path / f"fake-gh-{label}.py"
     payload_path = tmp_path / f"payloads-{label}.json"
@@ -353,12 +355,16 @@ import sys
 
 payloads = json.loads(open(os.environ["FAKE_GH_PAYLOADS"], encoding="utf-8").read())
 if (
-    len(sys.argv) != 5
-    or sys.argv[1:4] != ["api", "--method", "GET"]
-    or sys.argv[4] not in payloads
+    len(sys.argv) != 3
+    or sys.argv[1] != "api"
+    or sys.argv[2] not in payloads
 ):
     raise SystemExit("unexpected fake gh request")
-sys.stdout.write(json.dumps(payloads[sys.argv[4]], ensure_ascii=True))
+fail_state = os.environ.get("FAKE_GH_FAIL_FIRST_STATE")
+if fail_state and not os.path.exists(fail_state):
+    open(fail_state, "x", encoding="utf-8").close()
+    raise SystemExit("synthetic first-request failure")
+sys.stdout.write(json.dumps(payloads[sys.argv[2]], ensure_ascii=True))
 """,
         encoding="utf-8",
         newline="\n",
@@ -369,14 +375,11 @@ sys.stdout.write(json.dumps(payloads[sys.argv[4]], ensure_ascii=True))
     script = _embedded_script(
         "Authenticate exact recovery state and original QA authority", "capture"
     )
-    exact_call = '["gh", "api", "--method", "GET", endpoint]'
+    exact_call = '["gh", "api", endpoint]'
     assert script.count(exact_call) == 1
     script = script.replace(
         exact_call,
-        (
-            '[os.environ["FAKE_PYTHON"], os.environ["FAKE_GH"], '
-            '"api", "--method", "GET", endpoint]'
-        ),
+        ('[os.environ["FAKE_PYTHON"], os.environ["FAKE_GH"], "api", endpoint]'),
     )
     environment = os.environ.copy()
     environment.update(
@@ -387,6 +390,10 @@ sys.stdout.write(json.dumps(payloads[sys.argv[4]], ensure_ascii=True))
             "FAKE_GH_PAYLOADS": str(payload_path),
         }
     )
+    if fail_first:
+        environment["FAKE_GH_FAIL_FIRST_STATE"] = str(
+            tmp_path / f"fake-gh-first-failure-{label}.state"
+        )
     completed = subprocess.run(
         [
             sys.executable,
@@ -405,6 +412,17 @@ sys.stdout.write(json.dumps(payloads[sys.argv[4]], ensure_ascii=True))
         env=environment,
     )
     return completed, snapshot
+
+
+def test_capture_retries_one_bounded_transient_api_failure(tmp_path: Path) -> None:
+    completed, snapshot = _run_capture(
+        tmp_path,
+        _capture_payloads(),
+        "bounded-retry",
+        fail_first=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert snapshot.is_file()
 
 
 def test_live_recovery_workflow_is_exact_get_only_and_consolidated() -> None:
@@ -768,8 +786,21 @@ def test_recovery_has_no_github_mutation_or_unsafe_runtime_launch() -> None:
     assert release_text.count("GH_TOKEN: ${{ github.token }}") == 4
     assert release_text.count("unset GH_TOKEN") == 4
     assert release_text.count("GH_TOKEN") == 8
-    assert release_text.count('["gh", "api", "--method", "GET", endpoint]') == 1
-    assert release_text.count("gh api --method GET") == 2
+    assert release_text.count('["gh", "api", endpoint]') == 1
+    assert release_text.count('gh api "/repos/$SECTOR_REPOSITORY/') == 1
+    assert release_text.count('gh api "$1"') == 1
+    assert "--method" not in release_text
+    assert "for attempt in range(1, 4)" in release_text
+    assert "timeout=30" in release_text
+    assert "time.sleep(attempt)" in release_text
+    assert "for api_attempt in 1 2 3" in release_text
+    assert "timeout 30 gh api" in release_text
+    assert 'sleep "$api_attempt"' in release_text
+    assert "for asset_attempt in 1 2 3" in release_text
+    assert "timeout --signal=TERM --kill-after=15s 360s" in release_text
+    assert "bash -o pipefail -c" in release_text
+    assert 'rm -f -- "$asset_target"' in release_text
+    assert 'sleep "$asset_attempt"' in release_text
     fresh = _step(job, "Freshly download and verify exact draft assets")["run"]
     assert fresh.index("unset GH_TOKEN") < fresh.index(
         "python -I -S tools/verify_v093_release.py"
@@ -816,9 +847,12 @@ def test_recovery_has_no_github_mutation_or_unsafe_runtime_launch() -> None:
 @pytest.mark.parametrize(
     ("needle", "replacement"),
     [
-        ("--method GET", "--method POST"),
-        ("gh api --method GET", "gh api --method GET -f injected=value"),
-        ("gh api --method GET", "curl -X GET"),
+        (
+            '["gh", "api", endpoint]',
+            '["gh", "api", "--method", "GET", endpoint]',
+        ),
+        ('gh api "/repos/$SECTOR_REPOSITORY/', "gh api -f injected=value "),
+        ('gh api "/repos/$SECTOR_REPOSITORY/', "curl -X GET "),
         ("unset GH_TOKEN", 'echo "$GH_TOKEN" >> "$GITHUB_OUTPUT"'),
         ("unset GH_TOKEN", "git push origin HEAD:main"),
     ],

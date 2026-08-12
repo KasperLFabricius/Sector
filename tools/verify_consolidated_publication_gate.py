@@ -21,7 +21,7 @@ DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5
 FULL_COMMIT_ACTION = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$")
 SECRET_CONTEXT = re.compile(r"\bsecrets\b\s*(?:\.|\[)", re.IGNORECASE)
 RELEASE_WORKFLOW_CONTRACT_SHA256 = (
-    "d67ca373afc479ae4b7d3914ebc8159004d09386a31672633a09763b92c0aebf"
+    "f0dcaf225bbdb609b0e3537be3aca56191418e87fc093080f8426e1237d51acd"
 )
 JOB_CONTRACT_SHA256 = {
     "test": "39cdde5e29c6e182fc326da39eac460f9cf81534c2532469c8461609ed1b0f2a",
@@ -641,8 +641,21 @@ def validate_release_workflow(workflow_text: str) -> None:
         workflow_text.count("GH_TOKEN: ${{ github.token }}") != 4
         or workflow_text.count("unset GH_TOKEN") != 4
         or workflow_text.count("GH_TOKEN") != 8
-        or workflow_text.count('["gh", "api", "--method", "GET", endpoint]') != 1
-        or workflow_text.count("gh api --method GET") != 2
+        or workflow_text.count('["gh", "api", endpoint]') != 1
+        or workflow_text.count('gh api "/repos/$SECTOR_REPOSITORY/') != 1
+        or workflow_text.count('gh api "$1"') != 1
+        or "--method" in workflow_text
+        or workflow_text.count("for attempt in range(1, 4)") != 1
+        or workflow_text.count("timeout=30") != 1
+        or workflow_text.count("time.sleep(attempt)") != 1
+        or workflow_text.count("for api_attempt in 1 2 3") != 1
+        or workflow_text.count("timeout 30 gh api") != 1
+        or workflow_text.count('sleep "$api_attempt"') != 1
+        or workflow_text.count("for asset_attempt in 1 2 3") != 1
+        or workflow_text.count("timeout --signal=TERM --kill-after=15s 360s") != 1
+        or workflow_text.count("bash -o pipefail -c") != 1
+        or workflow_text.count('rm -f -- "$asset_target"') != 1
+        or workflow_text.count('sleep "$asset_attempt"') != 1
     ):
         raise ConsolidatedPublicationGateError(
             "release API calls or token lifetime differ from the GET-only contract"
@@ -718,6 +731,7 @@ def validate_release_workflow(workflow_text: str) -> None:
         "--field",
         "--raw-field",
         "--input",
+        " --paginate",
     ):
         if forbidden.casefold() in collapsed.casefold():
             raise ConsolidatedPublicationGateError(
