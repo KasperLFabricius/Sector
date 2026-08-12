@@ -134,6 +134,10 @@ def test_source_archive_is_exact_and_reports_revision_without_git(tmp_path):
         names = bundle.namelist()
         marker = f"{SOURCE_ROOT_NAME}/sector/sector_build_info.json"
         manifest = json.loads(bundle.read(marker))
+        assert f"{SOURCE_ROOT_NAME}/BUILD.bat" in names
+        assert f"{SOURCE_ROOT_NAME}/BUILD_SECTOR_PORTABLE.bat" in names
+        assert f"{SOURCE_ROOT_NAME}/packaging/build.bat" in names
+        assert f"{SOURCE_ROOT_NAME}/packaging/build_qa.bat" in names
         assert manifest["source_revision"] == COMMIT
         assert manifest["source_tree"] == evidence.source_tree
         assert manifest["sector_version"] == SECTOR_VERSION
