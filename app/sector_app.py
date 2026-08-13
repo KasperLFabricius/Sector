@@ -1011,6 +1011,39 @@ def _fatigue_catalog_prefix(detail_id):
     return f"fatiguecat_r{revision}_{detail_id}"
 
 
+def _fatigue_preset_guidance_basis(preset, selected_basis):
+    """Return the exact standard family controlling one named detail preset."""
+
+    preset_edition = fatigue_inputs.preset_edition(preset)
+    if preset_edition == fatigue_inputs.EC2_2023:
+        return design_standards.DesignBasisKey.PUBLISHED_2023
+    if preset_edition == fatigue_inputs.EC2_2005:
+        selected = design_standards.get_design_basis(selected_basis)
+        if selected.family is design_standards.StandardFamily.FIRST_GENERATION:
+            return selected.key
+        return design_standards.DesignBasisKey.FIRST_GEN_BASE
+    raise ValueError(f"no registered input guidance for fatigue preset {preset!r}")
+
+
+def _fatigue_detail_value_help(preset, selected_basis, purpose):
+    """Build source-bound help without attributing custom values to a code."""
+
+    if preset == fatigue_inputs.CUSTOM_PRESET:
+        return (
+            f"{purpose} This is a project-defined value; record its governing "
+            "source below. No Eurocode source is inferred."
+        )
+    guidance = design_standards.input_guidance(
+        _fatigue_preset_guidance_basis(preset, selected_basis),
+        design_standards.InputGuidanceKey.FATIGUE_DETAIL_VALUES,
+    )
+    preset_source = fatigue_inputs.DETAIL_PRESETS[preset]["source"]
+    return (
+        f"{purpose} {guidance.guidance} Source for this preset: "
+        f"{preset_source}."
+    )
+
+
 def _seed_fatigue_detail_widgets(entry, prefix):
     values = {
         "name": entry["name"],
@@ -1166,6 +1199,10 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         st.rerun()
 
     custom = preset == fatigue_inputs.CUSTOM_PRESET
+    mixed_bond_guidance = design_standards.input_guidance(
+        edition,
+        design_standards.InputGuidanceKey.FATIGUE_MIXED_BOND,
+    )
     kind = _seeded_selectbox(
         box,
         "Element type",
@@ -1192,7 +1229,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         f"{prefix}_n_star",
         disabled=standard_lock,
         format="%.0f",
-        help=r"Cycle count at the knee of the two-slope S-N curve.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            "Cycle count at the knee of the two-slope S-N curve.",
+        ),
     )
     delta_sigma = _seeded_number(
         c2,
@@ -1203,8 +1244,12 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         1.0,
         f"{prefix}_delta_sigma_rsk_mpa",
         disabled=standard_lock,
-        help=r"Characteristic stress range at $N^*$ before $\gamma_s$ and any "
-             "diameter or bend reduction.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            r"Characteristic stress range at $N^*$ before $\gamma_s$ and any "
+            "diameter or bend reduction.",
+        ),
     )
     k1 = _seeded_number(
         c1,
@@ -1215,7 +1260,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         0.1,
         f"{prefix}_k1",
         disabled=standard_lock,
-        help=r"S-N exponent for stress ranges at or above the $N^*$ knee.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            r"S-N exponent for stress ranges at or above the $N^*$ knee.",
+        ),
     )
     k2 = _seeded_number(
         c2,
@@ -1226,7 +1275,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         0.1,
         f"{prefix}_k2",
         disabled=standard_lock,
-        help=r"S-N exponent for stress ranges below the $N^*$ knee.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            r"S-N exponent for stress ranges below the $N^*$ knee.",
+        ),
     )
     stress_model = _seeded_selectbox(
         box,
@@ -1235,8 +1288,12 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         entry["stress_model"],
         f"{prefix}_stress_model",
         disabled=standard_lock,
-        help=r"Determines whether $\Delta\sigma_{Rsk}$ is fixed or selected from "
-             "the element diameter.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            r"Determines whether $\Delta\sigma_{Rsk}$ is fixed or selected from "
+            "the element diameter.",
+        ),
         format_func=lambda value: {
             fatigue_inputs.FIXED_STRESS: "Fixed reference range",
             fatigue_inputs.EC2_2023_BAR_STRESS:
@@ -1251,8 +1308,12 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         bool(entry["bend_reduction"]),
         f"{prefix}_bend_reduction",
         disabled=standard_lock,
-        help="Apply the selected code's bent-bar reduction to the characteristic "
-             "reference range.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            "Apply the selected detail's bent-bar reduction to the "
+            "characteristic reference range.",
+        ),
     )
     mandrel = _seeded_number(
         box,
@@ -1263,8 +1324,12 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         1.0,
         f"{prefix}_mandrel_diameter_mm",
         disabled=not bend_reduction,
-        help="Mandrel diameter used with the element diameter in the bent-bar "
-             "reduction.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            "Mandrel diameter used with the element diameter in the bent-bar "
+            "reduction.",
+        ),
     )
     bond_ratio = _seeded_number(
         c1,
@@ -1275,8 +1340,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         0.05,
         f"{prefix}_bond_ratio_xi",
         disabled=kind != fatigue_inputs.PRESTRESS,
-        help="Bond-strength ratio for a bonded tendon in a section that also "
-             "contains mild reinforcement; 0 leaves it unspecified.",
+        help=(
+            "Bond-strength ratio for a bonded tendon in a section that also "
+            "contains mild reinforcement; 0 leaves it unspecified. "
+            f"{mixed_bond_guidance.tooltip}"
+        ),
     )
     bond_diameter = _seeded_number(
         c2,
@@ -1287,8 +1355,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         0.1,
         f"{prefix}_bond_equivalent_diameter_mm",
         disabled=kind != fatigue_inputs.PRESTRESS,
-        help="Equivalent tendon diameter used with the bond ratio for the mixed "
-             "reinforcement fatigue adjustment.",
+        help=(
+            "Equivalent tendon diameter used with the bond ratio for the mixed "
+            "reinforcement fatigue adjustment. "
+            f"{mixed_bond_guidance.tooltip}"
+        ),
     )
     source = _seeded_text(
         box,
@@ -1296,7 +1367,11 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         entry.get("source", ""),
         f"{prefix}_source",
         disabled=standard_lock,
-        help="Standard, clause or project source for the resistance definition.",
+        help=_fatigue_detail_value_help(
+            preset,
+            edition,
+            "Standard, clause or project source for the resistance definition.",
+        ),
     )
     updated = {
         **entry,
@@ -3740,6 +3815,34 @@ def build_inputs(host=st):
         ),
     )
     fatigue_standard_basis = design_standards.get_design_basis(fatigue_edition)
+    fatigue_concrete_method_guidance = design_standards.input_guidance(
+        fatigue_edition,
+        design_standards.InputGuidanceKey.FATIGUE_CONCRETE_METHOD,
+    )
+    fatigue_action_factor_guidance = design_standards.input_guidance(
+        fatigue_edition,
+        design_standards.InputGuidanceKey.FATIGUE_ACTION_PARTIAL_FACTOR,
+    )
+    fatigue_reinforcement_factor_guidance = design_standards.input_guidance(
+        fatigue_edition,
+        design_standards.InputGuidanceKey.FATIGUE_REINFORCEMENT_MATERIAL_FACTOR,
+    )
+    fatigue_concrete_factor_guidance = design_standards.input_guidance(
+        fatigue_edition,
+        design_standards.InputGuidanceKey.FATIGUE_CONCRETE_MATERIAL_FACTOR,
+    )
+    fatigue_strength_development_guidance = design_standards.input_guidance(
+        fatigue_edition,
+        design_standards.InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_DEVELOPMENT,
+    )
+    fatigue_strength_k1_guidance = design_standards.input_guidance(
+        fatigue_edition,
+        design_standards.InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_K1,
+    )
+    fatigue_life_c_guidance = design_standards.input_guidance(
+        fatigue_edition,
+        design_standards.InputGuidanceKey.FATIGUE_CONCRETE_LIFE_C,
+    )
     fat.caption(fatigue_standard_basis.disclosure)
     fatigue_check_steel = _seeded_toggle(
         fat,
@@ -3758,6 +3861,27 @@ def build_inputs(host=st):
         disabled=not fatigue_on,
         help="Assess concrete compression fatigue at the searched section fibres.",
     )
+    retained_concrete_method = _retained_input_scalar(
+        "fatigue_concrete_method",
+        _FATIGUE_CONCRETE_MINER,
+    )
+    if retained_concrete_method not in _FATIGUE_CONCRETE_METHODS:
+        retained_concrete_method = _FATIGUE_CONCRETE_MINER
+    if retained_concrete_method == _FATIGUE_CONCRETE_PROJECT_MINER:
+        fatigue_concrete_method_help = (
+            "User-defined Miner uses the entered cycles and coefficient C in "
+            "a project-defined concrete S-N relation. This method is uncited; "
+            "no Eurocode source is inferred."
+        )
+    else:
+        fatigue_concrete_method_help = (
+            "Explicit Palmgren-Miner uses the entered cycles in every spectrum "
+            "bin. Damage-equivalent checks Formula (6.72) or (E.2); each row's "
+            "long/total action pair must then already represent a "
+            "damage-equivalent amplitude for 10^6 cycles, and its Cycles value "
+            "is ignored for concrete. "
+            f"{fatigue_concrete_method_guidance.tooltip}"
+        )
     fatigue_concrete_method = _seeded_selectbox(
         fat,
         "Concrete fatigue method",
@@ -3765,12 +3889,7 @@ def build_inputs(host=st):
         _FATIGUE_CONCRETE_MINER,
         "fatigue_concrete_method",
         disabled=not (fatigue_on and fatigue_check_concrete),
-        help=(
-            "Explicit Palmgren-Miner uses the entered cycles in every spectrum "
-            "bin. Damage-equivalent checks Formula (6.72) or (E.2); each row's "
-            "long/total action pair must then already represent a damage-equivalent "
-            "amplitude for 10^6 cycles, and its Cycles value is ignored for concrete."
-        ),
+        help=fatigue_concrete_method_help,
     )
     fat.caption(
         "Enter complete partial factors. Sector applies no control-, "
@@ -3786,8 +3905,10 @@ def build_inputs(host=st):
         0.05,
         "fatigue_gamma_ff",
         disabled=not fatigue_on,
-        help=r"Partial factor on each cyclic action increment before the elastic "
-             "fatigue solve.",
+        help=(
+            "Partial factor on each cyclic action increment before the Elastic "
+            f"fatigue solve. {fatigue_action_factor_guidance.tooltip}"
+        ),
     )
     fatigue_gamma_s = _seeded_number(
         ff2,
@@ -3798,8 +3919,11 @@ def build_inputs(host=st):
         0.05,
         "fatigue_gamma_s",
         disabled=not (fatigue_on and fatigue_check_steel),
-        help=r"Final material factor reducing $\Delta\sigma_{Rsk}$ and the "
-             "reinforcement yield or proof-stress limit.",
+        help=(
+            r"Final material factor reducing $\Delta\sigma_{Rsk}$ and the "
+            "reinforcement yield or proof-stress limit. "
+            f"{fatigue_reinforcement_factor_guidance.tooltip}"
+        ),
     )
     fatigue_gamma_c = _seeded_number(
         ff3,
@@ -3810,8 +3934,11 @@ def build_inputs(host=st):
         0.05,
         "fatigue_gamma_c",
         disabled=not (fatigue_on and fatigue_check_concrete),
-        help=r"Final material factor in the design concrete fatigue strength "
-             r"$f_{cd,\mathrm{fat}}$.",
+        help=(
+            r"Final material factor in the design concrete fatigue strength "
+            rf"$f_{{cd,\mathrm{{fat}}}}$. "
+            f"{fatigue_concrete_factor_guidance.tooltip}"
+        ),
     )
     fc1, fc2 = fat.columns(2)
     fatigue_beta_cc_t0 = _seeded_number(
@@ -3823,8 +3950,11 @@ def build_inputs(host=st):
         0.05,
         "fatigue_beta_cc_t0",
         disabled=not (fatigue_on and fatigue_check_concrete),
-        help=r"Concrete strength-development factor at the first cyclic loading "
-             "age $t_0$; enter the value from the selected basis.",
+        help=(
+            r"Concrete strength-development factor at the first cyclic loading "
+            r"age $t_0$; enter the value from the selected basis. "
+            f"{fatigue_strength_development_guidance.tooltip}"
+        ),
     )
     fatigue_t0_days = _seeded_number(
         fc2,
@@ -3851,9 +3981,24 @@ def build_inputs(host=st):
             or fatigue_standard_basis.family
             is design_standards.StandardFamily.PUBLISHED_2023
         ),
-        help=r"Coefficient in the 2005 design strength $f_{cd,\mathrm{fat}}$; "
-             "not used by the 2023 expression.",
+        help=(
+            r"Coefficient in the 2005 design strength $f_{cd,\mathrm{fat}}$; "
+            "not used by the 2023 expression. "
+            f"{fatigue_strength_k1_guidance.tooltip}"
+        ),
     )
+    if fatigue_concrete_method == _FATIGUE_CONCRETE_PROJECT_MINER:
+        fatigue_concrete_c_help = (
+            r"Coefficient in the project-defined $\log_{10}N_R$ concrete "
+            "fatigue-life relation. This value is uncited; no Eurocode source "
+            "is inferred."
+        )
+    else:
+        fatigue_concrete_c_help = (
+            r"Coefficient in the implemented $\log_{10}N_R$ concrete "
+            "fatigue-life relation. "
+            f"{fatigue_life_c_guidance.tooltip}"
+        )
     fatigue_concrete_c = _seeded_number(
         fc2,
         r"Concrete fatigue $C$",
@@ -3866,8 +4011,7 @@ def build_inputs(host=st):
             not (fatigue_on and fatigue_check_concrete)
             or fatigue_concrete_method == _FATIGUE_CONCRETE_EQUIVALENT
         ),
-        help=r"Coefficient in the implemented $\log_{10}N_R$ concrete fatigue-life "
-             "relation.",
+        help=fatigue_concrete_c_help,
     )
     fat.markdown("**Spectrum basis**")
     fatigue_basis = _fatigue_basis_panel(fat, disabled=not fatigue_on)
@@ -3981,6 +4125,14 @@ def build_inputs(host=st):
     ordinary_route = ordinary_binding.ordinary_crack_width_route
     if ordinary_route is None:
         raise ValueError("The selected basis has no ordinary crack-width route")
+    ordinary_diameter_guidance = design_standards.input_guidance(
+        sls_code,
+        design_standards.InputGuidanceKey.ORDINARY_CRACK_DIAMETER,
+    )
+    ordinary_bond_guidance = design_standards.input_guidance(
+        sls_code,
+        design_standards.InputGuidanceKey.ORDINARY_CRACK_MILD_BOND,
+    )
     scw.caption(sls_basis.disclosure)
     sls_phi = _seeded_number(
         scw, r"Crack-width element diameter $\phi$ (mm, 0 = auto)",
@@ -3988,7 +4140,8 @@ def build_inputs(host=st):
         disabled=not (elastic_on and sls_cw),
         help="Diameter override for crack spacing, applied to each reinforcement "
              "element; 0 uses each bar or tendon's table diameter (which may itself "
-             "be area-derived).")
+             "be area-derived). "
+             f"{ordinary_diameter_guidance.tooltip}")
     # k1 (EC2 7.11 bond coefficient) depends on the bar surface, which the geometry
     # cannot tell, so it is a user choice: 0.8 ribbed / high-bond, 1.6 plain round.
     sls_bond = scw.selectbox(
@@ -4000,15 +4153,27 @@ def build_inputs(host=st):
             {
                 "disabled": not (elastic_on and sls_cw),
                 "help": (
-                    "EC2 7.11 bond coefficient k1 for the crack spacing, applied "
-                    "to the mild reinforcement: 0.8 for ribbed / high-bond bars "
+                    "Bond coefficient k1 for the crack calculation, applied to "
+                    "the mild reinforcement: 0.8 for ribbed / high-bond bars "
                     "(e.g. Tentor), 1.6 for plain round bars. Prestressing "
-                    "tendons always use k1 = 1.6."
+                    "tendons always use k1 = 1.6. "
+                    f"{ordinary_bond_guidance.tooltip}"
                 ),
             },
         ),
     )
     sls_k1 = _BOND_K1[sls_bond]
+    if sls_basis.key is design_standards.DesignBasisKey.PUBLISHED_2023:
+        tendon_bond_help = design_standards.input_guidance(
+            sls_code,
+            design_standards.InputGuidanceKey.ORDINARY_CRACK_TENDON_BOND,
+        ).tooltip
+    else:
+        tendon_bond_help = (
+            "This input is not used by the selected first-generation ordinary "
+            "crack-width route; it is retained for a later switch to the 2023 "
+            "basis."
+        )
     sls_tendon_xi = _seeded_number(
         scw,
         r"Bonded-tendon ratio $\xi$ (0 = unset)",
@@ -4021,11 +4186,22 @@ def build_inputs(host=st):
         help=(
             "2023 mixed mild/prestressing crack calculation: tendon-to-ribbed-"
             "reinforcement bond-strength ratio. Enter the selected method input; "
-            "zero leaves it unspecified."
+            f"zero leaves it unspecified. {tendon_bond_help}"
         ),
     )
     sls_dk_na = ordinary_route.report_coarse_system
     sls_edition = ordinary_route.edition
+    if sls_basis.key is design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024:
+        sls_member_help = design_standards.input_guidance(
+            sls_code,
+            design_standards.InputGuidanceKey.ORDINARY_CRACK_MEMBER_TYPE,
+        ).tooltip
+    else:
+        sls_member_help = (
+            "This input is not used by the selected ordinary crack-width route; "
+            "it is retained for a later switch to the Danish first-generation "
+            "basis. No Eurocode source is inferred for the inactive value."
+        )
     sls_member = _seeded_selectbox(
         scw,
         "Member type",
@@ -4035,7 +4211,7 @@ def build_inputs(host=st):
         disabled=not (elastic_on and sls_cw and sls_dk_na),
         help=(
             "DK NA fine-system selection for the (h-x)/3 effective-height "
-            "term. Ignored by other methods."
+            f"term. Ignored by other methods. {sls_member_help}"
         ),
     )
 
@@ -4044,6 +4220,10 @@ def build_inputs(host=st):
         is design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024
     )
     if heightened_basis:
+        heightened_guidance = design_standards.input_guidance(
+            sls_code,
+            design_standards.InputGuidanceKey.HEIGHTENED_CRACK_OPERANDS,
+        )
         scw.markdown("**Optional DK NA heightened crack control**")
         scw.caption(
             "Separate section-level Formula 7.100 NA calculation. Sector does "
@@ -4056,8 +4236,8 @@ def build_inputs(host=st):
             "sls_heightened_on",
             disabled=not elastic_on,
             help=(
-                "Opt in to one section-level DS/EN 1992-1-1 DK NA:2024 "
-                "Formula 7.100 NA calculation."
+                "Opt in to the separate section-level heightened calculation. "
+                f"{heightened_guidance.tooltip}"
             ),
         )
         sls_heightened_crack_system = _seeded_selectbox(
@@ -4070,6 +4250,10 @@ def build_inputs(host=st):
                 "Fine crack system" if value == "fine" else "Coarse crack system"
             ),
             disabled=not (elastic_on and sls_heightened_on),
+            help=(
+                "Select the fine or coarse crack system. "
+                f"{heightened_guidance.tooltip}"
+            ),
         )
         sls_heightened_reinforcement_surface = _seeded_selectbox(
             scw,
@@ -4081,6 +4265,10 @@ def build_inputs(host=st):
                 "Ribbed / high bond" if value == "ribbed" else "Smooth"
             ),
             disabled=not (elastic_on and sls_heightened_on),
+            help=(
+                "Select the reinforcement surface used by the formula. "
+                f"{heightened_guidance.tooltip}"
+            ),
         )
         hc1, hc2 = scw.columns(2)
         sls_heightened_bar_diameter_mm = _seeded_number(
@@ -4092,7 +4280,10 @@ def build_inputs(host=st):
             1.0,
             "sls_heightened_bar_diameter_mm",
             disabled=not (elastic_on and sls_heightened_on),
-            help="Direct Formula 7.100 NA bar-diameter operand.",
+            help=(
+                "Direct bar-diameter operand. "
+                f"{heightened_guidance.tooltip}"
+            ),
         )
         sls_heightened_effective_tensile_strength_mpa = _seeded_number(
             hc2,
@@ -4104,8 +4295,9 @@ def build_inputs(host=st):
             "sls_heightened_effective_tensile_strength_mpa",
             disabled=not (elastic_on and sls_heightened_on),
             help=(
-                "Dedicated user-specified Formula 7.100 NA operand; it is not "
-                "inferred from the concrete grade or ordinary fctm input."
+                "Dedicated user-specified operand; it is not inferred from the "
+                "concrete grade or ordinary fctm input. "
+                f"{heightened_guidance.tooltip}"
             ),
         )
         sls_heightened_reinforcement_modulus_mpa = _seeded_number(
@@ -4117,6 +4309,10 @@ def build_inputs(host=st):
             1000.0,
             "sls_heightened_reinforcement_modulus_mpa",
             disabled=not (elastic_on and sls_heightened_on),
+            help=(
+                "Direct reinforcement-modulus operand. "
+                f"{heightened_guidance.tooltip}"
+            ),
         )
         sls_heightened_permitted_crack_width_mm = _seeded_number(
             hc2,
@@ -4127,7 +4323,10 @@ def build_inputs(host=st):
             0.01,
             "sls_heightened_permitted_crack_width_mm",
             disabled=not (elastic_on and sls_heightened_on),
-            help="Mandatory user-specified Formula 7.100 NA operand.",
+            help=(
+                "Mandatory user-specified permitted-width operand. "
+                f"{heightened_guidance.tooltip}"
+            ),
         )
         sls_heightened_effective_tension_area_mm2 = _seeded_number(
             hc1,
@@ -4138,7 +4337,10 @@ def build_inputs(host=st):
             100.0,
             "sls_heightened_effective_tension_area_mm2",
             disabled=not (elastic_on and sls_heightened_on),
-            help="Direct effective concrete tension-area operand.",
+            help=(
+                "Direct effective concrete tension-area operand. "
+                f"{heightened_guidance.tooltip}"
+            ),
         )
         sls_heightened_provided_reinforcement_area_mm2 = _seeded_number(
             hc2,
@@ -4151,7 +4353,7 @@ def build_inputs(host=st):
             disabled=not (elastic_on and sls_heightened_on),
             help=(
                 "Direct provided-area operand for the bounded required/provided "
-                "comparison."
+                f"comparison. {heightened_guidance.tooltip}"
             ),
         )
     else:

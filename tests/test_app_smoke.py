@@ -3921,6 +3921,176 @@ def test_degenerate_rupture_stress_does_not_crash():
     assert not at.exception
 
 
+def test_crack_input_tooltips_follow_the_exact_selected_basis():
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Analysis settings")
+    at.radio(key="mode").set_value("Elastic").run()
+
+    assert (
+        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010"
+        in at.number_input(key="sls_phi").help
+    )
+    assert "Formulas (7.8), (7.9), (7.11) and (7.14)" in (
+        at.selectbox(key="sls_bond").help
+    )
+    assert "not used by the selected first-generation" in (
+        at.number_input(key="sls_tendon_xi").help
+    )
+    assert "No Eurocode source is inferred" in (
+        at.selectbox(key="sls_member").help
+    )
+
+    at.selectbox(key="sls_code").set_value(_SLS_2023).run()
+    assert "DS/EN 1992-1-1:2023, 9.2.2 and 9.2.3" in (
+        at.number_input(key="sls_phi").help
+    )
+    assert "DS/EN 1992-1-1:2023, 9.2.2(3), Formula (9.6)" in (
+        at.number_input(key="sls_tendon_xi").help
+    )
+
+    at.selectbox(key="sls_code").set_value(_SLS_DK).run()
+    assert "DS/EN 1992-1-1 DK NA:2024, 7.3.4(1)" in (
+        at.selectbox(key="sls_member").help
+    )
+    for key in (
+        "sls_heightened_crack_system",
+        "sls_heightened_reinforcement_surface",
+    ):
+        assert "DK NA:2024" in at.selectbox(key=key).help
+        assert "Formula 7.100 NA" in at.selectbox(key=key).help
+    for key in (
+        "sls_heightened_bar_diameter_mm",
+        "sls_heightened_reinforcement_modulus_mpa",
+        "sls_heightened_effective_tension_area_mm2",
+    ):
+        assert "DK NA:2024" in at.number_input(key=key).help
+        assert "Formula 7.100 NA" in at.number_input(key=key).help
+    assert not at.exception
+
+
+def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
+    import fatigue_inputs
+
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Analysis settings")
+    at.toggle(key="fatigue_on").set_value(True).run()
+    assert "DS/EN 1992-1-1:2005+A1:2014" in (
+        at.selectbox(key="fatigue_concrete_method").help
+    )
+    assert "DS/EN 1992-2:2005/AC:2008 Formula 6.106" in (
+        at.selectbox(key="fatigue_concrete_method").help
+    )
+    first_generation_help = {
+        "fatigue_gamma_ff": "2.4.2.3 and 6.8.4(1)",
+        "fatigue_gamma_s": "clause 6.8.4 and Tables 6.3N/6.4N",
+        "fatigue_gamma_c": "3.1.6 and 6.8.7, Formula (6.76)",
+        "fatigue_beta_cc_t0": "3.1.6 and 6.8.7, Formula (6.76)",
+        "fatigue_concrete_k1": "3.1.6 and 6.8.7, Formula (6.76)",
+        "fatigue_concrete_c": "DS/EN 1992-2:2005/AC:2008 Formula 6.106",
+    }
+    for key, source in first_generation_help.items():
+        assert source in at.number_input(key=key).help
+
+    at.selectbox(key="fatigue_edition").set_value(_SLS_2023).run()
+    assert "E.4.3, Formula (E.2)" in (
+        at.selectbox(key="fatigue_concrete_method").help
+    )
+    assert "E.5.3, Formulae (E.7)-(E.8)" in (
+        at.selectbox(key="fatigue_concrete_method").help
+    )
+    published_2023_help = {
+        "fatigue_gamma_ff": "DS/EN 1992-1-1:2023, 10.2 and Annex E",
+        "fatigue_gamma_s": "Annex E.5 and Tables E.1/E.2",
+        "fatigue_gamma_c": "5.1.6(1), Formula (5.3), and 10.5, Formula (10.5)",
+        "fatigue_beta_cc_t0": (
+            "5.1.6(1), Formula (5.3), and 10.5, Formula (10.5)"
+        ),
+        "fatigue_concrete_k1": "not used by the 2023 concrete fatigue strength",
+        "fatigue_concrete_c": "E.5.3, Formulae (E.7)-(E.8)",
+    }
+    for key, source in published_2023_help.items():
+        assert source in at.number_input(key=key).help
+
+    at.selectbox(key="fatigue_concrete_method").set_value(
+        "User-defined Miner S-N relation"
+    ).run()
+    custom_method_help = at.selectbox(key="fatigue_concrete_method").help
+    custom_c_help = at.number_input(key="fatigue_concrete_c").help
+    for help_text in (custom_method_help, custom_c_help):
+        assert "project-defined" in help_text.casefold()
+        assert "uncited" in help_text.casefold()
+        assert "no Eurocode source is inferred" in help_text
+        assert "DS/EN 1992" not in help_text
+        assert "Formulae (E.7)-(E.8)" not in help_text
+    assert at.number_input(key="fatigue_concrete_c").disabled is False
+
+    at.selectbox(key="fatigue_edition").set_value(_SLS_DK).run()
+    for help_text in (
+        at.selectbox(key="fatigue_concrete_method").help,
+        at.number_input(key="fatigue_concrete_c").help,
+    ):
+        assert "no Eurocode source is inferred" in help_text
+        assert "DS/EN 1992" not in help_text
+        assert "Formula 6.106" not in help_text
+
+    at.selectbox(key="fatigue_edition").set_value(_SLS_2023).run()
+    _goto_material_tab(at, "Fatigue details")
+
+    def detail_widget(suffix):
+        return next(
+            widget
+            for widget in (
+                list(at.number_input)
+                + list(at.selectbox)
+                + list(at.text_input)
+            )
+            if str(widget.key).startswith("fatiguecat_")
+            and str(widget.key).endswith(suffix)
+        )
+
+    # The retained default is a 2005 named preset. Its help follows that preset,
+    # not the separately selected 2023 calculation route.
+    assert "DS/EN 1992-1-1:2005, Table 6.3N" in (
+        detail_widget("_delta_sigma_rsk_mpa").help
+    )
+    assert "DS/EN 1992-1-1:2005, Table 6.3N" in (
+        detail_widget("_source").help
+    )
+    for suffix in ("_bond_ratio_xi", "_bond_equivalent_diameter_mm"):
+        assert "EN 1992-1-1:2023 10.3(2)" in detail_widget(suffix).help
+
+    custom_catalog = fatigue_inputs.default_catalog()
+    custom_catalog["items"][0]["preset"] = fatigue_inputs.CUSTOM_PRESET
+    custom_at = _fresh()
+    custom_at.session_state[fatigue_inputs.DETAIL_CATALOG_KEY] = custom_catalog
+    custom_at.session_state["fatigue_on"] = True
+    custom_at.session_state["fatigue_edition"] = _SLS_2023
+    custom_at.session_state["_main_page"] = "Inputs"
+    custom_at.session_state["_input_tab"] = "3 · Material parameters"
+    custom_at.session_state["_material_tab"] = "Fatigue details"
+    custom_at.run()
+    custom_help = next(
+        widget.help
+        for widget in custom_at.number_input
+        if str(widget.key).startswith("fatiguecat_")
+        and str(widget.key).endswith("_delta_sigma_rsk_mpa")
+    )
+    assert "project-defined value" in custom_help
+    assert "No Eurocode source is inferred" in custom_help
+    assert "DS/EN 1992" not in custom_help
+    custom_source_help = next(
+        widget.help
+        for widget in custom_at.text_input
+        if str(widget.key).startswith("fatiguecat_")
+        and str(widget.key).endswith("_source")
+    )
+    assert "No Eurocode source is inferred" in custom_source_help
+    assert "DS/EN 1992" not in custom_source_help
+    assert not custom_at.exception
+
+
 def test_inputs_carry_help_tooltips():
     # Inputs across the panels expose hover help (the "?" tooltip).
     at = _fresh()

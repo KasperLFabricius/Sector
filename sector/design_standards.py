@@ -47,6 +47,29 @@ class Capability(StrEnum):
     HEIGHTENED_CRACK_CONTROL = "heightened_crack_control"
 
 
+class InputGuidanceKey(StrEnum):
+    """Stable semantic keys for basis-dependent input help."""
+
+    FATIGUE_DETAIL_VALUES = "fatigue_detail_values"
+    FATIGUE_CONCRETE_METHOD = "fatigue_concrete_method"
+    FATIGUE_MIXED_BOND = "fatigue_mixed_bond"
+    FATIGUE_ACTION_PARTIAL_FACTOR = "fatigue_action_partial_factor"
+    FATIGUE_REINFORCEMENT_MATERIAL_FACTOR = (
+        "fatigue_reinforcement_material_factor"
+    )
+    FATIGUE_CONCRETE_MATERIAL_FACTOR = "fatigue_concrete_material_factor"
+    FATIGUE_CONCRETE_STRENGTH_DEVELOPMENT = (
+        "fatigue_concrete_strength_development"
+    )
+    FATIGUE_CONCRETE_STRENGTH_K1 = "fatigue_concrete_strength_k1"
+    FATIGUE_CONCRETE_LIFE_C = "fatigue_concrete_life_c"
+    ORDINARY_CRACK_DIAMETER = "ordinary_crack_diameter"
+    ORDINARY_CRACK_MILD_BOND = "ordinary_crack_mild_bond"
+    ORDINARY_CRACK_TENDON_BOND = "ordinary_crack_tendon_bond"
+    ORDINARY_CRACK_MEMBER_TYPE = "ordinary_crack_member_type"
+    HEIGHTENED_CRACK_OPERANDS = "heightened_crack_operands"
+
+
 class ContextRole(StrEnum):
     """Why a non-selectable standards reference is retained."""
 
@@ -86,6 +109,22 @@ class CapabilityBinding:
     source: str
     disclosure: str
     ordinary_crack_width_route: OrdinaryCrackWidthSolverRoute | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InputGuidance:
+    """One immutable, basis-scoped source for an input tooltip."""
+
+    basis_key: DesignBasisKey
+    key: InputGuidanceKey
+    guidance: str
+    source: str
+
+    @property
+    def tooltip(self) -> str:
+        """Return the complete user-facing help without hiding its source."""
+
+        return f"{self.guidance} Source: {self.source.rstrip('.')}."
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +238,34 @@ _DK_HEIGHTENED_CRACK_DISCLOSURE = (
     "supplies the permitted crack width and decides applicability; Sector "
     "does not infer that the supplementary provision applies."
 )
+
+_FIRST_GEN_MIXED_BOND_SOURCE = "EN 1992-1-1:2005 6.8.2(2)"
+_PUBLISHED_2023_MIXED_BOND_SOURCE = "EN 1992-1-1:2023 10.3(2)"
+_PUBLISHED_2023_CRACK_TENDON_BOND_SOURCE = (
+    "DS/EN 1992-1-1:2023, 9.2.2(3), Formula (9.6)"
+)
+_FIRST_GEN_CONCRETE_METHOD_SOURCE = (
+    f"{_FIRST_GEN_EQUIVALENT_SOURCE}; {_FIRST_GEN_DAMAGE_SOURCE}"
+)
+_PUBLISHED_2023_CONCRETE_METHOD_SOURCE = (
+    "DS/EN 1992-1-1:2023, E.4.3, Formula (E.2), and E.5.3, "
+    "Formulae (E.7)-(E.8)"
+)
+_FIRST_GEN_FATIGUE_ACTION_FACTOR_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 2.4.2.3 and 6.8.4(1)"
+)
+_PUBLISHED_2023_FATIGUE_ACTION_FACTOR_SOURCE = (
+    "DS/EN 1992-1-1:2023, 10.2 and Annex E"
+)
+_FIRST_GEN_CONCRETE_STRENGTH_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.6 and 6.8.7, "
+    "Formula (6.76)"
+)
+_PUBLISHED_2023_CONCRETE_STRENGTH_SOURCE = (
+    "DS/EN 1992-1-1:2023, 5.1.6(1), Formula (5.3), and 10.5, "
+    "Formula (10.5)"
+)
+_DK_CRACK_MEMBER_SOURCE = "DS/EN 1992-1-1 DK NA:2024, 7.3.4(1)"
 
 
 def _binding(
@@ -354,6 +421,271 @@ CAPABILITY_BINDINGS: Mapping[
     tuple[DesignBasisKey, Capability], CapabilityBinding
 ] = MappingProxyType(_CAPABILITY_BINDINGS)
 
+
+def _guidance(
+    basis_key: DesignBasisKey,
+    key: InputGuidanceKey,
+    guidance: str,
+    source: str,
+) -> InputGuidance:
+    return InputGuidance(
+        basis_key=basis_key,
+        key=key,
+        guidance=guidance,
+        source=source,
+    )
+
+
+_INPUT_GUIDANCE: dict[
+    tuple[DesignBasisKey, InputGuidanceKey], InputGuidance
+] = {}
+
+for _basis_key in (
+    DesignBasisKey.FIRST_GEN_BASE,
+    DesignBasisKey.FIRST_GEN_DK_NA_2024,
+):
+    _first_gen_crack_source = (
+        _DK_ORDINARY_CRACK_SOURCE
+        if _basis_key is DesignBasisKey.FIRST_GEN_DK_NA_2024
+        else _FIRST_GEN_CRACK_SOURCE
+    )
+    _INPUT_GUIDANCE[
+        (_basis_key, InputGuidanceKey.FATIGUE_DETAIL_VALUES)
+    ] = _guidance(
+        _basis_key,
+        InputGuidanceKey.FATIGUE_DETAIL_VALUES,
+        "Named fatigue-detail values come from the registered reinforcement "
+        "S-N resistance tables. The selected preset identifies the specific "
+        "table row or note.",
+        _FIRST_GEN_REINFORCEMENT_SOURCE,
+    )
+    _INPUT_GUIDANCE[
+        (_basis_key, InputGuidanceKey.FATIGUE_CONCRETE_METHOD)
+    ] = _guidance(
+        _basis_key,
+        InputGuidanceKey.FATIGUE_CONCRETE_METHOD,
+        "Select either the damage-equivalent expression or the explicit "
+        "user-supplied-spectrum damage sum implemented for this basis.",
+        _FIRST_GEN_CONCRETE_METHOD_SOURCE,
+    )
+    _INPUT_GUIDANCE[
+        (_basis_key, InputGuidanceKey.FATIGUE_MIXED_BOND)
+    ] = _guidance(
+        _basis_key,
+        InputGuidanceKey.FATIGUE_MIXED_BOND,
+        "For a section combining mild reinforcement and bonded tendons, these "
+        "inputs define the mixed-bond adjustment used by the selected fatigue "
+        "route.",
+        _FIRST_GEN_MIXED_BOND_SOURCE,
+    )
+    for _key, _text, _source in (
+        (
+            InputGuidanceKey.FATIGUE_ACTION_PARTIAL_FACTOR,
+            "Partial factor applied to each cyclic action increment before the "
+            "Elastic fatigue solve.",
+            _FIRST_GEN_FATIGUE_ACTION_FACTOR_SOURCE,
+        ),
+        (
+            InputGuidanceKey.FATIGUE_REINFORCEMENT_MATERIAL_FACTOR,
+            "Material factor reducing the reinforcement S-N resistance and "
+            "yield or proof-stress limit.",
+            _FIRST_GEN_REINFORCEMENT_SOURCE,
+        ),
+        (
+            InputGuidanceKey.FATIGUE_CONCRETE_MATERIAL_FACTOR,
+            "Material factor used in the concrete fatigue design strength.",
+            _FIRST_GEN_CONCRETE_STRENGTH_SOURCE,
+        ),
+        (
+            InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_DEVELOPMENT,
+            "Strength-development factor at the age of first cyclic loading "
+            "used in the concrete fatigue design strength.",
+            _FIRST_GEN_CONCRETE_STRENGTH_SOURCE,
+        ),
+        (
+            InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_K1,
+            "Coefficient k1 used in the first-generation concrete fatigue "
+            "design strength.",
+            _FIRST_GEN_CONCRETE_STRENGTH_SOURCE,
+        ),
+        (
+            InputGuidanceKey.FATIGUE_CONCRETE_LIFE_C,
+            "Coefficient C used in the implemented concrete fatigue-life "
+            "relation for a user-supplied spectrum.",
+            _FIRST_GEN_DAMAGE_SOURCE,
+        ),
+    ):
+        _INPUT_GUIDANCE[(_basis_key, _key)] = _guidance(
+            _basis_key,
+            _key,
+            _text,
+            _source,
+        )
+    for _key, _text in (
+        (
+            InputGuidanceKey.ORDINARY_CRACK_DIAMETER,
+            (
+                "Diameter used by the ordinary crack-spacing calculation; zero "
+                "retains each reinforcement element's diameter."
+            ),
+        ),
+        (
+            InputGuidanceKey.ORDINARY_CRACK_MILD_BOND,
+            (
+                "Select the mild-reinforcement bond coefficient used by the "
+                "ordinary crack-spacing calculation."
+            ),
+        ),
+    ):
+        _INPUT_GUIDANCE[(_basis_key, _key)] = _guidance(
+            _basis_key,
+            _key,
+            _text,
+            _first_gen_crack_source,
+        )
+
+_INPUT_GUIDANCE[
+    (
+        DesignBasisKey.PUBLISHED_2023,
+        InputGuidanceKey.FATIGUE_DETAIL_VALUES,
+    )
+] = _guidance(
+    DesignBasisKey.PUBLISHED_2023,
+    InputGuidanceKey.FATIGUE_DETAIL_VALUES,
+    "Named fatigue-detail values come from the registered reinforcement S-N "
+    "resistance tables. The selected preset identifies the specific table row "
+    "or note.",
+    "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2",
+)
+_INPUT_GUIDANCE[
+    (
+        DesignBasisKey.PUBLISHED_2023,
+        InputGuidanceKey.FATIGUE_CONCRETE_METHOD,
+    )
+] = _guidance(
+    DesignBasisKey.PUBLISHED_2023,
+    InputGuidanceKey.FATIGUE_CONCRETE_METHOD,
+    "Select either the damage-equivalent expression or the explicit "
+    "user-supplied-spectrum damage sum implemented for this basis.",
+    _PUBLISHED_2023_CONCRETE_METHOD_SOURCE,
+)
+_INPUT_GUIDANCE[
+    (DesignBasisKey.PUBLISHED_2023, InputGuidanceKey.FATIGUE_MIXED_BOND)
+] = _guidance(
+    DesignBasisKey.PUBLISHED_2023,
+    InputGuidanceKey.FATIGUE_MIXED_BOND,
+    "For a section combining mild reinforcement and bonded tendons, these "
+    "inputs define the equivalent-tendon-area adjustment used by the selected "
+    "fatigue route.",
+    _PUBLISHED_2023_MIXED_BOND_SOURCE,
+)
+for _key, _text, _source in (
+    (
+        InputGuidanceKey.FATIGUE_ACTION_PARTIAL_FACTOR,
+        "Partial factor applied to each cyclic action increment before the "
+        "Elastic fatigue solve.",
+        _PUBLISHED_2023_FATIGUE_ACTION_FACTOR_SOURCE,
+    ),
+    (
+        InputGuidanceKey.FATIGUE_REINFORCEMENT_MATERIAL_FACTOR,
+        "Material factor reducing the reinforcement S-N resistance and yield "
+        "or proof-stress limit.",
+        "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2",
+    ),
+    (
+        InputGuidanceKey.FATIGUE_CONCRETE_MATERIAL_FACTOR,
+        "Material factor used in the concrete fatigue design strength.",
+        _PUBLISHED_2023_CONCRETE_STRENGTH_SOURCE,
+    ),
+    (
+        InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_DEVELOPMENT,
+        "Strength-development factor at the age of first cyclic loading used "
+        "in the concrete fatigue design strength.",
+        _PUBLISHED_2023_CONCRETE_STRENGTH_SOURCE,
+    ),
+    (
+        InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_K1,
+        "This field is not used by the 2023 concrete fatigue strength "
+        "expression.",
+        _PUBLISHED_2023_CONCRETE_STRENGTH_SOURCE,
+    ),
+    (
+        InputGuidanceKey.FATIGUE_CONCRETE_LIFE_C,
+        "Coefficient C used in the implemented concrete fatigue-life relation "
+        "for a user-supplied spectrum.",
+        "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)",
+    ),
+):
+    _INPUT_GUIDANCE[(DesignBasisKey.PUBLISHED_2023, _key)] = _guidance(
+        DesignBasisKey.PUBLISHED_2023,
+        _key,
+        _text,
+        _source,
+    )
+for _key, _text, _source in (
+    (
+        InputGuidanceKey.ORDINARY_CRACK_DIAMETER,
+        (
+            "Diameter used by the ordinary crack-width calculation; zero "
+            "retains each reinforcement element's diameter."
+        ),
+        _PUBLISHED_2023_CRACK_SOURCE,
+    ),
+    (
+        InputGuidanceKey.ORDINARY_CRACK_MILD_BOND,
+        (
+            "Select the mild-reinforcement bond input used by the ordinary "
+            "crack-width calculation."
+        ),
+        _PUBLISHED_2023_CRACK_SOURCE,
+    ),
+    (
+        InputGuidanceKey.ORDINARY_CRACK_TENDON_BOND,
+        (
+            "Tendon-to-ribbed-reinforcement bond-strength ratio used to derive "
+            "the effective prestressing contribution."
+        ),
+        _PUBLISHED_2023_CRACK_TENDON_BOND_SOURCE,
+    ),
+):
+    _INPUT_GUIDANCE[(DesignBasisKey.PUBLISHED_2023, _key)] = _guidance(
+        DesignBasisKey.PUBLISHED_2023,
+        _key,
+        _text,
+        _source,
+    )
+
+_INPUT_GUIDANCE[
+    (
+        DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        InputGuidanceKey.ORDINARY_CRACK_MEMBER_TYPE,
+    )
+] = _guidance(
+    DesignBasisKey.FIRST_GEN_DK_NA_2024,
+    InputGuidanceKey.ORDINARY_CRACK_MEMBER_TYPE,
+    "Select Beam or Slab for the Danish fine-system effective-height branch; "
+    "prestressed sections use the slabs-or-prestressed branch regardless of "
+    "this selection.",
+    _DK_CRACK_MEMBER_SOURCE,
+)
+
+_INPUT_GUIDANCE[
+    (
+        DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        InputGuidanceKey.HEIGHTENED_CRACK_OPERANDS,
+    )
+] = _guidance(
+    DesignBasisKey.FIRST_GEN_DK_NA_2024,
+    InputGuidanceKey.HEIGHTENED_CRACK_OPERANDS,
+    "This value is an operand or selection for the optional, separately "
+    "enabled heightened crack-control calculation.",
+    _DK_HEIGHTENED_CRACK_SOURCE,
+)
+
+INPUT_GUIDANCE: Mapping[
+    tuple[DesignBasisKey, InputGuidanceKey], InputGuidance
+] = MappingProxyType(_INPUT_GUIDANCE)
+
 STANDARD_CONTEXTS: tuple[StandardContext, ...] = (
     StandardContext(
         key="ec2_2_first_gen_ac_2008_fatigue_source",
@@ -394,6 +726,10 @@ def _valid_capabilities() -> str:
     return ", ".join(capability.value for capability in Capability)
 
 
+def _valid_input_guidance_keys() -> str:
+    return ", ".join(key.value for key in InputGuidanceKey)
+
+
 def parse_design_basis_key(value: object) -> DesignBasisKey:
     """Parse one exact persisted key without label or substring guessing."""
 
@@ -426,6 +762,22 @@ def parse_capability(value: object) -> Capability:
     )
 
 
+def parse_input_guidance_key(value: object) -> InputGuidanceKey:
+    """Parse one exact input-guidance key without substring guessing."""
+
+    if isinstance(value, InputGuidanceKey):
+        return value
+    if isinstance(value, str):
+        try:
+            return InputGuidanceKey(value)
+        except ValueError:
+            pass
+    raise ValueError(
+        "input guidance must be one of the registered keys: "
+        f"{_valid_input_guidance_keys()}"
+    )
+
+
 def get_design_basis(value: object) -> DesignBasis:
     """Return the immutable metadata for one exact basis key."""
 
@@ -446,6 +798,23 @@ def capability_binding(
             f"{basis_key.value} does not implement {capability_key.value}"
         )
     return binding
+
+
+def input_guidance(
+    basis: object,
+    key: object,
+) -> InputGuidance:
+    """Resolve exact basis-dependent input help or fail closed."""
+
+    basis_key = parse_design_basis_key(basis)
+    guidance_key = parse_input_guidance_key(key)
+    guidance = INPUT_GUIDANCE.get((basis_key, guidance_key))
+    if guidance is None:
+        raise ValueError(
+            f"{basis_key.value} has no input guidance for "
+            f"{guidance_key.value}"
+        )
+    return guidance
 
 
 def fatigue_edition_for(basis: object, capability: object) -> str:
