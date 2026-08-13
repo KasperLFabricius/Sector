@@ -1212,6 +1212,22 @@ def test_nm_interaction_is_opt_in_and_renders():
                for frame in frames)
 
 
+def test_assembled_report_payload_retains_interaction_and_bond_selection():
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Analysis settings")
+    at.checkbox(key="pl_interaction").set_value(True).run()
+    at.selectbox(key="sls_bond").set_value(
+        "Plain round (k1 = 1.6)"
+    ).run()
+
+    assert not at.exception
+    latest = at.session_state["_latest_inputs"]
+    assert latest["interaction"] is True
+    assert latest["sls_bond"] == "Plain round (k1 = 1.6)"
+    assert latest["sls_k1"] == pytest.approx(1.6)
+
+
 def test_axial_force_is_tension_positive():
     # N is entered tension-positive: a compression (negative N) raises the flexural
     # capacity relative to pure bending, a tension (positive N) lowers it. This is the

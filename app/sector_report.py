@@ -59,7 +59,7 @@ from sector import detailing
 from sector import fatigue as fatigue_core
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
-from sector.design_standards import get_design_basis
+from sector.design_standards import DesignBasisKey, get_design_basis
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -1272,8 +1272,8 @@ class ReportBuilder:
         """Freeze active publication context as complete-width table rows."""
         entries = []
         # Standard and Audit continuations must remain independently reviewable.
-        # Brief retains its compact assessment-only context to satisfy the hard
-        # three-page representative-fixture limit without dropping result rows.
+        # Brief retains compact assessment-only context so its new input inventory
+        # can remain readable without duplicating section context on every split.
         include_full_context = self.profile.key != "Brief"
         if include_full_context and self._table_section_context is not None:
             entries.append((
@@ -2134,6 +2134,7 @@ class ReportBuilder:
         self._tick(0.05, "Cover and conventions...")
         self._cover()
         if self.profile.key == "Brief":
+            self._brief_input_summary()
             self._brief_governing_register()
             self._write_pdf()
             return
@@ -2339,10 +2340,887 @@ class ReportBuilder:
         self._tick(1.0, "Done")
 
     # -- sections ----------------------------------------------------------
-    def _brief_governing_register(self):
-        """Publish retained critical-example identities on the third Brief page."""
+    def _brief_input_summary(self):
+        """Publish a compact, auditable inventory of every active report input."""
 
-        self._h1("Governing calculation register")
+        self._h1("Analysis input summary")
+        self._small(
+            "This compact inventory records the geometry, assigned materials, "
+            "actions and active analysis settings used for the reported results. "
+            "Generate Standard or Audit for calculation derivations and expanded "
+            "provenance."
+        )
+        self._brief_geometry_summary()
+        self._brief_material_summary()
+        self._brief_actions_summary()
+        self._brief_settings_summary()
+        self._brief_warning_summary()
+
+    def _brief_geometry_summary(self):
+        """Publish every concrete-ring and reinforcement input row compactly."""
+
+        inp = self._base_inp
+        self._h2("Geometry and reinforcement", reserve=80)
+        ring_rows = [["Ring", "Point", "x (mm)", "y (mm)"]]
+        rings = [("Outer", inp.get("outer") or [])]
+        rings.extend(
+            (f"Void {index}", ring)
+            for index, ring in enumerate(inp.get("holes") or [], 1)
+        )
+        for ring_label, ring in rings:
+            for point_index, point in enumerate(ring, 1):
+                ring_rows.append([
+                    ring_label,
+                    point_index,
+                    _fmt(point[0] * _MM, 3),
+                    _fmt(point[1] * _MM, 3),
+                ])
+        if len(ring_rows) == 1:
+            ring_rows.append(["Concrete", "-", "Not supplied", "Not supplied"])
+        self._table(
+            ring_rows,
+            [45 * mm, 25 * mm, 45 * mm, 45 * mm],
+            keep=False,
+            repeat_cols=2,
+            caption="Concrete outline and void coordinates",
+        )
+
+        element_rows = [[
+            "Element", "x (mm)", "y (mm)", "Area (mm<super>2</super>)",
+            "Diameter / size basis", "Material", "Fatigue detail",
+        ]]
+
+        def append_elements(kind, points, records, prefix):
+            retained = list(records or [])
+            if len(retained) != len(points):
+                retained = [
+                    {
+                        "id": f"{prefix}{index}",
+                        "x_mm": point[0] * _MM,
+                        "y_mm": point[1] * _MM,
+                        "area_mm2": point[2],
+                        "diameter_mm": None,
+                        "size_mode": "Area (diameter not retained)",
+                        "material_id": "-",
+                        "fatigue_detail_id": "",
+                    }
+                    for index, point in enumerate(points, 1)
+                ]
+            for record in retained:
+                diameter = record.get("diameter_mm")
+                diameter_text = (
+                    "not retained"
+                    if diameter is None
+                    else f"{_fmt(diameter, 3)} mm"
+                )
+                size_mode = str(record.get("size_mode") or "-")
+                element_rows.append([
+                    _html_escape(
+                        f"{kind} {record.get('id') or '-'}"
+                    ),
+                    _fmt(record.get("x_mm"), 3),
+                    _fmt(record.get("y_mm"), 3),
+                    _fmt(record.get("area_mm2"), 3),
+                    _LiteralReportText(f"{diameter_text}; {size_mode}"),
+                    _html_escape(str(record.get("material_id") or "-")),
+                    _html_escape(str(record.get("fatigue_detail_id") or "-")),
+                ])
+
+        append_elements(
+            "Bar", inp.get("bars") or [], inp.get("bar_elements"), "R"
+        )
+        append_elements(
+            "Tendon", inp.get("tendons") or [], inp.get("tendon_elements"), "P"
+        )
+        if len(element_rows) == 1:
+            element_rows.append(["None", "-", "-", "-", "-", "-", "-"])
+        self._table(
+            element_rows,
+            [24 * mm, 22 * mm, 22 * mm, 28 * mm, 35 * mm, 20 * mm, 19 * mm],
+            font=7.2,
+            keep=False,
+            repeat_cols=1,
+            caption="Reinforcement and tendon layout with assignments",
+        )
+
+    def _brief_material_summary(self):
+        """Publish assigned material identities and their key entered properties."""
+
+        inp = self._base_inp
+        fatigue = self._base_out.get("fatigue") or {}
+        fatigue_checks = fatigue.get("checks") or {}
+        reinforcement_fatigue = bool(
+            (inp.get("fatigue_on") or self._base_out.get("fatigue") is not None)
+            and fatigue_checks.get(
+                "reinforcement", inp.get("fatigue_check_steel")
+            )
+        )
+        self._h2("Assigned materials and key properties", reserve=80)
+        rows = [["Family / ID", "Assignment", "Name / preset / source", "Key properties"]]
+        concrete = inp.get("concrete")
+        if concrete is not None:
+            concrete_source = inp.get("concrete_preset") or inp.get("conc_preset")
+            concrete_2023 = "2023" in str(concrete_source or "")
+            concrete_properties = [
+                f"f<sub>ck</sub> = {_fmt(concrete.fck, 3)} MPa",
+                f"gamma<sub>c</sub> = {_fmt(concrete.gamma_c, 3)}",
+            ]
+            if concrete_2023:
+                concrete_properties.extend([
+                    "eta<sub>cc</sub> = "
+                    + _fmt(inp.get("concrete_eta_cc"), 6),
+                    "k<sub>tc</sub> = "
+                    + _fmt(inp.get("concrete_k_tc"), 2),
+                    (
+                        "alpha<sub>cc</sub> = eta<sub>cc</sub> "
+                        "k<sub>tc</sub> = "
+                        + _fmt(concrete.alpha_cc, 6)
+                    ),
+                ])
+            else:
+                concrete_properties.append(
+                    f"alpha<sub>cc</sub> = {_fmt(concrete.alpha_cc, 3)}"
+                )
+            concrete_properties.extend([
+                f"curve {concrete.curve}",
+                (
+                    f"eps<sub>c2</sub> / eps<sub>cu2</sub> = "
+                    f"{_fmt(concrete.eps_c2 * 1000, 3)} / "
+                    f"{_fmt(concrete.eps_cu2 * 1000, 3)} permille"
+                ),
+            ])
+            if concrete.curve == 2:
+                concrete_properties.append(f"n = {_fmt(concrete.n, 3)}")
+            rows.append([
+                "Concrete",
+                "Concrete rings",
+                _html_escape(str(concrete_source or "User-defined")),
+                "; ".join(concrete_properties),
+            ])
+
+        def catalogue_items(catalogue):
+            items = (catalogue or {}).get("items", [])
+            if isinstance(items, Mapping):
+                return [items]
+            return [item for item in items if isinstance(item, Mapping)]
+
+        bar_elements = list(inp.get("bar_elements") or [])
+        mild_ids = list(dict.fromkeys(
+            str(item.get("material_id"))
+            for item in bar_elements
+            if item.get("material_id") not in (None, "")
+        ))
+        if inp.get("shear_on") or inp.get("torsion_on"):
+            capacity_id = inp.get("capacity_steel_material_id")
+            if capacity_id not in (None, "") and str(capacity_id) not in mild_ids:
+                mild_ids.append(str(capacity_id))
+        mild_records = {
+            str(item.get("id")): item
+            for item in catalogue_items(inp.get("mild_material_catalog"))
+        }
+        mild_laws = inp.get("mild_materials") or {}
+        if not mild_ids and (inp.get("bars") or inp.get("shear_on") or inp.get("torsion_on")):
+            mild_ids = ["-"]
+            mild_records["-"] = {
+                "id": "-", "name": "Reinforcement",
+                "preset": inp.get("mild_preset") or "User-defined",
+                "description": "",
+            }
+            mild_laws = {"-": inp.get("steel")}
+        for material_id in mild_ids:
+            record = mild_records.get(material_id, {})
+            law = mild_laws.get(material_id)
+            if law is None and len(mild_ids) == 1:
+                law = inp.get("steel")
+            assignments = [
+                str(item.get("id") or "-")
+                for item in bar_elements
+                if str(item.get("material_id")) == material_id
+            ]
+            assignment_text = (
+                "Bars " + ", ".join(assignments) if assignments else "No bar row"
+            )
+            if str(inp.get("capacity_steel_material_id")) == material_id:
+                assignment_text += "; member-check reference"
+            source_parts = [
+                str(record.get(key) or "").strip()
+                for key in ("name", "preset", "description")
+            ]
+            source_text = "; ".join(part for part in source_parts if part) or "User-defined"
+            properties = "Material definition unavailable"
+            if law is not None:
+                curve = int(law.curve)
+                strengths = (
+                    f"f<sub>ytk</sub> / f<sub>yck</sub> = "
+                    f"{_fmt(law.fytk, 3)} / {_fmt(law.fyck, 3)} MPa"
+                )
+                factors = f"gamma<sub>y</sub> = {_fmt(law.gamma_y, 3)}"
+                if curve in (1, 3):
+                    strengths = (
+                        f"f<sub>ytk</sub> / f<sub>yck</sub> / "
+                        f"f<sub>utk</sub> = {_fmt(law.fytk, 3)} / "
+                        f"{_fmt(law.fyck, 3)} / {_fmt(law.futk, 3)} MPa"
+                    )
+                    factors = (
+                        f"gamma<sub>y</sub> / gamma<sub>u</sub> / "
+                        f"gamma<sub>E</sub> = {_fmt(law.gamma_y, 3)} / "
+                        f"{_fmt(law.gamma_u, 3)} / {_fmt(law.gamma_E, 3)}"
+                    )
+                law_parts = [
+                    f"curve {curve}",
+                    strengths,
+                    f"E<sub>s</sub> = {_fmt(law.Es / 1000, 1)} GPa",
+                    f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} permille",
+                    factors,
+                ]
+                if curve == 3:
+                    law_parts.extend([
+                        f"k = {_fmt(law.k, 3)}",
+                        (
+                            f"eps<sub>0t</sub> / eps<sub>0c</sub> = "
+                            f"{_fmt(law.ey0t * 1000, 3)} / "
+                            f"{_fmt(law.ey0c * 1000, 3)} permille"
+                        ),
+                    ])
+                law_parts.append(
+                    "compression branch active = "
+                    + self._brief_switch(law.active_in_compression)
+                )
+                properties = "; ".join(law_parts)
+            rows.append([
+                _html_escape(f"Mild / {material_id}"),
+                _html_escape(assignment_text),
+                _html_escape(source_text),
+                properties,
+            ])
+
+        tendon_elements = list(inp.get("tendon_elements") or [])
+        prestress_ids = list(dict.fromkeys(
+            str(item.get("material_id"))
+            for item in tendon_elements
+            if item.get("material_id") not in (None, "")
+        ))
+        prestress_records = {
+            str(item.get("id")): item
+            for item in catalogue_items(inp.get("prestress_material_catalog"))
+        }
+        prestress_laws = inp.get("prestress_materials") or {}
+        if not prestress_ids and inp.get("tendons"):
+            prestress_ids = ["-"]
+            prestress_records["-"] = {
+                "id": "-", "name": "Prestressing steel",
+                "preset": inp.get("prestress_preset") or "User-defined",
+                "description": "",
+            }
+            prestress_laws = {"-": inp.get("prestress")}
+        for material_id in prestress_ids:
+            record = prestress_records.get(material_id, {})
+            law = prestress_laws.get(material_id)
+            if law is None and len(prestress_ids) == 1:
+                law = inp.get("prestress")
+            assignments = [
+                str(item.get("id") or "-")
+                for item in tendon_elements
+                if str(item.get("material_id")) == material_id
+            ]
+            source_parts = [
+                str(record.get(key) or "").strip()
+                for key in ("name", "preset", "description")
+            ]
+            source_text = "; ".join(part for part in source_parts if part) or "User-defined"
+            properties = "Material definition unavailable"
+            if law is not None:
+                if law.curve in (1, 2, 3, 4, 5):
+                    properties = (
+                        f"built-in fixed curve {law.curve}; E<sub>p</sub> = "
+                        f"{_fmt(law.Es / 1000, 1)} GPa; "
+                        f"eps<sub>p,0</sub> / eps<sub>ut</sub> = "
+                        f"{_fmt(law.IS * 1000, 3)} / "
+                        f"{_fmt(law.rupture_strain * 1000, 3)} permille; "
+                        f"gamma<sub>y</sub> = {_fmt(law.gamma_y, 3)}"
+                    )
+                    if reinforcement_fatigue and record.get("fytk") is not None:
+                        properties += (
+                            "; fatigue proof-stress input "
+                            "f<sub>p0.1k</sub> = "
+                            f"{_fmt(record.get('fytk'), 3)} MPa "
+                            "(fatigue yield/proof check input; not a "
+                            "fixed-curve plastic-law field)"
+                        )
+                else:
+                    law_parts = [
+                        f"curve {law.curve}; f<sub>p0.1k</sub> / "
+                        f"f<sub>pk</sub> = {_fmt(law.fytk, 3)} / "
+                        f"{_fmt(law.futk, 3)} MPa; E<sub>p</sub> = "
+                        f"{_fmt(law.Es / 1000, 1)} GPa; "
+                        f"eps<sub>p,0</sub> = "
+                        f"{_fmt(law.IS * 1000, 3)} permille",
+                        f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} permille",
+                        f"gamma<sub>y</sub> / gamma<sub>u</sub> / "
+                        f"gamma<sub>E</sub> = {_fmt(law.gamma_y, 3)} / "
+                        f"{_fmt(law.gamma_u, 3)} / "
+                        f"{_fmt(law.gamma_E, 3)}",
+                    ]
+                    if law.curve == 7:
+                        law_parts.extend([
+                            f"k = {_fmt(law.k, 3)}",
+                            (
+                                f"eps<sub>0t</sub> = "
+                                f"{_fmt(law.ey0t * 1000, 3)} permille"
+                            ),
+                        ])
+                    properties = "; ".join(law_parts)
+            rows.append([
+                _html_escape(f"Prestress / {material_id}"),
+                _html_escape("Tendons " + ", ".join(assignments)),
+                _html_escape(source_text),
+                properties,
+            ])
+        self._table(
+            rows,
+            [29 * mm, 38 * mm, 48 * mm, 55 * mm],
+            font=7.2,
+            keep=False,
+            repeat_cols=1,
+            caption="Assigned material definitions and governing properties",
+        )
+
+    def _brief_actions_summary(self):
+        """Reuse the canonical action-table publication without derivations."""
+
+        self._h2("Actions", reserve=85)
+        self._loads_block()
+
+    @staticmethod
+    def _brief_switch(value):
+        return "yes" if bool(value) else "no"
+
+    @staticmethod
+    def _brief_auto_dimension(value, *, decimals=1, unit="mm"):
+        if value in (None, ""):
+            return "auto / derived"
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return _html_escape(str(value))
+        if math.isclose(number, 0.0, rel_tol=0.0, abs_tol=0.0):
+            return "auto / derived"
+        return f"{_fmt(number, decimals)} {unit}".strip()
+
+    @staticmethod
+    def _brief_transverse_leg_spacing(value):
+        """Format an explicit leg-spacing screen without treating zero as auto."""
+
+        if value in (None, ""):
+            return "gross-web upper-bound screen"
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return _html_escape(str(value))
+        if math.isclose(number, 0.0, rel_tol=0.0, abs_tol=0.0):
+            return "gross-web upper-bound screen"
+        return f"{_fmt(number, 1)} mm"
+
+    def _brief_settings_table(self, rows, *, caption):
+        """Publish setting/value rows in two compact, deterministic columns."""
+
+        body = list(rows[1:])
+        paired = [["Setting", "Value", "Setting", "Value"]]
+        for index in range(0, len(body), 2):
+            left = body[index]
+            right = body[index + 1] if index + 1 < len(body) else ["", ""]
+            paired.append([*left, *right])
+        self._table(
+            paired,
+            [42 * mm, 43 * mm, 42 * mm, 43 * mm],
+            font=7.2,
+            keep=False,
+            repeat_cols=0,
+            caption=caption,
+        )
+
+    def _brief_settings_summary(self):
+        """Publish active numerical, crack, resistance and fatigue settings."""
+
+        inp = self._base_inp
+        plastic_results = self._result_values("plastic")
+        elastic_results = self._result_values("elastic")
+        basis_key = inp.get("sls_code")
+        basis_2023 = False
+        basis_dk_coarse = False
+        try:
+            resolved_basis = get_design_basis(basis_key)
+            basis = resolved_basis.label
+            basis_2023 = resolved_basis.key is DesignBasisKey.PUBLISHED_2023
+            basis_dk_coarse = (
+                resolved_basis.key is DesignBasisKey.FIRST_GEN_DK_NA_2024
+            )
+        except (TypeError, ValueError):
+            basis = basis_key or "-"
+        self._h2("Analysis settings", reserve=75)
+        rows = [["Setting", "Value"]]
+        rows.append(["Analysis mode", _html_escape(str(inp.get("mode") or "-"))])
+        if plastic_results:
+            check_util = inp.get(
+                "check_util", plastic_results[0].get("check_util", True)
+            )
+            rows.extend([
+                ["Neutral-axis sweep start", f"{_fmt(inp.get('v_min'), 0)}&#176;"],
+                ["Neutral-axis sweep end", f"{_fmt(inp.get('v_max'), 0)}&#176;"],
+                ["Neutral-axis maximum increment", f"{_fmt(inp.get('v_inc'), 0)}&#176;"],
+                ["Applied-moment utilisation", self._brief_switch(check_util)],
+                ["N-M interaction diagrams", self._brief_switch(inp.get("interaction"))],
+            ])
+        if elastic_results or inp.get("fatigue_on"):
+            rows.extend([
+                ["Concrete elastic modulus E<sub>c</sub>", f"{_fmt(inp.get('conc_Ec'), 3)} GPa"],
+                ["Creep coefficient phi", _fmt(inp.get("el_phi"), 3)],
+            ])
+        if elastic_results:
+            rows.extend([
+                ["Ordinary SLS design basis", _html_escape(str(basis))],
+                [
+                    "Mean tensile strength f<sub>ctm</sub>",
+                    f"{_fmt(inp.get('sls_fctm'), 3)} MPa",
+                ],
+            ])
+        elif inp.get("minimum_reinforcement_on"):
+            rows.append([
+                "Mean tensile strength f<sub>ctm</sub>",
+                f"{_fmt(inp.get('sls_fctm'), 3)} MPa",
+            ])
+        self._brief_settings_table(
+            rows, caption="General numerical analysis settings",
+        )
+
+        crack_requested = bool(inp.get("sls_cw")) or any(
+            result.get("show_cw") for result in elastic_results
+        )
+        if crack_requested or inp.get("sls_heightened_on"):
+            self._h2("Crack-control settings", reserve=75)
+            crack_rows = [["Setting", "Value"]]
+            permitted = inp.get("sls_permitted_crack_width_mm")
+            crack_rows.extend([
+                ["Ordinary crack-width design basis", _html_escape(str(basis))],
+                [
+                    "Permitted crack width w<sub>k</sub>",
+                    "not specified" if permitted is None else f"{_fmt(permitted, 3)} mm",
+                ],
+                [
+                    "Crack-width diameter",
+                    "per-element values" if not inp.get("sls_phi")
+                    else f"{_fmt(inp.get('sls_phi'), 3)} mm global override",
+                ],
+            ])
+            if crack_requested and inp.get("bars"):
+                crack_rows.extend([
+                    [
+                        "Mild-steel bond selection",
+                        _html_escape(
+                            str(inp.get("sls_bond") or "not retained")
+                        ),
+                    ],
+                    [
+                        "Mild-steel bond coefficient k<sub>1</sub>",
+                        _fmt(inp.get("sls_k1"), 3),
+                    ],
+                ])
+            crack_member = next(
+                (
+                    result.get("crack_member")
+                    for result in elastic_results
+                    if result.get("show_cw") and result.get("crack_member")
+                ),
+                None,
+            )
+            if basis_dk_coarse and crack_member:
+                crack_rows.append([
+                    "Member type", _html_escape(str(crack_member)),
+                ])
+            if inp.get("tendons") and basis_2023:
+                tendon_xi = inp.get("sls_tendon_xi")
+                try:
+                    tendon_xi = float(tendon_xi)
+                except (TypeError, ValueError, OverflowError):
+                    tendon_xi = 0.0
+                crack_rows.append([
+                    "Bonded-tendon bond-strength ratio xi",
+                    (
+                        _fmt(tendon_xi, 3)
+                        if math.isfinite(tendon_xi) and tendon_xi > 0.0
+                        else "not set"
+                    ),
+                ])
+            if inp.get("sls_heightened_on"):
+                crack_rows.extend([
+                    ["DK heightened crack control", "fine and coarse calculated together"],
+                    ["Heightened reference case", _html_escape(str(inp.get("sls_heightened_reference_case") or "-"))],
+                    ["Reinforcement surface", _html_escape(str(inp.get("sls_heightened_reinforcement_surface") or "-"))],
+                    ["Effective tensile strength f<sub>ct,eff</sub>", f"{_fmt(inp.get('sls_heightened_effective_tensile_strength_mpa'), 3)} MPa"],
+                    ["Fine effective tension area A<sub>c,eff</sub>", f"{_fmt(inp.get('sls_heightened_fine_effective_tension_area_mm2'), 3)} mm<super>2</super>"],
+                    ["Coarse effective tension area A<sub>c,eff</sub>", f"{_fmt(inp.get('sls_heightened_coarse_effective_tension_area_mm2'), 3)} mm<super>2</super>"],
+                ])
+                heightened = self._base_out.get("heightened_crack_control") or {}
+                if isinstance(heightened, Mapping) and heightened:
+                    crack_rows.extend([
+                        ["Derived bar diameter", f"{_fmt(heightened.get('bar_diameter_mm'), 3)} mm; {_html_escape(str(heightened.get('diameter_source') or '-'))}"],
+                        ["Derived reinforcement modulus", f"{_fmt(heightened.get('reinforcement_modulus_mpa'), 1)} MPa"],
+                        ["Derived provided reinforcement area", f"{_fmt(heightened.get('provided_reinforcement_area_mm2'), 3)} mm<super>2</super>"],
+                    ])
+            self._brief_settings_table(
+                crack_rows,
+                caption="Ordinary and heightened crack-control settings",
+            )
+
+        resistance_active = any(inp.get(key) for key in (
+            "shear_on", "torsion_on", "combined_on",
+            "minimum_reinforcement_on", "transverse_detailing_on",
+            "clear_spacing_on",
+        ))
+        if resistance_active:
+            self._h2("Shear, torsion and detailing settings", reserve=75)
+            resistance_rows = [["Setting", "Value"]]
+            shear_active = bool(inp.get("shear_on"))
+            shear_links_active = bool(shear_active and inp.get("shear_links"))
+            minimum_active = bool(inp.get("minimum_reinforcement_on"))
+            transverse_active = bool(inp.get("transverse_detailing_on"))
+            clear_active = bool(inp.get("clear_spacing_on"))
+            effective_shear_method = (
+                inp.get("combined_method")
+                if inp.get("combined_on")
+                else inp.get("shear_method")
+            )
+            shear_2023 = bool(
+                shear_active and "2023" in str(effective_shear_method or "")
+            )
+            shear_2023_links = bool(shear_2023 and shear_links_active)
+            detailing_2023 = bool(
+                transverse_active
+                and inp.get("detailing_edition") == detailing.EC2_2023
+            )
+            if inp.get("combined_on"):
+                resistance_rows.extend([
+                    ["Combined M-V-T", "yes"],
+                    ["Combined shared method", _html_escape(str(inp.get("combined_method") or "-"))],
+                    ["Independent M and V longitudinal steel", self._brief_switch(inp.get("combined_mv_independent"))],
+                ])
+            if shear_active:
+                resistance_rows.extend([
+                    ["Shear method", _html_escape(str(effective_shear_method or "-"))],
+                    ["V<sub>x</sub> web width", self._brief_auto_dimension(inp.get("shear_vx_bw"))],
+                    ["V<sub>y</sub> web width", self._brief_auto_dimension(inp.get("shear_vy_bw"))],
+                    ["Shear links present", self._brief_switch(inp.get("shear_links"))],
+                ])
+                if shear_2023:
+                    resistance_rows.append([
+                        "Shear aggregate D<sub>lower</sub>",
+                        self._brief_auto_dimension(inp.get("shear_dlower")),
+                    ])
+            if inp.get("torsion_on"):
+                resistance_rows.extend([
+                    ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],
+                    ["Torsion wall thickness t<sub>ef</sub>", self._brief_auto_dimension(inp.get("torsion_tef"))],
+                    ["Concrete tensile factor gamma<sub>ct</sub>", _fmt(inp.get("torsion_gamma_ct"), 3)],
+                    ["Use nu<sub>t</sub> = nu<sub>v</sub>", self._brief_switch(inp.get("torsion_nu_v"))],
+                    ["Subdivide torsion tube", self._brief_switch(inp.get("torsion_subdivide"))],
+                ])
+                if inp.get("torsion_subdivide"):
+                    subrects = list(inp.get("torsion_subrects") or [])
+                    if not subrects:
+                        count = int(inp.get("torsion_nsub") or 0)
+                        subrects = [
+                            (
+                                inp.get(f"torsion_sub_x{index}"),
+                                inp.get(f"torsion_sub_y{index}"),
+                                inp.get(f"torsion_sub_b{index}"),
+                                inp.get(f"torsion_sub_h{index}"),
+                            )
+                            for index in range(count)
+                        ]
+                    for index, (x, y, width, height) in enumerate(subrects, 1):
+                        resistance_rows.append([
+                            f"Torsion sub-tube {index}",
+                            (
+                                f"x / y / b / h = {_fmt(x, 1)} / "
+                                f"{_fmt(y, 1)} / {_fmt(width, 1)} / "
+                                f"{_fmt(height, 1)} mm"
+                            ),
+                        ])
+            shared_links = bool(
+                shear_links_active or inp.get("torsion_on")
+            )
+            if shared_links:
+                resistance_rows.extend([
+                    ["Member-check reinforcing material", _html_escape(str(inp.get("capacity_steel_material_id") or "-"))],
+                    ["Compression-strut cot theta range", f"{_fmt(inp.get('strut_cot_min'), 2)} to {_fmt(inp.get('strut_cot_max'), 2)}"],
+                    ["Closed-link diameter", self._brief_auto_dimension(inp.get("shear_link_dia"))],
+                    ["Closed-link longitudinal spacing", self._brief_auto_dimension(inp.get("shear_link_s"))],
+                    ["Closed-link characteristic yield", self._brief_auto_dimension(inp.get("shear_fywk"), decimals=1, unit="MPa")],
+                ])
+                if shear_links_active:
+                    resistance_rows.append([
+                        "Effective V<sub>x</sub> / V<sub>y</sub> link legs",
+                        f"{_fmt(inp.get('shear_vx_link_legs'), 1)} / "
+                        f"{_fmt(inp.get('shear_vy_link_legs'), 1)}",
+                    ])
+            if minimum_active or transverse_active:
+                resistance_rows.extend([
+                    ["Minimum reinforcement", self._brief_switch(minimum_active)],
+                    ["Shear/torsion link detailing", self._brief_switch(transverse_active)],
+                ])
+            if minimum_active or transverse_active or clear_active:
+                resistance_rows.append([
+                    "Detailing edition",
+                    _html_escape(str(inp.get("detailing_edition") or "-")),
+                ])
+            if minimum_active or transverse_active:
+                resistance_rows.append([
+                    "Detailing member type",
+                    _html_escape(str(inp.get("detailing_member_type") or "-")),
+                ])
+            if minimum_active:
+                resistance_rows.extend([
+                    ["Section cut direction", _html_escape(str(inp.get("detailing_cut_direction") or "-"))],
+                    ["Modelled reinforcement direction", _modelled_direction_report_label(cut_direction=inp.get("detailing_cut_direction"), alias=inp.get(modelled_direction.ALIAS_KEY))],
+                ])
+            if detailing_2023 or shear_2023_links:
+                resistance_rows.append([
+                    "Link reinforcement ductility class",
+                    _html_escape(str(inp.get("transverse_ductility_class") or "-")),
+                ])
+            if detailing_2023:
+                resistance_rows.append([
+                    "2023 minimum-ratio ductility reduction",
+                    self._brief_switch(
+                        inp.get("transverse_apply_ductility_reduction")
+                    ),
+                ])
+            if transverse_active and shear_links_active:
+                resistance_rows.extend([
+                    ["Maximum V<sub>x</sub>-leg spacing along y", self._brief_transverse_leg_spacing(inp.get("shear_vx_transverse_leg_spacing"))],
+                    ["Maximum V<sub>y</sub>-leg spacing along x", self._brief_transverse_leg_spacing(inp.get("shear_vy_transverse_leg_spacing"))],
+                ])
+            if clear_active:
+                resistance_rows.extend([
+                    ["Clear-spacing check", "section-wide"],
+                    [
+                        "Upper aggregate size D<sub>upper</sub>",
+                        f"{_fmt(inp.get('detailing_d_upper'), 1)} mm",
+                    ],
+                    ["Tendons included in spacing", self._brief_switch(inp.get("detailing_include_tendons"))],
+                ])
+            self._brief_settings_table(
+                resistance_rows,
+                caption="Active shear, torsion and detailing settings",
+            )
+
+        fatigue = self._base_out.get("fatigue")
+        if inp.get("fatigue_on") or fatigue is not None:
+            self._h2("Grouped fatigue settings", reserve=75)
+            fatigue = fatigue or {}
+            checks = fatigue.get("checks") or {}
+            factors = fatigue.get("partial_factors") or {}
+            concrete = fatigue.get("concrete_parameters") or {}
+            basis = fatigue.get("basis") or inp.get(fatigue_inputs.BASIS_KEY) or {}
+            fatigue_rows = [["Setting", "Value"]]
+            edition = fatigue.get("edition") or inp.get("fatigue_edition") or "-"
+            reinforcement_fatigue = bool(
+                checks.get("reinforcement", inp.get("fatigue_check_steel"))
+            )
+            concrete_fatigue = bool(
+                checks.get("concrete", inp.get("fatigue_check_concrete"))
+            )
+            concrete_method = (
+                fatigue.get("concrete_method")
+                or inp.get("fatigue_concrete_method")
+                or fatigue_core.CONCRETE_MINER
+            )
+            solver_edition = str(fatigue.get("solver_edition") or "")
+            if not solver_edition:
+                try:
+                    solver_edition = get_design_basis(
+                        fatigue.get("basis_key") or inp.get("fatigue_edition")
+                    ).label
+                except (TypeError, ValueError):
+                    solver_edition = str(edition)
+            concrete_2023 = "2023" in solver_edition
+            fatigue_rows.extend([
+                ["Fatigue edition", _html_escape(str(edition))],
+                ["Reinforcement fatigue", self._brief_switch(reinforcement_fatigue)],
+                ["Concrete fatigue", self._brief_switch(concrete_fatigue)],
+                ["Action factor gamma<sub>Ff</sub>", _fmt(factors.get("gamma_ff", inp.get("fatigue_gamma_ff")), 3)],
+            ])
+            if reinforcement_fatigue:
+                fatigue_rows.append([
+                    "Reinforcement factor gamma<sub>s</sub>",
+                    _fmt(factors.get("gamma_s", inp.get("fatigue_gamma_s")), 3),
+                ])
+            if concrete_fatigue:
+                fatigue_rows.extend([
+                    [
+                        "Concrete factor gamma<sub>c,fat</sub>",
+                        _fmt(
+                            factors.get("gamma_c", inp.get("fatigue_gamma_c")),
+                            3,
+                        ),
+                    ],
+                    [
+                        "Concrete fatigue method",
+                        _html_escape(str(concrete_method)),
+                    ],
+                    [
+                        "Concrete age t<sub>0</sub>",
+                        f"{_fmt(fatigue.get('t0_days', inp.get('fatigue_t0_days')), 2)} days",
+                    ],
+                    [
+                        "beta<sub>cc</sub>(t<sub>0</sub>)",
+                        _fmt(
+                            concrete.get(
+                                "beta_cc_t0", inp.get("fatigue_beta_cc_t0")
+                            ),
+                            4,
+                        ),
+                    ],
+                ])
+                if not concrete_2023:
+                    fatigue_rows.append([
+                        "Concrete fatigue k<sub>1</sub>",
+                        _fmt(
+                            concrete.get(
+                                "k1", inp.get("fatigue_concrete_k1")
+                            ),
+                            3,
+                        ),
+                    ])
+                if concrete_method in fatigue_core.CONCRETE_MINER_METHODS:
+                    fatigue_rows.append([
+                        "Concrete fatigue C",
+                        _fmt(
+                            concrete.get(
+                                "c", inp.get("fatigue_concrete_c")
+                            ),
+                            3,
+                        ),
+                    ])
+            fatigue_rows.extend([
+                ["Spectrum method", _html_escape(str(basis.get("method") or "-"))],
+                ["Spectrum basis notes", _html_escape(str(basis.get("notes") or "-"))],
+            ])
+            mixed_reinforcement = bool(inp.get("bar_elements")) and bool(
+                inp.get("tendon_elements")
+            )
+            detail_basis = (
+                tuple(fatigue.get("fatigue_detail_basis") or ())
+                if reinforcement_fatigue
+                else ()
+            )
+            if reinforcement_fatigue and not detail_basis:
+                assigned_ids = [
+                    str(record.get("fatigue_detail_id") or "").strip()
+                    for record in (
+                        list(inp.get("bar_elements") or [])
+                        + list(inp.get("tendon_elements") or [])
+                    )
+                    if isinstance(record, Mapping)
+                ]
+                assigned_ids = [detail_id for detail_id in assigned_ids if detail_id]
+                try:
+                    source_catalog = fatigue_inputs.normalise_catalog(
+                        inp.get(fatigue_inputs.DETAIL_CATALOG_KEY),
+                        assigned_ids=assigned_ids,
+                    )
+                    source_details = fatigue_inputs.entry_map(source_catalog)
+                except (TypeError, ValueError):
+                    source_details = {}
+                seen_detail_ids = set()
+                ordered_details = []
+                for detail_id in assigned_ids:
+                    if (
+                        detail_id not in source_details
+                        or detail_id in seen_detail_ids
+                    ):
+                        continue
+                    seen_detail_ids.add(detail_id)
+                    ordered_details.append(source_details[detail_id])
+                detail_basis = tuple(ordered_details)
+            for detail in detail_basis:
+                bend_reduction = bool(detail.get("bend_reduction"))
+                modifiers = [
+                    "kind = "
+                    + _html_escape(str(detail.get("kind") or "-")),
+                    "stress model = "
+                    + _html_escape(str(detail.get("stress_model") or "-")),
+                    "bend reduction = " + self._brief_switch(bend_reduction),
+                ]
+                if bend_reduction:
+                    modifiers.append(
+                        "mandrel diameter = "
+                        f"{_fmt(detail.get('mandrel_diameter_mm'), 3)} mm"
+                    )
+                if (
+                    str(detail.get("kind") or "").strip().lower()
+                    == fatigue_inputs.PRESTRESS
+                    and mixed_reinforcement
+                ):
+                    modifiers.extend([
+                        "bond ratio xi = "
+                        + _fmt(detail.get("bond_ratio_xi"), 3),
+                        (
+                            "bond-equivalent diameter = "
+                            f"{_fmt(detail.get('bond_equivalent_diameter_mm'), 3)} mm"
+                        ),
+                    ])
+                fatigue_rows.append([
+                    "Fatigue detail " + _html_escape(str(detail.get("id") or "-")),
+                    (
+                        _html_escape(str(detail.get("name") or detail.get("preset") or "-"))
+                        + "; preset = "
+                        + _html_escape(str(detail.get("preset") or "-"))
+                        + "; source = "
+                        + _html_escape(str(detail.get("source") or "not stated"))
+                        + f"; Delta sigma<sub>Rsk</sub> = {_fmt(detail.get('delta_sigma_rsk_mpa'), 3)} MPa; "
+                        + f"N* = {_fmt(detail.get('n_star'), 3)}; "
+                        + f"k<sub>1</sub> / k<sub>2</sub> = {_fmt(detail.get('k1'), 3)} / {_fmt(detail.get('k2'), 3)}; "
+                        + "; ".join(modifiers)
+                    ),
+                ])
+            self._brief_settings_table(
+                fatigue_rows,
+                caption=(
+                    "Grouped fatigue calculation settings and detail definitions"
+                ),
+            )
+
+    def _brief_warning_summary(self):
+        """Retain active calculation warnings without expanding derivations."""
+
+        warnings = []
+        for label, payload in (
+            ("Fatigue", self._base_out.get("fatigue")),
+            ("DK heightened crack control", self._base_out.get("heightened_crack_control")),
+        ):
+            if not isinstance(payload, Mapping):
+                continue
+            for key in ("warnings", "errors"):
+                for message in payload.get(key) or ():
+                    warnings.append((label, str(message)))
+        if not warnings:
+            return
+        self._h2("Warnings retained with the calculation", reserve=90)
+        self._table(
+            [["Source", "Warning"], *[
+                [_html_escape(label), _html_escape(message)]
+                for label, message in warnings
+            ]],
+            [45 * mm, 120 * mm],
+            keep=False,
+            caption="Warnings relevant to the reported calculation",
+        )
+
+    def _brief_governing_register(self):
+        """Publish retained critical-example identities after the input inventory."""
+
+        self._h1("Governing calculation register", reserve=130)
         self._p(
             "This rapid-review profile retains every requested result and status "
             "in the overview. The register below identifies the precomputed "
@@ -3157,6 +4035,8 @@ class ReportBuilder:
             )
             if plastic:
                 self._small("<b>Plastic / capacity cases</b>")
+                if self.profile.key == "Brief":
+                    self.flow[-1].keepWithNext = 1
                 table_key = table_fields.PLASTIC_CASES_TABLE_KEY
                 rows = [[
                     "Case", "Description",
@@ -3199,6 +4079,8 @@ class ReportBuilder:
             )
             if elastic:
                 self._small("<b>Elastic cases</b>")
+                if self.profile.key == "Brief":
+                    self.flow[-1].keepWithNext = 1
                 rows = [[
                     "Case", "Description", "Part", "N<sub>Ed</sub>",
                     "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
@@ -3245,6 +4127,8 @@ class ReportBuilder:
             )
             if fatigue_rows:
                 self._small("<b>Grouped fatigue spectra</b>")
+                if self.profile.key == "Brief":
+                    self.flow[-1].keepWithNext = 1
                 table_key = table_fields.FATIGUE_SPECTRUM_TABLE_KEY
                 rows = [[
                     "Spectrum", "Bin", "Description", "Cycles",

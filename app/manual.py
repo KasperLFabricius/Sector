@@ -1276,6 +1276,10 @@ def manual_blocks() -> list:
         ],
     )
     md("Every profile publishes the complete requested-calculation status register. "
+       "Brief also includes compact geometry, assigned-material, reinforcement, "
+       "tendon, action and active-setting tables; four pages is the typical target, "
+       "while complex multi-case projects may need approximately four to six pages "
+       "to keep that evidence readable. "
        "Worked numerical derivations are limited to the globally governing or "
        "extremal calculation in each family. The DK/NA crack method retains one "
        "global fine-system and one global coarse-system example, and fatigue may "
