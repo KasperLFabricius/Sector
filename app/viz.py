@@ -2162,7 +2162,88 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
     xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
     span_x = max(xmax - xmin, 1.0)
     span_y = max(ymax - ymin, 1.0)
+    governing_span = max(span_x, span_y)
     cx, cy = float(centroid[0]) * 1000.0, float(centroid[1]) * 1000.0
+    # Keep every label in a deterministic lane outside the section.  Constraining
+    # the equal-aspect axes to these ranges is important: without ``constrain``,
+    # Plotly expands a data range to fill a very wide Streamlit container and the
+    # apparently separate data-coordinate labels collapse onto one another.
+    if axis == "x":
+        # A tall section's y span governs the equal-aspect pixel scale. Use that
+        # same governing span for horizontal lanes so their pixel gaps do not
+        # collapse merely because the section is narrow.
+        lane = {
+            "action": xmin - 0.30 * governing_span,
+            "d": xmax + 0.18 * governing_span,
+            "z": xmax + 0.40 * governing_span,
+        }
+        # Reserve roughly 100 px beyond each outward-facing label at both the
+        # report raster and the app canvas.  With equal aspect, a tall section's
+        # y range controls the data-to-pixel scale, so padding based only on its
+        # narrow x span can collapse to a handful of pixels and clip the boxes.
+        horizontal_label_pad = max(0.65 * span_x, 0.95 * span_y)
+        plot_x_range = [
+            lane["action"] - horizontal_label_pad,
+            lane["z"] + horizontal_label_pad,
+        ]
+        # On a wide, shallow section the x span governs the equal-aspect pixel
+        # scale.  Preserve the established local offset otherwise, but guarantee
+        # enough physical pixels for the bordered tension-face label when x is
+        # governing, and reserve matching range so the box remains contained.
+        tension_face_offset = 0.18 * span_y
+        tension_face_range = 0.30 * span_y
+        if span_x > span_y:
+            tension_face_offset = max(
+                tension_face_offset, 0.12 * governing_span
+            )
+            tension_face_range = max(
+                tension_face_range,
+                tension_face_offset + 0.10 * governing_span,
+            )
+        plot_y_range = [
+            ymin - tension_face_range,
+            ymax + tension_face_range,
+        ]
+    else:
+        # Preserve the established offsets for ordinary/tall sections, but set
+        # minimum gaps from the equal-aspect governing span. This prevents a
+        # wide, shallow section from collapsing the vertical callout stack while
+        # avoiding the whitespace that scaling every offset from its width would
+        # introduce. Keep the plotted range tight to those actual lanes.
+        depth_offset = max(0.16 * span_y, 0.08 * governing_span)
+        lever_offset = depth_offset + max(
+            0.24 * span_y, 0.12 * governing_span
+        )
+        action_offset = lever_offset + max(
+            0.34 * span_y, 0.18 * governing_span
+        )
+        lane = {
+            "action": ymax + action_offset,
+            "d": ymax + depth_offset,
+            "z": ymax + lever_offset,
+        }
+        vertical_label_pad = max(0.10 * span_y, 0.08 * governing_span)
+        # The symmetric tall, narrow case needs the same protection in x.  Its
+        # horizontal label is wider than the vertical one above, so its centred
+        # tail needs a larger governing-span minimum and containment allowance.
+        tension_face_offset = 0.20 * span_x
+        tension_face_range = 0.34 * span_x
+        if span_y > span_x:
+            tension_face_offset = max(
+                tension_face_offset, 0.45 * governing_span
+            )
+            tension_face_range = max(
+                tension_face_range,
+                tension_face_offset + 0.40 * governing_span,
+            )
+        plot_x_range = [
+            xmin - tension_face_range,
+            xmax + tension_face_range,
+        ]
+        plot_y_range = [
+            ymin - 0.20 * span_y,
+            lane["action"] + vertical_label_pad,
+        ]
     selected = [i for i in asl_bar_ids or [] if 1 <= i <= len(bars)]
     if selected:
         pts = [bars[i - 1] for i in selected]
@@ -2183,12 +2264,15 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         fig.add_shape(type="line", x0=xmin, x1=xmax, y0=face_level, y1=face_level,
                       line=dict(color=LOAD_POINT, width=2, dash="dash"))
         face_x = xmin + 0.06 * span_x
-        face_label_y = face_level + (-0.14 if tension_low else 0.14) * span_y
+        face_label_y = face_level + (
+            -tension_face_offset if tension_low else tension_face_offset
+        )
         fig.add_trace(go.Scatter(
             x=[face_x], y=[face_label_y], mode="markers",
             marker=dict(size=1, opacity=0), hoverinfo="skip", showlegend=False,
         ))
         fig.add_annotation(
+            name="shear-tension-face",
             x=face_x,
             y=face_level,
             ax=face_x,
@@ -2212,20 +2296,23 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         arrow_y0, arrow_y1 = (
             (ymin, ymax) if positive_action else (ymax, ymin)
         )
-        fig.add_annotation(x=xmin - 0.12 * span_x, y=arrow_y1,
-                           ax=xmin - 0.12 * span_x, ay=arrow_y0,
+        fig.add_annotation(x=lane["action"], y=arrow_y1,
+                           ax=lane["action"], ay=arrow_y0,
                            axref="x", ayref="y", text="", showarrow=True,
                            arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
                            font=dict(size=11, color=SCHEMATIC_INK))
-        fig.add_annotation(x=xmin - 0.12 * span_x, y=(ymin + ymax) / 2.0,
+        fig.add_annotation(name="shear-action-label",
+                           x=lane["action"], y=(ymin + ymax) / 2.0,
                            text=action_label, showarrow=False, xanchor="right", xshift=-6,
+                           bgcolor="rgba(255,255,255,0.94)",
+                           bordercolor=LOAD_POINT, borderwidth=1, borderpad=2,
                            font=dict(size=11, color=SCHEMATIC_INK))
         if asl_cg_m is not None and d_mm > 0.0:
             cg = float(asl_cg_m) * 1000.0
             direction = 1.0 if tension_low else -1.0
             comp = ymax if tension_low else ymin
-            dim_x = xmax + 0.13 * span_x
-            z_x = xmax + 0.25 * span_x
+            dim_x = lane["d"]
+            z_x = lane["z"]
             fig.add_shape(type="line", x0=dim_x, x1=dim_x, y0=cg, y1=comp,
                           line=dict(color=SCHEMATIC_INK, width=1.2))
             fig.add_annotation(x=dim_x, y=comp, ax=dim_x,
@@ -2236,15 +2323,23 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                                ay=cg + direction * 0.10 * span_y,
                                axref="x", ayref="y", text="", showarrow=True,
                                arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
-            fig.add_annotation(x=dim_x, y=(cg + comp) / 2.0,
+            fig.add_annotation(name="shear-d-label",
+                               x=dim_x, y=(cg + comp) / 2.0,
                                text=f"d = {d_mm:.0f} mm", showarrow=False,
-                               xanchor="right", xshift=-6)
+                               xanchor="right", xshift=-6,
+                               bgcolor="rgba(255,255,255,0.94)",
+                               bordercolor=SCHEMATIC_INK,
+                               borderwidth=1, borderpad=2)
             z_end = cg + direction * min(float(z_mm), float(d_mm))
             fig.add_shape(type="line", x0=z_x, x1=z_x, y0=cg, y1=z_end,
                           line=dict(color=ENVELOPE, width=1.2))
-            fig.add_annotation(x=z_x, y=(cg + z_end) / 2.0,
+            fig.add_annotation(name="shear-z-label",
+                               x=z_x, y=(cg + z_end) / 2.0,
                                text=f"z = {z_mm:.0f} mm", showarrow=False,
                                xanchor="left", xshift=6,
+                               bgcolor="rgba(255,255,255,0.94)",
+                               bordercolor=ENVELOPE,
+                               borderwidth=1, borderpad=2,
                                font=dict(color=ENVELOPE))
     else:
         fig.add_shape(type="line", x0=cx, x1=cx, y0=ymin, y1=ymax,
@@ -2253,12 +2348,15 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         fig.add_shape(type="line", x0=face_level, x1=face_level, y0=ymin, y1=ymax,
                       line=dict(color=LOAD_POINT, width=2, dash="dash"))
         face_y = ymin + 0.06 * span_y
-        face_label_x = face_level + (-0.14 if tension_low else 0.14) * span_x
+        face_label_x = face_level + (
+            -tension_face_offset if tension_low else tension_face_offset
+        )
         fig.add_trace(go.Scatter(
             x=[face_label_x], y=[face_y], mode="markers",
             marker=dict(size=1, opacity=0), hoverinfo="skip", showlegend=False,
         ))
         fig.add_annotation(
+            name="shear-tension-face",
             x=face_level,
             y=face_y,
             ax=face_label_x,
@@ -2281,7 +2379,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         arrow_x0, arrow_x1 = (
             (xmin, xmax) if positive_action else (xmax, xmin)
         )
-        action_y = ymax + 0.34 * span_y
+        action_y = lane["action"]
         fig.add_trace(go.Scatter(
             x=[arrow_x0, arrow_x1],
             y=[action_y, action_y],
@@ -2295,15 +2393,19 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                            axref="x", ayref="y", text="", showarrow=True,
                            arrowhead=2, arrowwidth=2, arrowcolor=LOAD_POINT,
                            font=dict(size=11, color=SCHEMATIC_INK))
-        fig.add_annotation(x=(xmin + xmax) / 2.0, y=action_y,
-                           text=action_label, showarrow=False, yanchor="top", yshift=-6,
+        fig.add_annotation(name="shear-action-label",
+                           x=(xmin + xmax) / 2.0, y=action_y,
+                           text=action_label, showarrow=False,
+                           yanchor="bottom", yshift=6,
+                           bgcolor="rgba(255,255,255,0.94)",
+                           bordercolor=LOAD_POINT, borderwidth=1, borderpad=2,
                            font=dict(size=11, color=SCHEMATIC_INK))
         if asl_cg_m is not None and d_mm > 0.0:
             cg = float(asl_cg_m) * 1000.0
             direction = 1.0 if tension_low else -1.0
             comp = xmax if tension_low else xmin
-            dim_y = ymax + 0.11 * span_y
-            z_y = ymax + 0.22 * span_y
+            dim_y = lane["d"]
+            z_y = lane["z"]
             fig.add_shape(type="line", x0=cg, x1=comp, y0=dim_y, y1=dim_y,
                           line=dict(color=SCHEMATIC_INK, width=1.2))
             fig.add_annotation(x=comp, y=dim_y,
@@ -2314,15 +2416,23 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                                ax=cg + direction * 0.10 * span_x, ay=dim_y,
                                axref="x", ayref="y", text="", showarrow=True,
                                arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
-            fig.add_annotation(x=(cg + comp) / 2.0, y=dim_y,
+            fig.add_annotation(name="shear-d-label",
+                               x=(cg + comp) / 2.0, y=dim_y,
                                text=f"d = {d_mm:.0f} mm", showarrow=False,
-                               yanchor="top", yshift=-6)
+                               yanchor="top", yshift=-6,
+                               bgcolor="rgba(255,255,255,0.94)",
+                               bordercolor=SCHEMATIC_INK,
+                               borderwidth=1, borderpad=2)
             z_end = cg + direction * min(float(z_mm), float(d_mm))
             fig.add_shape(type="line", x0=cg, x1=z_end, y0=z_y, y1=z_y,
                           line=dict(color=ENVELOPE, width=1.2))
-            fig.add_annotation(x=(cg + z_end) / 2.0, y=z_y,
+            fig.add_annotation(name="shear-z-label",
+                               x=(cg + z_end) / 2.0, y=z_y,
                                text=f"z = {z_mm:.0f} mm", showarrow=False,
                                yanchor="bottom", yshift=6,
+                               bgcolor="rgba(255,255,255,0.94)",
+                               bordercolor=ENVELOPE,
+                               borderwidth=1, borderpad=2,
                                font=dict(color=ENVELOPE))
 
     if not selected:
@@ -2335,6 +2445,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
             + f", ... ({len(selected)} total)"
         )
     fig.add_annotation(
+        name="shear-section-summary",
         x=0.0, y=1.02, xref="paper", yref="paper",
         xanchor="left", yanchor="bottom", showarrow=False, align="left",
         text=(f"<b>b<sub>w</sub></b> = {bw_mm:.0f} mm ({bw_source})<br>"
@@ -2347,7 +2458,16 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         borderpad=4,
         font=dict(size=10, color=SCHEMATIC_INK),
     )
-    fig.update_layout(margin=dict(l=30, r=30, t=118, b=_LEGEND_BOT_M))
+    fig.update_layout(
+        margin=dict(l=30, r=30, t=118, b=_LEGEND_BOT_M),
+        xaxis=dict(range=plot_x_range, constrain="domain"),
+        yaxis=dict(
+            range=plot_y_range,
+            scaleanchor="x",
+            scaleratio=1,
+            constrain="domain",
+        ),
+    )
     return fig
 
 
