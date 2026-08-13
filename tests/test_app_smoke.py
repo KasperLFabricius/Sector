@@ -382,13 +382,14 @@ def test_app_migrates_legacy_view_label(old, new):
 
 
 def test_app_empty_result_reads_not_calculated():
-    # An invalid/empty section makes run_analysis return {}; the freshness badge must
-    # read "Not calculated yet", not green "Results up to date".
+    # An invalid/empty section is blocked before solver entry. The freshness badge
+    # must read "Not calculated yet", not green "Results up to date", and the
+    # blocked attempt must not manufacture a result payload.
     at = _fresh()
     at.run()
     _clear_section(at)                           # empty the section -> no valid points
     _calculate(at)
-    assert ("results" in at.session_state) and at.session_state["results"] == {}
+    assert "results" not in at.session_state
     caps = [c.value for c in at.caption]
     assert any("Not calculated yet" in c for c in caps)
     assert not any("up to date" in c for c in caps)
@@ -2130,7 +2131,7 @@ def test_cleared_section_does_not_fall_back_to_quick_section():
     assert not at.exception
     _calculate(at)
     assert not at.exception
-    assert at.session_state["results"] == {}
+    assert "results" not in at.session_state
 
 
 def test_blank_and_partial_point_rows_are_skipped():
@@ -2321,7 +2322,7 @@ def test_void_slicing_the_section_is_rejected():
     assert any("disconnected" in e.value for e in at.error)
     _calculate(at)
     assert not at.exception
-    assert "plastic" not in at.session_state["results"]
+    assert "results" not in at.session_state
 
 
 def test_bow_tie_outline_is_blocked_in_ui_before_solver_entry():
@@ -2367,7 +2368,7 @@ def test_bar_outside_the_concrete_is_rejected():
     assert any("within the concrete" in e.value for e in at.error)
     _calculate(at)
     assert not at.exception
-    assert "plastic" not in at.session_state["results"]
+    assert "results" not in at.session_state
 
 
 def test_high_grade_concrete_auto_strain_calculates():
@@ -4812,7 +4813,7 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
     custom_at.session_state["fatigue_on"] = True
     custom_at.session_state["fatigue_edition"] = _SLS_2023
     custom_at.session_state["_main_page"] = "Inputs"
-    custom_at.session_state["_input_tab"] = "3 · Material parameters"
+    custom_at.session_state["_input_tab"] = f"3 {chr(0xB7)} Material parameters"
     custom_at.session_state["_material_tab"] = "Fatigue details"
     custom_at.run()
     custom_help = next(

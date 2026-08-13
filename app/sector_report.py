@@ -10073,6 +10073,7 @@ class ReportBuilder:
             return
         source = _html_escape(str(reference))
         self._h2("Textbook calculation - governing reinforcement fatigue")
+        calculation_start = len(self.flow) - 1
         self._p(
             "The globally governing reinforcement element and bin are used once "
             "to demonstrate the S-N, Miner and yield/proof checks. All other "
@@ -10098,6 +10099,10 @@ class ReportBuilder:
             ),
             note=_html_escape(selected_bin.get("bond_method") or ""),
         )
+        # Keep only the subsection heading, its lead-in and the first measured
+        # equation together.  The remaining worked chain must stay independently
+        # pageable; wrapping every equation would create a near-page-height block.
+        self._keep_measured_calculation_from(calculation_start)
         material_factor = selected_bin["material_factor"]
         self._formula(
             "Delta sigma<sub>Rd</sub> = Delta sigma<sub>Rsk</sub> / "

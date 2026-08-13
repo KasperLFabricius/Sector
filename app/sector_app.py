@@ -45,6 +45,7 @@ from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, design_standards  # noqa: E402
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
+from sector.sls_identity import PERMITTED_CRACK_WIDTH_SOURCE  # noqa: E402
 
 # The app has many independent calculation and publication surfaces. Keep their
 # modules inert until the active input stage or requested result actually reaches
@@ -6367,9 +6368,7 @@ def build_inputs(host=st):
                 sls_tendon_xi=sls_tendon_xi,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
                 sls_permitted_crack_width_mm=sls_permitted_crack_width_mm,
-                sls_permitted_crack_width_source=(
-                    sls_core.crack_criterion_source()
-                ),
+                sls_permitted_crack_width_source=PERMITTED_CRACK_WIDTH_SOURCE,
                 sls_heightened_on=sls_heightened_on,
                 sls_heightened_reference_case=(
                     sls_heightened_reference_case

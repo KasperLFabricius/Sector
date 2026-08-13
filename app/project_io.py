@@ -2,9 +2,9 @@
 
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
-Released Sector 0.92 projects used schema 23. Current projects use schema 25.
-Schema 24 has one bounded migration for the shared permitted crack-width
-setting; schema 23 and future schemas remain unsupported. Retired
+Released Sector 0.92 projects used schema 23. Sector 0.93 uses schema 25 during
+v0.94 development. Schema 24 has one bounded migration for the shared permitted
+crack-width setting; schema 23 and future schemas remain unsupported. Retired
 component-mapped bridge inputs are deliberately absent from the schema.
 """
 
@@ -38,9 +38,9 @@ from sector import (
     design_standards,
     geometry,
     heightened_crack_control,
-    sls,
 )
 from sector.build_info import source_revision
+from sector.sls_identity import PERMITTED_CRACK_WIDTH_KEY
 
 FORMAT = "sector-project"
 VERSION = 25
@@ -150,7 +150,7 @@ SCALAR_KEYS = [
     "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "pl_interaction", "el_phi",
     "sls_cw", "sls_phi", "sls_bond", "sls_tendon_xi",
-    "sls_code", "sls_member", sls.PERMITTED_CRACK_WIDTH_KEY,
+    "sls_code", "sls_member", PERMITTED_CRACK_WIDTH_KEY,
     *HEIGHTENED_CRACK_SCALAR_KEYS,
     # Fatigue.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
@@ -434,12 +434,12 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
     }
     for key in _POSITIVE_FACTOR_KEYS.intersection(payload):
         payload[key] = _positive_real(payload[key], key)
-    permitted_width = payload.get(sls.PERMITTED_CRACK_WIDTH_KEY)
-    payload[sls.PERMITTED_CRACK_WIDTH_KEY] = (
+    permitted_width = payload.get(PERMITTED_CRACK_WIDTH_KEY)
+    payload[PERMITTED_CRACK_WIDTH_KEY] = (
         None
         if permitted_width is None
         or (isinstance(permitted_width, str) and not permitted_width.strip())
-        else _positive_real(permitted_width, sls.PERMITTED_CRACK_WIDTH_KEY)
+        else _positive_real(permitted_width, PERMITTED_CRACK_WIDTH_KEY)
     )
     mild_ids, prestress_ids, bar_fatigue_ids, tendon_fatigue_ids = (
         _assigned_catalog_ids(tables)
@@ -577,9 +577,9 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
                 payload.get("sls_heightened_reference_case"),
             )
         )
-        if payload[sls.PERMITTED_CRACK_WIDTH_KEY] is None:
+        if payload[PERMITTED_CRACK_WIDTH_KEY] is None:
             raise ValueError(
-                f"{sls.PERMITTED_CRACK_WIDTH_KEY} is required when heightened "
+                f"{PERMITTED_CRACK_WIDTH_KEY} is required when heightened "
                 "crack control is enabled"
             )
     method_resolvers = (
@@ -1183,7 +1183,7 @@ def parse_project_with_info(text: str):
                 tables[key] = _obj_to_table(data["tables"][key], key)
         allowed_schema24_scalars = (
             set(SCALAR_KEYS)
-            - {sls.PERMITTED_CRACK_WIDTH_KEY}
+            - {PERMITTED_CRACK_WIDTH_KEY}
             | {LEGACY_HEIGHTENED_CRACK_WIDTH_KEY}
             | LEGACY_HEIGHTENED_OPERAND_KEYS
         )
@@ -1211,7 +1211,7 @@ def parse_project_with_info(text: str):
         migration_warnings = (*migration_warnings, *heightened_warnings)
         migrated_scalars.pop(LEGACY_HEIGHTENED_CRACK_WIDTH_KEY, None)
         migrated_scalars.pop(REPORT_PROFILE_KEY, None)
-        migrated_scalars[sls.PERMITTED_CRACK_WIDTH_KEY] = migrated_width
+        migrated_scalars[PERMITTED_CRACK_WIDTH_KEY] = migrated_width
         scalars = _canonical_scalars(migrated_scalars, tables)
     else:
         tables = {
