@@ -79,7 +79,7 @@ MANUAL_EQUATION_LOCATIONS = (
     _location(
         4, "manual.plastic.governing-curvature", "C4-1",
         "Plastic capacity analysis", "The governing curvature",
-        "a9125f6b7747160f86ebfe580b489be8e94a3719ff435f274d411ee1cb1c5cda",
+        "b7d2d42c417b87d22ce6eab64d35bd507eac0fd1395473841b00f0934ccadb6c",
     ),
     _location(
         5, "manual.detailing.minimum-2005", "C5-1",
