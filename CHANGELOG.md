@@ -2,19 +2,16 @@
 
 ## Unreleased
 
-- Make root `BUILD.bat` the obvious unsigned portable-distribution entry
-  point, retain `BUILD_SECTOR_PORTABLE.bat` and `packaging/build.bat` as
-  aliases, and move the internal non-distributable wrapper to
-  `packaging/build_qa.bat`. Explorer ZIP-preview and generic `Sector-main.zip`
-  launches now fail before PowerShell with exact **Extract All** and
-  official-source guidance.
+- Simplify Windows distribution to one root `BUILD.bat`, one PyInstaller build,
+  one portable folder/ZIP/checksum and one mandatory real first-page runtime
+  smoke. Remove signing, release-recovery, exact-source certification,
+  duplicate-build comparison and receipt machinery. A complete generic GitHub
+  source download is again a supported input.
 
-## 0.93 release candidate - 2026-08-11
+## 0.93 - 2026-08-11
 
-Sector 0.93 completes the governed implementation, publication-readiness and
-unsigned portable-release programme with exact-head qualification while
-retaining Sector's calculation-tool identity. Its authenticated seven-asset
-draft was freshly downloaded and reverified; it remains unpublished.
+Sector 0.93 advances the calculation, reporting, manual and internal portable
+Windows application while retaining Sector's calculation-tool identity.
 
 - Advanced projects to current-only schema 24, retired unsupported
   component-mapped bridge workflows and added a capability-scoped standards
@@ -31,26 +28,14 @@ draft was freshly downloaded and reverified; it remains unpublished.
 - Added Brief, Standard and Audit report profiles, reorganised the manual around
   task/input/method reading paths, and added its accessible HTML counterpart.
 
-- Added a separate double-click portable Windows builder for provenance-bearing
-  extracted source releases. It produces a verified complete unsigned ONEDIR
-  folder, deterministic ZIP, SHA-256 sidecar and canonical receipt without
-  administrator elevation; user guidance states the SmartScreen/corporate-
-  policy and proprietary-licence boundaries. The existing unsigned-QA and
-  protected signing paths remain separate.
-- Hardened extracted-source and portable-package authentication against
-  symlinks, junctions, generic Windows reparse points, special files, archive
-  traversal/collisions and mutation during verification. Added a controlled
-  headless loopback startup/termination gate for the exact portable ZIP.
-- Corrected unsigned QA builds from the official extracted source archive. The
-  source-release manifest now seals the commit object and every source file, so
-  `packaging/build.bat` can authenticate and isolate an archive without `.git`;
-  changed, missing or extra files fail closed. Git-checkout builds retain their
-  raw-object export path, and no signing, launch or distribution authority was
-  added.
+- Added a double-click portable Windows builder that creates a complete
+  unsigned ONEDIR folder, ZIP and SHA-256 sidecar without elevation. The build
+  launches the packaged executable and executes its real first page before it
+  can report success.
 
-Project schema is version 24. The release candidate is implementation QA, not
+Project schema is version 24. The application is a calculation tool, not
 engineering certification, code-completeness approval or a global compliance
-verdict. The proposed Windows deliverable is a verified unsigned portable ZIP;
+verdict. The Windows deliverable is an unsigned portable ZIP;
 no signed installer or trusted-publisher claim is included.
 
 ## 0.92 - 2026-08-08

@@ -1,10 +1,4 @@
-# Build a complete unsigned Sector portable Windows distribution.
-#
-# The supported user action is double-clicking root BUILD.bat in an extracted
-# official Sector source ZIP. BUILD_SECTOR_PORTABLE.bat remains an alias. This
-# internal script is also callable
-# by the exact-head CI acceptance job. It never launches Sector.exe, requests
-# elevation, signs code, installs software, or overwrites an existing output.
+# Build one ordinary internal-use Sector portable Windows package.
 
 param(
     [string]$SourceRevision = $env:SECTOR_SOURCE_REVISION,
@@ -14,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $sourceRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 
-function Test-SectorPortablePython {
+function Test-SectorPython {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
@@ -22,37 +16,36 @@ function Test-SectorPortablePython {
     )
 
     $probe = @'
-import json, platform, struct, sys
-print(json.dumps({'bits': struct.calcsize('P') * 8, 'implementation': platform.python_implementation(), 'version': list(sys.version_info[:3])}, sort_keys=True))
+import platform, struct, sys
+print(platform.python_implementation() + '|' + str(sys.version_info[0]) + '|' + str(sys.version_info[1]) + '|' + str(struct.calcsize('P') * 8) + '|' + sys.executable)
 '@
-    $probeArguments = @($PrefixArguments) + @("-I", "-S", "-c", $probe)
     try {
-        $probeText = [string](& $Executable @probeArguments 2>$null)
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($probeText)) {
+        $identity = [string](& $Executable @PrefixArguments -I -S -c $probe 2>$null)
+        if ($LASTEXITCODE -ne 0) {
             return $null
         }
-        $identity = $probeText | ConvertFrom-Json
     }
     catch {
         return $null
     }
+    $parts = @($identity.Trim() -split '\|', 5)
     if (
-        [string]$identity.implementation -cne "CPython" -or
-        [int]$identity.bits -ne 64 -or
-        $identity.version.Count -ne 3 -or
-        [int]$identity.version[0] -ne 3 -or
-        [int]$identity.version[1] -ne 13 -or
-        [int]$identity.version[2] -ne 0
+        $parts.Count -ne 5 -or
+        $parts[0] -cne "CPython" -or
+        $parts[1] -cne "3" -or
+        $parts[2] -cne "13" -or
+        $parts[3] -cne "64" -or
+        -not (Test-Path -LiteralPath $parts[4] -PathType Leaf)
     ) {
         return $null
     }
     return [PSCustomObject]@{
-        Executable = $Executable
-        PrefixArguments = @($PrefixArguments)
+        Executable = [IO.Path]::GetFullPath($parts[4])
+        PrefixArguments = @()
     }
 }
 
-function Resolve-SectorPortablePython {
+function Resolve-SectorPython {
     $candidates = @()
     if (-not [string]::IsNullOrWhiteSpace($env:SECTOR_PORTABLE_PYTHON)) {
         $candidates += [PSCustomObject]@{
@@ -60,36 +53,24 @@ function Resolve-SectorPortablePython {
             PrefixArguments = @()
         }
     }
-    $pythonCommands = @(
-        Get-Command python.exe -CommandType Application -All `
-            -ErrorAction SilentlyContinue
-    )
-    foreach ($pythonCommand in $pythonCommands) {
-        $pythonSource = [string]$pythonCommand.Source
-        if ([string]::IsNullOrWhiteSpace($pythonSource)) {
-            continue
-        }
-        $candidates += [PSCustomObject]@{
-            Executable = $pythonSource
-            PrefixArguments = @()
+    foreach ($command in @(Get-Command python.exe -CommandType Application -All -ErrorAction SilentlyContinue)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
+            $candidates += [PSCustomObject]@{
+                Executable = [string]$command.Source
+                PrefixArguments = @()
+            }
         }
     }
-    $launcherCommands = @(
-        Get-Command py.exe -CommandType Application -All `
-            -ErrorAction SilentlyContinue
-    )
-    foreach ($launcherCommand in $launcherCommands) {
-        $launcherSource = [string]$launcherCommand.Source
-        if ([string]::IsNullOrWhiteSpace($launcherSource)) {
-            continue
-        }
-        $candidates += [PSCustomObject]@{
-            Executable = $launcherSource
-            PrefixArguments = @("-3.13-64")
+    foreach ($command in @(Get-Command py.exe -CommandType Application -All -ErrorAction SilentlyContinue)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
+            $candidates += [PSCustomObject]@{
+                Executable = [string]$command.Source
+                PrefixArguments = @("-3.13-64")
+            }
         }
     }
     foreach ($candidate in $candidates) {
-        $accepted = Test-SectorPortablePython `
+        $accepted = Test-SectorPython `
             -Executable $candidate.Executable `
             -PrefixArguments $candidate.PrefixArguments
         if ($null -ne $accepted) {
@@ -97,138 +78,73 @@ function Resolve-SectorPortablePython {
         }
     }
     throw (
-        "Sector portable builds require exact CPython 3.13.0 (64-bit). " +
-        "Install that interpreter and make python.exe available on PATH."
+        "Sector builds require 64-bit CPython 3.13. " +
+        "Install Python 3.13 from python.org and run BUILD.bat again."
     )
 }
 
-# Interpreter identity is checked before resolving or creating any output.
-$python = Resolve-SectorPortablePython
-
-# Repository-selection controls cannot change the default source identity.
-Get-ChildItem Env: | Where-Object { $_.Name -like "GIT_*" } | ForEach-Object {
-    Remove-Item -LiteralPath ("Env:" + $_.Name)
-}
+$python = Resolve-SectorPython
 
 if ([string]::IsNullOrWhiteSpace($SourceRevision)) {
-    $manifestPath = Join-Path $sourceRoot "sector/sector_build_info.json"
-    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-        try {
-            $manifest = Get-Content -LiteralPath $manifestPath -Raw |
-                ConvertFrom-Json
-            $SourceRevision = [string]$manifest.source_revision
-        }
-        catch {
-            throw "Cannot read the source-release provenance manifest"
-        }
-    }
-    else {
-        # Git searches parent directories. Invoke it only when this source root
-        # itself carries a checkout/worktree marker, never merely because an
-        # extracted source release happens to sit below an unrelated checkout.
-        $gitMarker = Join-Path $sourceRoot ".git"
-        $gitCommand = Get-Command git.exe -CommandType Application `
-            -ErrorAction SilentlyContinue
-        if ((Test-Path -LiteralPath $gitMarker) -and $null -ne $gitCommand) {
-            $candidate = [string](& $gitCommand.Source --no-replace-objects `
-                -C $sourceRoot rev-parse HEAD 2>$null)
-            if ($LASTEXITCODE -eq 0) {
-                $SourceRevision = $candidate.Trim()
-            }
-        }
-    }
+    $SourceRevision = "unavailable"
 }
-if ($SourceRevision -cnotmatch '^[0-9a-f]{40}$') {
-    throw "SourceRevision must be an exact lowercase 40-hex commit"
+if ($SourceRevision -cne "unavailable" -and $SourceRevision -cnotmatch '^[0-9a-f]{40}$') {
+    throw "SourceRevision must be lowercase 40-hex or unavailable"
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    $stamp = [DateTime]::UtcNow.ToString(
-        "yyyyMMddTHHmmssfffffffZ",
-        [Globalization.CultureInfo]::InvariantCulture
-    )
-    $token = [Guid]::NewGuid().ToString("N")
-    $artifactRoot = Join-Path (Split-Path $sourceRoot -Parent) (
-        "{0}-portable-artifacts" -f (Split-Path $sourceRoot -Leaf)
-    )
-    $OutputDirectory = Join-Path $artifactRoot (
-        "windows-portable-{0}-{1}" -f $stamp, $token
-    )
+    $userFolder = [Environment]::GetFolderPath("UserProfile")
+    if ([string]::IsNullOrWhiteSpace($userFolder)) {
+        $userFolder = [IO.Path]::GetTempPath()
+    }
+    $token = [Guid]::NewGuid().ToString("N").Substring(0, 10)
+    $OutputDirectory = Join-Path $userFolder ("SectorBuilds\build-{0}" -f $token)
 }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$sourceBoundary = $sourceRoot.TrimEnd(
-    [IO.Path]::DirectorySeparatorChar,
-    [IO.Path]::AltDirectorySeparatorChar
-)
-if (
-    $OutputDirectory.Equals(
-        $sourceBoundary,
-        [StringComparison]::OrdinalIgnoreCase
-    ) -or
-    $OutputDirectory.StartsWith(
-        $sourceBoundary + [IO.Path]::DirectorySeparatorChar,
-        [StringComparison]::OrdinalIgnoreCase
-    )
-) {
-    throw "Portable output must be outside the authenticated source directory"
+if (Test-Path -LiteralPath $OutputDirectory) {
+    throw "Build output already exists: $OutputDirectory"
 }
-if ([IO.File]::Exists($OutputDirectory) -or [IO.Directory]::Exists($OutputDirectory)) {
-    throw "Portable output already exists: $OutputDirectory"
-}
-
-Write-Host "Sector unsigned portable Windows build"
-Write-Warning (
-    "This output is unsigned. Windows SmartScreen or corporate policy may " +
-    "warn or block it; it claims no trusted publisher or reputation."
-)
-Write-Host "Authenticated source: $sourceRoot"
-Write-Host "Exact source revision: $SourceRevision"
-Write-Host "New output directory: $OutputDirectory"
-Write-Host "Building the complete portable folder and ZIP. This may take several minutes."
 
 $driver = Join-Path $sourceRoot "tools/build_portable_windows.py"
-$driverArguments = @($python.PrefixArguments) + @(
+if (-not (Test-Path -LiteralPath $driver -PathType Leaf)) {
+    throw "The extracted Sector source is incomplete: tools/build_portable_windows.py is missing"
+}
+
+Write-Host "Sector v0.93 portable Windows build"
+Write-Host "Source: $sourceRoot"
+Write-Host "Output: $OutputDirectory"
+Write-Warning "This internal package is unsigned; Windows may show a SmartScreen warning."
+Write-Host "Building once, then starting Sector and executing its first page..."
+
+$arguments = @(
     "-I",
     "-S",
     $driver,
     "--root",
     $sourceRoot,
-    "--source-revision",
-    $SourceRevision,
     "--output",
-    $OutputDirectory
+    $OutputDirectory,
+    "--python",
+    $python.Executable,
+    "--source-revision",
+    $SourceRevision
 )
-& $python.Executable @driverArguments
+& $python.Executable @arguments
 if ($LASTEXITCODE -ne 0) {
-    throw "Portable build failed with exit code $LASTEXITCODE"
+    throw "Sector portable build failed with exit code $LASTEXITCODE"
 }
 
-$portableFolders = @(
-    Get-ChildItem -LiteralPath $OutputDirectory -Directory |
-        Where-Object { $_.Name -like "Sector-v*-windows-portable-unsigned" }
-)
-if ($portableFolders.Count -ne 1) {
-    throw "Portable build did not publish exactly one complete distribution folder"
-}
-$portableFolder = $portableFolders[0].FullName
-$portableArchive = $portableFolder + ".zip"
-$portableArchiveHash = $portableArchive + ".sha256"
-$portableReceipt = $portableFolder + ".portable-distribution.json"
-foreach ($path in @(
-    $portableFolder,
-    $portableArchive,
-    $portableArchiveHash,
-    $portableReceipt
-)) {
-    if (-not (Test-Path -LiteralPath $path)) {
-        throw "Portable build is missing expected output: $path"
-    }
+$folders = @(Get-ChildItem -LiteralPath $OutputDirectory -Directory |
+    Where-Object { $_.Name -like "Sector-v*-windows-portable" })
+$archives = @(Get-ChildItem -LiteralPath $OutputDirectory -File -Filter "*.zip")
+$checksums = @(Get-ChildItem -LiteralPath $OutputDirectory -File -Filter "*.zip.sha256")
+if ($folders.Count -ne 1 -or $archives.Count -ne 1 -or $checksums.Count -ne 1) {
+    throw "Build output is incomplete"
 }
 
 Write-Host ""
-Write-Host "Portable build complete. Distribute the whole folder or ZIP, never Sector.exe alone."
-Write-Host "Folder: $portableFolder"
-Write-Host "ZIP: $portableArchive"
-Write-Host "ZIP SHA-256: $portableArchiveHash"
-Write-Host "Verification receipt: $portableReceipt"
-Write-Warning "The package is unsigned and remains subject to the Sector licence."
+Write-Host "Build PASSED, including packaged first-page execution."
+Write-Host "Folder: $($folders[0].FullName)"
+Write-Host "ZIP: $($archives[0].FullName)"
+Write-Host "SHA-256: $($checksums[0].FullName)"
+Write-Host "Distribute the complete folder or ZIP, not Sector.exe by itself."

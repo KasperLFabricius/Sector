@@ -7,8 +7,7 @@ if exist "%SECTOR_CANONICAL_BUILD%" goto :run
 
 echo.
 echo Sector portable build cannot start from an incomplete ZIP preview.
-echo Choose "Extract All", then run BUILD.bat from the extracted top-level
-echo Sector folder.
+echo Choose "Extract All", then run BUILD.bat from the extracted Sector folder.
 set "SECTOR_BUILD_RC=2"
 goto :finish
 
@@ -18,8 +17,7 @@ set "SECTOR_BUILD_RC=%ERRORLEVEL%"
 
 :finish
 if not "%SECTOR_PORTABLE_NONINTERACTIVE%"=="1" goto :pause_for_user
-if /I "%CI%"=="true" goto :finished
-if "%CI%"=="1" goto :finished
+goto :finished
 
 :pause_for_user
 if not exist "%SECTOR_CANONICAL_BUILD%" pause

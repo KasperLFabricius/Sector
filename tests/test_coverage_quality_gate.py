@@ -8,7 +8,6 @@ import pytest
 import tomllib
 import yaml
 
-from tools.verify_consolidated_publication_gate import FULL_TEST_RUN
 from tools.verify_coverage_gate import (
     BASELINE_ENV,
     BASELINE_EXPRESSION,
@@ -49,7 +48,9 @@ def _workflow_text(data) -> str:
 
 
 def _step(workflow, name: str):
-    return next(step for step in workflow["jobs"]["test"]["steps"] if step["name"] == name)
+    return next(
+        step for step in workflow["jobs"]["test"]["steps"] if step["name"] == name
+    )
 
 
 def test_exact_contract_and_workflow_are_aligned():
@@ -65,7 +66,6 @@ def test_exact_contract_and_workflow_are_aligned():
     assert "--cov=app" in expected_coverage_command(data)
     assert "--cov=sector" in expected_coverage_command(data)
     assert "--cov-fail-under=90" in expected_coverage_command(data)
-    assert expected_coverage_command(data) == FULL_TEST_RUN
     assert data["waivers"] == []
 
 
@@ -140,17 +140,13 @@ def test_unknown_contract_keys_and_waiver_drift_are_rejected():
     data = deepcopy(_contract())
     data["waivers"] = [deepcopy(CALIBRATION_WAIVER)] * 2
     with pytest.raises(CoverageGateContractError, match="duplicate waiver"):
-        validate_contract(
-            data, ROOT, candidate_waiver_ids={CALIBRATION_WAIVER["id"]}
-        )
+        validate_contract(data, ROOT, candidate_waiver_ids={CALIBRATION_WAIVER["id"]})
 
     data = deepcopy(_contract())
     data["waivers"] = [deepcopy(CALIBRATION_WAIVER)]
     data["waivers"][0]["gate"] = "ruff"
     with pytest.raises(CoverageGateContractError, match="wrong gate"):
-        validate_contract(
-            data, ROOT, candidate_waiver_ids={CALIBRATION_WAIVER["id"]}
-        )
+        validate_contract(data, ROOT, candidate_waiver_ids={CALIBRATION_WAIVER["id"]})
 
 
 def test_satisfied_calibration_waiver_can_expire_against_accepted_baseline():
@@ -214,9 +210,7 @@ def test_git_baseline_is_loaded_from_the_accepted_object(tmp_path):
     ("field", "value"),
     [("if", "false"), ("continue-on-error", True), ("working-directory", "docs")],
 )
-def test_gate_steps_cannot_be_skipped_or_made_non_propagating(
-    step_name, field, value
-):
+def test_gate_steps_cannot_be_skipped_or_made_non_propagating(step_name, field, value):
     workflow = _workflow()
     _step(workflow, step_name)[field] = value
 
@@ -276,8 +270,8 @@ def test_filtered_trigger_or_command_drift_is_rejected():
         validate_workflow(_contract(), _workflow_text(workflow))
 
     workflow = _workflow()
-    _step(workflow, COVERAGE_STEP_NAME)["run"] = _step(
-        workflow, COVERAGE_STEP_NAME
-    )["run"].replace("--cov-fail-under=90", "--cov-fail-under=89")
+    _step(workflow, COVERAGE_STEP_NAME)["run"] = _step(workflow, COVERAGE_STEP_NAME)[
+        "run"
+    ].replace("--cov-fail-under=90", "--cov-fail-under=89")
     with pytest.raises(CoverageGateContractError, match="coverage test command"):
         validate_workflow(_contract(), _workflow_text(workflow))

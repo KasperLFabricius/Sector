@@ -906,16 +906,19 @@ human page checklist.
 
 ### PR-08 - Double-click portable Windows packaging
 
-Acceptance record: [PR-08 portable Windows packaging acceptance](pr08_v093_portable_windows_acceptance.md).
+The former packaging-certification acceptance record and its release machinery
+were retired after v0.93. Sector is an internal-use application; its supported
+delivery path is now the ordinary `BUILD.bat` workflow described in the root
+README and `packaging/README.md`.
 
 Scope:
 
-- add the separate portable build/orchestration path and BAT entry point;
-- support official extracted source ZIPs without `.git`;
-- create verified portable folder, ZIP, manifests, hashes and user README;
-- preserve a separate unsigned-QA reproducibility path;
-- add a controlled loopback startup smoke; and
-- update packaging documentation and workflow artifacts without signing.
+- support any complete extracted project ZIP without requiring `.git` or an
+  authenticated source manifest;
+- create one portable folder, one compressed ZIP, one checksum and a user
+  README;
+- run a real packaged first-page smoke before publishing the output; and
+- keep the package unsigned and clearly documented for internal use.
 
 Acceptance:
 
@@ -924,51 +927,40 @@ Acceptance:
 - spaces/OneDrive paths and non-repository source roots work;
 - output paths are obvious and printed at completion;
 - the whole folder/ZIP, not the executable alone, is distributable;
-- exact source, product/legal identity, dependency notices and unsigned status
-  verify before publication;
-- two independent builds are byte-identical under the accepted environment;
-- a clean extracted package reaches the local health endpoint and terminates;
-  and
+- product identity, dependency notices and unsigned status are retained;
+- a clean extracted package reaches the local health endpoint, completes its
+  first Streamlit page and terminates; and
 - no signing secret, certificate or protected environment is used.
 
-Tests: script policy, extracted-source adversaries, archive traversal/path
-guards, manifest/hash/identity, two-build comparison, controlled startup and a
-real exact-head Windows workflow artifact.
+Tests: build entry-point policy, package assembly, ZIP/checksum output,
+product identity, controlled first-page startup and one real Windows workflow
+artifact.
 
-### PR-09 - Full qualification and Sector 0.93 release
+### PR-09 - Sector 0.93 identity
 
 Scope:
 
 - reconcile every decision and PR acceptance row;
 - run the complete exact-head qualification matrix;
 - update version/resource/report/manual/package identity to 0.93;
-- build and verify exact source and portable application assets;
-- create the annotated tag and guarded draft source/application GitHub release;
-  and
-- attach hashes, limitations and QA receipts to that draft.
+- retain Sector version 0.93 across source, Windows resources, reports and the
+  manual; and
+- document the unsigned internal-use portable package.
 
 Acceptance:
 
 - every earlier PR is merged with zero unresolved blocking review thread;
 - complete tests, coverage, Ruff, strict owned mypy, dependency audit, app
   lifecycle, manual/report renders and Windows packaging pass;
-- source and portable assets derive from the exact accepted commit;
 - project schema, all product versions and report/manual provenance agree;
 - Sector identity metadata is byte-for-byte correct on guarded surfaces;
-- release notes distinguish source ZIP, unsigned portable ZIP and absent signed
-  installer;
-- no v0.93 scope item remains pending; and
+- release notes distinguish the project source from the unsigned portable ZIP;
+  and
 - the Excel decision snapshot matches the accepted register revision.
 
-Tests: full suite with a new unique pytest base temp, consolidated publication
-gate, all PDF structural/raster gates, exact source archive verification, two
-Windows builds, portable startup smoke and post-attachment draft-asset
-revalidation.
-
-Acceptance record: [PR-09 Sector 0.93 release acceptance](pr09_v093_release_acceptance.md).
-
-Programme completion records qualified release readiness and an authenticated,
-reverified draft. It does not make that draft a publicly published user release.
+Tests: full application suite, PDF structural/raster gates, ordinary Windows
+build and packaged first-page startup smoke. The former authenticated-release,
+reproducibility and certification gates are no longer part of the product.
 
 ## 4. Risk-based development test policy
 

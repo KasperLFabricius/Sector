@@ -10,10 +10,10 @@ echo.
 echo Sector portable build cannot start from an incomplete ZIP preview.
 echo.
 echo Windows extracted only packaging\build.bat, without the rest of Sector.
-echo Return to the complete official source ZIP and choose "Extract All".
+echo Return to the complete project ZIP and choose "Extract All".
 echo Then run BUILD.bat from the extracted top-level Sector folder.
 echo.
-echo Verified release downloads:
+echo Project downloads:
 echo https://github.com/KasperLFabricius/Sector/releases/latest
 set "SECTOR_BUILD_RC=2"
 goto :finish
@@ -24,8 +24,7 @@ set "SECTOR_BUILD_RC=%ERRORLEVEL%"
 
 :finish
 if not "%SECTOR_PORTABLE_NONINTERACTIVE%"=="1" goto :pause_for_user
-if /I "%CI%"=="true" goto :finished
-if "%CI%"=="1" goto :finished
+goto :finished
 
 :pause_for_user
 if not exist "%SECTOR_CANONICAL_BUILD%" pause
