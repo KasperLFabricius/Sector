@@ -175,8 +175,25 @@ def test_manual_compiler_builds_nested_structural_math() -> None:
     assert "radical" in kinds
     assert kinds.count("script") >= 4
     assert any(text.text == "log" and text.slant == 0.0 for text in layout.texts)
-    assert any(text.text == SQRT for text in layout.texts)
-    assert any(rule.role == "radical-vinculum" for rule in layout.rules)
+    radical_roles = {
+        rule.role for rule in layout.rules if rule.role.startswith("radical-")
+    }
+    assert {
+        "radical-hook",
+        "radical-descender",
+        "radical-stem",
+        "radical-vinculum",
+    } <= radical_roles
+    radical_rules = {
+        rule.role: rule for rule in layout.rules if rule.role.startswith("radical-")
+    }
+    for first, second in (
+        ("radical-hook", "radical-descender"),
+        ("radical-descender", "radical-stem"),
+        ("radical-stem", "radical-vinculum"),
+    ):
+        assert radical_rules[first].x2 == pytest.approx(radical_rules[second].x1)
+        assert radical_rules[first].y2 == pytest.approx(radical_rules[second].y1)
     assert sum(rule.role == "fraction-rule" for rule in layout.rules) == 2
     assert "sqrt" in equations.linear_math_text(tree)
 
@@ -735,7 +752,7 @@ def test_pdf_is_searchable_vector_math_with_one_canonical_semantic_row() -> None
         assert text.count(marker) == 1
     assert "Equation (7.11)" in text
     assert "EN 1992-1-1 Formula (7.11)" in text
-    assert SQRT in text
+    assert "sqrt" in text
     assert "frac" not in text and "\\" not in text
 
     resources = reader.pages[0]["/Resources"].get_object()

@@ -890,50 +890,71 @@ def _fraction_layout(node: Fraction, size: float, style: EquationStyle) -> MathL
 
 def _radical_layout(node: Radical, size: float, style: EquationStyle) -> MathLayout:
     radicand = _layout_math(node.radicand, size * 0.95, style)
-    root_size = max(size, radicand.height * 1.08)
-    root = _text_layout(
-        _SQRT,
-        font_name=style.fonts.regular,
-        font_size=root_size,
-        slant=0.0,
-        color=style.ink,
-        role="radical-sign",
-        kind="radical-sign",
-    )
     index = (
         _layout_math(node.index, size * 0.52, style)
         if node.index is not None
         else None
     )
     gap = size * 0.08
-    thickness = max(0.55, size * 0.05)
+    thickness = max(0.65, size * 0.065)
+    sign_width = size * 0.82
     root_x = (
-        max(0.0, index.width - root.width * 0.45)
+        max(0.0, index.width - sign_width * 0.35)
         if index is not None
         else 0.0
     )
-    radicand_x = root_x + root.width + gap * 0.2
+    radicand_x = root_x + sign_width + gap * 0.2
     radicand_y = 0.0
-    root_y = radicand.baseline - root.baseline
-    minimum_y = min(0.0, root_y)
-    shift = -minimum_y
-    radicand_y += shift
-    root_y += shift
     rule_y = radicand_y + radicand.height + gap
-    moved_root = _translate_layout(root, root_x, root_y)
     moved_radicand = _translate_layout(radicand, radicand_x, radicand_y)
     width = radicand_x + radicand.width
-    height = max(
-        moved_root.nodes[-1].bounds.top if moved_root.nodes else 0.0,
-        rule_y + thickness / 2.0,
-    )
+    height = rule_y + thickness / 2.0
     baseline = radicand_y + radicand.baseline
-    texts: tuple[TextPlacement, ...] = (*moved_root.texts, *moved_radicand.texts)
+
+    # Font radical glyphs do not stretch consistently across PDF readers.  In
+    # particular, a tall radicand turns Liberation Sans's glyph into a detached
+    # oversized check mark.  Draw the hook and rising stroke as measured vector
+    # rules instead, joining them directly to the vinculum.
+    hook_start_x = root_x
+    hook_elbow_x = root_x + sign_width * 0.22
+    hook_low_x = root_x + sign_width * 0.39
+    stem_top_x = root_x + sign_width
+    hook_start_y = max(0.0, baseline - size * 0.02)
+    hook_elbow_y = min(rule_y, baseline + size * 0.10)
+    hook_low_y = max(0.0, baseline - size * 0.34)
+
+    texts: tuple[TextPlacement, ...] = moved_radicand.texts
     rules: tuple[RulePlacement, ...] = (
-        *moved_root.rules,
         *moved_radicand.rules,
         RulePlacement(
-            radicand_x - gap * 0.1,
+            hook_start_x,
+            hook_start_y,
+            hook_elbow_x,
+            hook_elbow_y,
+            thickness,
+            style.ink,
+            "radical-hook",
+        ),
+        RulePlacement(
+            hook_elbow_x,
+            hook_elbow_y,
+            hook_low_x,
+            hook_low_y,
+            thickness,
+            style.ink,
+            "radical-descender",
+        ),
+        RulePlacement(
+            hook_low_x,
+            hook_low_y,
+            stem_top_x,
+            rule_y,
+            thickness,
+            style.ink,
+            "radical-stem",
+        ),
+        RulePlacement(
+            stem_top_x,
             rule_y,
             width,
             rule_y,
@@ -942,7 +963,13 @@ def _radical_layout(node: Radical, size: float, style: EquationStyle) -> MathLay
             "radical-vinculum",
         ),
     )
-    nodes: tuple[NodePlacement, ...] = (*moved_root.nodes, *moved_radicand.nodes)
+    nodes: tuple[NodePlacement, ...] = (
+        *moved_radicand.nodes,
+        NodePlacement(
+            "radical-sign",
+            Bounds(root_x, 0.0, sign_width, height),
+        ),
+    )
     if index is not None:
         index_y = max(0.0, baseline + size * 0.30)
         moved_index = _translate_layout(index, 0.0, index_y)
