@@ -106,12 +106,16 @@ LEGACY_HEIGHTENED_OPERAND_KEYS = {
     "sls_heightened_provided_reinforcement_area_mm2",
 }
 
-# Current UI/session inputs only. Deprecated compliance, authority, cover-
-# calculator, multidirectional-interaction and SLS-limit fields are absent.
-SCALAR_KEYS = [
-    # Quick Section settings. The generated point tables remain authoritative.
+
+QUICK_SECTION_SCALAR_KEYS = (
     "qsv_shape", "qsv_b_mm", "qsv_h_mm", "qsv_bf_mm", "qsv_hf_mm",
     "qsv_bw_mm", "qsv_hw_mm", "qsv_wall_mm", "qsv_dia_mm",
+    "qsv_t_orientation",
+    "qsv_trap_bottom_mm", "qsv_trap_top_mm", "qsv_trap_h_mm",
+    "qsv_l_b_mm", "qsv_l_h_mm", "qsv_l_web_mm", "qsv_l_flange_mm",
+    "qsv_i_bf_mm", "qsv_i_tf_mm", "qsv_i_bw_mm", "qsv_i_hw_mm",
+    "qsv_u_b_mm", "qsv_u_h_mm", "qsv_u_web_mm", "qsv_u_base_mm",
+    "qsv_annulus_outer_mm", "qsv_annulus_inner_mm",
     "qsv_ring_n", "qsv_ring_d", "qsv_ring_c_mm", "qsv_qs_rebar_mode",
     "qsv_qs_cover_to_edge", "qsv_bot_n", "qsv_bot_d", "qsv_bot_s",
     "qsv_top_n", "qsv_top_d", "qsv_top_s", "qsv_bot_c_mm",
@@ -119,6 +123,14 @@ SCALAR_KEYS = [
     "qsv_top_layers", "qsv_layer_s", "qsv_bot_off_d", "qsv_top_off_d",
     "qsv_tnd_n", "qsv_tnd_a", "qsv_tnd_c_mm", "qsv_tnd_layers",
     "qsv_tnd_layer_s",
+)
+
+
+# Current UI/session inputs only. Deprecated compliance, authority, cover-
+# calculator, multidirectional-interaction and SLS-limit fields are absent.
+SCALAR_KEYS = [
+    # Quick Section settings. The generated point tables remain authoritative.
+    *QUICK_SECTION_SCALAR_KEYS,
     # Concrete and material catalogues.
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_k_tc",
     "conc_alpha_cc", "conc_eps_c2", "conc_eps_cu2", "conc_n",

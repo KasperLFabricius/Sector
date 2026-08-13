@@ -760,16 +760,27 @@ def manual_blocks() -> list:
        "parametric shape with a live preview, then *Apply* writes its points into "
        "the tables (or *Back* leaves them untouched). Reinforcement can be given by "
        "a bar count or by a spacing, in one or several layers, and tendons as a "
-       "ring or in layers. The bottom and top faces take their own cover and bar "
-       "diameter (entered directly in mm), a stacked upper layer can hold a "
-       "different bar count than the main row, and a toggle measures the cover to "
-       "the bar edge instead of its centre.")
+       "ring or in layers where that placement is unambiguous. The bottom and top "
+       "faces take their own cover and bar diameter (entered directly in mm), a "
+       "stacked upper layer can hold a different bar count than the main row, and "
+       "a toggle measures the cover to the bar edge instead of its centre.")
     table(["Shape", "Produces"],
           [["Rectangle", "A solid rectangle b x h"],
            ["Slab strip", "A 1 m-wide strip of a given thickness"],
-           ["T-section", "A flange over a web"],
+           ["Trapezoid", "A symmetric trapezoid with horizontal faces"],
+           ["T-section", "A flange over a web, flange at top or bottom"],
+           ["L-section", "A left web with a bottom flange"],
+           ["I-section", "Equal top/bottom flanges around a central web"],
+           ["U-section", "An open-top base with two side webs"],
            ["Box girder", "A hollow box (one rectangular void)"],
-           ["Circular", "A circular section, optionally with a bar ring"]])
+           ["Circular", "A circular section, optionally with a bar ring"],
+           ["Annulus", "A circular hollow section (one circular void)"]])
+    md("Trapezoid, L-section and U-section apply their concrete geometry only: "
+       "automatic face reinforcement is not defined for those non-uniform or "
+       "split faces. Add their bars and tendons directly in the point tables. "
+       "The T-section, I-section and annulus provide bounded automatic placement, "
+       "and the builder blocks Apply if a dimension, layer or ring would create "
+       "invalid geometry or put a generated point outside concrete.")
     h2("Validity checks")
     md("Geometry is validated before any solver runs. Every outer or hole ring "
        "must contain finite numeric coordinates, at least three distinct points "

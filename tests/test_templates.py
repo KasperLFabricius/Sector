@@ -7,7 +7,12 @@ import math
 import pytest
 
 from sector import templates
-from sector.geometry import signed_area
+from sector.geometry import (
+    area_moments_rings,
+    orient,
+    signed_area,
+    validate_section_topology,
+)
 from sector.section import Section
 
 
@@ -44,6 +49,186 @@ def test_t_section_centred_on_total_depth():
     assert min(ys) == pytest.approx(-height / 2)
     # flange/web junction sits hf below the top
     assert max(ys) - (height / 2 - hf) == pytest.approx(hf)
+
+
+def _net_properties(outer, holes=()):
+    rings = [orient(outer, ccw=True)]
+    rings.extend(orient(hole, ccw=False) for hole in holes)
+    moments = area_moments_rings(rings)
+    return moments.area, moments.centroid
+
+
+def _assert_valid_template(outer, holes=()):
+    validation = validate_section_topology(outer, holes)
+    assert validation.valid, validation.message
+
+
+def test_inverted_t_is_a_vertical_reflection_with_equal_area():
+    upright = templates.t_section(1.2, 0.2, 0.3, 0.6)
+    inverted = templates.t_section(
+        1.2, 0.2, 0.3, 0.6, orientation="inverted"
+    )
+    area_up, centroid_up = _net_properties(upright)
+    area_down, centroid_down = _net_properties(inverted)
+
+    _assert_valid_template(inverted)
+    assert area_down == pytest.approx(area_up)
+    assert centroid_down[0] == pytest.approx(centroid_up[0])
+    assert centroid_down[1] == pytest.approx(-centroid_up[1])
+    assert inverted == [(x, -y) for x, y in upright]
+
+
+def test_trapezoid_exact_area_centroid_and_topology():
+    bottom, top, height = 1.2, 0.6, 0.8
+    outer = templates.trapezoid(bottom, top, height)
+    area, centroid = _net_properties(outer)
+    expected_y_from_bottom = height * (bottom + 2.0 * top) / (
+        3.0 * (bottom + top)
+    )
+
+    _assert_valid_template(outer)
+    assert len(outer) == 4
+    assert (min(x for x, _y in outer), max(x for x, _y in outer)) == pytest.approx(
+        (-bottom / 2.0, bottom / 2.0)
+    )
+    assert (min(y for _x, y in outer), max(y for _x, y in outer)) == pytest.approx(
+        (-height / 2.0, height / 2.0)
+    )
+    assert area == pytest.approx(0.5 * (bottom + top) * height)
+    assert centroid == pytest.approx(
+        (0.0, -height / 2.0 + expected_y_from_bottom)
+    )
+
+
+def test_l_section_exact_area_centroid_and_topology():
+    width, height, web, flange = 1.0, 1.2, 0.2, 0.25
+    outer = templates.l_section(width, height, web, flange)
+    area, centroid = _net_properties(outer)
+    web_area = web * height
+    flange_extension_area = (width - web) * flange
+    expected_area = web_area + flange_extension_area
+    extension_x = web / 2.0
+    extension_y = -height / 2.0 + flange / 2.0
+
+    _assert_valid_template(outer)
+    assert len(outer) == 6
+    assert area == pytest.approx(expected_area)
+    assert centroid == pytest.approx(
+        (
+            (
+                web_area * (-width / 2.0 + web / 2.0)
+                + flange_extension_area * extension_x
+            )
+            / expected_area,
+            flange_extension_area * extension_y / expected_area,
+        )
+    )
+
+
+def test_i_section_exact_area_centroid_and_topology():
+    flange_width, flange_thickness = 1.0, 0.2
+    web_width, web_height = 0.25, 0.8
+    outer = templates.i_section(
+        flange_width, flange_thickness, web_width, web_height
+    )
+    area, centroid = _net_properties(outer)
+
+    _assert_valid_template(outer)
+    assert len(outer) == 12
+    assert area == pytest.approx(
+        2.0 * flange_width * flange_thickness + web_width * web_height
+    )
+    assert centroid == pytest.approx((0.0, 0.0))
+
+
+def test_u_section_exact_area_centroid_and_topology():
+    width, height, web, base = 1.0, 1.2, 0.2, 0.25
+    outer = templates.u_section(width, height, web, base)
+    area, centroid = _net_properties(outer)
+    base_area = width * base
+    upright_web_area = web * (height - base)
+    expected_area = base_area + 2.0 * upright_web_area
+    base_y = -height / 2.0 + base / 2.0
+    upright_web_y = base / 2.0
+
+    _assert_valid_template(outer)
+    assert len(outer) == 8
+    assert area == pytest.approx(expected_area)
+    assert centroid == pytest.approx(
+        (
+            0.0,
+            (
+                base_area * base_y
+                + 2.0 * upright_web_area * upright_web_y
+            )
+            / expected_area,
+        )
+    )
+
+
+def test_annulus_exact_polygon_area_centroid_and_topology():
+    outer_diameter, inner_diameter, segments = 0.8, 0.4, 96
+    outer, holes = templates.annulus(
+        outer_diameter, inner_diameter, segments=segments
+    )
+    area, centroid = _net_properties(outer, holes)
+    factor = 0.5 * segments * math.sin(2.0 * math.pi / segments)
+    expected_area = factor * (
+        (outer_diameter / 2.0) ** 2 - (inner_diameter / 2.0) ** 2
+    )
+
+    _assert_valid_template(outer, holes)
+    assert len(outer) == segments
+    assert len(holes[0]) == segments
+    assert len(holes) == 1
+    assert area == pytest.approx(expected_area)
+    assert centroid == pytest.approx((0.0, 0.0), abs=1.0e-12)
+
+
+@pytest.mark.parametrize(
+    ("builder", "args", "match"),
+    [
+        (templates.trapezoid, (1.0, 0.0, 0.8), "top width"),
+        (templates.l_section, (1.0, 1.2, 1.0, 0.2), "web thickness"),
+        (templates.l_section, (1.0, 1.2, 0.2, 1.2), "flange thickness"),
+        (templates.i_section, (1.0, 0.2, 1.0, 0.8), "web width"),
+        (templates.u_section, (1.0, 1.2, 0.5, 0.2), "twice"),
+        (templates.u_section, (1.0, 1.2, 0.2, 1.2), "base thickness"),
+        (templates.annulus, (0.8, 0.8), "inner diameter"),
+        (templates.t_section, (1.0, 0.2, 1.0, 0.8), "web width"),
+    ],
+)
+def test_expanded_templates_reject_invalid_dimensions(builder, args, match):
+    with pytest.raises(ValueError, match=match):
+        builder(*args)
+
+
+@pytest.mark.parametrize("bad", (0.0, -1.0, math.inf, math.nan))
+def test_expanded_templates_reject_nonpositive_or_nonfinite_dimensions(bad):
+    with pytest.raises(ValueError):
+        templates.trapezoid(1.0, 0.8, bad)
+
+
+def test_t_section_rejects_unknown_orientation():
+    with pytest.raises(ValueError, match="orientation"):
+        templates.t_section(1.2, 0.2, 0.3, 0.6, orientation="sideways")
+
+
+@pytest.mark.parametrize(
+    ("builder", "args", "returns_holes"),
+    [
+        (templates.trapezoid, (1.2, 0.6, 0.8), False),
+        (templates.l_section, (1.0, 1.2, 0.2, 0.25), False),
+        (templates.i_section, (1.0, 0.2, 0.25, 0.8), False),
+        (templates.u_section, (1.0, 1.2, 0.2, 0.25), False),
+        (templates.annulus, (0.8, 0.4), True),
+    ],
+)
+def test_expanded_templates_build_a_section(builder, args, returns_holes):
+    generated = builder(*args)
+    outer, holes = generated if returns_holes else (generated, [])
+    section = Section.from_polygon(corners=outer, holes=holes)
+    assert section.gross_area > 0.0
 
 
 def test_circular_area_approaches_circle():
@@ -160,6 +345,21 @@ def test_ring_radius_caps_at_the_polygon_apothem():
     assert templates.ring_radius(0.6, 0.05) == pytest.approx(0.25)   # a real cover: as-is
 
 
+def test_annulus_ring_radius_stays_outside_void_and_fails_closed():
+    radius = templates.annulus_ring_radius(0.8, 0.4, 0.05)
+    assert radius == pytest.approx(0.35)
+    outer, holes = templates.annulus(0.8, 0.4)
+    bars = templates.bar_ring(0.0, 0.0, radius, 12, 20.0)
+    from sector.geometry import points_inside_concrete
+
+    assert points_inside_concrete(
+        [(x, y) for x, y, _area in bars], outer, holes
+    ).all()
+    assert templates.annulus_ring_radius(0.8, 0.4, 0.20) == pytest.approx(0.20)
+    with pytest.raises(ValueError, match="annulus void"):
+        templates.annulus_ring_radius(0.8, 0.4, 0.25)
+
+
 def test_box_row_xs_full_width_in_wall_split_in_hollow():
     # b=0.8, h=1.0, wall=0.2, cover=0.05. Bottom wall spans y in [-0.5, -0.3].
     full = templates.box_row_xs(-0.45, 0.8, 1.0, 0.2, 0.05, 3)     # in the bottom wall
@@ -187,6 +387,19 @@ def test_point_layers_stacks_tendon_rows():
     assert all(t[2] == 150.0 for t in tendons)                 # area carried through
     one = templates.point_layers(y0, 1.0, 1, ls, -0.15, 0.15, 4, 150.0)
     assert one == templates.point_row(y0, -0.15, 0.15, 4, 150.0)
+
+
+def test_point_layers_span_at_keeps_stepped_rows_in_the_web():
+    def span(y):
+        return (-0.5, 0.5) if y <= -0.2 else (-0.1, 0.1)
+
+    tendons = templates.point_layers(
+        -0.35, 1.0, 2, 0.25, -0.5, 0.5, 3, 150.0, span_at=span
+    )
+    lower = [point for point in tendons if point[1] < -0.2]
+    upper = [point for point in tendons if point[1] > -0.2]
+    assert max(abs(point[0]) for point in lower) == pytest.approx(0.5)
+    assert max(abs(point[0]) for point in upper) == pytest.approx(0.1)
 
 
 def test_count_for_spacing():
