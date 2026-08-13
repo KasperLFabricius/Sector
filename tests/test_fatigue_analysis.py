@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
+import fatigue_presentation  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
 
@@ -456,12 +457,24 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
                 utilisation=0.72,
                 converged=True,
                 passed=True,
+                miner_damage=0.72,
+                yield_utilisation=0.40,
+                governing_domain="reinforcement",
+                governing_criterion="Miner damage",
+                governing_reinforcement_id="R1",
+                governing_concrete_fibre=2,
             ),
             SimpleNamespace(
                 spectrum_name="Traffic B",
                 utilisation=0.91,
                 converged=True,
                 passed=True,
+                miner_damage=0.10,
+                yield_utilisation=0.91,
+                governing_domain="concrete",
+                governing_criterion="compressive stress",
+                governing_reinforcement_id="P1",
+                governing_concrete_fibre=7,
             ),
         )
 
@@ -478,6 +491,15 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
         np.asarray([1.05, 0.975]),
     )
     assert result["governing_spectrum"] == "Traffic B"
+    assert result["governing_domain"] == "concrete"
+    assert result["governing_criterion"] == "compressive stress"
+    assert result["governing_reinforcement_id"] == "P1"
+    assert result["governing_concrete_fibre"] == 7
+    headline = fatigue_presentation.overall_note(result)
+    assert "governing: concrete fibre 7 - compressive stress" in headline
+    assert "governing: -" not in headline
+    assert result["miner_damage"] == pytest.approx(0.72)
+    assert result["yield_utilisation"] == pytest.approx(0.91)
     assert result["utilisation"] == 0.91
     assert result["converged"] is True
     assert result["passed"] is True
@@ -649,6 +671,34 @@ def test_equivalent_concrete_method_is_mapped_and_referenced_explicitly():
         prepared.concrete_method,
     )
     assert "Formula (E.2)" in references["concrete"]
+
+
+def test_equivalent_only_aggregate_keeps_miner_damage_unavailable():
+    inp = _base(
+        fatigue_check_steel=False,
+        fatigue_concrete_method=fatigue_analysis.CONCRETE_EQUIVALENT,
+    )
+
+    result = fatigue_analysis.run_analysis(
+        inp,
+        engine=lambda *_args, **_kwargs: (
+            SimpleNamespace(
+                spectrum_name="Equivalent",
+                utilisation=0.82,
+                converged=True,
+                passed=True,
+                miner_damage=None,
+                yield_utilisation=None,
+                governing_domain="concrete",
+                governing_criterion="Equivalent amplitude",
+                governing_reinforcement_id=None,
+                governing_concrete_fibre=4,
+            ),
+        ),
+    )
+
+    assert result["miner_damage"] is None
+    assert "max Miner D" not in fatigue_presentation.overall_note(result)
 
 
 def test_project_concrete_miner_is_uncited_and_validates_its_c_value():

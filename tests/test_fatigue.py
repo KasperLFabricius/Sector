@@ -1167,6 +1167,7 @@ def test_equivalent_concrete_search_matches_the_fixed_fibre_criterion():
     assert result.concrete_strength.edition == fatigue.EC2_2023
     assert result.governing_domain == "concrete"
     assert result.governing_criterion == "Equivalent amplitude"
+    assert result.miner_damage is None
 
 
 def test_tendon_only_section_is_included_in_fatigue_solver_order():
@@ -1224,6 +1225,196 @@ def _mixed_properties():
             bond_diameter=16.0,
         ),
     )
+
+
+def test_exact_zero_cyclic_action_reuses_long_term_state_and_zero_damage():
+    section = Section.from_polygon(
+        corners=[
+            (-0.20, -0.30),
+            (0.20, -0.30),
+            (0.20, 0.30),
+            (-0.20, 0.30),
+        ],
+        bars_xy_area_mm2=[(0.0, -0.20, 1000.0)],
+        tendons_xy_area_mm2=[(0.045, 0.0, 100.0)],
+    )
+    properties = (
+        _steel_properties("R1"),
+        _steel_properties(
+            "P1",
+            kind=fatigue.PRESTRESS,
+            fytk=1426.087,
+            bond_ratio=0.25,
+            bond_diameter=10.0,
+        ),
+    )
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Zero range",
+        section,
+        (
+            fatigue.SpectrumBin(
+                "F1",
+                365_000.0,
+                mx_long_knm=15.0,
+            ),
+        ),
+        nl=18.0,
+        ns=7.0,
+        reinforcement=properties,
+        concrete=fatigue.ConcreteFatigueProperties(
+            edition="2023",
+            fck_mpa=40.0,
+            gamma_c=1.5,
+            beta_cc_t0=1.0,
+        ),
+        fatigue_edition="2023",
+        gamma_s=1.0,
+        gamma_ff=1.1,
+        n_mult=np.asarray([1.0, 0.95]),
+        prestress_stress=np.asarray([0.0, 1_355_142.0]),
+    )
+
+    state = result.bins[0]
+    assert state.zero_cyclic_action is True
+    assert state.bar_stress_total_mpa == state.bar_stress_long_mpa
+    assert state.bar_stress_design_total_mpa == state.bar_stress_long_mpa
+    assert (
+        state.concrete_compression_total_mpa
+        == state.concrete_compression_long_mpa
+    )
+    assert (
+        state.concrete_compression_design_total_mpa
+        == state.concrete_compression_long_mpa
+    )
+    for element in result.reinforcement:
+        bin_result = element.bins[0]
+        assert bin_result.zero_cyclic_range is True
+        assert bin_result.stress_range_mpa == 0.0
+        assert bin_result.stress_range_elastic_mpa == 0.0
+        assert bin_result.design_stress_range_mpa == 0.0
+        assert bin_result.design_stress_range_elastic_mpa == 0.0
+        assert math.isinf(bin_result.cycles_to_failure)
+        assert math.isinf(bin_result.log10_cycles_to_failure)
+        assert bin_result.damage == 0.0
+    assert all(item.damage == 0.0 for item in result.concrete)
+    assert result.concrete_search is not None
+    assert result.concrete_search.damage == 0.0
+    assert result.concrete_search.upper_damage == 0.0
+    assert result.miner_damage == 0.0
+    assert result.yield_utilisation == pytest.approx(
+        max(item.yield_utilisation for item in result.reinforcement)
+    )
+    assert result.utilisation == result.yield_utilisation
+    assert result.governing_domain == "reinforcement"
+    assert result.governing_criterion == "yield/proof stress"
+
+
+def test_concrete_search_bound_is_not_reported_as_evaluated_miner_damage(
+    monkeypatch,
+):
+    section = _section()
+
+    def bounded_search(candidate, states, _properties, **_kwargs):
+        assert candidate is section
+        assert all(state.zero_cyclic_action for state in states)
+        x, y = candidate.concrete_vertices()[0]
+        return fatigue.ConcreteFibreSearch(
+            x_m=float(x),
+            y_m=float(y),
+            damage=0.0,
+            upper_damage=0.25,
+            divisions=4,
+            boxes_evaluated=1,
+            points_evaluated=4,
+            absolute_gap=0.25,
+            relative_gap=1.0,
+            converged=True,
+            method=fatigue.CONCRETE_MINER,
+        )
+
+    monkeypatch.setattr(
+        fatigue,
+        "locate_governing_concrete_fibre",
+        bounded_search,
+    )
+    result = fatigue.analyse_fatigue_spectrum(
+        "Bounded zero range",
+        section,
+        (fatigue.SpectrumBin("F1", 100_000.0, p_long_kn=100.0),),
+        nl=10.0,
+        ns=10.0,
+        check_reinforcement=False,
+        concrete=fatigue.ConcreteFatigueProperties(
+            edition="2023",
+            fck_mpa=40.0,
+            gamma_c=1.5,
+            beta_cc_t0=1.0,
+        ),
+    )
+
+    assert result.miner_damage == 0.0
+    assert max(item.damage for item in result.concrete) == 0.0
+    assert result.concrete_search is not None
+    assert result.concrete_search.upper_damage == pytest.approx(0.25)
+    assert result.utilisation == pytest.approx(0.25)
+    assert result.governing_criterion == "Miner damage upper bound"
+
+
+def test_nonzero_uniform_cyclic_action_matches_independent_damage_oracle():
+    section = _section()
+    modular_ratio = 10.0
+    long_force = 1000.0
+    cyclic_force = 200.0
+    action_factor = 1.25
+    cycles = 100_000.0
+    material_factor = 1.15
+    transformed_area = section.gross_area + modular_ratio * sum(
+        bar.area for bar in section.bars
+    )
+    expected_range = (
+        modular_ratio * cyclic_force / transformed_area / 1000.0
+    )
+    expected_design_range = action_factor * expected_range
+    design_knee = 160.0 / material_factor
+    expected_life = 2.0e6 * (
+        design_knee / expected_design_range
+    ) ** 9.0
+    expected_damage = cycles / expected_life
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Nonzero range",
+        section,
+        (
+            fatigue.SpectrumBin(
+                "F1",
+                cycles,
+                p_long_kn=long_force,
+                p_short_kn=cyclic_force,
+            ),
+        ),
+        nl=modular_ratio,
+        ns=modular_ratio,
+        reinforcement=(
+            _steel_properties("R1"),
+            _steel_properties("R2"),
+        ),
+        check_concrete=False,
+        gamma_s=material_factor,
+        gamma_ff=action_factor,
+    )
+
+    assert result.bins[0].zero_cyclic_action is False
+    for element in result.reinforcement:
+        bin_result = element.bins[0]
+        assert bin_result.zero_cyclic_range is False
+        assert bin_result.stress_range_mpa == pytest.approx(expected_range)
+        assert bin_result.design_stress_range_mpa == pytest.approx(
+            expected_design_range
+        )
+        assert bin_result.cycles_to_failure == pytest.approx(expected_life)
+        assert bin_result.damage == pytest.approx(expected_damage)
+    assert result.miner_damage == pytest.approx(expected_damage)
 
 
 def test_2005_mixed_bond_correction_applies_eta_to_rebar_only():

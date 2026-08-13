@@ -1181,7 +1181,7 @@ def test_fatigue_sn_figure_explicitly_omits_zero_range_on_log_axes():
     fig = viz.fatigue_sn_figure(steel, properties, gamma_s=1.15)
 
     text = " ".join(annotation.text for annotation in fig.layout.annotations)
-    assert "1 zero-range bin omitted" in text
+    assert "No S-N marker for 1 zero-range bin; Miner D = 0" in text
 
 
 def test_fatigue_sn_figure_handles_finite_near_overflow_life():
@@ -1244,10 +1244,36 @@ def test_fatigue_damage_figure_shows_bin_cumulative_and_limit():
     )
 
 
+@pytest.mark.parametrize(
+    "identity",
+    ({"element_id": "P1"}, {"fibre_index": 4}),
+)
+def test_fatigue_damage_figure_zero_note_is_valid_for_all_result_types(
+    identity,
+):
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        bins=(NS(bin_name="FAT-0", cycles=365_000.0, damage=0.0),),
+        **identity,
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    text = " ".join(annotation.text for annotation in fig.layout.annotations)
+    assert (
+        "All bins: Miner D = 0; other stress criteria are assessed separately"
+        in text
+    )
+    assert "yield/proof" not in text
+    assert fig.layout.yaxis.type != "log"
+
+
 def test_fatigue_damage_figure_shows_equivalent_criterion_without_miner_sum():
     from types import SimpleNamespace as NS
 
     result = NS(
+        method="Damage-equivalent stress amplitude",
         bins=(
             NS(bin_name="EQ-1", equivalent_utilisation=0.82),
             NS(bin_name="EQ-2", equivalent_utilisation=1.04),
@@ -1267,6 +1293,29 @@ def test_fatigue_damage_figure_shows_equivalent_criterion_without_miner_sum():
         shape.type == "line" and shape.y0 == 1.0 and shape.y1 == 1.0
         for shape in fig.layout.shapes
     )
+
+
+def test_fatigue_damage_figure_labels_zero_equivalent_utilisation_truthfully():
+    from types import SimpleNamespace as NS
+
+    result = NS(
+        method="Damage-equivalent stress amplitude",
+        fibre_index=4,
+        bins=(
+            NS(
+                bin_name="EQ-0",
+                equivalent_utilisation=0.0,
+                damage=0.0,
+            ),
+        ),
+    )
+
+    fig = viz.fatigue_damage_figure(result)
+
+    text = " ".join(annotation.text for annotation in fig.layout.annotations)
+    assert "All bins: equivalent-amplitude utilisation = 0" in text
+    assert "Miner D" not in text
+    assert [trace.name for trace in fig.data] == ["equivalent criterion"]
 
 
 def test_fatigue_utilisation_map_labels_equivalent_search_evidence():

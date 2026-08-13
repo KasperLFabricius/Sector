@@ -8296,7 +8296,8 @@ class ReportBuilder:
         self._h2("Spectrum summary")
         rows = [[
             "Spectrum", "Status", "Bins", "Steel", "Concrete", "Governing",
-            "Utilisation", "Search upper D",
+            "Max Miner D", "Max yield / proof", "Governing util.",
+            "Search upper D",
         ]]
         rows.extend([
             [
@@ -8306,6 +8307,8 @@ class ReportBuilder:
                 row["reinforcement_elements"],
                 row["concrete_fibres"],
                 _html_escape(row["governing"]),
+                _fmt_sig(row["miner_damage"], 6),
+                _pct(row["yield_utilisation"]),
                 _pct(row["utilisation"]),
                 _fmt_sig(row["search_upper_damage"], 6),
             ]
@@ -8313,14 +8316,15 @@ class ReportBuilder:
         ])
         self._table(
             rows,
-            [24 * mm, 16 * mm, 10 * mm, 12 * mm, 15 * mm,
-             44 * mm, 22 * mm, 23 * mm],
-            font=6.0,
+            [18 * mm, 14 * mm, 8 * mm, 9 * mm, 10 * mm,
+             28 * mm, 16 * mm, 19 * mm, 18 * mm, 18 * mm],
+            font=5.5,
             keep=False,
         )
         self._small(
             "Miner sums are accumulated within each spectrum; different "
-            "spectrum names are not combined."
+            "spectrum names are not combined. Governing utilisation is the "
+            "maximum of the applicable Miner, yield/proof and concrete criteria."
         )
 
         input_records = fatigue_inputs.spectrum_records(
@@ -8365,11 +8369,11 @@ class ReportBuilder:
             spectrum_status = fatigue_presentation.result_status(spectrum)
             self._h2("Spectrum - " + _html_escape(spectrum_name))
             self._status_block(
-                f"{spectrum_status} - utilisation "
+                f"{spectrum_status} - governing utilisation "
                 f"{_pct(fatigue_presentation.evidence_number(
                     fatigue_presentation.value(spectrum, 'utilisation')
                 ))} | {_html_escape(
-                    fatigue_presentation.governing_criterion(spectrum)
+                    fatigue_presentation.criterion_breakdown(spectrum)
                 )}",
                 spectrum_status,
             )
@@ -8434,7 +8438,7 @@ class ReportBuilder:
                 self._h2("Elastic solver states")
                 rows = [[
                     "Bin", "Description", "Cycles", "Status",
-                    "gamma<sub>Ff</sub>", "Bond method",
+                    "Cyclic action", "gamma<sub>Ff</sub>", "Bond method",
                 ]]
                 rows.extend([
                     [
@@ -8442,6 +8446,7 @@ class ReportBuilder:
                         _html_escape(row["description"]),
                         _fmt_sig(row["cycles"], 8),
                         row["status"],
+                        row["cyclic_action"],
                         _fmt(row["gamma_ff"], 3),
                         _html_escape(row["bond_method"]),
                     ]
@@ -8449,8 +8454,9 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [22 * mm, 48 * mm, 23 * mm, 18 * mm, 22 * mm, 32 * mm],
-                    font=6.4,
+                    [18 * mm, 35 * mm, 18 * mm, 16 * mm, 28 * mm,
+                     18 * mm, 32 * mm],
+                    font=5.9,
                     keep=False,
                 )
 
@@ -8559,7 +8565,7 @@ class ReportBuilder:
                             if row["bin"] == selected_bin_name
                         ]
                     rows = [[
-                        "Bin", "Cycles", "Status", "Long stress",
+                        "Bin", "Cycles", "Status / range", "Long stress",
                         "Fatigue total", "Design total", "Design elastic &#916;sigma",
                         "Design &#916;sigma", "Bond factor / method",
                     ]]
@@ -8567,7 +8573,7 @@ class ReportBuilder:
                         [
                             _html_escape(row["bin"]),
                             _fmt(row["cycles"], 3),
-                            row["status"],
+                            row["status"] + "<br/>" + row["range_state"],
                             _fmt(row["stress_long_mpa"], 3),
                             _fmt(row["stress_total_mpa"], 3),
                             _fmt(row["stress_total_design_mpa"], 3),

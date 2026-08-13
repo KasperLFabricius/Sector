@@ -1497,6 +1497,7 @@ def fatigue_sn_figure(
         ))
     omitted = len(bins) - len(plotted)
     if omitted:
+        noun = "bin" if omitted == 1 else "bins"
         fig.add_annotation(
             x=0.01,
             y=0.02,
@@ -1504,7 +1505,10 @@ def fatigue_sn_figure(
             yref="paper",
             xanchor="left",
             yanchor="bottom",
-            text=f"{omitted} zero-range bin omitted from logarithmic axes",
+            text=(
+                f"No S-N marker for {omitted} zero-range {noun}; "
+                "Miner D = 0"
+            ),
             showarrow=False,
             bgcolor="rgba(255,255,255,0.82)",
             font=dict(size=10, color=SCHEMATIC_INK),
@@ -1559,9 +1563,13 @@ def fatigue_damage_figure(result, *, title=None):
         _fatigue_value(item, "equivalent_utilisation")
         for item in bins
     ]
-    if any(value is not None for value in equivalent):
+    equivalent_method = (
+        _fatigue_text(_fatigue_value(result, "method", ""))
+        == "Damage-equivalent stress amplitude"
+    )
+    if equivalent_method or any(value is not None for value in equivalent):
         values = [
-            0.0 if value is None else float(value)
+            None if value is None else float(value)
             for value in equivalent
         ]
         fig = go.Figure(go.Bar(
@@ -1570,7 +1578,7 @@ def fatigue_damage_figure(result, *, title=None):
             name="equivalent criterion",
             marker=dict(
                 color=[
-                    "#9B1C1C" if value > 1.0 else LOAD_POINT
+                    "#9B1C1C" if value is not None and value > 1.0 else LOAD_POINT
                     for value in values
                 ],
                 line=dict(color="#111827", width=0.6),
@@ -1587,6 +1595,24 @@ def fatigue_damage_figure(result, *, title=None):
             annotation_text="limit = 1.00",
             annotation_position="top right",
         )
+        available = [value for value in values if value is not None]
+        if not available or not any(value > 0.0 for value in available):
+            fig.add_annotation(
+                x=0.01,
+                y=0.98,
+                xref="paper",
+                yref="paper",
+                xanchor="left",
+                yanchor="top",
+                text=(
+                    "Equivalent-amplitude utilisation is unavailable by bin"
+                    if not available
+                    else "All bins: equivalent-amplitude utilisation = 0"
+                ),
+                showarrow=False,
+                bgcolor="rgba(255,255,255,0.90)",
+                font=dict(size=10, color=SCHEMATIC_INK),
+            )
         fig.update_layout(
             title=(
                 _fatigue_text(title)
@@ -1754,6 +1780,22 @@ def fatigue_damage_figure(result, *, title=None):
             bgcolor="rgba(253,236,236,0.92)",
             bordercolor="#9B1C1C",
             font=dict(size=10, color="#9B1C1C"),
+        )
+    elif not positive:
+        fig.add_annotation(
+            x=0.01,
+            y=0.98,
+            xref="paper",
+            yref="paper",
+            xanchor="left",
+            yanchor="top",
+            text=(
+                "All bins: Miner D = 0; other stress criteria are assessed "
+                "separately"
+            ),
+            showarrow=False,
+            bgcolor="rgba(255,255,255,0.90)",
+            font=dict(size=10, color=SCHEMATIC_INK),
         )
     identifier = (
         _fatigue_value(result, "element_id")
