@@ -60,8 +60,8 @@ def test_crack_outputs_select_largest_actual_calculation():
         "ratio": None,
         "criterion_source": None,
         "reason": (
-            "No ordinary crack-width criterion was specified; acceptance "
-            "is not assessed."
+            "No permitted crack width was specified in Analysis settings; "
+            "acceptance is not assessed."
         ),
         "comparison_equation": None,
     }
@@ -70,7 +70,7 @@ def test_crack_outputs_select_largest_actual_calculation():
 
 
 def test_crack_output_not_requested_retains_stored_criterion_without_a_width():
-    source = sls.crack_criterion_source("EL-quiet")
+    source = sls.crack_criterion_source()
     output = sls.crack_outputs(
         {"Short-term": {"wk": 0.31, "element_id": "B-7"}},
         valid=True,
@@ -93,7 +93,7 @@ def test_crack_output_preserves_evaluation_reason_when_width_is_unavailable():
         valid=True,
         requested=True,
         criterion_mm=0.30,
-        criterion_source=sls.crack_criterion_source("EL-scope"),
+        criterion_source=sls.crack_criterion_source(),
     )
 
     assert output["calculation_state"] == "NOT ASSESSED"
@@ -108,7 +108,7 @@ def test_invalid_requested_crack_result_is_not_assessed_with_retained_reason():
         valid=False,
         requested=True,
         criterion_mm=0.30,
-        criterion_source=sls.crack_criterion_source("EL-invalid-result"),
+        criterion_source=sls.crack_criterion_source(),
     )
 
     assert output["calculation_state"] == "NOT ASSESSED"
@@ -126,7 +126,7 @@ def test_invalid_requested_crack_result_is_not_assessed_with_retained_reason():
 def test_crack_output_compares_only_with_a_user_criterion(
     criterion, expected_status, expected_ratio
 ):
-    source = sls.crack_criterion_source("EL-limit")
+    source = sls.crack_criterion_source()
     output = sls.crack_outputs(
         {"Short-term": {"wk": 0.31, "element_id": "B-7"}},
         valid=True,
@@ -153,7 +153,7 @@ def test_crack_output_invalid_criterion_fails_closed(criterion):
         valid=True,
         requested=True,
         criterion_mm=criterion,
-        criterion_source=sls.crack_criterion_source("EL-invalid"),
+        criterion_source=sls.crack_criterion_source(),
     )
 
     assert output["calculation_state"] == "NOT ASSESSED"
@@ -179,7 +179,7 @@ def test_crack_comparison_requires_user_source_and_millimetre_output():
         },
         requested=True,
         criterion_mm=0.30,
-        criterion_source=sls.crack_criterion_source("EL-units"),
+        criterion_source=sls.crack_criterion_source(),
     )
 
     assert without_source["calculation_state"] == "NOT ASSESSED"

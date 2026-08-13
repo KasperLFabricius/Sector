@@ -2,11 +2,10 @@
 
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
-Released Sector 0.92 projects used schema 23. Sector 0.93 accepts only current
-schema version 24 and carries no legacy schema
-migration. An exact in-schema migration retains the two report labels written
-by early schema-24 builds. Retired component-mapped bridge inputs are
-deliberately absent from the schema.
+Released Sector 0.92 projects used schema 23. Current projects use schema 25.
+Schema 24 has one bounded migration for the shared permitted crack-width
+setting; schema 23 and future schemas remain unsupported. Retired
+component-mapped bridge inputs are deliberately absent from the schema.
 """
 
 from __future__ import annotations
@@ -26,17 +25,38 @@ import pandas as pd
 import reinforcement_table as rebar_table
 
 from app import modelled_direction, report_profiles
-from app.table_field_definitions import decimal_issue_ledger
+from app.table_field_definitions import (
+    BlankPolicy,
+    DecimalParseError,
+    decimal_issue_ledger,
+    parse_decimal,
+)
 from sector import __version__ as sector_version
-from sector import capacity, design_standards, geometry, heightened_crack_control
+from sector import (
+    capacity,
+    design_standards,
+    geometry,
+    heightened_crack_control,
+    sls,
+)
 from sector.build_info import source_revision
 
 FORMAT = "sector-project"
-VERSION = 24
+VERSION = 25
+MIGRATABLE_VERSION = 24
 
 V23_UNSUPPORTED_MESSAGE = (
-    "Sector project schema 23 is retired; Sector 0.93 accepts only current "
-    "schema 24. Recreate and verify the project in Sector 0.93."
+    "Sector project schema 23 is retired; only current schema 25 and the "
+    "bounded schema 24 migration are supported. Recreate and verify the project."
+)
+
+LEGACY_ORDINARY_CRACK_WIDTH_KEY = "ordinary_crack_criterion_mm"
+LEGACY_HEIGHTENED_CRACK_WIDTH_KEY = (
+    "sls_heightened_permitted_crack_width_mm"
+)
+SCHEMA24_ELASTIC_COLUMNS = (
+    *load_cases.ELASTIC_COLUMNS,
+    LEGACY_ORDINARY_CRACK_WIDTH_KEY,
 )
 
 TABLE_KEYS = ["corners_base", "hole_base", "bars_base", "tendons_base"]
@@ -69,7 +89,6 @@ HEIGHTENED_CRACK_SCALAR_KEYS = (
     "sls_heightened_bar_diameter_mm",
     "sls_heightened_effective_tensile_strength_mpa",
     "sls_heightened_reinforcement_modulus_mpa",
-    "sls_heightened_permitted_crack_width_mm",
     "sls_heightened_effective_tension_area_mm2",
     "sls_heightened_provided_reinforcement_area_mm2",
 )
@@ -78,7 +97,6 @@ _HEIGHTENED_POSITIVE_OPERAND_KEYS = (
     "sls_heightened_bar_diameter_mm",
     "sls_heightened_effective_tensile_strength_mpa",
     "sls_heightened_reinforcement_modulus_mpa",
-    "sls_heightened_permitted_crack_width_mm",
     "sls_heightened_effective_tension_area_mm2",
     "sls_heightened_provided_reinforcement_area_mm2",
 )
@@ -115,7 +133,7 @@ SCALAR_KEYS = [
     "mode", "v_min", "v_max", "v_inc", "pl_check_util",
     "pl_interaction", "el_phi",
     "sls_cw", "sls_phi", "sls_bond", "sls_tendon_xi",
-    "sls_code", "sls_member",
+    "sls_code", "sls_member", sls.PERMITTED_CRACK_WIDTH_KEY,
     *HEIGHTENED_CRACK_SCALAR_KEYS,
     # Fatigue.
     "fatigue_on", "fatigue_edition", "fatigue_check_steel",
@@ -283,8 +301,7 @@ def _obj_to_table(value, key: str) -> pd.DataFrame:
     ):
         raise ValueError(
             f"{key} table columns do not match current schema {VERSION}; "
-            "the exact Elastic columns, including "
-            "ordinary_crack_criterion_mm, are required"
+            "the exact current Elastic action columns are required"
         )
     try:
         frame = pd.DataFrame(rows, columns=columns)
@@ -400,6 +417,13 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
     }
     for key in _POSITIVE_FACTOR_KEYS.intersection(payload):
         payload[key] = _positive_real(payload[key], key)
+    permitted_width = payload.get(sls.PERMITTED_CRACK_WIDTH_KEY)
+    payload[sls.PERMITTED_CRACK_WIDTH_KEY] = (
+        None
+        if permitted_width is None
+        or (isinstance(permitted_width, str) and not permitted_width.strip())
+        else _positive_real(permitted_width, sls.PERMITTED_CRACK_WIDTH_KEY)
+    )
     mild_ids, prestress_ids, bar_fatigue_ids, tendon_fatigue_ids = (
         _assigned_catalog_ids(tables)
     )
@@ -541,6 +565,11 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
                     f"{key} is required when heightened crack control is enabled"
                 )
             payload[key] = _positive_real(payload[key], key)
+        if payload[sls.PERMITTED_CRACK_WIDTH_KEY] is None:
+            raise ValueError(
+                f"{sls.PERMITTED_CRACK_WIDTH_KEY} is required when heightened "
+                "crack control is enabled"
+            )
     method_resolvers = (
         ("shear_method", capacity.selected_shear_code),
         ("torsion_method", capacity.selected_torsion_code),
@@ -818,10 +847,11 @@ def _decode(text: str) -> dict:
     version = data.get("version")
     if version == 23:
         raise ValueError(V23_UNSUPPORTED_MESSAGE)
-    if version != VERSION:
+    if version not in {MIGRATABLE_VERSION, VERSION}:
         raise ValueError(
             f"unsupported Sector project schema {version!r}; "
-            f"only current schema {VERSION} is supported"
+            f"only current schema {VERSION} and migration from schema "
+            f"{MIGRATABLE_VERSION} are supported"
         )
     if not isinstance(data.get("tables"), Mapping):
         raise ValueError("malformed tables section")
@@ -858,6 +888,7 @@ def project_provenance(text: str) -> dict:
             and calculation.get("input_sha256") == actual
         )
     return {
+        "schema_version": data["version"],
         "sector_version": provenance.get("sector_version"),
         "source_revision": provenance.get("source_revision"),
         "saved_at_utc": provenance.get("saved_at_utc"),
@@ -868,8 +899,186 @@ def project_provenance(text: str) -> dict:
     }
 
 
-def parse_project(text: str):
-    """Return ``(tables, scalars)`` for one valid current-schema project."""
+def _legacy_positive_width(value: object, source: str) -> float | None:
+    """Parse one schema-24 crack-width value without losing its source."""
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        number = parse_decimal(value, blank=BlankPolicy.NULL)
+    except DecimalParseError as exc:
+        raise ValueError(
+            f"{source} must be a positive finite number"
+        ) from exc
+    if number is None or number <= 0.0:
+        raise ValueError(f"{source} must be a positive finite number")
+    return float(number)
+
+
+def _schema24_elastic_table(value) -> tuple[pd.DataFrame, list[dict]]:
+    """Migrate the exact schema-24 Elastic table and retain width provenance."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{load_cases.ELASTIC_TABLE_KEY} is not a table object")
+    columns = value.get("columns")
+    rows = value.get("rows")
+    if (
+        not isinstance(columns, list)
+        or not all(isinstance(column, str) for column in columns)
+        or not isinstance(rows, list)
+    ):
+        raise ValueError(
+            f"{load_cases.ELASTIC_TABLE_KEY} table columns/rows are malformed"
+        )
+    if tuple(columns) != SCHEMA24_ELASTIC_COLUMNS:
+        raise ValueError(
+            f"{load_cases.ELASTIC_TABLE_KEY} table columns do not match schema "
+            f"{MIGRATABLE_VERSION}; the exact legacy Elastic columns are required"
+        )
+    try:
+        frame = pd.DataFrame(rows, columns=columns)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{load_cases.ELASTIC_TABLE_KEY} table rows are not tabular"
+        ) from exc
+
+    migrated_widths = []
+    for row_number, row in enumerate(frame.to_dict("records"), start=1):
+        source = (
+            f"schema {MIGRATABLE_VERSION} {load_cases.ELASTIC_TABLE_KEY} "
+            f"row {row_number}: {LEGACY_ORDINARY_CRACK_WIDTH_KEY}"
+        )
+        width = _legacy_positive_width(
+            row.get(LEGACY_ORDINARY_CRACK_WIDTH_KEY), source
+        )
+        if width is not None:
+            name = str(row.get(load_cases.NAME) or "").strip()
+            migrated_widths.append({
+                "source": f"Elastic case {name or f'row {row_number}'}",
+                "value_mm": width,
+            })
+
+    width_position = columns.index(LEGACY_ORDINARY_CRACK_WIDTH_KEY)
+    current_rows = [
+        [cell for position, cell in enumerate(row) if position != width_position]
+        for row in rows
+    ]
+    current = {
+        "columns": [
+            column
+            for column in columns
+            if column != LEGACY_ORDINARY_CRACK_WIDTH_KEY
+        ],
+        "rows": current_rows,
+    }
+    return (
+        _obj_to_table(current, load_cases.ELASTIC_TABLE_KEY),
+        migrated_widths,
+    )
+
+
+def _migrated_crack_width(
+    raw_scalars: Mapping,
+    sources: list[dict],
+) -> tuple[float | None, tuple[str, ...], dict]:
+    """Select the one schema-25 width and describe the schema-24 decision."""
+
+    raw_heightened = raw_scalars.get(LEGACY_HEIGHTENED_CRACK_WIDTH_KEY)
+    heightened_enabled = raw_scalars.get("sls_heightened_on") is True
+    heightened_source = (
+        f"schema {MIGRATABLE_VERSION} input "
+        f"{LEGACY_HEIGHTENED_CRACK_WIDTH_KEY}"
+    )
+    try:
+        legacy_heightened_number = parse_decimal(
+            raw_heightened,
+            blank=BlankPolicy.NULL,
+        )
+    except DecimalParseError as exc:
+        raise ValueError(
+            f"{heightened_source} must be a positive finite number"
+        ) from exc
+    if legacy_heightened_number == 0.0 and not heightened_enabled:
+        # Schema 24 persisted the disabled number widget's zero default. It did
+        # not represent a user criterion and must migrate like a blank value.
+        heightened = None
+    else:
+        heightened = _legacy_positive_width(
+            raw_heightened,
+            heightened_source,
+        )
+    if heightened is not None:
+        sources.append({
+            "source": "Heightened crack control",
+            "value_mm": heightened,
+        })
+    unique = sorted({float(item["value_mm"]) for item in sources})
+    selected = min(unique) if unique else None
+    warnings: tuple[str, ...] = ()
+    policy = "blank"
+    if len(unique) == 1:
+        policy = "single-value"
+    elif len(unique) > 1:
+        policy = "conservative-minimum"
+        values = ", ".join(f"{value:g}" for value in unique)
+        warning = (
+            "Schema 24 contained conflicting permitted crack widths "
+            f"({values} mm). Sector migrated the conservative minimum "
+            f"{selected:g} mm to Analysis settings; review this value before "
+            "recalculating."
+        )
+        warnings = (warning,)
+    return selected, warnings, {
+        "criterion_sources": tuple(dict(item) for item in sources),
+        "selection_policy": policy,
+        "selected_value_mm": selected,
+    }
+
+
+def _apply_presentation(
+    data: Mapping,
+    raw_scalars: Mapping,
+    scalars: dict,
+) -> None:
+    """Apply project-owned presentation values after input canonicalisation."""
+
+    raw_presentation = data.get("presentation", {})
+    unknown_presentation = (
+        set(raw_presentation) - set(PRESENTATION_SCALAR_KEYS)
+    )
+    if unknown_presentation:
+        raise ValueError(
+            "unknown current-schema presentation inputs: "
+            + ", ".join(sorted(unknown_presentation))
+        )
+    scalars[modelled_direction.ALIAS_KEY] = (
+        modelled_direction.normalise_alias(
+            raw_presentation.get(modelled_direction.ALIAS_KEY)
+        )
+    )
+    legacy_report_profile = raw_scalars.get(REPORT_PROFILE_KEY)
+    current_report_profile = raw_presentation.get(REPORT_PROFILE_KEY)
+    if current_report_profile is None:
+        current_report_profile = legacy_report_profile
+    elif legacy_report_profile is not None:
+        if normalise_report_profile(current_report_profile) != (
+            normalise_report_profile(legacy_report_profile)
+        ):
+            raise ValueError(
+                "conflicting report profiles in scalars and presentation"
+            )
+    scalars[REPORT_PROFILE_KEY] = normalise_report_profile(
+        current_report_profile
+    )
+
+
+def parse_project_with_info(text: str):
+    """Return current inputs plus source-schema migration information.
+
+    ``parse_project`` remains the two-value compatibility API. Callers that need
+    to surface a schema-24 migration warning use this three-value wrapper.
+    """
+
     data = _decode(text)
     provenance = project_provenance(text)
     if not provenance["input_hash_valid"]:
@@ -886,47 +1095,78 @@ def parse_project(text: str):
             "missing current-schema tables: "
             + ", ".join(sorted(missing_tables))
         )
-    tables = {
-        key: _obj_to_table(data["tables"][key], key)
-        for key in PROJECT_TABLE_KEYS
-    }
+
+    source_version = data["version"]
     raw_scalars = data["scalars"]
-    legacy_report_profile = raw_scalars.get(REPORT_PROFILE_KEY)
-    unknown_scalars = (
-        set(raw_scalars) - set(SCALAR_KEYS) - {REPORT_PROFILE_KEY}
-    )
-    if unknown_scalars:
-        raise ValueError(
-            "unknown current-schema inputs: "
-            + ", ".join(sorted(unknown_scalars))
+    migration_warnings: tuple[str, ...] = ()
+    migration_provenance = {
+        "criterion_sources": (),
+        "selection_policy": "not-applicable",
+        "selected_value_mm": None,
+    }
+    if source_version == MIGRATABLE_VERSION:
+        tables = {}
+        legacy_widths = []
+        for key in PROJECT_TABLE_KEYS:
+            if key == load_cases.ELASTIC_TABLE_KEY:
+                tables[key], legacy_widths = _schema24_elastic_table(
+                    data["tables"][key]
+                )
+            else:
+                tables[key] = _obj_to_table(data["tables"][key], key)
+        allowed_schema24_scalars = (
+            set(SCALAR_KEYS)
+            - {sls.PERMITTED_CRACK_WIDTH_KEY}
+            | {LEGACY_HEIGHTENED_CRACK_WIDTH_KEY}
         )
-    scalars = _canonical_scalars(raw_scalars, tables)
-    raw_presentation = data.get("presentation", {})
-    unknown_presentation = (
-        set(raw_presentation) - set(PRESENTATION_SCALAR_KEYS)
-    )
-    if unknown_presentation:
-        raise ValueError(
-            "unknown current-schema presentation inputs: "
-            + ", ".join(sorted(unknown_presentation))
+        unknown_scalars = (
+            set(raw_scalars)
+            - allowed_schema24_scalars
+            - {REPORT_PROFILE_KEY}
         )
-    scalars[modelled_direction.ALIAS_KEY] = (
-        modelled_direction.normalise_alias(
-            raw_presentation.get(modelled_direction.ALIAS_KEY)
-        )
-    )
-    current_report_profile = raw_presentation.get(REPORT_PROFILE_KEY)
-    if current_report_profile is None:
-        current_report_profile = legacy_report_profile
-    elif legacy_report_profile is not None:
-        if normalise_report_profile(current_report_profile) != (
-            normalise_report_profile(legacy_report_profile)
-        ):
+        if unknown_scalars:
             raise ValueError(
-                "conflicting report profiles in scalars and presentation"
+                "unknown schema-24 inputs: "
+                + ", ".join(sorted(unknown_scalars))
             )
-    scalars[REPORT_PROFILE_KEY] = normalise_report_profile(
-        current_report_profile
-    )
+        migrated_width, migration_warnings, migration_provenance = (
+            _migrated_crack_width(raw_scalars, legacy_widths)
+        )
+        migrated_scalars = dict(raw_scalars)
+        migrated_scalars.pop(LEGACY_HEIGHTENED_CRACK_WIDTH_KEY, None)
+        migrated_scalars.pop(REPORT_PROFILE_KEY, None)
+        migrated_scalars[sls.PERMITTED_CRACK_WIDTH_KEY] = migrated_width
+        scalars = _canonical_scalars(migrated_scalars, tables)
+    else:
+        tables = {
+            key: _obj_to_table(data["tables"][key], key)
+            for key in PROJECT_TABLE_KEYS
+        }
+        unknown_scalars = (
+            set(raw_scalars) - set(SCALAR_KEYS) - {REPORT_PROFILE_KEY}
+        )
+        if unknown_scalars:
+            raise ValueError(
+                "unknown current-schema inputs: "
+                + ", ".join(sorted(unknown_scalars))
+            )
+        scalars = _canonical_scalars(raw_scalars, tables)
+
+    _apply_presentation(data, raw_scalars, scalars)
     _validate_geometry(tables)
+    info = {
+        "source_schema_version": source_version,
+        "target_schema_version": VERSION,
+        "migrated": source_version != VERSION,
+        "migration_warnings": migration_warnings,
+        "migration_provenance": migration_provenance,
+        "provenance": provenance,
+    }
+    return tables, scalars, info
+
+
+def parse_project(text: str):
+    """Return ``(tables, scalars)`` with schema-24 compatibility."""
+
+    tables, scalars, _info = parse_project_with_info(text)
     return tables, scalars

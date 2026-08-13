@@ -42,6 +42,8 @@ _SCHEMA23_ARTIFACT_KEYS = (
     "result_input_snapshot",
     "calculation_record",
     "_loaded_project_provenance",
+    "_loaded_project_migration",
+    "_project_migration_warnings",
     "_autosave_hash",
     "_fig_cache",
     "report_buffer",

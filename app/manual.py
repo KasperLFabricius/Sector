@@ -709,10 +709,10 @@ def manual_blocks() -> list:
     h2("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
-       "earlier results; press *Calculate* to create current results. The "
-       "Sector v0.93 supports only current project schema version 24. Released "
-       "Sector 0.92 projects used schema version 23 and are "
-       "rejected rather than migrated.")
+       "earlier results; press *Calculate* to create current results. Current "
+       "projects use schema version 25. Schema 24 is migrated in memory through "
+       "the bounded permitted-crack-width rule and resaves cleanly as schema 25; "
+       "the source file is not changed. Schema 23 remains unsupported.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
@@ -934,15 +934,16 @@ def manual_blocks() -> list:
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
     call("standard", "Sector 0.93 reports the DK NA fine and coarse crack systems side "
        "by side, each for the long-term and short-term load (four crack widths). "
-       "An optional positive criterion belongs to that named Elastic row. Blank "
-       "means the width is calculated without an acceptance assessment; when a "
-       "criterion is entered, Sector reports only a bounded comparison with that "
+       "One optional positive permitted width in Analysis settings is shared by "
+       "every selected Elastic row. Blank means the width is calculated without "
+       "an acceptance assessment; when a value is entered, Sector reports only a "
+       "bounded comparison with that "
        "user-specified value and does not infer exposure, durability, prestress "
        "category or owner requirements. Part C derives every model in full with "
        "the critical worked crack width.")
     md("For the first-generation Danish basis only, **DK heightened crack-control "
        "minimum** is a separate section-level opt-in. The user must declare its "
-       "applicability and enter the permitted width, crack system, reinforcement "
+       "applicability and supply the shared permitted width, crack system, reinforcement "
        "surface, bar diameter, effective tensile strength, reinforcement modulus, "
        "effective tension area and provided reinforcement area. Sector does not "
        "derive those project decisions from the ordinary crack calculation.")
@@ -1578,7 +1579,8 @@ def manual_blocks() -> list:
        "{4E_{sk}kw_k}}$$\n\n"
        "where $k=1$ for the fine crack system and $k=2$ for the coarse system; "
        "$m_s=1$ for ribbed reinforcement and $m_s=\\sqrt{2}$ for smooth "
-       "reinforcement. Sector multiplies the retained ratio by the user-supplied "
+       "reinforcement. Sector uses the shared Analysis permitted width, multiplies "
+       "the retained ratio by the user-supplied "
        "$A_{c,eff}$ and compares the resulting $A_{s,req}$ with the user-supplied "
        "$A_{s,prov}$. Applicability, restraint, watertightness and the permitted "
        "$w_k$ remain user declarations. The option is unavailable for the 2023 "

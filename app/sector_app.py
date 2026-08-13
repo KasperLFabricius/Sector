@@ -2016,16 +2016,6 @@ def _case_column_config(key):
             help=definition("calculate_crack_width").help,
             default=False, width="small",
         ),
-        "ordinary_crack_criterion_mm": st.column_config.TextColumn(
-            "Criterion wk [mm]",
-            help=(
-                f"{definition('ordinary_crack_criterion_mm').help} Enter a dot "
-                "or comma decimal; blank means no acceptance assessment."
-            ),
-            required=False,
-            default=None,
-            width="small",
-        ),
     }
 
 
@@ -2745,11 +2735,17 @@ def _apply_pending_project() -> None:
     if text is None:
         return
     try:
-        provenance = project_io.project_provenance(text)
-        tables, scalars = project_io.parse_project(text)
+        tables, scalars, parse_info = project_io.parse_project_with_info(text)
+        provenance = parse_info["provenance"]
     except ValueError as exc:
         st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
         return
+    # Parsing is the transaction boundary for a project replacement. A rejected
+    # upload leaves the existing project active, so its migration warning and
+    # structured provenance must remain intact. Clear them only once a valid
+    # replacement has been authenticated and is about to be applied.
+    st.session_state.pop("_project_migration_warnings", None)
+    st.session_state.pop("_loaded_project_migration", None)
     # A valid project load is an explicit whole-input replacement. Do not replay
     # uncommitted browser events from the project that was open previously.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
@@ -2841,6 +2837,33 @@ def _apply_pending_project() -> None:
     else:
         st.session_state.pop("calculation_record", None)
     st.session_state["_loaded_project_provenance"] = provenance
+    migration_warnings = tuple(parse_info.get("migration_warnings") or ())
+    if parse_info.get("migrated"):
+        # Keep the structured migration evidence independently of the transient
+        # parser result. Plain dict/list/scalar values remain stable across
+        # Streamlit reruns and can be consumed by provenance/report surfaces.
+        migration_provenance = parse_info.get("migration_provenance") or {}
+        st.session_state["_loaded_project_migration"] = {
+            "source_schema_version": parse_info["source_schema_version"],
+            "target_schema_version": parse_info["target_schema_version"],
+            "warnings": list(migration_warnings),
+            "migration_provenance": {
+                "criterion_sources": [
+                    dict(item)
+                    for item in migration_provenance.get(
+                        "criterion_sources", ()
+                    )
+                ],
+                "selection_policy": migration_provenance.get(
+                    "selection_policy"
+                ),
+                "selected_value_mm": migration_provenance.get(
+                    "selected_value_mm"
+                ),
+            },
+        }
+    if migration_warnings:
+        st.session_state["_project_migration_warnings"] = migration_warnings
     # Project files intentionally contain inputs, not result payloads. Remove any
     # result/report from the previously open project so it cannot be mistaken for
     # evidence belonging to the newly loaded section.
@@ -2869,9 +2892,18 @@ def _apply_pending_project() -> None:
             detail = f"Sector {version}, source {revision}, input hash {integrity}"
         else:
             detail = "current project provenance unavailable"
+        message = (
+            f"Project loaded ({detail}). Recalculate to create current results."
+        )
+        if parse_info.get("migrated"):
+            message += (
+                f" Schema {parse_info['source_schema_version']} was migrated in "
+                f"memory to schema {parse_info['target_schema_version']}; the "
+                "source file was not changed."
+            )
         st.session_state["_project_msg"] = (
             "success" if verified is not False else "error",
-            f"Project loaded ({detail}). Recalculate to create current results.",
+            message,
         )
 
 
@@ -2929,6 +2961,17 @@ def _save_load_panel() -> None:
                 )
         else:
             box.caption("Loaded: current project | provenance unavailable")
+    loaded_migration = st.session_state.get("_loaded_project_migration")
+    if loaded_migration:
+        migration = loaded_migration.get("migration_provenance") or {}
+        selected = migration.get("selected_value_mm")
+        selected_text = "none" if selected is None else f"{selected:g} mm"
+        box.caption(
+            f"Migrated schema {loaded_migration['source_schema_version']} to "
+            f"{loaded_migration['target_schema_version']} | "
+            f"{migration.get('selection_policy') or 'policy unavailable'} | "
+            f"selected {selected_text}"
+        )
     _autosave_panel(box)
     up = box.file_uploader("Load project", type=["json"], key="project_upload",
                            help="Restore a section from a downloaded project file.")
@@ -3662,12 +3705,12 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
+    "sls_permitted_crack_width_mm",
     "sls_heightened_on", "sls_heightened_crack_system",
     "sls_heightened_reinforcement_surface",
     "sls_heightened_bar_diameter_mm",
     "sls_heightened_effective_tensile_strength_mpa",
     "sls_heightened_reinforcement_modulus_mpa",
-    "sls_heightened_permitted_crack_width_mm",
     "sls_heightened_effective_tension_area_mm2",
     "sls_heightened_provided_reinforcement_area_mm2",
 )
@@ -4096,7 +4139,27 @@ def build_inputs(host=st):
     scw.caption(
         "Concrete and reinforcement stresses are always reported for every "
         "Elastic action. Ordinary crack width is enabled per action in the Loads "
-        "table; its criterion is optional and user specified."
+        "table. One optional permitted width in Analysis settings is shared by "
+        "every ordinary and heightened crack check."
+    )
+    sls_permitted_crack_width_mm = _seeded_number(
+        scw,
+        r"Permitted crack width $w_k$ (mm, optional)",
+        0.001,
+        10.0,
+        None,
+        0.01,
+        "sls_permitted_crack_width_mm",
+        disabled=not elastic_on,
+        placeholder="No acceptance assessment",
+        help=(
+            "Shared user-specified permitted crack width. Leave blank to "
+            "calculate ordinary crack widths without an acceptance assessment. "
+            "Sector does not infer a project acceptance limit from the selected "
+            "Eurocode. The optional DK NA heightened check requires this as its "
+            "user-supplied permitted-width operand (DS/EN 1992-1-1 DK NA:2024, "
+            "supplementary provision to 7.3.2(1)P, Formula 7.100 NA)."
+        ),
     )
     crack_basis_options = tuple(
         basis.key.value
@@ -4314,22 +4377,8 @@ def build_inputs(host=st):
                 f"{heightened_guidance.tooltip}"
             ),
         )
-        sls_heightened_permitted_crack_width_mm = _seeded_number(
-            hc2,
-            r"Permitted crack width $w_k$ (mm)",
-            0.0,
-            10.0,
-            0.0,
-            0.01,
-            "sls_heightened_permitted_crack_width_mm",
-            disabled=not (elastic_on and sls_heightened_on),
-            help=(
-                "Mandatory user-specified permitted-width operand. "
-                f"{heightened_guidance.tooltip}"
-            ),
-        )
         sls_heightened_effective_tension_area_mm2 = _seeded_number(
-            hc1,
+            hc2,
             r"Effective tension area $A_{c,eff}$ (mm2)",
             0.0,
             1.0e12,
@@ -4375,9 +4424,6 @@ def build_inputs(host=st):
         )
         sls_heightened_reinforcement_modulus_mpa = _retained_input_scalar(
             "sls_heightened_reinforcement_modulus_mpa", 0.0
-        )
-        sls_heightened_permitted_crack_width_mm = _retained_input_scalar(
-            "sls_heightened_permitted_crack_width_mm", 0.0
         )
         sls_heightened_effective_tension_area_mm2 = _retained_input_scalar(
             "sls_heightened_effective_tension_area_mm2", 0.0
@@ -5608,11 +5654,9 @@ def build_inputs(host=st):
                 sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_tendon_xi=sls_tendon_xi,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
-                ordinary_crack_criterion_mm=case_head[
-                    "ordinary_crack_criterion_mm"
-                ],
-                ordinary_crack_criterion_source=(
-                    load_cases.ordinary_crack_criterion_source(el_case_id)
+                sls_permitted_crack_width_mm=sls_permitted_crack_width_mm,
+                sls_permitted_crack_width_source=(
+                    sls_core.crack_criterion_source()
                 ),
                 sls_heightened_on=sls_heightened_on,
                 sls_heightened_crack_system=sls_heightened_crack_system,
@@ -5627,9 +5671,6 @@ def build_inputs(host=st):
                 ),
                 sls_heightened_reinforcement_modulus_mpa=(
                     sls_heightened_reinforcement_modulus_mpa
-                ),
-                sls_heightened_permitted_crack_width_mm=(
-                    sls_heightened_permitted_crack_width_mm
                 ),
                 sls_heightened_effective_tension_area_mm2=(
                     sls_heightened_effective_tension_area_mm2
@@ -6754,8 +6795,8 @@ def _run_single_analysis(
             crack_cases,
             valid=eout["converged"],
             requested=bool(inp["sls_cw"]),
-            criterion_mm=inp.get("ordinary_crack_criterion_mm"),
-            criterion_source=inp.get("ordinary_crack_criterion_source"),
+            criterion_mm=inp.get("sls_permitted_crack_width_mm"),
+            criterion_source=inp.get("sls_permitted_crack_width_source"),
         )
     if inp.get("minimum_reinforcement_on"):
         if inp.get("detailing_edition") == detailing.EC2_2023:
@@ -6805,7 +6846,7 @@ _HEIGHTENED_POSITIVE_INPUTS = (
         "Effective tensile strength",
     ),
     ("sls_heightened_reinforcement_modulus_mpa", "Reinforcement modulus"),
-    ("sls_heightened_permitted_crack_width_mm", "Permitted crack width"),
+    ("sls_permitted_crack_width_mm", "Permitted crack width"),
     ("sls_heightened_effective_tension_area_mm2", "Effective tension area"),
     (
         "sls_heightened_provided_reinforcement_area_mm2",
@@ -6872,7 +6913,7 @@ def _heightened_crack_control_payload(inp):
             "sls_heightened_reinforcement_modulus_mpa"
         ],
         permitted_crack_width_mm=inp[
-            "sls_heightened_permitted_crack_width_mm"
+            "sls_permitted_crack_width_mm"
         ],
         effective_tension_area_mm2=inp[
             "sls_heightened_effective_tension_area_mm2"
@@ -11398,7 +11439,7 @@ def _case_entries_for_view(inp, results, family):
     ]
 
 
-def _render_selected_case_actions(family, actions):
+def _render_selected_case_actions(family, actions, inp=None):
     """Compact, consistently named action evidence for the selected case."""
     if family == "plastic":
         st.dataframe(
@@ -11437,11 +11478,11 @@ def _render_selected_case_actions(family, actions):
         hide_index=True,
         width="stretch",
     )
-    criterion = actions.get("ordinary_crack_criterion_mm")
+    criterion = (inp or {}).get("sls_permitted_crack_width_mm")
     criterion_text = (
         "not specified; acceptance is not assessed"
         if criterion is None or pd.isna(criterion)
-        else f"user-specified {float(criterion):.3f} mm"
+        else f"global Analysis setting {float(criterion):.3f} mm"
     )
     st.caption(
         "Stresses are reported for this action. Crack width: "
@@ -11480,7 +11521,7 @@ def _selected_case_context(inp, results, family):
     )
     entry = entries[index]
     actions = entry.get("actions") or {}
-    _render_selected_case_actions(family, actions)
+    _render_selected_case_actions(family, actions, inp)
     if family == "elastic":
         case_inp = case_analysis.elastic_case_input(inp, actions)
     else:
@@ -11770,6 +11811,11 @@ _restore_input_state(
     )
 )
 app_run_probe.stop_phase(st.session_state, _startup_probe)
+
+for _migration_warning in st.session_state.get(
+    "_project_migration_warnings", ()
+):
+    st.warning(_migration_warning, icon=":material/warning:")
 
 main_page = st.segmented_control(
     "Workspace",

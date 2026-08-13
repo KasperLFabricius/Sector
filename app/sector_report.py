@@ -2387,10 +2387,8 @@ class ReportBuilder:
             ])
         if isinstance(self._selected_crack_comparison, Mapping):
             rows.append([
-                "User crack criterion",
-                _html_escape(str(
-                    self._selected_crack_comparison.get("case_id") or "-"
-                )),
+                "Global permitted crack width",
+                "Analysis settings",
             ])
         if isinstance(self._selected_cracking_threshold, Mapping):
             rows.append([
@@ -3235,8 +3233,9 @@ class ReportBuilder:
                 )
                 self._small(
                     "N in kN; M in kNm. Stresses are always reported and "
-                    "crack-width calculation is optional per case. No stress or "
-                    "crack-width limit is applied."
+                    "crack-width calculation is optional per case. The optional "
+                    "permitted crack width is shared from Analysis settings; no "
+                    "stress limit is applied."
                 )
             fatigue_rows = (
                 fatigue_inputs.spectrum_records(
@@ -3499,9 +3498,22 @@ class ReportBuilder:
             if crack_results:
                 crack_el = crack_results[0]
                 rows.append(["Crack-width code", str(crack_el.get("crack_code", "-"))])
+                permitted_width = inp.get("sls_permitted_crack_width_mm")
                 rows.append([
                     "Crack-width treatment",
-                    "Numerical output only; no crack-width limit applied",
+                    (
+                        "Calculated without acceptance assessment"
+                        if permitted_width is None
+                        else "Compared with the shared Analysis criterion"
+                    ),
+                ])
+                rows.append([
+                    "Permitted crack width w<sub>k</sub>",
+                    (
+                        "not specified"
+                        if permitted_width is None
+                        else f"{_fmt(permitted_width, 3)} mm"
+                    ),
                 ])
                 if crack_el.get("crack_member"):
                     rows.append(["Member type", str(crack_el["crack_member"])])

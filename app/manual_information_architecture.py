@@ -191,8 +191,8 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
     WarningReference(
         "crack-criterion-missing",
         "Crack width is calculated but acceptance is not assessed.",
-        "The optional ordinary crack criterion is blank.",
-        "Enter a positive criterion to compare, or retain the intentional blank state.",
+        "The optional permitted crack width in Analysis settings is blank.",
+        "Enter one positive shared value to compare, or retain the intentional blank state.",
     ),
     WarningReference(
         "results-stale",

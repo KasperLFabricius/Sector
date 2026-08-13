@@ -3,7 +3,8 @@
 A case name and description are user-controlled. The Elastic table retains the
 sustained and instantaneous decomposition required by the combined creep solver.
 Stresses are always calculation outputs; crack width is an optional numerical
-calculation per Elastic action. No required combinations are inferred.
+calculation per Elastic action. The permitted crack width is a shared Analysis
+setting, not part of an action row. No required combinations are inferred.
 """
 
 from __future__ import annotations
@@ -31,11 +32,6 @@ CASE_TABLE_KEYS = (PLASTIC_TABLE_KEY, ELASTIC_TABLE_KEY)
 NAME = "name"
 DESCRIPTION = "description"
 
-
-def ordinary_crack_criterion_source(case_name: object) -> str:
-    """Return the stable provenance label for one Elastic-case criterion."""
-
-    return f"User input - Elastic case {str(case_name).strip()}"
 
 # The stored values are deliberately coordinate-neutral.  The UI presents the
 # matching physical face for each component (Vx: left/right; Vy: bottom/top).
@@ -76,7 +72,6 @@ ELASTIC_COLUMNS = (
     "mx_short_ed_knm",
     "my_short_ed_knm",
     "calculate_crack_width",
-    "ordinary_crack_criterion_mm",
 )
 ELASTIC_ACTION_NUMERIC = (
     "n_long_ed_kn",
@@ -86,7 +81,7 @@ ELASTIC_ACTION_NUMERIC = (
     "mx_short_ed_knm",
     "my_short_ed_knm",
 )
-ELASTIC_NULLABLE_NUMERIC = ("ordinary_crack_criterion_mm",)
+ELASTIC_NULLABLE_NUMERIC = ()
 ELASTIC_NUMERIC = (*ELASTIC_ACTION_NUMERIC, *ELASTIC_NULLABLE_NUMERIC)
 ELASTIC_FLAGS = ("calculate_crack_width",)
 
@@ -220,12 +215,11 @@ def normalise_table(value, key: str) -> pd.DataFrame:
     """Coerce a table-like value to the canonical columns and dtypes.
 
     Unknown columns are discarded. Blank force cells become zero and the
-    optional ordinary crack criterion becomes ``None``; invalid nonblank values
-    remain invalid so :func:`validation_errors` can reject them before
-    calculation. A canonical frame carries an attrs ledger plus a tagged NaN
-    sentinel: repeated validation retains malformed text, while replacing the
-    cell with an ordinary editor NaN is a genuine clear and therefore adopts the
-    field's declared blank policy.
+    numeric action cells become zero; invalid nonblank values remain invalid so
+    :func:`validation_errors` can reject them before calculation. A canonical
+    frame carries an attrs ledger plus a tagged NaN sentinel: repeated validation
+    retains malformed text, while replacing the cell with an ordinary editor NaN
+    is a genuine clear and therefore adopts the field's declared blank policy.
     """
     key = _kind(key)
     if value is None:
@@ -455,7 +449,6 @@ def default_tables() -> dict[str, pd.DataFrame]:
         "mx_short_ed_knm": 0.0,
         "my_short_ed_knm": 0.0,
         "calculate_crack_width": False,
-        "ordinary_crack_criterion_mm": None,
     }], ELASTIC_TABLE_KEY)
     return {PLASTIC_TABLE_KEY: plastic, ELASTIC_TABLE_KEY: elastic}
 
@@ -498,11 +491,6 @@ def head_inputs(tables: Mapping | None) -> dict:
         "el_short_Mx": float(e["mx_short_ed_knm"]),
         "el_short_My": float(e["my_short_ed_knm"]),
         "sls_cw": bool(e["calculate_crack_width"]),
-        "ordinary_crack_criterion_mm": (
-            None
-            if decimal_is_blank(e["ordinary_crack_criterion_mm"])
-            else float(e["ordinary_crack_criterion_mm"])
-        ),
     }
 
 

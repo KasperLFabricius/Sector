@@ -38,7 +38,7 @@ def test_every_profile_retains_requested_statuses_and_engineering_values():
     expected = (
         "Plastic bending PL-QA-1 PASS 80.0 %",
         "Plastic bending PL-QA-2 FAIL 125.0 %",
-        "Crack width EL-QA-1 WITHIN USER-SPECIFIED LIMIT 0.213 mm",
+        "Crack width EL-QA-1 EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
         "Crack width EL-QA-2 NOT REQUESTED",
         "Torsion PL-QA-1 FAIL 162.7 %",
         "Combined M-V-T - DK NA sum PL-QA-1 FAIL 266.2 %",
