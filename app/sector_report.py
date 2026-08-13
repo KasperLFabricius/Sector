@@ -72,6 +72,10 @@ _REPORT_FRAME_PADDING = 6.0
 _A4_FRAME_USABLE_HEIGHT = A4[1] - 45 * mm - 2 * _REPORT_FRAME_PADDING
 _MIN_REPORT_TABLE_FONT = 7.2
 _REPORT_TABLE_HORIZONTAL_PADDING = 3.0
+_REPORT_TABLE_SCRIPT_PADDING = 2.0
+_REPORT_TABLE_SUBSCRIPT_RISE_FACTOR = 0.15
+_REPORT_TABLE_SUPERSCRIPT_RISE_FACTOR = 0.25
+_REPORT_TABLE_SCRIPT_TAG = re.compile(r"<(?:sub|sup|super)>", re.IGNORECASE)
 _ASSESSMENT_PALETTE = publication_theme.ASSESSMENT_COLORS
 _NUMERIC_TABLE_WORD = re.compile(
     r"(?<![A-Za-z0-9_.-])"
@@ -108,6 +112,30 @@ _EQUATION_DECIMAL_TOKEN_RE = re.compile(
 _EQUATION_NEGATIVE_ZERO_RE = re.compile(
     r"(^|[=(:,;+*/\[\]{}|<>^])(?P<space>\s*)-0(?=$|[\s),;%\]}|])"
 )
+
+
+def _table_script_markup(markup, font_size):
+    """Apply compact, measured script rises inside trusted table markup.
+
+    ReportLab's default half-em rise pushes subscripts through a table's bottom
+    rule.  These table-only rises remain visibly sub/superscripted while keeping
+    the glyph ink inside a compact row with explicit rule clearance.
+    """
+
+    subscript_rise = font_size * _REPORT_TABLE_SUBSCRIPT_RISE_FACTOR
+    superscript_rise = font_size * _REPORT_TABLE_SUPERSCRIPT_RISE_FACTOR
+    markup = re.sub(
+        r"<sub>",
+        f'<sub rise="{subscript_rise:.3f}">',
+        markup,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"<(?:sup|super)>",
+        f'<super rise="{superscript_rise:.3f}">',
+        markup,
+        flags=re.IGNORECASE,
+    )
 
 # A Unicode (Greek-capable) font for the report. DejaVuSans is free and shipped
 # with the app; Helvetica is the fallback (Greek glyphs then render as boxes, but
@@ -1923,16 +1951,26 @@ class ReportBuilder:
         markups = []
         literals = []
         numeric_sources = []
+        script_rows = []
         for r, row in enumerate(data):
             cells = []
             rendered_row = []
             literal_row = []
             numeric_source_row = []
+            row_markups = [_greek(str(cell)) for cell in row]
+            has_scripts = any(
+                _REPORT_TABLE_SCRIPT_TAG.search(markup) is not None
+                for markup in row_markups
+            )
+            if has_scripts:
+                script_rows.append(r)
             for ci, cell in enumerate(row):
                 st = head if (header and r == 0) else body
                 st = ParagraphStyle("x", parent=st,
                                     alignment=TA_LEFT if ci == 0 else TA_CENTER)
-                markup = _greek(str(cell))
+                markup = row_markups[ci]
+                if has_scripts:
+                    markup = _table_script_markup(markup, font)
                 cells.append(Paragraph(markup, st))
                 rendered_row.append(markup)
                 literal_row.append(isinstance(cell, _LiteralReportText))
@@ -2043,6 +2081,19 @@ class ReportBuilder:
             table._sector_publication_label = table_item.label
             table._sector_header_row = header_row
             table._sector_data_start = repeat_rows
+            table._sector_script_source_rows = tuple(script_rows)
+            table._sector_script_table_rows = tuple(
+                1 + context_count + row_index for row_index in script_rows
+            )
+            table._sector_script_leading = font + 2
+            table._sector_script_top_padding = _REPORT_TABLE_SCRIPT_PADDING
+            table._sector_script_bottom_padding = _REPORT_TABLE_SCRIPT_PADDING
+            table._sector_subscript_rise = (
+                font * _REPORT_TABLE_SUBSCRIPT_RISE_FACTOR
+            )
+            table._sector_superscript_rise = (
+                font * _REPORT_TABLE_SUPERSCRIPT_RISE_FACTOR
+            )
             table_style = [
                 ("SPAN", (0, 0), (-1, 0)),
                 ("GRID", (0, 1), (-1, -1), 0.4, _LINE),
@@ -2058,6 +2109,22 @@ class ReportBuilder:
                 table_style.append(
                     ("BACKGROUND", (0, header_row), (-1, header_row), _HEAD_BG)
                 )
+            for source_row in script_rows:
+                table_row = 1 + context_count + source_row
+                table_style.extend([
+                    (
+                        "TOPPADDING",
+                        (0, table_row),
+                        (-1, table_row),
+                        _REPORT_TABLE_SCRIPT_PADDING,
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, table_row),
+                        (-1, table_row),
+                        _REPORT_TABLE_SCRIPT_PADDING,
+                    ),
+                ])
             table_style.extend(context_style)
             table.setStyle(TableStyle(table_style))
             self.flow.append(KeepTogether(table) if keep else table)
