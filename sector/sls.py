@@ -416,6 +416,7 @@ def element_rows(
             "element_id": element_id,
             "material_id": material_id or None,
             "material_name": material_name or None,
+            "modulus_mpa": modulus,
             "x_mm": float(point[0]) * 1000.0,
             "y_mm": float(point[1]) * 1000.0,
             "area_mm2": float(point[2]),

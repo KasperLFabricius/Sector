@@ -46,7 +46,7 @@ from sector import (
     torsion,
 )
 from sector.design_standards import DesignBasisKey
-from sector.heightened_crack_control import calculate_heightened_crack_control
+from sector.heightened_crack_control import calculate_dual_heightened_crack_control
 from sector.materials import Concrete
 from sector.section import Section
 from tools.publication_preflight import (
@@ -354,13 +354,11 @@ def _inputs() -> dict:
         "sls_member": "Beam",
         "sls_permitted_crack_width_mm": 0.20,
         "sls_heightened_on": True,
-        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reference_case": "EL-QA-1",
         "sls_heightened_reinforcement_surface": "smooth",
-        "sls_heightened_bar_diameter_mm": 16.0,
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
-        "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
-        "sls_heightened_effective_tension_area_mm2": 60_000.0,
-        "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
+        "sls_heightened_fine_effective_tension_area_mm2": 60_000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 90_000.0,
         "v_min": 0.0,
         "v_max": 360.0,
         "v_inc": 90.0,
@@ -1117,6 +1115,58 @@ def _results(inp: dict | None = None) -> dict:
         ],
         "prestress": [],
     }
+    dual_heightened = calculate_dual_heightened_crack_control(
+        basis=inp["sls_code"],
+        reinforcement_surface=inp["sls_heightened_reinforcement_surface"],
+        bar_diameter_mm=25.23,
+        effective_tensile_strength_mpa=inp[
+            "sls_heightened_effective_tensile_strength_mpa"
+        ],
+        reinforcement_modulus_mpa=200_000.0,
+        permitted_crack_width_mm=inp["sls_permitted_crack_width_mm"],
+        fine_effective_tension_area_mm2=inp[
+            "sls_heightened_fine_effective_tension_area_mm2"
+        ],
+        coarse_effective_tension_area_mm2=inp[
+            "sls_heightened_coarse_effective_tension_area_mm2"
+        ],
+        provided_reinforcement_area_mm2=500.0,
+    )
+    heightened_branches = {}
+    for branch_name in ("fine", "coarse"):
+        branch = getattr(dual_heightened, branch_name)
+        heightened_branches[branch_name] = asdict(branch)
+    governing = heightened_branches[
+        dual_heightened.governing_crack_system.value
+    ]
+    heightened_payload = {
+        **governing,
+        **heightened_branches,
+        "governing_crack_system": (
+            dual_heightened.governing_crack_system.value
+        ),
+        "governing_required_reinforcement_area_mm2": (
+            dual_heightened.governing_required_reinforcement_area_mm2
+        ),
+        "governing_comparison_ratio": (
+            dual_heightened.governing_comparison_ratio
+        ),
+        "governing_status": dual_heightened.governing_status.value,
+        "reference_case_id": "EL-QA-1",
+        "ordinary_crack_branch": "Long-term (fine)",
+        "diameter_source": "largest contributing mild bar",
+        "diameter_governing_element_ids": ["R1"],
+        "modulus_governing_material_ids": ["M1"],
+        "contributions": [{
+            "element_id": "R1",
+            "material_id": "M1",
+            "material_name": "Fixture mild steel",
+            "area_mm2": 500.0,
+            "diameter_mm": 25.23,
+            "diameter_source": "equivalent-area",
+            "reinforcement_modulus_mpa": 200_000.0,
+        }],
+    }
     out = {
         "material_properties": material_properties,
         "plastic": plastic,
@@ -1127,29 +1177,7 @@ def _results(inp: dict | None = None) -> dict:
         "combined": combined_payload,
         "transverse_reinforcement": transverse_detailing,
         "clear_spacing": spacing,
-        "heightened_crack_control": asdict(calculate_heightened_crack_control(
-            basis=inp["sls_code"],
-            crack_system=inp["sls_heightened_crack_system"],
-            reinforcement_surface=inp[
-                "sls_heightened_reinforcement_surface"
-            ],
-            bar_diameter_mm=inp["sls_heightened_bar_diameter_mm"],
-            effective_tensile_strength_mpa=inp[
-                "sls_heightened_effective_tensile_strength_mpa"
-            ],
-            reinforcement_modulus_mpa=inp[
-                "sls_heightened_reinforcement_modulus_mpa"
-            ],
-            permitted_crack_width_mm=inp[
-                "sls_permitted_crack_width_mm"
-            ],
-            effective_tension_area_mm2=inp[
-                "sls_heightened_effective_tension_area_mm2"
-            ],
-            provided_reinforcement_area_mm2=inp[
-                "sls_heightened_provided_reinforcement_area_mm2"
-            ],
-        )),
+        "heightened_crack_control": heightened_payload,
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
              "signature": case_analysis.case_signature(
@@ -1329,27 +1357,29 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         spacing["selected_spacing"] * mean["selected_esm_ecm"],
     )
     heightened = out["heightened_crack_control"]
-    close(
-        "heightened base reinforcement ratio",
-        heightened["base_reinforcement_ratio"],
-        math.sqrt(
-            heightened["bar_diameter_mm"]
-            * heightened["effective_tensile_strength_mpa"]
-            / (
-                4.0
-                * heightened["reinforcement_modulus_mpa"]
-                * heightened["crack_system_factor"]
-                * heightened["permitted_crack_width_mm"]
-            )
-        ),
-    )
-    close(
-        "heightened required reinforcement area",
-        heightened["required_reinforcement_area_mm2"],
-        heightened["reinforcement_surface_multiplier"]
-        * heightened["base_reinforcement_ratio"]
-        * heightened["effective_tension_area_mm2"],
-    )
+    for branch_name in ("fine", "coarse"):
+        branch = heightened[branch_name]
+        close(
+            f"heightened {branch_name} base reinforcement ratio",
+            branch["base_reinforcement_ratio"],
+            math.sqrt(
+                branch["bar_diameter_mm"]
+                * branch["effective_tensile_strength_mpa"]
+                / (
+                    4.0
+                    * branch["reinforcement_modulus_mpa"]
+                    * branch["crack_system_factor"]
+                    * branch["permitted_crack_width_mm"]
+                )
+            ),
+        )
+        close(
+            f"heightened {branch_name} required reinforcement area",
+            branch["required_reinforcement_area_mm2"],
+            branch["reinforcement_surface_multiplier"]
+            * branch["base_reinforcement_ratio"]
+            * branch["effective_tension_area_mm2"],
+        )
 
     case = next(
         row for row in inp["plastic_cases"] if row["name"] == "PL-QA-1"

@@ -123,14 +123,12 @@ def _current_project():
 def _heightened_inputs() -> dict[str, object]:
     return {
         "sls_heightened_on": True,
-        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reference_case": "One Elastic action",
         "sls_heightened_reinforcement_surface": "ribbed",
-        "sls_heightened_bar_diameter_mm": 16.0,
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
-        "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
         "sls_permitted_crack_width_mm": 0.2,
-        "sls_heightened_effective_tension_area_mm2": 120_000.0,
-        "sls_heightened_provided_reinforcement_area_mm2": 2_500.0,
+        "sls_heightened_fine_effective_tension_area_mm2": 120_000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 180_000.0,
     }
 
 
@@ -164,6 +162,33 @@ def _schema24_payload(
     payload["provenance"]["input_sha256"] = project_io._input_digest({
         "tables": payload["tables"],
         "scalars": payload["scalars"],
+    })
+    return payload
+
+
+def _legacy_heightened_schema25_payload(tables=None) -> dict:
+    """Build one integrity-valid pre-PR06 schema-25 heightened payload."""
+
+    if tables is None:
+        tables, scalars = _current_project()
+    else:
+        _, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    persisted = payload["scalars"]
+    persisted.pop("sls_heightened_reference_case", None)
+    persisted.pop("sls_heightened_fine_effective_tension_area_mm2", None)
+    persisted.pop("sls_heightened_coarse_effective_tension_area_mm2", None)
+    persisted.update({
+        "sls_heightened_crack_system": "fine",
+        "sls_heightened_bar_diameter_mm": 16.0,
+        "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
+        "sls_heightened_effective_tension_area_mm2": 120_000.0,
+        "sls_heightened_provided_reinforcement_area_mm2": 2_500.0,
+    })
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": persisted,
     })
     return payload
 
@@ -1023,6 +1048,57 @@ def test_active_heightened_inputs_round_trip_with_direct_fct_eff():
     assert loaded["sls_fctm"] == 9.9
 
 
+def test_legacy_schema25_heightened_operands_migrate_to_dual_contract():
+    payload = _legacy_heightened_schema25_payload()
+
+    _, loaded, info = project_io.parse_project_with_info(json.dumps(payload))
+
+    assert info["migrated"] is True
+    assert len(info["migration_warnings"]) == 1
+    assert "copied to both systems" in info["migration_warnings"][0]
+    assert loaded["sls_heightened_reference_case"] == "One Elastic action"
+    assert loaded[
+        "sls_heightened_fine_effective_tension_area_mm2"
+    ] == pytest.approx(120_000.0)
+    assert loaded[
+        "sls_heightened_coarse_effective_tension_area_mm2"
+    ] == pytest.approx(120_000.0)
+    assert not project_io.LEGACY_HEIGHTENED_OPERAND_KEYS.intersection(loaded)
+
+
+def test_legacy_heightened_migration_refuses_ambiguous_reference_case():
+    tables, _ = _current_project()
+    elastic = tables[load_cases.ELASTIC_TABLE_KEY].to_dict("records")
+    tables[load_cases.ELASTIC_TABLE_KEY] = load_cases.normalise_table(
+        [
+            *elastic,
+            {
+                "name": "Second Elastic action",
+                "calculate_crack_width": True,
+            },
+        ],
+        load_cases.ELASTIC_TABLE_KEY,
+    )
+    payload = _legacy_heightened_schema25_payload(tables)
+
+    with pytest.raises(ValueError, match="does not identify one reference case"):
+        project_io.parse_project_with_info(json.dumps(payload))
+
+
+def test_legacy_heightened_migration_rejects_mixed_old_and_new_contract():
+    payload = _legacy_heightened_schema25_payload()
+    payload["scalars"][
+        "sls_heightened_fine_effective_tension_area_mm2"
+    ] = 120_000.0
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    with pytest.raises(ValueError, match="mixes retired and current"):
+        project_io.parse_project_with_info(json.dumps(payload))
+
+
 @pytest.mark.parametrize(
     "basis_key",
     (
@@ -1045,7 +1121,7 @@ def test_active_heightened_check_is_strictly_dk_na_2024_only(basis_key):
 
 @pytest.mark.parametrize(
     "missing",
-    project_io.HEIGHTENED_CRACK_SCALAR_KEYS[1:],
+    project_io.HEIGHTENED_CRACK_SCALAR_KEYS[2:],
 )
 def test_active_heightened_check_requires_every_selector_and_operand(missing):
     tables, scalars = _current_project()
@@ -1057,12 +1133,20 @@ def test_active_heightened_check_requires_every_selector_and_operand(missing):
         project_io.dump_project(tables, scalars)
 
 
+def test_active_heightened_reference_is_auto_selected_for_one_crack_case():
+    tables, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    scalars.pop("sls_heightened_reference_case")
+
+    text = project_io.dump_project(tables, scalars)
+    _, loaded = project_io.parse_project(text)
+
+    assert loaded["sls_heightened_reference_case"] == "One Elastic action"
+
+
 @pytest.mark.parametrize(
     ("key", "invalid", "message"),
     (
-        ("sls_heightened_crack_system", "Fine", "fine.*coarse"),
-        ("sls_heightened_crack_system", "fine ", "fine.*coarse"),
-        ("sls_heightened_crack_system", True, "fine.*coarse"),
         (
             "sls_heightened_reinforcement_surface",
             "Ribbed",
@@ -1092,12 +1176,10 @@ def test_active_heightened_selectors_are_exact(key, invalid, message):
 @pytest.mark.parametrize(
     "key",
     (
-        "sls_heightened_bar_diameter_mm",
         "sls_heightened_effective_tensile_strength_mpa",
-        "sls_heightened_reinforcement_modulus_mpa",
         "sls_permitted_crack_width_mm",
-        "sls_heightened_effective_tension_area_mm2",
-        "sls_heightened_provided_reinforcement_area_mm2",
+        "sls_heightened_fine_effective_tension_area_mm2",
+        "sls_heightened_coarse_effective_tension_area_mm2",
     ),
 )
 @pytest.mark.parametrize(

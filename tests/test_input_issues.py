@@ -74,3 +74,63 @@ def test_heightened_permitted_width_routes_to_schema25_global_setting():
         "sls_permitted_crack_width_mm",
         "Permitted crack width (shared)",
     )
+
+
+@pytest.mark.parametrize(
+    ("message", "stage", "widget_key"),
+    [
+        (
+            "Heightened crack control requires Elastic analysis to be enabled",
+            input_issues.ANALYSIS_SETTINGS,
+            "mode",
+        ),
+        (
+            "Heightened crack control requires the registered first-generation "
+            "DK NA:2024 design basis",
+            input_issues.ANALYSIS_SETTINGS,
+            "sls_code",
+        ),
+        (
+            "Heightened crack control requires at least one crack-enabled "
+            "Elastic case",
+            input_issues.LOADS,
+            "elastic_cases_editor",
+        ),
+        (
+            "Select one crack-enabled Elastic case as the heightened reference",
+            input_issues.ANALYSIS_SETTINGS,
+            "sls_heightened_reference_case",
+        ),
+        (
+            "Fine-system effective tension area must be a positive finite number",
+            input_issues.ANALYSIS_SETTINGS,
+            "sls_heightened_fine_effective_tension_area_mm2",
+        ),
+        (
+            "Coarse-system effective tension area must be a positive finite number",
+            input_issues.ANALYSIS_SETTINGS,
+            "sls_heightened_coarse_effective_tension_area_mm2",
+        ),
+    ],
+)
+def test_heightened_dual_inputs_route_to_current_correction_target(
+    message,
+    stage,
+    widget_key,
+):
+    issue = input_issues.heightened_issues([message])[0]
+
+    assert issue.target is not None
+    assert issue.target.stage == stage
+    assert issue.target.widget_key == widget_key
+
+
+def test_removed_heightened_operands_do_not_receive_stale_navigation_targets():
+    issues = input_issues.heightened_issues(
+        [
+            "Bar diameter must be a positive finite number",
+            "Provided reinforcement area must be a positive finite number",
+        ]
+    )
+
+    assert all(issue.target is None for issue in issues)

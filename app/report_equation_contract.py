@@ -1159,7 +1159,11 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         "u<sub>A</sub>", "dimensionless",
         ("u<sub>A</sub>", "required-to-provided reinforcement area ratio"),
         ("A<sub>s,req</sub>", "required reinforcement area", "mm2"),
-        ("A<sub>s,prov</sub>", "user-supplied provided reinforcement area", "mm2"),
+        (
+            "A<sub>s,prov</sub>",
+            "auto-derived retained mild-reinforcement area",
+            "mm2",
+        ),
         applicability_note_required=True,
     ),
 }

@@ -524,22 +524,41 @@ def _ordinary_crack_summary_row(inp, output):
 
 
 def _heightened_crack_summary_row(result):
-    """Format the singleton retained Formula 7.100 NA area comparison."""
-    required = _publication_metric(result.get("required_reinforcement_area_mm2"))
+    """Format both retained Formula 7.100 NA area comparisons."""
+    fine = result.get("fine") if isinstance(result.get("fine"), Mapping) else {}
+    coarse = (
+        result.get("coarse")
+        if isinstance(result.get("coarse"), Mapping)
+        else {}
+    )
+    fine_required = _publication_metric(
+        fine.get("required_reinforcement_area_mm2")
+    )
+    coarse_required = _publication_metric(
+        coarse.get("required_reinforcement_area_mm2")
+    )
     provided = _publication_metric(result.get("provided_reinforcement_area_mm2"))
-    ratio = _publication_metric(result.get("comparison_ratio"))
+    ratio = _publication_metric(result.get("governing_comparison_ratio"))
     result_text = (
-        f"As,req {required:.1f} mm2; As,prov {provided:.1f} mm2"
-        if required is not None and provided is not None
+        f"Fine As,req {fine_required:.1f} mm2; coarse As,req "
+        f"{coarse_required:.1f} mm2; As,prov {provided:.1f} mm2"
+        if fine_required is not None
+        and coarse_required is not None
+        and provided is not None
         else "-"
     )
-    note = str(result.get("disclosure") or result.get("source") or "")
+    note = (
+        f"Reference {result.get('reference_case_id') or '-'} / "
+        f"{result.get('ordinary_crack_branch') or '-'}; governing "
+        f"{result.get('governing_crack_system') or '-'}; "
+        + str(result.get("disclosure") or result.get("source") or "")
+    )
     if ratio is not None:
         note = f"As,req / As,prov = {ratio:.3f}; {note}".rstrip("; ")
     return _summary_row(
         "DK heightened crack-control minimum",
         "elastic",
-        str(result.get("status") or "NOT ASSESSED"),
+        str(result.get("governing_status") or "NOT ASSESSED"),
         result_text,
         "User-declared Formula 7.100 NA applicability",
         None,

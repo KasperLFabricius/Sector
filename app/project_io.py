@@ -25,6 +25,7 @@ import pandas as pd
 import reinforcement_table as rebar_table
 
 from app import modelled_direction, report_profiles
+from app import heightened_crack_adapter
 from app.table_field_definitions import (
     BlankPolicy,
     DecimalParseError,
@@ -84,22 +85,26 @@ FATIGUE_SCALAR_KEYS = (
 
 HEIGHTENED_CRACK_SCALAR_KEYS = (
     "sls_heightened_on",
-    "sls_heightened_crack_system",
+    "sls_heightened_reference_case",
     "sls_heightened_reinforcement_surface",
-    "sls_heightened_bar_diameter_mm",
     "sls_heightened_effective_tensile_strength_mpa",
-    "sls_heightened_reinforcement_modulus_mpa",
-    "sls_heightened_effective_tension_area_mm2",
-    "sls_heightened_provided_reinforcement_area_mm2",
+    "sls_heightened_fine_effective_tension_area_mm2",
+    "sls_heightened_coarse_effective_tension_area_mm2",
 )
 
 _HEIGHTENED_POSITIVE_OPERAND_KEYS = (
-    "sls_heightened_bar_diameter_mm",
     "sls_heightened_effective_tensile_strength_mpa",
+    "sls_heightened_fine_effective_tension_area_mm2",
+    "sls_heightened_coarse_effective_tension_area_mm2",
+)
+
+LEGACY_HEIGHTENED_OPERAND_KEYS = {
+    "sls_heightened_crack_system",
+    "sls_heightened_bar_diameter_mm",
     "sls_heightened_reinforcement_modulus_mpa",
     "sls_heightened_effective_tension_area_mm2",
     "sls_heightened_provided_reinforcement_area_mm2",
-)
+}
 
 # Current UI/session inputs only. Deprecated compliance, authority, cover-
 # calculator, multidirectional-interaction and SLS-limit fields are absent.
@@ -515,6 +520,10 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
     ):
         raise ValueError("sls_heightened_on must be a Boolean")
     if payload.get("sls_heightened_on", False):
+        if payload.get("mode") not in {"Elastic", "Both"}:
+            raise ValueError(
+                "heightened crack control requires Elastic analysis to be enabled"
+            )
         if "sls_code" not in payload:
             raise ValueError(
                 "sls_code is required when heightened crack control is enabled"
@@ -526,21 +535,6 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
                 "heightened crack control requires "
                 "ec2_1_1_first_gen_dk_na_2024"
             )
-
-        crack_system_key = "sls_heightened_crack_system"
-        if crack_system_key not in payload:
-            raise ValueError(
-                f"{crack_system_key} is required when heightened crack "
-                "control is enabled"
-            )
-        try:
-            payload[crack_system_key] = heightened_crack_control.CrackSystem(
-                payload[crack_system_key]
-            ).value
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"{crack_system_key} must be exactly 'fine' or 'coarse'"
-            ) from exc
 
         surface_key = "sls_heightened_reinforcement_surface"
         if surface_key not in payload:
@@ -565,6 +559,12 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
                     f"{key} is required when heightened crack control is enabled"
                 )
             payload[key] = _positive_real(payload[key], key)
+        payload["sls_heightened_reference_case"] = (
+            heightened_crack_adapter.resolve_reference_case_name(
+                elastic.to_dict("records"),
+                payload.get("sls_heightened_reference_case"),
+            )
+        )
         if payload[sls.PERMITTED_CRACK_WIDTH_KEY] is None:
             raise ValueError(
                 f"{sls.PERMITTED_CRACK_WIDTH_KEY} is required when heightened "
@@ -1035,6 +1035,59 @@ def _migrated_crack_width(
     }
 
 
+def _migrated_heightened_operands(
+    raw_scalars: Mapping,
+    elastic: pd.DataFrame,
+) -> tuple[dict, tuple[str, ...], bool]:
+    """Replace the retired single-system inputs with the dual input contract."""
+
+    old_keys = LEGACY_HEIGHTENED_OPERAND_KEYS.intersection(raw_scalars)
+    if not old_keys:
+        return dict(raw_scalars), (), False
+    new_only = {
+        "sls_heightened_reference_case",
+        "sls_heightened_fine_effective_tension_area_mm2",
+        "sls_heightened_coarse_effective_tension_area_mm2",
+    }
+    mixed = new_only.intersection(raw_scalars)
+    if mixed:
+        raise ValueError(
+            "heightened crack control mixes retired and current dual-system "
+            "inputs: " + ", ".join(sorted(mixed))
+        )
+
+    migrated = dict(raw_scalars)
+    for key in LEGACY_HEIGHTENED_OPERAND_KEYS:
+        migrated.pop(key, None)
+    legacy_area = raw_scalars.get(
+        "sls_heightened_effective_tension_area_mm2"
+    )
+    if legacy_area is not None:
+        migrated["sls_heightened_fine_effective_tension_area_mm2"] = legacy_area
+        migrated["sls_heightened_coarse_effective_tension_area_mm2"] = legacy_area
+
+    if raw_scalars.get("sls_heightened_on") is True:
+        try:
+            reference = heightened_crack_adapter.resolve_reference_case_name(
+                elastic.to_dict("records"), None
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "the retired heightened configuration cannot be migrated because "
+                "it does not identify one reference case; leave exactly one "
+                "Elastic case crack-enabled, then load and explicitly review it"
+            ) from exc
+        migrated["sls_heightened_reference_case"] = reference
+    warning = (
+        "The retired single-system heightened inputs were migrated to the dual "
+        "fine/coarse workflow. The former effective tension area was copied to "
+        "both systems; diameter, reinforcement modulus and provided area now "
+        "come from retained ordinary crack evidence. Review both effective "
+        "tension areas before recalculating."
+    )
+    return migrated, (warning,), True
+
+
 def _apply_presentation(
     data: Mapping,
     raw_scalars: Mapping,
@@ -1104,6 +1157,7 @@ def parse_project_with_info(text: str):
         "selection_policy": "not-applicable",
         "selected_value_mm": None,
     }
+    heightened_contract_migrated = False
     if source_version == MIGRATABLE_VERSION:
         tables = {}
         legacy_widths = []
@@ -1118,6 +1172,7 @@ def parse_project_with_info(text: str):
             set(SCALAR_KEYS)
             - {sls.PERMITTED_CRACK_WIDTH_KEY}
             | {LEGACY_HEIGHTENED_CRACK_WIDTH_KEY}
+            | LEGACY_HEIGHTENED_OPERAND_KEYS
         )
         unknown_scalars = (
             set(raw_scalars)
@@ -1132,7 +1187,15 @@ def parse_project_with_info(text: str):
         migrated_width, migration_warnings, migration_provenance = (
             _migrated_crack_width(raw_scalars, legacy_widths)
         )
-        migrated_scalars = dict(raw_scalars)
+        (
+            migrated_scalars,
+            heightened_warnings,
+            heightened_contract_migrated,
+        ) = _migrated_heightened_operands(
+            raw_scalars,
+            tables[load_cases.ELASTIC_TABLE_KEY],
+        )
+        migration_warnings = (*migration_warnings, *heightened_warnings)
         migrated_scalars.pop(LEGACY_HEIGHTENED_CRACK_WIDTH_KEY, None)
         migrated_scalars.pop(REPORT_PROFILE_KEY, None)
         migrated_scalars[sls.PERMITTED_CRACK_WIDTH_KEY] = migrated_width
@@ -1143,21 +1206,35 @@ def parse_project_with_info(text: str):
             for key in PROJECT_TABLE_KEYS
         }
         unknown_scalars = (
-            set(raw_scalars) - set(SCALAR_KEYS) - {REPORT_PROFILE_KEY}
+            set(raw_scalars)
+            - set(SCALAR_KEYS)
+            - LEGACY_HEIGHTENED_OPERAND_KEYS
+            - {REPORT_PROFILE_KEY}
         )
         if unknown_scalars:
             raise ValueError(
                 "unknown current-schema inputs: "
                 + ", ".join(sorted(unknown_scalars))
             )
-        scalars = _canonical_scalars(raw_scalars, tables)
+        (
+            migrated_scalars,
+            heightened_warnings,
+            heightened_contract_migrated,
+        ) = _migrated_heightened_operands(
+            raw_scalars,
+            tables[load_cases.ELASTIC_TABLE_KEY],
+        )
+        migration_warnings = (*migration_warnings, *heightened_warnings)
+        scalars = _canonical_scalars(migrated_scalars, tables)
 
     _apply_presentation(data, raw_scalars, scalars)
     _validate_geometry(tables)
     info = {
         "source_schema_version": source_version,
         "target_schema_version": VERSION,
-        "migrated": source_version != VERSION,
+        "migrated": (
+            source_version != VERSION or heightened_contract_migrated
+        ),
         "migration_warnings": migration_warnings,
         "migration_provenance": migration_provenance,
         "provenance": provenance,

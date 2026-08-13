@@ -200,13 +200,11 @@ def project_scalars() -> dict:
         "sls_member": "Beam",
         "sls_permitted_crack_width_mm": 0.20,
         "sls_heightened_on": True,
-        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reference_case": "EL-COMPLETE",
         "sls_heightened_reinforcement_surface": "smooth",
-        "sls_heightened_bar_diameter_mm": 16.0,
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
-        "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
-        "sls_heightened_effective_tension_area_mm2": 60_000.0,
-        "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
+        "sls_heightened_fine_effective_tension_area_mm2": 60_000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 90_000.0,
         "fatigue_on": True,
         "fatigue_edition": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "fatigue_check_steel": True,
@@ -303,9 +301,11 @@ def checking_pack() -> str:
           wk,criterion=0.20 mm, shared by every ordinary and heightened check.
         - Elastic case EL-COMPLETE: short-term Mx=55 kNm; all other
           long/short actions are zero; ordinary crack width is enabled.
-        - Separate DK NA heightened check: fine crack system, smooth
-          reinforcement, phi=16 mm, fct,eff=2.9 MPa, Esk=200000 MPa,
-          Ac,eff=60000 mm2 and As,provided=1600 mm2.
+        - Separate DK NA heightened check: both fine and coarse systems, smooth
+          reinforcement, fct,eff=2.9 MPa and user areas
+          Ac,eff,fine=60000 mm2 and Ac,eff,coarse=90000 mm2. EL-COMPLETE is the
+          sole crack-enabled reference case; phi, Esk and As,provided are derived
+          from its retained ordinary-crack evidence.
         - Fatigue spectrum Road reference: sustained Mx=5 kNm, increments
           4 kNm for 100000 cycles and 2 kNm for 1000000 cycles.
 
@@ -343,14 +343,16 @@ def checking_pack() -> str:
 
         ## DK NA heightened crack-control minimum
 
-        Formula 7.100 NA uses k=1 for the selected fine system. The independent
-        base ratio is sqrt(16 x 2.9/(4 x 200000 x 1 x 0.20))
-        =0.0170293863659. Smooth reinforcement applies sqrt(2), giving
-        rho_s,min=0.0240831891576. Therefore As,required
-        =0.0240831891576 x 60000=1444.991349455 mm2 and the retained
-        required/provided ratio is 1444.991349455/1600=0.903119593409.
-        Since 1600 >= 1444.991349455, the exact bounded state is PROVIDED AREA
-        AT LEAST CALCULATED REQUIREMENT. Applicability remains user-declared.
+        The ordinary result retains R1/R2 as the contributing mild bars, so
+        phi=max(25.23132522,25.23132522)=25.23132522 mm, Esk=200000 MPa and
+        As,provided=500+500=1000 mm2. Formula 7.100 NA uses k=1 for fine and k=2
+        for coarse; smooth reinforcement applies sqrt(2). Fine gives base ratio
+        0.0213849893527, rho_s,min=0.0302429419738, As,required=1814.57651843
+        mm2 and As,required/As,provided=1.81457651843. Coarse gives base ratio
+        0.0151214709869, rho_s,min=0.0213849893527, As,required=1924.64904175
+        mm2 and As,required/As,provided=1.92464904175. Both retained states are
+        PROVIDED AREA BELOW CALCULATED REQUIREMENT; coarse governs. Applicability
+        remains user-declared.
 
         ## Detailing and member resistance
 

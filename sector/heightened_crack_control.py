@@ -70,6 +70,18 @@ class HeightenedCrackControlResult:
     status: HeightenedCrackControlStatus
 
 
+@dataclass(frozen=True, slots=True)
+class DualHeightenedCrackControlResult:
+    """Fine and coarse Formula 7.100 NA results from one shared operand set."""
+
+    fine: HeightenedCrackControlResult
+    coarse: HeightenedCrackControlResult
+    governing_crack_system: CrackSystem
+    governing_required_reinforcement_area_mm2: float
+    governing_comparison_ratio: float
+    governing_status: HeightenedCrackControlStatus
+
+
 _FORMULA_IDENTITY = "Formula 7.100 NA"
 _CRACK_SYSTEM_FACTORS = {
     CrackSystem.FINE: 1.0,
@@ -227,4 +239,60 @@ def calculate_heightened_crack_control(
         required_reinforcement_area_mm2=required_area,
         comparison_ratio=comparison_ratio,
         status=status,
+    )
+
+
+def calculate_dual_heightened_crack_control(
+    *,
+    basis: object,
+    reinforcement_surface: object,
+    bar_diameter_mm: object,
+    effective_tensile_strength_mpa: object,
+    reinforcement_modulus_mpa: object,
+    permitted_crack_width_mm: object,
+    fine_effective_tension_area_mm2: object,
+    coarse_effective_tension_area_mm2: object,
+    provided_reinforcement_area_mm2: object,
+) -> DualHeightenedCrackControlResult:
+    """Evaluate both Formula 7.100 NA crack systems without suppressing either.
+
+    The systems share the retained reinforcement operands and permitted width,
+    while each keeps its independently supplied effective tension area.  The
+    larger required-to-provided area ratio governs; an exact tie is resolved to
+    the fine system so the result is deterministic.
+    """
+
+    common = dict(
+        basis=basis,
+        reinforcement_surface=reinforcement_surface,
+        bar_diameter_mm=bar_diameter_mm,
+        effective_tensile_strength_mpa=effective_tensile_strength_mpa,
+        reinforcement_modulus_mpa=reinforcement_modulus_mpa,
+        permitted_crack_width_mm=permitted_crack_width_mm,
+        provided_reinforcement_area_mm2=provided_reinforcement_area_mm2,
+    )
+    fine = calculate_heightened_crack_control(
+        **common,
+        crack_system=CrackSystem.FINE,
+        effective_tension_area_mm2=fine_effective_tension_area_mm2,
+    )
+    coarse = calculate_heightened_crack_control(
+        **common,
+        crack_system=CrackSystem.COARSE,
+        effective_tension_area_mm2=coarse_effective_tension_area_mm2,
+    )
+    governing = (
+        fine
+        if fine.comparison_ratio >= coarse.comparison_ratio
+        else coarse
+    )
+    return DualHeightenedCrackControlResult(
+        fine=fine,
+        coarse=coarse,
+        governing_crack_system=governing.crack_system,
+        governing_required_reinforcement_area_mm2=(
+            governing.required_reinforcement_area_mm2
+        ),
+        governing_comparison_ratio=governing.comparison_ratio,
+        governing_status=governing.status,
     )

@@ -3163,15 +3163,14 @@ def test_report_applies_one_global_criterion_without_noncritical_chapter():
 
 
 def _heightened_crack_result():
-    return {
+    common = {
         "basis_key": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
-        "crack_system": "fine",
         "reinforcement_surface": "smooth",
         "bar_diameter_mm": 16.0,
+        "diameter_source": "largest contributing mild bar",
         "effective_tensile_strength_mpa": 2.9,
         "reinforcement_modulus_mpa": 200_000.0,
         "permitted_crack_width_mm": 0.20,
-        "effective_tension_area_mm2": 60_000.0,
         "provided_reinforcement_area_mm2": 900.0,
         "source": (
             "DS/EN 1992-1-1 DK NA:2024, supplementary provision to "
@@ -3181,6 +3180,13 @@ def _heightened_crack_result():
             "The user supplies the permitted crack width and decides applicability."
         ),
         "formula_identity": "Formula 7.100 NA",
+        "reference_case_id": "EL-REF",
+        "ordinary_crack_branch": "Short-term (fine)",
+    }
+    fine = {
+        **common,
+        "crack_system": "fine",
+        "effective_tension_area_mm2": 60_000.0,
         "crack_system_factor": 1.0,
         "reinforcement_surface_multiplier": math.sqrt(2.0),
         "base_reinforcement_ratio": 0.0170293864,
@@ -3189,9 +3195,41 @@ def _heightened_crack_result():
         "comparison_ratio": 1.605546,
         "status": "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
     }
+    coarse = {
+        **common,
+        "crack_system": "coarse",
+        "effective_tension_area_mm2": 90_000.0,
+        "crack_system_factor": 2.0,
+        "reinforcement_surface_multiplier": math.sqrt(2.0),
+        "base_reinforcement_ratio": 0.0120415946,
+        "required_reinforcement_ratio": 0.0170293864,
+        "required_reinforcement_area_mm2": 1532.644776,
+        "comparison_ratio": 1.70293864,
+        "status": "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+    }
+    return {
+        **coarse,
+        "fine": fine,
+        "coarse": coarse,
+        "governing_crack_system": "coarse",
+        "governing_required_reinforcement_area_mm2": 1532.644776,
+        "governing_comparison_ratio": 1.70293864,
+        "governing_status": "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+        "diameter_governing_element_ids": ["R1"],
+        "modulus_governing_material_ids": ["M1"],
+        "contributions": [{
+            "element_id": "R1",
+            "material_id": "M1",
+            "material_name": "B500B",
+            "area_mm2": 900.0,
+            "diameter_mm": 16.0,
+            "diameter_source": "provided",
+            "reinforcement_modulus_mpa": 200_000.0,
+        }],
+    }
 
 
-def test_report_publishes_singleton_heightened_crack_chain_from_retained_values():
+def test_report_publishes_dual_heightened_crack_chain_from_retained_values():
     out = _out()
     out["heightened_crack_control"] = _heightened_crack_result()
 
@@ -3206,6 +3244,10 @@ def test_report_publishes_singleton_heightened_crack_chain_from_retained_values(
     assert "EQ-CRACK.HEIGHTENED.AREA-COMPARISON" not in flat
     assert "1.414" in flat
     assert "1445" in flat
+    assert "1532.6" in flat
+    assert "EL-REF" in flat
+    assert "R1" in flat
+    assert "coarse" in flat
     assert "PROVIDED AREA BELOW CALCULATED REQUIREMENT" in flat
     assert "watertightness" in flat
 
@@ -3213,7 +3255,7 @@ def test_report_publishes_singleton_heightened_crack_chain_from_retained_values(
 def test_report_heightened_crack_partial_payload_fails_closed():
     out = _out()
     heightened = _heightened_crack_result()
-    del heightened["base_reinforcement_ratio"]
+    del heightened["fine"]["base_reinforcement_ratio"]
     out["heightened_crack_control"] = heightened
 
     flat = " ".join(_pdf_text(sector_report.build_report(
@@ -3221,8 +3263,44 @@ def test_report_heightened_crack_partial_payload_fails_closed():
     )).split())
 
     assert "Worked calculation unavailable" in flat
-    assert "base_reinforcement_ratio" in flat
+    assert "fine.base_reinforcement_ratio" in flat
     assert "EQ-CRACK.HEIGHTENED.BASE-RATIO" not in flat
+
+
+@pytest.mark.parametrize(
+    ("mutation", "missing_text"),
+    (
+        (
+            lambda payload: payload["coarse"].pop(
+                "reinforcement_surface_multiplier"
+            ),
+            "coarse.reinforcement_surface_multiplier",
+        ),
+        (
+            lambda payload: payload.pop("modulus_governing_material_ids"),
+            "modulus_governing_material_ids",
+        ),
+        (
+            lambda payload: payload["contributions"][0].pop("material_id"),
+            "contributions[1].material_id",
+        ),
+    ),
+)
+def test_report_heightened_crack_provenance_fails_closed(
+    mutation,
+    missing_text,
+):
+    out = _out()
+    heightened = _heightened_crack_result()
+    mutation(heightened)
+    out["heightened_crack_control"] = heightened
+
+    flat = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Worked calculation unavailable" in flat
+    assert missing_text in flat
 
 
 def test_report_renders_greek_glyphs():
