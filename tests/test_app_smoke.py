@@ -4415,6 +4415,13 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     at = _fresh()
     at.run()
     _goto_input_tab(at, "Loads")
+    assert any(
+        "One optional permitted width in Analysis settings is shared by every "
+        "ordinary and heightened crack check"
+        in item.value
+        for item in at.caption
+    )
+    assert not any("row criterion" in item.value for item in at.caption)
 
     plastic = _widget(at.dataframe, "plastic_cases_editor").value
     elastic = _widget(at.dataframe, "elastic_cases_editor").value

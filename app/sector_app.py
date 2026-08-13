@@ -2084,8 +2084,9 @@ def _load_case_editors(box):
     box.caption(
         "Long and short action parts share the global creep coefficient below. "
         "Stresses are always reported. Crack width is an optional calculation "
-        "for each user-defined action. Its optional row criterion is assessed "
-        "only when specified; no combination completeness is inferred."
+        "for each user-defined action. One optional permitted width in Analysis "
+        "settings is shared by every ordinary and heightened crack check; no "
+        "combination completeness is inferred."
     )
     _table_field_guide(box, load_cases.ELASTIC_TABLE_KEY)
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
