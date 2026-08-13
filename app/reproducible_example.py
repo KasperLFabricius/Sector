@@ -299,12 +299,13 @@ def checking_pack() -> str:
         - Steel M1: fyk=550 MPa, gamma_s=1.20, Es=200000 MPa.
         - Plastic case PL-COMPLETE: N=0 kN, Mx=80 kNm, My=10 kNm,
           Vy=30 kN and T=20 kNm.
+        - Global Analysis setting: the user-specified permitted crack width is
+          wk,criterion=0.20 mm, shared by every ordinary and heightened check.
         - Elastic case EL-COMPLETE: short-term Mx=55 kNm; all other
-          long/short actions are zero; crack width is enabled with the
-          user-specified criterion wk,criterion=0.30 mm.
+          long/short actions are zero; ordinary crack width is enabled.
         - Separate DK NA heightened check: fine crack system, smooth
           reinforcement, phi=16 mm, fct,eff=2.9 MPa, Esk=200000 MPa,
-          permitted wk=0.20 mm, Ac,eff=60000 mm2 and As,provided=1600 mm2.
+          Ac,eff=60000 mm2 and As,provided=1600 mm2.
         - Fatigue spectrum Road reference: sustained Mx=5 kNm, increments
           4 kNm for 100000 cycles and 2 kNm for 1000000 cycles.
 

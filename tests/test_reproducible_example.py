@@ -250,7 +250,8 @@ def test_checking_pack_is_separate_and_covers_every_main_family():
     for text in (
         "Plastic capacity and applied ray", "Cracked elastic and crack width",
         "DK NA heightened crack-control minimum",
-        "0.1343977823/0.30=0.4479926077",
+        "wk,criterion=0.20 mm, shared by every ordinary and heightened check",
+        "0.1343977823/0.20=0.6719889115",
         "base ratio is sqrt(16 x 2.9/(4 x 200000 x 1 x 0.20))",
         "rho_s,min=0.0240831891576",
         "As,required",
