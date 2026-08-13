@@ -10,9 +10,11 @@ import pytest
 from sector.design_standards import DesignBasisKey
 from sector.heightened_crack_control import (
     CrackSystem,
+    DualHeightenedCrackControlResult,
     HeightenedCrackControlResult,
     HeightenedCrackControlStatus,
     ReinforcementSurface,
+    calculate_dual_heightened_crack_control,
     calculate_heightened_crack_control,
 )
 
@@ -251,6 +253,56 @@ def test_dual_visual_source_benchmark_closes_fine_coarse_and_smooth_routes():
         0.52141634036535534,
         rel=0.0,
         abs=1e-12,
+    )
+
+
+def test_dual_api_retains_both_systems_and_publishes_governing_comparison():
+    result = calculate_dual_heightened_crack_control(
+        basis=DK_BASIS,
+        reinforcement_surface="ribbed",
+        bar_diameter_mm=16.0,
+        effective_tensile_strength_mpa=2.9,
+        reinforcement_modulus_mpa=200_000.0,
+        permitted_crack_width_mm=0.2,
+        fine_effective_tension_area_mm2=60_000.0,
+        coarse_effective_tension_area_mm2=100_000.0,
+        provided_reinforcement_area_mm2=1_600.0,
+    )
+
+    assert isinstance(result, DualHeightenedCrackControlResult)
+    assert result.fine.crack_system is CrackSystem.FINE
+    assert result.coarse.crack_system is CrackSystem.COARSE
+    assert result.fine.effective_tension_area_mm2 == 60_000.0
+    assert result.coarse.effective_tension_area_mm2 == 100_000.0
+    assert result.governing_crack_system is CrackSystem.COARSE
+    assert result.governing_required_reinforcement_area_mm2 == (
+        result.coarse.required_reinforcement_area_mm2
+    )
+    assert result.governing_comparison_ratio == result.coarse.comparison_ratio
+    assert result.governing_status is result.coarse.status
+
+
+def test_dual_api_near_threshold_uses_true_larger_ratio_not_tolerance_tie():
+    epsilon = 5.0e-13
+    result = calculate_dual_heightened_crack_control(
+        basis=DK_BASIS,
+        reinforcement_surface="ribbed",
+        bar_diameter_mm=4.0,
+        effective_tensile_strength_mpa=1.0,
+        reinforcement_modulus_mpa=1.0,
+        permitted_crack_width_mm=1.0,
+        fine_effective_tension_area_mm2=1_000.0 * (1.0 - epsilon),
+        coarse_effective_tension_area_mm2=(
+            1_000.0 * (1.0 + epsilon) / math.sqrt(0.5)
+        ),
+        provided_reinforcement_area_mm2=1_000.0,
+    )
+
+    assert result.fine.comparison_ratio < 1.0
+    assert result.coarse.comparison_ratio > 1.0
+    assert result.governing_crack_system is CrackSystem.COARSE
+    assert result.governing_status is (
+        HeightenedCrackControlStatus.PROVIDED_AREA_BELOW_CALCULATED_REQUIREMENT
     )
 
 

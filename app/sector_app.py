@@ -59,6 +59,7 @@ mat_catalog = deferred_module("material_catalog")
 project_io = deferred_module("project_io")
 rebar_table = deferred_module("reinforcement_table")
 presentation = deferred_module("result_presentation")
+heightened_adapter = deferred_module("heightened_crack_adapter")
 session_state_migrations = deferred_module("session_state_migrations")
 table_fields = deferred_module("app.table_field_definitions")
 modelled_direction = deferred_module("app.modelled_direction")
@@ -2310,6 +2311,8 @@ _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
 _INPUT_ISSUE_FOCUS_KEY = "_input_issue_focus"
 _SHOW_INPUT_ISSUES_KEY = "_show_input_validation_issues"
+_HEIGHTENED_AUTO_REFERENCE_KEY = "_heightened_auto_reference_case"
+_HEIGHTENED_EXPLICIT_REFERENCE_KEY = "_heightened_explicit_reference_case"
 
 
 def _input_stage_labels() -> dict[str, str]:
@@ -2324,8 +2327,6 @@ def _input_stage_labels() -> dict[str, str]:
         stage_labels[3]: f"4 {dot} {stage_labels[3]}",
         stage_labels[4]: stage_labels[4],
     }
-
-
 def _record_input_event(
     key,
     callback=None,
@@ -2359,6 +2360,17 @@ def _journal_current_input_values(*keys) -> None:
 
     for key in keys:
         _record_input_event(key)
+
+
+def _mark_heightened_reference_explicit() -> None:
+    """Distinguish a multi-case user choice from the sole-case automatic seed."""
+
+    st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
+    selected = st.session_state.get("sls_heightened_reference_case")
+    if selected:
+        st.session_state[_HEIGHTENED_EXPLICIT_REFERENCE_KEY] = selected
+    else:
+        st.session_state.pop(_HEIGHTENED_EXPLICIT_REFERENCE_KEY, None)
 
 
 def _snapshot_input_state(inp=None) -> None:
@@ -2852,6 +2864,8 @@ def _apply_pending_project() -> None:
     # A valid project load is an explicit whole-input replacement. Do not replay
     # uncommitted browser events from the project that was open previously.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
+    st.session_state.pop(_HEIGHTENED_EXPLICIT_REFERENCE_KEY, None)
     # A current project load replaces every optional calculation family from the
     # prior session.  These fields may be absent from a valid current project, so
     # they must be cleared before the loaded scalars are applied; otherwise an
@@ -3809,13 +3823,11 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
     "sls_permitted_crack_width_mm",
-    "sls_heightened_on", "sls_heightened_crack_system",
+    "sls_heightened_on", "sls_heightened_reference_case",
     "sls_heightened_reinforcement_surface",
-    "sls_heightened_bar_diameter_mm",
     "sls_heightened_effective_tensile_strength_mpa",
-    "sls_heightened_reinforcement_modulus_mpa",
-    "sls_heightened_effective_tension_area_mm2",
-    "sls_heightened_provided_reinforcement_area_mm2",
+    "sls_heightened_fine_effective_tension_area_mm2",
+    "sls_heightened_coarse_effective_tension_area_mm2",
 )
 # Shear inputs. Folded into the overall signature (not the plastic/elastic split)
 # so a shear-only change marks the results stale without forcing the bending
@@ -4398,7 +4410,8 @@ def build_inputs(host=st):
         scw.markdown("**Optional DK NA heightened crack control**")
         scw.caption(
             "Separate section-level Formula 7.100 NA calculation. Sector does "
-            "not infer whether it applies; every operand is supplied directly."
+            "not infer whether it applies. Both fine and coarse systems are "
+            "calculated from one retained ordinary crack reference case."
         )
         sls_heightened_on = _seeded_toggle(
             scw,
@@ -4411,21 +4424,68 @@ def build_inputs(host=st):
                 f"{heightened_guidance.tooltip}"
             ),
         )
-        sls_heightened_crack_system = _seeded_selectbox(
-            scw,
-            "Heightened crack system",
-            ["fine", "coarse"],
-            "fine",
-            "sls_heightened_crack_system",
-            format_func=lambda value: (
-                "Fine crack system" if value == "fine" else "Coarse crack system"
-            ),
-            disabled=not (elastic_on and sls_heightened_on),
-            help=(
-                "Select the fine or coarse crack system. "
-                f"{heightened_guidance.tooltip}"
-            ),
+        crack_reference_names = list(
+            heightened_adapter.crack_enabled_case_names(
+                case_frames[load_cases.ELASTIC_TABLE_KEY].to_dict("records")
+            )
         )
+        if len(crack_reference_names) == 1:
+            sls_heightened_reference_case = crack_reference_names[0]
+            st.session_state["sls_heightened_reference_case"] = (
+                sls_heightened_reference_case
+            )
+            if (
+                st.session_state.get(_HEIGHTENED_EXPLICIT_REFERENCE_KEY)
+                != sls_heightened_reference_case
+            ):
+                st.session_state[_HEIGHTENED_AUTO_REFERENCE_KEY] = (
+                    sls_heightened_reference_case
+                )
+            scw.caption(
+                "Reference Elastic case: "
+                f"{sls_heightened_reference_case} (the sole crack-enabled case)."
+            )
+        elif len(crack_reference_names) > 1:
+            auto_reference = st.session_state.get(
+                _HEIGHTENED_AUTO_REFERENCE_KEY
+            )
+            if (
+                auto_reference
+                and st.session_state.get("sls_heightened_reference_case")
+                == auto_reference
+            ):
+                st.session_state["sls_heightened_reference_case"] = ""
+                durable = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
+                durable["sls_heightened_reference_case"] = ""
+                st.session_state[_INPUT_STATE_KEY] = durable
+            st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
+            sls_heightened_reference_case = _seeded_selectbox(
+                scw,
+                "Reference crack-enabled Elastic case",
+                ["", *crack_reference_names],
+                "",
+                "sls_heightened_reference_case",
+                format_func=lambda value: value or "Select a reference case",
+                disabled=not (elastic_on and sls_heightened_on),
+                on_change=_mark_heightened_reference_explicit,
+                help=(
+                    "Select the ordinary crack result whose retained contributing "
+                    "mild bars provide diameter, modulus and area provenance."
+                ),
+            )
+            if sls_heightened_reference_case:
+                st.session_state[_HEIGHTENED_EXPLICIT_REFERENCE_KEY] = (
+                    sls_heightened_reference_case
+                )
+        else:
+            sls_heightened_reference_case = _retained_input_scalar(
+                "sls_heightened_reference_case", ""
+            )
+            if sls_heightened_on:
+                scw.error(
+                    "Enable ordinary crack width for at least one Elastic case "
+                    "before calculating heightened crack control."
+                )
         sls_heightened_reinforcement_surface = _seeded_selectbox(
             scw,
             "Reinforcement surface",
@@ -4442,22 +4502,8 @@ def build_inputs(host=st):
             ),
         )
         hc1, hc2 = scw.columns(2)
-        sls_heightened_bar_diameter_mm = _seeded_number(
-            hc1,
-            r"Bar diameter $\phi$ (mm)",
-            0.0,
-            1000.0,
-            0.0,
-            1.0,
-            "sls_heightened_bar_diameter_mm",
-            disabled=not (elastic_on and sls_heightened_on),
-            help=(
-                "Direct bar-diameter operand. "
-                f"{heightened_guidance.tooltip}"
-            ),
-        )
         sls_heightened_effective_tensile_strength_mpa = _seeded_number(
-            hc2,
+            hc1,
             r"Effective tensile strength $f_{ct,eff}$ (MPa)",
             0.0,
             100.0,
@@ -4471,73 +4517,58 @@ def build_inputs(host=st):
                 f"{heightened_guidance.tooltip}"
             ),
         )
-        sls_heightened_reinforcement_modulus_mpa = _seeded_number(
+        sls_heightened_fine_effective_tension_area_mm2 = _seeded_number(
+            hc2,
+            r"Fine-system effective tension area $A_{c,eff,fine}$ (mm2)",
+            0.0,
+            1.0e12,
+            0.0,
+            100.0,
+            "sls_heightened_fine_effective_tension_area_mm2",
+            disabled=not (elastic_on and sls_heightened_on),
+            help=(
+                "User-supplied effective concrete tension area for the fine system. "
+                f"{heightened_guidance.tooltip}"
+            ),
+        )
+        sls_heightened_coarse_effective_tension_area_mm2 = _seeded_number(
             hc1,
-            r"Reinforcement modulus $E_{sk}$ (MPa)",
-            0.0,
-            500000.0,
-            0.0,
-            1000.0,
-            "sls_heightened_reinforcement_modulus_mpa",
-            disabled=not (elastic_on and sls_heightened_on),
-            help=(
-                "Direct reinforcement-modulus operand. "
-                f"{heightened_guidance.tooltip}"
-            ),
-        )
-        sls_heightened_effective_tension_area_mm2 = _seeded_number(
-            hc2,
-            r"Effective tension area $A_{c,eff}$ (mm2)",
+            r"Coarse-system effective tension area $A_{c,eff,coarse}$ (mm2)",
             0.0,
             1.0e12,
             0.0,
             100.0,
-            "sls_heightened_effective_tension_area_mm2",
+            "sls_heightened_coarse_effective_tension_area_mm2",
             disabled=not (elastic_on and sls_heightened_on),
             help=(
-                "Direct effective concrete tension-area operand. "
-                f"{heightened_guidance.tooltip}"
+                "User-supplied effective concrete tension area for the coarse "
+                f"system. {heightened_guidance.tooltip}"
             ),
         )
-        sls_heightened_provided_reinforcement_area_mm2 = _seeded_number(
-            hc2,
-            r"Provided reinforcement area $A_s$ (mm2)",
-            0.0,
-            1.0e12,
-            0.0,
-            100.0,
-            "sls_heightened_provided_reinforcement_area_mm2",
-            disabled=not (elastic_on and sls_heightened_on),
-            help=(
-                "Direct provided-area operand for the bounded required/provided "
-                f"comparison. {heightened_guidance.tooltip}"
-            ),
+        scw.caption(
+            "After calculation, bar diameter follows the ordinary override or "
+            "largest contributing mild bar; reinforcement modulus is the minimum "
+            "among contributing mild materials; provided area is their retained sum."
         )
     else:
         # Do not mount unsupported controls. Retain any prior DK operands so a
         # basis switch does not erase user input. An enabled incompatible state is
         # rejected by the shared calculation/report validation below.
         sls_heightened_on = _retained_input_scalar("sls_heightened_on", False)
-        sls_heightened_crack_system = _retained_input_scalar(
-            "sls_heightened_crack_system", "fine"
+        sls_heightened_reference_case = _retained_input_scalar(
+            "sls_heightened_reference_case", ""
         )
         sls_heightened_reinforcement_surface = _retained_input_scalar(
             "sls_heightened_reinforcement_surface", "ribbed"
         )
-        sls_heightened_bar_diameter_mm = _retained_input_scalar(
-            "sls_heightened_bar_diameter_mm", 0.0
-        )
         sls_heightened_effective_tensile_strength_mpa = _retained_input_scalar(
             "sls_heightened_effective_tensile_strength_mpa", 0.0
         )
-        sls_heightened_reinforcement_modulus_mpa = _retained_input_scalar(
-            "sls_heightened_reinforcement_modulus_mpa", 0.0
+        sls_heightened_fine_effective_tension_area_mm2 = _retained_input_scalar(
+            "sls_heightened_fine_effective_tension_area_mm2", 0.0
         )
-        sls_heightened_effective_tension_area_mm2 = _retained_input_scalar(
-            "sls_heightened_effective_tension_area_mm2", 0.0
-        )
-        sls_heightened_provided_reinforcement_area_mm2 = _retained_input_scalar(
-            "sls_heightened_provided_reinforcement_area_mm2", 0.0
+        sls_heightened_coarse_effective_tension_area_mm2 = _retained_input_scalar(
+            "sls_heightened_coarse_effective_tension_area_mm2", 0.0
         )
         if sls_heightened_on:
             scw.error(
@@ -5785,24 +5816,20 @@ def build_inputs(host=st):
                     sls_core.crack_criterion_source()
                 ),
                 sls_heightened_on=sls_heightened_on,
-                sls_heightened_crack_system=sls_heightened_crack_system,
+                sls_heightened_reference_case=(
+                    sls_heightened_reference_case
+                ),
                 sls_heightened_reinforcement_surface=(
                     sls_heightened_reinforcement_surface
-                ),
-                sls_heightened_bar_diameter_mm=(
-                    sls_heightened_bar_diameter_mm
                 ),
                 sls_heightened_effective_tensile_strength_mpa=(
                     sls_heightened_effective_tensile_strength_mpa
                 ),
-                sls_heightened_reinforcement_modulus_mpa=(
-                    sls_heightened_reinforcement_modulus_mpa
+                sls_heightened_fine_effective_tension_area_mm2=(
+                    sls_heightened_fine_effective_tension_area_mm2
                 ),
-                sls_heightened_effective_tension_area_mm2=(
-                    sls_heightened_effective_tension_area_mm2
-                ),
-                sls_heightened_provided_reinforcement_area_mm2=(
-                    sls_heightened_provided_reinforcement_area_mm2
+                sls_heightened_coarse_effective_tension_area_mm2=(
+                    sls_heightened_coarse_effective_tension_area_mm2
                 ),
                 shear_on=shear_on,
                 shear_method=(combined_method if combined_on else shear_method),
@@ -6409,6 +6436,18 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
                 element_no=element_number,
                 element_id=retained_id,
             )
+    effective_elements = []
+    for retained in cw.effective_reinforcement:
+        row = dataclasses.asdict(retained)
+        element_kind, element_number, retained_id = element(
+            int(row["element_index"])
+        )
+        row.update(
+            element_type=element_kind,
+            element_no=element_number,
+            element_id=retained_id,
+        )
+        effective_elements.append(row)
     return dict(
         wk=cw.wk, sr_max=cw.sr_max, esm_ecm=cw.esm_ecm,
         sigma_s=cw.sigma_s, rho_p_eff=cw.rho_p_eff, ac_eff=cw.ac_eff,
@@ -6424,6 +6463,7 @@ def _crack_dict(cw, bar_ids=None, tendon_ids=None):
         scope=cw.scope, direction_deg=cw.direction_deg,
         effective_area_operands=retained_record(cw.effective_area_operands),
         effective_reinforcement_2023=effective_reinforcement,
+        effective_reinforcement=effective_elements,
         governing_rule=cw.governing_rule,
         governing_candidate=governing_candidate,
         candidates=[candidate(c) for c in cw.candidates],
@@ -6713,7 +6753,15 @@ def _run_single_analysis(
             phi = inp["sls_phi"]
         else:
             phi = [
-                item["diameter_mm"]
+                (
+                    item["diameter_mm"]
+                    if item.get("size_mode")
+                    in {
+                        rebar_table.DIAMETER_MODE,
+                        rebar_table.INDEPENDENT_MODE,
+                    }
+                    else 0.0
+                )
                 for item in (inp.get("bar_elements", [])
                              + inp.get("tendon_elements", []))
             ]
@@ -6977,17 +7025,18 @@ def _run_fatigue_or_invalid(inp):
 
 
 _HEIGHTENED_POSITIVE_INPUTS = (
-    ("sls_heightened_bar_diameter_mm", "Bar diameter"),
     (
         "sls_heightened_effective_tensile_strength_mpa",
         "Effective tensile strength",
     ),
-    ("sls_heightened_reinforcement_modulus_mpa", "Reinforcement modulus"),
     ("sls_permitted_crack_width_mm", "Permitted crack width"),
-    ("sls_heightened_effective_tension_area_mm2", "Effective tension area"),
     (
-        "sls_heightened_provided_reinforcement_area_mm2",
-        "Provided reinforcement area",
+        "sls_heightened_fine_effective_tension_area_mm2",
+        "Fine-system effective tension area",
+    ),
+    (
+        "sls_heightened_coarse_effective_tension_area_mm2",
+        "Coarse-system effective tension area",
     ),
 )
 
@@ -7002,6 +7051,10 @@ def _heightened_crack_control_validation_errors(inp):
         return []
 
     errors = []
+    if inp.get("mode") not in {"Elastic", "Both"}:
+        errors.append(
+            "Heightened crack control requires Elastic analysis to be enabled"
+        )
     try:
         design_standards.capability_binding(
             inp.get("sls_code"),
@@ -7012,8 +7065,6 @@ def _heightened_crack_control_validation_errors(inp):
             "Heightened crack control requires the registered first-generation "
             "DK NA:2024 design basis"
         )
-    if inp.get("sls_heightened_crack_system") not in {"fine", "coarse"}:
-        errors.append("Heightened crack system must be fine or coarse")
     if inp.get("sls_heightened_reinforcement_surface") not in {
         "ribbed",
         "smooth",
@@ -7032,40 +7083,94 @@ def _heightened_crack_control_validation_errors(inp):
             or number <= 0.0
         ):
             errors.append(f"{label} must be a positive finite number")
+    try:
+        records = case_analysis.case_records(inp, "elastic")
+        heightened_adapter.resolve_reference_case_name(
+            records,
+            inp.get("sls_heightened_reference_case"),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        errors.append(str(exc))
     return errors
 
 
-def _heightened_crack_control_payload(inp):
-    """Return the complete family-owned section result without recomputation."""
+def _heightened_crack_control_payload(inp, analysis_result):
+    """Bind, derive and evaluate the dual family from retained case evidence."""
 
-    result = heightened_crack_control_core.calculate_heightened_crack_control(
+    reference_name = heightened_adapter.resolve_reference_case_name(
+        case_analysis.case_records(inp, "elastic"),
+        inp.get("sls_heightened_reference_case"),
+    )
+    reference = next(
+        (
+            entry
+            for entry in analysis_result.get("elastic_cases", [])
+            if entry.get("name") == reference_name
+        ),
+        None,
+    )
+    if not isinstance(reference, dict):
+        raise ValueError(
+            "The selected heightened reference case has no current retained result"
+        )
+    derived = heightened_adapter.derive_heightened_reinforcement(
+        reference,
+        bar_diameter_override_mm=inp.get("sls_phi", 0.0),
+    )
+    result = heightened_crack_control_core.calculate_dual_heightened_crack_control(
         basis=inp["sls_code"],
-        crack_system=inp["sls_heightened_crack_system"],
         reinforcement_surface=inp["sls_heightened_reinforcement_surface"],
-        bar_diameter_mm=inp["sls_heightened_bar_diameter_mm"],
+        bar_diameter_mm=derived.bar_diameter_mm,
         effective_tensile_strength_mpa=inp[
             "sls_heightened_effective_tensile_strength_mpa"
         ],
-        reinforcement_modulus_mpa=inp[
-            "sls_heightened_reinforcement_modulus_mpa"
+        reinforcement_modulus_mpa=derived.reinforcement_modulus_mpa,
+        permitted_crack_width_mm=inp["sls_permitted_crack_width_mm"],
+        fine_effective_tension_area_mm2=inp[
+            "sls_heightened_fine_effective_tension_area_mm2"
         ],
-        permitted_crack_width_mm=inp[
-            "sls_permitted_crack_width_mm"
+        coarse_effective_tension_area_mm2=inp[
+            "sls_heightened_coarse_effective_tension_area_mm2"
         ],
-        effective_tension_area_mm2=inp[
-            "sls_heightened_effective_tension_area_mm2"
-        ],
-        provided_reinforcement_area_mm2=inp[
-            "sls_heightened_provided_reinforcement_area_mm2"
-        ],
+        provided_reinforcement_area_mm2=(
+            derived.provided_reinforcement_area_mm2
+        ),
     )
-    payload = dataclasses.asdict(result)
-    payload.update(
-        basis_key=result.basis_key.value,
-        crack_system=result.crack_system.value,
-        reinforcement_surface=result.reinforcement_surface.value,
-        status=result.status.value,
-    )
+    branch_payloads = {}
+    for branch_name in ("fine", "coarse"):
+        branch = getattr(result, branch_name)
+        branch_payload = dataclasses.asdict(branch)
+        branch_payload.update(
+            basis_key=branch.basis_key.value,
+            crack_system=branch.crack_system.value,
+            reinforcement_surface=branch.reinforcement_surface.value,
+            status=branch.status.value,
+        )
+        branch_payloads[branch_name] = branch_payload
+    governing = branch_payloads[result.governing_crack_system.value]
+    payload = {
+        **governing,
+        "fine": branch_payloads["fine"],
+        "coarse": branch_payloads["coarse"],
+        "governing_crack_system": result.governing_crack_system.value,
+        "governing_required_reinforcement_area_mm2": (
+            result.governing_required_reinforcement_area_mm2
+        ),
+        "governing_comparison_ratio": result.governing_comparison_ratio,
+        "governing_status": result.governing_status.value,
+        "reference_case_id": derived.reference_case_id,
+        "ordinary_crack_branch": derived.ordinary_crack_branch,
+        "diameter_source": derived.diameter_source,
+        "diameter_governing_element_ids": list(
+            derived.diameter_governing_element_ids
+        ),
+        "modulus_governing_material_ids": list(
+            derived.modulus_governing_material_ids
+        ),
+        "contributions": [
+            dataclasses.asdict(item) for item in derived.contributions
+        ],
+    }
     return payload
 
 
@@ -7074,7 +7179,7 @@ def _attach_heightened_crack_control(inp, result):
 
     if inp.get("sls_heightened_on"):
         result["heightened_crack_control"] = (
-            _heightened_crack_control_payload(inp)
+            _heightened_crack_control_payload(inp, result)
         )
 
 
@@ -9440,31 +9545,32 @@ def _elastic_sls_section(inp, e):
 
 
 def _heightened_crack_control_panel(result):
-    """Render the one retained section-level Formula 7.100 NA result."""
+    """Render both retained Formula 7.100 NA systems and their provenance."""
 
     st.divider()
     st.markdown("#### DK NA heightened crack control")
     st.caption(
-        f"{result.get('formula_identity', 'Formula 7.100 NA')} | Section-level "
-        "calculation shown once, independently of the Elastic case picker."
+        f"{result.get('formula_identity', 'Formula 7.100 NA')} | Reference case "
+        f"{result.get('reference_case_id', '-')}, retained ordinary branch "
+        f"{result.get('ordinary_crack_branch', '-')}."
     )
-    required = result.get("required_reinforcement_area_mm2")
+    required = result.get("governing_required_reinforcement_area_mm2")
     provided = result.get("provided_reinforcement_area_mm2")
-    ratio = result.get("comparison_ratio")
+    ratio = result.get("governing_comparison_ratio")
     h1, h2, h3 = st.columns(3)
     h1.metric(
         "Calculated required area",
         "-" if required is None else f"{required:.1f} mm2",
     )
     h2.metric(
-        "User-specified provided area",
+        "Auto-derived provided area",
         "-" if provided is None else f"{provided:.1f} mm2",
     )
     h3.metric(
         "Required / provided",
         "-" if ratio is None else f"{ratio:.3f}",
     )
-    status = str(result.get("status") or "NOT ASSESSED")
+    status = str(result.get("governing_status") or "NOT ASSESSED")
     if status == "PROVIDED AREA BELOW CALCULATED REQUIREMENT":
         _manual_warning(st, "calculation-warning", status)
     else:
@@ -9472,11 +9578,59 @@ def _heightened_crack_control_panel(result):
     basis_label = design_standards.get_design_basis(
         result["basis_key"]
     ).label
+    systems = [result.get("fine") or {}, result.get("coarse") or {}]
+    st.dataframe(
+        [
+            {
+                "System": str(branch.get("crack_system") or "-").title(),
+                "Ac,eff (mm2)": branch.get("effective_tension_area_mm2"),
+                "As,req (mm2)": branch.get(
+                    "required_reinforcement_area_mm2"
+                ),
+                "As,req / As,prov": branch.get("comparison_ratio"),
+                "Status": branch.get("status"),
+                "Governing": (
+                    branch.get("crack_system")
+                    == result.get("governing_crack_system")
+                ),
+            }
+            for branch in systems
+        ],
+        hide_index=True,
+        width="stretch",
+    )
     st.caption(
-        f"Basis: {basis_label}. Crack system: {result.get('crack_system')}; "
-        f"reinforcement surface: {result.get('reinforcement_surface')}. "
+        f"Basis: {basis_label}. Reinforcement surface: "
+        f"{result.get('reinforcement_surface')}. Diameter "
+        f"{result.get('bar_diameter_mm', 0.0):.3f} mm from "
+        f"{result.get('diameter_source', '-')} (governing elements: "
+        f"{', '.join(result.get('diameter_governing_element_ids') or ['-'])}); "
+        "conservative modulus "
+        f"{result.get('reinforcement_modulus_mpa', 0.0):.1f} MPa "
+        "(governing materials: "
+        f"{', '.join(result.get('modulus_governing_material_ids') or ['-'])}). "
         "This bounded area comparison is not a global compliance verdict."
     )
+    contributions = result.get("contributions") or []
+    if contributions:
+        with st.expander(
+            "Auto-derived reinforcement provenance", expanded=False
+        ):
+            st.dataframe(
+                [
+                    {
+                        "Element": row.get("element_id"),
+                        "Material": row.get("material_id"),
+                        "Area (mm2)": row.get("area_mm2"),
+                        "Diameter (mm)": row.get("diameter_mm"),
+                        "Diameter source": row.get("diameter_source"),
+                        "Es (MPa)": row.get("reinforcement_modulus_mpa"),
+                    }
+                    for row in contributions
+                ],
+                hide_index=True,
+                width="stretch",
+            )
 
 
 def _crack_width_panel(e):
@@ -11666,6 +11820,43 @@ def _selected_case_context(inp, results, family):
     return case_inp, entry.get("results") or {}, entry
 
 
+def _store_completed_analysis(inp, results, calculation_input_sha256):
+    """Publish one successful calculation without disturbing prior evidence."""
+
+    st.session_state["results"] = results
+    st.session_state["result_sig"] = inp["signature"]
+    st.session_state["result_plastic_sig"] = inp["plastic_sig"]
+    st.session_state["result_elastic_sig"] = inp["elastic_sig"]
+    st.session_state["result_fatigue_sig"] = inp["fatigue_sig"]
+    st.session_state["result_plastic_case_context_sig"] = inp[
+        "plastic_case_context_sig"
+    ]
+    st.session_state["result_elastic_case_context_sig"] = inp[
+        "elastic_case_context_sig"
+    ]
+    st.session_state["result_plastic_bending_context_sig"] = inp[
+        "plastic_bending_context_sig"
+    ]
+    if results:
+        # Result payloads remain visible after an edit so the engineer can see
+        # the last calculated state. Keep the matching inputs with them.
+        st.session_state["result_input_snapshot"] = copy.deepcopy(inp)
+        st.session_state["calculation_record"] = {
+            "performed_at_utc": datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "sector_version": APP_VERSION,
+            "source_revision": source_revision(),
+            "input_sha256": calculation_input_sha256,
+            "result_sha256": project_io.result_sha256(results),
+        }
+    else:
+        st.session_state.pop("result_input_snapshot", None)
+    # Re-default the Plastic view's neutral-axis state to this result's governing
+    # angle. The user can still pick another rotation until the next Calculate.
+    st.session_state.pop("pl_state", None)
+
+
 @st.fragment
 def _analysis_workspace(inp):
     """Render and operate the main analysis workspace independently.
@@ -11761,50 +11952,27 @@ def _analysis_workspace(inp):
             else None
         )
         calculation_input_sha256 = _calculation_input_hash(inp)
-        st.session_state["results"] = run_analysis(
-            inp,
-            reuse_plastic=reuse_plastic,
-            reuse_elastic=reuse_elastic,
-            reuse_plastic_cases=reuse_plastic_cases,
-            reuse_plastic_bending_cases=reuse_plastic_bending_cases,
-            reuse_elastic_cases=reuse_elastic_cases,
-            reuse_fatigue=reuse_fatigue,
-        )
-        st.session_state["result_sig"] = inp["signature"]
-        st.session_state["result_plastic_sig"] = inp["plastic_sig"]
-        st.session_state["result_elastic_sig"] = inp["elastic_sig"]
-        st.session_state["result_fatigue_sig"] = inp["fatigue_sig"]
-        st.session_state["result_plastic_case_context_sig"] = inp[
-            "plastic_case_context_sig"
-        ]
-        st.session_state["result_elastic_case_context_sig"] = inp[
-            "elastic_case_context_sig"
-        ]
-        st.session_state["result_plastic_bending_context_sig"] = inp[
-            "plastic_bending_context_sig"
-        ]
-        if st.session_state["results"]:
-            # Result payloads remain visible after an edit so the engineer can see
-            # the last calculated state. Keep the matching inputs with them: using
-            # live edited geometry or spectra in a stale result view would combine
-            # evidence from two different calculations.
-            st.session_state["result_input_snapshot"] = copy.deepcopy(inp)
-            st.session_state["calculation_record"] = {
-                "performed_at_utc": datetime.now(timezone.utc).isoformat(
-                    timespec="seconds"
-                ),
-                "sector_version": APP_VERSION,
-                "source_revision": source_revision(),
-                "input_sha256": calculation_input_sha256,
-                "result_sha256": project_io.result_sha256(
-                    st.session_state["results"]
-                ),
-            }
+        try:
+            completed = run_analysis(
+                inp,
+                reuse_plastic=reuse_plastic,
+                reuse_elastic=reuse_elastic,
+                reuse_plastic_cases=reuse_plastic_cases,
+                reuse_plastic_bending_cases=reuse_plastic_bending_cases,
+                reuse_elastic_cases=reuse_elastic_cases,
+                reuse_fatigue=reuse_fatigue,
+            )
+        except ValueError as exc:
+            st.session_state["_case_error"] = (
+                "Calculation blocked: " + str(exc).rstrip(".") + "."
+            )
+            st.error(st.session_state["_case_error"])
         else:
-            st.session_state.pop("result_input_snapshot", None)
-        # Re-default the Plastic view's neutral-axis state to this result's governing
-        # angle. The user can still pick another rotation until the next Calculate.
-        st.session_state.pop("pl_state", None)
+            _store_completed_analysis(
+                inp,
+                completed,
+                calculation_input_sha256,
+            )
 
     view = c_view.selectbox(
         "View", VIEWS, key="view",

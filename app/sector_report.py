@@ -7987,35 +7987,83 @@ class ReportBuilder:
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
 
     def _heightened_crack_control(self):
-        """Publish the singleton retained DK Formula 7.100 NA calculation."""
+        """Publish both retained DK Formula 7.100 NA calculations."""
         result = self._base_out.get("heightened_crack_control") or {}
         required = (
             "basis_key",
-            "crack_system",
             "reinforcement_surface",
             "bar_diameter_mm",
+            "diameter_source",
             "effective_tensile_strength_mpa",
             "reinforcement_modulus_mpa",
             "permitted_crack_width_mm",
-            "effective_tension_area_mm2",
             "provided_reinforcement_area_mm2",
             "source",
             "disclosure",
             "formula_identity",
-            "crack_system_factor",
-            "reinforcement_surface_multiplier",
-            "base_reinforcement_ratio",
-            "required_reinforcement_ratio",
-            "required_reinforcement_area_mm2",
-            "comparison_ratio",
-            "status",
+            "reference_case_id",
+            "ordinary_crack_branch",
+            "diameter_governing_element_ids",
+            "modulus_governing_material_ids",
+            "contributions",
+            "fine",
+            "coarse",
+            "governing_crack_system",
+            "governing_status",
         )
         missing = [
             key for key in required
             if key not in result or result[key] is None
             or (key in {"source", "disclosure"} and not str(result[key]).strip())
         ]
-        self._h1("DK heightened crack-control minimum")
+        branch_required = (
+            "crack_system",
+            "crack_system_factor",
+            "reinforcement_surface_multiplier",
+            "effective_tension_area_mm2",
+            "base_reinforcement_ratio",
+            "required_reinforcement_ratio",
+            "required_reinforcement_area_mm2",
+            "comparison_ratio",
+            "status",
+        )
+        for branch_name in ("fine", "coarse"):
+            branch = result.get(branch_name)
+            if not isinstance(branch, Mapping):
+                missing.append(branch_name)
+                continue
+            missing.extend(
+                f"{branch_name}.{key}"
+                for key in branch_required
+                if branch.get(key) is None
+            )
+        for key in (
+            "diameter_governing_element_ids",
+            "modulus_governing_material_ids",
+            "contributions",
+        ):
+            value = result.get(key)
+            if not isinstance(value, (list, tuple)) or not value:
+                missing.append(key)
+        contribution_required = (
+            "element_id",
+            "material_id",
+            "area_mm2",
+            "diameter_mm",
+            "diameter_source",
+            "reinforcement_modulus_mpa",
+        )
+        contributions = result.get("contributions") or []
+        for index, contribution in enumerate(contributions, start=1):
+            if not isinstance(contribution, Mapping):
+                missing.append(f"contributions[{index}]")
+                continue
+            missing.extend(
+                f"contributions[{index}].{key}"
+                for key in contribution_required
+                if contribution.get(key) in (None, "")
+            )
+        self._h1("DK heightened crack-control minimum - fine and coarse")
         if missing:
             self._small(
                 "<b>Worked calculation unavailable.</b> The retained Formula "
@@ -8027,47 +8075,113 @@ class ReportBuilder:
 
         self._p(
             "<b>Calculation state:</b> "
-            + _html_escape(str(result["status"]))
+            + _html_escape(str(result["governing_status"]))
+            + "; governing system: "
+            + _html_escape(str(result["governing_crack_system"]))
         )
         self._small(
             "<b>Source:</b> " + _html_escape(str(result["source"]))
             + ". <b>Scope:</b> " + _html_escape(str(result["disclosure"]))
         )
         self._small(
-            "The user declared the applicability, crack system and permitted "
-            "width. Sector does not infer restraint, watertightness, exposure "
-            "class or owner requirements."
+            "The user declared applicability, permitted width, reinforcement "
+            "surface, effective tensile strength and the two effective tension "
+            "areas. Sector derives the shared reinforcement operands from the "
+            "retained ordinary crack result and does not infer restraint, "
+            "watertightness, exposure class or owner requirements."
         )
         rows = [
             ["Retained input", "Value"],
-            ["Crack system", _html_escape(str(result["crack_system"]))],
+            [
+                "Reference Elastic case / ordinary branch",
+                _html_escape(
+                    f"{result['reference_case_id']} / "
+                    f"{result['ordinary_crack_branch']}"
+                ),
+            ],
             [
                 "Reinforcement surface",
                 _html_escape(str(result["reinforcement_surface"])),
             ],
-            ["Bar diameter phi", f"{_fmt(result['bar_diameter_mm'], 3)} mm"],
+            [
+                "Auto-derived bar diameter phi",
+                f"{_fmt(result['bar_diameter_mm'], 3)} mm; "
+                + _html_escape(str(result["diameter_source"]))
+                + "; governing elements "
+                + _html_escape(", ".join(
+                    str(value)
+                    for value in result["diameter_governing_element_ids"]
+                )),
+            ],
             [
                 "Effective tensile strength fct,eff",
                 f"{_fmt(result['effective_tensile_strength_mpa'], 3)} MPa",
             ],
             [
-                "Reinforcement modulus Esk",
-                f"{_fmt(result['reinforcement_modulus_mpa'], 1)} MPa",
+                "Auto-derived reinforcement modulus Esk",
+                f"{_fmt(result['reinforcement_modulus_mpa'], 1)} MPa; "
+                "governing materials "
+                + _html_escape(", ".join(
+                    str(value)
+                    for value in result["modulus_governing_material_ids"]
+                )),
             ],
             [
                 "Permitted crack width wk",
                 f"{_fmt(result['permitted_crack_width_mm'], 3)} mm",
             ],
             [
-                "Effective tension area Ac,eff",
-                f"{_fmt(result['effective_tension_area_mm2'], 1)} mm2",
-            ],
-            [
-                "Provided reinforcement area As,prov",
+                "Auto-derived provided reinforcement area As,prov",
                 f"{_fmt(result['provided_reinforcement_area_mm2'], 1)} mm2",
             ],
         ]
         self._table(rows, [82 * mm, 78 * mm])
+        systems = [result["fine"], result["coarse"]]
+        self._table(
+            [
+                [
+                    "System",
+                    "k",
+                    "Ac,eff (mm2)",
+                    "rho s,min",
+                    "As,req (mm2)",
+                    "As,req / As,prov",
+                    "State",
+                ],
+                *[
+                    [
+                        _html_escape(str(branch["crack_system"])),
+                        _fmt(branch["crack_system_factor"], 3),
+                        _fmt(branch["effective_tension_area_mm2"], 1),
+                        _fmt(branch["required_reinforcement_ratio"], 6),
+                        _fmt(branch["required_reinforcement_area_mm2"], 1),
+                        _fmt(branch["comparison_ratio"], 3),
+                        _html_escape(str(branch["status"])),
+                    ]
+                    for branch in systems
+                ],
+            ],
+            [18 * mm, 10 * mm, 25 * mm, 23 * mm, 25 * mm, 25 * mm, 34 * mm],
+            font=7.0,
+        )
+        self._h2("Auto-derived reinforcement provenance")
+        self._table(
+            [
+                ["Element", "Material", "Area (mm2)", "phi (mm)", "Es (MPa)"],
+                *[
+                    [
+                        _html_escape(str(row.get("element_id") or "-")),
+                        _html_escape(str(row.get("material_id") or "-")),
+                        _fmt(row.get("area_mm2"), 1),
+                        _fmt(row.get("diameter_mm"), 3),
+                        _fmt(row.get("reinforcement_modulus_mpa"), 1),
+                    ]
+                    for row in contributions
+                ],
+            ],
+            [30 * mm, 30 * mm, 30 * mm, 30 * mm, 35 * mm],
+            font=7.5,
+        )
         self._formula(
             "rho<sub>s,min,base</sub> = sqrt[phi f<sub>ct,eff</sub> / "
             "(4 E<sub>sk</sub> k w<sub>k</sub>)]",
@@ -8078,15 +8192,22 @@ class ReportBuilder:
                 "crack system."
             ),
             subst=(
-                f"= sqrt[({_fmt(result['bar_diameter_mm'], 3)})"
-                f"({_fmt(result['effective_tensile_strength_mpa'], 3)}) / "
-                f"(4({_fmt(result['reinforcement_modulus_mpa'], 1)})"
-                f"({_fmt(result['crack_system_factor'], 3)})"
-                f"({_fmt(result['permitted_crack_width_mm'], 3)}))]"
+                "; ".join(
+                    f"{branch['crack_system']}: sqrt["
+                    f"({_fmt(result['bar_diameter_mm'], 3)})"
+                    f"({_fmt(result['effective_tensile_strength_mpa'], 3)}) / "
+                    f"(4({_fmt(result['reinforcement_modulus_mpa'], 1)})"
+                    f"({_fmt(branch['crack_system_factor'], 3)})"
+                    f"({_fmt(result['permitted_crack_width_mm'], 3)}))]"
+                    for branch in systems
+                )
             ),
             result=(
-                "rho<sub>s,min,base</sub> = "
-                f"{_fmt(result['base_reinforcement_ratio'], 6)}"
+                "; ".join(
+                    f"{branch['crack_system']}: rho<sub>s,min,base</sub> = "
+                    f"{_fmt(branch['base_reinforcement_ratio'], 6)}"
+                    for branch in systems
+                )
             ),
         )
         self._formula(
@@ -8100,45 +8221,69 @@ class ReportBuilder:
                 "reinforcement."
             ),
             subst=(
-                f"= {_fmt(result['reinforcement_surface_multiplier'], 6)} "
-                f"&#183; {_fmt(result['base_reinforcement_ratio'], 6)}"
+                "; ".join(
+                    f"{branch['crack_system']}: "
+                    f"{_fmt(branch['reinforcement_surface_multiplier'], 6)} "
+                    f"&#183; {_fmt(branch['base_reinforcement_ratio'], 6)}"
+                    for branch in systems
+                )
             ),
             result=(
-                "rho<sub>s,min</sub> = "
-                f"{_fmt(result['required_reinforcement_ratio'], 6)}"
+                "; ".join(
+                    f"{branch['crack_system']}: rho<sub>s,min</sub> = "
+                    f"{_fmt(branch['required_reinforcement_ratio'], 6)}"
+                    for branch in systems
+                )
             ),
         )
         self._formula(
             "A<sub>s,req</sub> = rho<sub>s,min</sub> A<sub>c,eff</sub>",
             equation_key="crack.heightened.required-area",
             references=("crack.heightened.required-ratio",),
-            ref="User-supplied effective tension area",
+            ref="User-supplied fine and coarse effective tension areas",
             subst=(
-                f"= {_fmt(result['required_reinforcement_ratio'], 6)} &#183; "
-                f"{_fmt(result['effective_tension_area_mm2'], 1)} mm<super>2</super>"
+                "; ".join(
+                    f"{branch['crack_system']}: "
+                    f"{_fmt(branch['required_reinforcement_ratio'], 6)} &#183; "
+                    f"{_fmt(branch['effective_tension_area_mm2'], 1)} "
+                    "mm<super>2</super>"
+                    for branch in systems
+                )
             ),
             result=(
-                "A<sub>s,req</sub> = "
-                f"{_fmt(result['required_reinforcement_area_mm2'], 1)} "
-                "mm<super>2</super>"
+                "; ".join(
+                    f"{branch['crack_system']}: A<sub>s,req</sub> = "
+                    f"{_fmt(branch['required_reinforcement_area_mm2'], 1)} "
+                    "mm<super>2</super>"
+                    for branch in systems
+                )
             ),
         )
         self._formula(
             "u<sub>A</sub> = A<sub>s,req</sub> / A<sub>s,prov</sub>",
             equation_key="crack.heightened.area-comparison",
             references=("crack.heightened.required-area",),
-            ref="User-provided reinforcement area comparison",
+            ref="Auto-derived provided reinforcement area comparison",
             note=(
-                "Bounded comparison with the user-supplied provided area; this "
+                "Bounded comparison with the retained ordinary-crack mild-bar "
+                "area; this "
                 "is not a global project-compliance verdict."
             ),
             subst=(
-                f"= {_fmt(result['required_reinforcement_area_mm2'], 1)} / "
-                f"{_fmt(result['provided_reinforcement_area_mm2'], 1)}"
+                "; ".join(
+                    f"{branch['crack_system']}: "
+                    f"{_fmt(branch['required_reinforcement_area_mm2'], 1)} / "
+                    f"{_fmt(result['provided_reinforcement_area_mm2'], 1)}"
+                    for branch in systems
+                )
             ),
             result=(
-                f"u<sub>A</sub> = {_fmt(result['comparison_ratio'], 3)}; "
-                + _html_escape(str(result["status"]))
+                "; ".join(
+                    f"{branch['crack_system']}: u<sub>A</sub> = "
+                    f"{_fmt(branch['comparison_ratio'], 3)}; "
+                    + _html_escape(str(branch["status"]))
+                    for branch in systems
+                )
             ),
         )
 

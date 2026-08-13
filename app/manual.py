@@ -943,10 +943,11 @@ def manual_blocks() -> list:
        "the critical worked crack width.")
     md("For the first-generation Danish basis only, **DK heightened crack-control "
        "minimum** is a separate section-level opt-in. The user must declare its "
-       "applicability and supply the shared permitted width, crack system, reinforcement "
-       "surface, bar diameter, effective tensile strength, reinforcement modulus, "
-       "effective tension area and provided reinforcement area. Sector does not "
-       "derive those project decisions from the ordinary crack calculation.")
+       "applicability and supply the shared permitted width, reinforcement surface, "
+       "effective tensile strength and separate fine/coarse effective tension areas. "
+       "Sector calculates both systems together. It derives bar diameter, reinforcement "
+       "modulus and provided area from one retained ordinary crack-enabled Elastic "
+       "case: the sole such case is automatic, otherwise the user selects it explicitly.")
     h2("Grouped fatigue")
     md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
        "**Reinforcement** and/or **Concrete**. Enter the complete project factors "
@@ -1579,10 +1580,15 @@ def manual_blocks() -> list:
        "{4E_{sk}kw_k}}$$\n\n"
        "where $k=1$ for the fine crack system and $k=2$ for the coarse system; "
        "$m_s=1$ for ribbed reinforcement and $m_s=\\sqrt{2}$ for smooth "
-       "reinforcement. Sector uses the shared Analysis permitted width, multiplies "
-       "the retained ratio by the user-supplied "
-       "$A_{c,eff}$ and compares the resulting $A_{s,req}$ with the user-supplied "
-       "$A_{s,prov}$. Applicability, restraint, watertightness and the permitted "
+       "reinforcement. Sector uses the shared Analysis permitted width and calculates "
+       "the fine and coarse systems together, each with its own user-supplied "
+       "$A_{c,eff}$. Bar diameter uses the ordinary crack override when positive, "
+       "otherwise the largest contributing mild bar; $E_{sk}$ is the conservative "
+       "minimum among contributing mild materials and $A_{s,prov}$ is their retained "
+       "area sum. The report preserves the reference case, ordinary branch, element "
+       "and material provenance and publishes both comparisons plus the governing "
+       "system. Missing or indeterminate retained evidence blocks the calculation. "
+       "Applicability, restraint, watertightness and the permitted "
        "$w_k$ remain user declarations. The option is unavailable for the 2023 "
        "basis.")
     h2("EN 1992-1-1:2023 refined model")

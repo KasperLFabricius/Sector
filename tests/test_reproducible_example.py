@@ -24,7 +24,7 @@ import sector_report  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "85375270ebf6d908a90d35e63ee953001b221b07bb51909262e5101e355fe495"
+    "8e1ceb8617996d329136fab6670f09642da71fbaa73a77b174e79b1b13f41169"
 )
 
 
@@ -143,19 +143,41 @@ def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
     }
 
     heightened = results["heightened_crack_control"]
-    base_ratio = (16.0 * 2.9 / (4.0 * 200_000.0 * 1.0 * 0.20)) ** 0.5
-    required_ratio = 2.0**0.5 * base_ratio
-    required_area = required_ratio * 60_000.0
+    diameter = (4.0 * 500.0 / 3.141592653589793) ** 0.5
+    fine_base_ratio = (
+        diameter * 2.9 / (4.0 * 200_000.0 * 1.0 * 0.20)
+    ) ** 0.5
+    coarse_base_ratio = (
+        diameter * 2.9 / (4.0 * 200_000.0 * 2.0 * 0.20)
+    ) ** 0.5
     assert heightened["formula_identity"] == "Formula 7.100 NA"
-    assert heightened["base_reinforcement_ratio"] == pytest.approx(base_ratio)
-    assert heightened["required_reinforcement_ratio"] == pytest.approx(
-        required_ratio
+    assert heightened["bar_diameter_mm"] == pytest.approx(diameter)
+    assert heightened["provided_reinforcement_area_mm2"] == pytest.approx(
+        1_000.0
     )
-    assert heightened["required_reinforcement_area_mm2"] == pytest.approx(
-        required_area
+    assert heightened["fine"]["base_reinforcement_ratio"] == pytest.approx(
+        fine_base_ratio
     )
-    assert heightened["status"] == (
-        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT"
+    assert heightened["coarse"]["base_reinforcement_ratio"] == pytest.approx(
+        coarse_base_ratio
+    )
+    assert heightened["fine"]["required_reinforcement_area_mm2"] == (
+        pytest.approx(2.0**0.5 * fine_base_ratio * 60_000.0)
+    )
+    assert heightened["coarse"]["required_reinforcement_area_mm2"] == (
+        pytest.approx(2.0**0.5 * coarse_base_ratio * 90_000.0)
+    )
+    assert heightened["governing_crack_system"] == "coarse"
+    assert heightened["governing_status"] == (
+        "PROVIDED AREA BELOW CALCULATED REQUIREMENT"
+    )
+    assert [row["element_id"] for row in heightened["contributions"]] == [
+        "R1",
+        "R2",
+    ]
+    assert all(
+        row["diameter_source"] == "equivalent-area-fallback"
+        for row in heightened["contributions"]
     )
 
 
@@ -252,11 +274,12 @@ def test_checking_pack_is_separate_and_covers_every_main_family():
         "DK NA heightened crack-control minimum",
         "wk,criterion=0.20 mm, shared by every ordinary and heightened check",
         "0.1343977823/0.20=0.6719889115",
-        "base ratio is sqrt(16 x 2.9/(4 x 200000 x 1 x 0.20))",
-        "rho_s,min=0.0240831891576",
-        "As,required",
-        "1444.991349455/1600=0.903119593409",
-        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
+        "phi=max(25.23132522,25.23132522)=25.23132522 mm",
+        "Fine gives base ratio",
+        "As,required/As,provided=1.81457651843",
+        "As,required/As,provided=1.92464904175",
+        "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+        "coarse governs",
         "Detailing and member resistance", "Fatigue", "Report completeness",
         "explicit equations", "genuine demand/resistance verdicts",
     ):

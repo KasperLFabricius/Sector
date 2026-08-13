@@ -232,12 +232,16 @@ def test_crack_summary_preserves_exact_bounded_state(
     assert "Retained assessment reason" in crack["note"]
 
 
-def test_heightened_crack_summary_is_singleton_and_not_global_utilisation():
+def test_dual_heightened_crack_summary_is_singleton_and_not_global_utilisation():
     heightened = {
-        "status": "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
-        "required_reinforcement_area_mm2": 420.0,
+        "fine": {"required_reinforcement_area_mm2": 420.0},
+        "coarse": {"required_reinforcement_area_mm2": 300.0},
         "provided_reinforcement_area_mm2": 350.0,
-        "comparison_ratio": 1.2,
+        "governing_comparison_ratio": 1.2,
+        "governing_crack_system": "fine",
+        "governing_status": "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+        "reference_case_id": "EL-REF",
+        "ordinary_crack_branch": "Short-term (fine)",
         "disclosure": "User-declared applicability.",
     }
     misleading_input = _inp(
@@ -272,6 +276,9 @@ def test_heightened_crack_summary_is_singleton_and_not_global_utilisation():
     assert rows[0]["case"] == "-"
     assert rows[0]["case_type"] == "-"
     assert rows[0]["source"] == "-"
+    assert "Fine As,req 420.0 mm2" in rows[0]["result"]
+    assert "coarse As,req 300.0 mm2" in rows[0]["result"]
+    assert "Reference EL-REF / Short-term (fine)" in rows[0]["note"]
     direct = next(
         row
         for row in direct_rows

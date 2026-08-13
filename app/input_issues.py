@@ -116,15 +116,15 @@ def case_issues(errors: Iterable[object]) -> tuple[InputIssue, ...]:
 
 _HEIGHTENED_TARGETS = (
     (
-        "Heightened crack control must be explicitly",
+        "Heightened crack control requires Elastic analysis",
         InputTarget(
             ANALYSIS_SETTINGS,
-            "sls_heightened_on",
-            "Optional DK NA heightened crack control",
+            "mode",
+            "Analysis mode",
         ),
     ),
     (
-        "Heightened crack control requires",
+        "Heightened crack control requires the registered",
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_code",
@@ -132,11 +132,27 @@ _HEIGHTENED_TARGETS = (
         ),
     ),
     (
-        "Heightened crack system",
+        "Heightened crack control requires at least one crack-enabled",
+        InputTarget(
+            LOADS,
+            "elastic_cases_editor",
+            "Elastic cases",
+        ),
+    ),
+    (
+        "Select one crack-enabled Elastic case",
         InputTarget(
             ANALYSIS_SETTINGS,
-            "sls_heightened_crack_system",
-            "Crack system",
+            "sls_heightened_reference_case",
+            "Reference crack-enabled Elastic case",
+        ),
+    ),
+    (
+        "Heightened crack control must be explicitly",
+        InputTarget(
+            ANALYSIS_SETTINGS,
+            "sls_heightened_on",
+            "Optional DK NA heightened crack control",
         ),
     ),
     (
@@ -148,27 +164,11 @@ _HEIGHTENED_TARGETS = (
         ),
     ),
     (
-        "Bar diameter",
-        InputTarget(
-            ANALYSIS_SETTINGS,
-            "sls_heightened_bar_diameter_mm",
-            "Bar diameter",
-        ),
-    ),
-    (
         "Effective tensile strength",
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_effective_tensile_strength_mpa",
             "Effective tensile strength",
-        ),
-    ),
-    (
-        "Reinforcement modulus",
-        InputTarget(
-            ANALYSIS_SETTINGS,
-            "sls_heightened_reinforcement_modulus_mpa",
-            "Reinforcement modulus",
         ),
     ),
     (
@@ -180,19 +180,19 @@ _HEIGHTENED_TARGETS = (
         ),
     ),
     (
-        "Effective tension area",
+        "Fine-system effective tension area",
         InputTarget(
             ANALYSIS_SETTINGS,
-            "sls_heightened_effective_tension_area_mm2",
-            "Effective tension area",
+            "sls_heightened_fine_effective_tension_area_mm2",
+            "Fine-system effective tension area",
         ),
     ),
     (
-        "Provided reinforcement area",
+        "Coarse-system effective tension area",
         InputTarget(
             ANALYSIS_SETTINGS,
-            "sls_heightened_provided_reinforcement_area_mm2",
-            "Provided reinforcement area",
+            "sls_heightened_coarse_effective_tension_area_mm2",
+            "Coarse-system effective tension area",
         ),
     ),
 )

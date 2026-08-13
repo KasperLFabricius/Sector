@@ -109,6 +109,20 @@ class EffectiveReinforcementElement2023:
 
 
 @dataclass(frozen=True, slots=True)
+class CrackEffectiveReinforcementElement:
+    """One reinforcement element retained in the ordinary effective area."""
+
+    element_index: int
+    reinforcement_type: str
+    area_mm2: float
+    diameter_mm: float
+    diameter_source: str
+    modulus_mpa: float
+    in_effective_area: bool
+    effective_area_contribution_mm2: float
+
+
+@dataclass(frozen=True, slots=True)
 class CrackEffectiveArea2005Fine:
     """Retained EC2 7.3.2 effective-height minimum for bending."""
 
@@ -380,6 +394,9 @@ class CrackWidthResult:
         ]
     ] = None
     effective_reinforcement_2023: Optional[EffectiveReinforcement2023] = None
+    effective_reinforcement: tuple[
+        CrackEffectiveReinforcementElement, ...
+    ] = ()
     governing_rule: str = "maximum-wk-then-lowest-bar-index"
 
 
@@ -396,6 +413,9 @@ def _governing_crack(
         ]
     ] = None,
     effective_reinforcement_2023: Optional[EffectiveReinforcement2023] = None,
+    effective_reinforcement: Sequence[
+        CrackEffectiveReinforcementElement
+    ] = (),
 ) -> Optional[CrackWidthResult]:
     """Return the largest-``wk`` candidate and retain the full sorted audit set."""
     if not candidates:
@@ -421,6 +441,7 @@ def _governing_crack(
         scope=c.scope, direction_deg=c.direction_deg,
         effective_area_operands=effective_area_operands,
         effective_reinforcement_2023=effective_reinforcement_2023,
+        effective_reinforcement=tuple(effective_reinforcement),
     )
 
 
@@ -1110,6 +1131,21 @@ def _crack_width(
     k1_arr = np.broadcast_to(np.asarray(k1, dtype=float), (bx.size,))
     mild_area = float(ba[in_band & (kinds == "mild")].sum())
     prestress_area = float(ba[in_band & (kinds == "prestress")].sum())
+    effective_reinforcement = tuple(
+        CrackEffectiveReinforcementElement(
+            element_index=i,
+            reinforcement_type=str(kinds[i]),
+            area_mm2=float(ba[i]) * 1.0e6,
+            diameter_mm=float(phi_arr[i]),
+            diameter_source=str(diameter_sources[i]),
+            modulus_mpa=float(es_arr[i]),
+            in_effective_area=bool(in_band[i]),
+            effective_area_contribution_mm2=(
+                float(ba[i]) * 1.0e6 if in_band[i] else 0.0
+            ),
+        )
+        for i in range(bx.size)
+    )
     direction_deg = math.degrees(math.atan2(gy, gx)) % 180.0
 
     # Per-bar crack width: each tension bar in the band uses its own cover,
@@ -1222,6 +1258,7 @@ def _crack_width(
     result = _governing_crack(
         candidates,
         effective_area_operands=effective_area_operands,
+        effective_reinforcement=effective_reinforcement,
     )
     if result is None:
         return _not_assessed(

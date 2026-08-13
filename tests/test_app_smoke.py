@@ -2382,23 +2382,29 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
 
 
 def test_loading_project_without_heightened_check_clears_prior_dk_state():
+    import load_cases
     import project_io
     from sector import design_standards
 
+    elastic = load_cases.normalise_table(
+        [{
+            "name": "Reference SLS",
+            "calculate_crack_width": True,
+        }],
+        load_cases.ELASTIC_TABLE_KEY,
+    )
     heightened_project = project_io.dump_project(
-        {},
+        {load_cases.ELASTIC_TABLE_KEY: elastic},
         {
             "mode": "Elastic",
             "sls_code": design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
             "sls_heightened_on": True,
-            "sls_heightened_crack_system": "fine",
+            "sls_heightened_reference_case": "Reference SLS",
             "sls_heightened_reinforcement_surface": "smooth",
-            "sls_heightened_bar_diameter_mm": 16.0,
             "sls_heightened_effective_tensile_strength_mpa": 2.9,
-            "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
             "sls_permitted_crack_width_mm": 0.20,
-            "sls_heightened_effective_tension_area_mm2": 60_000.0,
-            "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
+            "sls_heightened_fine_effective_tension_area_mm2": 60_000.0,
+            "sls_heightened_coarse_effective_tension_area_mm2": 80_000.0,
         },
     )
     at = _fresh()
@@ -2417,20 +2423,20 @@ def test_loading_project_without_heightened_check_clears_prior_dk_state():
     state = at.session_state.filtered_state
     expected_defaults = {
         "sls_heightened_on": False,
-        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reference_case": "",
         "sls_heightened_reinforcement_surface": "ribbed",
-        "sls_heightened_bar_diameter_mm": 0.0,
         "sls_heightened_effective_tensile_strength_mpa": 0.0,
-        "sls_heightened_reinforcement_modulus_mpa": 0.0,
-        "sls_heightened_effective_tension_area_mm2": 0.0,
-        "sls_heightened_provided_reinforcement_area_mm2": 0.0,
+        "sls_heightened_fine_effective_tension_area_mm2": 0.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 0.0,
     }
     assert {
-        key: state[key] for key in project_io.HEIGHTENED_CRACK_SCALAR_KEYS
+        key: state.get(key, expected_defaults[key])
+        for key in project_io.HEIGHTENED_CRACK_SCALAR_KEYS
     } == expected_defaults
     durable = state.get("_durable_input_scalars", {})
     assert {
-        key: durable[key] for key in project_io.HEIGHTENED_CRACK_SCALAR_KEYS
+        key: durable.get(key, expected_defaults[key])
+        for key in project_io.HEIGHTENED_CRACK_SCALAR_KEYS
     } == expected_defaults
 
 
@@ -4061,20 +4067,55 @@ def test_crack_input_tooltips_follow_the_exact_selected_basis():
     assert "DS/EN 1992-1-1 DK NA:2024, 7.3.4(1)" in (
         at.selectbox(key="sls_member").help
     )
-    for key in (
-        "sls_heightened_crack_system",
-        "sls_heightened_reinforcement_surface",
-    ):
+    for key in ("sls_heightened_reinforcement_surface",):
         assert "DK NA:2024" in at.selectbox(key=key).help
         assert "Formula 7.100 NA" in at.selectbox(key=key).help
     for key in (
-        "sls_heightened_bar_diameter_mm",
-        "sls_heightened_reinforcement_modulus_mpa",
-        "sls_heightened_effective_tension_area_mm2",
+        "sls_heightened_effective_tensile_strength_mpa",
+        "sls_heightened_fine_effective_tension_area_mm2",
+        "sls_heightened_coarse_effective_tension_area_mm2",
     ):
         assert "DK NA:2024" in at.number_input(key=key).help
         assert "Formula 7.100 NA" in at.number_input(key=key).help
     assert not at.exception
+
+
+def test_heightened_reference_becomes_explicit_when_second_case_is_enabled():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Elastic"),
+        ("selectbox", "sls_code", _SLS_DK),
+    )
+    cases = at.session_state[load_cases.ELASTIC_TABLE_KEY].to_dict("records")
+    cases[0]["calculate_crack_width"] = True
+    first_name = str(cases[0]["name"])
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, cases)
+    _set(at, ("toggle", "sls_heightened_on", True))
+
+    assert at.session_state["sls_heightened_reference_case"] == first_name
+
+    _replace_case_table(
+        at,
+        load_cases.ELASTIC_TABLE_KEY,
+        [
+            *cases,
+            {
+                "name": "Second crack case",
+                "calculate_crack_width": True,
+            },
+        ],
+    )
+    _goto_input_tab(at, "Analysis settings")
+    reference = at.selectbox(key="sls_heightened_reference_case")
+
+    assert reference.value == ""
+    assert at.session_state["sls_heightened_reference_case"] == ""
+    reference.set_value(first_name).run()
+    assert at.session_state["sls_heightened_reference_case"] == first_name
 
 
 def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
@@ -5622,37 +5663,42 @@ def test_crack_basis_widget_uses_only_stable_capability_keys():
 
 
 def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
+    import load_cases
+    import project_io
+    import reinforcement_table
+
     at = _fresh()
     at.run()
+    bars = at.session_state["bars_base"].copy(deep=True)
+    bars[reinforcement_table.SIZE_MODE] = reinforcement_table.AREA_MODE
+    _replace_base_table(at, "bars_base", bars)
+    cases = at.session_state[load_cases.ELASTIC_TABLE_KEY].copy(deep=True)
+    reference_name = str(cases.loc[0, "name"])
+    cases.at[0, "mx_long_ed_knm"] = 400.0
+    cases.at[0, "calculate_crack_width"] = True
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, cases)
     _set_and_click(
         at,
         "calculate",
         ("radio", "mode", "Elastic"),
         ("selectbox", "sls_code", _SLS_DK),
         ("toggle", "sls_heightened_on", True),
-        ("selectbox", "sls_heightened_crack_system", "fine"),
         ("selectbox", "sls_heightened_reinforcement_surface", "ribbed"),
-        ("number_input", "sls_heightened_bar_diameter_mm", 16.0),
         (
             "number_input",
             "sls_heightened_effective_tensile_strength_mpa",
             2.9,
         ),
-        (
-            "number_input",
-            "sls_heightened_reinforcement_modulus_mpa",
-            200000.0,
-        ),
         ("number_input", "sls_permitted_crack_width_mm", 0.2),
         (
             "number_input",
-            "sls_heightened_effective_tension_area_mm2",
+            "sls_heightened_fine_effective_tension_area_mm2",
             100000.0,
         ),
         (
             "number_input",
-            "sls_heightened_provided_reinforcement_area_mm2",
-            2000.0,
+            "sls_heightened_coarse_effective_tension_area_mm2",
+            150000.0,
         ),
     )
 
@@ -5661,10 +5707,23 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
     heightened = results["heightened_crack_control"]
     assert heightened["basis_key"] == _SLS_DK
     assert heightened["formula_identity"] == "Formula 7.100 NA"
+    assert heightened["reference_case_id"] == reference_name
     assert heightened["effective_tensile_strength_mpa"] == pytest.approx(2.9)
-    assert heightened["required_reinforcement_area_mm2"] > 0.0
-    assert heightened["status"] == (
-        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT"
+    assert heightened["fine"]["effective_tension_area_mm2"] == pytest.approx(
+        100000.0
+    )
+    assert heightened["coarse"]["effective_tension_area_mm2"] == pytest.approx(
+        150000.0
+    )
+    assert heightened["fine"]["required_reinforcement_area_mm2"] > 0.0
+    assert heightened["coarse"]["required_reinforcement_area_mm2"] > 0.0
+    assert heightened["provided_reinforcement_area_mm2"] > 0.0
+    assert heightened["bar_diameter_mm"] > 0.0
+    assert heightened["reinforcement_modulus_mpa"] > 0.0
+    assert heightened["contributions"]
+    assert all(
+        row["diameter_source"] == "equivalent-area-fallback"
+        for row in heightened["contributions"]
     )
     assert results["worked_example_selection"]["heightened_crack_control"] == {
         "result_key": "heightened_crack_control"
@@ -5694,15 +5753,43 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
         at,
         (
             "number_input",
-            "sls_heightened_provided_reinforcement_area_mm2",
-            2500.0,
+            "sls_heightened_coarse_effective_tension_area_mm2",
+            175000.0,
         ),
     )
     _select_view(at, "Elastic Results")
     assert any("press Calculate" in item.value for item in at.warning)
 
+    # A later reference state with no calculated ordinary crack evidence must
+    # fail closed without replacing the last completed result or crashing the app.
+    retained_result_hash = project_io.result_sha256(
+        at.session_state["results"]
+    )
+    cases = at.session_state[load_cases.ELASTIC_TABLE_KEY].copy(deep=True)
+    for key in (
+        "n_long_ed_kn",
+        "mx_long_ed_knm",
+        "my_long_ed_knm",
+        "n_short_ed_kn",
+        "mx_short_ed_knm",
+        "my_short_ed_knm",
+    ):
+        cases.at[0, key] = 0.0
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, cases)
+    _calculate(at)
+
+    assert not at.exception
+    assert project_io.result_sha256(at.session_state["results"]) == (
+        retained_result_hash
+    )
+    assert "Calculation blocked:" in at.session_state["_case_error"]
+    assert any(
+        "Calculation blocked:" in item.value
+        for item in at.error
+    )
+
     # Turning the optional calculation off and changing basis must not erase the
-    # dormant direct operands; returning to DK restores the exact prior value.
+    # dormant user operands; returning to DK restores the exact prior value.
     _set(at, ("toggle", "sls_heightened_on", False))
     _set(at, ("selectbox", "sls_code", _SLS_2023))
     assert not any(
@@ -5712,8 +5799,8 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
     )
     _set(at, ("selectbox", "sls_code", _SLS_DK))
     assert at.number_input(
-        key="sls_heightened_provided_reinforcement_area_mm2"
-    ).value == pytest.approx(2500.0)
+        key="sls_heightened_coarse_effective_tension_area_mm2"
+    ).value == pytest.approx(175000.0)
 
 
 def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
@@ -5722,14 +5809,12 @@ def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
         "mode": "Elastic",
         "sls_code": _SLS_2023,
         "sls_heightened_on": True,
-        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reference_case": "Elastic 1",
         "sls_heightened_reinforcement_surface": "ribbed",
-        "sls_heightened_bar_diameter_mm": 16.0,
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
-        "sls_heightened_reinforcement_modulus_mpa": 200000.0,
         "sls_permitted_crack_width_mm": 0.2,
-        "sls_heightened_effective_tension_area_mm2": 100000.0,
-        "sls_heightened_provided_reinforcement_area_mm2": 2000.0,
+        "sls_heightened_fine_effective_tension_area_mm2": 100000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 150000.0,
     }
     for key, value in seeded.items():
         at.session_state[key] = value
@@ -5757,16 +5842,13 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
         "mode": "Elastic",
         "sls_code": _SLS_DK,
         "sls_heightened_on": True,
-        "sls_heightened_crack_system": "fine",
         "sls_heightened_reinforcement_surface": "ribbed",
-        "sls_heightened_bar_diameter_mm": 0.0,
         "sls_heightened_effective_tensile_strength_mpa": 0.0,
-        "sls_heightened_reinforcement_modulus_mpa": 0.0,
         # A blank global criterion is the supported missing/required state. It
         # remains valid for ordinary crack output and blocks heightened control.
         "sls_permitted_crack_width_mm": None,
-        "sls_heightened_effective_tension_area_mm2": 0.0,
-        "sls_heightened_provided_reinforcement_area_mm2": 0.0,
+        "sls_heightened_fine_effective_tension_area_mm2": 0.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 0.0,
         "_material_tab": "Mild steel",
     }
     for key, value in seeded.items():
@@ -5786,11 +5868,12 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
 
     errors = [item.value for item in at.error]
     assert any("has no matching input snapshot" in message for message in errors)
-    assert "Bar diameter must be a positive finite number" in errors
-    assert "Reinforcement modulus must be a positive finite number" in errors
+    assert "Effective tensile strength must be a positive finite number" in errors
+    assert "Fine-system effective tension area must be a positive finite number" in errors
+    assert "Coarse-system effective tension area must be a positive finite number" in errors
     assert len(
         [message for message in errors if "positive finite number" in message]
-    ) == 6
+    ) == 4
 
     at.button(
         key="analysis-input-issue-1-heightened-1"
@@ -5803,16 +5886,16 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
     durable = at.session_state["_durable_input_scalars"]
     assert durable["_input_tab"] == stage
     assert durable["_material_tab"] == "Mild steel"
-    assert at.number_input(key="sls_heightened_bar_diameter_mm")
+    assert at.number_input(key="sls_heightened_effective_tensile_strength_mpa")
     assert any(
-        "Correction target: **Bar diameter**" in item.value
+        "Correction target: **Effective tensile strength**" in item.value
         for item in at.info
     )
 
     # The shared schema-25 width keeps its own exact actionable destination.
     _goto_page(at, "Analysis")
     at.button(
-        key="analysis-input-issue-4-heightened-4"
+        key="analysis-input-issue-2-heightened-2"
     ).click().run()
     assert at.number_input(key="sls_permitted_crack_width_mm")
     assert any(
