@@ -1060,6 +1060,45 @@ def test_figures_off_fatigue_report_consumes_completed_payload_only(monkeypatch)
     assert pdf.startswith(b"%PDF")
 
 
+def test_reinforcement_fatigue_lead_and_first_equation_share_bounded_group():
+    inp, out = _fatigue_report_fixture()
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, out, figures=False, profile="Audit",
+    )
+
+    builder._fatigue()
+
+    matching = []
+    for index, flowable in enumerate(builder.flow):
+        equations = getattr(flowable, "_sector_equations", ())
+        keys = {equation._sector_equation_key for equation in equations}
+        if "fatigue.reinforcement.design-stress-range" in keys:
+            matching.append((index, flowable, keys))
+
+    assert len(matching) == 1
+    index, group, keys = matching[0]
+    assert keys == {"fatigue.reinforcement.design-stress-range"}
+    assert isinstance(builder.flow[index - 1], sector_report.CondPageBreak)
+    paragraphs = [
+        item.getPlainText()
+        for item in group._content
+        if isinstance(item, sector_report.Paragraph)
+    ]
+    assert paragraphs[0] == (
+        "Textbook calculation - governing reinforcement fatigue"
+    )
+    assert any(
+        "globally governing reinforcement element and bin" in text
+        for text in paragraphs
+    )
+    assert any(
+        isinstance(item, sector_report._EquationFlowable)
+        and item._sector_equation_key
+        == "fatigue.reinforcement.design-resistance-range"
+        for item in builder.flow[index + 1:]
+    )
+
+
 def test_fatigue_report_has_no_python_max_or_solver_selection_fallback():
     methods = (
         sector_report.ReportBuilder._fatigue,
