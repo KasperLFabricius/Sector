@@ -692,7 +692,7 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     assert at.session_state["_main_page"] == "Inputs"
     # The "User manual" button lives in the About expander. It opens above the
     # current page instead of replacing the workspace.
-    at.session_state["_input_tab"] = "Project & report"
+    at.session_state["_input_tab"] = "Project"
     at.run()
     at.button(key="open_manual").click().run()
     assert not at.exception
@@ -728,7 +728,7 @@ def test_manual_generation_exposes_pdf_and_accessible_html_downloads(monkeypatch
 
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
-    at.session_state["_input_tab"] = "Project & report"
+    at.session_state["_input_tab"] = "Project"
     at.run()
     at.button(key="open_manual").click().run()
     at.button(key="manual_gen_pdf").click().run()
@@ -755,7 +755,7 @@ def test_native_manual_dismissal_event_closes_and_stays_closed():
     at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()
-    at.session_state["_input_tab"] = "Project & report"
+    at.session_state["_input_tab"] = "Project"
     at.run()
     at.button(key="open_manual").click().run()
     dialog = next(element for element in at._tree if element.type == "dialog")
@@ -788,7 +788,7 @@ def test_opening_and_closing_the_manual_keeps_inputs():
     at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
     at.run()
     at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input
-    at.session_state["_input_tab"] = "Project & report"
+    at.session_state["_input_tab"] = "Project"
     at.run()
     at.button(key="open_manual").click().run()
     at.button(key="manual_close").click().run()

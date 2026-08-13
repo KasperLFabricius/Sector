@@ -647,16 +647,17 @@ def _input_digest(content: Mapping) -> str:
 
 
 def input_sha256(tables: Mapping, scalars: Mapping) -> str:
-    """Hash the exact canonical calculation inputs."""
+    """Hash the complete canonical schema input block for project correlation."""
     return _input_digest(_canonical_inputs(tables, scalars))
 
 
 def persistence_sha256(tables: Mapping, scalars: Mapping) -> str:
     """Hash everything Sector persists for local project recovery.
 
-    Presentation metadata remains outside ``input_sha256`` so it cannot alter
-    calculation identity.  Autosave still needs to notice an alias-only edit,
-    so its de-duplication key covers both canonical inputs and presentation.
+    The dedicated presentation block remains outside legacy ``input_sha256``.
+    Autosave still needs to notice an alias/profile-only edit, so its
+    de-duplication key covers both canonical inputs and presentation. Runtime
+    result reuse has its own explicit engineering-input identity.
     """
 
     return _input_digest({
@@ -832,6 +833,7 @@ def dump_project(
                 "sector_version",
                 "source_revision",
                 "input_sha256",
+                "engineering_input_sha256",
                 "result_sha256",
             )
             if calculation.get(key) not in (None, "")
@@ -839,12 +841,11 @@ def dump_project(
         record["matches_saved_inputs"] = (
             record.get("input_sha256") == digest
         )
-        if "result_sha256" in record and not _valid_sha256(
-            record["result_sha256"]
-        ):
-            raise ValueError(
-                "calculation result_sha256 must be a lowercase SHA-256"
-            )
+        for key in ("engineering_input_sha256", "result_sha256"):
+            if key in record and not _valid_sha256(record[key]):
+                raise ValueError(
+                    f"calculation {key} must be a lowercase SHA-256"
+                )
         payload["calculation"] = record
     return json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False)
 

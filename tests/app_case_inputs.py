@@ -41,7 +41,7 @@ _INPUT_STAGE_LABELS = (
     f"2 {chr(0x00B7)} Section",
     f"3 {chr(0x00B7)} Material parameters",
     f"4 {chr(0x00B7)} Loads",
-    "Project & report",
+    "Project",
 )
 
 
@@ -181,13 +181,17 @@ def first_case_value(at, legacy_key):
     return at.session_state[base_key].iloc[0][column]
 
 
-def _goto_inputs(at):
+def _goto_page(at, page):
     try:
-        page = at.session_state["_main_page"]
+        current = at.session_state["_main_page"]
     except KeyError:
-        page = None
-    if page != "Inputs":
-        at.segmented_control(key="_main_page").set_value("Inputs").run()
+        current = None
+    if current != page:
+        at.segmented_control(key="_main_page").set_value(page).run()
+
+
+def _goto_inputs(at):
+    _goto_page(at, "Inputs")
 
 
 def goto_input_stage(at, short_name):
@@ -229,8 +233,10 @@ def _goto_widget_owner(at, key):
         return _goto_material(at, "Fatigue details")
     if key == "el_phi":
         return goto_input_stage(at, "Loads")
-    if key.startswith(("autosave_", "rep_", "project_")):
-        return goto_input_stage(at, "Project & report")
+    if key.startswith("rep_"):
+        return _goto_page(at, "Report")
+    if key.startswith(("autosave_", "project_")):
+        return goto_input_stage(at, "Project")
     if key.startswith(("section_", "label_")):
         return goto_input_stage(at, "Section")
     return goto_input_stage(at, "Analysis settings")

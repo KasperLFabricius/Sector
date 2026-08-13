@@ -24,8 +24,13 @@ def test_input_stages_and_result_views_match_the_exact_application_contract():
         "Section",
         "Material parameters",
         "Loads",
-        "Project & report",
+        "Project",
     )
+    assert tuple(item.label for item in ia.WORKSPACES) == ("Report",)
+    report = ia.destination("report-workspace")
+    assert report.heading == "Report workspace"
+    assert ia.heading_anchor("Report workspace", 2) == report.anchor
+    assert "WORKSPACES" in ia.__all__
     assert tuple(item.label for item in ia.RESULT_VIEWS) == (
         "Results Overview",
         "Plastic Results",

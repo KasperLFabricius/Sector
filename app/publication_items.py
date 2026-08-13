@@ -219,9 +219,9 @@ MANUAL_TABLE_SPECS = (
 # same-header replacement or row reorder that would otherwise look identical.
 MANUAL_TABLE_CONTENT_SHA256 = (
     "be08991cf6c78e87a479cb56daf4b0d37bd0d95186bf1bde11f9a80768db09ab",
-    "db23a10bc01b7771c8cba542aa7d8dc5ca012cb36510562dc643216e3fb406e9",
+    "04405e246b2ba32038ffb127c0117dfaac45d2c1afca00af3229a91e3b2e1b4e",
     "dfc12f2afad4b9961ecc50234ff2717edd71655ce2bee317fa560d7b697525b6",
-    "4732703cb9e90f0cf248a7440ea45a6477383fadf69460f8d3bd8ff8814f528d",
+    "c57b1f9833250de5684b679bcfc052f15bad2be7ba78bcfbf218a880eace69a2",
     "41d5e6ca0aa102ed274644a46c181ce4fd36feff6b57aae2f84857f4ac27e998",
     "b972bfbfeb72f66d02898862d2af8e0ec6837629130b1fd333213cbd26ece414",
     "1f3edbeb8f4f07cafeb123f8c0284a0f870a40ee8395d3a67cb210b86ab64242",
