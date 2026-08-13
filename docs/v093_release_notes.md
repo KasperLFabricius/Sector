@@ -1,6 +1,6 @@
-# Sector 0.93 release-candidate notes
+# Sector 0.93 notes
 
-Sector 0.93 is a structural cross-section calculation-tool release candidate.
+Sector 0.93 is an internal structural cross-section calculation tool.
 It is not engineering certification, a global code-compliance conclusion or a
 complete implementation of any Eurocode, National Annex, bridge-owner
 requirement or project design basis.
@@ -33,29 +33,16 @@ requirement or project design basis.
   results while varying presentation depth. The reorganised manual includes
   task, input and method reading paths plus a semantic accessible HTML version.
 
-## Release assets
+## Portable build
 
-The guarded workflow prepares a draft GitHub release containing exactly seven
-authenticated assets:
+Double-click the root `BUILD.bat` in a complete extracted project. It produces
+one complete `Sector-v0.93-windows-portable` folder, matching ZIP and SHA-256
+sidecar. The build is accepted only after the packaged `Sector.exe` starts and
+executes its first Streamlit page without an application exception.
 
-1. `Sector-v0.93-source.zip`
-2. `Sector-v0.93-source.zip.sha256`
-3. `Sector-v0.93-windows-portable-unsigned.zip`
-4. `Sector-v0.93-windows-portable-unsigned.zip.sha256`
-5. `Sector-v0.93-windows-portable-unsigned.portable-distribution.json`
-6. `Sector-v0.93-release-qa-receipt.json`
-7. `SHA256SUMS.txt`
-
-The source ZIP carries exact-commit provenance. The portable ZIP is a complete
-unsigned ONEDIR application; keep the whole extracted directory together.
-Neither archive is a signed installer. Windows SmartScreen or organisational
-policy may warn or block the portable application, and Sector claims no trusted
-publisher, administrator approval or managed deployment status.
-
-The release QA receipt binds the exact commit and tree, the seven required
-Sector QA jobs, immutable producer comparison, controlled loopback startup
-smoke and final portable artifact. The release workflow freshly downloads and
-reverifies all seven assets without launching `Sector.exe`.
+The portable ZIP is unsigned and is not an installer. Windows SmartScreen or
+organisational policy may warn or block it. Sector claims no trusted publisher,
+administrator approval or managed deployment status.
 
 ## Compatibility and scope
 

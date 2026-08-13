@@ -1,171 +1,48 @@
 # Sector Windows packaging
 
-Sector has three deliberately separate Windows packaging paths:
+Sector has one supported Windows packaging path: double-click the root
+`BUILD.bat`. `BUILD_SECTOR_PORTABLE.bat` and `packaging/build.bat` are aliases.
 
-1. the user-facing **unsigned portable** folder/ZIP built through the root
-   `BUILD.bat` (`BUILD_SECTOR_PORTABLE.bat` remains an alias);
-2. the internal, non-distributable **unsigned QA** witnesses built through
-   `packaging/build_qa.bat`; and
-3. the separately authorised protected signing workflow, which has no unsigned
-   fallback.
+## Build
 
-## Building the unsigned portable distribution
+1. Download or clone the complete Sector project.
+2. If it is a ZIP, choose **Extract All**. Do not run the BAT inside Explorer's
+   ZIP preview.
+3. Install 64-bit CPython 3.13 and make it available through `python.exe` or the
+   Windows `py` launcher.
+4. Double-click `BUILD.bat`.
 
-From a complete provenance-bearing official Sector source ZIP, choose
-**Extract All**, retain the whole extracted source directory and double-click
-`BUILD.bat` at its root. Do not run a BAT directly inside Explorer's ZIP
-preview, and do not use GitHub's generic `Sector-main.zip`, which has no
-authenticated source-release manifest. The legacy `BUILD_SECTOR_PORTABLE.bat`
-and `packaging/build.bat` names route to the same canonical root entry point.
-The BAT locates that root independently of the current directory and
-invokes `packaging/build_portable.ps1` itself with an execution-policy bypass.
-Do not open a separate PowerShell window and do not run as administrator.
+No administrator rights or separately entered PowerShell command are required.
+The builder installs the hash-locked build dependencies into a temporary virtual
+environment and invokes PyInstaller once. It then starts the packaged
+`Sector.exe` on a temporary loopback port, opens a real Streamlit session and
+requires the first page to finish without an application exception. A health
+response by itself is not accepted.
 
-The one-time build prerequisite is exact 64-bit CPython 3.13.0 plus sufficient
-disk space and access to the hash-locked build dependencies (from the network
-or an existing package cache). The script authenticates the extracted commit,
-tree and complete file inventory, builds from an isolated copy, then prints a
-new sibling output directory containing:
+Successful output is written below `%USERPROFILE%\SectorBuilds` unless
+`SECTOR_PORTABLE_OUTPUT` selects a different new directory:
 
 ```text
-Sector-v<version>-windows-portable-unsigned/
-Sector-v<version>-windows-portable-unsigned.zip
-Sector-v<version>-windows-portable-unsigned.zip.sha256
-Sector-v<version>-windows-portable-unsigned.portable-distribution.json
+Sector-v0.93-windows-portable/
+Sector-v0.93-windows-portable.zip
+Sector-v0.93-windows-portable.zip.sha256
 ```
 
-The folder contains `Sector.exe`, its required `_internal` tree,
-`README-PORTABLE.txt`, the Sector licence, third-party notices, exact source
-identity, a complete package manifest and `SHA256SUMS.txt`. Distribute or
-extract the whole folder/ZIP, never `Sector.exe` alone. The application requires
-neither Python, installation nor administrator elevation at runtime.
+Keep or distribute the complete folder/ZIP; `Sector.exe` does not work when
+copied away from its `_internal` directory. Python is not needed to run the
+finished package.
 
-This portable package is deliberately unsigned. Windows SmartScreen or
-organisational policy may warn or block it. It claims no digital signature,
-trusted publisher, reputation, installer registration or managed production
-approval, and it may be shared only as permitted by the proprietary Sector
-licence. Use the release channel's published source/archive SHA-256 as the
-external trust anchor; the embedded manifest proves internal exact-source
-consistency but is not itself a publisher signature.
+The ZIP is unsigned. Windows SmartScreen or organisational policy may warn or
+block it. The SHA-256 sidecar detects a damaged or changed archive; it is not a
+publisher signature or certification mechanism.
 
-The builder never launches `Sector.exe`. Exact-head CI alone safely extracts an
-already verified ZIP, starts it headlessly on a temporary `127.0.0.1` port,
-checks Streamlit's health response and terminates the owned process. Normal use
-opens the local interface in the browser. Report figures require a supported
-Chromium-family browser; Microsoft Edge is the supported Windows prerequisite
-and is not bundled.
+## Runtime
 
-## Inspecting the unsigned QA build
+`packaging/run_sector.py` starts Streamlit at `127.0.0.1:8502`, opens the local
+browser during normal use, and stores writable state below `%LOCALAPPDATA%`.
+Report figures require Microsoft Edge or another supported Chromium-family
+browser.
 
-The ordinary build scripts and the `Sector QA` workflow produce an **unsigned,
-non-distributable QA artifact** for static package inspection. Each run first
-authenticates exact source and copies it into a new isolated directory. A Git
-checkout is authenticated from raw commit objects. An official extracted Sector
-source release is authenticated from its embedded commit object, Git tree and
-per-file inventory; a changed, missing or extra path is rejected. Dependency
-installation, notice generation, PyInstaller analysis, and package assembly
-then read only from that isolated tree. Mutable worktree files are never
-packaging inputs.
-The run also preserves a canonical `source-identity.json` seal whose commit,
-tree, committer epoch, UTC time, file/byte counts, and raw inventory digest are
-derived from the authenticated exact source. Package time is the commit epoch;
-the spec has no checkout, `GITHUB_SHA`, or wall-clock fallback.
-Do not launch, zip or distribute this QA artifact. A signed Sector package
-requires the separately authorised signing workflow; this QA path has no
-unsigned distribution fallback. The separate user-facing unsigned portable
-distribution is built from the source root with `BUILD.bat`.
-
-### QA build
-
-The easiest inspection build is to **double-click `packaging/build_qa.bat`**. It
-resolves the exact current Git commit or the verified source-release revision,
-creates a uniquely named sibling `<source-folder>-qa-artifacts` run root, wraps
-the PowerShell build with an execution-policy bypass, and keeps the window open
-to show the preserved output path and unsigned warning. Git is not required for
-an official source release; Python is required for both input forms.
-
-Equivalently, from the repository root:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging/build.ps1
-```
-
-To select the identity and new output path explicitly:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File packaging/build.ps1 `
-  -SourceRevision <exact-lowercase-40-hex> `
-  -OutputDirectory <new-nonexistent-path>
-```
-
-For an extracted source release, the explicit output must be outside the source
-folder so the input inventory remains closed and cannot recursively include
-build output.
-
-The inspection result is `<run-root>/dist/Sector/`, including Sector's
-proprietary notice and generated third-party notice bundle. The same run root
-preserves the exact exported source and PyInstaller work evidence. A path is
-never reused, deleted, or overwritten. Keep the result local and use it only
-for static QA inspection. Do not execute `Sector.exe` from unsigned output.
-
-Before upload or signing, the package verifier independently rereads the raw
-selected commit and preserves its authenticated blob bytes in memory. The
-packaged `app`, `sector`, and `assets` trees are compared directly with that
-snapshot, never with the mutable exported build directory. Matching changes to
-the worktree, build source, evidence, manifest, and package therefore cannot
-reseal a foreign package as the selected commit.
-
-The QA and protected-release workflows create two sequential packages in
-different, new build roots from the same sealed commit. Each package first
-passes the raw-commit verifier independently. A separate standard-library gate
-then compares every complete-package path and byte, including `Sector.exe` and
-all runtime dependencies, twice. The two passes must have the same file count,
-byte count, per-file SHA-256 records, and aggregate inventory digest. Canonical
-comparison evidence is written create-only outside both build roots. Both
-unsigned QA witnesses and their identity records are retained by the QA
-artifact; neither executable is launched.
-
-## Portable and signed-package runtime design
-
-For the verified unsigned portable package, and after a signed package has
-passed the separately authorised signing gate, `Sector.exe` launches the
-Streamlit app exactly as `streamlit run app/sector_app.py` does
-(`packaging/run_sector.py` is the entry point) and opens the browser at the local
-URL. A console window stays open to show that URL and any messages.
-
-Sector serves only on this computer at **127.0.0.1:8502**
-(`http://127.0.0.1:8502`) instead of Streamlit's default 8501, so it can run
-alongside BriCoS (which uses 8501) without a clash. Set the `SECTOR_PORT`
-environment variable to use a different port.
-
-The packaged launcher disables usage telemetry. The application toolbar keeps
-viewer actions such as print and theme selection, but hides Streamlit's deploy,
-rerun, and clear-cache developer actions. Browser errors show the exception type
-without exposing local paths or tracebacks; full diagnostics remain available in
-the console for support.
-
-## Files
-
-| File | Purpose |
-|---|---|
-| `run_sector.py` | Frozen entry point: resolves the bundled app path and starts Streamlit. |
-| `sector.spec` | PyInstaller spec: collects Streamlit/Plotly/numba/kaleido/reportlab and bundles the `app` and `sector` trees (including the vendored point-grid frontend); retains runtime distribution metadata while omitting pip `RECORD` installer inventories whose absent launcher hashes are build-path-bound. |
-| `build.ps1` | Convenience wrapper: selects an exact Git or source-release revision and unique sibling output before delegating to the isolated driver. |
-| `build.bat` | Compatibility wrapper that routes to the root redistributable `BUILD.bat`. |
-| `build_qa.bat` | Internal double-click wrapper around QA-only `build.ps1`. |
-| `../tools/build_exact_commit.py` | Standard-library driver: exports an exact Git commit or materializes a verified source release, fixes the source epoch and PyInstaller build hash seed, uses safe-path/user-site isolation while honoring those controls, installs its hashed lock, generates notices, builds, and performs create-only assembly. |
-| `../tools/verify_windows_release.py` | Standard-library gate: authenticates the raw commit, canonical evidence/manifest, and packaged source bytes before publication or signing. |
-| `../tools/verify_reproducible_windows_builds.py` | Independent two-build gate: checks distinct roots, reauthenticates both packages, compares all package bytes twice, and writes canonical create-only evidence. |
-
-## Runtime notes
-
-- **Writable state.** The autosave file and numba's compile cache go to
-  `%LOCALAPPDATA%\Sector` (set via `SECTOR_AUTOSAVE_DIR` / `NUMBA_CACHE_DIR` in the
-  launcher), so a read-only install location (e.g. Program Files) does not break
-  startup.
-- **Report figures need a browser engine.** The PDF report exports its plots with
-  kaleido, which needs a Chromium-family browser at runtime. Microsoft Edge is
-  the supported Windows prerequisite. If a requested figure cannot be embedded,
-  report generation fails visibly instead of issuing an incomplete PDF.
-- **numba** speeds up the plastic solver but is optional -- if it cannot load in the
-  frozen build the app falls back to the (slower) pure-Python kernels.
+The PyInstaller spec retains only lightweight product/version/source metadata
+for diagnostics. It also explicitly includes Uvicorn and AnyIO modules that are
+loaded dynamically during packaged startup.

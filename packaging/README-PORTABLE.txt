@@ -1,65 +1,33 @@
-SECTOR PORTABLE WINDOWS BUILD (UNSIGNED)
-========================================
+SECTOR v@SECTOR_VERSION@ PORTABLE WINDOWS BUILD
+===============================================
 
-Build from an official Sector source ZIP
-----------------------------------------
+Building
+--------
 
-1. Extract the complete official Sector source ZIP.
-2. Confirm the source ZIP SHA-256 through the trusted release channel.
-3. Install exact 64-bit CPython 3.13.0 and make python.exe available on PATH.
-4. Double-click BUILD.bat in the extracted source folder.
+Extract the complete Sector project, then double-click BUILD.bat in its top
+folder. Do not run BUILD.bat inside Windows Explorer's ZIP preview. Building
+requires 64-bit CPython 3.13, network or cache access to the locked build
+dependencies, and no administrator rights.
 
-Do not run a BAT directly inside Windows Explorer's ZIP preview. Explorer may
-copy only the clicked file to a temporary directory, without its required
-siblings. Do not substitute GitHub's generic Sector-main.zip: use the official
-provenance-bearing source ZIP release asset and its SHA-256 sidecar.
-BUILD_SECTOR_PORTABLE.bat remains a backward-compatible alias for BUILD.bat.
+The build is successful only after the finished Sector.exe has started and its
+first Streamlit page has executed without an application exception. The output
+contains one complete folder, one ZIP and one ZIP SHA-256 sidecar.
 
-No separately entered PowerShell command, administrator rights, installation,
-or elevation is required. The build downloads only the dependencies pinned by
-Sector's hashed build lock and may take several minutes. It authenticates the
-embedded exact-source closure, builds from an isolated copy, and creates a new
-uniquely named sibling output directory. Existing output is never overwritten.
-The double-click wrapper accepts no command-line arguments; its SECTOR_*
-environment controls are reserved for the automated exact-head acceptance job.
+Running
+-------
 
-The embedded closure proves that the extracted files agree with the selected
-Sector source revision. It is not a publisher signature. Treat a source ZIP as
-official only when it came through the trusted release channel and its external
-SHA-256 agrees with the value published there.
+Extract the complete portable ZIP, keep the _internal folder beside Sector.exe,
+then double-click Sector.exe. Sector listens only on this computer and opens the
+interface in the default browser. Close the console window or press Ctrl+C there
+to stop it.
 
-Portable output
----------------
+Use a reasonably short extraction path such as C:\Sector. Report figures require
+Microsoft Edge or another supported Chromium-family browser.
 
-The completed output contains:
+Licence and Windows warning
+---------------------------
 
-* Sector-v@SECTOR_VERSION@-windows-portable-unsigned\
-* its same-named complete .zip archive
-* the archive's same-named .zip.sha256 sidecar
-* the folder's same-named .portable-distribution.json receipt
-
-The whole folder or the whole ZIP is the distributable unit. Never copy or
-share Sector.exe by itself. The manifest, hashes, licence, notices, application
-files, and _internal runtime tree all belong to one complete package.
-
-Running Sector
---------------
-
-Extract the complete portable ZIP before use, then double-click Sector.exe in
-the extracted folder. Sector listens only on the local computer and normally
-opens its interface in the default browser. Close the Sector console window or
-press Ctrl+C there to stop the application.
-
-Report figures require Microsoft Edge on Windows. Edge supplies the supported
-Chromium-family browser implementation; a browser is not bundled with Sector.
-
-Unsigned software warning and licence
---------------------------------------
-
-This portable package is unsigned. Windows SmartScreen or corporate security
-policy may warn about it or block it. The package makes no trusted-publisher,
-code-signature, installer, or reputation claim. Do not bypass an organisation's
-security policy; ask the relevant IT administrator when execution is blocked.
-
-Sector is proprietary software. Building, using, copying, or sharing it remains
-subject to the Sector licence included with the complete portable package.
+This internal portable package is unsigned. Windows SmartScreen or company
+policy may warn about or block it. The SHA-256 file detects archive damage; it
+does not certify a publisher. Use and distribution remain subject to the Sector
+licence included in the package.

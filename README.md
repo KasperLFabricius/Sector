@@ -2,20 +2,8 @@
 
 **Reinforced-concrete cross-section analysis for structural engineering.**
 
-Current release candidate: **Sector 0.93**. Its authenticated draft contains a
-provenance-bearing source/application ZIP and a separate verified **unsigned**
-portable Windows ZIP. No signed installer is prepared.
-Sector 0.92 remains the last publicly published release until that draft is
-deliberately published. See [CHANGELOG.md](CHANGELOG.md) and the
-[v0.93 release notes](docs/v093_release_notes.md).
-
-Sector 0.93 is governed by the
-[v0.93 decision register](docs/v093_decision_register.md) and the detailed
-[v0.93 pull-request programme](docs/v093_pr_programme.md). The frozen decisions
-are also
-available as a [formatted Excel register](docs/sector_v093_decision_register.xlsx),
-with final qualification recorded in the
-[v0.93 release acceptance](docs/pr09_v093_release_acceptance.md).
+Current internal version: **Sector 0.93**. See [CHANGELOG.md](CHANGELOG.md) and
+the [v0.93 release notes](docs/v093_release_notes.md).
 
 Sector is a transparent structural calculation tool, not a compliance,
 certification, sign-off or code-completeness system. The engineer controls
@@ -94,18 +82,12 @@ results update when you calculate.
 
 ## Portable Windows build
 
-The v0.93 programme adds a separate, unsigned portable Windows distribution.
-When a provenance-bearing official Sector source ZIP contains the root
-`BUILD.bat`, choose **Extract All**, keep the complete extracted source folder,
-and double-click `BUILD.bat` there. Do not run a BAT directly inside Explorer's
-ZIP preview, and do not use GitHub's generic `Sector-main.zip`: neither supplies
-the complete authenticated source-release boundary. The legacy
-`BUILD_SECTOR_PORTABLE.bat` name remains an alias. The one-time build requires
-exact 64-bit CPython 3.13.0
-and enough disk space; it invokes its internal PowerShell orchestration itself,
-does not require administrator elevation, and prints the resulting portable
-folder and ZIP paths. No separately entered PowerShell command is part of the
-user procedure.
+Download or clone the complete project, choose **Extract All** when using a ZIP,
+then double-click the root `BUILD.bat`. Do not run a BAT inside Explorer's ZIP
+preview because Windows may copy only that file to a temporary folder. The
+legacy `BUILD_SECTOR_PORTABLE.bat` name remains an alias. Building requires
+64-bit CPython 3.13 and enough disk space, but no administrator elevation or
+separately entered PowerShell command.
 
 The generated artifact is a complete ONEDIR folder and matching ZIP. Keep or
 share the whole folder/ZIP under the Sector licence; `Sector.exe` does not work
@@ -117,10 +99,9 @@ approval. Do not bypass organisational security policy. Report figures require
 a supported Chromium-family browser; Microsoft Edge is the supported Windows
 prerequisite and is not bundled.
 
-The portable artifact name is derived from the authenticated source version.
-The v0.93 draft-release asset is
-`Sector-v0.93-windows-portable-unsigned.zip`; its SHA-256 sidecar and canonical
-distribution receipt are prepared beside it in the guarded draft release.
+The build runs once, launches the packaged application headlessly, and executes
+its first Streamlit page. It publishes the folder, ZIP and ZIP SHA-256 only if
+that real page completes without an application exception.
 
 The solver's inner loops are compiled with Numba, which the app warms up once at
 startup (a few seconds, cached on disk thereafter) so every calculation after
@@ -191,27 +172,7 @@ does not grant a personal or public licence. See [LICENSE](LICENSE). Windows bui
 include a generated third-party notice bundle beside `Sector.exe`; the source
 process is documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The authenticated Sector v0.93 draft contains exactly identified source and
-unsigned portable assets. The primary archives are
-`Sector-v0.93-source.zip` and `Sector-v0.93-windows-portable-unsigned.zip`;
-their sidecars, the portable distribution receipt, the release QA receipt and
-`SHA256SUMS.txt` close the seven-asset draft set. The release receipt binds the
-exact source revision, the seven successful QA jobs and the immutable portable-
-build evidence. The portable archive is unsigned and is not an installer or a
-signed production package. The draft and all seven assets were freshly
-downloaded and reverified after attachment. They are not a publicly published
-user release until publication is deliberately authorized.
-
-The earlier corrective Sector 0.92 source release, tagged `v0.92-source.1`,
-provides `Sector-v0.92-source.zip` as the historical runnable
-source/application asset. It is exported from the exact accepted commit and
-embeds a self-verifying commit and file inventory for saved-project, report and
-optional unsigned-build provenance without `.git`. Use that asset rather than
-GitHub's automatic source snapshots when revision traceability is required for
-the 0.92 release. That release contains no Windows executable or installer.
-Unsigned Windows QA packages remain test evidence only and must not be
-distributed as the v0.93 portable release.
-
-That internal QA artifact is distinct from the separately named portable
-folder/ZIP described above. The protected signing workflow remains a separate,
-explicitly authorised path and has no unsigned fallback.
+`BUILD.bat` creates `Sector-v0.93-windows-portable.zip` and a SHA-256 sidecar.
+The archive is unsigned and is not an installer. The checksum detects transfer
+damage; it is not a publisher certificate. Internal distribution remains
+subject to the Sector licence and organisational security policy.
