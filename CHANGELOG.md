@@ -2,11 +2,37 @@
 
 ## Unreleased
 
-- Simplify Windows distribution to one root `BUILD.bat`, one PyInstaller build,
-  one portable folder/ZIP/checksum and one mandatory real first-page runtime
-  smoke. Remove signing, release-recovery, exact-source certification,
+## 0.94 - 2026-08-14
+
+Sector 0.94 improves calculation robustness, input navigation, report evidence
+and the ordinary internal portable build while retaining Sector's bounded
+calculation-tool identity.
+
+- Corrected prestressed N-M boundary endpoints and exact-zero fatigue cycles,
+  and separated Miner damage from proof/yield utilisation in result surfaces.
+- Added clause-specific Eurocode guidance, schema 25, one shared analysis-level
+  permitted crack width and the bounded schema-24 migration.
+- Added simultaneous Danish fine and coarse heightened crack-control systems,
+  deriving diameter, modulus and provided area from retained ordinary crack
+  evidence.
+- Added individually navigable validation issues, stateful material-family tabs
+  and trapezoid, L, I, U and annulus Quick Sections.
+- Moved report metadata, options, generation and downloads into a dedicated
+  Report workspace, with safe recovery from stale persisted profile values.
+- Made Brief reports auditable with relevant inputs and governing results,
+  corrected table script placement and preserved the radical renderer in PDF
+  output.
+- Reduced shear-plot label collisions and tightened visual report regressions.
+- Simplified Windows distribution to one root `BUILD.bat`, one PyInstaller
+  build, one portable folder/ZIP/checksum and one mandatory real first-page
+  runtime smoke. Removed signing, release-recovery, exact-source certification,
   duplicate-build comparison and receipt machinery. A complete generic GitHub
   source download is again a supported input.
+
+Project schema is version 25. Schema 24 has one bounded in-memory migration for
+the shared permitted crack width; schema 23 and future schemas remain
+unsupported. The Windows deliverable is an unsigned portable ZIP and is not an
+installer or publisher certification.
 
 ## 0.93 - 2026-08-11
 

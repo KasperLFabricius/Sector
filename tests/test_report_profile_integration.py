@@ -971,7 +971,13 @@ def test_brief_has_no_furniture_only_or_nearly_blank_spill_page():
         body = []
         for raw_line in (page.extract_text() or "").splitlines():
             line = " ".join(raw_line.split())
-            if not line or line.startswith(("Project: QA-REFERENCE", "Sector 0.93", "Rev:")):
+            if not line or line.startswith(
+                (
+                    "Project: QA-REFERENCE",
+                    f"Sector {report_render_fixture.__version__}",
+                    "Rev:",
+                )
+            ):
                 continue
             if line.startswith("Page ") and " of " in line:
                 continue

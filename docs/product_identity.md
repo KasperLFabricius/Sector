@@ -36,8 +36,8 @@ calculation: application/source version, actual inputs, selected
 method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
-Sector 0.93 remains the internal product identity during v0.94 development and
-uses project schema 25. Schema 24 has one bounded migration for the shared
+Sector 0.94 is the current internal product identity and uses project schema
+25. Schema 24 has one bounded migration for the shared
 permitted crack width; conflicting populated legacy values migrate to the
 conservative minimum with a visible warning. Schema 23 and future schemas remain
 unsupported. Earlier compliance, cover-calculator or authority metadata is not

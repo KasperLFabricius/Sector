@@ -955,15 +955,17 @@ def manual_blocks() -> list:
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
            ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
-    call("standard", "Sector 0.93 reports the DK NA fine and coarse crack systems side "
-       "by side, each for the long-term and short-term load (four crack widths). "
-       "One optional positive permitted width in Analysis settings is shared by "
-       "every selected Elastic row. Blank means the width is calculated without "
-       "an acceptance assessment; when a value is entered, Sector reports only a "
-       "bounded comparison with that "
-       "user-specified value and does not infer exposure, durability, prestress "
-       "category or owner requirements. Part C derives every model in full with "
-       "the critical worked crack width.")
+    call(
+        "standard",
+        f"Sector {APP_VERSION} reports the DK NA fine and coarse crack systems "
+        "side by side, each for the long-term and short-term load (four crack "
+        "widths). One optional positive permitted width in Analysis settings is "
+        "shared by every selected Elastic row. Blank means the width is calculated "
+        "without an acceptance assessment; when a value is entered, Sector reports "
+        "only a bounded comparison with that user-specified value and does not infer "
+        "exposure, durability, prestress category or owner requirements. Part C "
+        "derives every model in full with the critical worked crack width.",
+    )
     md("For the first-generation Danish basis only, **DK heightened crack-control "
        "minimum** is a separate section-level opt-in. The user must declare its "
        "applicability and supply the shared permitted width, reinforcement surface, "

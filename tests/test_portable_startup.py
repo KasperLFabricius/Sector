@@ -335,7 +335,7 @@ class _FakeProcess:
 
 
 def _package(tmp_path: Path) -> Path:
-    package = tmp_path / "Sector-v0.93-windows-portable"
+    package = tmp_path / "Sector-v0.94-windows-portable"
     package.mkdir()
     (package / "Sector.exe").write_bytes(b"fake")
     return package
