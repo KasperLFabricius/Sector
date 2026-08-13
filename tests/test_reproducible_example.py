@@ -316,7 +316,11 @@ def test_tables_only_report_contains_every_main_calculation_chapter(
 ):
     state = calculated_example.session_state.filtered_state
     pdf = sector_report.build_report(
-        {}, state["result_input_snapshot"], state["results"], figures=False
+        {},
+        state["result_input_snapshot"],
+        state["results"],
+        figures=False,
+        profile="Audit",
     )
     text = " ".join(
         page.extract_text() or ""
