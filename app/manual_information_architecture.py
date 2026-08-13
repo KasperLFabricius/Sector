@@ -15,6 +15,7 @@ from typing import Final, Literal, TypeAlias
 
 DestinationKind: TypeAlias = Literal[
     "reading-path",
+    "workspace",
     "input-stage",
     "result-view",
     "method",
@@ -98,8 +99,13 @@ INPUT_STAGES: Final[tuple[ManualDestination, ...]] = (
         "material-parameters", "Material parameters", "Materials", "input-stage"
     ),
     _destination("loads", "Loads", "Loads", "input-stage"),
+    _destination("project", "Project", "Project", "input-stage"),
+)
+
+
+WORKSPACES: Final[tuple[ManualDestination, ...]] = (
     _destination(
-        "project-report", "Project & report", "Project & report", "input-stage"
+        "report-workspace", "Report", "Report workspace", "workspace"
     ),
 )
 
@@ -283,12 +289,12 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
     ),
     Workflow(
         "save-load", "Save or load a project", "A current-schema reproducible project",
-        "project-report", "Current inputs or a compatible project file",
+        "project", "Current inputs or a compatible project file",
         "Loaded inputs require a fresh calculation", "project-version",
     ),
     Workflow(
         "report-profile", "Choose a report profile", "Brief, Standard or Audit publication",
-        "project-report", "Current results and project metadata",
+        "report-workspace", "Current inputs and project metadata",
         "Profile changes presentation depth only", "report-generation",
     ),
     Workflow(
@@ -305,6 +311,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
 ALL_DESTINATIONS: Final[tuple[ManualDestination, ...]] = (
     *READING_PATHS,
     *INPUT_STAGES,
+    *WORKSPACES,
     *RESULT_VIEWS,
     *METHODS,
 )
@@ -313,7 +320,10 @@ DESTINATIONS: Final = MappingProxyType(
     {destination.key: destination for destination in ALL_DESTINATIONS}
 )
 _HEADING_ANCHORS: Final = MappingProxyType({
-    (destination.heading, 2 if destination.kind == "result-view" else 1):
+    (
+        destination.heading,
+        2 if destination.kind in {"result-view", "workspace"} else 1,
+    ):
         destination.anchor
     for destination in ALL_DESTINATIONS
 })
@@ -356,6 +366,7 @@ __all__ = [
     "WARNING_REFERENCES",
     "WARNINGS",
     "WORKFLOWS",
+    "WORKSPACES",
     "ManualDestination",
     "WarningReference",
     "Workflow",

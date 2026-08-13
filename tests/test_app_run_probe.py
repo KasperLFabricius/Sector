@@ -478,11 +478,11 @@ def test_all_fragment_owners_are_explicit_and_bounded():
         if f'open_fragment_run(st.session_state, "{name}")' in source
     } == expected
     assert source.count("app_run_probe.open_fragment_run") == len(expected)
-    assert source.count("app_run_probe.close_fragment_run") == 10
+    assert source.count("app_run_probe.close_fragment_run") == 9
 
     for marker in (
         'def _save_load_panel()',
-        'def _report_panel(input_signature)',
+        'def _report_workspace(inp)',
         'def _quick_section_viewport()',
         'def _input_workspace()',
         'def _analysis_workspace(inp)',
@@ -537,7 +537,7 @@ def test_enabled_live_app_seals_complete_active_stage_records(monkeypatch):
         "2 " + chr(0x00B7) + " Section",
         "3 " + chr(0x00B7) + " Material parameters",
         "4 " + chr(0x00B7) + " Loads",
-        "Project & report",
+        "Project",
     )
     for index, stage in enumerate(stages):
         if index:
@@ -571,6 +571,14 @@ def test_enabled_live_app_seals_complete_active_stage_records(monkeypatch):
         for field in ("total_ms", "max_ms", "last_ms"):
             assert math.isfinite(pane[field])
             assert pane[field] >= 0.0
+
+    assert app_run_probe.WORKSPACE_NAMES == ("Inputs", "Analysis", "Report")
+    app.segmented_control(key="_main_page").set_value("Report").run(timeout=30)
+    assert not app.exception
+    report_record = app.session_state[app_run_probe.state_keys()[2]][-1]
+    assert report_record["workspace"] == "Report"
+    assert report_record["input_stage"] == ""
+    assert report_record["material_family"] == ""
 
 
 def test_probe_state_is_excluded_from_current_project_schema():

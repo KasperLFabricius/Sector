@@ -685,11 +685,13 @@ def manual_blocks() -> list:
 
     h1("The workspace")
     md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
-       "parameters*, *Loads* and *Project & report* in full-width tabs. The "
+       "parameters*, *Loads* and *Project* in full-width tabs. The "
        "*Section* tab places the section drawing beside its point tables, and each "
        "material panel places the selected stress-strain law beside its parameters. "
-       "These previews update live. The **Analysis** page contains only "
-       "calculated results selected with the **View** dropdown.")
+       "These previews update live. The **Analysis** workspace contains calculated "
+       "results selected with the **View** dropdown. The **Report** workspace, "
+       "immediately to its right, owns document metadata, profile selection, "
+       "generation and PDF download.")
     table(["View", "Shows"],
           [["Results Overview", "All named cases, numerical outputs and individual resistance checks"],
            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
@@ -700,12 +702,22 @@ def manual_blocks() -> list:
            ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
            ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
+    h2("Report workspace")
+    md("Enter project number, project name, section, revision, author and comments "
+       "in this workspace, then select **Brief**, **Standard** or **Audit**. "
+       "Generating reuses retained Analysis results only when their complete input "
+       "signature matches the current inputs; otherwise Sector recalculates for the "
+       "report and records that source. A metadata or input edit marks an existing "
+       "PDF out of date and blocks its download until it is regenerated.")
+    call("tip", "Report metadata and publication controls are no longer mixed with "
+         "the Project input stage. Save/load and autosave remain under **Inputs > "
+         "Project**; publication remains under **Report**.")
     call("tip", "*Auto-calc all derived values* (in Material parameters) "
          "recomputes every auto quantity from the current grade at once: the concrete "
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
          "$E_s$, $E_p$ and creep automatically.")
 
-    h1("Project & report")
+    h1("Project")
     h2("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
@@ -723,8 +735,8 @@ def manual_blocks() -> list:
        "small but enables every main report calculation family: plastic capacity, "
        "cracked elastic and crack width, fatigue, shear, torsion, combined M-V-T, "
        "longitudinal and transverse detailing, and clear spacing. Load it, press "
-       "*Calculate*, and generate the tables-only or "
-       "ordinary report. The checking pack reconstructs representative results from "
+       "*Calculate*, then open **Report** and generate the required publication. "
+       "The checking pack reconstructs representative results from "
        "the original inputs without calling a Sector solver and records the exact "
        "project/input SHA-256. It is evidence for reproducibility, not an approval or "
        "signing record.")
@@ -1238,7 +1250,7 @@ def manual_blocks() -> list:
        "reinforcement. The detailed blocks retain each contribution and the selected "
        "member strut angle.")
     h2("PDF report")
-    md("Choose **Brief**, **Standard** or **Audit** in the Report panel. Standard "
+    md("Choose **Brief**, **Standard** or **Audit** in the Report workspace. Standard "
        "is the default. The profile changes presentation depth only: retained "
        "engineering values, rounding policy, statuses, warnings and sources are "
        "identical, and figures remain a separate choice.")

@@ -295,7 +295,7 @@ def test_checking_pack_is_separate_and_covers_every_main_family():
 def test_manual_exposes_both_reference_downloads_with_stable_keys():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
-    at.session_state["_input_tab"] = "Project & report"
+    at.session_state["_input_tab"] = "Project"
     at.run()
     at.button(key="open_manual").click().run()
     assert not at.exception

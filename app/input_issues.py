@@ -19,7 +19,9 @@ ANALYSIS_SETTINGS = _STAGE_LABELS["analysis-settings"]
 SECTION = _STAGE_LABELS["section"]
 MATERIAL_PARAMETERS = _STAGE_LABELS["material-parameters"]
 LOADS = _STAGE_LABELS["loads"]
-PROJECT_REPORT = _STAGE_LABELS["project-report"]
+PROJECT = _STAGE_LABELS["project"]
+# Compatibility name for downstream imports; the stage itself is Project-only.
+PROJECT_REPORT = PROJECT
 
 INPUT_STAGES = frozenset(
     {
@@ -27,7 +29,7 @@ INPUT_STAGES = frozenset(
         SECTION,
         MATERIAL_PARAMETERS,
         LOADS,
-        PROJECT_REPORT,
+        PROJECT,
     }
 )
 MATERIAL_FAMILIES = frozenset(
@@ -358,6 +360,7 @@ __all__ = [
     "LOADS",
     "MATERIAL_FAMILIES",
     "MATERIAL_PARAMETERS",
+    "PROJECT",
     "PROJECT_REPORT",
     "SECTION",
     "InputIssue",

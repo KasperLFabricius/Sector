@@ -21,6 +21,7 @@ HISTORY_LIMIT = 128
 ENABLE_ENV = "SECTOR_PERFORMANCE_TELEMETRY"
 OUTPUT_ENV = "SECTOR_PERFORMANCE_TELEMETRY_PATH"
 TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+WORKSPACE_NAMES = ("Inputs", "Analysis", "Report")
 FRAGMENT_NAMES = (
     "inputs",
     "save_load",
@@ -112,9 +113,18 @@ def _run_token(context):
 
 
 def _labels(state) -> dict[str, str]:
-    labels = {}
+    try:
+        workspace = str(state.get("_main_page") or "")
+    except Exception:
+        workspace = ""
+    labels = {
+        "workspace": workspace,
+        "input_stage": "",
+        "material_family": "",
+    }
+    if workspace != "Inputs":
+        return labels
     for name, key in (
-        ("workspace", "_main_page"),
         ("input_stage", "_input_tab"),
         ("material_family", "_material_tab"),
     ):

@@ -2287,15 +2287,32 @@ def _fatigue_spectrum_signature(value):
     return tuple(rows)
 
 
-# Input widgets are not rendered on the Analysis page. Streamlit consequently
+# Input widgets are not rendered on the Analysis or Report workspace. Streamlit
+# consequently
 # removes their widget-owned keys at the end of that run, so keep a durable copy
 # outside the widget namespace and restore it before either page is rendered.
 # Autosave preferences and tracked input-tab choices are session settings rather
 # than project inputs, but they need the same treatment while their controls are
 # off-screen.
+_REPORT_STATE_SCALARS = (
+    "rep_proj_no",
+    "rep_proj_name",
+    "rep_section",
+    "rep_rev",
+    "rep_author",
+    "rep_comments",
+    project_io.REPORT_PROFILE_KEY,
+)
+_REPORT_STATE_SCALAR_SET = frozenset(_REPORT_STATE_SCALARS)
 _DURABLE_INPUT_SCALARS = (
-    tuple(project_io.SCALAR_KEYS)
-    + tuple(project_io.PRESENTATION_SCALAR_KEYS)
+    tuple(
+        key
+        for key in (
+            *project_io.SCALAR_KEYS,
+            *project_io.PRESENTATION_SCALAR_KEYS,
+        )
+        if key not in _REPORT_STATE_SCALAR_SET
+    )
     + (
         "autosave_on", "autosave_min", "_input_tab", "_material_tab",
         "_material_tab_preference",
@@ -2306,8 +2323,11 @@ _DURABLE_INPUT_SCALARS = (
 )
 _INPUT_STATE_KEY = "_durable_input_scalars"
 _INPUT_BUILD_KEY = "_inputs_build_in_progress"
+_REPORT_STATE_KEY = "_durable_report_scalars"
+_REPORT_BUILD_KEY = "_report_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
+_PENDING_REPORT_EVENTS_KEY = "_pending_report_events"
 _INPUT_NAVIGATION_KEYS = frozenset(
     {"_input_tab", "_material_tab", "_material_tab_preference"}
 )
@@ -2346,13 +2366,15 @@ def _record_input_event(
 
     if key == project_io.REPORT_PROFILE_KEY:
         st.session_state.pop("_report_profile_error", None)
-    if (
-        st.session_state.get("_main_page", "Inputs") == "Inputs"
-        and key in st.session_state
-    ):
+    workspace = st.session_state.get("_main_page", "Inputs")
+    if workspace == "Inputs" and key in st.session_state:
         pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
         pending[key] = copy.deepcopy(st.session_state[key])
         st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
+    elif workspace == "Report" and key in _REPORT_STATE_SCALAR_SET:
+        pending = dict(st.session_state.get(_PENDING_REPORT_EVENTS_KEY, {}))
+        pending[key] = copy.deepcopy(st.session_state[key])
+        st.session_state[_PENDING_REPORT_EVENTS_KEY] = pending
     if callback is not None:
         callback(*(callback_args or ()), **(callback_kwargs or {}))
 
@@ -2398,6 +2420,16 @@ def _snapshot_input_state(inp=None) -> None:
         st.session_state["_latest_inputs"] = inp
 
 
+def _snapshot_report_state() -> None:
+    """Keep report-owned document settings while Report is not mounted."""
+
+    saved = dict(st.session_state.get(_REPORT_STATE_KEY, {}))
+    for key in _REPORT_STATE_SCALARS:
+        if key in st.session_state:
+            saved[key] = copy.deepcopy(st.session_state[key])
+    st.session_state[_REPORT_STATE_KEY] = saved
+
+
 def _retained_input_scalar(key, default):
     """Read a conditionally unmounted input without erasing its durable value."""
 
@@ -2408,7 +2440,7 @@ def _retained_input_scalar(key, default):
 
 
 def _snapshot_completed_input_state() -> None:
-    """Widget callback: commit only a fully rendered Inputs workspace.
+    """Widget callback: commit only a fully rendered stateful workspace.
 
     A second browser event can interrupt an Inputs rerun before every widget has
     been reconstructed.  Committing that partial namespace would replace valid
@@ -2421,6 +2453,12 @@ def _snapshot_completed_input_state() -> None:
     ):
         _snapshot_input_state()
         st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    elif (
+        st.session_state.get(_LAST_WORKSPACE_KEY) == "Report"
+        and not st.session_state.get(_REPORT_BUILD_KEY, False)
+    ):
+        _snapshot_report_state()
+        st.session_state.pop(_PENDING_REPORT_EVENTS_KEY, None)
 
 
 def _snapshot_material_tab_state() -> None:
@@ -2448,15 +2486,15 @@ def _restore_input_state(*, replace: bool = False) -> None:
         # Returning from Analysis is different: no input-stage event can originate
         # there, and Streamlit may leave a stale default under a remounted selector
         # key. Restore the durable preference in that lifecycle transition.
-        returning_from_analysis = (
+        returning_from_other_workspace = (
             st.session_state.get("_main_page") == "Inputs"
-            and st.session_state.get(_LAST_WORKSPACE_KEY) == "Analysis"
+            and st.session_state.get(_LAST_WORKSPACE_KEY) in {"Analysis", "Report"}
         )
         preserve_navigation = (
             replace
             and key in _INPUT_NAVIGATION_KEYS
             and key in st.session_state
-            and not returning_from_analysis
+            and not returning_from_other_workspace
         )
         if not preserve_navigation and (replace or key not in st.session_state):
             st.session_state[key] = value
@@ -2474,6 +2512,31 @@ def _restore_input_state(*, replace: bool = False) -> None:
             continue
         if key not in st.session_state or key in restored:
             st.session_state[key] = copy.deepcopy(value)
+
+
+def _restore_report_state(*, replace: bool = False) -> None:
+    """Restore Report-owned settings before their keyed widgets mount."""
+
+    restored = set()
+    for key, value in st.session_state.get(_REPORT_STATE_KEY, {}).items():
+        if replace or key not in st.session_state:
+            st.session_state[key] = copy.deepcopy(value)
+            restored.add(key)
+    for key, value in st.session_state.get(
+        _PENDING_REPORT_EVENTS_KEY, {}
+    ).items():
+        if key not in st.session_state or key in restored:
+            st.session_state[key] = copy.deepcopy(value)
+
+
+def _has_uncommitted_inputs(state=None) -> bool:
+    """Whether a genuine Inputs edit lacks one fully assembled payload."""
+
+    state = st.session_state if state is None else state
+    return bool(
+        state.get(_INPUT_BUILD_KEY, False)
+        or state.get(_PENDING_INPUT_EVENTS_KEY)
+    )
 
 
 def _open_analysis_content(flag: str) -> None:
@@ -2632,16 +2695,23 @@ def _project_state():
     """Return the canonical table/scalar inputs behind a project download."""
     tables = {base: _current_table(base, ed, cols)
               for base, ed, cols in _PROJECT_TABLES if base in st.session_state}
-    durable = st.session_state.get(_INPUT_STATE_KEY, {})
+    input_durable = st.session_state.get(_INPUT_STATE_KEY, {})
+    report_durable = st.session_state.get(_REPORT_STATE_KEY, {})
     project_scalar_keys = (
         tuple(project_io.SCALAR_KEYS)
         + tuple(project_io.PRESENTATION_SCALAR_KEYS)
     )
-    scalars = {
-        key: live_fragment_value(st.session_state, durable, key)
-        for key in project_scalar_keys
-        if key in st.session_state or key in durable
-    }
+    scalars = {}
+    for key in project_scalar_keys:
+        durable = (
+            report_durable
+            if key in _REPORT_STATE_SCALAR_SET
+            else input_durable
+        )
+        if key in st.session_state or key in durable:
+            scalars[key] = live_fragment_value(
+                st.session_state, durable, key
+            )
     for key in load_cases.CASE_TABLE_KEYS:
         tables[key] = load_cases.normalise_table(
             st.session_state.get(key), key
@@ -2664,21 +2734,41 @@ def _project_persistence_hash() -> str:
     return project_io.persistence_sha256(tables, scalars)
 
 
-def _calculation_input_hash(inp) -> str:
-    """Use the persisted-input identity, or a typed fallback if unsavable."""
+def _engineering_input_hash(inp) -> str:
+    """Fingerprint only the frozen inputs that can change solver results."""
+
+    signature = inp.get("signature")
+    if signature is None:
+        raise ValueError("engineering input payload has no calculation signature")
+    return project_io.result_sha256(("sector-engineering-input-v1", signature))
+
+
+def _calculation_project_hash(inp) -> str:
+    """Retain the legacy canonical-project correlation beside engineering identity."""
 
     try:
         return _project_input_hash()
     except ValueError:
-        # A failed canonical project boundary must not suppress calculation
-        # provenance. The typed payload fingerprint remains deterministic and
-        # keeps the record explicitly tied to the actual attempted inputs.
-        calculation_payload = {
-            key: value
-            for key, value in inp.items()
-            if key not in project_io.PRESENTATION_SCALAR_KEYS
-        }
-        return project_io.result_sha256(calculation_payload)
+        # Calculation evidence must remain publishable even when optional project
+        # persistence fields are temporarily unsavable. The explicit engineering
+        # hash remains authoritative for result reuse.
+        return _engineering_input_hash(inp)
+
+
+def _report_project_state_hash(inp, meta, report_content) -> str:
+    """Fingerprint document/project state without conflating it with calculation."""
+
+    try:
+        return _project_persistence_hash()
+    except ValueError:
+        return project_io.result_sha256(
+            (
+                "sector-report-project-state-v1",
+                _engineering_input_hash(inp),
+                meta,
+                report_content,
+            )
+        )
 
 
 def _gather_project() -> str:
@@ -2773,6 +2863,14 @@ def _maybe_autosave() -> None:
     """Autosave on user interaction once the interval has elapsed (the BriCoS model:
     the save rides the reruns that interaction triggers, so the app never reruns or
     saves while idle). Call from the main flow after the inputs are built."""
+    # Off-Inputs pages retain the last completed engineering payload. A pending
+    # callback or interrupted Inputs build means live widget state can be only a
+    # partial newer draft, so no off-page rerun may serialize that hybrid state.
+    if (
+        st.session_state.get("_main_page", "Inputs") != "Inputs"
+        and _has_uncommitted_inputs()
+    ):
+        return
     # The Project panel is lazy. Streamlit may remove its widget-owned live keys
     # when that panel is no longer rendered, while the completed values remain in
     # the durable input mirror. Analysis-fragment reruns do not execute the outer
@@ -2881,11 +2979,13 @@ def _apply_pending_project() -> None:
     # replacement has been authenticated and is about to be applied.
     st.session_state.pop("_project_migration_warnings", None)
     st.session_state.pop("_loaded_project_migration", None)
+    st.session_state.pop(_REPORT_PROFILE_ERROR_KEY, None)
     # A valid project load is an explicit whole-input replacement. Do not replay
     # uncommitted browser events from the project that was open previously.
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
     st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
     st.session_state.pop(_HEIGHTENED_EXPLICIT_REFERENCE_KEY, None)
+    st.session_state.pop(_PENDING_REPORT_EVENTS_KEY, None)
     # A current project load replaces every optional calculation family and the
     # complete Quick Section builder state from the prior session. These fields may
     # be absent from a valid current project, so clear them before applying the
@@ -2925,6 +3025,8 @@ def _apply_pending_project() -> None:
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
+    for key in _REPORT_STATE_SCALARS:
+        st.session_state.pop(key, None)
     for key, value in scalars.items():
         st.session_state[key] = value
     if "torsion_gamma_ct" in scalars:
@@ -2960,10 +3062,30 @@ def _apply_pending_project() -> None:
     durable = {
         key: value
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
-        if key not in replacement_scoped_scalar_keys
+        if (
+            key not in replacement_scoped_scalar_keys
+            and key not in _REPORT_STATE_SCALAR_SET
+        )
     }
-    durable.update(scalars)
+    durable.update(
+        {
+            key: value
+            for key, value in scalars.items()
+            if key not in _REPORT_STATE_SCALAR_SET
+        }
+    )
     st.session_state[_INPUT_STATE_KEY] = durable
+    report_durable = {
+        key: value
+        for key, value in scalars.items()
+        if key in _REPORT_STATE_SCALAR_SET
+    }
+    for key in _REPORT_STATE_SCALARS:
+        report_durable.setdefault(
+            key,
+            _REPORT_DEFAULT if key == project_io.REPORT_PROFILE_KEY else "",
+        )
+    st.session_state[_REPORT_STATE_KEY] = report_durable
     # Keep each preset's change-marker in step with the loaded preset so the panel
     # does not re-prefill over the loaded field values.
     for marker, src in project_io.PREV_MARKERS.items():
@@ -3015,9 +3137,9 @@ def _apply_pending_project() -> None:
         "result_plastic_case_context_sig", "result_elastic_case_context_sig",
         "result_plastic_bending_context_sig",
         "result_input_snapshot",
-        "report_bytes", "report_signature", "report_filename", "report_generated_on",
     ):
         st.session_state.pop(key, None)
+    _clear_report_artifact()
     # Forget the Quick Section builder's last shape so the loaded qsv_ dimensions are
     # not mistaken for an in-builder shape switch: the next builder open takes the
     # first-call branch (records the loaded shape, no re-seed) and keeps b/h as saved.
@@ -3053,7 +3175,7 @@ def _apply_pending_project() -> None:
 def _save_load_panel() -> None:
     """Download the current project and upload one to restore it.
 
-    Rendered in the Project & report tab only *after* the
+    Rendered in the Project input stage only *after* the
     point tables and inputs have been seeded this run, so the download always
     reflects the live section (not an empty one on a fresh session). Local autosave
     controls rerun only this fragment; loading a project explicitly requests the
@@ -3141,8 +3263,8 @@ _REPORT_DEFAULT = report_profiles.DEFAULT_PROFILE.label
 _REPORT_CONTENT_OPTIONS = report_profiles.REPORT_PROFILE_KEYS
 _REPORT_PROFILE_ERROR_KEY = "_report_profile_error"
 
-# The progress placeholder lives in the Report panel; report generation (which runs
-# later in the same script run) fills it.
+# The progress placeholder is mounted by the Report workspace immediately before
+# its fragment-local generation call.
 _REPORT_PROG = None
 
 
@@ -3167,8 +3289,14 @@ def _normalise_report_profile_session_state() -> None:
     report is cleared; it is never silently treated as Standard.
     """
 
+    container_keys = (
+        _INPUT_STATE_KEY,
+        _PENDING_INPUT_EVENTS_KEY,
+        _REPORT_STATE_KEY,
+        _PENDING_REPORT_EVENTS_KEY,
+    )
     containers = [st.session_state]
-    for container_key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
+    for container_key in container_keys:
         container = st.session_state.get(container_key)
         if isinstance(container, dict):
             containers.append(container)
@@ -3187,12 +3315,50 @@ def _normalise_report_profile_session_state() -> None:
             container.pop(project_io.REPORT_PROFILE_KEY, None)
 
     if invalid:
+        for container in containers:
+            container.pop(project_io.REPORT_PROFILE_KEY, None)
         _clear_report_artifact()
         values = ", ".join(sorted({repr(value) for value in invalid}))
+        report_durable = dict(st.session_state.get(_REPORT_STATE_KEY, {}))
+        report_durable[project_io.REPORT_PROFILE_KEY] = _REPORT_DEFAULT
+        st.session_state[_REPORT_STATE_KEY] = report_durable
+        st.session_state[project_io.REPORT_PROFILE_KEY] = _REPORT_DEFAULT
         st.session_state[_REPORT_PROFILE_ERROR_KEY] = (
-            f"Stored report profile {values} is not recognised and was not "
-            "used. Select Brief, Standard or Audit before generating a report."
+            f"Stored report profile {values} is not recognised. It was removed "
+            f"from saved and pending state and reset to {_REPORT_DEFAULT}; any "
+            "older report was invalidated."
         )
+
+    # v0.93 owned these values in the Inputs mirror. Move them into the Report
+    # lifecycle after validating every copy, so an unknown value cannot be hidden
+    # by a valid value in another container.
+    input_durable = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
+    report_durable = dict(st.session_state.get(_REPORT_STATE_KEY, {}))
+    for key in _REPORT_STATE_SCALARS:
+        if key in input_durable:
+            report_durable.setdefault(key, input_durable.pop(key))
+    st.session_state[_INPUT_STATE_KEY] = input_durable
+
+    input_pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
+    report_pending = dict(st.session_state.get(_PENDING_REPORT_EVENTS_KEY, {}))
+    for key in _REPORT_STATE_SCALARS:
+        if key in input_pending:
+            report_pending[key] = input_pending.pop(key)
+    if input_pending:
+        st.session_state[_PENDING_INPUT_EVENTS_KEY] = input_pending
+    else:
+        st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    if report_pending:
+        st.session_state[_PENDING_REPORT_EVENTS_KEY] = report_pending
+    else:
+        st.session_state.pop(_PENDING_REPORT_EVENTS_KEY, None)
+
+    for key in _REPORT_STATE_SCALARS:
+        report_durable.setdefault(
+            key,
+            _REPORT_DEFAULT if key == project_io.REPORT_PROFILE_KEY else "",
+        )
+    st.session_state[_REPORT_STATE_KEY] = report_durable
 
 
 def _report_signature(
@@ -3246,89 +3412,73 @@ def _report_filename(meta, generated_on=None):
 
 def _clear_report_artifact():
     """Remove every key that could expose an older PDF after a failed rebuild."""
-    for key in ("report_buffer", "report_signature", "report_filename"):
+    for key in (
+        "report_buffer",
+        "report_bytes",
+        "report_signature",
+        "report_filename",
+        "report_generated_on",
+        "report_generation_record",
+        "_generating_report",
+    ):
         st.session_state.pop(key, None)
 
 
-@st.fragment
-def _report_panel(input_signature):
-    """Report metadata inputs plus Generate / Download, like the BriCoS panel.
+def _retained_analysis_for_report(
+    inp,
+    *,
+    state=None,
+    product_version=None,
+    revision=None,
+):
+    """Return one copied, internally coherent Analysis result tuple or ``None``."""
 
-    Metadata typing and stale-report feedback are fragment-local. Generating a PDF
-    escalates to a full rerun because the completed input payload and result views
-    live outside this panel.
-    """
-    app_run_probe.open_fragment_run(st.session_state, "report")
-    box = st.expander("Report", expanded=False)
-    box.caption("Fill in the project details, press Generate, then download the PDF. "
-                "The report uses the current inputs and the analyses for the selected "
-                "mode.")
-    _seeded_text(box, _REPORT_FIELDS[0][1], "", "rep_proj_no")
-    _seeded_text(box, _REPORT_FIELDS[1][1], "", "rep_proj_name")
-    _seeded_text(box, _REPORT_FIELDS[2][1], "", "rep_section")
-    c1, c2 = box.columns(2)
-    _seeded_text(c1, "Revision", "", "rep_rev")
-    _seeded_text(c2, "Prepared by", "", "rep_author")
-    _seeded_text_area(box, "Comments", "", "rep_comments", height=80)
-    profile_error = st.session_state.get(_REPORT_PROFILE_ERROR_KEY)
-    if profile_error:
-        box.error(profile_error)
-    report_profile = _seeded_segmented_control(
-        box,
-        "Report profile",
-        list(_REPORT_CONTENT_OPTIONS),
-        _REPORT_DEFAULT,
-        "rep_report_content",
-        width="stretch",
-        help=(
-            "Brief is a rapid-review summary, Standard is the default design-"
-            "review report, and Audit adds complete retained evidence. The "
-            "profile changes presentation depth only; figures remain separate."
-        ),
+    state = st.session_state if state is None else state
+    product_version = str(
+        APP_VERSION if product_version is None else product_version
     )
-    policy = report_profiles.resolve_profile(report_profile)
-    box.caption(policy.description + " " + policy.omitted_detail)
-    # Flag the request and start a full rerun. The report is then built at the end
-    # of that run, once build_inputs has rendered every panel and assembled the
-    # complete material, section and load payload.
-    if box.button("Generate report", type="primary", width="stretch",
-                  key="gen_report"):
-        st.session_state["_generating_report"] = True
-        app_run_probe.close_fragment_run(st.session_state)
-        st.rerun()
-    # A progress placeholder in the panel (filled live during generation, which runs
-    # at the end of this same run), in the BriCoS location -- below the button.
-    global _REPORT_PROG
-    _REPORT_PROG = box.empty()
-    msg = st.session_state.pop("_report_msg", None)
-    if msg:
-        (box.success if msg[0] == "success" else box.error)(msg[1])
-    if st.session_state.get("report_buffer"):
-        current_signature = _report_signature(input_signature)
-        if st.session_state.get("report_signature") == current_signature:
-            box.download_button(
-                "Download report (PDF)",
-                st.session_state["report_buffer"],
-                file_name=st.session_state.get(
-                    "report_filename",
-                    _report_filename(_report_meta()),
-                ),
-                mime="application/pdf",
-                width="stretch",
-            )
-        else:
-            _manual_warning(
-                box,
-                "results-stale",
-                "Report out of date: inputs or report metadata changed. "
-                "Generate it again before downloading.",
-            )
-    app_run_probe.close_fragment_run(st.session_state)
+    revision = str(source_revision() if revision is None else revision)
+    engineering_input_sha256 = _engineering_input_hash(inp)
+    retained = copy.deepcopy(
+        (
+            state.get("results"),
+            state.get("result_sig"),
+            state.get("result_input_snapshot"),
+            state.get("calculation_record"),
+        )
+    )
+    results, result_signature, input_snapshot, calculation = retained
+    if not results or not isinstance(calculation, dict):
+        return None
+    if (
+        calculation.get("sector_version") != product_version
+        or calculation.get("source_revision") != revision
+        or calculation.get("engineering_input_sha256")
+        != engineering_input_sha256
+        or result_signature != inp.get("signature")
+    ):
+        return None
+    if (
+        not isinstance(input_snapshot, dict)
+        or input_snapshot.get("signature") != inp.get("signature")
+        or _engineering_input_hash(input_snapshot) != engineering_input_sha256
+    ):
+        return None
+    result_sha256 = project_io.result_sha256(results)
+    if calculation.get("result_sha256") != result_sha256:
+        return None
+    return results, calculation, engineering_input_sha256, result_sha256
 
 
 def _generate_report(inp):
-    """Build the PDF from the current inputs when the Generate button was pressed."""
-    if not st.session_state.pop("_generating_report", False):
+    """Build one PDF from the frozen latest-input payload used by Report."""
+
+    if inp is None:
+        _clear_report_artifact()
+        st.session_state["_report_msg"] = (
+            "error",
+            "Open Inputs once to initialise the section before generating a report.",
+        )
         return
     if (inp.get("section") is None or inp.get("geometry_error")
             or inp.get("void_error")
@@ -3337,7 +3487,7 @@ def _generate_report(inp):
         st.session_state["_report_msg"] = ("error", "Define a valid section (and "
                                            "resolve any void or reinforcement error) "
                                            "before generating a report.")
-        st.rerun()
+        return
     case_errors = list(
         case_analysis.validation_errors(inp)
         if "plastic_cases" in inp or "elastic_cases" in inp
@@ -3349,7 +3499,7 @@ def _generate_report(inp):
         st.session_state["_report_msg"] = (
             "error", "; ".join(case_errors) + ".",
         )
-        st.rerun()
+        return
     prog = _REPORT_PROG
     bar = prog.progress(0.0, text="Preparing report...") if prog is not None else None
 
@@ -3360,14 +3510,44 @@ def _generate_report(inp):
     try:
         import sector_report
         meta = _report_meta()
+        current_revision = source_revision()
+        meta["source_revision"] = current_revision
         figs = not st.session_state.get("_report_no_figures", False)
         report_content = st.session_state.get(
             "rep_report_content", _REPORT_DEFAULT
         )
-        out = run_analysis(inp)
+        retained = _retained_analysis_for_report(
+            inp,
+            product_version=APP_VERSION,
+            revision=current_revision,
+        )
+        reuse_results = retained is not None
+        if retained is not None:
+            out, calculation, engineering_input_sha256, result_sha256 = retained
+            result_source = "reused-current-analysis-results"
+            calculation_state = "CURRENT - reused matching Analysis results"
+        else:
+            out = run_analysis(inp)
+            calculation = None
+            engineering_input_sha256 = _engineering_input_hash(inp)
+            result_sha256 = project_io.result_sha256(out)
+            result_source = "recalculated-for-report"
+            calculation_state = "CURRENT - recalculated for this report"
+        project_state_sha256 = _report_project_state_hash(
+            inp,
+            meta,
+            report_content,
+        )
+        generated_at_utc = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        )
         meta.update({
-            "calculation_state": "CURRENT - generated from this input payload",
-            "input_sha256": _calculation_input_hash(inp),
+            "calculation_state": calculation_state,
+            # ``input_sha256`` remains the report builder's compatibility key;
+            # its value is now explicitly the engineering calculation identity.
+            "input_sha256": engineering_input_sha256,
+            "engineering_input_sha256": engineering_input_sha256,
+            "project_state_sha256": project_state_sha256,
         })
         pdf = sector_report.build_report(meta, inp, out, version=APP_VERSION,
                                          figures=figs, progress=_on_progress,
@@ -3379,14 +3559,165 @@ def _generate_report(inp):
             report_content,
         )
         st.session_state["report_filename"] = _report_filename(meta)
-        st.session_state["_report_msg"] = ("success", "Report generated - use the "
-                                           "Download button in the Report panel.")
+        st.session_state["report_generated_on"] = generated_at_utc
+        st.session_state["report_generation_record"] = {
+            "generated_at_utc": generated_at_utc,
+            "input_sha256": engineering_input_sha256,
+            "engineering_input_sha256": engineering_input_sha256,
+            "project_state_sha256": project_state_sha256,
+            "result_sha256": result_sha256,
+            "sector_version": APP_VERSION,
+            "source_revision": current_revision,
+            "result_source": result_source,
+            "calculation_state": calculation_state,
+        }
+        if calculation is not None:
+            st.session_state["report_generation_record"][
+                "analysis_performed_at_utc"
+            ] = calculation.get("performed_at_utc")
+        source_text = (
+            "reused the matching current Analysis results"
+            if reuse_results
+            else "recalculated the current inputs for this report"
+        )
+        st.session_state["_report_msg"] = (
+            "success",
+            f"Report generated; Sector {source_text}.",
+        )
     except Exception as exc:                       # never let it crash the app
         _clear_report_artifact()
         st.session_state["_report_msg"] = ("error", f"Report generation failed: {exc}")
     if prog is not None:
         prog.empty()
-    st.rerun()
+
+
+@st.fragment
+def _report_workspace(inp):
+    """Own all report metadata, profile, generation and download controls."""
+
+    app_run_probe.open_fragment_run(st.session_state, "report")
+    if st.session_state.get(_REPORT_BUILD_KEY, False):
+        _restore_report_state(replace=True)
+    else:
+        _restore_report_state()
+    # A fragment rerun does not execute the top-level startup normaliser. Run it
+    # inside the fragment too, after recovery and before the strict keyed control
+    # mounts, then restore any exact legacy values moved from the old Inputs mirror.
+    _normalise_report_profile_session_state()
+    _restore_report_state()
+    st.session_state[_REPORT_BUILD_KEY] = True
+    uncommitted_input = _has_uncommitted_inputs()
+
+    st.subheader("Report")
+    st.caption(
+        "Document metadata and publication controls are kept here. Generate uses "
+        "the current input payload and reuses Analysis results only when their "
+        "input, result and Sector source identities remain coherent."
+    )
+    metadata_box = st.container(border=True)
+    metadata_box.markdown("**Document metadata**")
+    _seeded_text(metadata_box, _REPORT_FIELDS[0][1], "", "rep_proj_no")
+    _seeded_text(metadata_box, _REPORT_FIELDS[1][1], "", "rep_proj_name")
+    _seeded_text(metadata_box, _REPORT_FIELDS[2][1], "", "rep_section")
+    c1, c2 = metadata_box.columns(2)
+    _seeded_text(c1, "Revision", "", "rep_rev")
+    _seeded_text(c2, "Prepared by", "", "rep_author")
+    _seeded_text_area(
+        metadata_box, "Comments", "", "rep_comments", height=100
+    )
+
+    publication_box = st.container(border=True)
+    publication_box.markdown("**Publication**")
+    if uncommitted_input:
+        _manual_warning(
+            publication_box,
+            "results-stale",
+            "An Inputs edit was interrupted before Sector could assemble its "
+            "complete calculation payload. Open Inputs and allow it to finish "
+            "once before generating or downloading a report.",
+        )
+    profile_error = st.session_state.get(_REPORT_PROFILE_ERROR_KEY)
+    if profile_error:
+        _manual_warning(
+            publication_box,
+            "report-generation",
+            profile_error,
+        )
+    report_profile = _seeded_segmented_control(
+        publication_box,
+        "Report profile",
+        list(_REPORT_CONTENT_OPTIONS),
+        _REPORT_DEFAULT,
+        project_io.REPORT_PROFILE_KEY,
+        width="stretch",
+        help=(
+            "Brief is a rapid-review summary, Standard is the default design-"
+            "review report, and Audit adds complete retained evidence. The "
+            "profile changes presentation depth only; figures remain separate."
+        ),
+    )
+    policy = report_profiles.resolve_profile(report_profile)
+    publication_box.caption(policy.description + " " + policy.omitted_detail)
+    generate = publication_box.button(
+        "Generate report",
+        type="primary",
+        width="stretch",
+        key="gen_report",
+        disabled=inp is None or uncommitted_input,
+    )
+    if inp is None:
+        publication_box.info(
+            "Open Inputs once to initialise the section and report payload."
+        )
+
+    global _REPORT_PROG
+    _REPORT_PROG = publication_box.empty()
+    if generate:
+        _snapshot_report_state()
+        _generate_report(inp)
+
+    msg = st.session_state.pop("_report_msg", None)
+    if msg:
+        (publication_box.success if msg[0] == "success" else publication_box.error)(
+            msg[1]
+        )
+    if st.session_state.get("report_buffer") and not uncommitted_input:
+        current_signature = _report_signature(
+            inp.get("signature") if inp is not None else None
+        )
+        if st.session_state.get("report_signature") == current_signature:
+            publication_box.download_button(
+                "Download report (PDF)",
+                st.session_state["report_buffer"],
+                file_name=st.session_state.get(
+                    "report_filename",
+                    _report_filename(_report_meta()),
+                ),
+                mime="application/pdf",
+                width="stretch",
+            )
+            record = st.session_state.get("report_generation_record") or {}
+            source = record.get("calculation_state")
+            generated = record.get("generated_at_utc")
+            if source or generated:
+                publication_box.caption(
+                    " | ".join(value for value in (generated, source) if value)
+                )
+        else:
+            _manual_warning(
+                publication_box,
+                "results-stale",
+                "Report out of date: inputs or report metadata changed. "
+                "Generate it again before downloading.",
+            )
+
+    _snapshot_report_state()
+    st.session_state.pop(_PENDING_REPORT_EVENTS_KEY, None)
+    st.session_state[_REPORT_BUILD_KEY] = False
+    st.session_state[_LAST_WORKSPACE_KEY] = "Report"
+    if not uncommitted_input:
+        _measured_autosave()
+    app_run_probe.close_fragment_run(st.session_state)
 
 
 _QS_SHAPES = [
@@ -4151,7 +4482,6 @@ def build_inputs(host=st):
         ),
     )
     about_slot = project.container()
-    report_slot = project.container()
     save_slot = project.container()
     mode = aset.radio(
         "Bending analysis",
@@ -5949,14 +6279,12 @@ def build_inputs(host=st):
     )
     sig = plastic_sig + elastic_sig + (fatigue_sig,)
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
-    # Fill the reserved Report / Save-Load / About slots now the inputs exist, so
-    # the report and the download capture the fully-built section and loads.
-    # Project gathering and report/save widgets are among the most expensive
+    # Fill the reserved Save-Load / About slots now the inputs exist, so the
+    # project download captures the fully-built section and loads.
+    # Project gathering and save widgets are among the most expensive
     # non-calculation parts of an Inputs rerun.  They are independent of the four
     # engineering input stages, so build them only while their tracked tab is open.
     if project.open:
-        with report_slot:
-            _report_panel(sig)
         with save_slot:
             _save_load_panel()
         with about_slot.expander("About", expanded=False):
@@ -6139,8 +6467,8 @@ def _commit_input_fragment(inp) -> None:
 
     A fragment rerun can be superseded by a later browser event.  Nothing from
     that partial build becomes durable until ``build_inputs`` returns normally;
-    then the scalar/table mirrors, full analysis payload, autosave service and
-    report request all observe the same completed state.
+    then the scalar/table mirrors, full analysis payload and autosave service
+    observe the same completed state.
     """
 
     _snapshot_input_state(inp)
@@ -6149,7 +6477,6 @@ def _commit_input_fragment(inp) -> None:
     st.session_state[_INPUT_BUILD_KEY] = False
     st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
     _measured_autosave()
-    _generate_report(inp)
 
 
 @st.fragment
@@ -12047,7 +12374,13 @@ def _selected_case_context(inp, results, family):
     return case_inp, entry.get("results") or {}, entry
 
 
-def _store_completed_analysis(inp, results, calculation_input_sha256):
+def _store_completed_analysis(
+    inp,
+    results,
+    engineering_input_sha256,
+    project_input_sha256,
+    calculation_revision,
+):
     """Publish one successful calculation without disturbing prior evidence."""
 
     st.session_state["results"] = results
@@ -12073,8 +12406,12 @@ def _store_completed_analysis(inp, results, calculation_input_sha256):
                 timespec="seconds"
             ),
             "sector_version": APP_VERSION,
-            "source_revision": source_revision(),
-            "input_sha256": calculation_input_sha256,
+            "source_revision": calculation_revision,
+            # ``input_sha256`` preserves the schema-25 project correlation used
+            # by existing files. Result reuse is governed by the explicit frozen
+            # engineering identity, which excludes report metadata/preferences.
+            "input_sha256": project_input_sha256,
+            "engineering_input_sha256": engineering_input_sha256,
             "result_sha256": project_io.result_sha256(results),
         }
     else:
@@ -12178,7 +12515,9 @@ def _analysis_workspace(inp):
             if st.session_state.get("result_fatigue_sig") == inp["fatigue_sig"]
             else None
         )
-        calculation_input_sha256 = _calculation_input_hash(inp)
+        engineering_input_sha256 = _engineering_input_hash(inp)
+        project_input_sha256 = _calculation_project_hash(inp)
+        calculation_revision = source_revision()
         try:
             completed = run_analysis(
                 inp,
@@ -12198,7 +12537,9 @@ def _analysis_workspace(inp):
             _store_completed_analysis(
                 inp,
                 completed,
-                calculation_input_sha256,
+                engineering_input_sha256,
+                project_input_sha256,
+                calculation_revision,
             )
 
     view = c_view.selectbox(
@@ -12330,20 +12671,32 @@ quick_section_open = bool(st.session_state.get("_qs_open"))
 # They queue the destination instead; a full rerun applies it here, before the
 # widget is created again.
 next_main_page = st.session_state.pop("_next_main_page", None)
-if next_main_page in {"Inputs", "Analysis"}:
+if next_main_page in app_run_probe.WORKSPACE_NAMES:
     st.session_state["_main_page"] = next_main_page
 # The Quick Section builder remains a full-width Analysis view. The manual is a
 # dialog and deliberately leaves the current workspace page mounted behind it.
 if quick_section_open:
     st.session_state["_main_page"] = "Analysis"
 st.session_state.setdefault("_main_page", "Inputs")
+if st.session_state["_main_page"] not in app_run_probe.WORKSPACE_NAMES:
+    st.session_state["_main_page"] = "Inputs"
 _restore_input_state(
     replace=(
         _v093_state_purged
         or bool(st.session_state.get(_INPUT_BUILD_KEY, False))
         or (
             st.session_state.get("_main_page") == "Inputs"
-            and st.session_state.get(_LAST_WORKSPACE_KEY) == "Analysis"
+            and st.session_state.get(_LAST_WORKSPACE_KEY) in {"Analysis", "Report"}
+        )
+    )
+)
+_restore_report_state(
+    replace=(
+        _v093_state_purged
+        or bool(st.session_state.get(_REPORT_BUILD_KEY, False))
+        or (
+            st.session_state.get("_main_page") == "Report"
+            and st.session_state.get(_LAST_WORKSPACE_KEY) in {"Inputs", "Analysis"}
         )
     )
 )
@@ -12352,11 +12705,11 @@ app_run_probe.stop_phase(st.session_state, _startup_probe)
 for _migration_warning in st.session_state.get(
     "_project_migration_warnings", ()
 ):
-    st.warning(_migration_warning, icon=":material/warning:")
+    _manual_warning(st, "crack-criterion-missing", _migration_warning)
 
 main_page = st.segmented_control(
     "Workspace",
-    ["Inputs", "Analysis"],
+    list(app_run_probe.WORKSPACE_NAMES),
     key="_main_page",
     on_change=_snapshot_completed_input_state,
     required=True,
@@ -12365,9 +12718,10 @@ main_page = st.segmented_control(
 )
 
 if main_page == "Inputs":
+    st.session_state[_REPORT_BUILD_KEY] = False
     _input_workspace()
-else:
-    st.session_state[_INPUT_BUILD_KEY] = False
+elif main_page == "Analysis":
+    st.session_state[_REPORT_BUILD_KEY] = False
     reset_input_stage_mounts(st.session_state)
     st.session_state[_LAST_WORKSPACE_KEY] = "Analysis"
     inp = st.session_state.get("_latest_inputs")
@@ -12381,8 +12735,11 @@ else:
         )
     else:
         _analysis_workspace(inp)
+else:
+    reset_input_stage_mounts(st.session_state)
+    _report_workspace(st.session_state.get("_latest_inputs"))
 
-# Keep the current Inputs or Analysis workspace visible behind the manual. The
+# Keep the current workspace visible behind the manual. The
 # dialog is imported and built only while open, so its figures stay off the normal
 # rerun path.
 if manual_open:

@@ -156,7 +156,7 @@ def _goto_input_tab(at, name):
         "Section": f"2 {d} Section",
         "Material parameters": f"3 {d} Material parameters",
         "Loads": f"4 {d} Loads",
-        "Project & report": "Project & report",
+        "Project": "Project",
     }
     label = labels[name]
     try:
@@ -195,8 +195,10 @@ def _goto_widget_owner(at, key):
         return _goto_material_tab(at, "Fatigue details")
     if key == "el_phi":
         return _goto_input_tab(at, "Loads")
-    if key.startswith(("autosave_", "rep_", "project_")):
-        return _goto_input_tab(at, "Project & report")
+    if key.startswith("rep_"):
+        return _goto_page(at, "Report")
+    if key.startswith(("autosave_", "project_")):
+        return _goto_input_tab(at, "Project")
     if key.startswith(("section_", "label_")):
         return _goto_input_tab(at, "Section")
     return _goto_input_tab(at, "Analysis settings")
@@ -435,7 +437,7 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
         sector_app._input_workspace,
         sector_app._analysis_workspace,
         sector_app._quick_section_viewport,
-        sector_app._report_panel,
+        sector_app._report_workspace,
         sector_app._save_load_panel,
     ):
         assert hasattr(func, "__wrapped__"), func.__name__
@@ -443,10 +445,15 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
     workspace = inspect.getsource(sector_app._analysis_workspace.__wrapped__)
     assert workspace.index('c_calc.button(') < workspace.index('c_view.selectbox(')
     assert "_switch_view" not in workspace
-    for panel in (sector_app._report_panel, sector_app._save_load_panel):
-        panel_source = inspect.getsource(panel.__wrapped__)
-        assert "st.expander(" in panel_source
-        assert "parent." not in panel_source
+    report_source = inspect.getsource(sector_app._report_workspace.__wrapped__)
+    assert "st.container(border=True)" in report_source
+    assert "_generate_report(inp)" in report_source
+    assert report_source.index("_restore_report_state") < report_source.index(
+        "_normalise_report_profile_session_state()"
+    ) < report_source.index("_seeded_segmented_control")
+    save_source = inspect.getsource(sector_app._save_load_panel.__wrapped__)
+    assert "st.expander(" in save_source
+    assert "parent." not in save_source
 
     input_workspace = inspect.getsource(sector_app._input_workspace.__wrapped__)
     input_commit = inspect.getsource(sector_app._commit_input_fragment)
@@ -469,7 +476,6 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
         'st.session_state[_INPUT_BUILD_KEY] = False',
         'st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"',
         "_measured_autosave()",
-        "_generate_report(inp)",
     )
     assert [input_commit.index(token) for token in ordered_commit] == sorted(
         input_commit.index(token) for token in ordered_commit
@@ -479,6 +485,12 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
     assert 'st.rerun(scope="app")' in manual_exit
     assert "on_click=_open_analysis_content" not in app_source
     assert "on_click=_open_manual_dialog" not in app_source
+    assert app_source.count(
+        "st.session_state[_INPUT_BUILD_KEY] = False"
+    ) == 1
+    assert "and _has_uncommitted_inputs()" in inspect.getsource(
+        sector_app._maybe_autosave
+    )
 
 
 def test_input_fragment_exit_callbacks_request_full_app_reruns(monkeypatch):
@@ -815,7 +827,7 @@ def test_about_panel_shows_version_author_and_licensee():
     # The About panel carries the single-source release and ownership metadata.
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_input_tab(at, "Project")
     blob = " | ".join(m.value for m in at.markdown) + \
         " | ".join(c.value for c in at.caption)
     from sector import __version__ as version   # single source; no per-bump edit
@@ -2399,7 +2411,7 @@ def test_save_load_round_trip_through_the_app():
     assert plastic.loc[0, "name"] == "PL-ROUNDTRIP"
     assert plastic.loc[0, "description"] == "Source: Register C7"
     assert at.session_state["_loaded_project_provenance"]["input_hash_valid"] is True
-    _goto_input_tab(at, "Project & report")
+    _goto_input_tab(at, "Project")
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
@@ -3406,7 +3418,7 @@ def test_analysis_fragment_honours_hidden_disabled_autosave(tmp_path, monkeypatc
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_input_tab(at, "Project")
     at.checkbox(key="autosave_on").set_value(False).run()
     assert at.session_state["_durable_input_scalars"]["autosave_on"] is False
     _goto_page(at, "Analysis")
@@ -3426,7 +3438,7 @@ def test_analysis_fragment_honours_hidden_autosave_interval(tmp_path, monkeypatc
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_input_tab(at, "Project")
     at.number_input(key="autosave_min").set_value(120).run()
     assert at.session_state["_durable_input_scalars"]["autosave_min"] == 120
     _goto_page(at, "Analysis")
@@ -3479,7 +3491,7 @@ def test_autosave_disabled_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_input_tab(at, "Project")
     at.checkbox(key="autosave_on").set_value(False).run()
     at.session_state["_autosave_t"] = 0.0          # due, but autosave is off
     at.run()
@@ -3524,11 +3536,11 @@ def test_autosave_skips_a_blank_outline(tmp_path, monkeypatch):
 
 
 def test_generate_report_produces_pdf():
-    # The Report panel's Generate button builds a PDF from the current section
+    # The Report workspace builds a PDF from the current section
     # (figures skipped in the test so it does not need a browser).
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     at.session_state["_report_no_figures"] = True
     profile = at.segmented_control(key="rep_report_content")
     assert profile.value == "Standard"
@@ -3548,12 +3560,53 @@ def test_generate_report_produces_pdf():
         "Sector_T-1_S-1_Rev-A-2_"
     )
     assert at.session_state["report_filename"].endswith(".pdf")
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "recalculated-for-report"
+    )
+
+
+def test_metadata_only_report_edit_reuses_frozen_engineering_results(
+    monkeypatch,
+):
+    import sector_report
+
+    captured = {}
+
+    def capture_report(meta, inp, out, **_kwargs):
+        captured["meta"] = copy.deepcopy(meta)
+        captured["inp"] = copy.deepcopy(inp)
+        captured["out"] = copy.deepcopy(out)
+        return b"%PDF-metadata-capture"
+
+    monkeypatch.setattr(sector_report, "build_report", capture_report)
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    calculation = copy.deepcopy(at.session_state["calculation_record"])
+    engineering_hash = calculation["engineering_input_sha256"]
+
+    _goto_page(at, "Report")
+    at.text_input(key="rep_proj_name").set_value("Updated document title").run()
+    at.text_input(key="rep_rev").set_value("B").run()
+    at.button(key="gen_report").click().run()
+
+    assert not at.exception
+    assert at.session_state["calculation_record"] == calculation
+    record = at.session_state["report_generation_record"]
+    assert record["result_source"] == "reused-current-analysis-results"
+    assert record["engineering_input_sha256"] == engineering_hash
+    assert captured["meta"]["proj_name"] == "Updated document title"
+    assert captured["meta"]["rev"] == "B"
+    assert captured["meta"]["engineering_input_sha256"] == engineering_hash
+    assert captured["meta"]["project_state_sha256"] == record[
+        "project_state_sha256"
+    ]
 
 
 def test_report_download_becomes_stale_after_metadata_change():
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     at.session_state["_report_no_figures"] = True
     _set(
         at,
@@ -3571,7 +3624,7 @@ def test_report_download_becomes_stale_after_metadata_change():
 def test_report_download_becomes_stale_after_content_choice_change():
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     at.session_state["_report_no_figures"] = True
     at.button(key="gen_report").click().run()
     assert not any("Report out of date" in w.value for w in at.warning)
@@ -3620,29 +3673,38 @@ def test_hot_reload_migrates_exact_legacy_report_profile_state():
     at.session_state["_pending_input_events"] = {
         "rep_report_content": legacy,
     }
-    at.session_state["_input_tab"] = "Project & report"
+    at.session_state["_main_page"] = "Report"
 
     at.run()
 
     assert not at.exception
     assert at.segmented_control(key="rep_report_content").value == "Audit"
     assert at.session_state["rep_report_content"] == "Audit"
-    assert at.session_state["_durable_input_scalars"][
+    assert "rep_report_content" not in at.session_state["_durable_input_scalars"]
+    assert at.session_state["_durable_report_scalars"][
         "rep_report_content"
     ] == "Audit"
     assert "_pending_input_events" not in at.session_state
+    assert "_pending_report_events" not in at.session_state
 
 
 def test_hot_reload_surfaces_unknown_report_profile_and_clears_old_report():
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     at.session_state["rep_report_content"] = "Unexpected report"
-    at.session_state["_durable_input_scalars"][
-        "rep_report_content"
-    ] = "Unexpected report"
+    at.session_state["_durable_input_scalars"]["rep_report_content"] = (
+        "Unexpected report"
+    )
+    at.session_state["_durable_report_scalars"]["rep_report_content"] = (
+        "Unexpected report"
+    )
+    at.session_state["_pending_report_events"] = {
+        "rep_report_content": "Unexpected report",
+    }
     at.session_state["report_buffer"] = b"old report"
     at.session_state["report_signature"] = ("old",)
+    at.session_state["report_generation_record"] = {"old": True}
 
     at.run()
 
@@ -3650,10 +3712,92 @@ def test_hot_reload_surfaces_unknown_report_profile_and_clears_old_report():
     assert at.segmented_control(key="rep_report_content").value == "Standard"
     assert "report_buffer" not in at.session_state
     assert "report_signature" not in at.session_state
+    assert "report_generation_record" not in at.session_state
+    assert "rep_report_content" not in at.session_state["_durable_input_scalars"]
+    assert at.session_state["_durable_report_scalars"][
+        "rep_report_content"
+    ] == "Standard"
+    assert "_pending_report_events" not in at.session_state
     assert any(
-        "not recognised and was not used" in item.value
-        for item in at.error
+        "not recognised" in item.value and "reset to Standard" in item.value
+        for item in at.warning
     )
+
+
+def test_report_fragment_normalises_hostile_profile_before_strict_mount(
+    monkeypatch,
+):
+    import sector_app
+
+    class FakeBox:
+        def __init__(self, state):
+            self.state = state
+            self.warnings = []
+
+        def markdown(self, *_args, **_kwargs):
+            return None
+
+        def caption(self, *_args, **_kwargs):
+            return None
+
+        def warning(self, message, **_kwargs):
+            self.warnings.append(message)
+
+        def text_input(self, _label, *, key, **_kwargs):
+            return self.state[key]
+
+        def text_area(self, _label, *, key, **_kwargs):
+            return self.state[key]
+
+        def segmented_control(self, _label, _options, *, key, **_kwargs):
+            return self.state[key]
+
+        def columns(self, count):
+            return tuple(self for _ in range(count))
+
+        def button(self, *_args, **_kwargs):
+            return False
+
+        def info(self, *_args, **_kwargs):
+            return None
+
+        def empty(self):
+            return self
+
+    class FakeStreamlit:
+        def __init__(self):
+            self.session_state = {
+                "rep_report_content": "Hostile stale value",
+                "_durable_report_scalars": {
+                    "rep_report_content": "Hostile stale value",
+                },
+                "report_buffer": b"%PDF-old",
+                "report_signature": ("old",),
+            }
+            self.box = FakeBox(self.session_state)
+
+        def subheader(self, *_args, **_kwargs):
+            return None
+
+        def caption(self, *_args, **_kwargs):
+            return None
+
+        def container(self, **_kwargs):
+            return self.box
+
+    fake = FakeStreamlit()
+    monkeypatch.setattr(sector_app, "st", fake)
+    monkeypatch.setattr(sector_app, "_measured_autosave", lambda: None)
+
+    sector_app._report_workspace.__wrapped__({"signature": ("frozen",)})
+
+    assert fake.session_state["rep_report_content"] == "Standard"
+    assert fake.session_state["_durable_report_scalars"][
+        "rep_report_content"
+    ] == "Standard"
+    assert "report_buffer" not in fake.session_state
+    assert "report_signature" not in fake.session_state
+    assert any("reset to Standard" in warning for warning in fake.box.warnings)
 
 
 def test_autosave_detects_report_profile_only_change(tmp_path, monkeypatch):
@@ -3662,7 +3806,8 @@ def test_autosave_detects_report_profile_only_change(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
+    at.text_input(key="rep_proj_name").set_value("Durable project").run()
     at.segmented_control(key="rep_report_content").set_value("Audit").run()
     at.session_state["_autosave_t"] = 0.0
     at.run()
@@ -3670,20 +3815,115 @@ def test_autosave_detects_report_profile_only_change(tmp_path, monkeypatch):
     saved = tmp_path / "autosave.json"
     assert saved.exists()
     _, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert scalars["rep_proj_name"] == "Durable project"
     assert scalars[project_io.REPORT_PROFILE_KEY] == "Audit"
+
+
+def test_analysis_autosave_waits_for_interrupted_scalar_and_table_edit(
+    tmp_path,
+    monkeypatch,
+):
+    import project_io
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    at.session_state["_autosave_t"] = 0.0
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["_pending_input_events"] = {
+        "conc_fck": 60.0,
+        "plastic_cases_editor": {"edited_rows": {0: {"Mx_kNm": 125.0}}},
+    }
+    at.session_state["conc_fck"] = 60.0
+
+    at.segmented_control(key="_main_page").set_value("Analysis").run()
+
+    saved = tmp_path / "autosave.json"
+    assert not at.exception
+    assert at.session_state["_inputs_build_in_progress"] is True
+    assert set(at.session_state["_pending_input_events"]) == {
+        "conc_fck",
+        "plastic_cases_editor",
+    }
+    assert not saved.exists()
+
+    _goto_page(at, "Inputs")
+
+    assert not at.exception
+    assert at.session_state["_inputs_build_in_progress"] is False
+    assert "_pending_input_events" not in at.session_state
+    assert saved.exists()
+    _, scalars = project_io.parse_project(saved.read_text(encoding="utf-8"))
+    assert scalars["conc_fck"] == pytest.approx(60.0)
 
 
 def test_report_download_becomes_stale_after_analysis_input_change():
     at = _fresh()
     at.run()
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     at.session_state["_report_no_figures"] = True
     at.button(key="gen_report").click().run()
     assert not any("Report out of date" in w.value for w in at.warning)
 
     _set(at, ("number_input", "pl_Mx", 123.0))
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     assert any("Report out of date" in w.value for w in at.warning)
+
+
+def test_interrupted_input_edit_blocks_report_until_payload_is_committed():
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    old_result_signature = at.session_state["result_sig"]
+    old_input_hash = at.session_state["calculation_record"][
+        "engineering_input_sha256"
+    ]
+    _goto_page(at, "Report")
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+    old_report = at.session_state["report_buffer"]
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "reused-current-analysis-results"
+    )
+
+    _goto_page(at, "Inputs")
+    at.session_state["_inputs_build_in_progress"] = True
+    at.session_state["_pending_input_events"] = {"conc_fck": 60.0}
+    at.session_state["conc_fck"] = 30.0
+    at.segmented_control(key="_main_page").set_value("Report").run()
+
+    assert not at.exception
+    assert at.session_state["_inputs_build_in_progress"] is True
+    assert at.session_state["_latest_inputs"]["signature"] == old_result_signature
+    assert at.button(key="gen_report").disabled is True
+    assert at.session_state["report_buffer"] == old_report
+    assert any(
+        "Inputs edit was interrupted" in warning.value
+        for warning in at.warning
+    )
+    assert not any(
+        getattr(item, "label", "") == "Download report (PDF)"
+        for item in at.get("download_button")
+    )
+
+    _goto_page(at, "Inputs")
+    assert at.session_state["_inputs_build_in_progress"] is False
+    assert "_pending_input_events" not in at.session_state
+    assert at.session_state["_latest_inputs"]["concrete"].fck == pytest.approx(
+        60.0
+    )
+
+    _goto_page(at, "Report")
+    assert at.button(key="gen_report").disabled is False
+    at.button(key="gen_report").click().run()
+
+    assert not at.exception
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "recalculated-for-report"
+    )
+    assert at.session_state["report_generation_record"]["input_sha256"] != (
+        old_input_hash
+    )
 
 
 def test_direction_alias_is_visible_before_checks_and_follows_the_cut():
@@ -3756,25 +3996,99 @@ def test_direction_alias_changes_only_the_report_document_signature():
     assert without_alias[1] != with_alias[1]
 
 
-def test_calculation_fallback_hash_excludes_direction_alias(monkeypatch):
+def test_engineering_input_hash_uses_only_the_frozen_result_signature():
     import sector_app
 
-    def invalid_project_boundary():
-        raise ValueError("invalid canonical project")
-
-    monkeypatch.setattr(
-        sector_app, "_project_input_hash", invalid_project_boundary
-    )
-    base = {"mode": "Plastic", "modelled_direction_alias": "span"}
+    base = {
+        "signature": ("plastic", 1.0),
+        "mode": "Plastic",
+        "modelled_direction_alias": "span",
+    }
     renamed = {**base, "modelled_direction_alias": "deck north"}
-    audit = {**base, "rep_report_content": "Audit"}
+    metadata = {**base, "rep_proj_name": "New title", "rep_report_content": "Audit"}
+    changed = {**base, "signature": ("plastic", 2.0)}
 
-    assert sector_app._calculation_input_hash(base) == (
-        sector_app._calculation_input_hash(renamed)
+    assert sector_app._engineering_input_hash(base) == (
+        sector_app._engineering_input_hash(renamed)
     )
-    assert sector_app._calculation_input_hash(base) == (
-        sector_app._calculation_input_hash(audit)
+    assert sector_app._engineering_input_hash(base) == (
+        sector_app._engineering_input_hash(metadata)
     )
+    assert sector_app._engineering_input_hash(base) != (
+        sector_app._engineering_input_hash(changed)
+    )
+
+
+def test_report_reuse_requires_one_current_coherent_calculation_tuple():
+    import project_io
+    import sector_app
+
+    inp = {"signature": ("engineering", 1.0)}
+    results = {"plastic": {"mx": [1.0], "my": [2.0]}}
+    engineering_hash = sector_app._engineering_input_hash(inp)
+    record = {
+        "performed_at_utc": "2026-08-13T12:00:00+00:00",
+        "sector_version": "0.93-test",
+        "source_revision": "current-revision",
+        "engineering_input_sha256": engineering_hash,
+        "result_sha256": project_io.result_sha256(results),
+    }
+    state = {
+        "results": results,
+        "result_sig": inp["signature"],
+        "result_input_snapshot": copy.deepcopy(inp),
+        "calculation_record": record,
+    }
+
+    retained = sector_app._retained_analysis_for_report(
+        inp,
+        state=state,
+        product_version="0.93-test",
+        revision="current-revision",
+    )
+    assert retained is not None
+    assert retained[0] == results and retained[0] is not results
+
+    legacy_record = {
+        key: value
+        for key, value in record.items()
+        if key != "engineering_input_sha256"
+    }
+    mutations = (
+        ("calculation_record", None),
+        ("calculation_record", legacy_record),
+        ("calculation_record", {**record, "sector_version": "0.92"}),
+        (
+            "calculation_record",
+            {**record, "source_revision": "older-revision"},
+        ),
+        (
+            "calculation_record",
+            {**record, "engineering_input_sha256": "0" * 64},
+        ),
+        (
+            "calculation_record",
+            {**record, "result_sha256": "0" * 64},
+        ),
+        ("result_sig", ("engineering", 2.0)),
+        ("result_input_snapshot", None),
+    )
+    for key, value in mutations:
+        incoherent = copy.deepcopy(state)
+        incoherent[key] = value
+        assert sector_app._retained_analysis_for_report(
+            inp,
+            state=incoherent,
+            product_version="0.93-test",
+            revision="current-revision",
+        ) is None
+
+    assert sector_app._retained_analysis_for_report(
+        {"signature": ("engineering", 2.0)},
+        state=state,
+        product_version="0.93-test",
+        revision="current-revision",
+    ) is None
 
 
 def test_capacity_only_toggle_drops_utilisation_without_locking_case_table():
@@ -5047,20 +5361,20 @@ def test_applied_moments_default_to_zero():
 
 
 def test_page_navigation_and_input_stages_follow_the_workflow_order():
-    # Only the selected top-level page renders. The Inputs page stages the four
-    # engineering steps plus project/report without tying either solver to a limit
-    # state.
+    # Only the selected top-level workspace renders. Inputs stages four engineering
+    # steps plus Project; Report is the peer immediately right of Analysis.
     at = _fresh()
     at.run()
     d = chr(0x00B7)   # the step-number middle dot (v0.63)
     nav = at.segmented_control(key="_main_page")
-    assert nav.options == ["Inputs", "Analysis"] and nav.value == "Inputs"
+    assert nav.options == ["Inputs", "Analysis", "Report"]
+    assert nav.value == "Inputs"
     expected_outer = [
         f"1 {d} Analysis settings",
         f"2 {d} Section",
         f"3 {d} Material parameters",
         f"4 {d} Loads",
-        "Project & report",
+        "Project",
     ]
     assert [tab.label for tab in at.tabs] == expected_outer
     assert at.session_state["_input_tab"] == expected_outer[0]
@@ -5071,13 +5385,15 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
     ]
-    _goto_input_tab(at, "Project & report")
+    _goto_input_tab(at, "Project")
     labels = [ex.label for ex in at.expander]
-    assert labels == [
-        "About",
-        "Report",
-        "Save / Load",
-    ]
+    assert labels == ["About", "Save / Load"]
+    assert "rep_proj_no" not in {widget.key for widget in at.text_input}
+
+    _goto_page(at, "Report")
+    assert at.segmented_control(key="rep_report_content").value == "Standard"
+    assert "rep_proj_no" in {widget.key for widget in at.text_input}
+    assert not at.expander
 
 
 def test_v093_hot_reload_purges_schema23_bridge_state_before_widgets_mount():
@@ -5182,7 +5498,7 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
         "Mild steel",
         "Prestressing steel",
         f"4 {dot} Loads",
-        "Project & report",
+        "Project",
     ]
     number_keys = {widget.key for widget in at.number_input}
     assert "conc_fck" in number_keys
@@ -5901,17 +6217,20 @@ def test_bonded_tendon_ratio_invalidates_elastic_results_and_report():
     elastic_before = at.session_state["results"]["elastic"]
     wk_before = elastic_before["crack"]["wk"]
 
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     at.session_state["_report_no_figures"] = True
     at.button(key="gen_report").click().run()
     assert "report_buffer" in at.session_state
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "reused-current-analysis-results"
+    )
     assert not any("Report out of date" in w.value for w in at.warning)
 
     _goto_input_tab(at, "Analysis settings")
     _set(at, ("number_input", "sls_tendon_xi", 0.75))
     _select_view(at, "Elastic Results")
     assert any("press Calculate" in w.value for w in at.warning)
-    _goto_input_tab(at, "Project & report")
+    _goto_page(at, "Report")
     assert any("Report out of date" in w.value for w in at.warning)
 
     _calculate(at)

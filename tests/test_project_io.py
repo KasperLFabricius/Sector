@@ -1308,6 +1308,7 @@ def test_obsolete_compliance_and_approval_inputs_are_not_in_schema():
 def test_calculation_record_is_correlated_but_results_are_not_persisted():
     tables, scalars = _current_project()
     digest = project_io.input_sha256(tables, scalars)
+    engineering_digest = "e" * 64
     text = project_io.dump_project(
         tables,
         scalars,
@@ -1316,6 +1317,7 @@ def test_calculation_record_is_correlated_but_results_are_not_persisted():
             "sector_version": "0.91",
             "source_revision": "abc123",
             "input_sha256": digest,
+            "engineering_input_sha256": engineering_digest,
             "result_sha256": "f" * 64,
         },
     )
@@ -1323,6 +1325,9 @@ def test_calculation_record_is_correlated_but_results_are_not_persisted():
 
     assert provenance["results_included"] is False
     assert provenance["calculation"]["matches_saved_inputs"] is True
+    assert provenance["calculation"]["engineering_input_sha256"] == (
+        engineering_digest
+    )
     assert provenance["calculation"]["result_sha256"] == "f" * 64
 
     with pytest.raises(ValueError, match="result_sha256"):
@@ -1330,6 +1335,12 @@ def test_calculation_record_is_correlated_but_results_are_not_persisted():
             tables,
             scalars,
             calculation={"input_sha256": digest, "result_sha256": "not-a-hash"},
+        )
+    with pytest.raises(ValueError, match="engineering_input_sha256"):
+        project_io.dump_project(
+            tables,
+            scalars,
+            calculation={"engineering_input_sha256": "not-a-hash"},
         )
 
 
