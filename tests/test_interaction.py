@@ -108,3 +108,49 @@ def test_interaction_reaches_the_true_axial_limits_with_prestress():
     pts = solve_interaction(sec, c, s, 90.0, prestress=pre, n_points=8)
     assert pts[0].axial == pytest.approx(true_Nt, abs=1.0)    # tension limit reached
     assert pts[-1].axial == pytest.approx(true_Nc, abs=1.0)   # squash reached
+
+
+def test_offset_tendon_boundary_keeps_exact_squash_endpoint_reachable():
+    """Regression for the reported default section plus one offset tendon."""
+    from sector import material_presets, templates
+    from sector.section import Section
+
+    outer = templates.rectangle(0.4, 0.6)
+    bars = templates.merge_bars(
+        templates.bar_row(-0.25, -0.15, 0.15, 6, 20.0),
+        templates.bar_row(0.25, -0.15, 0.15, 2, 20.0),
+    )
+    section = Section.from_polygon(
+        outer,
+        bars,
+        tendons_xy_area_mm2=[(0.045, 0.0, templates.bar_area(10.0))],
+    )
+    concrete_values = dict(
+        material_presets.CONCRETE_PRESETS[
+            "DS/EN 1992-1-1:2005 + DK NA:2024"
+        ]
+    )
+    concrete_values["fck"] = 40.0
+    concrete = material_presets.build_concrete(**concrete_values)
+    steel = material_presets.build_mild(
+        **material_presets.MILD_PRESETS[
+            "DS/EN 1992-1-1:2005 + DK NA:2024"
+        ]
+    )
+    prestress_values = dict(
+        material_presets.PRESTRESS_PRESETS["EN 1992-1-1:2005"]
+    )
+    prestress_values["IS"] = 7.0
+    prestress = material_presets.build_prestress(**prestress_values)
+
+    squash_probe = plastic_capacity_at_angle(
+        section, concrete, steel, 1.0e7, 90.0, prestress=prestress
+    )
+    points = solve_interaction(
+        section, concrete, steel, 90.0, prestress=prestress, n_points=32
+    )
+
+    assert not squash_probe.axial_reachable
+    assert not squash_probe.converged
+    assert all(point.converged for point in points)
+    assert points[-1].axial == pytest.approx(squash_probe.axial, abs=1.0e-8)

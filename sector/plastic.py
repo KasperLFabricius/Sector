@@ -1052,7 +1052,15 @@ def solve_interaction(
 
     pts = []
     for i in range(n_points + 1):
-        P = N_t + (N_c - N_t) * (i / n_points)
+        # Retain the probed limits exactly at the inclusive endpoints. Rebuilding
+        # N_c as N_t + (N_c - N_t) can round one ulp past the reachable squash
+        # load, correctly causing the strict reachability guard to reject it.
+        if i == 0:
+            P = N_t
+        elif i == n_points:
+            P = N_c
+        else:
+            P = N_t + (N_c - N_t) * (i / n_points)
         p = _cap(P)
         pts.append(InteractionPoint(axial=p.axial, Mx=p.Mx, My=p.My,
                                     converged=p.converged))
