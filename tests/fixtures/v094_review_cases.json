@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "programme_base": {
+    "commit": "c1086a2cb8b20a8339ae72bf30218b0b8c6c4dfe",
+    "tree": "1ac7905eb5e6fd48cce50def16f769a7e8458be0",
+    "product_version": "0.93",
+    "project_schema": 24
+  },
+  "supplied_artifacts": {
+    "report_revision": "95eadcd19e313a581aefb507bc69bdc3f8b793e2",
+    "reports": [
+      {
+        "profile": "Standard",
+        "pages": 69,
+        "sha256": "cde7f6deb48280fcabc4f3b939022512e6ef7f1ceb721906bdfa184a459a089d"
+      },
+      {
+        "profile": "Audit",
+        "pages": 78,
+        "sha256": "d5024c418f364af0780293055c628f4e0ab670e86161a807c1ae70243f6d30f0"
+      },
+      {
+        "profile": "Brief",
+        "pages": 4,
+        "sha256": "e9c1ca57cb1f6cf1336e4eb65e969e941e221ca819af085b76a413df3f0d923a"
+      }
+    ],
+    "screenshots": {
+      "nm_nonconvergence_sha256": "1f1d1bca22d399827acaba6deddc512e2be057b0aef34ce24089b0b56aa76bf9",
+      "shear_overlap_sha256": "a6b1c81f34f3679092f3794fcb164e70f241a19da4190034488b863394e81afd"
+    }
+  },
+  "nm_prestress": {
+    "section": "rectangle",
+    "width_mm": 400.0,
+    "height_mm": 600.0,
+    "tendon": {
+      "x_mm": 45.0,
+      "y_mm": 0.0,
+      "diameter_mm": 10.0,
+      "area_mm2": 78.53981633974483,
+      "initial_prestrain": 0.007
+    },
+    "acceptance": {
+      "all_four_branches_converge": true,
+      "exact_first_and_last_axial_endpoints": true,
+      "solver_tolerance_unchanged": true
+    }
+  },
+  "fatigue_zero_range": {
+    "tendon_id": "P1",
+    "tendon_x_mm": 45.0,
+    "tendon_y_mm": 0.0,
+    "cycles": 365000.0,
+    "long_mx_knm": 15.0,
+    "cyclic_action_vector": [0.0, 0.0, 0.0],
+    "observed_report_stress_range_mpa": 9.53e-10,
+    "observed_report_miner_damage": 3.285e-102,
+    "observed_proof_stress_utilisation": 0.95,
+    "acceptance": {
+      "stress_range_mpa": 0.0,
+      "miner_damage": 0.0,
+      "life": "positive_infinity"
+    }
+  },
+  "report_observations": {
+    "brief_must_include_relevant_inputs": true,
+    "subscript_overlap_example": "Standard Table 2.11",
+    "radical_fix_already_in_base": true,
+    "stale_profile_state": {
+      "widget_key": "rep_report_content",
+      "recognised_legacy_values_migrate": true,
+      "unknown_value_resets_to": "Standard",
+      "visible_notice": true,
+      "old_report_invalidated": true,
+      "app_execution_continues": true
+    }
+  }
+}
