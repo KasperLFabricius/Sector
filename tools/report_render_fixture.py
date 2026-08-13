@@ -1810,11 +1810,27 @@ def validate_pdf_content(
             "a material heading/provenance is separated from its definition"
         )
 
-    settings_page = next(
-        (page.extract_text() or "" for page in reader.pages
-         if "Analysis settings" in (page.extract_text() or "")),
-        "",
-    )
+    settings_pages = []
+    for page in reader.pages:
+        has_settings_h2 = False
+
+        def collect_settings_h2(text, _cm, _tm, _font, font_size):
+            nonlocal has_settings_h2
+            if (
+                " ".join(text.split()) == "Analysis settings"
+                and math.isclose(float(font_size), 11.5, abs_tol=1.0e-6)
+            ):
+                has_settings_h2 = True
+
+        page_text = page.extract_text(visitor_text=collect_settings_h2) or ""
+        if has_settings_h2:
+            settings_pages.append(page_text)
+    if len(settings_pages) != 1:
+        raise AssertionError(
+            "expected exactly one Analysis settings level-2 heading, "
+            f"found {len(settings_pages)}"
+        )
+    settings_page = settings_pages[0]
     if "Sweep start" not in settings_page:
         raise AssertionError("the analysis-settings heading is separated from its table")
     for heading, first_case in (
