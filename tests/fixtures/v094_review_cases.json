@@ -34,12 +34,72 @@
     "section": "rectangle",
     "width_mm": 400.0,
     "height_mm": 600.0,
+    "reinforcement_rows": [
+      {
+        "y_mm": -250.0,
+        "x_start_mm": -150.0,
+        "x_end_mm": 150.0,
+        "count": 6,
+        "diameter_mm": 20.0
+      },
+      {
+        "y_mm": 250.0,
+        "x_start_mm": -150.0,
+        "x_end_mm": 150.0,
+        "count": 2,
+        "diameter_mm": 20.0
+      }
+    ],
     "tendon": {
       "x_mm": 45.0,
       "y_mm": 0.0,
       "diameter_mm": 10.0,
       "area_mm2": 78.53981633974483,
       "initial_prestrain": 0.007
+    },
+    "materials": {
+      "concrete": {
+        "basis": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "curve": 2,
+        "fck_mpa": 40.0,
+        "gamma_c": 1.45,
+        "alpha_cc": 1.0,
+        "eps_c2_per_mille": 2.0,
+        "eps_cu2_per_mille": 3.5,
+        "n": 2.0,
+        "k_tc": 1.0
+      },
+      "mild_steel": {
+        "basis": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "curve": 3,
+        "fytk_mpa": 550.0,
+        "fyck_mpa": 550.0,
+        "futk_mpa": 550.0,
+        "elastic_modulus_gpa": 200.0,
+        "gamma_y": 1.2,
+        "gamma_u": 1.2,
+        "gamma_E": 1.0,
+        "ultimate_strain_per_mille": 50.0,
+        "k": 1.0
+      },
+      "prestressing_steel": {
+        "basis": "EN 1992-1-1:2005",
+        "curve": 7,
+        "fytk_mpa": 1640.0,
+        "futk_mpa": 1860.0,
+        "elastic_modulus_gpa": 195.0,
+        "gamma_y": 1.15,
+        "gamma_u": 1.15,
+        "gamma_E": 1.0,
+        "ultimate_strain_per_mille": 35.0,
+        "initial_prestrain_per_mille": 7.0,
+        "k": 1.0
+      }
+    },
+    "sweep": {
+      "angles_deg": [90.0, 270.0, 0.0, 180.0],
+      "points_per_branch": 32,
+      "unreachable_squash_probe_kn": 10000000.0
     },
     "acceptance": {
       "all_four_branches_converge": true,

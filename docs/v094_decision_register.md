@@ -41,6 +41,7 @@ result.
 | D094-018 | Add trapezoid, L, I, U and annulus Quick Sections, with inverted T as an orientation. | Invalid dimensions fail before geometry construction; generated reinforcement remains inside the valid concrete region. | Exact geometry, preview and project round-trip tests. | PR-13 |
 | D094-019 | Sector does not issue a global code-compliance conclusion. | Status vocabulary remains bound to implemented equations and user-specified criteria. | Programme-wide status and absence checks. | All; PR-14 closes |
 | D094-020 | A stale persisted report-profile selection must never abort the app. | Current values are retained, recognised legacy values migrate, and any unrecognised `rep_report_content` value is cleared from every live/durable copy, reset to Standard and explained with a visible notice before the keyed widget mounts. Any previously generated report is invalidated. | Hot-session, autosave/project-restore and packaged-startup AppTests using recognised and hostile stale values. | PR-09 |
+| D094-021 | Every implementation PR requires a clean GitHub Codex Review on its complete final head before merge. | A review finding is corrected, pushed and followed by `@codex review`; merge is blocked until Codex has reviewed that exact head and has no open finding. Local/subagent review is supplementary only. | Latest-head Codex review identity, zero unresolved Codex threads and clean-review reaction/receipt. | All remaining PRs; PR-01/PR-02 retrospective corrections |
 
 ## Standards boundary
 
