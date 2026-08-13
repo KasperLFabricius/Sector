@@ -53,6 +53,7 @@ def _reinforcement(element_id="R1", utilisation=0.60):
         yield_long_check=None,
         yield_design_total_check=None,
         governing_yield_check=None,
+        zero_cyclic_range=False,
     )
     return NS(
         element_id=element_id,
@@ -129,6 +130,7 @@ def _spectrum(*, utilisation=0.60, converged=True, passed=True):
         converged=True,
         bond_method="Perfect bond",
         design_action_factor=1.1,
+        zero_cyclic_action=False,
     )
     search = NS(
         x_m=0.2,
@@ -156,6 +158,8 @@ def _spectrum(*, utilisation=0.60, converged=True, passed=True):
         concrete_method="Explicit Palmgren-Miner spectrum",
         governing_domain="reinforcement",
         governing_criterion="Miner damage",
+        miner_damage=utilisation,
+        yield_utilisation=0.446,
     )
 
 
@@ -167,6 +171,12 @@ def _payload(**overrides):
         "converged": spectrum.converged,
         "passed": spectrum.passed,
         "utilisation": spectrum.utilisation,
+        "governing_domain": spectrum.governing_domain,
+        "governing_criterion": spectrum.governing_criterion,
+        "governing_reinforcement_id": spectrum.governing_reinforcement_id,
+        "governing_concrete_fibre": spectrum.governing_concrete_fibre,
+        "miner_damage": spectrum.miner_damage,
+        "yield_utilisation": spectrum.yield_utilisation,
         "reinforcement_properties": (
             NS(element_id="R1", n_star=2.0e6),
         ),
@@ -204,7 +214,10 @@ def test_summary_rows_retain_each_independent_spectrum_and_governing_criterion()
         "reinforcement_elements": 1,
         "concrete_fibres": 1,
         "governing": "R1 - Miner damage",
+        "miner_damage": 0.60,
+        "yield_utilisation": 0.446,
         "utilisation": 0.60,
+        "zero_cyclic_bins": 0,
         "search_converged": True,
         "search_upper_damage": 0.011,
     }]
@@ -226,6 +239,7 @@ def test_reinforcement_rows_expose_miner_yield_and_full_bin_evidence():
     assert bins[0]["cycles_to_failure"] == pytest.approx(3.2e6)
     assert bins[0]["damage"] == pytest.approx(0.0625)
     assert bins[0]["bond_method"] == "Perfect bond"
+    assert bins[0]["range_state"] == "Cyclic range"
 
 
 def test_result_rows_preserve_infinite_life_and_failure_evidence():
@@ -270,6 +284,7 @@ def test_spectrum_bin_rows_publish_retained_state_without_recalculation():
     assert row["cycles"] == pytest.approx(2.0e5)
     assert row["gamma_ff"] == pytest.approx(1.1)
     assert row["bond_method"] == "Perfect bond"
+    assert row["cyclic_action"] == "Nonzero cyclic action"
     assert "max_design_stress_range_mpa" not in row
     assert "max_concrete_compression_mpa" not in row
 
@@ -280,6 +295,24 @@ def test_spectrum_bin_rows_publish_retained_state_without_recalculation():
         and isinstance(node.func, ast.Name)
         and node.func.id == "max"
         for node in ast.walk(tree)
+    )
+
+
+def test_overall_note_separates_miner_from_yield_proof_utilisation():
+    payload = _payload()
+
+    assert presentation.overall_note(payload) == (
+        "governing: R1 - Miner damage; max Miner D 0.6; "
+        "max yield/proof utilisation 44.6 %"
+    )
+
+
+def test_failed_overall_note_retains_governing_criterion_breakdown():
+    payload = _payload(spectrum=_spectrum(utilisation=1.2, passed=False))
+
+    assert presentation.overall_note(payload) == (
+        "Governing grouped spectrum; governing: R1 - Miner damage; "
+        "max Miner D 1.2; max yield/proof utilisation 44.6 %"
     )
 
 

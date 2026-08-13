@@ -9479,6 +9479,7 @@ def _fatigue_reinforcement_panel(payload, spectrum):
             "Bin": row["bin"],
             "Cycles": row["cycles"],
             "Status": row["status"],
+            "Range state": row["range_state"],
             "Long stress [MPa]": row["stress_long_mpa"],
             "Elastic total [MPa]": row["stress_total_elastic_mpa"],
             "Fatigue total [MPa]": row["stress_total_mpa"],
@@ -9699,6 +9700,7 @@ def _fatigue_spectrum_panel(inp, spectrum):
             "Description": row["description"],
             "Cycles": row["cycles"],
             "Status": row["status"],
+            "Cyclic action": row["cyclic_action"],
             "gamma_Ff": row["gamma_ff"],
             "Bond method": row["bond_method"],
         }
@@ -9813,9 +9815,14 @@ def fatigue_view(inp, results, *, stale=False):
     utilisation = fatigue_presentation.evidence_number(
         payload.get("utilisation")
     )
+    breakdown = fatigue_presentation.criterion_breakdown(payload)
     _fatigue_status_callout(
         status,
-        f"{governing_name} | utilisation {viz.pct(utilisation)}",
+        (
+            f"{governing_name} | governing utilisation "
+            f"{viz.pct(utilisation)}"
+            + (f" | {breakdown}" if breakdown else "")
+        ),
     )
     warnings = tuple(payload.get("warnings") or ())
     if warnings:
@@ -9832,17 +9839,24 @@ def fatigue_view(inp, results, *, stale=False):
             "Reinforcement": row["reinforcement_elements"],
             "Concrete fibres": row["concrete_fibres"],
             "Governing": row["governing"],
+            "Max Miner D": row["miner_damage"],
+            "Max yield / proof util. [%]": (
+                None if row["yield_utilisation"] is None
+                else 100.0 * row["yield_utilisation"]
+            ),
             "Utilisation [%]": (
                 None if row["utilisation"] is None
                 else 100.0 * row["utilisation"]
             ),
+            "Zero-action bins": row["zero_cyclic_bins"],
             "Search upper D": row["search_upper_damage"],
         }
         for row in summary_rows
     ], height=360)
     st.caption(
         "Each named spectrum is assessed independently; Miner sums are not "
-        "combined across spectrum names."
+        "combined across spectrum names. Governing utilisation is the maximum "
+        "of the applicable Miner, yield/proof and concrete criteria."
     )
 
     options = [row["spectrum"] for row in summary_rows]
@@ -9867,11 +9881,22 @@ def fatigue_view(inp, results, *, stale=False):
     row = next(
         item for item in summary_rows if item["spectrum"] == selected_name
     )
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Status", row["status"])
-    m2.metric("Utilisation", viz.pct(row["utilisation"]))
-    m3.metric("Bins", row["bins"])
-    m4.metric("Governing", row["governing"])
+    m2.metric("Governing utilisation", viz.pct(row["utilisation"]))
+    m3.metric(
+        "Max Miner D",
+        fatigue_presentation.compact_number(row["miner_damage"]),
+    )
+    m4.metric(
+        "Max yield / proof utilisation",
+        (
+            "-"
+            if row["yield_utilisation"] is None
+            else viz.pct(row["yield_utilisation"])
+        ),
+    )
+    m5.metric("Governing", row["governing"])
     st.plotly_chart(
         _memo_fig(
             "fatigue_utilisation_map",

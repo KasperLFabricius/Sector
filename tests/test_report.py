@@ -646,6 +646,7 @@ def _fatigue_report_fixture():
             yield_long_check=yield_long,
             yield_design_total_check=yield_total,
             governing_yield_check=yield_total,
+            zero_cyclic_range=False,
         )
         steel = NS(
             element_id="R1",
@@ -732,6 +733,7 @@ def _fatigue_report_fixture():
             converged=True,
             bond_method="Perfect bond",
             design_action_factor=1.10,
+            zero_cyclic_action=False,
         )
         concrete_strength = NS(
             edition=fatigue_core.EC2_2023,
@@ -772,6 +774,12 @@ def _fatigue_report_fixture():
             concrete_strength=concrete_strength,
             governing_domain=governing_domain,
             governing_criterion=governing_criterion,
+            miner_damage=max(
+                damage,
+                concrete_damage,
+                search.damage,
+            ),
+            yield_utilisation=reinforcement_utilisation,
         )
 
     spectra = (
@@ -861,6 +869,10 @@ def _fatigue_report_fixture():
         "elements": tuple(inp["bar_elements"]),
         "spectra": spectra,
         "governing_spectrum": "Traffic B",
+        "governing_domain": "concrete",
+        "governing_criterion": "compressive stress",
+        "governing_reinforcement_id": "R1",
+        "governing_concrete_fibre": 4,
         "governing_reinforcement_example": {
             "spectrum_name": "Traffic A",
             "element_id": "R1",
@@ -877,6 +889,8 @@ def _fatigue_report_fixture():
             "search_upper_bound_governs": False,
         },
         "utilisation": 0.91,
+        "miner_damage": spectra[1].miner_damage,
+        "yield_utilisation": spectra[1].yield_utilisation,
         "converged": True,
         "passed": True,
     }
@@ -909,6 +923,11 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "reinforcement_fatigue" in text
     assert "concrete_fatigue_damage_sum" in text
     assert "different spectrum names are not combined" in text
+    assert "Max Miner D" in text
+    assert "Max yield / proof" in text
+    assert "Governing util." in text
+    assert "governing utilisation" in text
+    assert "Status / range" in text
     assert "Torsion and shear fatigue are not assessed" in text
     compact = text.replace(" ", "")
     delta_sigma = chr(0x394) + chr(0x3C3)

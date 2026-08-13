@@ -84,12 +84,19 @@ def overall_note(payload, *, stale=False):
     if status == "INVALID":
         return "One or more grouped spectra did not converge"
     if status == "FAIL":
-        return "Governing grouped spectrum"
+        breakdown = criterion_breakdown(payload)
+        return "Governing grouped spectrum" + (
+            f"; {breakdown}" if breakdown else ""
+        )
     warnings = items(payload, "warnings")
     if warnings:
         suffix = "" if len(warnings) == 1 else "s"
-        return f"{len(warnings)} fatigue-basis warning{suffix}; review Inputs"
-    return "Governing grouped spectrum"
+        warning_note = (
+            f"{len(warnings)} fatigue-basis warning{suffix}; review Inputs"
+        )
+        breakdown = criterion_breakdown(payload)
+        return warning_note + (f"; {breakdown}" if breakdown else "")
+    return criterion_breakdown(payload) or "Governing grouped spectrum"
 
 
 def spectrum_by_name(payload, spectrum_name):
@@ -122,6 +129,40 @@ def governing_criterion(spectrum):
     return "-"
 
 
+def compact_number(raw):
+    """Format a retained result value without hiding infinity or exact zero."""
+
+    number = evidence_number(raw)
+    if number is None:
+        return "-"
+    if math.isinf(number):
+        return "inf" if number > 0.0 else "-inf"
+    return f"{number:.6g}"
+
+
+def criterion_breakdown(spectrum):
+    """State Miner and yield/proof results separately from the governing value."""
+
+    parts = []
+    governing = governing_criterion(spectrum)
+    if governing != "-":
+        parts.append(f"governing: {governing}")
+    miner = evidence_number(value(spectrum, "miner_damage"))
+    if miner is not None:
+        parts.append(f"max Miner D {compact_number(miner)}")
+    yield_util = evidence_number(value(spectrum, "yield_utilisation"))
+    if yield_util is not None:
+        parts.append(
+            "max yield/proof utilisation "
+            + (
+                "inf"
+                if math.isinf(yield_util)
+                else f"{100.0 * yield_util:.1f} %"
+            )
+        )
+    return "; ".join(parts)
+
+
 def spectrum_rows(payload):
     """Return one QA summary row for every independently checked spectrum."""
 
@@ -135,7 +176,17 @@ def spectrum_rows(payload):
             "reinforcement_elements": len(items(spectrum, "reinforcement")),
             "concrete_fibres": len(items(spectrum, "concrete")),
             "governing": governing_criterion(spectrum),
+            "miner_damage": evidence_number(
+                value(spectrum, "miner_damage")
+            ),
+            "yield_utilisation": evidence_number(
+                value(spectrum, "yield_utilisation")
+            ),
             "utilisation": evidence_number(value(spectrum, "utilisation")),
+            "zero_cyclic_bins": sum(
+                bool(value(state, "zero_cyclic_action", False))
+                for state in items(spectrum, "bins")
+            ),
             "search_converged": (
                 None if search is None else bool(value(search, "converged", False))
             ),
@@ -257,6 +308,11 @@ def reinforcement_bin_rows(result):
                 item, "yield_design_total_check"
             ),
             "governing_yield_check": value(item, "governing_yield_check"),
+            "range_state": (
+                "Zero cyclic range"
+                if bool(value(item, "zero_cyclic_range", False))
+                else "Cyclic range"
+            ),
         })
     return rows
 
@@ -394,6 +450,11 @@ def spectrum_bin_rows(spectrum):
             ),
             "gamma_ff": evidence_number(value(state, "design_action_factor")),
             "bond_method": str(value(state, "bond_method", "-")),
+            "cyclic_action": (
+                "Zero cyclic action"
+                if bool(value(state, "zero_cyclic_action", False))
+                else "Nonzero cyclic action"
+            ),
         })
     return rows
 

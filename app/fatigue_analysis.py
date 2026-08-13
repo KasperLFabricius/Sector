@@ -1264,6 +1264,17 @@ def run_analysis(
         prestress_stress=prepared.prestress_stress,
     ))
     governing = max(results, key=lambda result: result.utilisation)
+    miner_values = [
+        float(value)
+        for result in results
+        if (value := getattr(result, "miner_damage", None)) is not None
+    ]
+    miner_damage = max(miner_values) if miner_values else None
+    yield_values = [
+        float(value)
+        for result in results
+        if (value := getattr(result, "yield_utilisation", None)) is not None
+    ]
     governing_reinforcement_example = _global_reinforcement_example(results)
     governing_concrete_example = _global_concrete_example(results)
     references = calculation_references(
@@ -1345,8 +1356,22 @@ def run_analysis(
         "elements": prepared.element_records,
         "spectra": results,
         "governing_spectrum": governing.spectrum_name,
+        "governing_domain": getattr(governing, "governing_domain", None),
+        "governing_criterion": getattr(governing, "governing_criterion", None),
+        "governing_reinforcement_id": getattr(
+            governing,
+            "governing_reinforcement_id",
+            None,
+        ),
+        "governing_concrete_fibre": getattr(
+            governing,
+            "governing_concrete_fibre",
+            None,
+        ),
         "governing_reinforcement_example": governing_reinforcement_example,
         "governing_concrete_example": governing_concrete_example,
+        "miner_damage": miner_damage,
+        "yield_utilisation": max(yield_values) if yield_values else None,
         "utilisation": governing.utilisation,
         "converged": all(result.converged for result in results),
         "passed": all(result.passed for result in results),
