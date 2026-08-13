@@ -27,6 +27,19 @@ FATIGUE_CAPABILITIES = (
     standards.Capability.CONCRETE_FATIGUE_EQUIVALENT,
     standards.Capability.CONCRETE_FATIGUE_DAMAGE_SUM,
 )
+COMMON_INPUT_GUIDANCE = (
+    standards.InputGuidanceKey.FATIGUE_DETAIL_VALUES,
+    standards.InputGuidanceKey.FATIGUE_CONCRETE_METHOD,
+    standards.InputGuidanceKey.FATIGUE_MIXED_BOND,
+    standards.InputGuidanceKey.FATIGUE_ACTION_PARTIAL_FACTOR,
+    standards.InputGuidanceKey.FATIGUE_REINFORCEMENT_MATERIAL_FACTOR,
+    standards.InputGuidanceKey.FATIGUE_CONCRETE_MATERIAL_FACTOR,
+    standards.InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_DEVELOPMENT,
+    standards.InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_K1,
+    standards.InputGuidanceKey.FATIGUE_CONCRETE_LIFE_C,
+    standards.InputGuidanceKey.ORDINARY_CRACK_DIAMETER,
+    standards.InputGuidanceKey.ORDINARY_CRACK_MILD_BOND,
+)
 
 
 def test_catalogue_has_exactly_three_stable_basis_keys_and_labels():
@@ -259,6 +272,141 @@ def test_heightened_crack_binding_is_first_generation_dk_only_and_bounded():
         assert excluded not in new_claims
 
 
+def test_input_guidance_registry_is_complete_basis_bound_and_exact():
+    assert set(standards.INPUT_GUIDANCE) == {
+        (basis, key)
+        for basis in standards.DesignBasisKey
+        for key in COMMON_INPUT_GUIDANCE
+    } | {
+        (
+            standards.DesignBasisKey.PUBLISHED_2023,
+            standards.InputGuidanceKey.ORDINARY_CRACK_TENDON_BOND,
+        ),
+        (
+            standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+            standards.InputGuidanceKey.ORDINARY_CRACK_MEMBER_TYPE,
+        ),
+        (
+            standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+            standards.InputGuidanceKey.HEIGHTENED_CRACK_OPERANDS,
+        ),
+    }
+
+    assert standards.input_guidance(
+        standards.DesignBasisKey.FIRST_GEN_BASE,
+        standards.InputGuidanceKey.FATIGUE_MIXED_BOND,
+    ).source == "EN 1992-1-1:2005 6.8.2(2)"
+    assert standards.input_guidance(
+        standards.DesignBasisKey.PUBLISHED_2023,
+        standards.InputGuidanceKey.FATIGUE_MIXED_BOND,
+    ).source == "EN 1992-1-1:2023 10.3(2)"
+    assert standards.input_guidance(
+        standards.DesignBasisKey.PUBLISHED_2023,
+        standards.InputGuidanceKey.ORDINARY_CRACK_TENDON_BOND,
+    ).source == (
+        "DS/EN 1992-1-1:2023, 9.2.2(3), Formula (9.6)"
+    )
+    expected_fatigue_sources = {
+        standards.InputGuidanceKey.FATIGUE_ACTION_PARTIAL_FACTOR: (
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 2.4.2.3 and "
+            "6.8.4(1)",
+            "DS/EN 1992-1-1:2023, 10.2 and Annex E",
+        ),
+        standards.InputGuidanceKey.FATIGUE_REINFORCEMENT_MATERIAL_FACTOR: (
+            "DS/EN 1992-1-1:2005+A1:2014, clause 6.8.4 and Tables "
+            "6.3N/6.4N",
+            "DS/EN 1992-1-1:2023, Annex E.5 and Tables E.1/E.2",
+        ),
+        standards.InputGuidanceKey.FATIGUE_CONCRETE_MATERIAL_FACTOR: (
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.6 and 6.8.7, "
+            "Formula (6.76)",
+            "DS/EN 1992-1-1:2023, 5.1.6(1), Formula (5.3), and 10.5, "
+            "Formula (10.5)",
+        ),
+        standards.InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_DEVELOPMENT: (
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.6 and 6.8.7, "
+            "Formula (6.76)",
+            "DS/EN 1992-1-1:2023, 5.1.6(1), Formula (5.3), and 10.5, "
+            "Formula (10.5)",
+        ),
+        standards.InputGuidanceKey.FATIGUE_CONCRETE_STRENGTH_K1: (
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.6 and 6.8.7, "
+            "Formula (6.76)",
+            "DS/EN 1992-1-1:2023, 5.1.6(1), Formula (5.3), and 10.5, "
+            "Formula (10.5)",
+        ),
+        standards.InputGuidanceKey.FATIGUE_CONCRETE_LIFE_C: (
+            "DS/EN 1992-2:2005/AC:2008 Formula 6.106 - user-supplied spectrum",
+            "DS/EN 1992-1-1:2023, E.5.3, Formulae (E.7)-(E.8)",
+        ),
+    }
+    for key, (first_generation, published_2023) in expected_fatigue_sources.items():
+        assert standards.input_guidance(
+            standards.DesignBasisKey.FIRST_GEN_BASE, key
+        ).source == first_generation
+        assert standards.input_guidance(
+            standards.DesignBasisKey.FIRST_GEN_DK_NA_2024, key
+        ).source == first_generation
+        assert standards.input_guidance(
+            standards.DesignBasisKey.PUBLISHED_2023, key
+        ).source == published_2023
+    member_type = standards.input_guidance(
+        standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        standards.InputGuidanceKey.ORDINARY_CRACK_MEMBER_TYPE,
+    )
+    assert member_type.source == "DS/EN 1992-1-1 DK NA:2024, 7.3.4(1)"
+    base_crack = standards.input_guidance(
+        standards.DesignBasisKey.FIRST_GEN_BASE,
+        standards.InputGuidanceKey.ORDINARY_CRACK_DIAMETER,
+    )
+    assert base_crack.source == (
+        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 7.3.2 and 7.3.4, "
+        "Formulas (7.8), (7.9), (7.11) and (7.14)"
+    )
+    heightened = standards.input_guidance(
+        standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        standards.InputGuidanceKey.HEIGHTENED_CRACK_OPERANDS,
+    )
+    assert heightened.source == (
+        "DS/EN 1992-1-1 DK NA:2024, supplementary provision to "
+        "7.3.2(1)P, Formula 7.100 NA"
+    )
+    assert heightened.tooltip.endswith(f"Source: {heightened.source}.")
+
+
+def test_input_guidance_lookup_fails_closed_for_unknown_or_unsupported_keys():
+    for invalid in (
+        None,
+        "",
+        "fatigue_mixed_bond ",
+        "custom",
+        "bond",
+    ):
+        with pytest.raises(ValueError, match="input guidance"):
+            standards.parse_input_guidance_key(invalid)
+
+    for unsupported in (
+        (
+            standards.DesignBasisKey.FIRST_GEN_BASE,
+            standards.InputGuidanceKey.ORDINARY_CRACK_TENDON_BOND,
+        ),
+        (
+            standards.DesignBasisKey.PUBLISHED_2023,
+            standards.InputGuidanceKey.HEIGHTENED_CRACK_OPERANDS,
+        ),
+        (
+            standards.DesignBasisKey.FIRST_GEN_BASE,
+            standards.InputGuidanceKey.ORDINARY_CRACK_MEMBER_TYPE,
+        ),
+        (
+            standards.DesignBasisKey.PUBLISHED_2023,
+            standards.InputGuidanceKey.ORDINARY_CRACK_MEMBER_TYPE,
+        ),
+    ):
+        with pytest.raises(ValueError, match="has no input guidance"):
+            standards.input_guidance(*unsupported)
+
+
 def test_context_records_are_non_selectable_and_have_no_solver_bindings():
     assert {
         (record.citation, record.role)
@@ -295,4 +443,19 @@ def test_catalogue_and_records_are_immutable():
             standards.DESIGN_BASES,
             standards.DesignBasisKey.FIRST_GEN_BASE,
             basis,
+        )
+    guidance = standards.input_guidance(
+        standards.DesignBasisKey.FIRST_GEN_BASE,
+        standards.InputGuidanceKey.FATIGUE_DETAIL_VALUES,
+    )
+    with pytest.raises(FrozenInstanceError):
+        setattr(guidance, "source", "changed")
+    with pytest.raises(TypeError):
+        setitem(
+            standards.INPUT_GUIDANCE,
+            (
+                standards.DesignBasisKey.FIRST_GEN_BASE,
+                standards.InputGuidanceKey.FATIGUE_DETAIL_VALUES,
+            ),
+            guidance,
         )
