@@ -119,17 +119,22 @@ Development PRs run only:
 3. cheap compile/import, version, base and scope guards.
 
 Solver-heavy, publication-wide and packaging-wide suites are not repeated on
-unrelated PRs. PR-14 runs the complete static, numerical, UI, report/manual,
-schema, reproducibility, source-release, portable-startup and packaging gates
-before any version surface is changed to 0.94.
+unrelated PRs. PR-14 first runs the complete static, numerical, UI,
+report/manual and schema regression gate while the product still identifies as
+0.93. Only after that passes does PR-14 raise every governed version surface to
+0.94 and run the complete exact-head regression, identity, reproducibility,
+source-release, portable-startup and packaging gates against the bumped build.
 
 ## 5. Review and merge protocol
 
 Every slice starts from the exact accepted `origin/main` head and records its
 base, head, scope, exclusions and focused evidence. It publishes one immutable
-candidate head for exact-head review. One localised correction class is
-permitted. Independent or repeated substantive findings cause reslicing rather
-than scope growth.
+candidate head for exact-head review. The GitHub Codex Review integration must
+review the complete final head. Any finding is corrected and `@codex review` is
+retriggered; merge is blocked until that exact head has no open Codex finding.
+Local or subagent review is supplementary and cannot substitute for this gate.
+One localised correction class is permitted. Independent or repeated
+substantive findings cause reslicing rather than scope growth.
 
 After a clean exact-head review, the PR head, formal reviews, comments and
 thread-resolution state are inspected once more before merge. Post-merge checks
@@ -143,7 +148,9 @@ Sector 0.94 is complete only when:
 - PR-01 through PR-13 are merged as accepted bounded slices;
 - every frozen decision and supplied-review issue has objective closure;
 - current-schema and approved schema-24 migration paths pass;
-- the complete exact-head qualification and portable package gates pass;
+- the pre-bump complete regression gate passes at 0.93;
+- the version is then raised and the complete exact-head 0.94 qualification and
+  portable package gates pass against that bumped head;
 - reports and the manual pass semantic, structural-PDF and raster review;
 - the product version is raised exactly once in PR-14; and
 - no global compliance, certification or engineering-approval claim is added.
