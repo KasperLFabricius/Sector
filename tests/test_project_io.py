@@ -228,6 +228,51 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert json.loads(second)["version"] == project_io.VERSION
 
 
+@pytest.mark.parametrize(
+    ("shape", "settings"),
+    [
+        (
+            "Trapezoid",
+            {"qsv_trap_bottom_mm": 900.0, "qsv_trap_top_mm": 550.0,
+             "qsv_trap_h_mm": 750.0},
+        ),
+        (
+            "L-section",
+            {"qsv_l_b_mm": 950.0, "qsv_l_h_mm": 850.0,
+             "qsv_l_web_mm": 180.0, "qsv_l_flange_mm": 220.0},
+        ),
+        (
+            "I-section",
+            {"qsv_i_bf_mm": 850.0, "qsv_i_tf_mm": 180.0,
+             "qsv_i_bw_mm": 240.0, "qsv_i_hw_mm": 650.0},
+        ),
+        (
+            "U-section",
+            {"qsv_u_b_mm": 900.0, "qsv_u_h_mm": 850.0,
+             "qsv_u_web_mm": 160.0, "qsv_u_base_mm": 210.0},
+        ),
+        (
+            "Annulus",
+            {"qsv_annulus_outer_mm": 900.0, "qsv_annulus_inner_mm": 450.0},
+        ),
+        (
+            "T-section",
+            {"qsv_t_orientation": "Flange at bottom"},
+        ),
+    ],
+)
+def test_expanded_quick_section_settings_round_trip(shape, settings):
+    tables, scalars = _current_project()
+    expected = {"qsv_shape": shape, **settings}
+    scalars.update(expected)
+
+    text = project_io.dump_project(tables, scalars)
+    _loaded_tables, loaded_scalars = project_io.parse_project(text)
+
+    assert {key: loaded_scalars[key] for key in expected} == expected
+    assert project_io.project_provenance(text)["input_hash_valid"] is True
+
+
 def test_schema_25_serializes_only_the_shared_analysis_criterion():
     tables, scalars = _current_project()
     scalars["sls_permitted_crack_width_mm"] = 0.30

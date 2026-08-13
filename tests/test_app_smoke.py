@@ -600,6 +600,11 @@ def test_persisted_settings_use_the_seeded_number_helper():
                 "ring_d", "bot_d", "top_d",                     # QS diameter inputs
                 "qs_cover_to_edge", "bot_off_d", "top_off_d",   # QS toggle + interleave
                 "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "dia_mm",  # QS dims
+                "trap_bottom_mm", "trap_top_mm", "trap_h_mm", "t_orientation",
+                "l_b_mm", "l_h_mm", "l_web_mm", "l_flange_mm",
+                "i_bf_mm", "i_tf_mm", "i_bw_mm", "i_hw_mm",
+                "u_b_mm", "u_h_mm", "u_web_mm", "u_base_mm",
+                "annulus_outer_mm", "annulus_inner_mm",
                 "ring_n", "ring_c_mm", "bot_c_mm", "top_c_mm",  # QS rebar covers
                 "bot_s", "top_s", "bot_n", "top_n", "bot_n2", "top_n2",
                 "bot_layers", "top_layers", "layer_s",
@@ -659,6 +664,109 @@ def test_quick_section_dimensions_survive_a_project_restore():
     # A real shape switch after the restore still re-seeds to the new default.
     at2.selectbox(key="shape").set_value("Rectangle").run()
     assert at2.session_state["b_mm"] == 400.0
+
+
+def test_expanded_quick_section_dimension_survives_a_project_restore():
+    import project_io
+
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Annulus").run()
+    _set_and_click(
+        at, "qs_back", ("number_input", "annulus_outer_mm", 900.0)
+    )
+    text = project_io.dump_project(
+        {
+            key: at.session_state[key]
+            for key in project_io.PROJECT_TABLE_KEYS
+            if key in at.session_state
+        },
+        {
+            key: at.session_state[key]
+            for key in project_io.SCALAR_KEYS
+            if key in at.session_state
+        },
+    )
+
+    restored = _fresh()
+    restored.session_state["_pending_project"] = text
+    restored.session_state["_qs_open"] = True
+    restored.run()
+
+    assert not restored.exception
+    assert restored.selectbox(key="shape").value == "Annulus"
+    assert restored.number_input(key="annulus_outer_mm").value == pytest.approx(900.0)
+
+
+def test_pre_expansion_project_load_clears_stale_expanded_quick_section_state():
+    import project_io
+
+    # This is a valid current-schema project in the form written before PR-13: its
+    # T-section fields exist, but the expanded-shape fields and orientation do not.
+    pre_expansion_project = project_io.dump_project(
+        {},
+        {
+            "qsv_shape": "T-section",
+            "qsv_bf_mm": 1200.0,
+            "qsv_hf_mm": 300.0,
+            "qsv_bw_mm": 400.0,
+            "qsv_hw_mm": 700.0,
+        },
+    )
+    at = _fresh()
+    stale = {
+        "t_orientation": "Flange at bottom",
+        "qsv_t_orientation": "Flange at bottom",
+        "annulus_outer_mm": 1337.0,
+        "qsv_annulus_outer_mm": 1337.0,
+        "annulus_inner_mm": 777.0,
+        "qsv_annulus_inner_mm": 777.0,
+    }
+    for key, value in stale.items():
+        at.session_state[key] = value
+    at.session_state["_durable_input_scalars"] = {
+        key: value for key, value in stale.items() if key.startswith("qsv_")
+    }
+    at.session_state["_pending_project"] = pre_expansion_project
+    at.session_state["_qs_open"] = True
+    at.session_state["_main_page"] = "Analysis"
+    at.run()
+
+    assert not at.exception
+    assert at.selectbox(key="shape").value == "T-section"
+    assert at.selectbox(key="t_orientation").value == "Flange at top"
+    for key in (
+        "annulus_outer_mm",
+        "qsv_annulus_outer_mm",
+        "annulus_inner_mm",
+        "qsv_annulus_inner_mm",
+    ):
+        assert key not in at.session_state
+        assert key not in at.session_state["_durable_input_scalars"]
+
+
+def test_current_expanded_quick_section_keys_apply_after_hot_project_load():
+    import project_io
+
+    at = _fresh_qs()
+    at.session_state["qsv_t_orientation"] = "Flange at top"
+    at.session_state["t_orientation"] = "Flange at top"
+    at.session_state["_pending_project"] = project_io.dump_project(
+        {},
+        {
+            "qsv_shape": "T-section",
+            "qsv_bf_mm": 1200.0,
+            "qsv_hf_mm": 300.0,
+            "qsv_bw_mm": 400.0,
+            "qsv_hw_mm": 700.0,
+            "qsv_t_orientation": "Flange at bottom",
+        },
+    )
+    at.session_state["_qs_open"] = True
+    at.run()
+
+    assert not at.exception
+    assert at.selectbox(key="shape").value == "T-section"
+    assert at.selectbox(key="t_orientation").value == "Flange at bottom"
 
 
 def test_quick_section_dimensions_survive_a_midsession_project_load():
@@ -1364,6 +1472,160 @@ def test_load_sets_survive_a_mode_switch():
     at.radio(key="mode").set_value("Both").run()
     assert first_case_value(at, "pl_Mx") == pytest.approx(175.0)
     assert first_case_value(at, "el_long_Mx") == pytest.approx(60.0)
+
+
+def test_expanded_quick_section_catalogue_previews_and_applies():
+    expected_catalogue = [
+        "Rectangle",
+        "Slab strip",
+        "Trapezoid",
+        "T-section",
+        "L-section",
+        "I-section",
+        "U-section",
+        "Box girder",
+        "Circular",
+        "Annulus",
+    ]
+    cases = [
+        ("Trapezoid", 4, 0, False),
+        ("L-section", 6, 0, False),
+        ("I-section", 12, 0, True),
+        ("U-section", 8, 0, False),
+        ("Annulus", 48, 48, True),
+    ]
+    at = _fresh_qs()
+    assert list(at.selectbox(key="shape").options) == expected_catalogue
+
+    for index, (shape, corners, hole_corners, has_auto_rebar) in enumerate(cases):
+        at.selectbox(key="shape").set_value(shape).run()
+        assert not at.exception, shape
+        xs, _ys = _section_outline_from_result_view(at)
+        assert len(xs) == corners + 1, shape  # Plotly closes the filled outer ring
+        if not has_auto_rebar:
+            assert any(
+                "Automatic reinforcement placement is not defined" in info.value
+                for info in at.info
+            ), shape
+
+        _apply_qs(at)
+        assert not at.exception, shape
+        assert len(at.session_state["corners_base"]) == corners, shape
+        assert len(at.session_state["hole_base"]) == hole_corners, shape
+        if has_auto_rebar:
+            assert len(at.session_state["bars_base"]) > 0, shape
+        else:
+            assert len(at.session_state["bars_base"]) == 0, shape
+            assert len(at.session_state["tendons_base"]) == 0, shape
+        if index < len(cases) - 1:
+            _open_qs(at)
+
+
+def test_inverted_t_applies_flange_below_and_keeps_stacked_bars_in_web():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("T-section").run()
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("selectbox", "t_orientation", "Flange at bottom"),
+        ("number_input", "bot_layers", 2),
+        ("number_input", "layer_s", 250.0),
+        ("number_input", "tnd_n", 3),
+        ("number_input", "tnd_layers", 2),
+        ("number_input", "tnd_layer_s", 250.0),
+    )
+    assert not at.exception
+
+    corners = at.session_state["corners_base"]
+    bottom = corners[corners["y (mm)"] == corners["y (mm)"].min()]
+    top = corners[corners["y (mm)"] == corners["y (mm)"].max()]
+    assert bottom["x (mm)"].abs().max() == pytest.approx(600.0)
+    assert top["x (mm)"].abs().max() == pytest.approx(150.0)
+
+    bars = at.session_state["bars_base"]
+    web_layer = bars[(bars["y (mm)"] > -150.0) & (bars["y (mm)"] < -50.0)]
+    assert len(web_layer) == 6
+    assert web_layer["x (mm)"].abs().max() <= 100.0
+
+    tendons = at.session_state["tendons_base"]
+    web_tendons = tendons[(tendons["y (mm)"] > -100.0) & (tendons["y (mm)"] < 0.0)]
+    assert len(web_tendons) == 3
+    assert web_tendons["x (mm)"].abs().max() <= 50.0
+
+
+def test_annulus_applies_one_void_and_contained_bar_and_tendon_rings():
+    from sector.geometry import points_inside_concrete
+
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Annulus").run()
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "ring_n", 12),
+        ("number_input", "tnd_n", 8),
+    )
+    assert not at.exception
+    assert len(at.session_state["corners_base"]) == 48
+    assert len(at.session_state["hole_base"]) == 48
+    assert len(at.session_state["bars_base"]) == 12
+    assert len(at.session_state["tendons_base"]) == 8
+
+    outer = [tuple(row / 1000.0) for row in at.session_state[
+        "corners_base"
+    ][["x (mm)", "y (mm)"]].to_numpy()]
+    hole = [tuple(row / 1000.0) for row in at.session_state[
+        "hole_base"
+    ][["x (mm)", "y (mm)"]].to_numpy()]
+    points = []
+    for key in ("bars_base", "tendons_base"):
+        points.extend(
+            tuple(row / 1000.0)
+            for row in at.session_state[key][["x (mm)", "y (mm)"]].to_numpy()
+        )
+    assert points_inside_concrete(points, outer, [hole]).all()
+
+
+def test_invalid_quick_section_is_explained_and_cannot_be_applied():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Annulus").run()
+    at.number_input(key="annulus_inner_mm").set_value(900.0).run()
+
+    assert not at.exception
+    assert at.button(key="qs_apply").disabled
+    assert any(
+        "inner diameter must be less than outer diameter" in error.value
+        for error in at.error
+    )
+    assert any("Preview unavailable" in info.value for info in at.info)
+
+
+def test_zero_reinforcement_ignores_unused_cover_validation():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Annulus").run()
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "ring_n", 0),
+        ("number_input", "ring_c_mm", 300.0),
+    )
+
+    assert not at.exception
+    assert len(at.session_state["corners_base"]) == 48
+    assert len(at.session_state["hole_base"]) == 48
+    assert len(at.session_state["bars_base"]) == 0
+
+    solid = _fresh_qs()
+    _set_and_click(
+        solid,
+        "qs_apply",
+        ("number_input", "bot_n", 0),
+        ("number_input", "top_n", 0),
+        ("number_input", "bot_c_mm", 500.0),
+        ("number_input", "top_c_mm", 500.0),
+    )
+    assert not solid.exception
+    assert len(solid.session_state["corners_base"]) == 4
+    assert len(solid.session_state["bars_base"]) == 0
 
 
 def test_circular_shape_calculates():

@@ -2886,15 +2886,20 @@ def _apply_pending_project() -> None:
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
     st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
     st.session_state.pop(_HEIGHTENED_EXPLICIT_REFERENCE_KEY, None)
-    # A current project load replaces every optional calculation family from the
-    # prior session.  These fields may be absent from a valid current project, so
-    # they must be cleared before the loaded scalars are applied; otherwise an
-    # omitted family can inherit a previously enabled check.
-    replaced_optional_scalar_keys = (
+    # A current project load replaces every optional calculation family and the
+    # complete Quick Section builder state from the prior session. These fields may
+    # be absent from a valid current project, so clear them before applying the
+    # loaded scalars; otherwise an omitted field can inherit a stale value. In
+    # particular, schema-25 projects written before expanded Quick Sections have no
+    # orientation and must retain the historical upright-T default.
+    replacement_scoped_scalar_keys = (
         *project_io.FATIGUE_SCALAR_KEYS,
         *project_io.HEIGHTENED_CRACK_SCALAR_KEYS,
+        *project_io.QUICK_SECTION_SCALAR_KEYS,
     )
-    for key in replaced_optional_scalar_keys:
+    for key in replacement_scoped_scalar_keys:
+        st.session_state.pop(key, None)
+    for key in _QS_WIDGET_KEYS:
         st.session_state.pop(key, None)
     _discard_clear_recovery()
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
@@ -2955,7 +2960,7 @@ def _apply_pending_project() -> None:
     durable = {
         key: value
         for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
-        if key not in replaced_optional_scalar_keys
+        if key not in replacement_scoped_scalar_keys
     }
     durable.update(scalars)
     st.session_state[_INPUT_STATE_KEY] = durable
@@ -3384,7 +3389,18 @@ def _generate_report(inp):
     st.rerun()
 
 
-_QS_SHAPES = ["Rectangle", "Slab strip", "T-section", "Box girder", "Circular"]
+_QS_SHAPES = [
+    "Rectangle",
+    "Slab strip",
+    "Trapezoid",
+    "T-section",
+    "L-section",
+    "I-section",
+    "U-section",
+    "Box girder",
+    "Circular",
+    "Annulus",
+]
 
 # b_mm and h_mm are reused across shapes with different meanings and defaults (a
 # 400x600 rectangle, an 800x1000 box, a 300 mm slab thickness). Switching shape must
@@ -3421,13 +3437,8 @@ def _qs_shape_prefill(shape):
 # would be lost (resetting the builder to defaults on reopen, and dropping them
 # from a saved project). The builder mirrors them to durable "qsv_" keys whenever it
 # renders and restores them when it opens; project_io persists the durable copies.
-_QS_WIDGET_KEYS = (
-    "shape", "b_mm", "h_mm", "bf_mm", "hf_mm", "bw_mm", "hw_mm", "wall_mm",
-    "dia_mm", "ring_n", "ring_d", "ring_c_mm", "qs_rebar_mode", "qs_cover_to_edge",
-    "bot_n", "bot_d", "bot_s", "top_n", "top_d", "top_s",
-    "bot_c_mm", "top_c_mm", "bot_n2", "top_n2",
-    "bot_layers", "top_layers", "layer_s", "bot_off_d", "top_off_d",
-    "tnd_n", "tnd_a", "tnd_c_mm", "tnd_layers", "tnd_layer_s",
+_QS_WIDGET_KEYS = tuple(
+    key.removeprefix("qsv_") for key in project_io.QUICK_SECTION_SCALAR_KEYS
 )
 
 
@@ -3491,10 +3502,17 @@ def _quick_section_geometry(box):
     placed either by bar count or by centre-to-centre spacing (slab ``phi @ s``);
     a circular section uses a perimeter ring.
     """
-    shape = box.selectbox("Shape", _QS_SHAPES, key="shape",
-                          help="Outline of the concrete cross-section to analyse.")
+    shape = _seeded_selectbox(
+        box,
+        "Shape",
+        _QS_SHAPES,
+        "Rectangle",
+        "shape",
+        help="Outline of the concrete cross-section to analyse.",
+    )
     _qs_shape_prefill(shape)   # re-seed b/h on a shape change (see the prefill note)
     holes = []
+    bottom_span_at = top_span_at = None
     if shape == "Rectangle":
         b = _seeded_number(box, r"Width $b$ (mm)", 50.0, 10000.0, 400.0, 10.0, "b_mm",
                            help="Overall section width.") / 1000.0
@@ -3507,17 +3525,117 @@ def _quick_section_geometry(box):
                            help="Slab thickness; the strip is analysed per 1 m width.") / 1000.0
         b = width_b = 1.0
         outer = templates.slab_strip(h)
+    elif shape == "Trapezoid":
+        bottom_width = _seeded_number(
+            box, "Bottom width (mm)", 50.0, 12000.0, 800.0, 10.0,
+            "trap_bottom_mm", help="Width of the horizontal bottom face."
+        ) / 1000.0
+        top_width = _seeded_number(
+            box, "Top width (mm)", 50.0, 12000.0, 500.0, 10.0,
+            "trap_top_mm", help="Width of the horizontal top face."
+        ) / 1000.0
+        h = _seeded_number(
+            box, "Height (mm)", 50.0, 12000.0, 700.0, 10.0,
+            "trap_h_mm", help="Overall trapezoid height."
+        ) / 1000.0
+        outer = templates.trapezoid(bottom_width, top_width, h)
+        b, width_b = bottom_width, top_width
     elif shape == "T-section":
+        orientation_label = _seeded_selectbox(
+            box,
+            "Orientation",
+            ["Flange at top", "Flange at bottom"],
+            "Flange at top",
+            "t_orientation",
+            help="Flip the T vertically without changing its section dimensions.",
+        )
+        orientation = (
+            "upright" if orientation_label == "Flange at top" else "inverted"
+        )
         bf = _seeded_number(box, r"Flange width $b_f$ (mm)", 100.0, 12000.0, 1200.0, 10.0, "bf_mm",
-                            help="Width of the (top) flange.") / 1000.0
+                            help="Width of the flange.") / 1000.0
         hf = _seeded_number(box, r"Flange thickness $h_f$ (mm)", 50.0, 2000.0, 200.0, 10.0, "hf_mm",
                             help="Thickness of the flange.") / 1000.0
         bw = _seeded_number(box, r"Web width $b_w$ (mm)", 50.0, 4000.0, 300.0, 10.0, "bw_mm",
                             help="Width of the web.") / 1000.0
         hw = _seeded_number(box, r"Web depth $h_w$ (mm)", 100.0, 6000.0, 600.0, 10.0, "hw_mm",
                             help="Depth of the web below the flange.") / 1000.0
-        outer = templates.t_section(bf, hf, bw, hw)
-        b, h, width_b = bw, hf + hw, bf
+        outer = templates.t_section(bf, hf, bw, hw, orientation=orientation)
+        h = hf + hw
+        if orientation == "upright":
+            b, width_b = bw, bf
+            junction_y = h / 2.0 - hf
+
+            def section_width_at(y):
+                return bf if y >= junction_y else bw
+        else:
+            b, width_b = bf, bw
+            junction_y = -h / 2.0 + hf
+
+            def section_width_at(y):
+                return bf if y <= junction_y else bw
+    elif shape == "L-section":
+        b = _seeded_number(
+            box, "Overall width (mm)", 50.0, 12000.0, 800.0, 10.0,
+            "l_b_mm", help="Overall bounding width of the L-section."
+        ) / 1000.0
+        h = _seeded_number(
+            box, "Overall height (mm)", 50.0, 12000.0, 800.0, 10.0,
+            "l_h_mm", help="Overall bounding height of the L-section."
+        ) / 1000.0
+        web = _seeded_number(
+            box, "Left web thickness (mm)", 10.0, 6000.0, 200.0, 10.0,
+            "l_web_mm", help="Thickness of the vertical left leg."
+        ) / 1000.0
+        flange = _seeded_number(
+            box, "Bottom flange thickness (mm)", 10.0, 6000.0, 200.0, 10.0,
+            "l_flange_mm", help="Thickness of the horizontal bottom leg."
+        ) / 1000.0
+        outer = templates.l_section(b, h, web, flange)
+        width_b = b
+    elif shape == "I-section":
+        bf = _seeded_number(
+            box, r"Flange width $b_f$ (mm)", 100.0, 12000.0, 800.0, 10.0,
+            "i_bf_mm", help="Common width of the top and bottom flanges."
+        ) / 1000.0
+        tf = _seeded_number(
+            box, r"Flange thickness $t_f$ (mm)", 10.0, 3000.0, 200.0, 10.0,
+            "i_tf_mm", help="Common thickness of the top and bottom flanges."
+        ) / 1000.0
+        bw = _seeded_number(
+            box, r"Web width $b_w$ (mm)", 10.0, 6000.0, 250.0, 10.0,
+            "i_bw_mm", help="Width of the central web."
+        ) / 1000.0
+        hw = _seeded_number(
+            box, r"Clear web height $h_w$ (mm)", 50.0, 12000.0, 600.0, 10.0,
+            "i_hw_mm", help="Clear web height between the two flanges."
+        ) / 1000.0
+        outer = templates.i_section(bf, tf, bw, hw)
+        b = width_b = bf
+        h = hw + 2.0 * tf
+        flange_limit = h / 2.0 - tf
+
+        def section_width_at(y):
+            return bf if abs(y) >= flange_limit else bw
+    elif shape == "U-section":
+        b = _seeded_number(
+            box, "Overall width (mm)", 100.0, 12000.0, 800.0, 10.0,
+            "u_b_mm", help="Overall outer width of the open-top U-section."
+        ) / 1000.0
+        h = _seeded_number(
+            box, "Overall height (mm)", 100.0, 12000.0, 800.0, 10.0,
+            "u_h_mm", help="Overall outer height of the open-top U-section."
+        ) / 1000.0
+        web = _seeded_number(
+            box, "Side-web thickness (mm)", 10.0, 6000.0, 150.0, 10.0,
+            "u_web_mm", help="Common thickness of the two vertical side webs."
+        ) / 1000.0
+        base = _seeded_number(
+            box, "Base thickness (mm)", 10.0, 6000.0, 200.0, 10.0,
+            "u_base_mm", help="Thickness of the horizontal bottom base."
+        ) / 1000.0
+        outer = templates.u_section(b, h, web, base)
+        width_b = b
     elif shape == "Box girder":
         b = _seeded_number(box, r"Width $b$ (mm)", 200.0, 12000.0, 800.0, 10.0, "b_mm",
                            help="Overall outer width of the box.") / 1000.0
@@ -3534,13 +3652,31 @@ def _quick_section_geometry(box):
                                 help="Thickness of the box walls (uniform).") / 1000.0
         outer, holes = templates.box(b, h, wall)
         width_b = b
-    else:  # Circular
+    elif shape == "Circular":
         dia = _seeded_number(box, "Diameter (mm)", 100.0, 6000.0, 600.0, 10.0, "dia_mm",
                              help="Outer diameter of the circular section.") / 1000.0
         outer = templates.circular(dia)
         b = h = width_b = dia
+    else:  # Annulus
+        dia = _seeded_number(
+            box, "Outer diameter (mm)", 100.0, 12000.0, 800.0, 10.0,
+            "annulus_outer_mm", help="Outer diameter of the annulus."
+        ) / 1000.0
+        inner_dia = _seeded_number(
+            box, "Inner diameter (mm)", 10.0, 11000.0, 400.0, 10.0,
+            "annulus_inner_mm", help="Diameter of the central circular void."
+        ) / 1000.0
+        outer, holes = templates.annulus(dia, inner_dia)
+        b = h = width_b = dia
 
     box.markdown("**Reinforcement**")
+    if shape in {"Trapezoid", "L-section", "U-section"}:
+        box.info(
+            "Automatic reinforcement placement is not defined for this shape. "
+            "Apply creates the concrete geometry only; add bars and tendons in "
+            "the point tables."
+        )
+        return outer, holes, [], []
     # Cover can be measured to the near edge of the bars rather than to their centres
     # -- the centre then sits a bar radius deeper. Applied to the mild bars (bottom /
     # top rows and the circular ring); tendons keep a centre cover.
@@ -3548,15 +3684,23 @@ def _quick_section_geometry(box):
         box, "Cover to bar edge (else to bar centre)", False, "qs_cover_to_edge",
         help="Measure the cover to the near surface of the bars, not their centres.")
     _edge = lambda cov, dia_mm: cov + (dia_mm / 2000.0 if cover_to_edge else 0.0)
-    if shape == "Circular":
+    if shape in {"Circular", "Annulus"}:
         nb = _seeded_number(box, "Perimeter bars", 0, 200, 8, 1, "ring_n",
                             help="Number of bars evenly spaced around the perimeter.")
         rd = _seeded_number(box, "Bar diameter (mm)", 1.0, 100.0, 20.0, 1.0, "ring_d",
                             help="Diameter of each reinforcement bar.")
         cov = _seeded_number(box, "Cover (mm)", 0.0, 500.0, 50.0, 5.0, "ring_c_mm",
                              help="Cover from the section face to the bars.") / 1000.0
-        bars = templates.bar_ring(0.0, 0.0,
-                                  templates.ring_radius(dia, _edge(cov, rd)), int(nb), rd)
+        if int(nb) > 0:
+            ring_cover = _edge(cov, rd)
+            radius = (
+                templates.annulus_ring_radius(dia, inner_dia, ring_cover)
+                if shape == "Annulus"
+                else templates.ring_radius(dia, ring_cover)
+            )
+            bars = templates.bar_ring(0.0, 0.0, radius, int(nb), rd)
+        else:
+            bars = []
     else:
         by_spacing = box.radio(
             "Bar placement", ["By number", "By spacing"], horizontal=True,
@@ -3615,6 +3759,12 @@ def _quick_section_geometry(box):
                                 help="Bars in each top layer above the first.")
         ne_bot = int(bot_n2) if (not by_spacing and int(nl_bot) > 1) else None
         ne_top = int(top_n2) if (not by_spacing and int(nl_top) > 1) else None
+        bot_has_bars = int(nb_bot) > 0 or (ne_bot is not None and ne_bot > 0)
+        top_has_bars = int(nb_top) > 0 or (ne_top is not None and ne_top > 0)
+        if shape not in {"T-section", "I-section"} and bot_has_bars and bot_w < 0.0:
+            raise ValueError("bottom reinforcement cover leaves no valid face span")
+        if shape not in {"T-section", "I-section"} and top_has_bars and top_w < 0.0:
+            raise ValueError("top reinforcement cover leaves no valid face span")
         layer_s = _seeded_number(
             box, "Layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, "layer_s",
             disabled=int(nl_bot) == 1 and int(nl_top) == 1,
@@ -3632,19 +3782,25 @@ def _quick_section_geometry(box):
                                    0.0, 1.0, "top_off_d",
                                    help="Second bar size at the midpoints of the top "
                                         "row(s); 0 = off.")
-        # A T-section's top face is the flange (width width_b); a top layer pushed
-        # below the flange must fit the narrower web (width b) or it would fall
-        # outside the concrete. The bottom layers stay in the web (b) and only ever
-        # widen into the flange, so they need no such limit.
-        if shape == "T-section":
-            flange_y = h / 2 - hf
+        # T/I layers can cross a flange/web junction. Recompute each row's clear
+        # face span at its actual y-coordinate so no stacked row can escape a
+        # narrower web. The same rule applies from both faces (and after flipping T).
+        if shape in {"T-section", "I-section"}:
+            def bottom_span_at(y):
+                row_width = section_width_at(y)
+                if bot_has_bars and row_width < 2.0 * bot_e:
+                    raise ValueError(
+                        "bottom reinforcement cover leaves no valid stepped span"
+                    )
+                return -row_width / 2 + bot_e, row_width / 2 - bot_e
 
             def top_span_at(y):
-                if y >= flange_y:                 # within the flange
-                    return -width_b / 2 + top_e, width_b / 2 - top_e
-                return -b / 2 + top_e, b / 2 - top_e  # below the flange -> the web
-        else:
-            top_span_at = None
+                row_width = section_width_at(y)
+                if top_has_bars and row_width < 2.0 * top_e:
+                    raise ValueError(
+                        "top reinforcement cover leaves no valid stepped span"
+                    )
+                return -row_width / 2 + top_e, row_width / 2 - top_e
 
         if shape == "Box girder":
             # A box girder's rows split into the side walls once they rise into the
@@ -3658,7 +3814,8 @@ def _quick_section_geometry(box):
         else:
             bot_group = templates.bar_layers(-h / 2 + bot_e, 1.0, int(nl_bot), layer_s,
                                              -b / 2 + bot_e, b / 2 - bot_e, int(nb_bot),
-                                             rd_bot, n_at=n_at_bot, n_extra=ne_bot)
+                                             rd_bot, span_at=bottom_span_at,
+                                             n_at=n_at_bot, n_extra=ne_bot)
             top_group = templates.bar_layers(h / 2 - top_e, -1.0, int(nl_top), layer_s,
                                              -width_b / 2 + top_e, width_b / 2 - top_e,
                                              int(nb_top), rd_top, span_at=top_span_at,
@@ -3668,9 +3825,9 @@ def _quick_section_geometry(box):
             if off_d <= 0.0:
                 continue
             inter = _qs_interleave(grp, off_d)
-            # A row split across a void (a box girder's hollow) leaves a gap whose
-            # midpoint would fall in the void; keep only interleaved bars in concrete.
-            if inter and holes:
+            # A row split across a void leaves a gap whose midpoint is not concrete.
+            # Filter universally: it is cheap, and also guards concave outlines.
+            if inter:
                 ok = geometry.points_inside_concrete(
                     [(x, y) for x, y, _a in inter], outer, holes)
                 inter = [p for p, good in zip(inter, ok) if good]
@@ -3695,15 +3852,43 @@ def _quick_section_geometry(box):
         help="Vertical centre-to-centre distance between stacked tendon rows.") / 1000.0
     tendons = []
     if nt > 0:
-        if shape == "Circular":
+        if shape in {"Circular", "Annulus"}:
+            radius = (
+                templates.annulus_ring_radius(b, inner_dia, cov_p)
+                if shape == "Annulus"
+                else templates.ring_radius(b, cov_p)
+            )
             tendons = templates.point_ring(
-                0.0, 0.0, templates.ring_radius(b, cov_p), int(nt), a_t)
+                0.0, 0.0, radius, int(nt), a_t)
         elif shape == "Box girder":
             tendons = templates.box_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
                                            b, h, wall, cov_p, int(nt), a_t)
         else:
+            if shape in {"T-section", "I-section"}:
+                def tendon_span_at(y):
+                    row_width = section_width_at(y)
+                    if row_width < 2.0 * cov_p:
+                        raise ValueError(
+                            "tendon cover leaves no valid stepped span"
+                        )
+                    return -row_width / 2 + cov_p, row_width / 2 - cov_p
+            else:
+                tendon_span_at = None
+                if b < 2.0 * cov_p:
+                    raise ValueError("tendon cover leaves no valid face span")
             tendons = templates.point_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
-                                             -b / 2 + cov_p, b / 2 - cov_p, int(nt), a_t)
+                                             -b / 2 + cov_p, b / 2 - cov_p, int(nt), a_t,
+                                             span_at=tendon_span_at)
+    generated = bars + tendons
+    if generated:
+        contained = geometry.points_inside_concrete(
+            [(x, y) for x, y, _area in generated], outer, holes
+        )
+        if not all(contained):
+            raise ValueError(
+                "automatic reinforcement placement falls outside valid concrete; "
+                "reduce cover, layers or layer spacing"
+            )
     return outer, (holes or []), bars, tendons
 
 
@@ -3728,25 +3913,40 @@ def _quick_section_viewport():
                "and leaves the current points untouched.")
     bcol, acol, _ = st.columns([1, 1, 3])
     back = bcol.button("Back", width="stretch", key="qs_back")
-    apply = acol.button("Apply to point tables", type="primary",
-                        width="stretch", key="qs_apply")
+    apply_slot = acol.empty()
 
     form, preview = st.columns([2, 3])
+    generation_error = None
+    outer, holes, bars, tendons = [], [], [], []
     with form:
-        outer, holes, bars, tendons = _quick_section_geometry(st)
+        try:
+            outer, holes, bars, tendons = _quick_section_geometry(st)
+        except ValueError as exc:
+            generation_error = str(exc)
+            st.error(f"Quick Section cannot be generated: {exc}")
+    apply = apply_slot.button(
+        "Apply to point tables",
+        type="primary",
+        width="stretch",
+        key="qs_apply",
+        disabled=generation_error is not None,
+    )
     _qs_mirror_settings()   # keep the durable copy current with what is shown
     preview_token = app_run_probe.start_phase(st.session_state, "preview")
     try:
         with preview:
-            bar_xy = [(x, y, a) for x, y, a in bars]
-            tendon_xy = [(x, y, a) for x, y, a in tendons]
-            st.plotly_chart(
-                viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
-                                   title="Preview", show_labels=True, height=560,
-                                   scale=_MM, unit="mm"),
-                width="stretch")
-            st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
-                       f"{len(bars)} bars, {len(tendons)} tendons.")
+            if generation_error is not None:
+                st.info("Preview unavailable until the dimensions are valid.")
+            else:
+                bar_xy = [(x, y, a) for x, y, a in bars]
+                tendon_xy = [(x, y, a) for x, y, a in tendons]
+                st.plotly_chart(
+                    viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
+                                       title="Preview", show_labels=True, height=560,
+                                       scale=_MM, unit="mm"),
+                    width="stretch")
+                st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
+                           f"{len(bars)} bars, {len(tendons)} tendons.")
     finally:
         app_run_probe.stop_phase(st.session_state, preview_token)
 

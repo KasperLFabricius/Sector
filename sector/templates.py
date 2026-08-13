@@ -11,6 +11,8 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
+from . import geometry
+
 # Standard reinforcement bar diameters (mm).
 BAR_DIAMETERS = (8, 10, 12, 16, 20, 25, 32, 40)
 
@@ -25,9 +27,35 @@ def bar_area(diameter_mm: float) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _positive_dimensions(**dimensions: float) -> None:
+    """Reject non-finite or non-positive section dimensions before construction."""
+
+    for name, value in dimensions.items():
+        if not math.isfinite(value) or value <= 0.0:
+            label = name.replace("_", " ")
+            raise ValueError(f"{label} must be a positive finite number")
+
+
+def _validated_geometry(outer, holes=()):
+    """Require canonical ring/void topology for one generated section."""
+
+    validation = geometry.validate_section_topology(outer, holes)
+    if not validation.valid:
+        raise ValueError(f"generated section topology is invalid: {validation.message}")
+    return outer, list(holes)
+
+
 def rectangle(b: float, h: float):
     """Solid rectangle ``b`` wide by ``h`` tall, centred on the origin."""
-    return [(-b / 2, -h / 2), (-b / 2, h / 2), (b / 2, h / 2), (b / 2, -h / 2)]
+
+    _positive_dimensions(width=b, height=h)
+    outer = [
+        (-b / 2, -h / 2),
+        (-b / 2, h / 2),
+        (b / 2, h / 2),
+        (b / 2, -h / 2),
+    ]
+    return _validated_geometry(outer)[0]
 
 
 def slab_strip(h: float, width: float = 1.0):
@@ -35,21 +63,172 @@ def slab_strip(h: float, width: float = 1.0):
     return rectangle(width, h)
 
 
-def t_section(bf: float, hf: float, bw: float, hw: float):
+def t_section(
+    bf: float,
+    hf: float,
+    bw: float,
+    hw: float,
+    *,
+    orientation: str = "upright",
+):
     """T-section: flange ``bf`` x ``hf`` on a web ``bw`` x ``hw``.
 
     Symmetric about the Y axis, centred on the total depth ``H = hf + hw`` so the
     outline spans ``-H/2`` to ``H/2`` (consistent with the other shapes). The
-    flange is at the top; vertices are clockwise from its top-left corner.
+    ``orientation`` is ``"upright"`` for the flange at the top and
+    ``"inverted"`` for the flange at the bottom. Vertices are clockwise for the
+    upright orientation. The flange must be wider than the web so every returned
+    corner represents a genuine T step rather than a duplicate rectangle point.
     """
+    _positive_dimensions(
+        flange_width=bf,
+        flange_thickness=hf,
+        web_width=bw,
+        web_depth=hw,
+    )
+    if bw >= bf:
+        raise ValueError("web width must be less than flange width")
+    if orientation not in {"upright", "inverted"}:
+        raise ValueError("orientation must be 'upright' or 'inverted'")
     height = hf + hw
     top = height / 2          # top of flange
     yj = height / 2 - hf      # flange/web junction
     bot = -height / 2         # bottom of web
-    return [
+    outer = [
         (-bf / 2, top), (bf / 2, top), (bf / 2, yj),
         (bw / 2, yj), (bw / 2, bot), (-bw / 2, bot), (-bw / 2, yj), (-bf / 2, yj),
     ]
+    if orientation == "inverted":
+        outer = [(x, -y) for x, y in outer]
+    return _validated_geometry(outer)[0]
+
+
+def trapezoid(bottom_width: float, top_width: float, height: float):
+    """Symmetric trapezoid with horizontal top/bottom faces.
+
+    The bounding box is centred on the origin. ``bottom_width`` and
+    ``top_width`` may be equal, in which case the result is a rectangle.
+    """
+
+    _positive_dimensions(
+        bottom_width=bottom_width,
+        top_width=top_width,
+        height=height,
+    )
+    outer = [
+        (-bottom_width / 2, -height / 2),
+        (-top_width / 2, height / 2),
+        (top_width / 2, height / 2),
+        (bottom_width / 2, -height / 2),
+    ]
+    return _validated_geometry(outer)[0]
+
+
+def l_section(
+    width: float,
+    height: float,
+    web_thickness: float,
+    flange_thickness: float,
+):
+    """L-section with a left web and bottom flange inside ``width`` x ``height``."""
+
+    _positive_dimensions(
+        width=width,
+        height=height,
+        web_thickness=web_thickness,
+        flange_thickness=flange_thickness,
+    )
+    if web_thickness >= width:
+        raise ValueError("web thickness must be less than overall width")
+    if flange_thickness >= height:
+        raise ValueError("flange thickness must be less than overall height")
+    xmin, xmax = -width / 2, width / 2
+    ymin, ymax = -height / 2, height / 2
+    web_right = xmin + web_thickness
+    flange_top = ymin + flange_thickness
+    outer = [
+        (xmin, ymin),
+        (xmin, ymax),
+        (web_right, ymax),
+        (web_right, flange_top),
+        (xmax, flange_top),
+        (xmax, ymin),
+    ]
+    return _validated_geometry(outer)[0]
+
+
+def i_section(
+    flange_width: float,
+    flange_thickness: float,
+    web_width: float,
+    web_height: float,
+):
+    """Symmetric I-section with equal top and bottom flanges."""
+
+    _positive_dimensions(
+        flange_width=flange_width,
+        flange_thickness=flange_thickness,
+        web_width=web_width,
+        web_height=web_height,
+    )
+    if web_width >= flange_width:
+        raise ValueError("web width must be less than flange width")
+    total_height = web_height + 2.0 * flange_thickness
+    top = total_height / 2
+    bottom = -top
+    upper_junction = top - flange_thickness
+    lower_junction = bottom + flange_thickness
+    outer = [
+        (-flange_width / 2, top),
+        (flange_width / 2, top),
+        (flange_width / 2, upper_junction),
+        (web_width / 2, upper_junction),
+        (web_width / 2, lower_junction),
+        (flange_width / 2, lower_junction),
+        (flange_width / 2, bottom),
+        (-flange_width / 2, bottom),
+        (-flange_width / 2, lower_junction),
+        (-web_width / 2, lower_junction),
+        (-web_width / 2, upper_junction),
+        (-flange_width / 2, upper_junction),
+    ]
+    return _validated_geometry(outer)[0]
+
+
+def u_section(
+    width: float,
+    height: float,
+    web_thickness: float,
+    base_thickness: float,
+):
+    """Open-top U-section with two equal webs and a bottom base."""
+
+    _positive_dimensions(
+        width=width,
+        height=height,
+        web_thickness=web_thickness,
+        base_thickness=base_thickness,
+    )
+    if 2.0 * web_thickness >= width:
+        raise ValueError("twice the web thickness must be less than overall width")
+    if base_thickness >= height:
+        raise ValueError("base thickness must be less than overall height")
+    xmin, xmax = -width / 2, width / 2
+    ymin, ymax = -height / 2, height / 2
+    inner_left = xmin + web_thickness
+    inner_right = xmax - web_thickness
+    base_top = ymin + base_thickness
+    outer = [
+        (xmin, ymin),
+        (xmin, ymax),
+        (inner_left, ymax),
+        (inner_left, base_top),
+        (inner_right, base_top),
+        (inner_right, ymax),
+        (xmax, ymax),
+        (xmax, ymin),
+    ]
+    return _validated_geometry(outer)[0]
 
 
 CIRCLE_SEGMENTS = 48   # N-gon used to approximate a circular outline
@@ -57,17 +236,75 @@ CIRCLE_SEGMENTS = 48   # N-gon used to approximate a circular outline
 
 def circular(diameter: float, segments: int = CIRCLE_SEGMENTS):
     """Circular section of the given diameter, approximated by an N-gon."""
+    _positive_dimensions(diameter=diameter)
+    if isinstance(segments, bool) or int(segments) != segments or segments < 3:
+        raise ValueError("segments must be an integer of at least 3")
+    segments = int(segments)
     r = diameter / 2.0
-    return [(r * math.cos(2 * math.pi * k / segments),
-             r * math.sin(2 * math.pi * k / segments)) for k in range(segments)]
+    outer = [
+        (
+            r * math.cos(2 * math.pi * k / segments),
+            r * math.sin(2 * math.pi * k / segments),
+        )
+        for k in range(segments)
+    ]
+    return _validated_geometry(outer)[0]
+
+
+def annulus(
+    outer_diameter: float,
+    inner_diameter: float,
+    segments: int = CIRCLE_SEGMENTS,
+):
+    """Circular hollow section represented by one outer ring and one void."""
+
+    _positive_dimensions(
+        outer_diameter=outer_diameter,
+        inner_diameter=inner_diameter,
+    )
+    if inner_diameter >= outer_diameter:
+        raise ValueError("inner diameter must be less than outer diameter")
+    outer = circular(outer_diameter, segments=segments)
+    hole = circular(inner_diameter, segments=segments)
+    return _validated_geometry(outer, [hole])
 
 
 def ring_radius(diameter: float, cover: float, segments: int = CIRCLE_SEGMENTS):
     """Radius for reinforcement on a circular section: ``diameter/2 - cover``, but
     never outside the inscribed N-gon's apothem, so a bar between two polygon
     vertices is not left just outside the outline (e.g. at zero cover)."""
+    _positive_dimensions(diameter=diameter)
+    if not math.isfinite(cover) or cover < 0.0:
+        raise ValueError("cover must be a finite non-negative number")
+    if isinstance(segments, bool) or int(segments) != segments or segments < 3:
+        raise ValueError("segments must be an integer of at least 3")
+    segments = int(segments)
     apothem = (diameter / 2.0) * math.cos(math.pi / segments)
     return max(min(diameter / 2.0 - cover, apothem), 0.0)
+
+
+def annulus_ring_radius(
+    outer_diameter: float,
+    inner_diameter: float,
+    cover: float,
+    segments: int = CIRCLE_SEGMENTS,
+):
+    """Reinforcement radius inside an annulus, measured from its outer face.
+
+    The point-reinforcement centroid must not lie strictly within the polygonal
+    void. A cover that pushes it into the void is rejected instead of silently
+    placing invalid reinforcement; a centroid on the boundary follows Sector's
+    existing zero-cover convention and remains valid.
+    """
+
+    annulus(outer_diameter, inner_diameter, segments=segments)
+    radius = ring_radius(outer_diameter, cover, segments=segments)
+    inner_radius = inner_diameter / 2.0
+    if radius < inner_radius:
+        raise ValueError(
+            "cover places the reinforcement ring inside the annulus void"
+        )
+    return radius
 
 
 def box(b: float, h: float, wall: float):
@@ -77,13 +314,14 @@ def box(b: float, h: float, wall: float):
     ``wall`` must leave a positive cavity: ``2 * wall`` strictly less than both
     ``b`` and ``h``, otherwise the void would be empty or larger than the outline.
     """
-    if wall <= 0:
-        raise ValueError("wall thickness must be positive")
+    _positive_dimensions(width=b, height=h, wall_thickness=wall)
     if 2 * wall >= b or 2 * wall >= h:
         raise ValueError(
             "wall thickness too large: 2*wall must be less than both b and h"
         )
-    return rectangle(b, h), [rectangle(b - 2 * wall, h - 2 * wall)]
+    outer = rectangle(b, h)
+    hole = rectangle(b - 2 * wall, h - 2 * wall)
+    return _validated_geometry(outer, [hole])
 
 
 # ---------------------------------------------------------------------------
@@ -140,13 +378,16 @@ def bar_layers(y_face: float, direction: float, n_layers: int, layer_spacing: fl
     rows = []
     for j in range(max(0, int(n_layers))):
         y = y_face + direction * j * layer_spacing
-        xs, xe = span_at(y) if span_at is not None else (x_start, x_end)
         if n_at is not None:
+            xs, xe = span_at(y) if span_at is not None else (x_start, x_end)
             n = int(n_at(xs, xe))
         elif j > 0 and n_extra is not None:
             n = int(n_extra)
         else:
             n = n_per
+        if n <= 0:
+            continue
+        xs, xe = span_at(y) if span_at is not None else (x_start, x_end)
         rows.extend(bar_row(y, xs, xe, n, diameter_mm))
     return rows
 
@@ -195,16 +436,27 @@ def point_row(y: float, x_start: float, x_end: float, n: int, area_mm2: float):
     return [(x_start + k * step, y, area_mm2) for k in range(n)]
 
 
-def point_layers(y_face: float, direction: float, n_layers: int, layer_spacing: float,
-                 x_start: float, x_end: float, n_per: int, area_mm2: float):
+def point_layers(
+    y_face: float,
+    direction: float,
+    n_layers: int,
+    layer_spacing: float,
+    x_start: float,
+    x_end: float,
+    n_per: int,
+    area_mm2: float,
+    span_at=None,
+):
     """Stack ``n_layers`` rows of ``n_per`` point areas (the tendon analogue of
     :func:`bar_layers`): the first row at ``y_face`` and each next ``layer_spacing``
     further in ``direction`` (``+1`` up from a bottom face). ``n_layers = 1`` is a
-    single :func:`point_row`."""
+    single :func:`point_row`. ``span_at(y) -> (x_start, x_end)``, when given,
+    keeps each row inside a stepped section as it moves away from the face."""
     rows = []
     for j in range(max(0, int(n_layers))):
-        rows.extend(point_row(y_face + direction * j * layer_spacing,
-                              x_start, x_end, n_per, area_mm2))
+        y = y_face + direction * j * layer_spacing
+        xs, xe = span_at(y) if span_at is not None else (x_start, x_end)
+        rows.extend(point_row(y, xs, xe, n_per, area_mm2))
     return rows
 
 
