@@ -6363,7 +6363,7 @@ def build_inputs(host=st):
                 P_el_s=P_el_s, Mx_el_s=Mx_el_s, My_el_s=My_el_s, ns=ns,
                 el_phi=phi_creep, conc_Ec=conc_Ec,
                 sls_cw=sls_cw, sls_fctm=sls_fctm, sls_phi=sls_phi,
-                sls_k1=sls_k1, sls_dk_na=sls_dk_na,
+                sls_bond=sls_bond, sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_tendon_xi=sls_tendon_xi,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
                 sls_permitted_crack_width_mm=sls_permitted_crack_width_mm,

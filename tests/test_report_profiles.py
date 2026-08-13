@@ -54,8 +54,10 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
         brief.glossary_scope,
     ) == ("compact", "compact", "interpretive", "governing", "revision", "short")
     assert not brief.include_qa_appendix
-    assert brief.hard_page_limit == 3
-    assert brief.target_page_limit is None
+    assert brief.hard_page_limit is None
+    assert brief.target_page_limit == 4
+    assert brief.target_exception_requires_reason
+    assert brief.target_exception_requires_visual_approval
     assert brief.sparse_page_body_coverage_threshold is None
 
     assert (

@@ -52,8 +52,9 @@ BRIEF_PROFILE: Final = ReportProfilePolicy(
     key="Brief",
     label="Brief",
     description=(
-        "Rapid-review report with every requested calculation result and the "
-        "governing result chain. Non-governing results are compact."
+        "Rapid-review report with a compact active-input inventory, every "
+        "requested calculation result and the governing result chain. "
+        "Non-governing results are compact."
     ),
     omitted_detail=(
         "Complete non-governing derivations, full method theory, branch "
@@ -66,7 +67,9 @@ BRIEF_PROFILE: Final = ReportProfilePolicy(
     provenance_scope="revision",
     glossary_scope="short",
     include_qa_appendix=False,
-    hard_page_limit=3,
+    target_page_limit=4,
+    target_exception_requires_reason=True,
+    target_exception_requires_visual_approval=True,
 )
 
 STANDARD_PROFILE: Final = ReportProfilePolicy(
