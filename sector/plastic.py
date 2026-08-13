@@ -1014,6 +1014,9 @@ def solve_interaction(
     diagram -- the ``+M`` side for this ``V``; call again at ``V + 180`` for the
     ``-M`` side. Returns ``InteractionPoint``s ordered from tension to compression.
     """
+    if n_points < 1:
+        raise ValueError("n_points must be at least 1")
+
     bx, by, ba = section.bar_arrays()
     tx, ty, ta = section.tendon_arrays()
     bar_laws = _material_sequence(steel, bar_materials, len(ba), "bar")
