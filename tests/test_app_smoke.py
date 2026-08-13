@@ -177,7 +177,9 @@ def _goto_material_tab(at, name):
     except KeyError:
         current = None
     if current != name:
-        at.selectbox(key="_material_tab").set_value(name).run()
+        at.session_state["_material_tab"] = name
+        at.session_state["_material_tab_preference"] = name
+        at.run()
     return at
 
 
@@ -527,6 +529,7 @@ def test_interrupted_input_fragment_batches_latest_cross_pane_events():
     }
     at.session_state["_input_tab"] = material_stage
     at.session_state["_material_tab"] = "Mild steel"
+    at.session_state["_material_tab_preference"] = "Mild steel"
     at.run()
 
     assert not at.exception
@@ -4907,14 +4910,15 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
     at.run()
     _goto_input_tab(at, "Material parameters")
 
-    family = at.selectbox(key="_material_tab")
-    assert family.options == ["Concrete", "Mild steel", "Prestressing steel"]
-    assert family.value == "Concrete"
+    assert at.session_state["_material_tab"] == "Concrete"
     dot = chr(0x00B7)
     assert [tab.label for tab in at.tabs] == [
         f"1 {dot} Analysis settings",
         f"2 {dot} Section",
         f"3 {dot} Material parameters",
+        "Concrete",
+        "Mild steel",
+        "Prestressing steel",
         f"4 {dot} Loads",
         "Project & report",
     ]
@@ -4924,20 +4928,20 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
     assert "pre_fytk" not in number_keys
 
     at.number_input(key="conc_fck").set_value(55.0).run()
-    at.selectbox(key="_material_tab").set_value("Mild steel").run()
+    _goto_material_tab(at, "Mild steel")
     number_keys = {widget.key for widget in at.number_input}
     assert "conc_fck" not in number_keys
     assert "mild_fytk" in number_keys
     assert "pre_fytk" not in number_keys
     at.number_input(key="mild_fytk").set_value(525.0).run()
 
-    at.selectbox(key="_material_tab").set_value("Prestressing steel").run()
+    _goto_material_tab(at, "Prestressing steel")
     number_keys = {widget.key for widget in at.number_input}
     assert "conc_fck" not in number_keys
     assert "mild_fytk" not in number_keys
     assert "pre_fytk" in number_keys
 
-    at.selectbox(key="_material_tab").set_value("Concrete").run()
+    _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_fck").value == 55.0
     assert at.session_state["mild_fytk"] == 525.0
     assert not at.exception
@@ -4949,11 +4953,12 @@ def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner()
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_input_tab(at, "Material parameters")
 
-    family = at.selectbox(key="_material_tab")
-    assert family.options == [
-        "Concrete", "Mild steel", "Prestressing steel", "Fatigue details"
+    labels = [tab.label for tab in at.tabs]
+    start = labels.index("Concrete")
+    assert labels[start:start + 4] == [
+        "Concrete", "Mild steel", "Prestressing steel", "Fatigue details",
     ]
-    family.set_value("Fatigue details").run()
+    _goto_material_tab(at, "Fatigue details")
     assert any(button.key == "fatigue_catalog_add_mild" for button in at.button)
     assert "conc_fck" not in {widget.key for widget in at.number_input}
 
@@ -4963,9 +4968,13 @@ def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner()
     assert at.session_state["_material_tab"] == "Concrete"
 
     _goto_input_tab(at, "Material parameters")
-    family = at.selectbox(key="_material_tab")
-    assert family.options == ["Concrete", "Mild steel", "Prestressing steel"]
-    assert family.value == "Concrete"
+    labels = [tab.label for tab in at.tabs]
+    start = labels.index("Concrete")
+    assert labels[start:start + 3] == [
+        "Concrete", "Mild steel", "Prestressing steel",
+    ]
+    assert "Fatigue details" not in labels
+    assert at.session_state["_material_tab"] == "Concrete"
     assert not at.exception
 
 
@@ -5119,6 +5128,7 @@ def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
     at.session_state["_inputs_build_in_progress"] = True
     at.session_state["conc_fck"] = 30.0
     at.session_state["_material_tab"] = "Prestressing steel"
+    at.session_state["_material_tab_preference"] = "Prestressing steel"
     at.run()
 
     assert at.session_state["_material_tab"] == "Prestressing steel"
@@ -5886,6 +5896,7 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
     durable = at.session_state["_durable_input_scalars"]
     assert durable["_input_tab"] == stage
     assert durable["_material_tab"] == "Mild steel"
+    assert durable["_material_tab_preference"] == "Mild steel"
     assert at.number_input(key="sls_heightened_effective_tensile_strength_mpa")
     assert any(
         "Correction target: **Effective tensile strength**" in item.value
@@ -5945,6 +5956,9 @@ def test_material_blocker_navigates_to_its_material_family(monkeypatch):
     assert at.session_state["_mild_catalog_selected"] == "M2"
     assert at.session_state["_durable_input_scalars"][
         "_material_tab"
+    ] == "Mild steel"
+    assert at.session_state["_durable_input_scalars"][
+        "_material_tab_preference"
     ] == "Mild steel"
     assert at.session_state["_durable_input_scalars"][
         "_mild_catalog_selected"

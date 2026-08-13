@@ -33,7 +33,6 @@ from app import manual_information_architecture as manual_ia  # noqa: E402
 from app import report_profiles  # noqa: E402
 from deferred_import import deferred_module  # noqa: E402
 from input_stage_host import (  # noqa: E402
-    input_stages,
     live_fragment_value,
     normalise_stage_selection,
     reset_input_stage_mounts,
@@ -2299,6 +2298,7 @@ _DURABLE_INPUT_SCALARS = (
     + tuple(project_io.PRESENTATION_SCALAR_KEYS)
     + (
         "autosave_on", "autosave_min", "_input_tab", "_material_tab",
+        "_material_tab_preference",
         "_material_catalog_revision", "_mild_catalog_selected",
         "_prestress_catalog_selected", "_fatigue_catalog_revision",
         "_fatigue_catalog_selected", "_fatigue_basis_revision",
@@ -2308,7 +2308,9 @@ _INPUT_STATE_KEY = "_durable_input_scalars"
 _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
-_INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
+_INPUT_NAVIGATION_KEYS = frozenset(
+    {"_input_tab", "_material_tab", "_material_tab_preference"}
+)
 _INPUT_ISSUE_FOCUS_KEY = "_input_issue_focus"
 _SHOW_INPUT_ISSUES_KEY = "_show_input_validation_issues"
 _HEIGHTENED_AUTO_REFERENCE_KEY = "_heightened_auto_reference_case"
@@ -2377,7 +2379,13 @@ def _snapshot_input_state(inp=None) -> None:
     """Keep live input values available while their widgets are not mounted."""
     saved = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
     for key in _DURABLE_INPUT_SCALARS:
-        if key in st.session_state:
+        if key == "_material_tab":
+            selection = st.session_state.get(
+                "_material_tab_preference", st.session_state.get(key)
+            )
+            if selection is not None:
+                saved[key] = selection
+        elif key in st.session_state:
             saved[key] = st.session_state[key]
     st.session_state[_INPUT_STATE_KEY] = saved
 
@@ -2413,6 +2421,16 @@ def _snapshot_completed_input_state() -> None:
     ):
         _snapshot_input_state()
         st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+
+
+def _snapshot_material_tab_state() -> None:
+    """Retain the nested material tab before its widget callback reruns."""
+
+    if "_material_tab" in st.session_state:
+        st.session_state["_material_tab_preference"] = st.session_state[
+            "_material_tab"
+        ]
+    _snapshot_completed_input_state()
 
 
 def _restore_input_state(*, replace: bool = False) -> None:
@@ -2490,7 +2508,9 @@ def _queue_input_issue_navigation(issue: input_issues.InputIssue) -> None:
     st.session_state["_input_tab"] = stage_label
     if target.material_family is not None:
         durable["_material_tab"] = target.material_family
+        durable["_material_tab_preference"] = target.material_family
         st.session_state["_material_tab"] = target.material_family
+        st.session_state["_material_tab_preference"] = target.material_family
     if target.material_id is not None:
         selector_key = {
             "Mild steel": "_mild_catalog_selected",
@@ -5428,9 +5448,38 @@ def build_inputs(host=st):
             "properties remain editable."
         )
 
-    # Keep the derived-value action with the material inputs. It sets a one-shot
-    # flag that the concrete panel consumes on the following run.
-    if mat_tab.button(
+    # Reserve the derived-value action above the peer tabs, but mount the tab
+    # selector before evaluating the button. A button-triggered early rerun must
+    # not make the nested tab widget disappear and revive its first-tab default.
+    auto_all_slot = mat_tab.empty()
+
+    material_tab_labels = ["Concrete", "Mild steel", "Prestressing steel"]
+    if fatigue_on:
+        material_tab_labels.append("Fatigue details")
+    selected_material_tab = normalise_stage_selection(
+        st.session_state, "_material_tab", material_tab_labels
+    )
+    material_tab_preference = st.session_state.get("_material_tab_preference")
+    if material_tab_preference not in material_tab_labels:
+        st.session_state["_material_tab_preference"] = selected_material_tab
+    else:
+        # A rerun triggered by a sibling control can remount nested tabs with
+        # their first browser-side default. The tab callback records genuine tab
+        # clicks first, so the retained preference is authoritative here.
+        st.session_state["_material_tab"] = material_tab_preference
+    material_tabs = stateful_input_tabs(
+        mat_tab,
+        material_tab_labels,
+        key="_material_tab",
+        state=st.session_state,
+        on_change=_snapshot_material_tab_state,
+        width="stretch",
+    )
+    if any(tab.open for tab in material_tabs):
+        st.session_state["_material_tab_preference"] = st.session_state[
+            "_material_tab"
+        ]
+    if auto_all_slot.button(
         "Auto-calc all derived values",
         key="auto_all_btn",
         width="stretch",
@@ -5440,28 +5489,6 @@ def build_inputs(host=st):
     ):
         st.session_state["_auto_all"] = True
         st.rerun()
-
-    material_tab_labels = ["Concrete", "Mild steel", "Prestressing steel"]
-    if fatigue_on:
-        material_tab_labels.append("Fatigue details")
-    normalise_stage_selection(
-        st.session_state, "_material_tab", material_tab_labels
-    )
-    selected_material_tab = mat_tab.selectbox(
-        "Material family",
-        material_tab_labels,
-        key="_material_tab",
-        on_change=_snapshot_completed_input_state,
-        width="stretch",
-        help="Choose the material law or fatigue-detail catalogue to edit.",
-    )
-    material_stage_host = mat_tab.container()
-    material_tabs = input_stages(
-        material_stage_host,
-        material_tab_labels,
-        selected_material_tab,
-        state=st.session_state,
-    )
     conc_tab, mild_tab, pre_tab = material_tabs[:3]
     fatigue_tab = material_tabs[3] if fatigue_on else None
     conc_inputs, conc_preview = conc_tab.columns([1.1, 0.9], gap="large")
