@@ -54,6 +54,35 @@ def test_interaction_spans_tension_to_squash_with_interior_peak():
     assert max(Mx) > Mx[0] and max(Mx) > Mx[-1]
 
 
+@pytest.mark.parametrize("n_points", [0, -1])
+def test_interaction_rejects_nonpositive_point_count_before_endpoint_solves(
+    monkeypatch,
+    n_points,
+):
+    sec, c, s, _ = _beam()
+
+    def unexpected_endpoint_solve(*_args, **_kwargs):
+        pytest.fail("invalid n_points reached the endpoint solver")
+
+    monkeypatch.setattr(
+        "sector.plastic.plastic_capacity_at_angle",
+        unexpected_endpoint_solve,
+    )
+
+    with pytest.raises(ValueError, match="n_points must be at least 1"):
+        solve_interaction(sec, c, s, 90.0, n_points=n_points)
+
+
+def test_interaction_one_interval_returns_both_axial_endpoints():
+    sec, c, s, _ = _beam()
+
+    points = solve_interaction(sec, c, s, 90.0, n_points=1)
+
+    assert len(points) == 2
+    assert points[0].axial < 0.0 < points[-1].axial
+    assert all(point.converged for point in points)
+
+
 def test_symmetric_section_has_zero_moment_at_the_axial_extremes():
     # A doubly-symmetric section carries no moment under uniform strain, so both the
     # tension and the squash apex sit on the N axis (Mx = 0).
