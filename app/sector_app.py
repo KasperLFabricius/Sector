@@ -28,6 +28,7 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import app_run_probe  # noqa: E402
+from app import input_issues  # noqa: E402
 from app import manual_information_architecture as manual_ia  # noqa: E402
 from app import report_profiles  # noqa: E402
 from deferred_import import deferred_module  # noqa: E402
@@ -2307,6 +2308,22 @@ _INPUT_BUILD_KEY = "_inputs_build_in_progress"
 _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
 _INPUT_NAVIGATION_KEYS = frozenset({"_input_tab", "_material_tab"})
+_INPUT_ISSUE_FOCUS_KEY = "_input_issue_focus"
+_SHOW_INPUT_ISSUES_KEY = "_show_input_validation_issues"
+
+
+def _input_stage_labels() -> dict[str, str]:
+    """Map stable short stage names to the labels mounted by Streamlit."""
+
+    dot = chr(0x00B7)
+    stage_labels = tuple(stage.label for stage in manual_ia.INPUT_STAGES)
+    return {
+        stage_labels[0]: f"1 {dot} {stage_labels[0]}",
+        stage_labels[1]: f"2 {dot} {stage_labels[1]}",
+        stage_labels[2]: f"3 {dot} {stage_labels[2]}",
+        stage_labels[3]: f"4 {dot} {stage_labels[3]}",
+        stage_labels[4]: stage_labels[4],
+    }
 
 
 def _record_input_event(
@@ -2447,6 +2464,91 @@ def _open_manual_dialog() -> None:
 def _set_main_page(page: str) -> None:
     """Select a top-level page from a button callback."""
     st.session_state["_main_page"] = page
+
+
+def _queue_input_issue_navigation(issue: input_issues.InputIssue) -> None:
+    """Queue one safe Analysis-to-Inputs transition before the full rerun."""
+
+    target = issue.target
+    if target is None:
+        return
+    stage_label = _input_stage_labels()[target.stage]
+    durable = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
+    durable["_input_tab"] = stage_label
+    st.session_state["_input_tab"] = stage_label
+    if target.material_family is not None:
+        durable["_material_tab"] = target.material_family
+        st.session_state["_material_tab"] = target.material_family
+    if target.material_id is not None:
+        selector_key = {
+            "Mild steel": "_mild_catalog_selected",
+            "Prestressing steel": "_prestress_catalog_selected",
+        }[target.material_family]
+        durable[selector_key] = target.material_id
+        st.session_state[selector_key] = target.material_id
+    st.session_state[_INPUT_STATE_KEY] = durable
+
+    # A navigation event from Analysis is authoritative. Do not let an old
+    # interrupted Inputs-tab event replay over it during returning-state restore.
+    pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
+    authoritative_navigation_keys = set(_INPUT_NAVIGATION_KEYS)
+    if target.material_id is not None:
+        authoritative_navigation_keys.add(selector_key)
+    for key in authoritative_navigation_keys:
+        pending.pop(key, None)
+    if pending:
+        st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
+    else:
+        st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+
+    st.session_state[_INPUT_ISSUE_FOCUS_KEY] = {
+        "message": issue.message,
+        "stage": target.stage,
+        "material_family": target.material_family,
+        "material_id": target.material_id,
+        "widget_key": target.widget_key,
+        "widget_label": target.widget_label,
+    }
+    # The top-level segmented control is already mounted on this run. Follow the
+    # existing auxiliary-view lifecycle and apply the destination before its next
+    # mount rather than mutating the live widget after creation.
+    st.session_state["_next_main_page"] = "Inputs"
+
+
+def _render_input_issues(
+    issues: tuple[input_issues.InputIssue, ...],
+    *,
+    key_prefix: str,
+) -> None:
+    """Render one alert per issue and a control only for a trusted target."""
+
+    for index, issue in enumerate(issues, start=1):
+        if issue.target is None:
+            st.error(issue.message)
+            continue
+        row = st.container(
+            horizontal=True,
+            vertical_alignment="center",
+            gap="small",
+        )
+        row.error(issue.message)
+        button_key = re.sub(
+            r"[^a-zA-Z0-9_-]+",
+            "-",
+            f"{key_prefix}-{index}-{issue.code}",
+        )
+        target = issue.target
+        destination = target.stage
+        if target.material_family:
+            destination += f" / {target.material_family}"
+        if row.button(
+            "Go to",
+            key=button_key,
+            icon=":material/arrow_forward:",
+            help=f"Open {destination} to correct this input.",
+        ):
+            _queue_input_issue_navigation(issue)
+            st.rerun(scope="app")
 
 
 def _section_table_snapshot():
@@ -3787,15 +3889,7 @@ def build_inputs(host=st):
     # remain active-only through InputStage, so hidden stages do not execute.
     # Panels carry calculation methodology (Elastic / Plastic), not a limit
     # state -- the same analysis can serve several load combinations.
-    _dot = chr(0x00B7)   # middle dot (BMP code point, source stays ASCII)
-    stage_labels = tuple(stage.label for stage in manual_ia.INPUT_STAGES)
-    input_tab_labels = [
-        f"1 {_dot} {stage_labels[0]}",
-        f"2 {_dot} {stage_labels[1]}",
-        f"3 {_dot} {stage_labels[2]}",
-        f"4 {_dot} {stage_labels[3]}",
-        stage_labels[4],
-    ]
+    input_tab_labels = list(_input_stage_labels().values())
     aset, sec_tab, mat_tab, loads, project = stateful_input_tabs(
         s,
         input_tab_labels,
@@ -3807,10 +3901,23 @@ def build_inputs(host=st):
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
     sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
-    scw = aset.expander("Elastic crack-width method", expanded=False)
+    focus = st.session_state.get(_INPUT_ISSUE_FOCUS_KEY, {})
+    focus_widget = str(focus.get("widget_key") or "")
+    scw = aset.expander(
+        "Elastic crack-width method",
+        expanded=focus_widget.startswith("sls_"),
+    )
     det = aset.expander("Reinforcement detailing", expanded=False)
-    fat = aset.expander("Fatigue", expanded=False)
-    sts = aset.expander("Shear, torsion & combined (Plastic)", expanded=False)
+    fat = aset.expander(
+        "Fatigue",
+        expanded=focus_widget.startswith("fatigue_"),
+    )
+    sts = aset.expander(
+        "Shear, torsion & combined (Plastic)",
+        expanded=focus_widget.startswith(
+            ("shear_", "torsion_", "combined_", "capacity_")
+        ),
+    )
     about_slot = project.container()
     report_slot = project.container()
     save_slot = project.container()
@@ -5189,6 +5296,7 @@ def build_inputs(host=st):
         else []
     )
     material_assignment_error = None
+    material_assignment_errors = []
     if (
         invalid_bar_materials
         or invalid_tendon_materials
@@ -5197,17 +5305,30 @@ def build_inputs(host=st):
         parts = []
         if invalid_bar_materials:
             parts.append("bar material " + ", ".join(invalid_bar_materials))
+            material_assignment_errors.append(
+                "Bar material assignment references undefined ID(s): "
+                + ", ".join(invalid_bar_materials)
+            )
         if invalid_tendon_materials:
             parts.append("tendon material " + ", ".join(invalid_tendon_materials))
+            material_assignment_errors.append(
+                "Tendon material assignment references undefined ID(s): "
+                + ", ".join(invalid_tendon_materials)
+            )
         if invalid_capacity_materials:
             parts.append(
                 "member-check material "
                 + ", ".join(invalid_capacity_materials)
             )
+            material_assignment_errors.append(
+                "Member-check material references undefined ID(s): "
+                + ", ".join(invalid_capacity_materials)
+            )
         material_assignment_error = (
             "Undefined material assignment(s): " + "; ".join(parts) + "."
         )
-        sec.error(material_assignment_error)
+        for assignment_error in material_assignment_errors:
+            sec.error(assignment_error)
     fatigue_assignment_error = None
     if fatigue_on and fatigue_check_steel:
         invalid_bar_details = fatigue_inputs.invalid_assignments(
@@ -5417,7 +5538,8 @@ def build_inputs(host=st):
             "Invalid material definition(s): "
             + "; ".join(material_definition_errors)
         )
-        mat_tab.error(definition_message)
+        for definition_error in material_definition_errors:
+            mat_tab.error(f"Invalid material definition: {definition_error}")
         material_error = (
             f"{material_error} {definition_message}".strip()
             if material_error else definition_message
@@ -5610,6 +5732,9 @@ def build_inputs(host=st):
     inp = dict(section=section, geometry_error=geometry_error,
                 void_error=void_error, steel_error=steel_error,
                 material_error=material_error,
+                material_assignment_errors=tuple(material_assignment_errors),
+                material_definition_errors=tuple(material_definition_errors),
+                torsion_gamma_ct_error=torsion_gamma_ct_error,
                 fatigue_assignment_error=fatigue_assignment_error,
                 concrete=concrete, steel=reference_steel,
                 concrete_preset=concrete_preset,
@@ -5766,6 +5891,7 @@ def _commit_input_fragment(inp) -> None:
 
     _snapshot_input_state(inp)
     st.session_state.pop(_PENDING_INPUT_EVENTS_KEY, None)
+    st.session_state.pop(_INPUT_ISSUE_FOCUS_KEY, None)
     st.session_state[_INPUT_BUILD_KEY] = False
     st.session_state[_LAST_WORKSPACE_KEY] = "Inputs"
     _measured_autosave()
@@ -5786,6 +5912,16 @@ def _input_workspace() -> None:
     if st.session_state.get(_INPUT_BUILD_KEY, False):
         _restore_input_state(replace=True)
     st.session_state[_INPUT_BUILD_KEY] = True
+    focus = st.session_state.get(_INPUT_ISSUE_FOCUS_KEY)
+    if isinstance(focus, dict):
+        location = str(focus.get("stage") or "Inputs")
+        if focus.get("material_family"):
+            location += f" / {focus['material_family']}"
+        correction = str(focus.get("widget_label") or "the cited input")
+        st.info(
+            f"Opened **{location}**. Correction target: **{correction}**.  \n"
+            f"{focus.get('message') or ''}"
+        )
     pane_token = app_run_probe.start_phase(
         st.session_state, "pane_construction"
     )
@@ -11571,12 +11707,21 @@ def _analysis_workspace(inp):
         if "plastic_cases" in inp or "elastic_cases" in inp
         else presentation.required_action_set_errors(inp)
     )
-    case_errors.extend(_heightened_crack_control_validation_errors(inp))
-    if calc and case_errors:
-        st.session_state["_case_error"] = "; ".join(case_errors) + "."
+    heightened_errors = _heightened_crack_control_validation_errors(inp)
+    section_input_issues = input_issues.section_issues(inp)
+    requested_input_issues = (
+        *input_issues.case_issues(case_errors),
+        *input_issues.heightened_issues(heightened_errors),
+    )
+    all_input_issues = (*section_input_issues, *requested_input_issues)
+    # Retire the former semicolon-joined state if this code hot-reloads into a
+    # live 0.93 session. The current validator output is the only authority.
+    st.session_state.pop("_case_error", None)
+    if calc and all_input_issues:
+        st.session_state[_SHOW_INPUT_ISSUES_KEY] = True
         calc = False
-    elif not case_errors:
-        st.session_state.pop("_case_error", None)
+    elif not requested_input_issues:
+        st.session_state.pop(_SHOW_INPUT_ISSUES_KEY, None)
     if calc:
         # Reuse a previously computed half whose split signature is unchanged, so a
         # Both run that touched only elastic (or only plastic) inputs recomputes just
@@ -11685,6 +11830,13 @@ def _analysis_workspace(inp):
             "results-stale",
             "Inputs changed since the last calculation - press Calculate to update.",
         )
+    visible_input_issues = list(section_input_issues)
+    if st.session_state.get(_SHOW_INPUT_ISSUES_KEY):
+        visible_input_issues.extend(requested_input_issues)
+    _render_input_issues(
+        tuple(visible_input_issues),
+        key_prefix="analysis-input-issue",
+    )
     result_snapshot = st.session_state.get("result_input_snapshot")
     if stale and view in _RESULT_VIEWS and result_snapshot is None:
         # Sessions can survive a Streamlit hot reload. A result payload without
@@ -11697,17 +11849,6 @@ def _analysis_workspace(inp):
         )
         app_run_probe.close_fragment_run(st.session_state)
         return
-    if st.session_state.get("_case_error"):
-        st.error(st.session_state["_case_error"])
-
-    for section_err in (
-        inp.get("geometry_error"),
-        inp.get("void_error"),
-        inp.get("steel_error"),
-        inp.get("material_error"),
-    ):
-        if section_err:
-            st.error(section_err)
     if inp.get("fatigue_assignment_error"):
         _manual_warning(
             st,

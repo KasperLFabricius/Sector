@@ -5751,6 +5751,129 @@ def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
     )
 
 
+def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
+    at = _fresh()
+    seeded = {
+        "mode": "Elastic",
+        "sls_code": _SLS_DK,
+        "sls_heightened_on": True,
+        "sls_heightened_crack_system": "fine",
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_bar_diameter_mm": 0.0,
+        "sls_heightened_effective_tensile_strength_mpa": 0.0,
+        "sls_heightened_reinforcement_modulus_mpa": 0.0,
+        # A blank global criterion is the supported missing/required state. It
+        # remains valid for ordinary crack output and blocks heightened control.
+        "sls_permitted_crack_width_mm": None,
+        "sls_heightened_effective_tension_area_mm2": 0.0,
+        "sls_heightened_provided_reinforcement_area_mm2": 0.0,
+        "_material_tab": "Mild steel",
+    }
+    for key, value in seeded.items():
+        at.session_state[key] = value
+    at.run()
+
+    # A retained pre-snapshot result is a supported hot-reload state. Current
+    # blockers and their navigation controls must remain visible even though the
+    # stale input-dependent result itself is suppressed.
+    at.session_state["results"] = {"legacy_hot_reload": True}
+    at.session_state["result_sig"] = "legacy-signature"
+    try:
+        del at.session_state["result_input_snapshot"]
+    except KeyError:
+        pass
+    _calculate(at)
+
+    errors = [item.value for item in at.error]
+    assert any("has no matching input snapshot" in message for message in errors)
+    assert "Bar diameter must be a positive finite number" in errors
+    assert "Reinforcement modulus must be a positive finite number" in errors
+    assert len(
+        [message for message in errors if "positive finite number" in message]
+    ) == 6
+
+    at.button(
+        key="analysis-input-issue-1-heightened-1"
+    ).click().run()
+
+    stage = f"1 {chr(0x00B7)} Analysis settings"
+    assert at.session_state["_main_page"] == "Inputs"
+    assert at.session_state["_input_tab"] == stage
+    assert at.session_state["_material_tab"] == "Mild steel"
+    durable = at.session_state["_durable_input_scalars"]
+    assert durable["_input_tab"] == stage
+    assert durable["_material_tab"] == "Mild steel"
+    assert at.number_input(key="sls_heightened_bar_diameter_mm")
+    assert any(
+        "Correction target: **Bar diameter**" in item.value
+        for item in at.info
+    )
+
+    # The shared schema-25 width keeps its own exact actionable destination.
+    _goto_page(at, "Analysis")
+    at.button(
+        key="analysis-input-issue-4-heightened-4"
+    ).click().run()
+    assert at.number_input(key="sls_permitted_crack_width_mm")
+    assert any(
+        "Correction target: **Permitted crack width (shared)**" in item.value
+        for item in at.info
+    )
+
+
+def test_material_blocker_navigates_to_its_material_family(monkeypatch):
+    import material_catalog
+
+    catalogue = material_catalog.default_catalog("mild")
+    catalogue, added_id = material_catalog.add_entry(catalogue, "mild")
+    assert added_id == "M2"
+    catalogue["items"][1]["description"] = "force-invalid-definition"
+    original = material_catalog.build_material
+
+    def fail_marked_definition(entry, kind):
+        if entry.get("description") == "force-invalid-definition":
+            raise ValueError("test-invalid material law")
+        return original(entry, kind)
+
+    monkeypatch.setattr(material_catalog, "build_material", fail_marked_definition)
+    at = _fresh()
+    at.session_state[material_catalog.MILD_CATALOG_KEY] = catalogue
+    at.session_state["_mild_catalog_selected"] = "M1"
+    at.run()
+    _goto_page(at, "Analysis")
+    # Simulate an interrupted Inputs edit that would otherwise replay M1 over
+    # the authoritative Go-to destination during returning-state restoration.
+    at.session_state["_pending_input_events"] = {
+        "_mild_catalog_selected": "M1",
+    }
+
+    assert any(
+        "Invalid material definition: M2: test-invalid material law" in item.value
+        for item in at.error
+    )
+    at.button(
+        key="analysis-input-issue-1-material-definition-1"
+    ).click().run()
+
+    material_stage = f"3 {chr(0x00B7)} Material parameters"
+    assert at.session_state["_main_page"] == "Inputs"
+    assert at.session_state["_input_tab"] == material_stage
+    assert at.session_state["_material_tab"] == "Mild steel"
+    assert at.session_state["_mild_catalog_selected"] == "M2"
+    assert at.session_state["_durable_input_scalars"][
+        "_material_tab"
+    ] == "Mild steel"
+    assert at.session_state["_durable_input_scalars"][
+        "_mild_catalog_selected"
+    ] == "M2"
+    assert at.selectbox(key="_mild_catalog_selected").value == "M2"
+    assert "_pending_input_events" not in at.session_state
+    assert any(
+        "Opened **Material parameters / Mild steel**" in item.value
+        for item in at.info
+    )
+
+
 def test_short_term_crack_uses_combined_creep_state():
     # With creep (ns != nl) the short-term crack width must come from the combined
     # instantaneous state (total = s2 + RST1), so the governing bar's sigma_s
