@@ -71,9 +71,19 @@ def case_records(inp: Mapping, family: str) -> list[dict]:
     return _rows(inp.get(f"{family}_cases"), key)
 
 
-def case_signature(record: Mapping, key: str) -> tuple:
-    """Stable per-row signature used only after shared inputs have matched."""
-    return tuple(record[column] for column in load_cases.TABLE_COLUMNS[key])
+def case_signature(
+    record: Mapping,
+    key: str,
+    context: Mapping | None = None,
+) -> tuple:
+    """Stable row signature including the shared crack criterion where used."""
+
+    signature = tuple(record[column] for column in load_cases.TABLE_COLUMNS[key])
+    if key == load_cases.ELASTIC_TABLE_KEY:
+        signature += (
+            (context or {}).get(sls_core.PERMITTED_CRACK_WIDTH_KEY),
+        )
+    return signature
 
 
 def plastic_bending_signature(record: Mapping) -> tuple:
@@ -167,16 +177,13 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
     """Map one Elastic row and its optional crack-width calculation."""
     out = dict(base)
     calculate_crack_width = bool(record["calculate_crack_width"])
-    criterion = record.get("ordinary_crack_criterion_mm")
-    criterion_source = load_cases.ordinary_crack_criterion_source(
-        record[load_cases.NAME]
-    )
+    criterion = base.get(sls_core.PERMITTED_CRACK_WIDTH_KEY)
     out.update(
         mode="Elastic",
         elastic_case=_metadata(record),
         calculate_crack_width=calculate_crack_width,
-        ordinary_crack_criterion_mm=criterion,
-        ordinary_crack_criterion_source=criterion_source,
+        sls_permitted_crack_width_mm=criterion,
+        sls_permitted_crack_width_source=sls_core.crack_criterion_source(),
         P_el_l=float(record["n_long_ed_kn"]),
         Mx_el_l=float(record["mx_long_ed_knm"]),
         My_el_l=float(record["my_long_ed_knm"]),
@@ -194,8 +201,9 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
 def _with_ordinary_crack_assessment(
     result: Mapping,
     record: Mapping,
+    base: Mapping,
 ) -> dict:
-    """Attach the case-owned ordinary crack comparison to an Elastic result."""
+    """Attach the shared Analysis criterion to one Elastic result."""
 
     copied = dict(result)
     elastic = copied.get("elastic")
@@ -214,10 +222,8 @@ def _with_ordinary_crack_assessment(
     elastic_copy["crack_output"] = sls_core.assess_crack_output(
         raw_output,
         requested=bool(record["calculate_crack_width"]),
-        criterion_mm=record.get("ordinary_crack_criterion_mm"),
-        criterion_source=load_cases.ordinary_crack_criterion_source(
-            record[load_cases.NAME]
-        ),
+        criterion_mm=base.get(sls_core.PERMITTED_CRACK_WIDTH_KEY),
+        criterion_source=sls_core.crack_criterion_source(),
     )
     copied["elastic"] = elastic_copy
     return copied
@@ -232,12 +238,12 @@ def _reuse_by_name(entries: Sequence[Mapping] | None) -> dict[str, Mapping]:
 
 
 def _entry(record: dict, key: str, result: dict, *, evaluated: bool,
-           reused: bool) -> dict:
+           reused: bool, context: Mapping | None = None) -> dict:
     entry = {
         "name": record[load_cases.NAME],
         "description": record[load_cases.DESCRIPTION],
         "actions": dict(record),
-        "signature": case_signature(record, key),
+        "signature": case_signature(record, key, context),
         "evaluated": bool(evaluated),
         "reused": bool(reused),
         "results": result,
@@ -317,7 +323,9 @@ def run_case_tables(
     if plastic_required:
         bending_live = mode in {"Plastic", "Both"}
         for record in plastic_rows:
-            signature = case_signature(record, load_cases.PLASTIC_TABLE_KEY)
+            signature = case_signature(
+                record, load_cases.PLASTIC_TABLE_KEY, inp
+            )
             cached = cached_plastic.get(record[load_cases.NAME])
             if cached is not None and tuple(cached.get("signature") or ()) == signature:
                 plastic_entries.append(
@@ -327,6 +335,7 @@ def run_case_tables(
                         cached.get("results") or {},
                         evaluated=bool(cached.get("evaluated")),
                         reused=True,
+                        context=inp,
                     )
                 )
                 continue
@@ -360,6 +369,7 @@ def run_case_tables(
                     result,
                     evaluated=evaluated,
                     reused=False,
+                    context=inp,
                 )
             )
         out["plastic_cases"] = plastic_entries
@@ -368,7 +378,9 @@ def run_case_tables(
     elastic_entries = []
     if elastic_required:
         for record in elastic_rows:
-            signature = case_signature(record, load_cases.ELASTIC_TABLE_KEY)
+            signature = case_signature(
+                record, load_cases.ELASTIC_TABLE_KEY, inp
+            )
             cached = cached_elastic.get(record[load_cases.NAME])
             if cached is not None and tuple(cached.get("signature") or ()) == signature:
                 elastic_entries.append(
@@ -378,12 +390,14 @@ def run_case_tables(
                         cached.get("results") or {},
                         evaluated=True,
                         reused=True,
+                        context=inp,
                     )
                 )
                 continue
             result = _with_ordinary_crack_assessment(
                 runner(elastic_case_input(inp, record)),
                 record,
+                inp,
             )
             elastic_entries.append(
                 _entry(
@@ -392,6 +406,7 @@ def run_case_tables(
                     result,
                     evaluated=True,
                     reused=False,
+                    context=inp,
                 )
             )
         out["elastic_cases"] = elastic_entries

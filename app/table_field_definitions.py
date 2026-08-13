@@ -291,8 +291,6 @@ _TABLE_METHOD_DEPENDENCIES = MappingProxyType({
 def validation_rule(definition: FieldDefinition) -> str:
     """Return one explicit manual validation rule from the canonical field role."""
 
-    if definition.key == "ordinary_crack_criterion_mm":
-        return "Optional; when entered it must be finite and greater than zero."
     if definition.key == "cycles":
         return "Required finite number greater than zero."
     if definition.key in {"name", "spectrum"}:
@@ -498,15 +496,6 @@ _ELASTIC_FIELDS = (
         "Run the selected crack-width calculation for this case.", "-", "-",
         "Requests numerical crack-width calculation for the elastic action.",
         "Not applicable.", BlankPolicy.DEFAULT, "User selection", False,
-    ),
-    _field(
-        "ordinary_crack_criterion_mm", "Crack-width criterion",
-        "Optional positive crack-width criterion. Leave blank to report the "
-        "calculated width without assessing acceptance.",
-        "w_{k,criterion}", "mm",
-        "User-specified upper bound for the ordinary crack-width comparison.",
-        "Must be greater than zero when specified.", BlankPolicy.NULL,
-        "User input", None,
     ),
 )
 

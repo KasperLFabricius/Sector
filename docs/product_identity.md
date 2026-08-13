@@ -36,12 +36,13 @@ calculation: application/source version, actual inputs, selected
 method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
-Sector 0.93 is the current internal version and uses current-only project
-schema 24. Sector 0.93 rejects released Sector 0.92 schema 23 rather than
-migrating or silently dropping inputs. Earlier app/project/schema versions and
-their compliance, cover-calculator or authority metadata remain deliberately
-unsupported and are not carried forward. Its portable Windows ZIP is unsigned;
-no trusted-publisher reputation or administrator approval is claimed.
+Sector 0.93 remains the internal product identity during v0.94 development and
+uses project schema 25. Schema 24 has one bounded migration for the shared
+permitted crack width; conflicting populated legacy values migrate to the
+conservative minimum with a visible warning. Schema 23 and future schemas remain
+unsupported. Earlier compliance, cover-calculator or authority metadata is not
+carried forward. Its portable Windows ZIP is unsigned; no trusted-publisher
+reputation or administrator approval is claimed.
 
 Sector does not infer semantic bridge regions, walls, webs or flanges. A
 calculation that cites a bridge source remains bounded to its implemented

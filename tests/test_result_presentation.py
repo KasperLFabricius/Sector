@@ -212,7 +212,7 @@ def test_crack_summary_preserves_exact_bounded_state(
             else 0.833 if state == "WITHIN USER-SPECIFIED LIMIT"
             else None
         ),
-        "criterion_source": "User input - Elastic case EL-01" if criterion else None,
+        "criterion_source": "User input - Analysis settings" if criterion else None,
         "reason": "Retained assessment reason",
     }
     rows = presentation.result_summary_rows(

@@ -28,6 +28,7 @@ def _base(**overrides):
         "shear_on": True,
         "torsion_on": True,
         "combined_on": True,
+        "sls_permitted_crack_width_mm": None,
         "plastic_cases": _plastic([
             {
                 "name": "PL-A",
@@ -316,23 +317,24 @@ def test_rejects_names_duplicated_across_solver_tables():
         case_analysis.run_case_tables(inp, lambda _inp, **_kwargs: {})
 
 
-def test_elastic_case_maps_optional_criterion_and_deterministic_source():
+def test_elastic_case_maps_shared_analysis_criterion_and_source():
     record = case_analysis.case_records(
         {
             "elastic_cases": _elastic([{
                 "name": "EL-frequent",
                 "calculate_crack_width": True,
-                "ordinary_crack_criterion_mm": "0,30",
             }])
         },
         "elastic",
     )[0]
 
-    mapped = case_analysis.elastic_case_input(_base(), record)
+    mapped = case_analysis.elastic_case_input(
+        _base(sls_permitted_crack_width_mm=0.30), record
+    )
 
-    assert mapped["ordinary_crack_criterion_mm"] == pytest.approx(0.30)
-    assert mapped["ordinary_crack_criterion_source"] == (
-        "User input - Elastic case EL-frequent"
+    assert mapped["sls_permitted_crack_width_mm"] == pytest.approx(0.30)
+    assert mapped["sls_permitted_crack_width_source"] == (
+        "User input - Analysis settings"
     )
 
 
@@ -340,7 +342,7 @@ def test_optional_criterion_changes_elastic_case_signature_and_reuse_boundary():
     calls = []
 
     def runner(case_inp):
-        calls.append(case_inp["ordinary_crack_criterion_mm"])
+        calls.append(case_inp["sls_permitted_crack_width_mm"])
         return {
             "elastic": {
                 "crack_output": {
@@ -358,13 +360,13 @@ def test_optional_criterion_changes_elastic_case_signature_and_reuse_boundary():
             shear_on=False,
             torsion_on=False,
             combined_on=False,
+            sls_permitted_crack_width_mm=criterion,
             plastic_cases=load_cases.empty_table(
                 load_cases.PLASTIC_TABLE_KEY
             ),
             elastic_cases=_elastic([{
                 "name": "EL-one",
                 "calculate_crack_width": True,
-                "ordinary_crack_criterion_mm": criterion,
             }]),
         )
 
@@ -386,11 +388,11 @@ def test_case_orchestration_publishes_only_the_controlled_crack_comparison():
         shear_on=False,
         torsion_on=False,
         combined_on=False,
+        sls_permitted_crack_width_mm=0.30,
         plastic_cases=load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY),
         elastic_cases=_elastic([{
             "name": "EL-governing",
             "calculate_crack_width": True,
-            "ordinary_crack_criterion_mm": 0.30,
         }]),
     )
 
@@ -414,7 +416,7 @@ def test_case_orchestration_publishes_only_the_controlled_crack_comparison():
     assert output["calculation_state"] == "EXCEEDS USER-SPECIFIED LIMIT"
     assert output["ratio"] == pytest.approx(1.2)
     assert output["criterion_source"] == (
-        "User input - Elastic case EL-governing"
+        "User input - Analysis settings"
     )
     assert output["comparison_equation"] == "w_k / w_k,criterion"
     assert "status" not in output
@@ -426,11 +428,11 @@ def test_stored_criterion_is_not_assessed_when_width_was_not_requested():
         shear_on=False,
         torsion_on=False,
         combined_on=False,
+        sls_permitted_crack_width_mm=0.30,
         plastic_cases=load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY),
         elastic_cases=_elastic([{
             "name": "EL-stored",
             "calculate_crack_width": False,
-            "ordinary_crack_criterion_mm": 0.30,
         }]),
     )
 

@@ -105,7 +105,6 @@ def project_tables() -> dict[str, pd.DataFrame]:
                 "mx_short_ed_knm": 55.0,
                 "my_short_ed_knm": 0.0,
                 "calculate_crack_width": True,
-                "ordinary_crack_criterion_mm": 0.30,
             }],
             load_cases.ELASTIC_TABLE_KEY,
         ),
@@ -199,13 +198,13 @@ def project_scalars() -> dict:
         "sls_tendon_xi": 0.0,
         "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "sls_member": "Beam",
+        "sls_permitted_crack_width_mm": 0.20,
         "sls_heightened_on": True,
         "sls_heightened_crack_system": "fine",
         "sls_heightened_reinforcement_surface": "smooth",
         "sls_heightened_bar_diameter_mm": 16.0,
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
         "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
-        "sls_heightened_permitted_crack_width_mm": 0.20,
         "sls_heightened_effective_tension_area_mm2": 60_000.0,
         "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
         "fatigue_on": True,
@@ -337,9 +336,9 @@ def checking_pack() -> str:
         clear cover=17.38433739 mm, Ac,eff=15000 mm2, rho_p,eff=1/15,
         sr,max=139.645079986 mm and eps_sm-eps_cm=0.000962424042.
         Therefore wk=0.1343977823 mm, governed by R1. The retained comparison is
-        0.1343977823/0.30=0.4479926077, so the exact state is WITHIN
-        USER-SPECIFIED LIMIT. Its source is User input - Elastic case
-        EL-COMPLETE; no exposure, durability or owner limit is inferred.
+        0.1343977823/0.20=0.6719889115, so the exact state is WITHIN
+        USER-SPECIFIED LIMIT. Its source is User input - Analysis settings;
+        no exposure, durability or owner limit is inferred.
 
         ## DK NA heightened crack-control minimum
 

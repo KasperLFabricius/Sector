@@ -71,6 +71,22 @@ def test_reference_fixture_engineering_is_internally_consistent():
     validate_fixture_engineering(inp, _results(inp))
 
 
+def test_reference_fixture_uses_one_global_crack_width_criterion():
+    inp = _inputs()
+    elastic_cases = inp["elastic_cases"]
+
+    assert inp["sls_permitted_crack_width_mm"] == pytest.approx(0.20)
+    assert all(
+        "ordinary_crack_criterion_mm" not in case for case in elastic_cases
+    )
+    assert "sls_heightened_permitted_crack_width_mm" not in inp
+    output = _results(inp)["elastic_cases"][0]["results"]["elastic"][
+        "crack_output"
+    ]
+    assert output["criterion_mm"] == pytest.approx(0.20)
+    assert output["criterion_source"] == "User input - Analysis settings"
+
+
 def test_reference_fixture_retains_governing_worked_chains_without_figures():
     """Check the textbook payload and PDF text without launching a browser."""
     pdf = build_fixture_pdf(figures=False)

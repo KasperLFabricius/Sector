@@ -176,7 +176,6 @@ def _inputs() -> dict:
             "mx_short_ed_knm": 20.0,
             "my_short_ed_knm": 0.0,
             "calculate_crack_width": True,
-            "ordinary_crack_criterion_mm": 0.30,
         },
         {
             "name": "EL-QA-2",
@@ -188,7 +187,6 @@ def _inputs() -> dict:
             "mx_short_ed_knm": 10.0,
             "my_short_ed_knm": 0.0,
             "calculate_crack_width": False,
-            "ordinary_crack_criterion_mm": None,
         },
     ]
     mild_catalogue, second_id = material_catalog.add_entry(
@@ -354,13 +352,13 @@ def _inputs() -> dict:
         "sls_cw": True,
         "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "sls_member": "Beam",
+        "sls_permitted_crack_width_mm": 0.20,
         "sls_heightened_on": True,
         "sls_heightened_crack_system": "fine",
         "sls_heightened_reinforcement_surface": "smooth",
         "sls_heightened_bar_diameter_mm": 16.0,
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
         "sls_heightened_reinforcement_modulus_mpa": 200_000.0,
-        "sls_heightened_permitted_crack_width_mm": 0.20,
         "sls_heightened_effective_tension_area_mm2": 60_000.0,
         "sls_heightened_provided_reinforcement_area_mm2": 1_600.0,
         "v_min": 0.0,
@@ -780,12 +778,12 @@ def _results(inp: dict | None = None) -> dict:
             "case": "Long-term",
             "governing": "bar 1",
             "unit": "mm",
-            "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
-            "criterion_mm": 0.30,
-            "ratio": 0.71,
-            "criterion_source": "User input - Elastic case EL-QA-1",
+            "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+            "criterion_mm": 0.20,
+            "ratio": 1.065,
+            "criterion_source": "User input - Analysis settings",
             "reason": (
-                "The calculated crack width is within the user-specified limit."
+                "The calculated crack width exceeds the user-specified limit."
             ),
             "comparison_equation": "w_k / w_k,criterion",
         },
@@ -1143,7 +1141,7 @@ def _results(inp: dict | None = None) -> dict:
                 "sls_heightened_reinforcement_modulus_mpa"
             ],
             permitted_crack_width_mm=inp[
-                "sls_heightened_permitted_crack_width_mm"
+                "sls_permitted_crack_width_mm"
             ],
             effective_tension_area_mm2=inp[
                 "sls_heightened_effective_tension_area_mm2"
@@ -1171,11 +1169,11 @@ def _results(inp: dict | None = None) -> dict:
         "elastic_cases": [
             {"name": "EL-QA-1", "actions": elastic_rows[0], "evaluated": True,
              "signature": case_analysis.case_signature(
-                 elastic_rows[0], load_cases.ELASTIC_TABLE_KEY),
+                 elastic_rows[0], load_cases.ELASTIC_TABLE_KEY, inp),
              "results": {"elastic": elastic}},
             {"name": "EL-QA-2", "actions": elastic_rows[1], "evaluated": True,
              "signature": case_analysis.case_signature(
-                 elastic_rows[1], load_cases.ELASTIC_TABLE_KEY),
+                 elastic_rows[1], load_cases.ELASTIC_TABLE_KEY, inp),
              "results": {"elastic": elastic_2}},
         ],
     }

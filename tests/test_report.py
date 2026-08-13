@@ -3045,7 +3045,7 @@ def test_report_publishes_one_retained_critical_user_crack_comparison():
         "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
         "criterion_mm": 0.300,
         "ratio": 0.710,
-        "criterion_source": "User input - Elastic case EL-TEST",
+        "criterion_source": "User input - Analysis settings",
         "reason": "The calculated crack width is within the user-specified limit.",
         "comparison_equation": "w_k / w_k,criterion",
     }
@@ -3062,8 +3062,9 @@ def test_report_publishes_one_retained_critical_user_crack_comparison():
     assert "No user-specified crack-width criterion" not in flat
 
 
-def test_report_never_adds_noncritical_user_crack_comparison_chapter():
+def test_report_applies_one_global_criterion_without_noncritical_chapter():
     inp = _inp()
+    inp["sls_permitted_crack_width_mm"] = 0.10
     rows = [
         {
             "name": "EL-GLOBAL-WIDTH",
@@ -3074,7 +3075,6 @@ def test_report_never_adds_noncritical_user_crack_comparison_chapter():
             "n_short_ed_kn": 0.0,
             "mx_short_ed_knm": 0.0,
             "my_short_ed_knm": 0.0,
-            "ordinary_crack_criterion_mm": None,
             "calculate_crack_width": True,
         },
         {
@@ -3086,7 +3086,6 @@ def test_report_never_adds_noncritical_user_crack_comparison_chapter():
             "n_short_ed_kn": 0.0,
             "mx_short_ed_knm": 0.0,
             "my_short_ed_knm": 0.0,
-            "ordinary_crack_criterion_mm": 0.10,
             "calculate_crack_width": True,
         },
     ]
@@ -3102,12 +3101,12 @@ def test_report_never_adds_noncritical_user_crack_comparison_chapter():
             "case": "Long-term",
             "governing": "bar 1",
             "unit": "mm",
-            "calculation_state": "CALCULATED - ACCEPTANCE NOT ASSESSED",
-            "criterion_mm": None,
-            "ratio": None,
-            "criterion_source": None,
-            "reason": "No user-specified crack-width criterion was supplied.",
-            "comparison_equation": None,
+            "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+            "criterion_mm": 0.10,
+            "ratio": 4.0,
+            "criterion_source": "User input - Analysis settings",
+            "reason": "The calculated crack width exceeds the user-specified limit.",
+            "comparison_equation": "w_k / w_k,criterion",
         },
     )
     assessed_result = copy.deepcopy(_out()["elastic"])
@@ -3124,9 +3123,7 @@ def test_report_never_adds_noncritical_user_crack_comparison_chapter():
             "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
             "criterion_mm": 0.10,
             "ratio": 2.0,
-            "criterion_source": (
-                "User input - Elastic case EL-NONCRITICAL-LIMIT"
-            ),
+            "criterion_source": "User input - Analysis settings",
             "reason": (
                 "The calculated crack width exceeds the user-specified limit."
             ),
@@ -3159,7 +3156,9 @@ def test_report_never_adds_noncritical_user_crack_comparison_chapter():
     assert flat.count("Crack width worked - governing case") == 1
     assert "Governing crack width - EL-NONCRITICAL-LIMIT" not in flat
     assert "Governing crack-width comparison - EL-NONCRITICAL-LIMIT" not in flat
-    assert "User-specified crack-width comparison - critical case" not in flat
+    assert flat.count(
+        "User-specified crack-width comparison - critical case"
+    ) == 1
     assert "EQ-CRACK.USER-LIMIT.COMPARISON" not in flat
 
 

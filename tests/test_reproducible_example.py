@@ -24,7 +24,7 @@ import sector_report  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "7b22d40622278204b6a77251460477bc3c4dd23e807baffa17e62b9c5b658624"
+    "85375270ebf6d908a90d35e63ee953001b221b07bb51909262e5101e355fe495"
 )
 
 
@@ -132,12 +132,12 @@ def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
         "governing": "R1",
         "unit": "mm",
         "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
-        "criterion_mm": 0.30,
+        "criterion_mm": 0.20,
         "ratio": pytest.approx(
-            expected_elastic["crack_width_mm"] / 0.30,
+            expected_elastic["crack_width_mm"] / 0.20,
             rel=5.0e-12,
         ),
-        "criterion_source": "User input - Elastic case EL-COMPLETE",
+        "criterion_source": "User input - Analysis settings",
         "reason": "The calculated crack width is within the user-specified limit.",
         "comparison_equation": "w_k / w_k,criterion",
     }

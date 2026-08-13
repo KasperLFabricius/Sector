@@ -101,9 +101,9 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
         "published project-adoption basis",
         "no Danish National Annex",
         "confinement enhancement is not included or assessed",
-        "current project schema version 24",
-        "Sector v0.93 supports only current project schema version 24",
-        "Released Sector 0.92 projects used schema version 23",
+        "Current projects use schema version 25",
+        "Schema 24 is migrated in memory",
+        "Schema 23 remains unsupported",
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
     ):
@@ -475,7 +475,7 @@ def test_manual_documents_optional_crack_criterion_and_dk_heightened_boundary():
         if isinstance(item, str)
     )
 
-    assert "An optional positive criterion belongs to that named Elastic row" in text
+    assert "One optional positive permitted width in Analysis settings" in text
     assert "does not infer exposure, durability, prestress category" in text
     assert "DK NA heightened crack-control minimum" in text
     assert r"m_s=\sqrt{2}" in text

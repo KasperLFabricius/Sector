@@ -2,7 +2,7 @@
 
 The elastic solver returns numerical section states. This module exposes those
 states as reproducible calculation outputs. An ordinary crack-width result may
-optionally be compared with a positive limit entered for its named Elastic case;
+optionally be compared with one positive permitted width from Analysis settings;
 no exposure, durability, decompression or load-combination criterion is inferred.
 """
 
@@ -17,6 +17,8 @@ CRACK_CALCULATED_UNASSESSED = "CALCULATED - ACCEPTANCE NOT ASSESSED"
 CRACK_WITHIN_USER_LIMIT = "WITHIN USER-SPECIFIED LIMIT"
 CRACK_EXCEEDS_USER_LIMIT = "EXCEEDS USER-SPECIFIED LIMIT"
 CRACK_COMPARISON_EQUATION = "w_k / w_k,criterion"
+PERMITTED_CRACK_WIDTH_KEY = "sls_permitted_crack_width_mm"
+PERMITTED_CRACK_WIDTH_SOURCE = "User input - Analysis settings"
 
 
 def _is_boolean_scalar(value: object) -> bool:
@@ -27,10 +29,10 @@ def _is_boolean_scalar(value: object) -> bool:
     )
 
 
-def crack_criterion_source(case_name: object) -> str:
-    """Return the stable provenance label for one Elastic-case criterion."""
+def crack_criterion_source() -> str:
+    """Return the stable provenance label for the shared Analysis setting."""
 
-    return f"User input - Elastic case {str(case_name).strip()}"
+    return PERMITTED_CRACK_WIDTH_SOURCE
 
 
 def _element_id(ids: Sequence[str] | None, index: int, fallback: str) -> str:
@@ -219,8 +221,8 @@ def assess_crack_output(
         result.update(
             calculation_state=CRACK_CALCULATED_UNASSESSED,
             reason=(
-                "No ordinary crack-width criterion was specified; acceptance "
-                "is not assessed."
+                "No permitted crack width was specified in Analysis settings; "
+                "acceptance is not assessed."
             ),
         )
         return result
