@@ -11,14 +11,17 @@ from __future__ import annotations
 import math
 from typing import Iterable, Mapping, Sequence
 
+from .sls_identity import (
+    PERMITTED_CRACK_WIDTH_KEY,
+    PERMITTED_CRACK_WIDTH_SOURCE,
+)
+
 CRACK_NOT_REQUESTED = "NOT REQUESTED"
 CRACK_NOT_ASSESSED = "NOT ASSESSED"
 CRACK_CALCULATED_UNASSESSED = "CALCULATED - ACCEPTANCE NOT ASSESSED"
 CRACK_WITHIN_USER_LIMIT = "WITHIN USER-SPECIFIED LIMIT"
 CRACK_EXCEEDS_USER_LIMIT = "EXCEEDS USER-SPECIFIED LIMIT"
 CRACK_COMPARISON_EQUATION = "w_k / w_k,criterion"
-PERMITTED_CRACK_WIDTH_KEY = "sls_permitted_crack_width_mm"
-PERMITTED_CRACK_WIDTH_SOURCE = "User input - Analysis settings"
 
 
 def _is_boolean_scalar(value: object) -> bool:
