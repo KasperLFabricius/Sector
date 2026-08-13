@@ -195,21 +195,21 @@ def test_brief_retains_curve_specific_mild_steel_inputs_and_compression_switch()
     for expected in (
         "curve 1",
         "fytk / fyck / futk = 510.000 / 470.000 / 620.000 MPa",
-        "εut = 41.000 ‰",
-        "γy / γu / γE = 1.100 / 1.250 / 1.050",
+        "\u03b5ut = 41.000 \u2030",
+        "\u03b3y / \u03b3u / \u03b3E = 1.100 / 1.250 / 1.050",
         "compression branch active = yes",
     ):
         assert expected in m1
     assert "; k =" not in m1
-    assert "ε0t / ε0c" not in m1
+    assert "\u03b50t / \u03b50c" not in m1
 
     for expected in (
         "curve 3",
         "fytk / fyck / futk = 525.000 / 315.000 / 645.000 MPa",
-        "εut = 56.000 ‰",
-        "γy / γu / γE = 1.120 / 1.280 / 1.040",
+        "\u03b5ut = 56.000 \u2030",
+        "\u03b3y / \u03b3u / \u03b3E = 1.120 / 1.280 / 1.040",
         "k = 0.870",
-        "ε0t / ε0c = 3.250 / 4.750 ‰",
+        "\u03b50t / \u03b50c = 3.250 / 4.750 \u2030",
         "compression branch active = no",
     ):
         assert expected in m2
@@ -323,22 +323,22 @@ def test_brief_retains_curve_specific_prestress_inputs():
     for expected in (
         "curve 6",
         "fp0.1k / fpk = 1575.000 / 1815.000 MPa",
-        "εp,0 = 4.800 ‰",
-        "εut = 31.000 ‰",
-        "γy / γu / γE = 1.080 / 1.160 / 1.030",
+        "\u03b5p,0 = 4.800 \u2030",
+        "\u03b5ut = 31.000 \u2030",
+        "\u03b3y / \u03b3u / \u03b3E = 1.080 / 1.160 / 1.030",
     ):
         assert expected in p1
     assert "; k =" not in p1
-    assert "ε0t" not in p1
+    assert "\u03b50t" not in p1
 
     for expected in (
         "curve 7",
         "fp0.1k / fpk = 1685.000 / 1915.000 MPa",
-        "εp,0 = 6.100 ‰",
-        "εut = 39.000 ‰",
-        "γy / γu / γE = 1.110 / 1.210 / 1.020",
+        "\u03b5p,0 = 6.100 \u2030",
+        "\u03b5ut = 39.000 \u2030",
+        "\u03b3y / \u03b3u / \u03b3E = 1.110 / 1.210 / 1.020",
         "k = 0.860",
-        "ε0t = 2.750 ‰",
+        "\u03b50t = 2.750 \u2030",
     ):
         assert expected in p2
 
@@ -493,9 +493,9 @@ def test_brief_retains_2023_concrete_applicability_and_derived_factor():
     ]
     for expected in (
         "DS/EN 1992-1-1:2023",
-        "ηcc = 0.912345",
+        "\u03b7cc = 0.912345",
         "ktc = 0.85",
-        "αcc = ηcc ktc = 0.775493",
+        "\u03b1cc = \u03b7cc ktc = 0.775493",
         "n = 1.750",
     ):
         assert expected in concrete_085
@@ -513,7 +513,7 @@ def test_brief_retains_2023_concrete_applicability_and_derived_factor():
         text_100.index("Concrete Concrete rings"):text_100.index("Mild / M1")
     ]
     assert "ktc = 1.00" in concrete_100
-    assert "αcc = ηcc ktc = 0.912345" in concrete_100
+    assert "\u03b1cc = \u03b7cc ktc = 0.912345" in concrete_100
     assert concrete_100 != concrete_085
 
 
@@ -847,17 +847,17 @@ def test_brief_fatigue_rows_omit_inactive_concrete_route_inputs():
     for expected in (
         "Reinforcement fatigue yes",
         "Concrete fatigue no",
-        "Action factor γFf 1.111",
-        "Reinforcement factor γs 1.222",
+        "Action factor \u03b3Ff 1.111",
+        "Reinforcement factor \u03b3s 1.222",
         "Spectrum method Grouped action spectrum",
         "Fatigue detail F1",
     ):
         assert expected in text
     for inactive in (
-        "Concrete factor γc,fat",
+        "Concrete factor \u03b3c,fat",
         "Concrete fatigue method",
         "Concrete age t0",
-        "βcc(t0)",
+        "\u03b2cc(t0)",
         "Concrete fatigue k1",
         "Concrete fatigue C",
     ):
@@ -920,15 +920,15 @@ def test_brief_fatigue_concrete_rows_follow_basis_and_method(
     for expected in (
         "Reinforcement fatigue no",
         "Concrete fatigue yes",
-        "Action factor γFf 1.111",
-        "Concrete factor γc,fat 1.333",
+        "Action factor \u03b3Ff 1.111",
+        "Concrete factor \u03b3c,fat 1.333",
         f"Concrete fatigue method {method}",
         "Concrete age t0 41.00 days",
-        "βcc(t0) 0.9400",
+        "\u03b2cc(t0) 0.9400",
         "Spectrum method Grouped action spectrum",
     ):
         assert expected in text
-    assert "Reinforcement factor γs" not in text
+    assert "Reinforcement factor \u03b3s" not in text
     assert "Fatigue detail F1" not in text
     assert ("Concrete fatigue k1 0.730" in text) is expect_k1
     assert ("Concrete fatigue C 19.000" in text) is expect_c
