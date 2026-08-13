@@ -5,11 +5,13 @@ Greek glyphs are referenced via chr() so this test file stays ASCII.
 
 from __future__ import annotations
 
+import io
 import math
 import pathlib
 import sys
 
 import pytest
+from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
@@ -819,6 +821,285 @@ def test_uniaxial_shear_geometry_preserves_negative_action_direction():
 
     assert load_arrow.y < load_arrow.ay
     assert "V<sub>y,Ed</sub> = -25 kN" in text
+
+
+@pytest.mark.parametrize("axis", ("x", "y"))
+@pytest.mark.parametrize("tension_low", (True, False))
+def test_shear_geometry_callouts_use_separate_contained_lanes(
+    axis, tension_low
+):
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    cg = (-0.25 if tension_low else 0.25) if axis == "x" else (
+        -0.15 if tension_low else 0.15
+    )
+    d_mm, z_mm = (550.0, 495.0) if axis == "x" else (350.0, 315.0)
+    fig = viz.shear_geometry_figure(
+        outer, [], [(-0.15, -0.25, 300.0), (0.15, 0.25, 300.0)],
+        axis=axis, tension_low=tension_low, centroid=(0.0, 0.0),
+        asl_bar_ids=[1], asl_cg_m=cg, asl_mm2=300.0,
+        d_mm=d_mm, z_mm=z_mm, bw_mm=400.0,
+        bw_source="auto", signed_v_ed=(-25.0 if tension_low else 25.0),
+    )
+    annotations = {
+        annotation.name: annotation
+        for annotation in fig.layout.annotations
+        if annotation.name
+    }
+    action = annotations["shear-action-label"]
+    depth = annotations["shear-d-label"]
+    lever = annotations["shear-z-label"]
+    face = annotations["shear-tension-face"]
+
+    assert fig.layout.yaxis.scaleanchor == "x"
+    assert fig.layout.xaxis.constrain == "domain"
+    assert fig.layout.yaxis.constrain == "domain"
+    x_range = tuple(fig.layout.xaxis.range)
+    y_range = tuple(fig.layout.yaxis.range)
+    for annotation in (action, depth, lever, face):
+        assert x_range[0] <= float(annotation.x) <= x_range[1]
+        assert y_range[0] <= float(annotation.y) <= y_range[1]
+
+    if axis == "x":
+        assert float(action.x) < -200.0 < 200.0 < float(depth.x) < float(lever.x)
+        assert (float(face.ay) < -300.0) is tension_low
+        assert (float(face.ay) > 300.0) is (not tension_low)
+    else:
+        assert 300.0 < float(depth.y) < float(lever.y) < float(action.y)
+        assert (float(face.ax) < -200.0) is tension_low
+        assert (float(face.ax) > 200.0) is (not tension_low)
+
+
+def _annotation_border_boxes(
+    png: bytes, colour: str
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Return compact annotation-border rectangles in raster order."""
+
+    image = Image.open(io.BytesIO(png)).convert("RGB")
+    rgb = tuple(bytes.fromhex(colour.removeprefix("#")))
+    runs = []
+    for y in range(image.height):
+        row_runs = []
+        x = 0
+        while x < image.width:
+            if image.getpixel((x, y)) != rgb:
+                x += 1
+                continue
+            x0 = x
+            while x < image.width and image.getpixel((x, y)) == rgb:
+                x += 1
+            row_runs.append((x0, x - 1))
+        merged = []
+        for x0, x1 in row_runs:
+            if merged and x0 - merged[-1][1] <= 3:
+                merged[-1] = (merged[-1][0], x1)
+            else:
+                merged.append((x0, x1))
+        runs.extend((x0, x1, y) for x0, x1 in merged if x1 - x0 + 1 >= 30)
+    boxes = [
+        (min(x0, other_x0), max(x1, other_x1), y0, y1)
+        for index, (x0, x1, y0) in enumerate(runs)
+        for other_x0, other_x1, y1 in runs[index + 1:]
+        if 8 <= y1 - y0 <= 24
+        and min(x1, other_x1) - max(x0, other_x0) + 1 >= 30
+    ]
+    unique = tuple(sorted(set(boxes), key=lambda box: (box[2], box[0])))
+    assert unique, f"no raster annotation border found for {colour}"
+    return unique
+
+
+def _annotation_border_box(png: bytes, colour: str) -> tuple[int, int, int, int]:
+    """Return the first compact annotation-border rectangle in raster order."""
+
+    return _annotation_border_boxes(png, colour)[0]
+
+
+def _raster_colour_bounds(
+    png: bytes, colour: str
+) -> tuple[int, int, int, int]:
+    """Return the pixel bounds occupied by one exact opaque figure colour."""
+
+    image = Image.open(io.BytesIO(png)).convert("RGB")
+    rgb = tuple(bytes.fromhex(colour.removeprefix("#")))
+    points = [
+        (x, y)
+        for y in range(image.height)
+        for x in range(image.width)
+        if image.getpixel((x, y)) == rgb
+    ]
+    assert points, f"no raster pixels found for {colour}"
+    return (
+        min(point[0] for point in points),
+        max(point[0] for point in points),
+        min(point[1] for point in points),
+        max(point[1] for point in points),
+    )
+
+
+def _boxes_overlap(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+) -> bool:
+    """Return whether two inclusive raster rectangles share any pixels."""
+
+    return not (
+        first[1] < second[0]
+        or second[1] < first[0]
+        or first[3] < second[2]
+        or second[3] < first[2]
+    )
+
+
+@pytest.mark.parametrize("width, height", ((548, 389), (1600, 560)))
+def test_report_and_app_size_shear_callout_borders_have_pixel_gaps(
+    width, height
+):
+    fig = viz.shear_geometry_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [(-0.1, -0.25, 300.0), (0.1, 0.25, 300.0)],
+        axis="y", tension_low=False, centroid=(0.0, 0.0),
+        asl_bar_ids=[2], asl_cg_m=0.25, asl_mm2=300.0,
+        d_mm=450.0, z_mm=405.0, bw_mm=600.0,
+        bw_source="auto minimum solid width", signed_v_ed=220.0,
+    )
+    png = fig.to_image(format="png", width=width, height=height, scale=1)
+    action = _annotation_border_box(png, viz.LOAD_POINT)
+    lever = _annotation_border_box(png, viz.ENVELOPE)
+    depth = _annotation_border_box(png, viz.SCHEMATIC_INK)
+
+    assert action[3] + 6 < lever[2]
+    assert lever[3] + 6 < depth[2]
+
+
+@pytest.mark.parametrize(
+    "tension_low, signed_v_ed",
+    ((True, -220.0), (False, 220.0)),
+)
+def test_report_size_tall_axis_x_callouts_are_contained_and_separate(
+    tension_low, signed_v_ed
+):
+    width, height = 548, 389
+    cg = -0.55 if tension_low else 0.55
+    fig = viz.shear_geometry_figure(
+        [(-0.2, -0.6), (0.2, -0.6), (0.2, 0.6), (-0.2, 0.6)],
+        [],
+        [(-0.1, -0.55, 300.0), (0.1, 0.55, 300.0)],
+        axis="x", tension_low=tension_low, centroid=(0.0, 0.0),
+        asl_bar_ids=[1 if tension_low else 2], asl_cg_m=cg, asl_mm2=300.0,
+        d_mm=1150.0, z_mm=1035.0, bw_mm=400.0,
+        bw_source="auto minimum solid width", signed_v_ed=signed_v_ed,
+    )
+    png = fig.to_image(format="png", width=width, height=height, scale=1)
+    load_boxes = _annotation_border_boxes(png, viz.LOAD_POINT)
+    depth = _annotation_border_box(png, viz.SCHEMATIC_INK)
+    lever = _annotation_border_box(png, viz.ENVELOPE)
+
+    # LOAD_POINT owns both the left action label and the tension-face label.
+    assert len(load_boxes) >= 2
+    action = min(load_boxes, key=lambda box: box[0])
+    assert 6 < action[0] < action[1] < width - 6
+    assert 6 < depth[0] < depth[1] < width - 6
+    assert 6 < lever[0] < lever[1] < width - 6
+    assert action[1] + 6 < depth[0]
+    assert depth[1] + 6 < lever[0]
+
+
+@pytest.mark.parametrize(
+    "tension_low, signed_v_ed",
+    ((True, -220.0), (False, 220.0)),
+)
+def test_report_size_wide_axis_y_callouts_are_contained_and_separate(
+    tension_low, signed_v_ed
+):
+    width, height = 548, 389
+    cg = -0.75 if tension_low else 0.75
+    fig = viz.shear_geometry_figure(
+        [(-0.8, -0.1), (0.8, -0.1), (0.8, 0.1), (-0.8, 0.1)],
+        [],
+        [(-0.75, -0.05, 300.0), (0.75, 0.05, 300.0)],
+        axis="y", tension_low=tension_low, centroid=(0.0, 0.0),
+        asl_bar_ids=[1 if tension_low else 2], asl_cg_m=cg, asl_mm2=300.0,
+        d_mm=1550.0, z_mm=1395.0, bw_mm=200.0,
+        bw_source="auto minimum solid width", signed_v_ed=signed_v_ed,
+    )
+    png = fig.to_image(format="png", width=width, height=height, scale=1)
+    load_boxes = _annotation_border_boxes(png, viz.LOAD_POINT)
+    depth = _annotation_border_box(png, viz.SCHEMATIC_INK)
+    lever = _annotation_border_box(png, viz.ENVELOPE)
+
+    assert len(load_boxes) >= 2
+    action = min(load_boxes, key=lambda box: box[2])
+    for box in (*load_boxes, depth, lever):
+        assert 6 < box[0] < box[1] < width - 6
+        assert 6 < box[2] < box[3] < height - 6
+    assert action[3] + 6 < lever[2]
+    assert lever[3] + 6 < depth[2]
+
+
+@pytest.mark.parametrize("tension_low", (True, False))
+@pytest.mark.parametrize("signed_v_ed", (-220.0, 220.0))
+def test_report_size_wide_axis_x_tension_face_clears_section(
+    tension_low, signed_v_ed
+):
+    width, height = 548, 389
+    cg = -0.075 if tension_low else 0.075
+    fig = viz.shear_geometry_figure(
+        [(-0.8, -0.1), (0.8, -0.1), (0.8, 0.1), (-0.8, 0.1)],
+        [],
+        [(-0.75, -0.075, 300.0), (0.75, 0.075, 300.0)],
+        axis="x", tension_low=tension_low, centroid=(0.0, 0.0),
+        asl_bar_ids=[1 if tension_low else 2], asl_cg_m=cg, asl_mm2=300.0,
+        d_mm=175.0, z_mm=157.5, bw_mm=1600.0,
+        bw_source="auto minimum solid width", signed_v_ed=signed_v_ed,
+    )
+    png = fig.to_image(format="png", width=width, height=height, scale=1)
+    load_boxes = _annotation_border_boxes(png, viz.LOAD_POINT)
+    section = _raster_colour_bounds(png, viz.CONCRETE_LINE)
+
+    assert len(load_boxes) >= 2
+    action = min(load_boxes, key=lambda box: box[0])
+    face = max(load_boxes, key=lambda box: box[0])
+    for box in load_boxes:
+        assert 6 < box[0] < box[1] < width - 6
+        assert 6 < box[2] < box[3] < height - 6
+    assert not _boxes_overlap(action, face)
+    if tension_low:
+        assert section[3] + 6 < face[2]
+    else:
+        assert face[3] + 6 < section[2]
+
+
+@pytest.mark.parametrize("tension_low", (True, False))
+@pytest.mark.parametrize("signed_v_ed", (-220.0, 220.0))
+def test_report_size_tall_axis_y_tension_face_clears_section(
+    tension_low, signed_v_ed
+):
+    width, height = 548, 389
+    cg = -0.075 if tension_low else 0.075
+    fig = viz.shear_geometry_figure(
+        [(-0.1, -0.8), (0.1, -0.8), (0.1, 0.8), (-0.1, 0.8)],
+        [],
+        [(-0.075, -0.75, 300.0), (0.075, 0.75, 300.0)],
+        axis="y", tension_low=tension_low, centroid=(0.0, 0.0),
+        asl_bar_ids=[1 if tension_low else 2], asl_cg_m=cg, asl_mm2=300.0,
+        d_mm=175.0, z_mm=157.5, bw_mm=1600.0,
+        bw_source="auto minimum solid width", signed_v_ed=signed_v_ed,
+    )
+    png = fig.to_image(format="png", width=width, height=height, scale=1)
+    load_boxes = _annotation_border_boxes(png, viz.LOAD_POINT)
+    section = _raster_colour_bounds(png, viz.CONCRETE_LINE)
+
+    assert len(load_boxes) >= 2
+    action = min(load_boxes, key=lambda box: box[2])
+    face = max(load_boxes, key=lambda box: box[2])
+    for box in load_boxes:
+        assert 6 < box[0] < box[1] < width - 6
+        assert 6 < box[2] < box[3] < height - 6
+    assert not _boxes_overlap(action, face)
+    if tension_low:
+        assert face[1] + 6 < section[0]
+    else:
+        assert section[1] + 6 < face[0]
 
 
 def test_biaxial_shear_overview_has_signed_coordinate_arrows_without_resultant():
