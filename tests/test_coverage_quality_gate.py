@@ -57,15 +57,19 @@ def test_exact_contract_and_workflow_are_aligned():
     data = _contract()
     validate_contract(data, ROOT)
     validate_workflow(data, WORKFLOW.read_text(encoding="utf-8"))
+    command = expected_coverage_command(data)
 
     assert expected_validator_command().endswith(
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
     )
-    assert "--dist loadgroup" in expected_coverage_command(data)
-    assert "--basetemp $baseTemp" in expected_coverage_command(data)
-    assert "--cov=app" in expected_coverage_command(data)
-    assert "--cov=sector" in expected_coverage_command(data)
-    assert "--cov-fail-under=90" in expected_coverage_command(data)
+    assert "--dist loadgroup" in command
+    assert '-m "not real_image_export"' in command
+    assert "--basetemp $coreTemp" in command
+    assert command.count("-n 0") == 3
+    assert command.count("--cov-append") == 3
+    assert "--cov=app" in command
+    assert "--cov=sector" in command
+    assert "coverage report --show-missing --skip-covered --fail-under=90" in command
     assert data["waivers"] == []
 
 
@@ -272,6 +276,6 @@ def test_filtered_trigger_or_command_drift_is_rejected():
     workflow = _workflow()
     _step(workflow, COVERAGE_STEP_NAME)["run"] = _step(workflow, COVERAGE_STEP_NAME)[
         "run"
-    ].replace("--cov-fail-under=90", "--cov-fail-under=89")
+    ].replace("--fail-under=90", "--fail-under=89")
     with pytest.raises(CoverageGateContractError, match="coverage test command"):
         validate_workflow(_contract(), _workflow_text(workflow))

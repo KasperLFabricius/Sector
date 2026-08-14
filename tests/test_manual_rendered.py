@@ -103,6 +103,7 @@ def test_accessible_html_fixture_is_self_contained_and_semantic():
     assert "Audit does not mean approved, compliant or certified" in text
 
 
+@pytest.mark.real_image_export
 @pytest.mark.xdist_group(name="publication-real-figures")
 def test_issued_manual_renders_every_page_and_retains_navigation():
     pdf = build_fixture_pdf()

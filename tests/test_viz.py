@@ -949,6 +949,8 @@ def _boxes_overlap(
     )
 
 
+@pytest.mark.xdist_group(name="publication-real-figures")
+@pytest.mark.real_image_export
 @pytest.mark.parametrize("width, height", ((548, 389), (1600, 560)))
 def test_report_and_app_size_shear_callout_borders_have_pixel_gaps(
     width, height
@@ -971,6 +973,8 @@ def test_report_and_app_size_shear_callout_borders_have_pixel_gaps(
     assert lever[3] + 6 < depth[2]
 
 
+@pytest.mark.xdist_group(name="publication-real-figures")
+@pytest.mark.real_image_export
 @pytest.mark.parametrize(
     "tension_low, signed_v_ed",
     ((True, -220.0), (False, 220.0)),
@@ -1004,6 +1008,8 @@ def test_report_size_tall_axis_x_callouts_are_contained_and_separate(
     assert depth[1] + 6 < lever[0]
 
 
+@pytest.mark.xdist_group(name="publication-real-figures")
+@pytest.mark.real_image_export
 @pytest.mark.parametrize(
     "tension_low, signed_v_ed",
     ((True, -220.0), (False, 220.0)),
@@ -1036,6 +1042,8 @@ def test_report_size_wide_axis_y_callouts_are_contained_and_separate(
     assert lever[3] + 6 < depth[2]
 
 
+@pytest.mark.xdist_group(name="publication-real-figures")
+@pytest.mark.real_image_export
 @pytest.mark.parametrize("tension_low", (True, False))
 @pytest.mark.parametrize("signed_v_ed", (-220.0, 220.0))
 def test_report_size_wide_axis_x_tension_face_clears_section(
@@ -1069,6 +1077,8 @@ def test_report_size_wide_axis_x_tension_face_clears_section(
         assert face[3] + 6 < section[2]
 
 
+@pytest.mark.xdist_group(name="publication-real-figures")
+@pytest.mark.real_image_export
 @pytest.mark.parametrize("tension_low", (True, False))
 @pytest.mark.parametrize("signed_v_ed", (-220.0, 220.0))
 def test_report_size_tall_axis_y_tension_face_clears_section(
