@@ -387,7 +387,8 @@ def _out():
     return {
         "plastic": {"mx": [100.0, 0.0, -100.0, 0.0], "my": [0.0, 100.0, 0.0, -100.0],
                     "max_mx": 100.0, "max_my": 100.0, "min_mx": -100.0, "min_my": -100.0,
-                    "util": 0.8, "closed": True,
+                    "util": 0.8, "util_valid": True, "util_reason": None,
+                    "util_origin_inside_or_on": True, "closed": True,
                     "check_util": True, "applied": (80.0, 0.0), "converged": True,
                     "worked_point_index": 0,
                     "worked_point_basis": "utilisation direction",
@@ -3689,6 +3690,124 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     txt = _pdf_text(sector_report.build_report({}, _inp(), invalid, figures=False))
     assert "INVALID - Plastic bending" in txt
     assert "diagnostic only" in txt
+    assert "Utilisation (applied direction)" not in txt
+
+    capacity_invalid = _out()
+    capacity_invalid["plastic"].update(
+        converged=False, check_util=False, applied=None
+    )
+    txt = _pdf_text(sector_report.build_report(
+        {}, _inp(), capacity_invalid, figures=False
+    ))
+    assert "INVALID - Plastic bending" in txt
+    assert "diagnostic only" in txt
+    assert "not checked (capacity only)" not in txt
+
+    origin_invalid = _out()
+    origin_invalid["plastic"].update(
+        util=None,
+        util_valid=False,
+        util_reason="Global moment origin lies outside the closed M-M envelope",
+        util_origin_inside_or_on=False,
+        util_gov=None,
+        worked_point_basis="peak resultant moment",
+    )
+    txt = _pdf_text(sector_report.build_report(
+        {}, _inp(), origin_invalid, figures=False
+    ))
+    assert "INVALID - Plastic bending" in txt
+    assert "Global moment origin lies outside the closed M-M envelope" in txt
+    assert "open arc" not in txt.casefold()
+    assert "Utilisation (applied direction)" not in txt
+    assert "Worked plastic calculation (peak resultant moment)" in txt
+
+    legacy = _out()
+    legacy["plastic"].pop("util_valid")
+    txt = _pdf_text(sector_report.build_report({}, _inp(), legacy, figures=False))
+    assert "Retained result predates the current M-M origin-containment" in txt
+    assert "Utilisation (applied direction)" not in txt
+
+    absent = _out()
+    absent["plastic"].update(util=None, util_valid=True, util_gov=None)
+    txt = _pdf_text(sector_report.build_report({}, _inp(), absent, figures=False))
+    assert "Closed envelope has no retained utilisation assessment" in txt
+    assert "open arc" not in txt.casefold()
+
+
+def test_legacy_multi_case_utilisation_cannot_select_or_publish_worked_point():
+    inp = _inp()
+    rows = [
+        {
+            "name": name,
+            "description": description,
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": moment,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 0.0,
+        }
+        for name, description, moment in (
+            ("PL-LEGACY-HIGH", "High stale utilisation", 80.0),
+            ("PL-LEGACY-CAPACITY", "Larger retained capacity", 20.0),
+        )
+    ]
+    inp["plastic_cases"] = rows
+    high_stale_util = copy.deepcopy(_out()["plastic"])
+    high_stale_util.update(util=1.4, worked_point_basis="utilisation direction")
+    high_stale_util.pop("util_valid")
+    larger_capacity = copy.deepcopy(_out()["plastic"])
+    larger_capacity.update(
+        util=0.2,
+        mx=[200.0, 0.0, -200.0, 0.0],
+        max_mx=200.0,
+        min_mx=-200.0,
+        worked_point_basis="utilisation direction",
+    )
+    larger_capacity.pop("util_valid")
+    out = _out()
+    out["plastic_cases"] = [
+        {
+            "name": row["name"],
+            "actions": row,
+            "evaluated": True,
+            "results": {"plastic": result},
+        }
+        for row, result in zip(
+            rows, (high_stale_util, larger_capacity), strict=True
+        )
+    ]
+
+    selected = result_presentation.worked_example_selection(inp, out)
+    assert selected["families"]["plastic"]["case_id"] == "PL-LEGACY-CAPACITY"
+
+    out["worked_example_selection"] = selected
+    txt = " ".join(_pdf_text(_build_report_from_completed_payload(
+        {}, inp, out, figures=False,
+    )).split())
+    assert "Retained result predates the current M-M origin-containment" in txt
+    assert "Worked plastic calculation unavailable" in txt
+    assert "Worked plastic calculation (utilisation direction)" not in txt
+
+
+def test_legacy_plastic_cannot_publish_retained_combined_verdict():
+    out = _out()
+    out["plastic"].pop("util_valid")
+    out["combined"] = _combined_out()
+    inp = _inp()
+    inp.update(combined_on=True, shear_on=True, torsion_on=True)
+
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False,
+    )).split())
+
+    assert "Combined bending + shear + torsion" in txt
+    assert "Retained combined result predates" in txt
+    assert "recalculate" in txt.casefold()
+    assert "Governing combined worked example" not in txt
+    assert "130.0 %" not in txt
 
 
 def test_report_handles_plastic_only():
@@ -3721,7 +3840,14 @@ def test_report_elastic_only_omits_plastic_theory():
 def test_report_capacity_only_omits_utilisation():
     # A capacity-only run (utilisation not checked) reports no utilisation value.
     out = _out()
-    out["plastic"].update(util=None, check_util=False, applied=None)
+    out["plastic"].update(
+        util=None,
+        util_valid=None,
+        util_reason=None,
+        util_origin_inside_or_on=None,
+        check_util=False,
+        applied=None,
+    )
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "capacity only" in txt
     assert "applied direction" not in txt    # no utilisation percentage row
@@ -4063,6 +4189,230 @@ def test_report_audits_independent_governing_faces_and_angles():
     assert "bottom (-y)" in text and "top (+y)" in text
     assert "1.250" in text and "1.750" in text
     assert "V+T (6.29)" in text
+
+
+def test_report_legacy_blocker_sanitizes_both_face_combined_cells_only():
+    out = _out()
+    out["plastic"].pop("util_valid")
+    out["combined"] = _combined_out()
+    sh = _shear_out()
+    negative = copy.deepcopy(sh)
+    positive = copy.deepcopy(sh)
+    positive.update(tension_low=False, util=0.65)
+    sh.update(
+        component="vy",
+        both_faces_evaluated=True,
+        face_candidates=[
+            dict(
+                tension_low=True,
+                shear=negative,
+                shear_status="SHEAR KEPT A",
+                torsion_status="V+T KEPT A",
+                combined_status="STALE COMBINED A",
+            ),
+            dict(
+                tension_low=False,
+                shear=positive,
+                shear_status="SHEAR KEPT B",
+                torsion_status="V+T KEPT B",
+                combined_status="STALE COMBINED B",
+            ),
+        ],
+        governing_domains={
+            "shear": dict(
+                face="negative", cot=1.25, status="SHEAR KEPT", util=0.77,
+            ),
+            "vt": dict(
+                face="positive", cot=1.75, status="V+T KEPT", util=1.10,
+            ),
+            "combined": dict(
+                face="positive", cot=1.75, status="STALE DOMAIN", util=9.87654,
+            ),
+        },
+    )
+    out["shear"] = sh
+    before = copy.deepcopy(out)
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, _inp(), out, figures=False,
+    )
+    tables = []
+    builder._table = lambda rows, *args, **kwargs: tables.append(copy.deepcopy(rows))
+
+    builder._shear_direction(sh, component="vy")
+
+    face_rows = next(rows for rows in tables if rows[0][-1] == "Combined")
+    assert [row[-3:] for row in face_rows[1:]] == [
+        ["SHEAR KEPT A", "V+T KEPT A", "NOT ASSESSED"],
+        ["SHEAR KEPT B", "V+T KEPT B", "NOT ASSESSED"],
+    ]
+    governing_rows = next(
+        rows for rows in tables if rows[0][0] == "Check"
+        and rows[0][-1] == "Status / outcome"
+    )
+    by_check = {row[0]: row for row in governing_rows[1:]}
+    assert by_check["Shear"][-2:] == ["77.0 %", "SHEAR KEPT"]
+    assert by_check["V+T (6.29)"][-2:] == ["110.0 %", "V+T KEPT"]
+    assert by_check["Combined"] == [
+        "Combined", "-", "-", "-", "NOT ASSESSED",
+    ]
+    rendered_text = " ".join(
+        item.getPlainText()
+        for item in builder.flow
+        if hasattr(item, "getPlainText")
+    )
+    assert "Retained combined result predates" in rendered_text
+    assert out == before
+
+
+def test_brief_register_omits_stale_retained_combined_selection():
+    inp = _inp()
+    actions = [
+        {
+            "name": "PL-LEGACY", "description": "Legacy",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 1.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 1.0,
+        },
+        {
+            "name": "PL-CURRENT", "description": "Current",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 2.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 2.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+    legacy_plastic = copy.deepcopy(_out()["plastic"])
+    legacy_plastic.pop("util_valid")
+    out = {
+        "plastic_cases": [
+            {
+                "actions": actions[0],
+                "evaluated": True,
+                "results": {
+                    "plastic": legacy_plastic,
+                    "combined": _combined_out(),
+                },
+            },
+            {
+                "actions": actions[1],
+                "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(_out()["plastic"]),
+                    "shear": _shear_out(),
+                    "combined": _combined_out(),
+                },
+            },
+        ],
+        "worked_example_selection": {
+            "schema": 1,
+            "families": {
+                "combined": {"case_id": "PL-LEGACY", "component": None},
+                "shear": {"case_id": "PL-CURRENT", "component": None},
+            },
+            "crack_examples": [],
+        },
+    }
+    selection_before = copy.deepcopy(out["worked_example_selection"])
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, out, figures=False, profile="Brief",
+    )
+    tables = []
+    builder._table = lambda rows, *args, **kwargs: tables.append(copy.deepcopy(rows))
+
+    builder._brief_governing_register()
+
+    register = next(
+        rows for rows in tables
+        if rows[0] == ["Calculation", "Selected case / branch"]
+    )
+    assert ["Combined M-V-T", "PL-LEGACY"] not in register
+    assert ["Combined M-V-T", "PL-CURRENT"] not in register
+    assert ["Shear resistance", "PL-CURRENT"] in register
+    assert out["worked_example_selection"] == selection_before
+
+    current_out = copy.deepcopy(out)
+    current_out["worked_example_selection"]["families"]["combined"] = {
+        "case_id": "PL-CURRENT", "component": None,
+    }
+    current_builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, current_out, figures=False, profile="Brief",
+    )
+    current_tables = []
+    current_builder._table = (
+        lambda rows, *args, **kwargs: current_tables.append(copy.deepcopy(rows))
+    )
+
+    current_builder._brief_governing_register()
+
+    current_register = next(
+        rows for rows in current_tables
+        if rows[0] == ["Calculation", "Selected case / branch"]
+    )
+    assert ["Combined M-V-T", "PL-CURRENT"] in current_register
+    assert current_out["worked_example_selection"]["families"]["combined"] == {
+        "case_id": "PL-CURRENT", "component": None,
+    }
+
+
+def test_audit_appendix_claims_combined_method_only_for_assessable_case():
+    inp = _inp()
+    actions = [
+        {
+            "name": "PL-A", "description": "First",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 1.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 1.0,
+        },
+        {
+            "name": "PL-B", "description": "Second",
+            "n_ed_kn": 0.0, "mx_ed_knm": 0.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 2.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 2.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+    legacy = copy.deepcopy(_out()["plastic"])
+    legacy.pop("util_valid")
+    out = {
+        "plastic_cases": [
+            {
+                "actions": actions[0], "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(legacy),
+                    "combined": _combined_out(),
+                },
+            },
+            {
+                "actions": actions[1], "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(legacy),
+                    "combined": _combined_out(),
+                },
+            },
+        ],
+    }
+    before = copy.deepcopy(out)
+    sentence = (
+        "The combined M-V-T chapter states the selected edition, the common "
+        "strut-angle basis and the applicable interaction expressions."
+    )
+
+    def appendix_text(payload):
+        builder = sector_report.ReportBuilder(
+            io.BytesIO(), {}, inp, payload, figures=False, profile="Audit",
+        )
+        builder._appendix()
+        return " ".join(
+            item.getPlainText()
+            for item in builder.flow
+            if hasattr(item, "getPlainText")
+        )
+
+    assert sentence not in appendix_text(out)
+    out["plastic_cases"][1]["results"]["plastic"]["util_valid"] = True
+    assert sentence in appendix_text(out)
+    out["plastic_cases"][1]["results"]["plastic"].pop("util_valid")
+    assert out == before
 
 
 def test_report_biaxial_shear_separates_directions_without_aggregate_interaction():

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy as np
 
@@ -318,8 +319,334 @@ class RadialUtilResult:
 
     demand: float
     resistance: float | None
-    utilisation: float
+    utilisation: float | None
     governing_index: int | None
+    valid: bool
+    reason: str | None
+    origin_inside_or_on: bool | None
+
+
+_RADIAL_POINT_OUTSIDE = -1
+_RADIAL_POINT_BOUNDARY = 0
+_RADIAL_POINT_INSIDE = 1
+
+
+def _invalid_radial_result(
+    demand: float,
+    reason: str,
+    *,
+    origin_inside_or_on: bool | None,
+) -> RadialUtilResult:
+    """Return one explicit fail-closed radial assessment."""
+
+    return RadialUtilResult(
+        demand=demand,
+        resistance=None,
+        utilisation=None,
+        governing_index=None,
+        valid=False,
+        reason=reason,
+        origin_inside_or_on=origin_inside_or_on,
+    )
+
+
+def _radial_capacity_points(mx, my):
+    """Return finite envelope arrays and their retained original indices."""
+
+    try:
+        px = np.asarray(mx, dtype=float)
+        py = np.asarray(my, dtype=float)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if px.ndim != 1 or py.ndim != 1 or len(px) != len(py) or len(px) == 0:
+        return None
+    if not np.all(np.isfinite(px)) or not np.all(np.isfinite(py)):
+        return None
+    original_indices = np.arange(len(px), dtype=int)
+    # One exact terminal copy is a harmless serialization closure marker. The
+    # physical swept-point indices remain unchanged when that final copy is removed.
+    while len(px) >= 2 and px[0] == px[-1] and py[0] == py[-1]:
+        px = px[:-1]
+        py = py[:-1]
+        original_indices = original_indices[:-1]
+    if len(px) == 0:
+        return None
+    if len(px) >= 2:
+        keep = np.ones(len(px), dtype=bool)
+        keep[1:] = (px[1:] != px[:-1]) | (py[1:] != py[:-1])
+        px = px[keep]
+        py = py[keep]
+        original_indices = original_indices[keep]
+    return px, py, original_indices
+
+
+def _fraction_coordinates(values: np.ndarray) -> tuple[Fraction, ...]:
+    """Return exact rational values for the represented binary64 coordinates."""
+
+    return tuple(Fraction.from_float(float(value)) for value in values)
+
+
+def _fraction_orientation(
+    ax: Fraction,
+    ay: Fraction,
+    bx: Fraction,
+    by: Fraction,
+    cx: Fraction,
+    cy: Fraction,
+) -> Fraction:
+    """Return the exact orientation determinant for three represented points."""
+
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+
+def _fraction_point_on_segment(
+    qx: Fraction,
+    qy: Fraction,
+    ax: Fraction,
+    ay: Fraction,
+    bx: Fraction,
+    by: Fraction,
+) -> bool:
+    """Return whether one exact point lies on the closed represented segment."""
+
+    return (
+        min(ax, bx) <= qx <= max(ax, bx)
+        and min(ay, by) <= qy <= max(ay, by)
+        and _fraction_orientation(ax, ay, bx, by, qx, qy) == 0
+    )
+
+
+def _fraction_segments_intersect(
+    ax: Fraction,
+    ay: Fraction,
+    bx: Fraction,
+    by: Fraction,
+    cx: Fraction,
+    cy: Fraction,
+    dx: Fraction,
+    dy: Fraction,
+) -> bool:
+    """Return whether two closed represented segments intersect or touch."""
+
+    if (
+        max(ax, bx) < min(cx, dx)
+        or max(cx, dx) < min(ax, bx)
+        or max(ay, by) < min(cy, dy)
+        or max(cy, dy) < min(ay, by)
+    ):
+        return False
+    o1 = _fraction_orientation(ax, ay, bx, by, cx, cy)
+    o2 = _fraction_orientation(ax, ay, bx, by, dx, dy)
+    o3 = _fraction_orientation(cx, cy, dx, dy, ax, ay)
+    o4 = _fraction_orientation(cx, cy, dx, dy, bx, by)
+    if o1 == 0 and _fraction_point_on_segment(cx, cy, ax, ay, bx, by):
+        return True
+    if o2 == 0 and _fraction_point_on_segment(dx, dy, ax, ay, bx, by):
+        return True
+    if o3 == 0 and _fraction_point_on_segment(ax, ay, cx, cy, dx, dy):
+        return True
+    if o4 == 0 and _fraction_point_on_segment(bx, by, cx, cy, dx, dy):
+        return True
+    return o1 * o2 < 0 and o3 * o4 < 0
+
+
+def _fraction_envelope_is_collinear(
+    px: tuple[Fraction, ...],
+    py: tuple[Fraction, ...],
+) -> bool:
+    """Return whether every retained point lies on one represented line."""
+
+    if len(px) < 3:
+        return True
+    return all(
+        _fraction_orientation(px[0], py[0], px[1], py[1], px[index], py[index])
+        == 0
+        for index in range(2, len(px))
+    )
+
+
+def _fraction_envelope_has_simple_topology(
+    px: tuple[Fraction, ...],
+    py: tuple[Fraction, ...],
+) -> bool:
+    """Validate a simple 2-D ring while retaining the collapsed-line contract."""
+
+    count = len(px)
+    if count < 3 or _fraction_envelope_is_collinear(px, py):
+        return True
+    twice_area = sum(
+        px[index] * py[(index + 1) % count]
+        - py[index] * px[(index + 1) % count]
+        for index in range(count)
+    )
+    if twice_area == 0:
+        return False
+    for first in range(count):
+        first_next = (first + 1) % count
+        for second in range(first + 1, count):
+            second_next = (second + 1) % count
+            adjacent = first_next == second or second_next == first
+            if adjacent:
+                if first_next == second:
+                    shared = first_next
+                    first_other = first
+                    second_other = second_next
+                else:
+                    shared = first
+                    first_other = first_next
+                    second_other = second
+                if (
+                    _fraction_orientation(
+                        px[first_other],
+                        py[first_other],
+                        px[shared],
+                        py[shared],
+                        px[second_other],
+                        py[second_other],
+                    )
+                    == 0
+                ):
+                    first_dx = px[first_other] - px[shared]
+                    first_dy = py[first_other] - py[shared]
+                    second_dx = px[second_other] - px[shared]
+                    second_dy = py[second_other] - py[shared]
+                    # Collinear sides may continue through their common vertex, but
+                    # must not reverse and overlap an already traversed segment.
+                    if first_dx * second_dx + first_dy * second_dy >= 0:
+                        return False
+                continue
+            if _fraction_segments_intersect(
+                px[first],
+                py[first],
+                px[first_next],
+                py[first_next],
+                px[second],
+                py[second],
+                px[second_next],
+                py[second_next],
+            ):
+                return False
+    return True
+
+
+def _fraction_point_location(
+    qx: Fraction,
+    qy: Fraction,
+    px: tuple[Fraction, ...],
+    py: tuple[Fraction, ...],
+) -> int:
+    """Classify one exact represented point as outside, boundary, or inside."""
+
+    count = len(px)
+    for index in range(count):
+        nxt = (index + 1) % count
+        ax, ay = px[index], py[index]
+        bx, by = px[nxt], py[nxt]
+        if (
+            min(ax, bx) <= qx <= max(ax, bx)
+            and min(ay, by) <= qy <= max(ay, by)
+            and (qx - ax) * (by - ay) == (qy - ay) * (bx - ax)
+        ):
+            return _RADIAL_POINT_BOUNDARY
+    if count < 3:
+        return _RADIAL_POINT_OUTSIDE
+    inside = False
+    previous = count - 1
+    for index in range(count):
+        xi, yi = px[index], py[index]
+        xj, yj = px[previous], py[previous]
+        if (yi > qy) != (yj > qy):
+            crossing_x = (xj - xi) * (qy - yi) / (yj - yi) + xi
+            if qx < crossing_x:
+                inside = not inside
+        previous = index
+    return _RADIAL_POINT_INSIDE if inside else _RADIAL_POINT_OUTSIDE
+
+
+def _fraction_interval_location(
+    lower: Fraction,
+    upper: Fraction,
+    demand_x: Fraction,
+    demand_y: Fraction,
+    px: tuple[Fraction, ...],
+    py: tuple[Fraction, ...],
+) -> int | None:
+    """Classify the exact open ray interval between two boundary events."""
+
+    if lower >= upper:
+        return None
+    midpoint = (lower + upper) / 2
+    return _fraction_point_location(
+        demand_x * midpoint,
+        demand_y * midpoint,
+        px,
+        py,
+    )
+
+
+def _fraction_crossings_share_vertex(
+    prior_edges: list[int],
+    edge: int,
+    distance: Fraction,
+    demand_x: Fraction,
+    demand_y: Fraction,
+    px: tuple[Fraction, ...],
+    py: tuple[Fraction, ...],
+) -> bool:
+    """Return whether equal hits are the same adjacent polygon-vertex event."""
+
+    count = len(px)
+    demand_norm_sq = demand_x * demand_x + demand_y * demand_y
+    for prior_edge in prior_edges:
+        if (prior_edge + 1) % count == edge:
+            vertex = edge
+        elif (edge + 1) % count == prior_edge:
+            vertex = prior_edge
+        else:
+            continue
+        vx, vy = px[vertex], py[vertex]
+        if demand_x * vy != demand_y * vx:
+            continue
+        vertex_parameter = (demand_x * vx + demand_y * vy) / demand_norm_sq
+        if vertex_parameter == distance:
+            return True
+    return False
+
+
+def _finite_fraction_float(value: Fraction) -> float:
+    """Convert an exact rational to binary64, using infinity as invalid sentinel."""
+
+    try:
+        converted = float(value)
+    except OverflowError:
+        return math.inf
+    return converted if math.isfinite(converted) else math.inf
+
+
+def _finite_fraction_hypot(x_value: Fraction, y_value: Fraction) -> float:
+    """Return a guarded binary64 norm without pre-rounding tiny components."""
+
+    scale = max(abs(x_value), abs(y_value))
+    if scale == 0:
+        return 0.0
+    numerator = scale.numerator
+    denominator = scale.denominator
+    exponent = numerator.bit_length() - denominator.bit_length()
+    if exponent >= 0:
+        if numerator < denominator << exponent:
+            exponent -= 1
+    elif numerator << -exponent < denominator:
+        exponent -= 1
+    if exponent >= 0:
+        factor = Fraction(1, 1 << exponent)
+    else:
+        factor = Fraction(1 << -exponent, 1)
+    scaled = math.hypot(float(x_value * factor), float(y_value * factor))
+    try:
+        converted = math.ldexp(scaled, exponent)
+    except OverflowError:
+        return math.inf
+    return converted if math.isfinite(converted) else math.inf
 
 
 def radial_util_result(mx, my, ax, ay) -> RadialUtilResult:
@@ -332,41 +659,239 @@ def radial_util_result(mx, my, ax, ay) -> RadialUtilResult:
     interpolation of the vertex radii, which bulges outside the chords) keeps the
     check on the conservative side and consistent with the plotted envelope.
 
-    The result owns radial demand, resistance, utilisation, and the governing swept
-    member. ``governing_index`` is ``None`` when there is no applied direction or
-    the ray misses the envelope.
+    The global moment origin must lie inside or on the accepted closed envelope
+    before either the zero-demand special case or a forward ray crossing can own a
+    utilisation. The result retains that classification and an explicit invalid
+    reason; no finite substitute is fabricated when the prerequisite fails.
     """
-    a_rad = float(np.hypot(ax, ay))
-    if a_rad < 1e-9:
-        return RadialUtilResult(a_rad, None, 0.0, None)
-    ux, uy = ax / a_rad, ay / a_rad                 # applied load ray direction
-    px, py = np.asarray(mx, dtype=float), np.asarray(my, dtype=float)
-    ex, ey = np.roll(px, -1) - px, np.roll(py, -1) - py   # edge vectors (polygon closed)
-    # Intersect the ray t*u (t >= 0) with each edge P + s*e (s in [0, 1]):
-    # solving t*u = P + s*e gives t and s from the ray x edge cross product D.
-    D = ux * ey - uy * ex
-    with np.errstate(divide="ignore", invalid="ignore"):
-        t = (ey * px - ex * py) / D                 # ray distance to the edge line
-        s = (uy * px - ux * py) / D                 # edge parameter
-    hit = (np.abs(D) > 1e-12) & (s >= -1e-9) & (s <= 1.0 + 1e-9) & (t > 1e-9)
-    if not hit.any():
-        return RadialUtilResult(a_rad, None, math.inf, None)
-    idx = np.nonzero(hit)[0]
-    edge = int(idx[np.argmin(t[idx])])              # nearest forward boundary crossing
-    cap = float(t[edge])
+    points = _radial_capacity_points(mx, my)
+    try:
+        ax_value, ay_value = float(ax), float(ay)
+        a_rad = float(math.hypot(ax_value, ay_value))
+    except (OverflowError, TypeError, ValueError):
+        a_rad = math.nan
+        ax_value = ay_value = math.nan
+    if points is None:
+        return _invalid_radial_result(
+            a_rad,
+            "M-M envelope coordinates are malformed or non-finite",
+            origin_inside_or_on=None,
+        )
+    px, py, original_indices = points
+    fraction_px = _fraction_coordinates(px)
+    fraction_py = _fraction_coordinates(py)
+    if not _fraction_envelope_has_simple_topology(fraction_px, fraction_py):
+        return _invalid_radial_result(
+            a_rad,
+            "M-M envelope is self-intersecting, self-touching, or self-overlapping",
+            origin_inside_or_on=None,
+        )
+    origin_location = _fraction_point_location(
+        Fraction(0),
+        Fraction(0),
+        fraction_px,
+        fraction_py,
+    )
+    if origin_location == _RADIAL_POINT_OUTSIDE:
+        return _invalid_radial_result(
+            a_rad,
+            "Global moment origin lies outside the closed M-M envelope",
+            origin_inside_or_on=False,
+        )
+    if not math.isfinite(a_rad):
+        return _invalid_radial_result(
+            a_rad,
+            "Applied moment components are non-finite",
+            origin_inside_or_on=True,
+        )
+    if a_rad == 0.0:
+        return RadialUtilResult(
+            demand=a_rad,
+            resistance=None,
+            utilisation=0.0,
+            governing_index=None,
+            valid=True,
+            reason=None,
+            origin_inside_or_on=True,
+        )
+    demand_x = Fraction.from_float(ax_value)
+    demand_y = Fraction.from_float(ay_value)
+    hits: list[tuple[Fraction, int]] = []
+    count = len(fraction_px)
+    for edge in range(count):
+        nxt = (edge + 1) % count
+        edge_x = fraction_px[nxt] - fraction_px[edge]
+        edge_y = fraction_py[nxt] - fraction_py[edge]
+        determinant = demand_x * edge_y - demand_y * edge_x
+        if determinant == 0:
+            continue
+        distance = (
+            edge_y * fraction_px[edge] - edge_x * fraction_py[edge]
+        ) / determinant
+        edge_parameter = (
+            demand_y * fraction_px[edge] - demand_x * fraction_py[edge]
+        ) / determinant
+        if distance > 0 and 0 <= edge_parameter <= 1:
+            hits.append((distance, edge))
+    if not hits:
+        # A legitimate axial-limit envelope may collapse to a line through the
+        # origin. In that special case, use the farthest positive swept point in
+        # the applied direction rather than inventing polygon area.
+        if all(
+            demand_x * y_value == demand_y * x_value
+            for x_value, y_value in zip(fraction_px, fraction_py, strict=True)
+        ):
+            demand_norm_sq = demand_x * demand_x + demand_y * demand_y
+            parameters = tuple(
+                (demand_x * x_value + demand_y * y_value) / demand_norm_sq
+                for x_value, y_value in zip(fraction_px, fraction_py, strict=True)
+            )
+            positive = tuple(
+                index for index, parameter in enumerate(parameters) if parameter > 0
+            )
+            if positive:
+                governing = max(positive, key=parameters.__getitem__)
+                capacity_parameter = parameters[governing]
+                capacity = _finite_fraction_hypot(
+                    fraction_px[governing], fraction_py[governing]
+                )
+                utilisation = _finite_fraction_float(1 / capacity_parameter)
+                if (
+                    not math.isfinite(capacity)
+                    or capacity <= 0.0
+                    or not math.isfinite(utilisation)
+                    or utilisation <= 0.0
+                ):
+                    return _invalid_radial_result(
+                        a_rad,
+                        "Collapsed M-M envelope resistance is not finite and positive",
+                        origin_inside_or_on=True,
+                    )
+                return RadialUtilResult(
+                    demand=a_rad,
+                    resistance=capacity,
+                    utilisation=utilisation,
+                    governing_index=int(original_indices[governing]),
+                    valid=True,
+                    reason=None,
+                    origin_inside_or_on=True,
+                )
+        return _invalid_radial_result(
+            a_rad,
+            "No admissible positive M-M envelope intersection in the applied direction",
+            origin_inside_or_on=True,
+        )
+    hits.sort()
+    crossing_groups: list[tuple[Fraction, list[int]]] = []
+    for distance, edge_index in hits:
+        if crossing_groups:
+            previous_distance = crossing_groups[-1][0]
+            if (
+                distance == previous_distance
+                and _fraction_crossings_share_vertex(
+                    crossing_groups[-1][1],
+                    edge_index,
+                    distance,
+                    demand_x,
+                    demand_y,
+                    fraction_px,
+                    fraction_py,
+                )
+            ):
+                crossing_groups[-1][1].append(edge_index)
+                continue
+        crossing_groups.append((distance, [edge_index]))
+
+    first_location = _fraction_interval_location(
+        Fraction(0),
+        crossing_groups[0][0],
+        demand_x,
+        demand_y,
+        fraction_px,
+        fraction_py,
+    )
+    if first_location is None:
+        return _invalid_radial_result(
+            a_rad,
+            "Initial M-M envelope crossing interval is not numerically resolvable",
+            origin_inside_or_on=True,
+        )
+    if first_location == _RADIAL_POINT_OUTSIDE:
+        return _invalid_radial_result(
+            a_rad,
+            "Applied ray initially leaves the admissible M-M envelope",
+            origin_inside_or_on=True,
+        )
+    selected_crossing: tuple[Fraction, list[int]] | None = None
+    for group_index, (distance, edge_indices) in enumerate(crossing_groups):
+        if group_index + 1 < len(crossing_groups):
+            next_distance = crossing_groups[group_index + 1][0]
+            after_location = _fraction_interval_location(
+                distance,
+                next_distance,
+                demand_x,
+                demand_y,
+                fraction_px,
+                fraction_py,
+            )
+            if after_location is None:
+                return _invalid_radial_result(
+                    a_rad,
+                    "M-M envelope crossing interval is not numerically resolvable",
+                    origin_inside_or_on=True,
+                )
+        else:
+            # A finite polygon is outside beyond its last positive ray event.
+            after_location = _RADIAL_POINT_OUTSIDE
+        if after_location == _RADIAL_POINT_OUTSIDE:
+            selected_crossing = (distance, edge_indices)
+            break
+    if selected_crossing is None:
+        return _invalid_radial_result(
+            a_rad,
+            "No verified inside-to-outside M-M envelope crossing in the applied "
+            "direction",
+            origin_inside_or_on=True,
+        )
+    capacity_parameter, edge_indices = selected_crossing
+    edge = edge_indices[0]
     # The governing swept state is the endpoint of that chord nearest the crossing --
     # the computed neutral-axis angle closest to the applied load's direction.
-    n = len(px)
-    cx, cy = ux * cap, uy * cap
+    n = len(fraction_px)
+    cx = demand_x * capacity_parameter
+    cy = demand_y * capacity_parameter
     nxt = (edge + 1) % n
-    d0 = math.hypot(float(px[edge]) - cx, float(py[edge]) - cy)
-    d1 = math.hypot(float(px[nxt]) - cx, float(py[nxt]) - cy)
-    gov = edge if d0 <= d1 else nxt
-    return RadialUtilResult(a_rad, cap, a_rad / cap, gov)
+    d0_sq = (fraction_px[edge] - cx) ** 2 + (fraction_py[edge] - cy) ** 2
+    d1_sq = (fraction_px[nxt] - cx) ** 2 + (fraction_py[nxt] - cy) ** 2
+    gov = edge if d0_sq <= d1_sq else nxt
+    cap = _finite_fraction_hypot(cx, cy)
+    utilisation = _finite_fraction_float(1 / capacity_parameter)
+    if (
+        not math.isfinite(cap)
+        or cap <= 0.0
+        or not math.isfinite(utilisation)
+        or utilisation <= 0.0
+    ):
+        return _invalid_radial_result(
+            a_rad,
+            "M-M envelope intersection is not finite and positive",
+            origin_inside_or_on=True,
+        )
+    return RadialUtilResult(
+        demand=a_rad,
+        resistance=cap,
+        utilisation=utilisation,
+        governing_index=int(original_indices[gov]),
+        valid=True,
+        reason=None,
+        origin_inside_or_on=True,
+    )
 
 
 def radial_util(mx, my, ax, ay):
     """Compatibility tuple ``(utilisation, governing_index)`` for the selector."""
 
     result = radial_util_result(mx, my, ax, ay)
+    if not result.valid or result.utilisation is None:
+        return math.inf, None
     return result.utilisation, result.governing_index

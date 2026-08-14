@@ -52,6 +52,34 @@ def _publication_cases(out, family):
     return cases
 
 
+def plastic_result_predates_origin_contract(result):
+    """Return whether a checked closed result lacks the radial-validity contract."""
+
+    return (
+        result.get("util_valid") is None
+        and bool(result.get("check_util", True))
+        and bool(result.get("closed", True))
+    )
+
+
+def combined_bending_assessment_blocker(results):
+    """Return why retained combined evidence cannot trust its bending term."""
+
+    results = results or {}
+    plastic = results.get("plastic")
+    if (
+        results.get("combined") is not None
+        and isinstance(plastic, Mapping)
+        and plastic_result_predates_origin_contract(plastic)
+    ):
+        return (
+            "Retained combined result predates the current M-M "
+            "origin-containment contract; recalculate before assessing M-V-T "
+            "interaction."
+        )
+    return None
+
+
 def _transverse_metric(family, result):
     """Rank an already-computed shear, torsion or combined result."""
     def shear_metric(item):
@@ -110,6 +138,8 @@ def _worked_family_selection(out, family):
     context_family = "plastic" if family in {"shear", "torsion", "combined"} else family
     best = None
     for order, (case_id, case_out) in enumerate(_publication_cases(out, context_family)):
+        if family == "combined" and combined_bending_assessment_blocker(case_out):
+            continue
         result = case_out.get(family)
         if not result:
             continue
@@ -117,8 +147,9 @@ def _worked_family_selection(out, family):
         if family == "plastic":
             if not result.get("converged"):
                 continue
+            assessment = plastic_action_assessment(result)
             utilisation = _publication_metric(
-                result.get("util"), allow_positive_infinity=True
+                assessment.get("util"), allow_positive_infinity=True
             )
             if utilisation is not None:
                 score = (2, utilisation, -order)
@@ -346,11 +377,26 @@ def plastic_action_assessment(pl):
     elif not checked:
         status = "NOT ASSESSED"
         detail = "Capacity only; applied-moment check disabled"
-    elif not complete or util is None:
+    elif not complete:
         status = "NOT ASSESSED"
         detail = (
             f"Open arc; close the 360{_DEGREE} envelope to assess utilisation"
         )
+    elif pl.get("util_valid") is False:
+        status = "INVALID"
+        detail = str(
+            pl.get("util_reason")
+            or "Plastic utilisation prerequisites are invalid"
+        )
+    elif plastic_result_predates_origin_contract(pl):
+        status = "NOT ASSESSED"
+        detail = (
+            "Retained result predates the current M-M origin-containment "
+            "contract; recalculate"
+        )
+    elif util is None:
+        status = "NOT ASSESSED"
+        detail = "Closed envelope has no retained utilisation assessment"
     elif not math.isfinite(util):
         status = "FAIL"
         detail = "No finite capacity intersection"
@@ -1263,6 +1309,18 @@ def result_summary_rows(inp, results, *, stale=False):
         rows.append(_summary_row(
             "Combined M-V-T", "plastic", "NOT RUN",
             view="M-V-T Combined", note="Calculate required", inp=inp,
+        ))
+    elif (combined_blocker := combined_bending_assessment_blocker(results)) is not None:
+        rows.append(_summary_row(
+            "Combined M-V-T - DK NA sum",
+            "plastic",
+            "NOT ASSESSED",
+            result="-",
+            criterion="<= 100 %",
+            util=None,
+            view="M-V-T Combined",
+            note=combined_blocker,
+            inp=inp,
         ))
     elif combined is not None:
         directions = combined.get("directions") or {}

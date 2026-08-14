@@ -2736,7 +2736,7 @@ def _project_persistence_hash() -> str:
 
 
 def _engineering_input_hash(inp) -> str:
-    """Fingerprint only the frozen inputs that can change solver results."""
+    """Fingerprint frozen inputs and explicit solver-result contracts."""
 
     signature = inp.get("signature")
     if signature is None:
@@ -4370,6 +4370,10 @@ _SHARED_SIG_KEYS = (
 _PLASTIC_CONTEXT_SIG_KEYS = (
     "v_min", "v_max", "v_inc",
     "pl_check_util", "pl_interaction",
+)
+_PLASTIC_RESULT_CONTRACT_TOKEN = (
+    "plastic-result-contract",
+    "m-m-origin-containment-simple-envelope-v2",
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
@@ -6234,7 +6238,11 @@ def build_inputs(host=st):
         capacity_steel_material_id,
     )
     shared_sig = geom_sig + material_sig + _get(_SHARED_SIG_KEYS)
-    plastic_bending_context_sig = shared_sig + _get(_PLASTIC_CONTEXT_SIG_KEYS)
+    plastic_bending_context_sig = (
+        shared_sig
+        + _get(_PLASTIC_CONTEXT_SIG_KEYS)
+        + (_PLASTIC_RESULT_CONTRACT_TOKEN,)
+    )
     elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
     capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
     plastic_case_context_sig = (
@@ -7104,18 +7112,25 @@ def _run_single_analysis(
             radial = combined.radial_util_result(
                 mx, my, inp["Mx_pl"], inp["My_pl"]
             )
-            util = radial.utilisation
-            util_gov = radial.governing_index
+            util = radial.utilisation if radial.valid else None
+            util_gov = radial.governing_index if radial.valid else None
             util_demand = radial.demand
             util_resistance = radial.resistance
+            util_valid = radial.valid
+            util_reason = radial.reason
+            util_origin_inside_or_on = radial.origin_inside_or_on
         else:
             util, util_gov = None, None
             util_demand, util_resistance = None, None
+            util_valid, util_reason = None, None
+            util_origin_inside_or_on = None
         out["plastic"] = dict(
             mx=mx, my=my,
             max_mx=max(mx), max_my=max(my), min_mx=min(mx), min_my=min(my),
             util=util, util_gov=util_gov, closed=closed, check_util=check_util,
             util_demand=util_demand, util_resistance=util_resistance,
+            util_valid=util_valid, util_reason=util_reason,
+            util_origin_inside_or_on=util_origin_inside_or_on,
             applied=((inp["Mx_pl"], inp["My_pl"]) if check_util else None),
             converged=all(p.converged for p in pts),
             # The adapter publishes the accepted state already evaluated by the
@@ -9631,7 +9646,8 @@ def plastic_view(inp, results):
     st.plotly_chart(
         viz.interaction_figure(p["mx"], p["my"], applied=p.get("applied"),
                                angles=[pt["V"] for pt in p["points"]],
-                               util=p.get("util"), closed=p.get("closed", True)),
+                               util=assessment.get("util"),
+                               closed=p.get("closed", True)),
         width="stretch")
 
     # Default to the utilisation-governing angle (the state in the applied load's
@@ -11074,6 +11090,8 @@ def shear_view(inp, results):
             st.info("Press Calculate to run the shear check.")
         return
     aggregate = results["shear"]
+    combined_blocker = presentation.combined_bending_assessment_blocker(results)
+    combined_blocked = combined_blocker is not None
     directions = aggregate.get("directions") or {}
     if directions:
         summary = []
@@ -11194,6 +11212,7 @@ def shear_view(inp, results):
                 domain_labels[key]
                 for key, domain in governing_domains.items()
                 if domain.get("face") == face_token
+                and not (key == "combined" and combined_blocked)
             ]
             candidate_rows.append({
                 "Face": viz.tension_face_label(
@@ -11204,15 +11223,34 @@ def shear_view(inp, results):
                 "|VEd|/VRd": candidate_links.get("util"),
                 "Shear status": candidate.get("shear_status"),
                 "V+T status": candidate.get("torsion_status"),
-                "Combined status": candidate.get("combined_status"),
+                "Combined status": (
+                    "NOT ASSESSED"
+                    if combined_blocked
+                    else candidate.get("combined_status")
+                ),
                 "Governing domains": ", ".join(governing_here),
             })
         st.caption("Associated bending moment is zero; both faces were evaluated.")
         st.dataframe(candidate_rows, hide_index=True, width="stretch")
+        if combined_blocked:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "Combined M-V-T is NOT ASSESSED. " + combined_blocker,
+            )
         governing_rows = []
         for key in ("shear", "vt", "minimum_reinforcement", "combined"):
             domain = governing_domains.get(key)
             if not domain:
+                continue
+            if key == "combined" and combined_blocked:
+                governing_rows.append({
+                    "Check": domain_labels[key],
+                    "Governing face": "-",
+                    f"cot {_THETA}": None,
+                    "Value / utilisation": None,
+                    "Status / outcome": "NOT ASSESSED",
+                })
                 continue
             status = domain.get("status")
             if key == "minimum_reinforcement":
@@ -11952,6 +11990,14 @@ def combined_view(inp, results):
         else:
             st.info("Enable Plastic utilisation, shear and torsion, then press "
                     "Calculate to run the combined check.")
+        return
+    combined_blocker = presentation.combined_bending_assessment_blocker(results)
+    if combined_blocker is not None:
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "Combined M-V-T is NOT ASSESSED. " + combined_blocker,
+        )
         return
     aggregate = results["combined"]
     _member_material_note(inp)
