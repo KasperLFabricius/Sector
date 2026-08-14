@@ -1047,6 +1047,22 @@ class ReportBuilder:
             case_inp, "elastic" if family == "elastic" else "plastic"
         ) else None
 
+    def _combined_selection_is_authoritative(self, selected):
+        """Return whether a retained combined selection has trusted bending."""
+
+        if not isinstance(selected, Mapping):
+            return False
+        matches = [
+            case_out
+            for case_inp, case_out in self._case_contexts("plastic")
+            if self._case_id(case_inp, "plastic") == selected.get("case_id")
+        ]
+        return (
+            len(matches) == 1
+            and matches[0].get("combined") is not None
+            and presentation.combined_bending_assessment_blocker(matches[0]) is None
+        )
+
     def _result_values(self, key):
         family = "elastic" if key == "elastic" else "plastic"
         return [
@@ -2154,6 +2170,12 @@ class ReportBuilder:
                     and not self._needs_diagnostic_chapter(
                         key, case_out[key]
                     )
+                    and not (
+                        key == "combined"
+                        and presentation.combined_bending_assessment_blocker(
+                            case_out
+                        ) is not None
+                    )
                 ):
                     continue
                 jobs.append((
@@ -3228,6 +3250,11 @@ class ReportBuilder:
         ):
             selected = self._selected_families.get(family)
             if not isinstance(selected, Mapping):
+                continue
+            if (
+                family == "combined"
+                and not self._combined_selection_is_authoritative(selected)
+            ):
                 continue
             identity = str(selected.get("case_id") or "-")
             component = selected.get("component")
@@ -5411,7 +5438,8 @@ class ReportBuilder:
         applied = pl.get("applied")   # None for a capacity-only run
         self._fig(viz.interaction_figure(
             pl["mx"], pl["my"], applied=applied, title="M-M interaction",
-            angles=[pt["V"] for pt in pl["points"]], util=pl.get("util"),
+            angles=[pt["V"] for pt in pl["points"]],
+            util=assessment.get("util"),
             closed=pl.get("closed", True)), 130, 100)
         rows = [["Quantity", "Value"],
                 ["Applied N<sub>Ed</sub>",
@@ -5422,16 +5450,32 @@ class ReportBuilder:
                 ["Max / Min M<sub>y</sub> capacity",
                  f"{_fmt(pl['max_my'], 3)} / "
                  f"{_fmt(pl.get('min_my', min(pl['my'])), 3)} kNm"]]
-        if not pl.get("check_util", True):
+        if assessment.get("status") == "INVALID":
+            if applied is not None:
+                rows.append(["Applied M<sub>x</sub>, M<sub>y</sub>",
+                             f"{_fmt(applied[0], 3)}, {_fmt(applied[1], 3)} kNm"])
+            rows.append([
+                "Utilisation",
+                "INVALID - " + _html_escape(assessment.get("detail") or ""),
+            ])
+        elif not pl.get("check_util", True):
             rows.append(["Utilisation", "not checked (capacity only)"])
-        elif pl.get("util") is not None:
+        elif not assessment.get("assessed"):
+            rows.append([
+                "Utilisation",
+                "not assessed - " + _html_escape(assessment.get("detail") or ""),
+            ])
+        elif assessment.get("util") is not None:
             if applied is not None:
                 rows.append(["Applied M<sub>x</sub>, M<sub>y</sub>",
                              f"{_fmt(applied[0], 3)}, {_fmt(applied[1], 3)} kNm"])
             rows.append(["Utilisation (applied direction)",
-                         f"{_fmt(pl['util']*100, 3)} %"])
+                         f"{_fmt(assessment['util']*100, 3)} %"])
         else:
-            rows.append(["Utilisation", "open arc (no closed envelope)"])
+            rows.append([
+                "Utilisation",
+                "not assessed - " + _html_escape(assessment.get("detail") or ""),
+            ])
         self._table(rows, [90 * mm, 60 * mm])
         # N-M interaction diagrams (opt-in): the capacity boundary about each bending
         # axis, from pure tension to the squash load.
@@ -5568,6 +5612,20 @@ class ReportBuilder:
     def _plastic_worked(self, pl):
         pts = pl["points"]
         worked_index = pl.get("worked_point_index")
+        assessment = presentation.plastic_action_assessment(pl)
+        retained_basis = str(
+            pl.get("worked_point_basis") or "accepted solver state"
+        )
+        if retained_basis == "utilisation direction" and not assessment.get(
+            "assessed"
+        ):
+            self._h2("Worked plastic calculation unavailable")
+            self._small(
+                "The retained utilisation-based worked point is not authoritative: "
+                + _html_escape(assessment.get("detail") or "recalculate")
+                + "."
+            )
+            return
         if not isinstance(worked_index, int) or not 0 <= worked_index < len(pts):
             self._h2("Worked plastic calculation unavailable")
             self._small(
@@ -5576,7 +5634,7 @@ class ReportBuilder:
             )
             return
         gov = pts[worked_index]
-        basis = str(pl.get("worked_point_basis") or "accepted solver state")
+        basis = retained_basis
         heading = f"Worked plastic calculation ({basis})"
         state_rows = presentation.plastic_state_rows(gov)
         start = len(self.flow)
@@ -6143,6 +6201,10 @@ class ReportBuilder:
 
     def _shear_direction(self, sh, *, include_case_heading=True, component=None):
         res = sh["res"]
+        combined_blocker = presentation.combined_bending_assessment_blocker(
+            self.out
+        )
+        combined_blocked = combined_blocker is not None
         if include_case_heading:
             self._case_heading("Shear resistance", "plastic")
         component = component or sh.get("component") or (
@@ -6190,12 +6252,20 @@ class ReportBuilder:
                      else _pct(candidate_links.get("util"))),
                     candidate.get("shear_status", "NOT ASSESSED"),
                     candidate.get("torsion_status", "NOT RUN"),
-                    candidate.get("combined_status", "NOT RUN"),
+                    (
+                        "NOT ASSESSED"
+                        if combined_blocked
+                        else candidate.get("combined_status", "NOT RUN")
+                    ),
                 ])
+            domain_subject = (
+                "Shear and V+T"
+                if combined_blocked
+                else "Shear, V+T and combined"
+            )
             self._small(
                 "The associated bending moment is effectively zero; both faces are "
-                "mandatory. Shear, V+T and combined checks may govern on different "
-                "faces."
+                f"mandatory. {domain_subject} checks may govern on different faces."
             )
             self._table(
                 face_rows,
@@ -6214,6 +6284,11 @@ class ReportBuilder:
             for key in ("shear", "vt", "minimum_reinforcement", "combined"):
                 domain = governing_domains.get(key)
                 if not domain:
+                    continue
+                if key == "combined" and combined_blocked:
+                    governing_rows.append([
+                        labels[key], "-", "-", "-", "NOT ASSESSED",
+                    ])
                     continue
                 status = domain.get("status")
                 if key == "minimum_reinforcement":
@@ -6234,6 +6309,8 @@ class ReportBuilder:
                 [35 * mm, 38 * mm, 24 * mm, 31 * mm, 42 * mm],
                 font=6.5,
             )
+            if combined_blocked:
+                self._small(combined_blocker)
         links_payload = sh.get("links") or {}
         link_res = links_payload.get("res") or {}
         z_geometry = float(link_res.get("z", res.get("z", 0.9 * sh["d"])))
@@ -6636,6 +6713,23 @@ class ReportBuilder:
 
     def _combined(self):
         aggregate = self.out["combined"]
+        combined_blocker = presentation.combined_bending_assessment_blocker(
+            self.out
+        )
+        if combined_blocker is not None:
+            self._case_heading(
+                "Combined bending + shear + torsion (M-V-T)", "plastic"
+            )
+            self._table(
+                [
+                    ["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
+                     "r<sub>T</sub>", "DK NA sum", "Status"],
+                    ["M+V+T", "-", "-", "-", "-", "NOT ASSESSED"],
+                ],
+                [30 * mm, 25 * mm, 25 * mm, 25 * mm, 30 * mm, 35 * mm],
+            )
+            self._small(combined_blocker)
+            return
         directions = aggregate.get("directions") or {}
         selected = self._selected_family("combined", self.inp)
         critical = selected is not None
@@ -10487,7 +10581,12 @@ class ReportBuilder:
         elastic_results = self._result_values("elastic")
         shear_results = self._result_values("shear")
         torsion_results = self._result_values("torsion")
-        combined_results = self._result_values("combined")
+        combined_results = [
+            case_out["combined"]
+            for _, case_out in self._case_contexts("plastic")
+            if case_out.get("combined") is not None
+            and presentation.combined_bending_assessment_blocker(case_out) is None
+        ]
         if plastic_results:
             if "2023" in str(self.inp.get("concrete_preset", "")):
                 lines.append(

@@ -52,26 +52,12 @@ def solve_elastic_uncracked(*args, **kwargs):
     return solve(*args, **kwargs)
 
 
-def plastic_capacity_at_angle(*args, **kwargs):
-    """Load the plastic point solver only for a 2023 detailing check."""
-
-    from .plastic import plastic_capacity_at_angle as solve
-
-    return solve(*args, **kwargs)
-
-
 def solve_plastic(*args, **kwargs):
     """Load the plastic envelope solver only for a 2023 detailing check."""
 
     from .plastic import solve_plastic as solve
 
     return solve(*args, **kwargs)
-
-
-def _face_angle(axis: str, tension_low: bool) -> float:
-    from .plastic import FACE_ANGLE
-
-    return FACE_ANGLE[(axis, tension_low)]
 
 
 EC2_2005 = "EN 1992-1-1:2005"
@@ -458,12 +444,25 @@ def _cracking_action(
     """Cracking action in the direction of the supplied centroidal moment."""
     from .section import Section
 
+    try:
+        n_ed = float(n_ed_tension_kn)
+        mx_entered = float(mx_centroid_knm)
+        my_entered = float(my_centroid_knm)
+        fctm = float(fctm_mpa)
+    except (TypeError, ValueError, OverflowError):
+        return {"valid": False, "reason": "cracking action inputs must be finite"}
+    if not all(math.isfinite(value) for value in (n_ed, mx_entered, my_entered)):
+        return {"valid": False, "reason": "cracking action inputs must be finite"}
+    if not math.isfinite(fctm) or fctm <= 0.0:
+        return {"valid": False, "reason": "fctm must be finite and positive"}
+    limit = fctm * 1000.0
+    if not math.isfinite(limit):
+        return {"valid": False, "reason": "fctm must be finite and positive"}
+
     plain = Section([ring.copy() for ring in section.concrete])
-    axial = solve_elastic_uncracked(
-        plain, -float(n_ed_tension_kn), 0.0, 0.0, 1.0
-    )
+    axial = solve_elastic_uncracked(plain, -n_ed, 0.0, 0.0, 1.0)
     bending = solve_elastic_uncracked(
-        plain, 0.0, float(mx_centroid_knm), float(my_centroid_knm), 1.0
+        plain, 0.0, mx_entered, my_entered, 1.0
     )
     if not axial.converged or not bending.converged:
         return {"valid": False, "reason": "uncracked section solve did not converge"}
@@ -472,32 +471,56 @@ def _cracking_action(
     sigma_m = (
         bending.eps0 + bending.kx * vertices[:, 0] + bending.ky * vertices[:, 1]
     )
-    limit = float(fctm_mpa) * 1000.0
+    if not np.all(np.isfinite(sigma_n)) or not np.all(np.isfinite(sigma_m)):
+        return {"valid": False, "reason": "cracking stress planes must be finite"}
     if float(np.max(sigma_n)) >= limit - _TOL:
         factor = 0.0
         governing_index = int(np.argmax(sigma_n))
         branch = "axial action reaches the concrete tensile strength"
     else:
-        candidates = [
-            (index, (limit - float(base)) / float(delta))
-            for index, (base, delta) in enumerate(zip(sigma_n, sigma_m))
-            if delta > _TOL and (limit - float(base)) >= -_TOL
-        ]
+        candidates = []
+        positive_tension_increment = False
+        for index, (base_value, delta_value) in enumerate(zip(sigma_n, sigma_m)):
+            base = float(base_value)
+            delta = float(delta_value)
+            if delta <= 0.0:
+                continue
+            positive_tension_increment = True
+            numerator = limit - base
+            if numerator < 0.0:
+                continue
+            try:
+                candidate_factor = numerator / delta
+            except OverflowError:
+                continue
+            if math.isfinite(candidate_factor) and candidate_factor >= 0.0:
+                candidates.append((index, candidate_factor))
         if not candidates:
-            return {"valid": False, "reason": "moment direction creates no tension"}
+            reason = (
+                "cracking action is not representable with finite values"
+                if positive_tension_increment
+                else "moment direction creates no tension"
+            )
+            return {"valid": False, "reason": reason}
         governing_index, candidate_factor = min(
             candidates, key=lambda item: item[1]
         )
-        factor = max(candidate_factor, 0.0)
+        factor = candidate_factor
         branch = "scaled bending reaches the concrete tensile strength"
-    mx_cr = factor * float(mx_centroid_knm)
-    my_cr = factor * float(my_centroid_knm)
+    mx_cr = factor * mx_entered
+    my_cr = factor * my_entered
+    m_cr = math.hypot(mx_cr, my_cr)
+    if not all(math.isfinite(value) for value in (factor, mx_cr, my_cr, m_cr)):
+        return {
+            "valid": False,
+            "reason": "cracking action is not representable with finite values",
+        }
     governing_vertex = vertices[governing_index]
     return {
         "valid": True,
         "branch": branch,
         "factor": factor,
-        "fctm_mpa": float(fctm_mpa),
+        "fctm_mpa": fctm,
         "governing_vertex_index": governing_index,
         "governing_vertex_x_m": float(governing_vertex[0]),
         "governing_vertex_y_m": float(governing_vertex[1]),
@@ -505,32 +528,9 @@ def _cracking_action(
         "governing_bending_stress_mpa": float(sigma_m[governing_index]) / 1000.0,
         "mx_cr_knm": mx_cr,
         "my_cr_knm": my_cr,
-        "m_cr_knm": math.hypot(mx_cr, my_cr),
+        "m_cr_knm": m_cr,
         "axial_peak_tension_mpa": float(np.max(sigma_n)) / 1000.0,
     }
-
-
-def _origin_inside_polygon(points: Sequence[tuple[float, float]]) -> bool:
-    """Return whether the zero-moment point lies inside or on a capacity polygon."""
-    if len(points) < 3:
-        return False
-    scale = max(
-        max((abs(x) for x, _y in points), default=0.0),
-        max((abs(y) for _x, y in points), default=0.0),
-        1.0,
-    )
-    tol = 1.0e-9 * scale
-    inside = False
-    for index, (x1, y1) in enumerate(points):
-        x2, y2 = points[(index + 1) % len(points)]
-        cross = x1 * y2 - y1 * x2
-        if abs(cross) <= tol * scale and x1 * x2 + y1 * y2 <= tol * tol:
-            return True
-        if (y1 > 0.0) != (y2 > 0.0):
-            crossing_x = x1 - y1 * (x2 - x1) / (y2 - y1)
-            if crossing_x >= -tol:
-                inside = not inside
-    return inside
 
 
 def _optional_float(value) -> float | None:
@@ -663,7 +663,7 @@ def _nominal_capacity_utilisation(
     p_comp = -float(n_ed_tension_kn)
     mx = float(mx_cr_knm)
     my = float(my_cr_knm)
-    if abs(mx) <= _TOL and abs(my) <= _TOL:
+    if mx == 0.0 and my == 0.0:
         points = solve_plastic(
             section,
             concrete,
@@ -685,8 +685,24 @@ def _nominal_capacity_utilisation(
                 "nominal_solution": _nominal_envelope_solution(points),
                 "reason": "nominal axial-moment envelope did not converge",
             }
-        polygon = [(float(point.Mx), float(point.My)) for point in points]
-        axial_feasible = _origin_inside_polygon(polygon)
+        radial = _module("combined").radial_util_result(
+            [point.Mx for point in points],
+            [point.My for point in points],
+            0.0,
+            0.0,
+        )
+        if not radial.valid and radial.origin_inside_or_on is None:
+            return {
+                "valid": False,
+                "utilisation": None,
+                "mr_nom_knm": None,
+                "axial_feasible": None,
+                "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+                "nominal_reinforcement_terms": nominal_reinforcement_terms,
+                "nominal_solution": _nominal_envelope_solution(points),
+                "reason": radial.reason,
+            }
+        axial_feasible = radial.valid
         return {
             "valid": True,
             "utilisation": 0.0 if axial_feasible else math.inf,
@@ -702,52 +718,12 @@ def _nominal_capacity_utilisation(
                 else "zero moment lies outside the nominal envelope at NEd,min"
             ),
         }
-    if abs(my) <= _TOL:
-        angle = _face_angle("x", mx > 0.0)
-        point = plastic_capacity_at_angle(
-            section,
-            concrete,
-            reference,
-            p_comp,
-            angle,
-            bar_materials=characteristic,
-        )
-        resistance = abs(point.Mx)
-        util = abs(mx) / resistance if resistance > 0.0 else math.inf
-        return {
-            "valid": bool(point.converged),
-            "utilisation": util,
-            "mr_nom_knm": resistance,
-            "model": "uniaxial x",
-            "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
-            "nominal_reinforcement_terms": nominal_reinforcement_terms,
-            "nominal_solution": _nominal_point_solution(
-                point, method="fixed-angle nominal x-axis capacity"
-            ),
-        }
-    if abs(mx) <= _TOL:
-        angle = _face_angle("y", my > 0.0)
-        point = plastic_capacity_at_angle(
-            section,
-            concrete,
-            reference,
-            p_comp,
-            angle,
-            bar_materials=characteristic,
-        )
-        resistance = abs(point.My)
-        util = abs(my) / resistance if resistance > 0.0 else math.inf
-        return {
-            "valid": bool(point.converged),
-            "utilisation": util,
-            "mr_nom_knm": resistance,
-            "model": "uniaxial y",
-            "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
-            "nominal_reinforcement_terms": nominal_reinforcement_terms,
-            "nominal_solution": _nominal_point_solution(
-                point, method="fixed-angle nominal y-axis capacity"
-            ),
-        }
+    if my == 0.0:
+        model = "uniaxial x; 15-degree envelope"
+    elif mx == 0.0:
+        model = "uniaxial y; 15-degree envelope"
+    else:
+        model = "biaxial 15-degree envelope"
     points = solve_plastic(
         section,
         concrete,
@@ -766,27 +742,41 @@ def _nominal_capacity_utilisation(
             "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
             "nominal_reinforcement_terms": nominal_reinforcement_terms,
             "nominal_solution": _nominal_envelope_solution(points),
-            "reason": "nominal biaxial envelope did not converge",
+            "model": model,
+            "reason": "nominal axial-moment envelope did not converge",
         }
-    util, governing = _module("combined").radial_util(
+    radial = _module("combined").radial_util_result(
         [point.Mx for point in points],
         [point.My for point in points],
         mx,
         my,
     )
-    resistance = math.hypot(mx, my) / util if util and util > 0.0 else math.inf
+    if not radial.valid:
+        return {
+            "valid": False,
+            "utilisation": None,
+            "mr_nom_knm": None,
+            "model": model,
+            "governing": None,
+            "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
+            "nominal_reinforcement_terms": nominal_reinforcement_terms,
+            "radial_demand_knm": radial.demand,
+            "radial_resistance_knm": None,
+            "nominal_solution": _nominal_envelope_solution(points),
+            "reason": radial.reason,
+        }
     return {
         "valid": True,
-        "utilisation": util,
-        "mr_nom_knm": resistance,
-        "model": "biaxial 15-degree envelope",
-        "governing": governing,
+        "utilisation": radial.utilisation,
+        "mr_nom_knm": radial.resistance,
+        "model": model,
+        "governing": radial.governing_index,
         "nominal_axial_resistance_kn": nominal_axial_resistance_kn,
         "nominal_reinforcement_terms": nominal_reinforcement_terms,
-        "radial_demand_knm": math.hypot(mx, my),
-        "radial_resistance_knm": resistance,
+        "radial_demand_knm": radial.demand,
+        "radial_resistance_knm": radial.resistance,
         "nominal_solution": _nominal_envelope_solution(
-            points, governing_index=governing
+            points, governing_index=radial.governing_index
         ),
     }
 
@@ -840,7 +830,7 @@ def minimum_reinforcement_2023(
         }
 
     # Pure tension has its own direct force-equilibrium expression (12.2).
-    if abs(mx_c) <= _TOL and abs(my_c) <= _TOL:
+    if mx_c == 0.0 and my_c == 0.0:
         if n_ed_tension_kn <= 0.0:
             return {
                 "status": "NOT APPLICABLE",

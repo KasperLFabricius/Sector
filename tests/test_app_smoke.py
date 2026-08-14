@@ -869,17 +869,65 @@ def test_calculation_results_have_no_trace_payload_or_trace_view():
         box.key != "calculation_trace_selection" for box in at.selectbox
     )
 
-def test_plastic_view_tolerates_legacy_results_without_min_fields():
-    # A result payload cached before min_mx/min_my existed (inputs unchanged, so no
-    # recompute) must still render the Plastic Results view: the minima are derived
-    # from the envelope rather than raising a KeyError.
+def test_plastic_view_fails_closed_for_a_legacy_pre_contract_result():
+    # A cached legacy payload still renders its capacity evidence, but cannot retain
+    # a green utilisation verdict after the origin-containment contract changes.
     at = _fresh()
     at.run()
     _calculate(at)
-    at.session_state["results"]["plastic"].pop("min_mx", None)
-    at.session_state["results"]["plastic"].pop("min_my", None)
+    plastic = at.session_state["results"]["plastic"]
+    for key in (
+        "min_mx",
+        "min_my",
+        "util_valid",
+        "util_reason",
+        "util_origin_inside_or_on",
+    ):
+        plastic.pop(key, None)
     _select_view(at, "Plastic Results")
+
     assert not at.exception
+    assert any(
+        "NOT ASSESSED - Plastic bending" in item.value
+        and "predates" in item.value
+        for item in at.warning
+    )
+    assert not any("PASS - Plastic bending" in item.value for item in at.success)
+
+
+def test_combined_view_fails_closed_for_legacy_pre_contract_bending():
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    results = at.session_state["results"]
+    results["plastic"].pop("util_valid", None)
+    results["combined"] = {
+        "valid": True,
+        "method": "DK NA",
+        "r_m": 0.6,
+        "r_v": 0.2,
+        "r_t": 0.1,
+        "dkna_sum": 0.9,
+        "dkna_ok": True,
+        "m_v_independent": False,
+        "asl_torsion": 0.0,
+        "delta_ftd": 0.0,
+    }
+    case_results = results["plastic_cases"][0]["results"]
+    case_results["plastic"].pop("util_valid", None)
+    case_results["combined"] = dict(results["combined"])
+
+    _select_view(at, "M-V-T Combined")
+
+    assert not at.exception
+    assert any(
+        "not assessed" in item.value.casefold()
+        and "predates" in item.value.casefold()
+        and "recalculate" in item.value.casefold()
+        for item in at.warning
+    )
+    assert not any("Selected calculation method: DK NA" in item.value for item in at.caption)
+    assert not any("90.0 %" in str(item.value) for item in at.metric)
 
 
 def test_calculate_elastic_produces_bar_stresses():
@@ -1143,7 +1191,48 @@ def test_full_sweep_reports_utilisation():
     at = _fresh()
     at.run()
     _calculate(at)  # default 0-360 sweep
-    assert at.session_state["results"]["plastic"]["util"] is not None
+    plastic = at.session_state["results"]["plastic"]
+    assert plastic["util"] is not None
+    assert plastic["util_valid"] is True
+    assert plastic["util_reason"] is None
+    assert plastic["util_origin_inside_or_on"] is True
+
+
+def test_origin_invalid_plastic_result_is_retained_and_rendered_invalid(monkeypatch):
+    import sector_app
+    import sector.combined as combined_core
+    from sector.combined import RadialUtilResult
+
+    reason = "Global moment origin lies outside the closed M-M envelope"
+    monkeypatch.setattr(
+        combined_core,
+        "radial_util_result",
+        lambda *_args, **_kwargs: RadialUtilResult(
+            demand=0.0,
+            resistance=None,
+            utilisation=None,
+            governing_index=None,
+            valid=False,
+            reason=reason,
+            origin_inside_or_on=False,
+        ),
+    )
+    at = _fresh()
+    at.run()
+    _calculate(at)
+
+    plastic = at.session_state["results"]["plastic"]
+    assert plastic["util"] is None
+    assert plastic["util_valid"] is False
+    assert plastic["util_reason"] == reason
+    assert plastic["util_origin_inside_or_on"] is False
+    assert plastic["worked_point_basis"] == "peak resultant moment"
+    _select_view(at, "Plastic Results")
+    assert any(
+        "INVALID - Plastic bending" in item.value and reason in item.value
+        for item in at.error
+    )
+    assert not at.exception
 
 
 def test_plastic_result_overview_has_compact_verdict_and_qa_tables():
@@ -1484,6 +1573,49 @@ def test_recalculate_reuses_the_unchanged_analysis_half():
     res = at.session_state["results"]
     assert res["plastic"] is not pl3
     assert res["elastic"] is not el2
+
+
+def test_plastic_result_contract_invalidates_every_pre_contract_reuse_gate():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._PLASTIC_RESULT_CONTRACT_TOKEN
+
+    for key in (
+        "plastic_bending_context_sig",
+        "plastic_case_context_sig",
+        "plastic_sig",
+        "signature",
+    ):
+        assert tuple(latest[key]).count(token) == 1
+    assert token not in tuple(latest["elastic_case_context_sig"])
+    assert token not in tuple(latest["elastic_sig"])
+
+    plastic_before = at.session_state["results"]["plastic"]
+    elastic_before = at.session_state["results"]["elastic"]
+    pre_amend_token = (
+        "plastic-result-contract",
+        "m-m-origin-containment-v1",
+    )
+    for key in (
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+        "result_plastic_bending_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            pre_amend_token if item == token else item
+            for item in at.session_state[key]
+        )
+
+    _calculate(at)
+    results = at.session_state["results"]
+    assert results["plastic"] is not plastic_before
+    assert results["elastic"] is elastic_before
+    assert results["plastic_cases"][0]["reused"] is False
+    assert results["elastic_cases"][0]["reused"] is True
 
 
 def test_load_sets_survive_a_mode_switch():

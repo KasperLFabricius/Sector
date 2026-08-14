@@ -7,6 +7,7 @@ with Asl = 1473 mm2 (d = 550 mm, bw = 300 mm, N = 0): VRd,c ~ 103.4 kN.
 
 from __future__ import annotations
 
+import copy
 import math
 import pathlib
 import sys
@@ -775,6 +776,125 @@ def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     assert vy["governing_face"] == (
         "negative" if governing["tension_low"] else "positive"
     )
+
+
+def test_legacy_bending_blocks_combined_evidence_in_both_face_shear_view():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("checkbox", "combined_on", True),
+        ("number_input", "pl_Mx", 0.0),
+        ("number_input", "shear_Vy", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    selected = results["plastic_cases"][0]["results"]
+    shear = selected["shear"]
+    assert shear["both_faces_evaluated"] is True
+    assert shear["governing_domains"].get("combined") is not None
+
+    _select_view(at, "Shear")
+    current_candidates = next(
+        frame.value
+        for frame in at.dataframe
+        if {"Face", "Combined status", "Governing domains"}.issubset(
+            frame.value.columns
+        )
+    )
+    current_governing = next(
+        frame.value
+        for frame in at.dataframe
+        if {"Check", "Governing face", "Value / utilisation",
+            "Status / outcome"}.issubset(frame.value.columns)
+    )
+    assert current_candidates["Combined status"].tolist() == [
+        candidate["combined_status"] for candidate in shear["face_candidates"]
+    ]
+    assert set(current_candidates["Combined status"]).issubset({"PASS", "FAIL"})
+    current_component_rows = current_governing.loc[
+        current_governing["Check"].isin(["Shear", "V+T (6.29)"])
+    ].reset_index(drop=True)
+    current_combined = current_governing.loc[
+        current_governing["Check"] == "Combined"
+    ]
+    assert len(current_combined) == 1
+    current_domain = shear["governing_domains"]["combined"]
+    current_combined_row = current_combined.iloc[0]
+    cot_column = next(
+        column for column in current_governing.columns
+        if str(column).startswith("cot ")
+    )
+    expected_face_suffix = (
+        "(-y)" if current_domain["face"] == "negative" else "(+y)"
+    )
+    assert str(current_combined_row["Governing face"]).endswith(
+        expected_face_suffix
+    )
+    assert current_combined_row[cot_column] == pytest.approx(current_domain["cot"])
+    assert current_combined_row["Value / utilisation"] == pytest.approx(
+        current_domain["util"]
+    )
+    assert current_combined_row["Status / outcome"] == current_domain["status"]
+
+    root_plastic_before = copy.deepcopy(results["plastic"])
+    legacy_selected = copy.deepcopy(selected)
+    legacy_selected["plastic"].pop("util_valid")
+    face_candidates_before = copy.deepcopy(legacy_selected["shear"]["face_candidates"])
+    governing_domains_before = copy.deepcopy(
+        legacy_selected["shear"]["governing_domains"]
+    )
+    results["plastic_cases"][0]["results"] = legacy_selected
+    _select_view(at, "Shear")
+
+    legacy_candidates = next(
+        frame.value
+        for frame in at.dataframe
+        if {"Face", "Combined status", "Governing domains"}.issubset(
+            frame.value.columns
+        )
+    )
+    legacy_governing = next(
+        frame.value
+        for frame in at.dataframe
+        if {"Check", "Governing face", "Value / utilisation",
+            "Status / outcome"}.issubset(frame.value.columns)
+    )
+    assert set(legacy_candidates["Combined status"]) == {"NOT ASSESSED"}
+    assert all(
+        "Combined" not in str(value)
+        for value in legacy_candidates["Governing domains"]
+    )
+    legacy_component_rows = legacy_governing.loc[
+        legacy_governing["Check"].isin(["Shear", "V+T (6.29)"])
+    ].reset_index(drop=True)
+    assert legacy_component_rows.to_dict("records") == (
+        current_component_rows.to_dict("records")
+    )
+    legacy_combined = legacy_governing.loc[
+        legacy_governing["Check"] == "Combined"
+    ]
+    assert len(legacy_combined) == 1
+    assert legacy_combined.iloc[0]["Governing face"] == "-"
+    assert legacy_combined.iloc[0]["Status / outcome"] == "NOT ASSESSED"
+    assert math.isnan(float(legacy_combined.iloc[0]["Value / utilisation"]))
+    assert any(
+        "predates" in item.value.casefold()
+        and "recalculate" in item.value.casefold()
+        for item in at.warning
+    )
+    assert results["plastic"] == root_plastic_before
+    assert legacy_selected["shear"]["face_candidates"] == face_candidates_before
+    assert legacy_selected["shear"]["governing_domains"] == governing_domains_before
 
 
 def test_app_linked_shear_governing_uses_the_selected_link_utilisation():

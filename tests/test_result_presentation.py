@@ -24,7 +24,13 @@ def test_worked_example_selection_retains_named_cases_branches_and_directions():
             {
                 "name": "PL-A",
                 "results": {
-                    "plastic": {"converged": True, "util": 0.7},
+                    "plastic": {
+                        "converged": True,
+                        "closed": True,
+                        "check_util": True,
+                        "util": 0.7,
+                        "util_valid": True,
+                    },
                     "shear": {"directions": {
                         "vx": {"res": {"valid": True}, "util": 0.8},
                         "vy": {"res": {"valid": True}, "util": 0.8},
@@ -34,7 +40,13 @@ def test_worked_example_selection_retains_named_cases_branches_and_directions():
             {
                 "name": "PL-B",
                 "results": {
-                    "plastic": {"converged": True, "util": 0.9},
+                    "plastic": {
+                        "converged": True,
+                        "closed": True,
+                        "check_util": True,
+                        "util": 0.9,
+                        "util_valid": True,
+                    },
                     "shear": {"directions": {
                         "vx": {"res": {"valid": True}, "util": 0.95},
                     }},
@@ -296,6 +308,8 @@ def _plastic(**updates):
         "closed": True,
         "converged": True,
         "util": 0.8,
+        "util_valid": True,
+        "util_reason": None,
         "util_gov": 0,
         "points": [{"V": 90.0}],
     }
@@ -328,6 +342,17 @@ def _inp(**updates):
         ({"util": 1.2}, "FAIL", True),
         ({"check_util": False, "util": None}, "NOT ASSESSED", False),
         ({"closed": False, "util": None}, "NOT ASSESSED", False),
+        ({"util_valid": None}, "NOT ASSESSED", False),
+        (
+            {
+                "util": None,
+                "util_valid": False,
+                "util_reason": "Global moment origin lies outside the closed M-M envelope",
+                "util_gov": None,
+            },
+            "INVALID",
+            False,
+        ),
         ({"converged": False}, "INVALID", False),
     ],
 )
@@ -359,6 +384,27 @@ def test_plastic_assessment_text_is_compact_and_solver_neutral():
     assert presentation.plastic_assessment_text(capacity_only) == (
         "NOT ASSESSED - Plastic bending | Capacity only; "
         "applied-moment check disabled"
+    )
+
+    origin_invalid = presentation.plastic_action_assessment(_plastic(
+        util=None,
+        util_valid=False,
+        util_reason="Global moment origin lies outside the closed M-M envelope",
+        util_gov=None,
+    ))
+    assert origin_invalid["util"] is None
+    assert origin_invalid["margin"] is None
+    assert presentation.plastic_assessment_text(origin_invalid) == (
+        "INVALID - Plastic bending | Global moment origin lies outside the "
+        "closed M-M envelope"
+    )
+
+    legacy = presentation.plastic_action_assessment(_plastic(util_valid=None))
+    assert legacy["util"] is None
+    assert legacy["margin"] is None
+    assert presentation.plastic_assessment_text(legacy) == (
+        "NOT ASSESSED - Plastic bending | Retained result predates the current "
+        "M-M origin-containment contract; recalculate"
     )
 
 
@@ -917,6 +963,58 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
     assert by_check["Combined Vx+T - DK NA sum"]["criterion"] == "<= 100 %"
     assert by_check["Generic Vx-Vy-T interaction"]["status"] == "NOT CALCULATED"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_legacy_plastic_invalidates_retained_combined_summary_and_selection():
+    plastic = _plastic()
+    plastic.pop("util_valid")
+    combined = {
+        "valid": True,
+        "r_m": 0.6,
+        "r_v": 0.2,
+        "r_t": 0.1,
+        "dkna_sum": 0.9,
+        "dkna_ok": True,
+        "method": "DK NA",
+    }
+    results = {"plastic": plastic, "combined": combined}
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        results,
+    )
+    combined_rows = [row for row in rows if row["check"].startswith("Combined")]
+
+    assert len(combined_rows) == 1
+    assert combined_rows[0]["status"] == "NOT ASSESSED"
+    assert combined_rows[0]["result"] == "-"
+    assert combined_rows[0]["util"] is None
+    assert "predates" in combined_rows[0]["note"].casefold()
+    assert "recalculate" in combined_rows[0]["note"].casefold()
+    selection = presentation.worked_example_selection({}, results)
+    assert "combined" not in selection["families"]
+
+    current_combined = dict(combined, dkna_sum=0.7)
+    named = {
+        "plastic_cases": [
+            {
+                "name": "PL-LEGACY",
+                "results": {"plastic": plastic, "combined": combined},
+            },
+            {
+                "name": "PL-CURRENT",
+                "results": {
+                    "plastic": _plastic(util=0.5),
+                    "combined": current_combined,
+                },
+            },
+        ]
+    }
+    named_selection = presentation.worked_example_selection({}, named)
+    assert named_selection["families"]["combined"] == {
+        "case_id": "PL-CURRENT",
+        "component": None,
+    }
 
 
 def test_infinite_failure_governs_while_nan_and_non_applicable_do_not():
