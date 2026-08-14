@@ -45,7 +45,8 @@ EXPECTED_CONTRACT_KEYS = {
     ("crack.heightened.required-ratio", None),
     ("crack.heightened.required-area", None),
     ("crack.heightened.area-comparison", None),
-    ("cracking.threshold", None),
+    ("cracking.threshold", "ordinary"),
+    ("cracking.threshold", "prestress"),
     ("detailing.clear-spacing.distance", None),
     ("detailing.clear-spacing.requirement", None),
     ("detailing.links.minimum-ratio", None),
@@ -168,11 +169,10 @@ THEORY_ONLY_EQUATIONS = {
     ("basis.fatigue.stress-range", None),
     ("basis.plastic.equilibrium", None),
     ("basis.plastic.governing-curvature", None),
+    ("cracking.threshold", "prestress"),
     ("materials.concrete.curve-2", None),
 }
 
-# This is an executable PR-03 work list, not a permanent allowance. Each family
-# slice removes its entries by publishing a numerical substitution and result.
 EXISTING_LIVE_EQUATION_GAPS = set()
 
 
@@ -229,7 +229,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 143
+    assert len(catalogue_pairs) == 144
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -247,11 +247,11 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
     )
     assert role_counts == {
         "numerical": 136,
-        "none": 7,
+        "none": 8,
     }
-    assert publication_role_counts == {"calculation": 136, "theory": 7}
+    assert publication_role_counts == {"calculation": 136, "theory": 8}
     # Conditional call sites expand to every exact runtime variant in the catalogue.
-    assert result_counts == {True: 136, False: 7}
+    assert result_counts == {True: 136, False: 8}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key
@@ -329,6 +329,21 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
     assert "w<sub>k,cal</sub>" in definitions
     assert "w<sub>k</sub>" in definitions
     assert "equal to w<sub>k,cal</sub>" in definitions["w<sub>k</sub>"]
+
+    ordinary = contracts.equation_contract("cracking.threshold", "ordinary")
+    prestress = contracts.equation_contract("cracking.threshold", "prestress")
+    assert ordinary.substitution_role == "numerical"
+    assert not ordinary.applicability_note_required
+    assert prestress.substitution_role == "none"
+    assert prestress.publication_role == "theory"
+    assert not prestress.applicability_note_required
+    assert prestress.result_symbol is None
+    assert {symbol.markup for symbol in prestress.symbols} == {
+        "lambda<sub>cr</sub>",
+        "sigma<sub>pre,i</sub>",
+        "sigma<sub>ext,i</sub>",
+        "f<sub>ct,eff</sub>",
+    }
 
 
 def test_fatigue_contracts_are_exact_numerical_worked_blocks():

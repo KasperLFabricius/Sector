@@ -2887,6 +2887,33 @@ def test_report_publishes_one_globally_critical_cracking_threshold():
     assert "lambda_cr 0.800; cracked" in flat
 
 
+def test_report_publishes_ordinary_cracking_threshold_relation():
+    out = _out()
+    out.pop("plastic")
+    out["elastic"].update(
+        converged=True,
+        show_cw=False,
+        lambda_cr=(out["elastic"]["fctm"] / out["elastic"]["sigma_ct"]),
+        cracked=True,
+        crack=None,
+        crack_short=None,
+        crack_coarse=None,
+        crack_short_coarse=None,
+    )
+
+    ordinary_inp = _inp()
+    ordinary_inp["mode"] = "Elastic"
+    ordinary = " ".join(_pdf_text(sector_report.build_report(
+        {}, ordinary_inp, out, figures=False, qa_appendix=False,
+    )).split())
+    compact_ordinary = ordinary.replace(" ", "")
+    assert (
+        chr(0x03BB) + "cr=fct,eff/" + chr(0x03C3) + "ct,I"
+    ) in compact_ordinary
+    assert "Locked-in prestress remains fixed" not in ordinary
+    assert "lambda_cr 0.403; cracked" in ordinary
+
+
 def test_report_escapes_user_entered_action_provenance():
     inp = _inp()
     inp["plastic_case"] = {

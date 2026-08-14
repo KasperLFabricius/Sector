@@ -412,7 +412,7 @@ def test_role_specific_report_compilers_accept_fragments_and_verdicts_only_expli
     percentage = equations.compile_report_fragment("= 83.2%")
     cracked = equations.compile_report_math(
         "lambda<sub>cr</sub> = 0.925  ->  section is cracked "
-        "(cracks when lambda<sub>cr</sub> &lt;= 1)"
+        "(strictly below 1: cracked; 1 or above: uncracked)"
     )
     invalid = equations.compile_report_math(
         "lambda<sub>cr</sub> = 1.125 -> INVALID; "

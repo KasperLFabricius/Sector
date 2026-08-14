@@ -1004,11 +1004,25 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("V<sub>Rd,c</sub>", "shear resistance without links", "kN"),
         ("screen", "minimum-reinforcement interaction value"),
     ),
-    ("cracking.threshold", None): _result(
+    ("cracking.threshold", "ordinary"): _result(
         "lambda<sub>cr</sub>", "dimensionless",
         ("lambda<sub>cr</sub>", "load factor to first cracking"),
         ("f<sub>ct,eff</sub>", "effective concrete tensile strength", "MPa"),
         ("sigma<sub>ct,I</sub>", "Stage-I extreme tensile stress", "MPa"),
+    ),
+    ("cracking.threshold", "prestress"): _relation(
+        ("lambda<sub>cr</sub>", "external-action factor to first cracking"),
+        (
+            "sigma<sub>pre,i</sub>",
+            "fixed prestress concrete tensile stress at fibre i",
+            "MPa",
+        ),
+        (
+            "sigma<sub>ext,i</sub>",
+            "external-action concrete tensile stress increment at fibre i",
+            "MPa",
+        ),
+        ("f<sub>ct,eff</sub>", "effective concrete tensile strength", "MPa"),
     ),
     ("crack.effective-area.2005", "fine"): _result(
         "h<sub>c,eff</sub>", "mm",
@@ -1170,9 +1184,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 143:
+    if len(_CONTRACTS) != 144:
         raise RuntimeError(
-            f"Expected 143 report equation contracts, got {len(_CONTRACTS)}."
+            f"Expected 144 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):

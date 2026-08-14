@@ -1558,6 +1558,13 @@ def manual_blocks() -> list:
        "section has not cracked. **Worked (beam, $M_x=150$ kNm):** "
        "$\\lambda_{cr}=0.49<1$, so the section is cracked and the Stage II stresses "
        "govern ($\\sigma_s=204$ MPa at the bottom bars).")
+    md("With tendons, locked-in prestress is permanent and is not scaled. If any "
+       "prestress-only fibre is above $f_{ctm}$, Sector assigns "
+       "$\\lambda_{cr}=0$ directly and the section is classified cracked. "
+       "Otherwise, at each fibre with a tensile external increment Sector solves "
+       "$\\sigma_{pre,i}+\\lambda_{cr}\\sigma_{ext,i}=f_{ctm}$, scaling only the "
+       "external $N/M$, and takes the first cracking factor. "
+       "$\\lambda_{cr}<1$ is cracked and $\\lambda_{cr}\\ge 1$ is uncracked.")
     call("concept", "Cracking is **irreversible** and is triggered by the largest "
          "load the section ever sees, so Sector decides cracked/uncracked from the "
          "**governing** of the sustained (long-term) and the peak (total = long + "

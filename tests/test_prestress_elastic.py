@@ -16,7 +16,11 @@ import pytest
 
 from sector.elastic import _steel_resultant, solve_elastic_combined
 from sector.section import Section
-from sector.serviceability import analyse_cracking
+from sector.serviceability import (
+    _prestressed_cracking_factor,
+    analyse_cracking,
+    combined_cracking,
+)
 
 
 def _section():
@@ -112,3 +116,204 @@ def test_lambda_cr_factors_only_the_external_load():
     at_crack = analyse_cracking(sec, 0.0, mx * r.lambda_cr, 0.0, n, n_mult=n_mult,
                                 prestress_stress=ps, **common)
     assert at_crack.sigma_ct == pytest.approx(3.2, rel=1e-3)   # exactly at fctm
+    assert at_crack.lambda_cr == pytest.approx(1.0, rel=1e-3)
+
+
+@pytest.mark.parametrize(
+    ("prestress_mpa", "external_mpa", "expected"),
+    [
+        ([-1.0], [0.0], math.inf),
+        ([np.nextafter(2.9, -math.inf)], [0.0], math.inf),
+        ([2.9], [0.0], math.inf),
+        ([2.9], [np.nextafter(0.0, math.inf)], 0.0),
+        ([2.9], [np.nextafter(0.0, -math.inf)], math.inf),
+        ([np.nextafter(2.9, math.inf)], [0.0], 0.0),
+        ([3.0], [0.0], 0.0),
+        ([2.9], [0.5], 0.0),
+        ([1.0], [1.9], 1.0),
+        ([2.0, 1.0], [0.45, 1.9], 1.0),
+        ([3.0, -1.0], [-10.0, 2.0], 0.0),
+    ],
+)
+def test_prestressed_cracking_factor_owns_fixed_prestress_threshold(
+    prestress_mpa,
+    external_mpa,
+    expected,
+):
+    factor = _prestressed_cracking_factor(
+        np.asarray(prestress_mpa, dtype=float),
+        np.asarray(external_mpa, dtype=float),
+        2.9,
+    )
+
+    if math.isinf(expected):
+        assert factor == math.inf
+    else:
+        assert factor == pytest.approx(expected, abs=0.0)
+
+
+def test_prestressed_cracking_factor_keeps_small_positive_external_increment():
+    prestress = 2.9 - 5.0e-10
+    external = 1.0e-9
+
+    factor = _prestressed_cracking_factor(
+        np.asarray([prestress]),
+        np.asarray([external]),
+        2.9,
+    )
+
+    assert factor == pytest.approx((2.9 - prestress) / external, rel=1.0e-12)
+    assert 0.0 < factor < 1.0
+
+
+def test_eccentric_prestress_alone_cracks_single_and_combined_routes():
+    # F095-002: the fixed prestress already puts the upper fibres above fctm.
+    # Zero external action therefore owns lambda_cr=0; it is not a no-candidate
+    # state merely because no external tensile increment exists.
+    sec = Section.from_polygon(
+        corners=[(-0.15, -0.30), (-0.15, 0.30),
+                 (0.15, 0.30), (0.15, -0.30)],
+        bars_xy_area_mm2=[(0.0, -0.25, 1000.0)],
+    )
+    n = 6.85
+    n_mult = np.array([0.975])
+    prestress = np.array([500_000.0])
+    expected_sigma_ct = 3.7389176145082486
+
+    single = analyse_cracking(
+        sec,
+        0.0,
+        0.0,
+        0.0,
+        n,
+        fctm=2.9,
+        n_mult=n_mult,
+        prestress_stress=prestress,
+    )
+    combined = combined_cracking(
+        sec,
+        0.0,
+        0.0,
+        0.0,
+        n,
+        0.0,
+        0.0,
+        0.0,
+        n,
+        fctm=2.9,
+        n_mult=n_mult,
+        prestress_stress=prestress,
+    )
+
+    assert single.sigma_ct == pytest.approx(expected_sigma_ct, rel=1e-12)
+    assert single.lambda_cr == 0.0
+    assert single.cracked is True
+    assert single.zeta == 1.0
+    assert combined[2] == pytest.approx(expected_sigma_ct, rel=1e-12)
+    assert combined[:2] == (True, 0.0)
+
+
+def test_prestressed_public_routes_keep_no_candidate_positive_infinity():
+    sec = Section.from_polygon(
+        corners=[(-0.15, -0.30), (-0.15, 0.30),
+                 (0.15, 0.30), (0.15, -0.30)],
+        bars_xy_area_mm2=[(0.0, -0.25, 1000.0)],
+    )
+    n = 6.85
+    n_mult = np.array([0.975])
+    prestress = np.array([200_000.0])
+
+    single = analyse_cracking(
+        sec,
+        0.0,
+        0.0,
+        0.0,
+        n,
+        fctm=2.9,
+        n_mult=n_mult,
+        prestress_stress=prestress,
+    )
+    combined = combined_cracking(
+        sec,
+        0.0,
+        0.0,
+        0.0,
+        n,
+        0.0,
+        0.0,
+        0.0,
+        n,
+        fctm=2.9,
+        n_mult=n_mult,
+        prestress_stress=prestress,
+    )
+
+    assert single.cracked is False
+    assert single.lambda_cr == math.inf
+    assert combined[0] is False
+    assert combined[1] == math.inf
+
+
+def test_prestressed_public_routes_keep_exact_lambda_one_uncracked(monkeypatch):
+    sec = Section.from_polygon(
+        corners=[(-0.15, -0.30), (-0.15, 0.30),
+                 (0.15, 0.30), (0.15, -0.30)],
+        bars_xy_area_mm2=[(0.0, -0.25, 1000.0)],
+    )
+    n = 6.85
+    n_mult = np.array([0.975])
+    prestress = np.array([200_000.0])
+    monkeypatch.setattr(
+        "sector.serviceability._prestressed_cracking_factor",
+        lambda *_args: 1.0,
+    )
+
+    single = analyse_cracking(
+        sec, 0.0, 0.0, 0.0, n,
+        fctm=2.9, n_mult=n_mult, prestress_stress=prestress,
+    )
+    combined = combined_cracking(
+        sec,
+        0.0, 0.0, 0.0, n,
+        0.0, 0.0, 0.0, n,
+        fctm=2.9, n_mult=n_mult, prestress_stress=prestress,
+    )
+
+    assert single.lambda_cr == 1.0
+    assert single.cracked is False
+    assert combined[:2] == (False, 1.0)
+
+
+def test_combined_cracking_factors_only_nonzero_external_superposition():
+    sec = Section.from_polygon(
+        corners=[(-0.15, -0.30), (-0.15, 0.30),
+                 (0.15, 0.30), (0.15, -0.30)],
+        bars_xy_area_mm2=[(0.0, -0.25, 1000.0)],
+    )
+    n_mult = np.array([0.975])
+    prestress = np.array([200_000.0])
+    expected_lambda = 0.5566877809474418
+
+    cracked, factor, sigma_ct = combined_cracking(
+        sec,
+        0.0, -20.0, 0.0, 10.0,
+        0.0, -30.0, 0.0, 6.85,
+        fctm=2.9,
+        n_mult=n_mult,
+        prestress_stress=prestress,
+    )
+
+    assert cracked is True
+    assert factor == pytest.approx(expected_lambda, rel=1.0e-12)
+    assert sigma_ct == pytest.approx(4.072094510631632, rel=1.0e-12)
+
+    at_threshold = combined_cracking(
+        sec,
+        0.0, -20.0 * expected_lambda, 0.0, 10.0,
+        0.0, -30.0 * expected_lambda, 0.0, 6.85,
+        fctm=2.9,
+        n_mult=n_mult,
+        prestress_stress=prestress,
+    )
+    assert at_threshold[1] == pytest.approx(1.0, rel=1.0e-12)
+    assert at_threshold[2] == pytest.approx(2.9, rel=1.0e-12)

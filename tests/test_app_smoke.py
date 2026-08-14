@@ -1618,6 +1618,195 @@ def test_plastic_result_contract_invalidates_every_pre_contract_reuse_gate():
     assert results["elastic_cases"][0]["reused"] is True
 
 
+def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
+    import io
+
+    import load_cases
+    import pandas as pd
+    import pypdf
+    import reinforcement_table
+    import sector_app
+    import sector_report
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Elastic"))
+    _replace_base_table(at, "corners_base", pd.DataFrame({
+        "x (mm)": [-150.0, -150.0, 150.0, 150.0],
+        "y (mm)": [-300.0, 300.0, 300.0, -300.0],
+    }))
+    _replace_base_table(at, "bars_base", reinforcement_table.empty_table())
+    _replace_base_table(
+        at,
+        "tendons_base",
+        reinforcement_table.table_from_points(
+            [(0.0, -250.0, 1000.0)], "tendon"
+        ),
+    )
+    cases = at.session_state[load_cases.ELASTIC_TABLE_KEY].copy(deep=True)
+    for column in load_cases.ELASTIC_ACTION_NUMERIC:
+        cases.at[0, column] = 0.0
+    cases.at[0, "calculate_crack_width"] = False
+    case_name = str(cases.at[0, "name"])
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, cases)
+    _set(
+        at,
+        ("number_input", "mild_Es", 200.0),
+        ("number_input", "conc_Ec", 200.0 / 6.85),
+        ("number_input", "el_phi", 0.0),
+        ("number_input", "sls_fctm", 2.9),
+        ("number_input", "pre_Es", 195.0),
+        ("number_input", "pre_IS", 500.0 / 195.0),
+    )
+    _calculate(at)
+
+    assert not at.exception
+    latest = at.session_state["_latest_inputs"]
+    results = at.session_state["results"]
+    assert latest["nl"] == pytest.approx(6.85, rel=1e-12)
+    assert latest["ns"] == pytest.approx(6.85, rel=1e-12)
+    assert not latest["bars"]
+    assert len(latest["tendons"]) == 1
+    assert latest["tendons"][0] == pytest.approx((0.0, -0.25, 1000.0))
+    tendon = latest["tendon_materials"][0]
+    assert tendon.Es == pytest.approx(195_000.0)
+    assert tendon.IS == pytest.approx(500.0 / 195_000.0, rel=1e-12)
+    assert results["prestress_initial"]["elements"][0][
+        "locked_in_stress_mpa"
+    ] == pytest.approx(500.0, rel=1e-12)
+
+    n_mult, prestress_stress = sector_app._elastic_solver_inputs(latest, results)
+    assert n_mult == pytest.approx([0.975], rel=1e-12)
+    assert prestress_stress == pytest.approx([500_000.0], rel=1e-12)
+
+    expected_sigma_ct = 3.7389176145082486
+    elastic_results = (
+        results["elastic"],
+        results["elastic_cases"][0]["results"]["elastic"],
+    )
+    for elastic in elastic_results:
+        assert elastic["sigma_ct"] == pytest.approx(
+            expected_sigma_ct, rel=1e-12
+        )
+        assert elastic["lambda_cr"] == 0.0
+        assert elastic["cracked"] is True
+        assert elastic["props_cr"] is not None
+    assert results["worked_example_selection"]["cracking_threshold"] == {
+        "case_id": case_name,
+    }
+
+    _select_view(at, "Elastic Results")
+    warning_text = "\n".join(str(item.value) for item in at.warning)
+    assert "CRACKED" in warning_text
+    assert "0.000" in warning_text
+    assert "fixed prestress already reaches the tensile threshold" in warning_text
+    metric = next(
+        item for item in at.metric if "Cracking factor" in item.label
+    )
+    assert metric.value == "0.000"
+    for expected in (
+        "external N/M",
+        "prestress remains fixed",
+        "above fctm",
+        "lambda_cr < 1 is cracked",
+        "lambda_cr >= 1 is uncracked",
+    ):
+        assert expected in metric.help
+    assert not any("UNCRACKED" in str(item.value) for item in at.success)
+
+    report_buffer = io.BytesIO()
+    sector_report.ReportBuilder(
+        report_buffer,
+        {},
+        latest,
+        results,
+        figures=False,
+        qa_appendix=False,
+    ).build()
+    report_text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in pypdf.PdfReader(
+            io.BytesIO(report_buffer.getvalue())
+        ).pages
+    )
+    compact_report = report_text.replace(" ", "")
+    assert (
+        chr(0x03C3) + "pre,i+" + chr(0x03BB) + "cr"
+        + chr(0x03C3) + "ext,i=fct,eff"
+    ) in compact_report
+    for expected in (
+        (
+            "1 -150.000 -300.000 2 -150.000 300.000 "
+            "3 150.000 300.000 4 150.000 -300.000"
+        ),
+        "P1 0.000 -250.000 1000.000 35.682",
+        "Elastic modulus Ep 195.0 GPa",
+        "P1 P1 195000.0 0.002564 500.000 1000.0 500.000",
+        "= 1 - 6.85 / 6.85",
+        "Long-term 0.000 0.000 0.000 Short-term 0.000 0.000 0.000",
+        "Locked-in prestress remains fixed",
+        "assigns lambda_cr = 0 directly and does not apply the equality",
+        "strictly positive external tensile increment",
+        "Calculated output: sigma_ct,I = 3.739 MPa; lambda_cr = 0.000",
+        "strictly below 1: cracked; 1 or above: uncracked",
+    ):
+        assert expected in report_text
+
+
+def test_elastic_result_contract_invalidates_every_pre_contract_reuse_gate():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._ELASTIC_RESULT_CONTRACT_TOKEN
+
+    for key in ("elastic_case_context_sig", "elastic_sig", "signature"):
+        assert tuple(latest[key]).count(token) == 1
+    for key in (
+        "plastic_bending_context_sig",
+        "plastic_case_context_sig",
+        "plastic_sig",
+        "fatigue_sig",
+    ):
+        assert token not in tuple(latest[key])
+
+    plastic_before = at.session_state["results"]["plastic"]
+    elastic_before = at.session_state["results"]["elastic"]
+    elastic_sig_before = tuple(at.session_state["result_elastic_sig"])
+    pre_contract_inputs = copy.deepcopy(latest)
+    pre_contract_inputs["signature"] = tuple(
+        item for item in latest["signature"] if item != token
+    )
+    assert sector_app._engineering_input_hash(
+        pre_contract_inputs
+    ) != sector_app._engineering_input_hash(latest)
+    for key in (
+        "result_sig",
+        "result_elastic_sig",
+        "result_elastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            item for item in at.session_state[key] if item != token
+        )
+    assert tuple(at.session_state["result_elastic_sig"]) != elastic_sig_before
+    assert at.session_state["result_sig"] != latest["signature"]
+
+    _calculate(at)
+    results = at.session_state["results"]
+    assert results["elastic"] is not elastic_before
+    assert results["plastic"] is plastic_before
+    assert results["elastic_cases"][0]["reused"] is False
+    assert results["plastic_cases"][0]["reused"] is True
+    for key in (
+        "result_sig",
+        "result_elastic_sig",
+        "result_elastic_case_context_sig",
+    ):
+        assert tuple(at.session_state[key]).count(token) == 1
+
+
 def test_load_sets_survive_a_mode_switch():
     # Both tables remain authoritative across mode changes, so values are not lost.
     at = _fresh()
