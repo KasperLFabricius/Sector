@@ -223,10 +223,26 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     Returns ``A`` (m2), ``u`` (m), ``tef`` (mm), ``Ak`` (m2), ``uk`` (m) plus the
     auto ``tef`` and whether it was capped/overridden. ``A`` is the area within the
     outer outline *including* any hollow (6.3.2(1)); for a hollow section ``tef`` is
-    capped at the real wall thickness (estimated from the concrete area / centre-line
-    perimeter). ``tef_override`` (mm, 0 = auto) forces the wall thickness.
+    capped at the nearest measured real wall thickness. ``tef_override`` (mm,
+    0 = auto) selects an explicit wall thickness; a supported single-cell hollow
+    override above the nearest real wall is rejected before any resistance is
+    evaluated.
     """
-    geometry.require_valid_section_topology(outer, holes or [])
+    topology = geometry.validate_section_topology(outer, holes or [])
+    topology.require_valid()
+    if (
+        isinstance(tef_override, (str, bytes))
+        or type(tef_override).__name__ in {"bool", "bool_"}
+    ):
+        raise ValueError("tef override must be a finite non-negative real number (mm)")
+    try:
+        tef_override_mm = float(tef_override)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "tef override must be a finite non-negative real number (mm)"
+        ) from exc
+    if not math.isfinite(tef_override_mm) or tef_override_mm < 0.0:
+        raise ValueError("tef override must be a finite non-negative real number (mm)")
     minimum_dimension_mm = minimum_caliper_width(outer) * 1000.0 if outer else 0.0
     if not outer or len(outer) < 3:
         return dict(A=0.0, u=0.0, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
@@ -237,7 +253,9 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
     # The single-tube idealisation models a solid section or a single-cell hollow box;
     # a multi-cell section (two or more voids) needs sub-division into separate tubes
     # (6.3.2(1)), which is not implemented, so reject it rather than report an
-    # unconservative single-tube TRd.
+    # unconservative single-tube TRd. Relating a user override to internal multi-cell
+    # walls likewise needs that separate sub-tube mechanics contract; do not infer it
+    # from the single-cell nearest-wall rule here.
     if holes and len(holes) > 1:
         return dict(A=0.0, u=0.0, tef=0.0, Ak=0.0, uk=0.0, tef_auto=0.0,
                     tef_capped=False, tef_user=False, hollow=True,
@@ -269,9 +287,23 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
         wall = min(walls) if walls else tef_auto
         if wall < tef:
             tef, tef_capped = wall, True
-    tef_user = tef_override > 0.0
+    tef_user = tef_override_mm > 0.0
     if tef_user:
-        tef = tef_override / 1000.0                  # mm -> m
+        tef_override_m = tef_override_mm / 1000.0    # mm -> m
+        wall_equality_tolerance = max(
+            topology.floating_point_tolerance,
+            math.ulp(wall) if hollow else 0.0,
+            math.ulp(tef_override_m),
+        )
+        if hollow and tef_override_m > wall + wall_equality_tolerance:
+            raise ValueError(
+                f"tef override {tef_override_mm:.12g} mm exceeds the nearest real "
+                f"wall thickness {wall * 1000.0:.12g} mm"
+            )
+        # Only representation-scale slack is an equality case. The topology policy's
+        # relative section-scale tolerance is intentionally not used here: on a very
+        # wide section it could otherwise admit a materially thicker physical wall.
+        tef = min(tef_override_m, wall) if hollow else tef_override_m
     tef_selection = (
         "user override" if tef_user else "real-wall cap" if tef_capped else "A/u"
     )

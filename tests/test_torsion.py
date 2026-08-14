@@ -21,6 +21,13 @@ def _rect(b, h):
     return [(0.0, 0.0), (b, 0.0), (b, h), (0.0, h)]
 
 
+def _f095_box():
+    """Exact centred 600 mm box and 400 mm void from F095-003."""
+    outer = [(-0.3, -0.3), (0.3, -0.3), (0.3, 0.3), (-0.3, 0.3)]
+    hole = [(-0.2, -0.2), (-0.2, 0.2), (0.2, 0.2), (0.2, -0.2)]
+    return outer, hole
+
+
 # -- tube idealisation ------------------------------------------------------
 
 def test_tube_properties_solid_rectangle():
@@ -57,9 +64,14 @@ def test_tube_minimum_dimension_is_rotation_invariant():
 
 
 def test_tube_tef_override():
-    t = torsion.tube_properties(_rect(0.3, 0.6), None, tef_override=80.0)
+    outer = _rect(0.3, 0.6)
+    default = torsion.tube_properties(outer, None)
+    assert torsion.tube_properties(outer, None, tef_override=0.0) == default
+
+    t = torsion.tube_properties(outer, None, tef_override=80.0)
     assert t["tef"] == pytest.approx(80.0)
     assert t["tef_user"]
+    assert t["tef_selection"] == "user override"
     # Centre-line offset by 40 mm -> (0.3-0.08)(0.6-0.08).
     assert t["Ak"] == pytest.approx((0.3 - 0.08) * (0.6 - 0.08))
 
@@ -73,6 +85,106 @@ def test_tube_hollow_caps_tef_at_the_wall():
     assert t["hollow"] and t["tef_capped"]
     assert t["tef_auto"] == pytest.approx(150.0)
     assert t["tef"] == pytest.approx(100.0)             # the actual 100 mm wall
+
+
+@pytest.mark.parametrize("override_mm", [80.0, 100.0])
+def test_tube_hollow_accepts_override_at_or_below_the_real_wall(override_mm):
+    outer = _rect(0.6, 0.6)
+    hole = [(0.1, 0.1), (0.5, 0.1), (0.5, 0.5), (0.1, 0.5)]
+    tube = torsion.tube_properties(outer, [hole], tef_override=override_mm)
+    assert tube["valid"]
+    assert tube["tef"] == pytest.approx(override_mm)
+    assert tube["tef_user"] is True
+    assert tube["tef_selection"] == "user override"
+
+
+def test_f095_box_rejects_inflating_override_before_resistance():
+    outer, hole = _f095_box()
+    automatic = torsion.tube_properties(outer, [hole])
+    assert automatic["tef"] == pytest.approx(100.0)
+    assert automatic["Ak"] == pytest.approx(0.25)
+    assert automatic["tef_selection"] == "real-wall cap"
+    assert torsion.trd_c(2.0, automatic["Ak"], automatic["tef"]) == (
+        pytest.approx(100.0)
+    )
+
+    with pytest.raises(ValueError, match=(
+        r"tef override 150 mm exceeds the nearest real wall thickness 100 mm"
+    )):
+        torsion.tube_properties(outer, [hole], tef_override=150.0)
+
+
+def test_tube_hollow_uses_the_nearest_asymmetric_wall_for_override_limit():
+    outer = _rect(0.6, 0.6)
+    # Clear walls are 50, 150, 100 and 100 mm; the 50 mm wall governs.
+    hole = [(0.05, 0.1), (0.45, 0.1), (0.45, 0.5), (0.05, 0.5)]
+    with pytest.raises(ValueError, match=(
+        r"tef override 60 mm exceeds the nearest real wall thickness 50 mm"
+    )):
+        torsion.tube_properties(outer, [hole], tef_override=60.0)
+
+
+def test_tube_hollow_tolerance_never_increases_tef_beyond_real_wall():
+    from sector import geometry
+
+    outer = _rect(0.6, 0.6)
+    hole = [(0.1, 0.1), (0.5, 0.1), (0.5, 0.5), (0.1, 0.5)]
+    tolerance_mm = (
+        geometry.validate_section_topology(outer, [hole]).floating_point_tolerance
+        * 1000.0
+    )
+    tube = torsion.tube_properties(
+        outer,
+        [hole],
+        tef_override=100.0 + 0.5 * tolerance_mm,
+    )
+    assert tube["valid"]
+    assert tube["tef"] == pytest.approx(100.0, rel=0.0, abs=1.0e-12)
+    assert tube["tef_user"] is True
+
+    with pytest.raises(ValueError, match=r"exceeds the nearest real wall thickness"):
+        torsion.tube_properties(
+            outer,
+            [hole],
+            tef_override=100.0 + 2.0 * tolerance_mm,
+        )
+
+
+def test_tube_hollow_override_tolerance_does_not_scale_with_section_width():
+    # A 1e9 m wide section has a 1 m topology-relative tolerance, but its nearest
+    # real wall is a separately represented 2 m engineering dimension. A 2.5 m
+    # override is materially above that wall and must not be treated as equality.
+    outer = _rect(1.0e9, 10.0)
+    hole = [(2.0, 3.0), (1.0e9 - 2.0, 3.0),
+            (1.0e9 - 2.0, 7.0), (2.0, 7.0)]
+    with pytest.raises(ValueError, match=(
+        r"tef override 2500 mm exceeds the nearest real wall thickness 2000 mm"
+    )):
+        torsion.tube_properties(outer, [hole], tef_override=2500.0)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        -1.0,
+        math.nan,
+        math.inf,
+        -math.inf,
+        True,
+        False,
+        np.bool_(True),
+        np.bool_(False),
+        "80",
+        b"80",
+        None,
+    ],
+)
+def test_tube_rejects_invalid_tef_override_scalars(override):
+    with pytest.raises(
+        ValueError,
+        match=r"tef override must be a finite non-negative real number \(mm\)",
+    ):
+        torsion.tube_properties(_rect(0.3, 0.6), None, tef_override=override)
 
 
 def test_tube_thin_box_wall_is_not_overestimated():
@@ -420,6 +532,20 @@ def _apply_t_section(at, bf=1000.0, hf=200.0, bw=300.0, hw=600.0):
     return at
 
 
+def _apply_box_section(at, b=600.0, h=600.0, wall=100.0):
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set(at, ("selectbox", "shape", "Box girder"))
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "b_mm", b),
+        ("number_input", "h_mm", h),
+        ("number_input", "wall_mm", wall),
+    )
+    return at
+
+
 def test_app_torsion_produces_a_resistance():
     at = _fresh()
     at.run()
@@ -432,6 +558,85 @@ def test_app_torsion_produces_a_resistance():
     assert 1.0 <= t["cot"] <= 2.5
     assert t["util"] == pytest.approx(40.0 / t["trd"])
     assert t["asl_req"] > 0.0                       # torsion needs longitudinal steel
+
+
+def test_app_hollow_override_above_real_wall_preserves_completed_result():
+    import copy
+    import project_io
+    from sector import geometry
+
+    at = _fresh()
+    at.run()
+    _apply_box_section(at)
+    _set(
+        at,
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 40.0),
+    )
+    _calculate(at)
+    assert not at.exception
+    baseline = at.session_state["results"]["torsion"]
+    assert baseline["valid"] is True
+    assert baseline["tube"]["hollow"] is True
+    assert baseline["tube"]["tef"] == pytest.approx(100.0)
+    assert baseline["tube"]["tef_selection"] == "real-wall cap"
+    baseline_result_hash = project_io.result_sha256(at.session_state["results"])
+    baseline_signature = at.session_state["result_sig"]
+    baseline_calculation = copy.deepcopy(at.session_state["calculation_record"])
+
+    # A valid four-rectangle partition is deliberately active. The top-level real-wall
+    # prerequisite must reject the override before subdivision can rebuild subtubes.
+    _set(at, ("checkbox", "torsion_subdivide", True))
+    _set(at, ("number_input", "torsion_nsub", 4.0))
+    rectangles_mm = [
+        (-250.0, 0.0, 100.0, 600.0),
+        (250.0, 0.0, 100.0, 600.0),
+        (0.0, -250.0, 400.0, 100.0),
+        (0.0, 250.0, 400.0, 100.0),
+    ]
+    changes = []
+    for index, (x, y, b, h) in enumerate(rectangles_mm):
+        for field, value in zip(
+            ("x", "y", "b", "h"), (x, y, b, h), strict=True
+        ):
+            changes.append(("number_input", f"torsion_sub_{field}{index}", value))
+    _set(at, *changes)
+    routed = at.session_state["_latest_inputs"]
+    rectangles_m = [
+        (x / 1000.0, y / 1000.0, b / 1000.0, h / 1000.0)
+        for x, y, b, h in routed["torsion_subrects"]
+    ]
+    partition_valid, partition_reason = geometry.rectangles_partition_concrete(
+        routed["outer"], routed["holes"], rectangles_m
+    )
+    assert partition_valid, partition_reason
+    _set(at, ("number_input", "torsion_tef", 150.0))
+    _calculate(at)
+
+    assert not at.exception
+    assert project_io.result_sha256(at.session_state["results"]) == (
+        baseline_result_hash
+    )
+    assert at.session_state["result_sig"] == baseline_signature
+    assert at.session_state["calculation_record"] == baseline_calculation
+    assert at.session_state["_latest_inputs"]["signature"] != baseline_signature
+    assert at.session_state["_latest_inputs"]["torsion_tef"] == pytest.approx(150.0)
+    assert at.session_state["result_input_snapshot"]["torsion_tef"] == pytest.approx(
+        0.0
+    )
+    assert (
+        at.session_state["results"]["torsion"]["tube"]["tef_selection"]
+        == "real-wall cap"
+    )
+    assert (
+        at.session_state["_case_error"]
+        == "Calculation blocked: tef override 150 mm exceeds the nearest real wall "
+        "thickness 100 mm."
+    )
+    assert any(
+        "exceeds the nearest real wall thickness" in item.value
+        for item in at.error
+    )
 
 
 def test_app_torsion_gamma_ct_defaults_follow_method_until_user_edit():
