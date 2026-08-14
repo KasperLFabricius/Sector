@@ -17,6 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import manual  # noqa: E402
+import publication_image_export  # noqa: E402
 import publication_theme  # noqa: E402
 import sector_report  # noqa: E402
 
@@ -157,7 +158,7 @@ def test_report_and_manual_reconstruct_every_frozen_text_role():
 
 
 @pytest.mark.parametrize("path", ["report", "manual"])
-def test_export_path_hides_exact_server_kopts_noise_only(path):
+def test_export_path_hides_exact_server_kopts_noise_only(path, monkeypatch):
     class Figure:
         def emit(self):
             warnings.warn_explicit(
@@ -184,6 +185,11 @@ def test_export_path_hides_exact_server_kopts_noise_only(path):
             target.write(b"manual-bytes")
 
     figure = Figure()
+    monkeypatch.setattr(
+        publication_image_export,
+        "export_png",
+        lambda render, **kwargs: render(),
+    )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         if path == "report":

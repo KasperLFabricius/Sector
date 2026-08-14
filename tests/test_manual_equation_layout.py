@@ -23,6 +23,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import manual
+import publication_image_export
 
 from app import publication_equation_layout as equations
 
@@ -235,8 +236,6 @@ def test_each_identity_expression_result_and_source_stay_ordered_on_one_page(
 def test_last_compile_failure_precedes_figure_and_output_side_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sector_report
-
     original = equations.compile_manual_math
     calls = []
     figure_starts = []
@@ -249,9 +248,9 @@ def test_last_compile_failure_precedes_figure_and_output_side_effects(
 
     monkeypatch.setattr(equations, "compile_manual_math", compile_or_fail)
     monkeypatch.setattr(
-        sector_report,
-        "ensure_image_server",
-        lambda: figure_starts.append(True),
+        publication_image_export,
+        "ensure_ready",
+        lambda *, timeout: figure_starts.append(timeout),
     )
     output = io.BytesIO()
     with pytest.raises(

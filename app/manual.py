@@ -25,7 +25,6 @@ from __future__ import annotations
 import html
 import io
 import re
-import threading
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -36,6 +35,7 @@ from manual_equation_publication import (
     manual_publication_blocks,
     source_kind_label,
 )
+import publication_image_export
 from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
 import publication_theme
@@ -2472,47 +2472,35 @@ def _compile_manual_equation_pdf_flowables(published_blocks, frame_width):
 
 
 _FIG_EXPORT_TIMEOUT_S = 30.0
-_FIG_TIMED_OUT = object()
+
+
+class ManualFigureError(RuntimeError):
+    """A requested figure could not be embedded in the issued manual."""
 
 
 def _png_size(png):
     return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
 
 
-def _call_with_timeout(fn, timeout):
-    """Run ``fn()`` in a daemon thread, returning its result (``None`` on error)
-    or the ``_FIG_TIMED_OUT`` sentinel if it does not finish within ``timeout``.
-
-    kaleido's browser export -- both the shared-server startup and each figure
-    render -- can block indefinitely when the headless browser is in a bad state,
-    so it runs off the main thread with a join timeout; the PDF then still
-    completes (with placeholders) instead of hanging the app."""
-    box = {}
-
-    def _work():
-        try:
-            box["v"] = fn()
-        except Exception:
-            box["v"] = None
-
-    worker = threading.Thread(target=_work, daemon=True)
-    worker.start()
-    worker.join(timeout)
-    if worker.is_alive():
-        return _FIG_TIMED_OUT
-    return box.get("v")
-
-
 def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
-    """Render a manual figure to PNG bytes, ``None`` on failure, or the
-    ``_FIG_TIMED_OUT`` sentinel if kaleido does not finish in ``timeout``."""
+    """Render one manual figure through the shared process coordinator."""
+
     def _render():
         buf = io.BytesIO()
         with publication_theme.without_kaleido_server_kopts_noise():
             fig_callable().write_image(buf, format="png", scale=2)
         return buf.getvalue()
 
-    return _call_with_timeout(_render, timeout)
+    try:
+        return publication_image_export.export_png(
+            _render,
+            timeout=timeout,
+            description="manual figure export",
+        )
+    except publication_image_export.KaleidoExportError as exc:
+        raise ManualFigureError(
+            "Manual figure export failed; manual not created."
+        ) from exc
 
 
 def _manual_pdf_styles(
@@ -2553,8 +2541,10 @@ def _manual_pdf_styles(
 def build_manual_pdf(buffer, figures=True):
     """Render the manual to ``buffer`` as a PDF over the same content blocks.
 
-    ``figures=False`` skips the Plotly-to-PNG export (used by the tests, and a
-    graceful fallback when kaleido or a browser is unavailable)."""
+    ``figures=False`` deliberately publishes placeholders without launching
+    Kaleido.  With ``figures=True`` every requested image is mandatory and any
+    exporter failure aborts before a partial PDF is written to ``buffer``.
+    """
     import sector_report as report
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
@@ -2666,16 +2656,20 @@ def build_manual_pdf(buffer, figures=True):
         PageBreak(),
     ])
 
-    # One shared kaleido server for all figures. Start it behind the same timeout
-    # as the figure renders, so a wedged browser startup cannot hang the build;
-    # if it times out, drop to tables-only. Skipped entirely when figures are off.
+    # Every requested figure is mandatory.  The shared coordinator serializes
+    # startup and exports with report generation; any indeterminate operation
+    # aborts before ReportLab receives the output buffer.
     n1 = n2 = 0
-    figures_hung = False
     figure_cache = {}
     if figures:
-        if _call_with_timeout(report.ensure_image_server,
-                              _FIG_EXPORT_TIMEOUT_S) is _FIG_TIMED_OUT:
-            figures_hung = True
+        try:
+            publication_image_export.ensure_ready(
+                timeout=_FIG_EXPORT_TIMEOUT_S
+            )
+        except publication_image_export.KaleidoExportError as exc:
+            raise ManualFigureError(
+                "Manual figure exporter could not start; manual not created."
+            ) from exc
     for published in published_blocks:
         block = published.block
         item = published.item
@@ -2757,11 +2751,8 @@ def build_manual_pdf(buffer, figures=True):
                 png = figure_cache[block[1]]
             else:
                 png = None
-                if figures and not figures_hung:
+                if figures:
                     png = _fig_to_png(block[1])
-                    if png is _FIG_TIMED_OUT:
-                        figures_hung = True   # kaleido wedged: skip the rest promptly
-                        png = None
                 figure_cache[block[1]] = png
             if png:
                 w, h = _png_size(png)

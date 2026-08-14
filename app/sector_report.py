@@ -17,7 +17,6 @@ not depend on a Greek-capable font.
 
 from __future__ import annotations
 
-import atexit
 from collections.abc import Mapping
 import datetime
 import decimal
@@ -26,7 +25,6 @@ import io
 import math
 import os
 import re
-import threading
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -48,6 +46,7 @@ from app import modelled_direction
 from app import publication_equation_layout as publication_equations
 from app import report_profiles
 from app import table_field_definitions as table_fields
+import publication_image_export
 from publication_items import PublicationCounter
 from publication_notation import normalize_trusted_markup, shield_literal_markup
 import publication_theme
@@ -518,102 +517,16 @@ class _PaginatedReportTable(Table):
         return fragments
 
 
-def _kaleido_server_api():
-    """``(start, stop)`` callables for the kaleido sync server, or ``(None, None)``
-    when kaleido (or its sync-server API) is unavailable. Split out so tests can
-    stand in a fake server without a real browser."""
+def ensure_image_server(timeout=None):
+    """Start the shared exporter or fail the requested report explicitly."""
+
+    selected_timeout = _FIG_EXPORT_TIMEOUT_S if timeout is None else timeout
     try:
-        import kaleido
-    except Exception:
-        return None, None
-    return (getattr(kaleido, "start_sync_server", None),
-            getattr(kaleido, "stop_sync_server", None))
-
-
-def _kaleido_page_path():
-    """Create one persistent Plotly launcher page outside Kaleido's temp tree.
-
-    Kaleido normally writes a fresh ``index.html`` in a random temporary folder
-    every time its browser starts. Endpoint protection can lock that just-created
-    file, which makes report generation time out before the first figure. A stable
-    page also avoids repeated temp-file scanning in the packaged desktop app.
-    """
-    try:
-        import kaleido
-
-        generator = kaleido.PageGenerator(mathjax=False)
-        html = generator.generate_index()
-        configured = (
-            os.environ.get("SECTOR_KALEIDO_DIR")
-            or os.environ.get("SECTOR_AUTOSAVE_DIR")
-        )
-        if configured:
-            folder = os.path.abspath(configured)
-        else:
-            base = os.environ.get("LOCALAPPDATA")
-            folder = (
-                os.path.join(base, "Sector", "kaleido")
-                if base
-                else os.path.join(os.path.expanduser("~"), ".sector", "kaleido")
-            )
-        os.makedirs(folder, exist_ok=True)
-        page = os.path.join(folder, "plotly_export.html")
-        current = None
-        try:
-            with open(page, "r", encoding="utf-8") as handle:
-                current = handle.read()
-        except OSError:
-            pass
-        if current != html:
-            with open(page, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(html)
-        return page
-    except Exception:
-        return None
-
-
-_image_server_started = False
-_image_server_lock = threading.Lock()
-
-
-def _safe_stop(stop):
-    try:
-        stop(silence_warnings=True)
-    except Exception:
-        pass
-
-
-def ensure_image_server():
-    """Start the kaleido export server once per process and leave it running.
-
-    With kaleido 1.x each ``to_image`` otherwise spawns and tears down a headless
-    browser. The per-report context manager that used to do this paid that cost on
-    every report; starting the server once and keeping it alive for the app's
-    lifetime means only the first report pays the browser start-up and the rest are
-    just render time. Idempotent (started exactly once, even across threads) and
-    best-effort: it returns silently -- falling back to one browser per image, or
-    the per-image error path -- when kaleido or a browser is unavailable. The report
-    build then fails explicitly if a requested engineering figure cannot be embedded.
-    The server is stopped at interpreter exit.
-    """
-    global _image_server_started
-    if _image_server_started:
-        return
-    with _image_server_lock:
-        if _image_server_started:
-            return
-        _image_server_started = True          # attempt exactly once per process
-        start, stop = _kaleido_server_api()
-        if start is None:
-            return                            # nothing to start; per-image fallback
-        try:
-            page = _kaleido_page_path()
-            kwargs = {"page_generator": page} if page else {}
-            start(silence_warnings=True, **kwargs)
-        except Exception:
-            return                            # browser unavailable; per-image fallback
-        if stop is not None:
-            atexit.register(lambda: _safe_stop(stop))
+        publication_image_export.ensure_ready(timeout=selected_timeout)
+    except publication_image_export.KaleidoExportError as exc:
+        raise ReportFigureError(
+            "Engineering-figure exporter could not start; report not created."
+        ) from exc
 
 
 class _NumberedCanvas(canvas.Canvas):
@@ -896,31 +809,30 @@ def _equation_result_unit(unit, result):
 
 
 def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
-    """Export a Plotly figure to PNG bytes off the main thread.
+    """Export through the serialized process coordinator.
 
-    Returns ``(png_bytes, timed_out)``: ``png_bytes`` is the PNG (``None`` when export
-    failed or timed out), and ``timed_out`` is True when the worker was still running
-    at the join timeout. kaleido's headless browser can block indefinitely in a bad
-    state, so a timeout means it is wedged and the caller should STOP retrying -- each
-    further export would block for the full timeout again.
+    The tuple contract is retained for the report builder: a timeout is distinct
+    from another export failure, while either condition permanently poisons the
+    shared coordinator and makes later calls fail without starting more workers.
     """
-    box = {}
 
     def _work():
-        try:
-            with publication_theme.without_kaleido_server_kopts_noise():
-                box["v"] = fig.to_image(
-                    format="png", width=w_px, height=h_px, scale=2
-                )
-        except Exception:
-            box["v"] = None
+        with publication_theme.without_kaleido_server_kopts_noise():
+            return fig.to_image(
+                format="png", width=w_px, height=h_px, scale=2
+            )
 
-    worker = threading.Thread(target=_work, daemon=True)
-    worker.start()
-    worker.join(timeout)
-    if worker.is_alive():
+    try:
+        png = publication_image_export.export_png(
+            _work,
+            timeout=timeout,
+            description="report figure export",
+        )
+    except publication_image_export.KaleidoExportTimeout:
         return None, True
-    return box.get("v"), False
+    except publication_image_export.KaleidoExportError:
+        return None, False
+    return png, False
 
 
 def _fmt(v, nd=3):
