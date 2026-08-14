@@ -820,6 +820,16 @@ def build_torsion_context(inp, n_ed_comp):
     area, _cx, _cy = gross_area_centroid(inp["outer"], inp["holes"])
     sigma_cp = n_ed_comp / area / 1000.0 if area > 0.0 else 0.0
     alpha_cw = tcode.shear_alpha_cw(sigma_cp, fcd)
+    subdivision_requested = bool(inp.get("torsion_subdivide"))
+    if subdivision_requested:
+        tef_override_mm = _nonnegative_finite_real(
+            inp["torsion_tef"], "torsion wall-thickness override"
+        )
+        if tef_override_mm > 0.0:
+            raise CapacityInputError(
+                "torsion wall-thickness override must be 0 (automatic per sub-tube) "
+                "when torsion subdivision is enabled"
+            )
     torsion = _module("torsion")
     tube = torsion.tube_properties(
         inp["outer"], inp["holes"], tef_override=inp["torsion_tef"]
@@ -857,7 +867,6 @@ def build_torsion_context(inp, n_ed_comp):
     }
 
     subrects = inp.get("torsion_subrects") or []
-    subdivision_requested = bool(inp.get("torsion_subdivide"))
     subdivision_valid = False
     subdivision_reason = ""
     if subdivision_requested:

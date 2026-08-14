@@ -811,6 +811,46 @@ def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     assert "invalid sub-tube partition" in bad["tube"]["reason"]
 
 
+def test_torsion_subdivision_requires_zero_global_tef_and_keeps_subtubes_automatic():
+    automatic = _member_input(
+        torsion_on=True,
+        torsion_subdivide=True,
+        torsion_tef=0.0,
+        torsion_subrects=[(150.0, 300.0, 300.0, 600.0)],
+    )
+
+    ctx = capacity.build_torsion_context(automatic, 0.0)
+
+    assert ctx["subdivide"] is True
+    assert len(ctx["subtubes"]) == 1
+    assert ctx["subtubes"][0]["tef_user"] is False
+    assert ctx["subtubes"][0]["tef_selection"] == "A/u"
+
+    two_holes = [
+        [(0.05, 0.10), (0.10, 0.10), (0.10, 0.15), (0.05, 0.15)],
+        [(0.20, 0.40), (0.25, 0.40), (0.25, 0.45), (0.20, 0.45)],
+    ]
+    for rectangles, holes in (
+        (automatic["torsion_subrects"], []),
+        ([(150.0, 300.0, 290.0, 600.0)], []),  # requested, but leaves a gap
+        (automatic["torsion_subrects"], two_holes),  # multi-cell placeholder
+    ):
+        overridden = dict(
+            automatic,
+            torsion_tef=25.0,
+            torsion_subrects=rectangles,
+            holes=holes,
+        )
+        with pytest.raises(
+            capacity.CapacityInputError,
+            match=(
+                r"torsion wall-thickness override must be 0 "
+                r"\(automatic per sub-tube\) when torsion subdivision is enabled"
+            ),
+        ):
+            capacity.build_torsion_context(overridden, 0.0)
+
+
 def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():
     concave = [
         (0.1, 0.1),

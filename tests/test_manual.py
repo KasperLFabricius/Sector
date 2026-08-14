@@ -352,6 +352,15 @@ def test_manual_documents_direct_torsion_tensile_factor_and_benchmark():
     assert "T_{Rd,c} = 26.435" in text
 
 
+def test_manual_documents_automatic_subtube_wall_thickness_boundary():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+
+    assert "Subdivision requires 0" in text
+    assert "automatically and independently for every sub-tube" in text
+    assert "positive global $t_{ef}$ override" in text
+    assert "0 selects automatic $A/u$ for each sub-tube" in text
+
+
 def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "general / other cases" in text
