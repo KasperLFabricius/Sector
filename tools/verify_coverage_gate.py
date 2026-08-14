@@ -216,14 +216,80 @@ $baseTemp = Join-Path $env:RUNNER_TEMP (
 if (Test-Path -LiteralPath $baseTemp) {{
   throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
 }}
+New-Item -ItemType Directory -Path $baseTemp | Out-Null
+$coreTemp = Join-Path $baseTemp "core"
+$vizTemp = Join-Path $baseTemp "real-viz"
+$reportTemp = Join-Path $baseTemp "real-report"
+$manualTemp = Join-Path $baseTemp "real-manual"
+$phaseFailures = @()
+
 python -m pytest tests -n 4 `
   --dist loadgroup `
-  --basetemp $baseTemp `
+  -m "not real_image_export" `
+  --basetemp $coreTemp `
 {targets}
-  --cov-report=term-missing:skip-covered `
-  --cov-report=xml:qa-artifacts/coverage.xml `
-  --cov-fail-under={coverage['minimum_percent']} `
+  --cov-report= `
   --junitxml=qa-artifacts/test-results.xml
+$phaseExit = $LASTEXITCODE
+if ($phaseExit -ne 0) {{
+  $phaseFailures += "parallel core ($phaseExit)"
+}}
+
+python -m pytest tests/test_viz.py -n 0 `
+  -m "real_image_export" `
+  --basetemp $vizTemp `
+{targets}
+  --cov-append `
+  --cov-report= `
+  --junitxml=qa-artifacts/test-results-real-viz.xml
+$phaseExit = $LASTEXITCODE
+if ($phaseExit -ne 0) {{
+  $phaseFailures += "serial real-viz ($phaseExit)"
+}}
+
+python -m pytest `
+  tests/test_report_rendered.py::test_issued_report_renders_every_page_and_retains_expected_content `
+  -n 0 `
+  -m "real_image_export" `
+  --basetemp $reportTemp `
+{targets}
+  --cov-append `
+  --cov-report= `
+  --junitxml=qa-artifacts/test-results-real-report.xml
+$phaseExit = $LASTEXITCODE
+if ($phaseExit -ne 0) {{
+  $phaseFailures += "serial real-report ($phaseExit)"
+}}
+
+python -m pytest `
+  tests/test_manual_rendered.py::test_issued_manual_renders_every_page_and_retains_navigation `
+  -n 0 `
+  -m "real_image_export" `
+  --basetemp $manualTemp `
+{targets}
+  --cov-append `
+  --cov-report= `
+  --junitxml=qa-artifacts/test-results-real-manual.xml
+$phaseExit = $LASTEXITCODE
+if ($phaseExit -ne 0) {{
+  $phaseFailures += "serial real-manual ($phaseExit)"
+}}
+
+python -m coverage xml -o qa-artifacts/coverage.xml
+$phaseExit = $LASTEXITCODE
+if ($phaseExit -ne 0) {{
+  $phaseFailures += "coverage XML ($phaseExit)"
+}}
+
+python -m coverage report --show-missing --skip-covered --fail-under={coverage['minimum_percent']}
+$phaseExit = $LASTEXITCODE
+if ($phaseExit -ne 0) {{
+  $phaseFailures += "coverage floor ($phaseExit)"
+}}
+
+if ($phaseFailures.Count -gt 0) {{
+  throw "QA phases failed: $($phaseFailures -join ', ')"
+}}
 '''
 
 
