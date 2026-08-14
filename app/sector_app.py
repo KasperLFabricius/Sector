@@ -5407,7 +5407,8 @@ def build_inputs(host=st):
         sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
         help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
-             "the real wall for a hollow section); enter a value to override.")
+             "the nearest real wall for a single-cell hollow section). A positive "
+             "single-tube override may not exceed that measured wall thickness.")
     torsion_gamma_ct = _seeded_number(
         sts,
         r"Concrete tensile factor $\gamma_{ct}$",
