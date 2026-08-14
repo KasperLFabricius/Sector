@@ -1,0 +1,566 @@
+{
+  "schema": 1,
+  "programme_base": {
+    "commit": "9abd4c89f71d1379e32085ecc6773e14de882e33",
+    "tree": "f5e98754f0f970749919e354957bfa34dd4eb7fe",
+    "product_version": "0.94",
+    "project_schema": 25,
+    "tag": "v0.94"
+  },
+  "release_baseline": {
+    "qa_run_id": 31769606607,
+    "qa_attempt": 1,
+    "accounted_test_items": 3369,
+    "coverage_percent": 92,
+    "report_pages": 71,
+    "manual_pages": 68,
+    "portable_zip_sha256": "97ff762df39da16fbf206f425dbe53a9209fc880f582fe5b80d4c42ecb4b3afc"
+  },
+  "lifecycle_policy": {
+    "development_version": "0.94",
+    "target_version": "0.95",
+    "development_prs": [
+      "PR-01",
+      "PR-02",
+      "PR-03",
+      "PR-04",
+      "PR-05",
+      "PR-06",
+      "PR-07",
+      "PR-08",
+      "PR-09",
+      "PR-10",
+      "PR-11",
+      "PR-12",
+      "PR-13",
+      "PR-14"
+    ],
+    "development_full_ci_allowed": false,
+    "development_commit_subject_contains": "[skip ci]",
+    "development_merge_subject_contains": "[skip ci]",
+    "g1_repair_commit_subject_contains": "[skip ci]",
+    "g1_repair_merge_subject_contains": "[skip ci]",
+    "pre_bump_full_ci_owner": "G1",
+    "pre_bump_version": "0.94",
+    "independent_adversarial_exact_head": true,
+    "official_codex_exact_head": true,
+    "retrigger_both_after_change": true,
+    "zero_unresolved_threads": true,
+    "post_bump_full_qualification": true,
+    "version_bump_owner": "PR-15",
+    "version_bump_candidate_subject_contains": "[skip ci]",
+    "version_bump_merge_subject_contains": "Release Sector 0.95",
+    "version_bump_merge_message_forbids_case_insensitive": [
+      "[skip ci]",
+      "[ci skip]",
+      "[no ci]",
+      "[skip actions]",
+      "[actions skip]"
+    ],
+    "version_bump_merge_message_forbids_skip_checks_trailer": true,
+    "post_bump_full_ci_owner": "G2",
+    "post_bump_full_ci_trigger": "PR-15 exact main push",
+    "post_bump_exact_main_actions_receipt_required": true,
+    "release_version": "0.95"
+  },
+  "findings": [
+    {
+      "id": "F095-001",
+      "severity": "P1",
+      "owning_pr": "PR-02",
+      "source_locations": [
+        "sector/combined.py:325",
+        "sector/plastic.py:18",
+        "app/result_presentation.py:331"
+      ],
+      "reproduction": {
+        "outer_m": [
+          [9.85, -0.3],
+          [10.15, -0.3],
+          [10.15, 0.3],
+          [9.85, 0.3]
+        ],
+        "holes_m": [],
+        "reinforcement": [
+          {"x_m": 10.0, "y_m": -0.25, "area_mm2": 1000.0, "material": "mild"},
+          {"x_m": 10.0, "y_m": 0.25, "area_mm2": 1000.0, "material": "mild"}
+        ],
+        "concrete": {"fck_mpa": 30.0, "gamma_c": 1.5, "curve": 2},
+        "mild_steel": {"fytk_mpa": 500.0, "fyck_mpa": 500.0, "gamma_y": 1.15, "curve": 2},
+        "axial_force_kn": 100.0,
+        "sweep_deg": {"start": 0.0, "stop": 345.0, "increment": 15.0},
+        "demand_knm": {"mx": 0.0, "my": 0.0},
+        "observed_my_capacity_knm": {"minimum": 900.741, "maximum": 1099.259},
+        "observed_utilisation": 0.0,
+        "observed_verdict": "PASS"
+      },
+      "accepted_behavior": {
+        "origin_must_be_inside_or_on_closed_polygon": true,
+        "finite_positive_forward_ray_intersection_required": true,
+        "origin_outside_result": "invalid",
+        "finite_pass_for_zero_or_small_demand": false,
+        "centred_envelope_ratios_unchanged": true
+      },
+      "excluded_behavior": "Translating geometry or fabricating a finite substitute to force origin containment."
+    },
+    {
+      "id": "F095-002",
+      "severity": "P1",
+      "owning_pr": "PR-03",
+      "source_locations": [
+        "sector/serviceability.py:1818",
+        "sector/serviceability.py:1883"
+      ],
+      "reproduction": {
+        "fctm_mpa": 2.9,
+        "prestress_only_concrete_tension_mpa": 3.739,
+        "external_tensile_stress_mpa": 0.0,
+        "observed_lambda_cr": "positive_infinity",
+        "observed_cracked": false
+      },
+      "accepted_behavior": {
+        "prestress_is_scaled": false,
+        "lambda_cr": 0.0,
+        "cracked": true,
+        "single_and_combined_routes_equal": true,
+        "ordinary_external_load_interpolation_unchanged": true
+      },
+      "excluded_behavior": "Scaling the permanent prestress action to manufacture a positive cracking factor."
+    },
+    {
+      "id": "F095-003",
+      "severity": "P1",
+      "owning_pr": "PR-04",
+      "source_locations": [
+        "sector/torsion.py:219",
+        "app/sector_app.py:5398"
+      ],
+      "reproduction": {
+        "outer_mm": [[-300.0, -300.0], [300.0, -300.0], [300.0, 300.0], [-300.0, 300.0]],
+        "void_mm": [[-200.0, -200.0], [-200.0, 200.0], [200.0, 200.0], [200.0, -200.0]],
+        "nearest_wall_mm": 100.0,
+        "override_mm": 150.0,
+        "fctd_mpa": 2.0,
+        "auto": {"tef_mm": 100.0, "ak_m2": 0.25, "trd_c_knm": 100.0},
+        "observed_override": {"tef_mm": 150.0, "ak_m2": 0.2025, "trd_c_knm": 121.5}
+      },
+      "accepted_behavior": {
+        "override_below_or_equal_wall": "accepted",
+        "override_above_wall": "rejected_before_resistance",
+        "asymmetric_nearest_wall_is_used": true,
+        "basis_is_published": true
+      },
+      "excluded_behavior": "Using an override above the physical wall and merely labelling it as user-selected."
+    },
+    {
+      "id": "F095-004",
+      "severity": "P1",
+      "owning_pr": "PR-05",
+      "source_locations": [
+        "sector/capacity.py:940",
+        "app/sector_app.py:7097",
+        "app/result_presentation.py:1322"
+      ],
+      "reproduction": {
+        "input": {
+          "combined_on": true,
+          "combined_method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+          "combined_mv_independent": false,
+          "shear_links": false
+        },
+        "out": {
+          "plastic": {"util": 0.2, "converged": false, "closed": true, "check_util": true},
+          "shear": {"res": {"valid": true}, "util": 0.3, "links": null},
+          "torsion": {
+            "valid": true,
+            "util": 0.4,
+            "interaction": null,
+            "asl_req": 125.0,
+            "asw_over_s": 0.0
+          }
+        },
+        "observed": {"combined_valid": true, "dkna_sum": 0.9, "verdict": "PASS"},
+        "controls": {
+          "inactive_links": {
+            "input_override": {"shear_links": false},
+            "shear": {"res": {"valid": true}, "util": 0.3, "links": null},
+            "expected_prerequisite_valid": true
+          },
+          "invalid_active_links": {
+            "input_override": {"shear_links": true},
+            "shear": {
+              "res": {"valid": true},
+              "util": 0.3,
+              "links": {
+                "res": {"valid": false},
+                "util": 0.3,
+                "delta_ftd": 0.0
+              }
+            },
+            "observed_combined_valid": true,
+            "expected_prerequisite_valid": false
+          }
+        }
+      },
+      "accepted_behavior": {
+        "combined_valid": false,
+        "required_plastic_flags": ["converged", "closed", "check_util"],
+        "component_utilisations_must_be_finite": true,
+        "inactive_null_links_are_valid": true,
+        "active_links_require_valid_payload": true,
+        "open_or_capacity_only_plastic_is_invalid": true,
+        "invalid_active_links_are_invalid": true,
+        "all_result_surfaces_fail_closed": true
+      },
+      "excluded_behavior": "Treating the presence of a numeric component utilisation as proof that the component was assessed."
+    },
+    {
+      "id": "F095-005",
+      "severity": "P2",
+      "owning_pr": "PR-06",
+      "source_locations": [
+        "sector/materials.py:168",
+        "sector/materials.py:376"
+      ],
+      "reproduction": {
+        "mild_curve_3_base": {
+          "fytk": 500.0,
+          "fyck": 500.0,
+          "eut": 0.05,
+          "futk": 550.0,
+          "gamma_y": 1.15,
+          "gamma_u": 1.15,
+          "gamma_E": 1.0,
+          "curve": 3,
+          "k": 0.9,
+          "ey0t": 0.002,
+          "ey0c": 0.002,
+          "Es": 200000.0,
+          "active_in_compression": true
+        },
+        "prestress_curve_7_base": {
+          "curve": 7,
+          "IS": 0.007,
+          "gamma_y": 1.15,
+          "gamma_u": 1.15,
+          "gamma_E": 1.0,
+          "fytk": 1640.0,
+          "eut": 0.035,
+          "futk": 1860.0,
+          "k": 0.9,
+          "ey0t": 0.002,
+          "Es": 195000.0
+        },
+        "invalid_mutations": [
+          {"base": "mild_curve_3_base", "field": "fytk", "value": "NaN"},
+          {"base": "mild_curve_3_base", "field": "futk", "value": -1.0},
+          {"base": "prestress_curve_7_base", "field": "IS", "value": "positive_infinity"},
+          {"base": "prestress_curve_7_base", "field": "eut", "value": -0.01}
+        ],
+        "relationship_cases": [
+          {"base": "mild_curve_3_base", "overrides": {"futk": 450.0}, "reason": "futk below fytk"},
+          {"base": "mild_curve_3_base", "overrides": {"k": 1.1}, "reason": "k outside (0, 1]"},
+          {"base": "prestress_curve_7_base", "overrides": {"futk": 1600.0}, "reason": "futk below fytk"},
+          {"base": "prestress_curve_7_base", "overrides": {"ey0t": 0.04}, "reason": "second yield beyond rupture"}
+        ],
+        "curve_applicability_controls": [
+          {"type": "MildSteel", "curve": 2, "hardening_fields_used": false},
+          {"type": "Prestress", "curves": [1, 2, 3, 4, 5], "custom_strength_fields_used": false}
+        ]
+      },
+      "accepted_behavior": {
+        "reject_at_constructor": true,
+        "positive_required_fields": true,
+        "material_relationships_enforced": true,
+        "typed_owning_field_error": true,
+        "valid_catalogue_materials_unchanged": true
+      },
+      "excluded_behavior": "Replacing an invalid material value with zero, a limit value or another silent coercion."
+    },
+    {
+      "id": "F095-006",
+      "severity": "P2",
+      "owning_pr": "PR-07",
+      "source_locations": [
+        "sector/section.py:33",
+        "sector/elastic.py:544"
+      ],
+      "reproduction": {
+        "invalid_solver_cases": [
+          {"field": "reinforcement_area", "value": "NaN"},
+          {"field": "section_coordinate", "value": "positive_infinity"},
+          {"field": "action_moment", "value": "NaN"}
+        ],
+        "observed_possible_state": {"converged": true, "finite_result": false}
+      },
+      "accepted_behavior": {
+        "reject_before_iteration": true,
+        "nonfinite_iteration_forces_converged_false": true,
+        "typed_owning_field_or_result_error": true,
+        "publishable_numeric_result": false,
+        "finite_valid_inputs_unchanged": true
+      },
+      "excluded_behavior": "Returning converged=True with non-finite state or substituting a finite result."
+    },
+    {
+      "id": "F095-007",
+      "severity": "P2",
+      "owning_pr": "PR-08",
+      "source_locations": [
+        "sector/plastic.py:949",
+        "app/sector_app.py:4777",
+        "app/sector_app.py:6520"
+      ],
+      "reproduction": {
+        "reversed": {"start_deg": 90.0, "stop_deg": 0.0, "increment_deg": 15.0},
+        "non_divisible": {"start_deg": 0.0, "stop_deg": 100.0, "increment_deg": 30.0},
+        "invalid_increments_deg": [0.0, -15.0, "NaN", "positive_infinity"]
+      },
+      "accepted_behavior": {
+        "reversed_range": "rejected",
+        "zero_span_angles_deg": [0.0],
+        "non_divisible_angles_deg": [0.0, 25.0, 50.0, 75.0, 100.0],
+        "uniform_step_not_greater_than_requested": true,
+        "each_endpoint_count": 1,
+        "overshoot": false,
+        "ui_and_core_contract_equal": true
+      },
+      "excluded_behavior": "Silently collapsing a reversed range or stepping beyond the documented maximum."
+    },
+    {
+      "id": "F095-008",
+      "severity": "P1",
+      "owning_pr": "PR-09",
+      "source_locations": [
+        "app/publication_image_export.py:97",
+        "app/publication_image_export.py:162",
+        "app/publication_image_export.py:202",
+        "requirements.in:1"
+      ],
+      "reproduction": {
+        "outer_timeout_seconds": 0.01,
+        "dependency_timeout_seconds": 90.0,
+        "worker_kind": "uncancellable_daemon_thread",
+        "observed_after_timeout": ["worker_alive", "process_poisoned"],
+        "dependency_source_risk": "potential unbounded shutdown join",
+        "declared_kaleido_minimum": "0.2.1",
+        "required_api_family": "1.x sync server"
+      },
+      "accepted_behavior": {
+        "killable_child_process": true,
+        "ready_handshake_before_ready_state": true,
+        "timeout_terminates_owned_process_tree": true,
+        "later_clean_attempt_can_recover": true,
+        "concurrent_result_swap": false,
+        "figures_enabled_partial_artifact": false,
+        "figures_disabled_starts_browser": false,
+        "dependency_floor_matches_used_api": true
+      },
+      "excluded_behavior": "Raising the timeout while leaving an uncancellable worker or unbounded shutdown join."
+    },
+    {
+      "id": "F095-009",
+      "severity": "P2",
+      "owning_pr": "PR-10",
+      "source_locations": ["app/sector_app.py:3241"],
+      "reproduction": {
+        "valid_project_byte_recipe": {
+          "generator": "project_io.dump_project({}, {}, app_version='0.94', revision=REVISION)",
+          "clock_injection": "unittest.mock.patch.object(project_io, 'datetime', FrozenDateTime)",
+          "frozen_datetime_now": "2026-08-14T00:00:00+00:00",
+          "saved_at_utc": "2026-08-14T00:00:00+00:00",
+          "encoding": "UTF-8",
+          "json_format": "indent=2, ensure_ascii=True, allow_nan=False"
+        },
+        "first_upload": {
+          "name": "project.sector.json",
+          "revision": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "size": 2147,
+          "sha256": "70111512928cee6a65b5957581c491c2ab9c7939163ccea119635a157d04bf5c",
+          "decode_and_parse": "success"
+        },
+        "changed_upload": {
+          "name": "project.sector.json",
+          "revision": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          "size": 2147,
+          "sha256": "8f77560166dfd2b3d553ec65b773d2ab426d77ac0dc062b7543f2db3fb1ae7ba",
+          "decode_and_parse": "success"
+        },
+        "invalid_then_fixed_pair": {
+          "name": "project.sector.json",
+          "size": 2147,
+          "invalid_bytes_recipe": "replace byte 0 of first_upload with 0xff",
+          "invalid_sha256": "7d9d999da902338941f1aefb9040b893c681d248b8f0529b3f5649e8f45de6bb",
+          "invalid_decode": "failure",
+          "fixed_sha256": "70111512928cee6a65b5957581c491c2ab9c7939163ccea119635a157d04bf5c",
+          "fixed_decode_and_parse": "success"
+        },
+        "observed_identity": ["name", "size"]
+      },
+      "accepted_behavior": {
+        "identity_uses_successfully_decoded_content_digest": true,
+        "filename_is_provenance_only": true,
+        "failed_decode_advances_identity": false,
+        "changed_same_name_size_is_processed": true
+      },
+      "excluded_behavior": "Committing a new upload identity before UTF-8 decoding and project parsing both succeed."
+    },
+    {
+      "id": "F095-010",
+      "severity": "P2",
+      "owning_pr": "PR-11",
+      "source_locations": [
+        "app/sector_app.py:2797",
+        "app/sector_app.py:2820",
+        "app/sector_app.py:2863"
+      ],
+      "reproduction": {
+        "writers": 2,
+        "shared_target": "autosave.json",
+        "observed_temp_name": "autosave.json.tmp",
+        "injected_failures": ["lock", "write", "replace"],
+        "observed_failure_visibility": false,
+        "observed_due_timer_reset_before_attempt": true
+      },
+      "accepted_behavior": {
+        "cross_session_lock": true,
+        "unique_same_directory_temp": true,
+        "atomic_replace": true,
+        "saved_hash_updates_after_replace_only": true,
+        "failure_visible": true,
+        "failure_remains_due": true,
+        "bounded_retry_backoff": true
+      },
+      "excluded_behavior": "Swallowing persistence failure or reporting a hash as saved before successful atomic replacement."
+    },
+    {
+      "id": "F095-011",
+      "severity": "P2",
+      "owning_pr": "PR-12",
+      "source_locations": [
+        "app/point_grid_frontend/point_grid.js:107",
+        "app/point_grid_frontend/point_grid.js:313",
+        "app/point_grid_frontend/point_grid.js:612"
+      ],
+      "reproduction": {
+        "hostile_values": [
+          "<img src=x onerror=globalThis.__sector_xss=1>",
+          "<svg onload=globalThis.__sector_xss=2></svg>",
+          "</div><script>globalThis.__sector_xss=3</script>"
+        ],
+        "entry_routes": ["paste", "loaded_project", "unknown_selector_value"],
+        "observed_sink": "innerHTML"
+      },
+      "accepted_behavior": {
+        "render_sink": "textContent",
+        "hostile_value_is_literal_text": true,
+        "script_or_event_execution": false,
+        "component_rerun_remains_safe": true,
+        "real_browser_regression": true
+      },
+      "excluded_behavior": "Regex-only tag stripping or an incomplete blacklist of event attributes."
+    },
+    {
+      "id": "F095-012",
+      "severity": "P2",
+      "owning_pr": "PR-13",
+      "source_locations": [
+        "tests/test_manual.py:615",
+        "requirements-dev.in:1"
+      ],
+      "reproduction": {
+        "manual_guard_dependency": "fitz",
+        "manual_guard_current_behavior_if_absent": "skip"
+      },
+      "accepted_behavior": {
+        "manual_guard_mandatory_in_locked_qa": true,
+        "missing_pdf_parser_is_failure": true,
+        "raw_dollar_positive_and_negative_controls": true,
+        "issued_manual_semantics_and_crops_unchanged": true
+      },
+      "excluded_behavior": "Allowing a supported locked environment to skip the guard because its parser was not declared."
+    },
+    {
+      "id": "F095-013",
+      "severity": "P2",
+      "owning_pr": "PR-14",
+      "source_locations": [
+        "tools/build_portable_windows.py:56",
+        "requirements.in:1",
+        "packaging/sector.spec:152"
+      ],
+      "reproduction": {
+        "portable_subprocess_timeout": null,
+        "required_metadata_copy_failure_is_swallowed": true,
+        "direct_runtime_import_missing_from_direct_manifest": "pandas",
+        "runtime_pin_without_product_import": "pypdf"
+      },
+      "accepted_behavior": {
+        "portable_named_phase_timeouts": true,
+        "portable_timeout_kills_process_tree": true,
+        "portable_failure_diagnostics_retained": true,
+        "prior_valid_artifact_survives_failure": true,
+        "required_metadata_copy_failure_is_fatal": true,
+        "direct_dependency_ownership_matches_imports": true,
+        "focused_packaged_startup_smoke": true
+      },
+      "excluded_behavior": "Relying only on the coarse CI job timeout, swallowing required metadata failure or bundling application behaviour changes."
+    }
+  ],
+  "deferred_observations": [
+    {
+      "topic": "production export selector inventory",
+      "decision": "requires an exact source inventory fixture before it can become PR-09 acceptance evidence"
+    },
+    {
+      "topic": "manual hot-reload artifact identity",
+      "decision": "conditional observation pending an executable stale-bytes reproduction; not part of mandatory PR-13"
+    },
+    {
+      "topic": "cache, collapsed-work and dead-code maintenance",
+      "decision": "requires separately approved measured and reachability-proven PR; not a mandatory v0.95 slice"
+    }
+  ],
+  "non_findings": [
+    {
+      "id": "N095-001",
+      "topic": "concrete equivalent-amplitude fatigue cycles",
+      "decision": "intentional disclosed one-million-cycle pair contract; no correctness change"
+    },
+    {
+      "id": "N095-002",
+      "topic": "packaged loopback binding",
+      "decision": "no defect established by the v0.95 adversarial audit"
+    },
+    {
+      "id": "N095-003",
+      "topic": "pinned GitHub Actions permissions",
+      "decision": "no defect established by the v0.95 adversarial audit"
+    },
+    {
+      "id": "N095-004",
+      "topic": "report HTML escaping",
+      "decision": "no defect established by the v0.95 adversarial audit"
+    },
+    {
+      "id": "N095-005",
+      "topic": "dependency lock overlay version consistency",
+      "decision": "no lock-version mismatch established; direct ownership remains F095-013"
+    },
+    {
+      "id": "N095-006",
+      "topic": "coverage and JUnit accounting",
+      "decision": "no defect established by the v0.95 adversarial audit"
+    },
+    {
+      "id": "N095-007",
+      "topic": "internal Markdown links",
+      "decision": "no broken link established by the v0.95 adversarial audit"
+    },
+    {
+      "id": "N095-008",
+      "topic": "AST reachability",
+      "decision": "no unreachable statement established; helper candidates remain deferred"
+    }
+  ]
+}
