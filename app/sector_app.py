@@ -4375,6 +4375,10 @@ _PLASTIC_RESULT_CONTRACT_TOKEN = (
     "plastic-result-contract",
     "m-m-origin-containment-simple-envelope-v2",
 )
+_ELASTIC_RESULT_CONTRACT_TOKEN = (
+    "elastic-result-contract",
+    "prestress-only-cracking-v1",
+)
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
@@ -6243,7 +6247,11 @@ def build_inputs(host=st):
         + _get(_PLASTIC_CONTEXT_SIG_KEYS)
         + (_PLASTIC_RESULT_CONTRACT_TOKEN,)
     )
-    elastic_case_context_sig = shared_sig + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+    elastic_case_context_sig = (
+        shared_sig
+        + _get(_ELASTIC_CONTEXT_SIG_KEYS)
+        + (_ELASTIC_RESULT_CONTRACT_TOKEN,)
+    )
     capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
     plastic_case_context_sig = (
         plastic_bending_context_sig + capacity_context_sig
@@ -10074,24 +10082,40 @@ def _elastic_sls_section(inp, e):
         st.error("INVALID - Cracking classification | Elastic solve did not "
                  "converge; values are diagnostic only.")
     elif e["cracked"]:
+        governing_text = (
+            "fixed prestress already reaches the tensile threshold"
+            if inp.get("tendons") and e["lambda_cr"] == 0.0
+            else "governing long-term/total action"
+        )
         _manual_warning(
             st,
             "calculation-warning",
             f"CRACKED | $\\lambda_{{cr}}$ {e['lambda_cr']:.3f} | "
-            "governing long-term/total action",
+            + governing_text,
         )
     else:
         lam = "infinite" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}"
-        st.success(f"UNCRACKED | $\\sigma_{{ct}}$ {e['sigma_ct']:.3f} MPa < "
+        st.success(f"UNCRACKED | $\\sigma_{{ct}}$ {e['sigma_ct']:.3f} MPa <= "
                    f"$f_{{ctm}}$ {e['fctm']:.3f} MPa | "
                    f"$\\lambda_{{cr}}$ {lam}")
 
+    if inp.get("tendons"):
+        threshold_help = (
+            "Factor on the external N/M actions to first cracking. Locked-in "
+            "prestress remains fixed; prestress alone above fctm gives "
+            "lambda_cr = 0. Otherwise lambda_cr < 1 is cracked and "
+            "lambda_cr >= 1 is uncracked."
+        )
+    else:
+        threshold_help = (
+            r"Proportional load factor to first cracking, "
+            r"$f_{ctm}/\sigma_{ct,I}$ ($=M_{cr}/M$ in pure bending), taken as "
+            "the governing (smaller) of the long-term and total actions. "
+            "lambda_cr < 1 is cracked; lambda_cr >= 1 is uncracked."
+        )
     st.metric(r"Cracking factor $\lambda_{cr}$",
               "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
-              help=r"Proportional load factor to first cracking, "
-                   r"$f_{ctm}/\sigma_{ct,I}$ ($=M_{cr}/M$ in pure bending), taken as "
-                   "the governing (smaller) of "
-                   "the long-term and total actions. < 1 = cracked.")
+              help=threshold_help)
 
     pL, pR = st.columns(2)
     with pL:

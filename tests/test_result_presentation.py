@@ -564,6 +564,44 @@ def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
     assert presentation.overall_summary_status(rows) == "PASS"
 
 
+def test_zero_cracking_factor_remains_calculated_and_governs_named_cases():
+    elastic = {
+        "converged": True,
+        "stress_outputs": {},
+        "lambda_cr": 0.0,
+        "cracked": True,
+        "show_cw": False,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Elastic"), {"elastic": elastic},
+    )
+    cracking = next(
+        row for row in rows if row["check"] == "Cracking threshold/state"
+    )
+
+    assert cracking["status"] == "CALCULATED"
+    assert cracking["result"] == "lambda_cr 0.000; cracked"
+
+    selected = presentation.worked_example_selection({}, {
+        "elastic_cases": [
+            {
+                "name": "EL-PRESTRESS-ZERO",
+                "results": {"elastic": elastic},
+            },
+            {
+                "name": "EL-ORDINARY",
+                "results": {"elastic": {
+                    **elastic,
+                    "lambda_cr": 0.4,
+                }},
+            },
+        ],
+    })
+    assert selected["cracking_threshold"] == {
+        "case_id": "EL-PRESTRESS-ZERO",
+    }
+
+
 def test_stale_summary_retains_last_status_as_evidence():
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic"), {"plastic": _plastic()}, stale=True,

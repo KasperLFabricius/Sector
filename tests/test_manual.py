@@ -155,6 +155,25 @@ def test_manual_covers_both_examples_and_all_crack_editions():
     assert "mild steel" in text.lower() and "prestress" in text.lower()
 
 
+def test_manual_distinguishes_fixed_prestress_cracking_threshold():
+    text = "\n".join(
+        block[1] for block in manual.manual_blocks() if block[0] == "md"
+    )
+
+    for expected in (
+        "locked-in prestress is permanent and is not scaled",
+        "Sector assigns",
+        "directly",
+        r"\sigma_{pre,i}+\lambda_{cr}\sigma_{ext,i}=f_{ctm}",
+        "scaling only the external $N/M$",
+        "prestress-only fibre is above",
+        r"$\lambda_{cr}=0$",
+        r"$\lambda_{cr}<1$ is cracked",
+        r"$\lambda_{cr}\ge 1$ is uncracked",
+    ):
+        assert expected in text
+
+
 def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     blocks = manual.manual_blocks()
     text = "\n".join(str(block) for block in blocks)

@@ -8267,9 +8267,20 @@ class ReportBuilder:
                 self._h2("Governing cracking threshold")
             lam = el.get("lambda_cr")
             verdict = "cracked" if el.get("cracked") else "uncracked"
+            prestressed = bool(self.inp.get("tendons"))
+            threshold_equation = (
+                "sigma<sub>pre,i</sub> + lambda<sub>cr</sub> "
+                "sigma<sub>ext,i</sub> = f<sub>ct,eff</sub>"
+                if prestressed else
+                "lambda<sub>cr</sub> = f<sub>ct,eff</sub> / "
+                "sigma<sub>ct,I</sub>"
+            )
             self._formula(
-                "lambda<sub>cr</sub> = f<sub>ct,eff</sub> / sigma<sub>ct,I</sub>",
+                threshold_equation,
                 equation_key="cracking.threshold",
+                equation_variant=(
+                    "prestress" if prestressed else "ordinary"
+                ),
                 ref=(
                     "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
                     "(EN 1992-1-1:2023 &#167;9.2.1)"
@@ -8278,17 +8289,45 @@ class ReportBuilder:
                     "(DS/EN 1992-1-1 &#167;7.1)"
                 ),
                 subst=(
+                    None
+                    if prestressed else
                     f"f<sub>ct,eff</sub> = {_fmt(el.get('fctm'), 3)} MPa,  "
                     f"sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa"
                 ),
                 result=(
-                    f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
-                    f"{verdict} (cracks when lambda<sub>cr</sub> &lt;= 1)"
-                    if valid else
-                    f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
-                    "no verified cracking classification"
+                    None
+                    if prestressed else
+                    (
+                        f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  section is "
+                        f"{verdict} (strictly below 1: cracked; "
+                        "1 or above: uncracked)"
+                        if valid else
+                        f"lambda<sub>cr</sub> = {_fmt(lam,3)}  ->  INVALID; "
+                        "no verified cracking classification"
+                    )
                 ),
             )
+            if prestressed:
+                self._small(
+                    "Locked-in prestress remains fixed. If any prestress-only "
+                    "concrete fibre is above fct,eff, Sector assigns lambda_cr = 0 "
+                    "directly and does not apply the equality. Otherwise it scales "
+                    "only the external N/M actions and takes the minimum equality "
+                    "solution over fibres with a strictly positive external tensile "
+                    "increment; if there is no such fibre, the factor is infinite. "
+                    + (
+                        "Calculated output: sigma_ct,I = "
+                        f"{_fmt(el.get('sigma_ct'), 3)} MPa; lambda_cr = "
+                        f"{_fmt(lam,3)}; section is "
+                        f"{verdict} (strictly below 1: cracked; 1 or above: "
+                        "uncracked)."
+                        if valid else
+                        "Calculated output: sigma_ct,I = "
+                        f"{_fmt(el.get('sigma_ct'), 3)} MPa; lambda_cr = "
+                        f"{_fmt(lam,3)}; INVALID; "
+                        "no verified cracking classification."
+                    )
+                )
             self._small(
                 "Globally critical threshold across the elastic cases. "
                 "Cracking is triggered by the peak tension the section sees and "

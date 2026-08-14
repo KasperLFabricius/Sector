@@ -9,12 +9,13 @@ ignores the stiffening contribution of the intact concrete between cracks.
 
 This module adds both, following EN 1992-1-1:
 
-* **Cracking threshold.** The uncracked (Stage I) state is linear, so its peak
-  concrete tensile stress scales with the applied load. The load factor that
-  first reaches ``f_ctm`` is ``lambda_cr = f_ctm / sigma_ct,I``; ``lambda_cr >= 1``
-  means the section has not cracked under the applied load and the Stage I
-  stresses govern. This generalises ``M_cr / M`` to combined axial-plus-biaxial
-  loading by scaling the whole action vector proportionally.
+* **Cracking threshold.** Without prestress, the uncracked (Stage I) peak
+  concrete tensile stress scales with the applied load and
+  ``lambda_cr = f_ctm / sigma_ct,I``. With tendons, locked-in prestress remains
+  fixed while only the external action is scaled; prestress alone above
+  ``f_ctm`` therefore gives ``lambda_cr = 0``. In both cases ``lambda_cr >= 1``
+  means the section is treated as uncracked under the applied history. This
+  generalises ``M_cr / M`` to combined axial-plus-biaxial loading.
 
 * **Tension stiffening.** Where cracked, deformation quantities are interpolated
   between the uncracked and fully cracked states with the distribution
@@ -488,6 +489,31 @@ def cracking_factor(sigma_ct_mpa: float, fctm: float) -> float:
     if sigma_ct_mpa <= 0.0:
         return math.inf
     return fctm / sigma_ct_mpa
+
+
+def _prestressed_cracking_factor(
+    sigma_pre_mpa: np.ndarray,
+    sigma_ext_mpa: np.ndarray,
+    fctm: float,
+) -> float:
+    """Factor the external action while retaining fixed prestress.
+
+    Prestress is already present at external-load factor zero.  If it exceeds
+    ``fctm`` at any concrete fibre, cracking therefore owns ``lambda_cr = 0``
+    even when the external action has no tensile component.  Otherwise the
+    existing externally tensile-fibre interpolation is retained.
+    """
+    sigma_pre = np.asarray(sigma_pre_mpa, dtype=float)
+    sigma_ext = np.asarray(sigma_ext_mpa, dtype=float)
+    if sigma_pre.shape != sigma_ext.shape:
+        raise ValueError("Prestress and external concrete-stress arrays must match")
+    if np.any(sigma_pre > fctm):
+        return 0.0
+    loaded = sigma_ext > 0.0
+    if not np.any(loaded):
+        return math.inf
+    factor = float(np.min((fctm - sigma_pre[loaded]) / sigma_ext[loaded]))
+    return max(0.0, factor) if math.isfinite(factor) else factor
 
 
 def tension_stiffening_zeta(lambda_cr: float, beta: float) -> float:
@@ -1834,9 +1860,7 @@ def analyse_cracking(
         sig_ext = (ext.eps0 + ext.kx * verts[:, 0]
                    + ext.ky * verts[:, 1]) / _KPA_PER_MPA
         sig_pre = sig_tot - sig_ext                          # prestress alone
-        loaded = sig_ext > 1.0e-9                            # external puts in tension
-        lam = (float(np.min((fctm - sig_pre[loaded]) / sig_ext[loaded]))
-               if np.any(loaded) else math.inf)
+        lam = _prestressed_cracking_factor(sig_pre, sig_ext, fctm)
     cracked = lam < 1.0
     lam = max(0.0, lam) if math.isfinite(lam) else lam       # no negative load factor
 
@@ -1900,9 +1924,7 @@ def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
         sig_l_ext = _sig(P_l, Mx_l, My_l, n_l, None)
         sig_pre = sig_l - sig_l_ext                        # prestress alone
         sig_ext = sig_l_ext + sig_s                        # total external
-        loaded = sig_ext > 1.0e-9
-        lam = (float(np.min((fctm - sig_pre[loaded]) / sig_ext[loaded]))
-               if np.any(loaded) else math.inf)
+        lam = _prestressed_cracking_factor(sig_pre, sig_ext, fctm)
     cracked = lam < 1.0
     lam = max(0.0, lam) if math.isfinite(lam) else lam
     return cracked, lam, sigma_ct

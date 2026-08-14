@@ -389,6 +389,21 @@ def _subdivided_torsion() -> dict:
 
 def _add_combined_chords(out: dict) -> None:
     combined = report_data._combined_out()
+    combined["transverse"] = {
+        "valid": True,
+        "cot": 2.0,
+        "theta_deg": 26.6,
+        "u_stirrup": 0.6,
+        "u_crush": 0.4,
+        "governing": 0.6,
+        "governs": "stirrups",
+        "ok": True,
+        "shear_fraction": 0.0,
+        "torsion_fraction": 0.6,
+        "shear_credited": True,
+        "vrd_c": 120.0,
+        "v_ed": 40.0,
+    }
     combined["longitudinal"] = {
         "valid": True,
         "axis": "x",
@@ -567,13 +582,16 @@ def test_normal_report_routes_cover_the_complete_equation_catalogue(
         identity for identity, _contract in contracts.equation_contract_items()
     }
 
-    assert len(raw["S0"]) == 88
-    assert len(actual["S0"]) == 87
-    assert len(expected - actual["S0"]) == 56
+    # S0 intentionally retains a pre-origin-contract plastic payload, so the
+    # report suppresses its stale Combined worked blocks. S1 supplies the current
+    # contract and owns those routes, including the new prestress threshold.
+    assert len(raw["S0"]) == 76
+    assert len(actual["S0"]) == 75
+    assert len(expected - actual["S0"]) == 69
 
     covered = set(actual["S0"])
     for scenario, expected_increment in zip(
-        ("S1", "S2", "S3", "S4"), (31, 21, 3, 1), strict=True
+        ("S1", "S2", "S3", "S4"), (44, 21, 3, 1), strict=True
     ):
         increment = actual[scenario] - covered
         assert len(increment) == expected_increment
