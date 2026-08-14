@@ -20,6 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import manual  # noqa: E402
+import publication_image_export  # noqa: E402
 import viz  # noqa: E402
 from app import table_field_definitions as table_fields  # noqa: E402
 from sector.codes import fctm  # noqa: E402
@@ -622,13 +623,22 @@ def test_manual_pdf_has_no_stray_dollar_delimiters():
     assert "$" not in text
 
 
-def test_call_with_timeout_guards_slow_and_failing_work():
-    # The PDF build runs both the kaleido server startup and each figure render
-    # through this guard, so a wedged browser cannot hang the build.
-    import time
-    assert manual._call_with_timeout(lambda: 42, 5) == 42
-    assert manual._call_with_timeout(lambda: 1 / 0, 5) is None           # error -> None
-    assert manual._call_with_timeout(lambda: time.sleep(2), 0.2) is manual._FIG_TIMED_OUT
+def test_manual_figure_export_uses_shared_coordinator(monkeypatch):
+    class Figure:
+        @staticmethod
+        def write_image(target, **kwargs):
+            assert kwargs == {"format": "png", "scale": 2}
+            target.write(b"png")
+
+    calls = []
+
+    def export(render, *, timeout, description):
+        calls.append((timeout, description))
+        return render()
+
+    monkeypatch.setattr(publication_image_export, "export_png", export)
+    assert manual._fig_to_png(lambda: Figure(), timeout=4.0) == b"png"
+    assert calls == [(4.0, "manual figure export")]
 
 
 def test_manual_pdf_builds_tables_only():
@@ -665,7 +675,6 @@ def test_manual_pdf_builds_tables_only():
 
 def test_manual_pdf_exports_each_repeated_figure_only_once(monkeypatch):
     from PIL import Image
-    import sector_report
 
     png = io.BytesIO()
     Image.new("RGB", (20, 12), "white").save(png, format="PNG")
@@ -675,7 +684,11 @@ def test_manual_pdf_exports_each_repeated_figure_only_once(monkeypatch):
         calls.append(builder)
         return png.getvalue()
 
-    monkeypatch.setattr(sector_report, "ensure_image_server", lambda: None)
+    monkeypatch.setattr(
+        publication_image_export,
+        "ensure_ready",
+        lambda *, timeout: None,
+    )
     monkeypatch.setattr(manual, "_fig_to_png", fake_export)
     pdf = manual.build_manual_pdf_bytes(figures=True)
     unique_figures = {

@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
 import material_catalog  # noqa: E402
+import publication_image_export  # noqa: E402
 import result_presentation  # noqa: E402
 import sector_report  # noqa: E402
 
@@ -3475,40 +3476,30 @@ def test_report_ec2_2023_shows_refined_formula():
     assert "1.7" in txt                          # kw in the worked substitution
 
 
-def test_ensure_image_server_starts_once(monkeypatch):
-    # The app-wide kaleido server starts exactly once per process (even across
-    # threads / repeated calls) and is registered to stop only at interpreter exit,
-    # not after each report -- so a second report reuses the running browser.
-    calls = {"start": 0, "stop": 0, "atexit": 0, "kwargs": None}
-    def start(**kwargs):
-        calls["start"] += 1
-        calls["kwargs"] = kwargs
-
-    monkeypatch.setattr(sector_report, "_kaleido_server_api",
-                        lambda: (start,
-                                 (lambda **k: calls.__setitem__("stop", calls["stop"] + 1))))
+def test_ensure_image_server_uses_shared_export_coordinator(monkeypatch):
+    calls = []
     monkeypatch.setattr(
-        sector_report,
-        "_kaleido_page_path",
-        lambda: "persistent-plotly-export.html",
+        publication_image_export,
+        "ensure_ready",
+        lambda *, timeout: calls.append(timeout),
     )
-    monkeypatch.setattr(sector_report.atexit, "register",
-                        lambda f: calls.__setitem__("atexit", calls["atexit"] + 1))
-    monkeypatch.setattr(sector_report, "_image_server_started", False)
-    for _ in range(3):
+
+    sector_report.ensure_image_server(timeout=7.5)
+
+    assert calls == [7.5]
+
+
+def test_ensure_image_server_fails_closed_when_coordinator_fails(monkeypatch):
+    def fail(*, timeout):
+        del timeout
+        raise publication_image_export.KaleidoExportError("unavailable")
+
+    monkeypatch.setattr(publication_image_export, "ensure_ready", fail)
+    with pytest.raises(
+        sector_report.ReportFigureError,
+        match="report not created",
+    ):
         sector_report.ensure_image_server()
-    assert calls["start"] == 1            # started once despite three calls
-    assert calls["kwargs"]["page_generator"] == "persistent-plotly-export.html"
-    assert calls["atexit"] == 1           # stop deferred to interpreter exit
-    assert calls["stop"] == 0             # never stopped mid-session
-
-
-def test_ensure_image_server_without_kaleido_is_safe(monkeypatch):
-    # No kaleido / no sync-server API: it must not raise and must not retry.
-    monkeypatch.setattr(sector_report, "_kaleido_server_api", lambda: (None, None))
-    monkeypatch.setattr(sector_report, "_image_server_started", False)
-    sector_report.ensure_image_server()
-    assert sector_report._image_server_started is True
 
 
 def test_tables_only_report_does_not_start_the_image_server(monkeypatch):
@@ -5016,18 +5007,13 @@ def test_report_torsion_out_of_limits_retains_values_and_verdict():
     assert "NO CODE VERDICT" not in txt
 
 
-def test_fig_png_times_out_instead_of_hanging():
-    # v0.62: the report's kaleido export runs off the main thread with a join
-    # timeout, so a stuck browser signals failure (None) instead of freezing report
-    # generation. The report builder converts that signal to ReportFigureError.
-    import time
+def test_fig_png_preserves_timeout_signal(monkeypatch):
+    def timeout(*args, **kwargs):
+        del args, kwargs
+        raise publication_image_export.KaleidoExportTimeout("wedged")
 
-    class _SlowFig:
-        def to_image(self, **kw):
-            time.sleep(5.0)
-            return b"never"
-
-    png, timed_out = sector_report._fig_png(_SlowFig(), 100, 100, timeout=0.3)
+    monkeypatch.setattr(publication_image_export, "export_png", timeout)
+    png, timed_out = sector_report._fig_png(object(), 100, 100, timeout=0.3)
     assert png is None and timed_out is True
 
 
