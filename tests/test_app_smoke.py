@@ -1618,6 +1618,69 @@ def test_plastic_result_contract_invalidates_every_pre_contract_reuse_gate():
     assert results["elastic_cases"][0]["reused"] is True
 
 
+def test_capacity_result_contract_invalidates_capacity_without_bending_or_elastic():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Both"),
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 30.0),
+    )
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+
+    for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
+        assert tuple(latest[key]).count(token) == 1
+    for key in (
+        "plastic_bending_context_sig",
+        "elastic_case_context_sig",
+        "elastic_sig",
+        "fatigue_sig",
+    ):
+        assert token not in tuple(latest[key])
+    pre_contract_inputs = copy.deepcopy(latest)
+    pre_contract_inputs["signature"] = tuple(
+        item for item in latest["signature"] if item != token
+    )
+    assert sector_app._engineering_input_hash(
+        pre_contract_inputs
+    ) != sector_app._engineering_input_hash(latest)
+
+    plastic_before = at.session_state["results"]["plastic"]
+    torsion_before = at.session_state["results"]["torsion"]
+    elastic_before = at.session_state["results"]["elastic"]
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            item for item in at.session_state[key] if item != token
+        )
+    assert at.session_state["result_sig"] != latest["signature"]
+
+    _calculate(at)
+    results = at.session_state["results"]
+    assert results["plastic"] is plastic_before
+    assert results["torsion"] is not torsion_before
+    assert results["elastic"] is elastic_before
+    assert results["plastic_cases"][0]["reused"] is False
+    assert results["elastic_cases"][0]["reused"] is True
+    assert at.session_state["result_plastic_bending_context_sig"] == (
+        latest["plastic_bending_context_sig"]
+    )
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        assert tuple(at.session_state[key]).count(token) == 1
+
+
 def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     import io
 

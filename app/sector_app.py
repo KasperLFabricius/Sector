@@ -4379,6 +4379,10 @@ _ELASTIC_RESULT_CONTRACT_TOKEN = (
     "elastic-result-contract",
     "prestress-only-cracking-v1",
 )
+_CAPACITY_RESULT_CONTRACT_TOKEN = (
+    "capacity-result-contract",
+    "torsion-subdivision-automatic-tef-v1",
+)
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
@@ -5408,7 +5412,9 @@ def build_inputs(host=st):
         "torsion_tef", disabled=not _tors,
         help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
              "the nearest real wall for a single-cell hollow section). A positive "
-             "single-tube override may not exceed that measured wall thickness.")
+             "single-tube override may not exceed that measured wall thickness. "
+             "Subdivided tubes always derive each component thickness automatically; "
+             "set this field to 0 before enabling subdivision.")
     torsion_gamma_ct = _seeded_number(
         sts,
         r"Concrete tensile factor $\gamma_{ct}$",
@@ -6253,7 +6259,9 @@ def build_inputs(host=st):
         + _get(_ELASTIC_CONTEXT_SIG_KEYS)
         + (_ELASTIC_RESULT_CONTRACT_TOKEN,)
     )
-    capacity_context_sig = _get(_CAPACITY_CONTEXT_SIG_KEYS)
+    capacity_context_sig = (
+        _get(_CAPACITY_CONTEXT_SIG_KEYS) + (_CAPACITY_RESULT_CONTRACT_TOKEN,)
+    )
     plastic_case_context_sig = (
         plastic_bending_context_sig + capacity_context_sig
     )

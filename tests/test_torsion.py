@@ -563,7 +563,6 @@ def test_app_torsion_produces_a_resistance():
 def test_app_hollow_override_above_real_wall_preserves_completed_result():
     import copy
     import project_io
-    from sector import geometry
 
     at = _fresh()
     at.run()
@@ -584,32 +583,8 @@ def test_app_hollow_override_above_real_wall_preserves_completed_result():
     baseline_signature = at.session_state["result_sig"]
     baseline_calculation = copy.deepcopy(at.session_state["calculation_record"])
 
-    # A valid four-rectangle partition is deliberately active. The top-level real-wall
-    # prerequisite must reject the override before subdivision can rebuild subtubes.
-    _set(at, ("checkbox", "torsion_subdivide", True))
-    _set(at, ("number_input", "torsion_nsub", 4.0))
-    rectangles_mm = [
-        (-250.0, 0.0, 100.0, 600.0),
-        (250.0, 0.0, 100.0, 600.0),
-        (0.0, -250.0, 400.0, 100.0),
-        (0.0, 250.0, 400.0, 100.0),
-    ]
-    changes = []
-    for index, (x, y, b, h) in enumerate(rectangles_mm):
-        for field, value in zip(
-            ("x", "y", "b", "h"), (x, y, b, h), strict=True
-        ):
-            changes.append(("number_input", f"torsion_sub_{field}{index}", value))
-    _set(at, *changes)
-    routed = at.session_state["_latest_inputs"]
-    rectangles_m = [
-        (x / 1000.0, y / 1000.0, b / 1000.0, h / 1000.0)
-        for x, y, b, h in routed["torsion_subrects"]
-    ]
-    partition_valid, partition_reason = geometry.rectangles_partition_concrete(
-        routed["outer"], routed["holes"], rectangles_m
-    )
-    assert partition_valid, partition_reason
+    # Keep the PR-04 real-wall regression single-tube. PR-04B separately owns the
+    # subdivision/global-override conflict and its error precedence.
     _set(at, ("number_input", "torsion_tef", 150.0))
     _calculate(at)
 
@@ -785,6 +760,47 @@ def test_app_torsion_subdivided_sums_capacities():
     assert t["governing_sub"] == max(range(len(t["subtubes"])),
                                      key=lambda i: t["subtubes"][i]["util"])
     assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
+
+
+def test_app_subdivision_override_blocks_and_preserves_completed_result():
+    import copy
+    import project_io
+
+    at = _fresh()
+    at.run()
+    _subdivided(at)
+    _calculate(at)
+    assert not at.exception
+    baseline = at.session_state["results"]["torsion"]
+    assert baseline["valid"] is True
+    assert all(not item["tube"]["tef_user"] for item in baseline["subtubes"])
+    baseline_result_hash = project_io.result_sha256(at.session_state["results"])
+    baseline_signature = at.session_state["result_sig"]
+    baseline_input_snapshot_hash = project_io.result_sha256(
+        at.session_state["result_input_snapshot"]
+    )
+    baseline_calculation = copy.deepcopy(at.session_state["calculation_record"])
+
+    _set(at, ("number_input", "torsion_tef", 25.0))
+    _calculate(at)
+
+    assert not at.exception
+    assert project_io.result_sha256(at.session_state["results"]) == (
+        baseline_result_hash
+    )
+    assert at.session_state["result_sig"] == baseline_signature
+    assert project_io.result_sha256(
+        at.session_state["result_input_snapshot"]
+    ) == baseline_input_snapshot_hash
+    assert at.session_state["calculation_record"] == baseline_calculation
+    assert at.session_state["_latest_inputs"]["signature"] != baseline_signature
+    assert at.session_state["result_input_snapshot"]["torsion_tef"] == 0.0
+    assert at.session_state["_latest_inputs"]["torsion_tef"] == 25.0
+    assert at.session_state["_case_error"] == (
+        "Calculation blocked: torsion wall-thickness override must be 0 "
+        "(automatic per sub-tube) when torsion subdivision is enabled."
+    )
+    assert any("automatic per sub-tube" in item.value for item in at.error)
 
 
 def test_app_compound_torsion_requires_subdivision():
