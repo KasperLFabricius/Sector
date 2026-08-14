@@ -42,7 +42,7 @@ def test_portable_job_runs_build_bat_once_and_executes_the_page_gate():
 def test_portable_upload_is_only_the_zip_and_checksum():
     portable = _workflow()["jobs"]["portable"]
     upload = _step(portable, "Upload portable ZIP")
-    assert upload["with"]["name"].startswith("Sector-v0.93-windows-portable-")
+    assert upload["with"]["name"].startswith("Sector-v0.94-windows-portable-")
     paths = upload["with"]["path"].splitlines()
     assert paths == [
         "${{ env.SECTOR_PORTABLE_OUTPUT }}/*.zip",

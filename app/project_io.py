@@ -2,10 +2,11 @@
 
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
-Released Sector 0.92 projects used schema 23. Sector 0.93 uses schema 25 during
-v0.94 development. Schema 24 has one bounded migration for the shared permitted
-crack-width setting; schema 23 and future schemas remain unsupported. Retired
-component-mapped bridge inputs are deliberately absent from the schema.
+Released Sector 0.92 projects used schema 23 and Sector 0.93 projects used
+schema 24. Sector 0.94 uses schema 25. Schema 24 has one bounded migration for
+the shared permitted crack-width setting; schema 23 and future schemas remain
+unsupported. Retired component-mapped bridge inputs are deliberately absent
+from the schema.
 """
 
 from __future__ import annotations
