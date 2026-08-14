@@ -63,7 +63,7 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "c5d3cc47ca5f472932288b954e51378b1f5b2c95b3a664266f19a05d61506d27",
+        "503679af2e6f28da9d0f32ccab6b744af6cac0d6334649f45ac930d8fe055702",
     ),
 )
 
