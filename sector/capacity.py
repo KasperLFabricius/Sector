@@ -122,6 +122,32 @@ def _is_boolean_scalar(value):
     )
 
 
+def combined_angle_objective_r_m(plastic: object) -> float | None:
+    """Return validated bending utilisation for a pre-selection angle scan.
+
+    This non-certifying seam consumes only the already-built plastic result.
+    It does not inspect shear, links, torsion, angle selection, or final
+    combined-result evidence.
+    """
+
+    if not isinstance(plastic, Mapping):
+        return None
+    if any(
+        plastic.get(key, _MISSING) is not True
+        for key in ("converged", "closed", "check_util", "util_valid")
+    ):
+        return None
+
+    value = plastic.get("util", _MISSING)
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+        return None
+    try:
+        r_m = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return r_m if math.isfinite(r_m) and r_m >= 0.0 else None
+
+
 def _positive_finite_real(value, label):
     """Return one calculation coefficient, rejecting only malformed values."""
     if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):

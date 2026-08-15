@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import copy
 import dataclasses
+import inspect
 import math
 import pathlib
 from types import SimpleNamespace
@@ -85,6 +86,101 @@ def test_capacity_module_has_no_ui_dependency():
         if isinstance(node, ast.ImportFrom)
     )
     assert not any(name == "streamlit" or name.startswith("streamlit.") for name in imports)
+
+
+def _checked_plastic(util=0.20):
+    return {
+        "converged": True,
+        "closed": True,
+        "check_util": True,
+        "util_valid": True,
+        "util": util,
+    }
+
+
+@dataclasses.dataclass(frozen=True)
+class _ValueErrorFloat:
+    def __float__(self) -> float:
+        raise ValueError("hostile conversion")
+
+
+def test_combined_angle_objective_r_m_accepts_valid_plastic_evidence():
+    control = _checked_plastic(np.float64(0.20))
+    before = copy.deepcopy(control)
+    retained_util = control["util"]
+
+    assert capacity.combined_angle_objective_r_m(control) == pytest.approx(0.20)
+    assert control == before
+    assert control["util"] is retained_util
+
+    zero_control = _checked_plastic(np.float64(0.0))
+    zero_util = zero_control["util"]
+    assert capacity.combined_angle_objective_r_m(zero_control) == 0.0
+    assert zero_control["util"] is zero_util
+
+    above_one_control = _checked_plastic(np.float64(1.2345))
+    above_one_util = above_one_control["util"]
+    above_one = capacity.combined_angle_objective_r_m(above_one_control)
+    assert type(above_one) is float
+    assert above_one == pytest.approx(1.2345)
+    assert above_one_control["util"] is above_one_util
+
+
+def test_combined_angle_objective_r_m_rejects_invalid_plastic_evidence():
+    for malformed in (None, object(), {}, {"plastic": _checked_plastic()}):
+        assert capacity.combined_angle_objective_r_m(malformed) is None
+
+    for flag in ("converged", "closed", "check_util", "util_valid"):
+        missing = _checked_plastic()
+        del missing[flag]
+        missing_before = copy.deepcopy(missing)
+        assert capacity.combined_angle_objective_r_m(missing) is None
+        assert missing == missing_before
+        for value in (False, None, 0, 1, "true", np.bool_(True)):
+            mutated = _checked_plastic()
+            mutated[flag] = value
+            before = copy.deepcopy(mutated)
+            retained_flag = mutated[flag]
+            assert capacity.combined_angle_objective_r_m(mutated) is None
+            assert mutated == before
+            assert mutated[flag] is retained_flag
+
+    missing_util = _checked_plastic()
+    del missing_util["util"]
+    missing_util_before = copy.deepcopy(missing_util)
+    assert capacity.combined_angle_objective_r_m(missing_util) is None
+    assert missing_util == missing_util_before
+    for value in (
+        None,
+        False,
+        True,
+        np.bool_(False),
+        "0.20",
+        b"0.20",
+        -0.01,
+        math.nan,
+        math.inf,
+        -math.inf,
+        10**4000,
+        SimpleNamespace(),
+        _ValueErrorFloat(),
+    ):
+        mutated = _checked_plastic(value)
+        before = copy.deepcopy(mutated)
+        retained_util = mutated["util"]
+        assert capacity.combined_angle_objective_r_m(mutated) is None
+        assert mutated == before
+        assert mutated["util"] is retained_util
+
+
+def test_combined_angle_objective_r_m_has_angle_independent_boundary():
+    signature = inspect.signature(capacity.combined_angle_objective_r_m)
+    assert tuple(signature.parameters) == ("plastic",)
+    assert all(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    assert signature.parameters["plastic"].default is inspect.Parameter.empty
 
 
 def test_combined_interaction_authority_uses_input_shared_stirrup_geometry():
