@@ -369,6 +369,119 @@ def combined_longitudinal_chord_evidence_is_valid(
     )
 
 
+def _rings_are_equivalent(left: object, right: object) -> bool:
+    """Compare one polygon ring modulo benign serialization differences."""
+
+    geometry = _module("geometry")
+    left_ring = geometry.ring_without_terminal_closure(left)
+    right_ring = geometry.ring_without_terminal_closure(right)
+    if left_ring.shape != right_ring.shape or len(left_ring) < 3:
+        return False
+
+    left_points = tuple((float(point[0]), float(point[1])) for point in left_ring)
+    right_points = tuple(
+        (float(point[0]), float(point[1])) for point in right_ring
+    )
+
+    def points_match(
+        first: tuple[float, float],
+        second: tuple[float, float],
+    ) -> bool:
+        return first == second
+
+    for candidate in (right_points, tuple(reversed(right_points))):
+        for offset in range(len(candidate)):
+            if all(
+                points_match(
+                    left_points[index],
+                    candidate[(index + offset) % len(candidate)],
+                )
+                for index in range(len(candidate))
+            ):
+                return True
+    return False
+
+
+def _section_and_raw_rings_are_equivalent(
+    section: object,
+    outer: object,
+    holes: object,
+) -> bool:
+    """Bind a Section's stored rings to the separately retained raw geometry."""
+
+    validator = getattr(section, "require_valid_geometry", None)
+    if not callable(validator):
+        return True
+    concrete = getattr(section, "concrete", _MISSING)
+    if not isinstance(concrete, (list, tuple)) or not isinstance(
+        holes, (list, tuple)
+    ):
+        return False
+    section_rings = list(concrete)
+    raw_holes = list(holes)
+    if (
+        not section_rings
+        or len(section_rings) != len(raw_holes) + 1
+        or not _rings_are_equivalent(section_rings[0], outer)
+    ):
+        return False
+
+    unmatched_holes = list(raw_holes)
+    for section_hole in section_rings[1:]:
+        for index, raw_hole in enumerate(unmatched_holes):
+            if _rings_are_equivalent(section_hole, raw_hole):
+                unmatched_holes.pop(index)
+                break
+        else:
+            return False
+    return not unmatched_holes
+
+
+def combined_torsion_subdivision_geometry_is_valid(inp: object) -> bool:
+    """Validate both Section-owned and raw subdivision geometry authority.
+
+    A real ``Section`` may own a richer geometry validator, while the retained
+    raw outline and holes are still consumed later by the torsion producer.
+    Both representations must therefore pass and describe the same concrete
+    before a later subdivision-input seam can assess wall thickness or
+    rectangle coverage.
+    """
+
+    if (
+        not isinstance(inp, Mapping)
+        or "outer" not in inp
+        or "holes" not in inp
+    ):
+        return False
+    retained_holes = inp["holes"]
+    if retained_holes is not None and not isinstance(
+        retained_holes, (list, tuple)
+    ):
+        return False
+    try:
+        section = inp.get("section")
+        section_validator = getattr(section, "require_valid_geometry", None)
+        if callable(section_validator) and not isinstance(
+            getattr(section, "concrete", _MISSING), (list, tuple)
+        ):
+            return False
+        raw_holes = [] if retained_holes is None else retained_holes
+        _require_valid_input_geometry(inp)
+        _module("geometry").require_valid_section_topology(
+            inp["outer"],
+            raw_holes,
+        )
+        if not _section_and_raw_rings_are_equivalent(
+            section,
+            inp["outer"],
+            raw_holes,
+        ):
+            return False
+    except (ArithmeticError, KeyError, TypeError, ValueError, OverflowError):
+        return False
+    return True
+
+
 def _selected_code(
     methods: Mapping[str, codes.DesignCode],
     value: object,
