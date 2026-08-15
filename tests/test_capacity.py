@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from sector import capacity, codes, torsion
+from sector import section as section_core
 
 
 def _rect(b=0.3, h=0.6):
@@ -886,6 +887,349 @@ def test_combined_longitudinal_chord_evidence_rejects_unsupported_shapes():
             torsion_live=True,
             torsion_subdivided=False,
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class _TopologySection:
+    error: type[Exception] | None = None
+    concrete: object = (
+        ((0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)),
+    )
+
+    def require_valid_geometry(self):
+        if self.error is not None:
+            raise self.error("invalid section geometry")
+
+
+def _torsion_subdivision_geometry_input(*, section=..., outer=..., holes=...):
+    inp = {
+        "outer": _rect() if outer is ... else outer,
+        "holes": [] if holes is ... else holes,
+    }
+    if section is not ...:
+        inp["section"] = section
+    return inp
+
+
+@pytest.mark.parametrize(
+    "inp",
+    [
+        _torsion_subdivision_geometry_input(),
+        _torsion_subdivision_geometry_input(section=_TopologySection()),
+        _torsion_subdivision_geometry_input(
+            section=SimpleNamespace(require_valid_geometry=None)
+        ),
+        _torsion_subdivision_geometry_input(holes=None),
+        _torsion_subdivision_geometry_input(
+            holes=[
+                [(0.1, 0.2), (0.2, 0.2), (0.2, 0.4), (0.1, 0.4)]
+            ]
+        ),
+    ],
+)
+def test_torsion_subdivision_geometry_accepts_both_current_representations(
+    inp,
+):
+    before = copy.deepcopy(inp)
+
+    result = capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+
+    assert result is True
+    assert inp == before
+
+
+@pytest.mark.parametrize(
+    ("section_outer", "section_holes", "raw_outer", "raw_holes"),
+    [
+        (
+            [(0.3, 0.0), (0.3, 0.6), (0.0, 0.6), (0.0, 0.0)],
+            [],
+            _rect(),
+            [],
+        ),
+        (
+            list(reversed(_rect())),
+            [],
+            [*_rect(), _rect()[0]],
+            [],
+        ),
+        (
+            [*_rect(), _rect()[0]],
+            [],
+            [(0.3, 0.6), (0.0, 0.6), (0.0, 0.0), (0.3, 0.0)],
+            [],
+        ),
+        (
+            _rect(),
+            [
+                [(0.03, 0.08), (0.10, 0.08), (0.10, 0.20), (0.03, 0.20)],
+                [(0.18, 0.35), (0.25, 0.35), (0.25, 0.50), (0.18, 0.50)],
+            ],
+            _rect(),
+            (
+                [(0.25, 0.50), (0.25, 0.35), (0.18, 0.35), (0.18, 0.50)],
+                [(0.10, 0.20), (0.03, 0.20), (0.03, 0.08), (0.10, 0.08)],
+            ),
+        ),
+    ],
+)
+def test_torsion_subdivision_geometry_accepts_equivalent_ring_encodings(
+    section_outer,
+    section_holes,
+    raw_outer,
+    raw_holes,
+):
+    section = section_core.Section.from_polygon(section_outer, holes=section_holes)
+    inp = _torsion_subdivision_geometry_input(
+        section=section,
+        outer=raw_outer,
+        holes=raw_holes,
+    )
+    before_outer = copy.deepcopy(inp["outer"])
+    before_holes = copy.deepcopy(inp["holes"])
+    before_rings = [ring.copy() for ring in section.concrete]
+
+    assert capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert inp["section"] is section
+    assert inp["outer"] == before_outer
+    assert inp["holes"] == before_holes
+    assert all(
+        np.array_equal(actual, retained)
+        for actual, retained in zip(section.concrete, before_rings, strict=True)
+    )
+
+
+@pytest.mark.parametrize(
+    ("section_outer", "section_holes", "raw_outer", "raw_holes"),
+    [
+        (_rect(), [], _rect(b=0.4), []),
+        (
+            _rect(),
+            [],
+            [(0.0, 0.0), (0.3 + 1.0e-13, 0.0), (0.3, 0.6), (0.0, 0.6)],
+            [],
+        ),
+        (
+            _rect(),
+            [],
+            _rect(),
+            [[(0.08, 0.20), (0.18, 0.20), (0.18, 0.38), (0.08, 0.38)]],
+        ),
+        (
+            _rect(),
+            [[(0.08, 0.20), (0.18, 0.20), (0.18, 0.38), (0.08, 0.38)]],
+            _rect(),
+            [],
+        ),
+        (
+            _rect(),
+            [[(0.04, 0.10), (0.12, 0.10), (0.12, 0.24), (0.04, 0.24)]],
+            _rect(),
+            [[(0.16, 0.32), (0.24, 0.32), (0.24, 0.48), (0.16, 0.48)]],
+        ),
+    ],
+)
+def test_torsion_subdivision_geometry_rejects_mismatched_valid_representations(
+    section_outer,
+    section_holes,
+    raw_outer,
+    raw_holes,
+):
+    section = section_core.Section.from_polygon(section_outer, holes=section_holes)
+    inp = _torsion_subdivision_geometry_input(
+        section=section,
+        outer=raw_outer,
+        holes=raw_holes,
+    )
+    before_outer = copy.deepcopy(inp["outer"])
+    before_holes = copy.deepcopy(inp["holes"])
+    before_rings = [ring.copy() for ring in section.concrete]
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert inp["section"] is section
+    assert inp["outer"] == before_outer
+    assert inp["holes"] == before_holes
+    assert all(
+        np.array_equal(actual, retained)
+        for actual, retained in zip(section.concrete, before_rings, strict=True)
+    )
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        SimpleNamespace(require_valid_geometry=lambda: None),
+        _TopologySection(concrete=()),
+        _TopologySection(concrete="rings"),
+        _TopologySection(concrete=(((0.0, 0.0), (0.3, 0.0)),)),
+    ],
+)
+def test_torsion_subdivision_geometry_rejects_missing_or_malformed_section_rings(
+    section,
+):
+    inp = _torsion_subdivision_geometry_input(section=section)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+
+
+@pytest.mark.parametrize(
+    ("concrete_factory", "expected_first"),
+    [
+        pytest.param(
+            lambda: {tuple(_rect()): None},
+            None,
+            id="mapping",
+        ),
+        pytest.param(
+            lambda: iter((tuple(_rect()),)),
+            tuple(_rect()),
+            id="one-shot-iterator",
+        ),
+    ],
+)
+def test_torsion_subdivision_geometry_rejects_nonrepeatable_section_collections(
+    concrete_factory,
+    expected_first,
+):
+    section = _TopologySection(concrete=concrete_factory())
+    inp = _torsion_subdivision_geometry_input(section=section)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    if expected_first is not None:
+        assert next(section.concrete) == expected_first
+
+
+def test_torsion_subdivision_geometry_preflights_real_section_before_validation():
+    section = section_core.Section.from_polygon(_rect())
+    retained_ring = tuple(_rect())
+    concrete = iter((retained_ring,))
+    section.concrete = concrete
+    inp = _torsion_subdivision_geometry_input(section=section)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert next(concrete) == retained_ring
+
+
+@pytest.mark.parametrize(
+    "holes_factory",
+    [
+        pytest.param(dict, id="empty-mapping"),
+        pytest.param(
+            lambda: {
+                ((0.08, 0.20), (0.18, 0.20), (0.18, 0.38), (0.08, 0.38)): None
+            },
+            id="ring-keyed-mapping",
+        ),
+    ],
+)
+def test_torsion_subdivision_geometry_rejects_mapping_raw_holes(holes_factory):
+    holes = holes_factory()
+    inp = _torsion_subdivision_geometry_input(holes=holes)
+    before = copy.deepcopy(inp)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert inp == before
+
+
+def test_torsion_subdivision_geometry_rejects_raw_hole_iterator_without_consuming():
+    hole = ((0.08, 0.20), (0.18, 0.20), (0.18, 0.38), (0.08, 0.38))
+    holes = iter((hole,))
+    inp = _torsion_subdivision_geometry_input(holes=holes)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert next(holes) == hole
+
+
+@pytest.mark.parametrize(
+    "bad_input",
+    [None, False, 0, 1, "mapping", b"mapping", [], (), object()],
+)
+def test_torsion_subdivision_geometry_rejects_malformed_top_level(bad_input):
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(
+        bad_input
+    )
+
+
+@pytest.mark.parametrize("missing_key", ["outer", "holes"])
+def test_torsion_subdivision_geometry_requires_both_raw_geometry_keys(
+    missing_key,
+):
+    inp = _torsion_subdivision_geometry_input()
+    del inp[missing_key]
+    before = copy.deepcopy(inp)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert inp == before
+
+
+@pytest.mark.parametrize(
+    "section_error",
+    [ValueError, TypeError, ArithmeticError, OverflowError],
+)
+def test_torsion_subdivision_geometry_rejects_invalid_section_with_valid_raw(
+    section_error,
+):
+    inp = _torsion_subdivision_geometry_input(
+        section=_TopologySection(section_error)
+    )
+    before = copy.deepcopy(inp)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert inp == before
+
+
+@pytest.mark.parametrize(
+    ("outer", "holes"),
+    [
+        (None, []),
+        ([], []),
+        ([(0.0, 0.0), (0.3, 0.0)], []),
+        (
+            [(0.0, 0.0), (0.3, 0.6), (0.0, 0.6), (0.3, 0.0)],
+            [],
+        ),
+        (
+            [
+                (0.0, 0.0),
+                (0.3, 0.0),
+                (0.3, 0.6),
+                (0.3, 0.0),
+                (0.0, 0.6),
+            ],
+            [],
+        ),
+        (_rect(), "holes"),
+        (_rect(), [None]),
+        (_rect(), [[(0.0, 0.0), (0.1, 0.0)]]),
+        (
+            _rect(),
+            [[(0.1, 0.2), (0.2, 0.4), (0.1, 0.4), (0.2, 0.2)]],
+        ),
+    ],
+)
+def test_torsion_subdivision_geometry_rejects_stale_raw_with_valid_section(
+    outer,
+    holes,
+):
+    inp = _torsion_subdivision_geometry_input(
+        section=_TopologySection(),
+        outer=outer,
+        holes=holes,
+    )
+    before = copy.deepcopy(inp)
+
+    assert not capacity.combined_torsion_subdivision_geometry_is_valid(inp)
+    assert inp == before
+
+
+def test_torsion_subdivision_geometry_has_dormant_one_object_boundary():
+    signature = inspect.signature(
+        capacity.combined_torsion_subdivision_geometry_is_valid
+    )
+    parameters = tuple(signature.parameters.values())
+    assert tuple(parameter.name for parameter in parameters) == ("inp",)
+    assert parameters[0].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters[0].default is inspect.Parameter.empty
 
 
 def _prestress_law(*, modulus_mpa=200_000.0, initial_strain=0.005):
