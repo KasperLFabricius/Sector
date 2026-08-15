@@ -86,6 +86,195 @@ def test_capacity_module_has_no_ui_dependency():
     assert not any(name == "streamlit" or name.startswith("streamlit.") for name in imports)
 
 
+def test_combined_interaction_authority_uses_input_shared_stirrup_geometry():
+    inp = _member_input(
+        shear_links=True,
+        shear_link_legs=4,
+        shear_link_dia=10.0,
+        shear_link_s=150.0,
+    )
+    expected = math.pi * 10.0**2 / 4.0 / 150.0
+    retained = {"asw_over_s": expected}
+    inp_before = dict(inp)
+    retained_before = dict(retained)
+
+    authority = capacity.combined_interaction_authority(inp, retained)
+
+    assert authority == capacity.CombinedInteractionAuthority(
+        links_required=True,
+        expected_asw_over_s=expected,
+        retained_asw_over_s=expected,
+        retained_current=True,
+        interaction_required=True,
+    )
+    assert inp == inp_before
+    assert retained == retained_before
+
+    # The torsion share is one closed-stirrup leg, not the shear leg count.
+    multiplied = capacity.combined_interaction_authority(
+        inp,
+        {"asw_over_s": expected * inp["shear_link_legs"]},
+    )
+    assert multiplied.expected_asw_over_s == expected
+    assert multiplied.retained_current is False
+    assert multiplied.interaction_required is True
+
+    equivalent_string = capacity.combined_interaction_authority(
+        inp,
+        {"asw_over_s": str(expected)},
+    )
+    assert equivalent_string.retained_asw_over_s is None
+    assert equivalent_string.retained_current is False
+
+    boolean_equivalent_input = _member_input(
+        shear_links=True,
+        shear_link_dia=1.0,
+        shear_link_s=math.pi / 4.0,
+    )
+    boolean_equivalent = capacity.combined_interaction_authority(
+        boolean_equivalent_input,
+        {"asw_over_s": True},
+    )
+    assert boolean_equivalent.expected_asw_over_s == 1.0
+    assert boolean_equivalent.retained_asw_over_s is None
+    assert boolean_equivalent.retained_current is False
+
+
+@pytest.mark.parametrize(
+    "retained_ratio",
+    [None, False, True, "0.5", math.nan, math.inf, -math.inf, -0.1, 0.0, 0.5, 0.6],
+)
+def test_combined_interaction_authority_rejects_stale_or_malformed_retained_ratio(
+    retained_ratio,
+):
+    inp = _member_input(shear_links=True)
+    retained = {"asw_over_s": retained_ratio}
+    before = repr(retained)
+
+    authority = capacity.combined_interaction_authority(inp, retained)
+
+    assert authority.retained_current is False
+    assert authority.interaction_required is True
+    assert repr(retained) == before
+
+    missing = capacity.combined_interaction_authority(inp, {})
+    malformed = capacity.combined_interaction_authority(inp, object())
+    assert missing.retained_current is False
+    assert malformed.retained_current is False
+    assert missing.interaction_required is True
+    assert malformed.interaction_required is True
+
+
+@pytest.mark.parametrize("field", ["shear_link_dia", "shear_link_s"])
+@pytest.mark.parametrize(
+    "value",
+    [None, False, True, "10", math.nan, math.inf, -math.inf, -1.0, 0.0],
+)
+def test_combined_interaction_authority_rejects_invalid_active_input_geometry(
+    field,
+    value,
+):
+    inp = _member_input(shear_links=True)
+    inp[field] = value
+    with pytest.raises(capacity.CapacityInputError):
+        capacity.combined_interaction_authority(inp, {"asw_over_s": 0.5})
+
+
+@pytest.mark.parametrize(
+    ("diameter", "spacing"),
+    [(1.0e308, 1.0), (1.0e-200, 1.0e200)],
+)
+def test_combined_interaction_authority_rejects_nonfinite_derived_ratio(
+    diameter,
+    spacing,
+):
+    inp = _member_input(
+        shear_links=True,
+        shear_link_dia=diameter,
+        shear_link_s=spacing,
+    )
+    with pytest.raises(capacity.CapacityInputError):
+        capacity.combined_interaction_authority(inp, {"asw_over_s": 0.5})
+
+
+@pytest.mark.parametrize("field", ["shear_link_dia", "shear_link_s"])
+def test_combined_interaction_authority_requires_active_input_geometry(field):
+    inp = _member_input(shear_links=True)
+    del inp[field]
+    with pytest.raises(capacity.CapacityInputError):
+        capacity.combined_interaction_authority(inp, {"asw_over_s": 0.5})
+
+
+@pytest.mark.parametrize("authority", [None, 0, 1, "", [], {}])
+def test_combined_interaction_authority_requires_exact_link_authority(authority):
+    inp = _member_input()
+    inp["shear_links"] = authority
+    with pytest.raises(capacity.CapacityInputError):
+        capacity.combined_interaction_authority(inp, {"asw_over_s": 0.5})
+
+    with pytest.raises(capacity.CapacityInputError):
+        capacity.combined_interaction_authority(object(), {"asw_over_s": 0.5})
+
+    missing = _member_input()
+    del missing["shear_links"]
+    with pytest.raises(capacity.CapacityInputError):
+        capacity.combined_interaction_authority(missing, {"asw_over_s": 0.5})
+
+
+def test_combined_interaction_authority_ignores_inactive_and_not_applied_loads():
+    inactive = _member_input(
+        shear_links=False,
+        shear_link_dia=0.0,
+        shear_link_s=0.0,
+    )
+    assert capacity.combined_interaction_authority(inactive, object()) == (
+        capacity.CombinedInteractionAuthority(
+            links_required=False,
+            expected_asw_over_s=None,
+            retained_asw_over_s=None,
+            retained_current=True,
+            interaction_required=False,
+        )
+    )
+
+    active = _member_input(
+        shear_links=True,
+        shear_V=0.0,
+        torsion_T=0.0,
+    )
+    expected = math.pi * active["shear_link_dia"] ** 2 / 4.0 / active["shear_link_s"]
+    authority = capacity.combined_interaction_authority(
+        active,
+        {"asw_over_s": expected},
+    )
+    assert authority.retained_current is True
+    assert authority.interaction_required is True
+
+    stale_input = dict(active, shear_link_dia=12.0)
+    stale = capacity.combined_interaction_authority(
+        stale_input,
+        {"asw_over_s": expected},
+    )
+    assert stale.retained_current is False
+    assert stale.interaction_required is True
+
+    tiny = _member_input(
+        shear_links=True,
+        shear_link_dia=1.0e-6,
+        shear_link_s=1.0e6,
+    )
+    tiny_expected = math.pi * tiny["shear_link_dia"] ** 2 / 4.0 / tiny["shear_link_s"]
+    assert tiny_expected > 0.0
+    assert capacity.combined_interaction_authority(
+        tiny,
+        {"asw_over_s": 0.0},
+    ).retained_current is False
+    assert capacity.combined_interaction_authority(
+        tiny,
+        {"asw_over_s": tiny_expected},
+    ).retained_current is True
+
+
 def _prestress_law(*, modulus_mpa=200_000.0, initial_strain=0.005):
     return SimpleNamespace(Es=modulus_mpa, IS=initial_strain)
 

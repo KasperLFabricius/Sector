@@ -40,6 +40,17 @@ class CapacityResultError(ArithmeticError):
 
 
 @dataclass(frozen=True, slots=True)
+class CombinedInteractionAuthority:
+    """Authoritative shared-stirrup applicability and retained evidence state."""
+
+    links_required: bool
+    expected_asw_over_s: float | None
+    retained_asw_over_s: float | None
+    retained_current: bool
+    interaction_required: bool
+
+
+@dataclass(frozen=True, slots=True)
 class LockedInPrestressTendon:
     """One tendon's locked-in elastic prestress contribution.
 
@@ -146,6 +157,75 @@ def _nonnegative_finite_real(value: Any, label: str) -> float:
             f"{label} must be a non-negative finite real number"
         )
     return number
+
+
+def combined_interaction_authority(
+    inp: object,
+    torsion_out: object,
+) -> CombinedInteractionAuthority:
+    """Bind shared-interaction applicability to the input stirrup geometry.
+
+    Torsion uses one leg of the closed shear stirrup.  The retained torsion
+    reinforcement ratio is evidence only: it cannot turn off the shared 6.29
+    interaction when the input declares active links.
+    """
+
+    if not isinstance(inp, Mapping):
+        raise CapacityInputError("combined input must be a mapping")
+    links_required = inp.get("shear_links", _MISSING)
+    if type(links_required) is not bool:
+        raise CapacityInputError(
+            "combined shear-links authority must be a concrete Boolean"
+        )
+    if not links_required:
+        return CombinedInteractionAuthority(
+            links_required=False,
+            expected_asw_over_s=None,
+            retained_asw_over_s=None,
+            retained_current=True,
+            interaction_required=False,
+        )
+
+    diameter = _positive_finite_real(
+        inp.get("shear_link_dia", _MISSING),
+        "shared stirrup diameter",
+    )
+    spacing = _positive_finite_real(
+        inp.get("shear_link_s", _MISSING),
+        "shared stirrup spacing",
+    )
+    try:
+        expected_value = _module("templates").bar_area(diameter) / spacing
+    except ArithmeticError as exc:
+        raise CapacityInputError(
+            "shared stirrup reinforcement ratio must be a positive finite real number"
+        ) from exc
+    expected = _positive_finite_real(
+        expected_value,
+        "shared stirrup reinforcement ratio",
+    )
+
+    retained = None
+    if isinstance(torsion_out, Mapping):
+        value = torsion_out.get("asw_over_s", _MISSING)
+        if not _is_boolean_scalar(value) and not isinstance(value, (str, bytes)):
+            try:
+                candidate = float(value)
+            except (TypeError, ValueError, OverflowError):
+                candidate = math.nan
+            if math.isfinite(candidate) and candidate >= 0.0:
+                retained = candidate
+
+    return CombinedInteractionAuthority(
+        links_required=True,
+        expected_asw_over_s=expected,
+        retained_asw_over_s=retained,
+        retained_current=bool(
+            retained is not None
+            and math.isclose(retained, expected, rel_tol=1e-12, abs_tol=0.0)
+        ),
+        interaction_required=True,
+    )
 
 
 def _selected_code(
