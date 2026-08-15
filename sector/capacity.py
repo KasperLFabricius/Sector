@@ -228,6 +228,121 @@ def combined_interaction_authority(
     )
 
 
+def combined_longitudinal_chord_evidence_is_valid(
+    links: object,
+    *,
+    shear_axis: str,
+    shear_tension_low: bool,
+    shear_live: bool,
+    torsion_live: bool,
+    torsion_subdivided: bool,
+) -> bool:
+    """Return whether retained link chords cover every required live face."""
+
+    if (
+        type(shear_axis) is not str
+        or shear_axis not in {"x", "y"}
+        or type(shear_tension_low) is not bool
+        or any(
+        type(value) is not bool
+        for value in (shear_live, torsion_live, torsion_subdivided)
+        )
+    ):
+        return False
+    if not shear_live and not torsion_live:
+        return True
+    if torsion_live and torsion_subdivided:
+        return False
+    if not isinstance(links, Mapping):
+        return False
+
+    candidates = links.get("chord_candidates", _MISSING)
+    if not isinstance(candidates, (list, tuple)) or not candidates:
+        return False
+
+    face_keys: set[tuple[str, str, bool]] = set()
+    shear_candidates: list[Mapping[str, Any]] = []
+    off_candidates: list[Mapping[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            return False
+        if candidate.get("valid", _MISSING) is not True:
+            return False
+        if candidate.get("conditional", _MISSING) is not True:
+            return False
+        role = candidate.get("role", _MISSING)
+        axis = candidate.get("axis", _MISSING)
+        tension_low = candidate.get("tension_low", _MISSING)
+        if (
+            type(role) is not str
+            or role not in {"shear_axis", "off_axis"}
+            or type(axis) is not str
+            or axis not in {"x", "y"}
+            or type(tension_low) is not bool
+        ):
+            return False
+        utilisation = candidate.get("util", _MISSING)
+        if _is_boolean_scalar(utilisation) or isinstance(
+            utilisation,
+            (str, bytes),
+        ):
+            return False
+        try:
+            utilisation_value = float(utilisation)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if math.isnan(utilisation_value) or utilisation_value < 0.0:
+            return False
+        if candidate.get("off_not_evaluated", None) is not None:
+            return False
+
+        face_key = (role, axis, tension_low)
+        if face_key in face_keys:
+            return False
+        face_keys.add(face_key)
+        if role == "shear_axis":
+            if (
+                "off_not_evaluated" not in candidate
+                or candidate.get("off_not_evaluated") is not None
+                or candidate.get("has_torsion", _MISSING) is not torsion_live
+                or type(candidate.get("gets_shift", _MISSING)) is not bool
+            ):
+                return False
+            shear_candidates.append(candidate)
+        else:
+            off_candidates.append(candidate)
+
+    if not torsion_live:
+        return bool(
+            shear_live
+            and len(candidates) == 1
+            and len(shear_candidates) == 1
+            and not off_candidates
+            and shear_candidates[0]["axis"] == shear_axis
+            and shear_candidates[0]["tension_low"] is shear_tension_low
+            and shear_candidates[0]["gets_shift"] is True
+        )
+
+    shifted_candidates = [
+        item for item in shear_candidates if item["gets_shift"] is True
+    ]
+    if (
+        len(candidates) != 4
+        or len(shear_candidates) != 2
+        or len(off_candidates) != 2
+        or len(shifted_candidates) != 1
+    ):
+        return False
+    off_axis = "y" if shear_axis == "x" else "x"
+    return bool(
+        {item["axis"] for item in shear_candidates} == {shear_axis}
+        and {item["axis"] for item in off_candidates} == {off_axis}
+        and shifted_candidates[0]["tension_low"] is shear_tension_low
+        and {item["tension_low"] for item in shear_candidates} == {True, False}
+        and {item["tension_low"] for item in off_candidates} == {True, False}
+    )
+
+
 def _selected_code(
     methods: Mapping[str, codes.DesignCode],
     value: object,

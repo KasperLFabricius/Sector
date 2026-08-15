@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import dataclasses
 import math
 import pathlib
@@ -273,6 +274,522 @@ def test_combined_interaction_authority_ignores_inactive_and_not_applied_loads()
         tiny,
         {"asw_over_s": tiny_expected},
     ).retained_current is True
+
+
+def _chord_candidate(
+    role,
+    axis,
+    tension_low,
+    *,
+    gets_shift=False,
+    torsion_live=True,
+    util=0.5,
+):
+    candidate = {
+        "valid": True,
+        "conditional": True,
+        "role": role,
+        "axis": axis,
+        "tension_low": tension_low,
+        "util": util,
+    }
+    if role == "shear_axis":
+        candidate.update(
+            off_not_evaluated=None,
+            has_torsion=torsion_live,
+            gets_shift=gets_shift,
+        )
+    return candidate
+
+
+def _complete_torsion_chord_links(*, shear_axis="x", shear_tension_low=True):
+    off_axis = "y" if shear_axis == "x" else "x"
+    return {
+        "chord_candidates": [
+            _chord_candidate(
+                "shear_axis",
+                shear_axis,
+                True,
+                gets_shift=shear_tension_low is True,
+            ),
+            _chord_candidate(
+                "shear_axis",
+                shear_axis,
+                False,
+                gets_shift=shear_tension_low is False,
+            ),
+            _chord_candidate("off_axis", off_axis, True),
+            _chord_candidate("off_axis", off_axis, False),
+        ]
+    }
+
+
+def _chord_evidence_is_valid(
+    links,
+    *,
+    shear_live,
+    torsion_live,
+    torsion_subdivided,
+    shear_axis="x",
+    shear_tension_low=True,
+):
+    return capacity.combined_longitudinal_chord_evidence_is_valid(
+        links,
+        shear_axis=shear_axis,
+        shear_tension_low=shear_tension_low,
+        shear_live=shear_live,
+        torsion_live=torsion_live,
+        torsion_subdivided=torsion_subdivided,
+    )
+
+
+def test_combined_longitudinal_chord_evidence_accepts_complete_required_faces():
+    assert _chord_evidence_is_valid(
+        object(),
+        shear_live=False,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+    assert _chord_evidence_is_valid(
+        object(),
+        shear_live=False,
+        torsion_live=False,
+        torsion_subdivided=True,
+    )
+
+    shear_only = {
+        "chord_candidates": [
+            _chord_candidate(
+                "shear_axis",
+                "x",
+                True,
+                gets_shift=True,
+                torsion_live=False,
+            )
+        ]
+    }
+    assert _chord_evidence_is_valid(
+        shear_only,
+        shear_live=True,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+    alternate_shear_only = {
+        "chord_candidates": [
+            _chord_candidate(
+                "shear_axis",
+                "y",
+                False,
+                gets_shift=True,
+                torsion_live=False,
+            )
+        ]
+    }
+    assert _chord_evidence_is_valid(
+        alternate_shear_only,
+        shear_axis="y",
+        shear_tension_low=False,
+        shear_live=True,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+
+    torsion = _complete_torsion_chord_links()
+    before = copy.deepcopy(torsion)
+    for shear_live in (False, True):
+        assert _chord_evidence_is_valid(
+            torsion,
+            shear_live=shear_live,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+    assert torsion == before
+    alternate_torsion = _complete_torsion_chord_links(
+        shear_axis="y",
+        shear_tension_low=False,
+    )
+    assert _chord_evidence_is_valid(
+        alternate_torsion,
+        shear_axis="y",
+        shear_tension_low=False,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+
+    tuple_candidates = {
+        "chord_candidates": tuple(copy.deepcopy(torsion["chord_candidates"]))
+    }
+    assert _chord_evidence_is_valid(
+        tuple_candidates,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+
+    infinite_failure = copy.deepcopy(torsion)
+    infinite_failure["chord_candidates"][0]["util"] = math.inf
+    assert _chord_evidence_is_valid(
+        infinite_failure,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+    zero_utilisation = copy.deepcopy(torsion)
+    zero_utilisation["chord_candidates"][0]["util"] = 0.0
+    assert _chord_evidence_is_valid(
+        zero_utilisation,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+
+
+def test_combined_longitudinal_chord_evidence_rejects_incomplete_coverage():
+    control = _complete_torsion_chord_links()
+    for index in range(4):
+        missing = copy.deepcopy(control)
+        del missing["chord_candidates"][index]
+        assert not _chord_evidence_is_valid(
+            missing,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+
+    malformed_sets = []
+    duplicate = copy.deepcopy(control)
+    duplicate["chord_candidates"][-1] = copy.deepcopy(
+        duplicate["chord_candidates"][-2]
+    )
+    malformed_sets.append(duplicate)
+    extra = copy.deepcopy(control)
+    extra["chord_candidates"].append(
+        _chord_candidate("shear_axis", "y", True)
+    )
+    malformed_sets.append(extra)
+    same_axis = copy.deepcopy(control)
+    same_axis["chord_candidates"][2]["axis"] = "x"
+    same_axis["chord_candidates"][3]["axis"] = "x"
+    malformed_sets.append(same_axis)
+    split_shear_axis = copy.deepcopy(control)
+    split_shear_axis["chord_candidates"][1]["axis"] = "y"
+    malformed_sets.append(split_shear_axis)
+    split_off_axis = copy.deepcopy(control)
+    split_off_axis["chord_candidates"][2]["axis"] = "x"
+    malformed_sets.append(split_off_axis)
+    no_shift = copy.deepcopy(control)
+    no_shift["chord_candidates"][0]["gets_shift"] = False
+    malformed_sets.append(no_shift)
+    two_shifts = copy.deepcopy(control)
+    two_shifts["chord_candidates"][1]["gets_shift"] = True
+    malformed_sets.append(two_shifts)
+    swapped_shift = copy.deepcopy(control)
+    swapped_shift["chord_candidates"][0]["gets_shift"] = False
+    swapped_shift["chord_candidates"][1]["gets_shift"] = True
+    malformed_sets.append(swapped_shift)
+    shear_only_extra = {
+        "chord_candidates": [
+            _chord_candidate(
+                "shear_axis",
+                "x",
+                True,
+                gets_shift=True,
+                torsion_live=False,
+            ),
+            _chord_candidate(
+                "off_axis",
+                "y",
+                True,
+                torsion_live=False,
+            ),
+        ]
+    }
+    assert not _chord_evidence_is_valid(
+        shear_only_extra,
+        shear_live=True,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+    for shear_only_candidate in (
+        _chord_candidate(
+            "shear_axis",
+            "x",
+            True,
+            gets_shift=False,
+            torsion_live=False,
+        ),
+        _chord_candidate(
+            "shear_axis",
+            "x",
+            True,
+            gets_shift=True,
+            torsion_live=True,
+        ),
+        _chord_candidate(
+            "off_axis",
+            "y",
+            True,
+            torsion_live=False,
+        ),
+    ):
+        assert not _chord_evidence_is_valid(
+            {"chord_candidates": [shear_only_candidate]},
+            shear_live=True,
+            torsion_live=False,
+            torsion_subdivided=False,
+        )
+    for malformed in malformed_sets:
+        before = copy.deepcopy(malformed)
+        assert not _chord_evidence_is_valid(
+            malformed,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+        assert malformed == before
+
+    thread_repro = {
+        "chord": _chord_candidate("shear_axis", "x", True, gets_shift=True)
+    }
+    assert not _chord_evidence_is_valid(
+        thread_repro,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+    for legacy_key in (
+        "chord",
+        "chord_off",
+        "governing_longitudinal",
+        "longitudinal_fallback",
+    ):
+        assert not _chord_evidence_is_valid(
+            {
+                legacy_key: _chord_candidate(
+                    "shear_axis",
+                    "x",
+                    True,
+                    gets_shift=True,
+                    torsion_live=False,
+                )
+            },
+            shear_live=True,
+            torsion_live=False,
+            torsion_subdivided=False,
+        )
+
+    assert not _chord_evidence_is_valid(
+        {
+            "chord_candidates": [
+                _chord_candidate(
+                    "shear_axis",
+                    "x",
+                    True,
+                    gets_shift=True,
+                    torsion_live=False,
+                )
+            ]
+        },
+        shear_axis="y",
+        shear_live=True,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+    assert not _chord_evidence_is_valid(
+        {
+            "chord_candidates": [
+                _chord_candidate(
+                    "shear_axis",
+                    "x",
+                    True,
+                    gets_shift=True,
+                    torsion_live=False,
+                )
+            ]
+        },
+        shear_tension_low=False,
+        shear_live=True,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+    assert not _chord_evidence_is_valid(
+        control,
+        shear_axis="y",
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+    assert not _chord_evidence_is_valid(
+        control,
+        shear_tension_low=False,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+
+
+def test_combined_longitudinal_chord_evidence_rejects_bad_candidate_claims():
+    mutations = [
+        ("valid", None),
+        ("valid", False),
+        ("valid", 1),
+        ("conditional", None),
+        ("conditional", False),
+        ("conditional", 1),
+        ("role", None),
+        ("role", "other"),
+        ("axis", None),
+        ("axis", "z"),
+        ("tension_low", None),
+        ("tension_low", 1),
+        ("util", None),
+        ("util", True),
+        ("util", "0.5"),
+        ("util", math.nan),
+        ("util", -math.inf),
+        ("util", -0.1),
+        ("off_not_evaluated", "not_solved"),
+        ("off_not_evaluated", "subdivided"),
+        ("off_not_evaluated", "unknown"),
+        ("has_torsion", False),
+        ("has_torsion", 1),
+        ("gets_shift", None),
+        ("gets_shift", 1),
+    ]
+    for field, value in mutations:
+        links = _complete_torsion_chord_links()
+        links["chord_candidates"][0][field] = value
+        assert not _chord_evidence_is_valid(
+            links,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+
+    for field in (
+        "valid",
+        "conditional",
+        "role",
+        "axis",
+        "tension_low",
+        "util",
+        "off_not_evaluated",
+        "has_torsion",
+        "gets_shift",
+    ):
+        links = _complete_torsion_chord_links()
+        del links["chord_candidates"][0][field]
+        assert not _chord_evidence_is_valid(
+            links,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+
+    off_axis_mutations = [
+        ("valid", False),
+        ("conditional", False),
+        ("role", "other"),
+        ("axis", "z"),
+        ("tension_low", 1),
+        ("util", math.nan),
+        ("off_not_evaluated", "not_solved"),
+        ("off_not_evaluated", "subdivided"),
+        ("off_not_evaluated", "unknown"),
+    ]
+    for field, value in off_axis_mutations:
+        links = _complete_torsion_chord_links()
+        links["chord_candidates"][2][field] = value
+        assert not _chord_evidence_is_valid(
+            links,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+    for field in ("valid", "conditional", "role", "axis", "tension_low", "util"):
+        links = _complete_torsion_chord_links()
+        del links["chord_candidates"][2][field]
+        assert not _chord_evidence_is_valid(
+            links,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+
+
+def test_combined_longitudinal_chord_evidence_rejects_unsupported_shapes():
+    control = _complete_torsion_chord_links()
+    for malformed in (None, object(), {}, {"chord_candidates": {}}, {"chord_candidates": []}):
+        assert not _chord_evidence_is_valid(
+            malformed,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+
+    non_mapping = copy.deepcopy(control)
+    non_mapping["chord_candidates"][0] = None
+    assert not _chord_evidence_is_valid(
+        non_mapping,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+
+    not_solved = copy.deepcopy(control)
+    for candidate in not_solved["chord_candidates"][:2]:
+        candidate["off_not_evaluated"] = "not_solved"
+    assert not _chord_evidence_is_valid(
+        not_solved,
+        shear_live=True,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+
+    for links in (control, not_solved):
+        assert not _chord_evidence_is_valid(
+            links,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=True,
+        )
+        assert not _chord_evidence_is_valid(
+            links,
+            shear_live=False,
+            torsion_live=True,
+            torsion_subdivided=True,
+        )
+
+    for mode_name in ("shear_live", "torsion_live", "torsion_subdivided"):
+        for bad_mode in (None, 0, 1, "false", []):
+            modes = {
+                "shear_live": True,
+                "torsion_live": True,
+                "torsion_subdivided": False,
+            }
+            modes[mode_name] = bad_mode
+            assert not _chord_evidence_is_valid(
+                control,
+                **modes,
+            )
+
+    for bad_axis in (None, 0, 1, "", "z", []):
+        assert not _chord_evidence_is_valid(
+            control,
+            shear_axis=bad_axis,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
+    for bad_face in (None, 0, 1, "true", []):
+        assert not _chord_evidence_is_valid(
+            control,
+            shear_tension_low=bad_face,
+            shear_live=True,
+            torsion_live=True,
+            torsion_subdivided=False,
+        )
 
 
 def _prestress_law(*, modulus_mpa=200_000.0, initial_strain=0.005):
