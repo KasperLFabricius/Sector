@@ -79,6 +79,28 @@ class LockedInPrestressResult:
         return self.total_n_kn, self.total_mx_knm, self.total_my_knm
 
 
+@dataclass(frozen=True, slots=True)
+class CombinedPrerequisiteAssessment:
+    """Normalized evidence required before a combined M-V-T assessment."""
+
+    method: str
+    m_v_independent: bool
+    valid: bool
+    r_m: float | None
+    r_v: float | None
+    r_t: float | None
+    have_m: bool
+    have_v: bool
+    have_t: bool
+    plastic_valid: bool
+    shear_valid: bool
+    links_required: bool
+    links_valid: bool
+    torsion_valid: bool
+    reasons: tuple[str, ...]
+
+
+
 def plastic_capacity_at_angle(*args, **kwargs):
     """Resolve the plastic point solver only when a capacity check needs it.
 
@@ -185,6 +207,810 @@ def _finite_solver_result(value: Any, label: str) -> float:
     if not math.isfinite(number):
         raise CapacityResultError(f"{label} must be a finite real result")
     return number
+
+
+def _optional_finite_result(value: Any) -> float | None:
+    """Normalize non-negative finite utilisation without accepting Booleans."""
+
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number >= 0.0 else None
+
+
+def _optional_positive_finite_result(value: Any) -> float | None:
+    number = _optional_finite_result(value)
+    return number if number is not None and number > 0.0 else None
+
+
+def _combined_member_angle_selection_cot(value: object) -> float | None:
+    """Return the cotangent from one minimally complete retained angle scan."""
+
+    if not isinstance(value, Mapping):
+        return None
+    cot = _optional_positive_finite_result(value.get("cot"))
+    theta_deg = _optional_finite_result(value.get("theta_deg"))
+    utilisation = _optional_finite_result(value.get("utilisation"))
+    cot_min = _optional_positive_finite_result(value.get("cot_min"))
+    cot_max = _optional_positive_finite_result(value.get("cot_max"))
+    step = _optional_finite_result(value.get("step"))
+    samples = value.get("samples")
+    selected_index = value.get("selected_index")
+    objective_count = value.get("objective_count")
+    labels = value.get("objective_labels")
+    governing_indices = value.get("governing_component_indices")
+    governing_labels = value.get("governing_objectives")
+    runner_up = value.get("runner_up_utilisation")
+    runner_up_value = (
+        _optional_finite_result(runner_up)
+        if runner_up is not None
+        else None
+    )
+    if (
+        cot is None
+        or theta_deg is None
+        or utilisation is None
+        or cot_min is None
+        or cot_max is None
+        or step is None
+        or type(samples) is not int
+        or samples < 2
+        or type(selected_index) is not int
+        or not 0 <= selected_index < samples
+        or type(objective_count) is not int
+        or objective_count <= 0
+        or not isinstance(labels, (list, tuple))
+        or len(labels) != objective_count
+        or any(type(label) is not str or not label for label in labels)
+        or not isinstance(governing_indices, (list, tuple))
+        or not governing_indices
+        or any(
+            type(index) is not int or not 0 <= index < objective_count
+            for index in governing_indices
+        )
+        or len(set(governing_indices)) != len(governing_indices)
+        or tuple(governing_indices) != tuple(sorted(governing_indices))
+        or not isinstance(governing_labels, (list, tuple))
+        or any(
+            type(label) is not str or not label for label in governing_labels
+        )
+        or tuple(governing_labels)
+        != tuple(labels[index] for index in governing_indices)
+        or cot_max < cot_min
+        or not math.isclose(
+            step,
+            (cot_max - cot_min) / (samples - 1),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        )
+        or not math.isclose(
+            cot,
+            cot_min + step * selected_index,
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        )
+        or (
+            len(governing_indices) == objective_count
+            and runner_up is not None
+        )
+        or (
+            len(governing_indices) < objective_count
+            and (
+                runner_up_value is None
+                or runner_up_value >= utilisation
+            )
+        )
+        or not math.isclose(
+            theta_deg,
+            math.degrees(math.atan2(1.0, cot)),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        )
+    ):
+        return None
+    return cot
+
+
+def _combined_plastic_prerequisite(
+    plastic: object,
+) -> tuple[bool, float | None, tuple[str, ...]]:
+    reasons: list[str] = []
+    r_m = _optional_finite_result(
+        plastic.get("util") if isinstance(plastic, Mapping) else None
+    )
+    valid = isinstance(plastic, Mapping)
+    if not valid:
+        reasons.append("plastic result is missing or malformed")
+    else:
+        for key, reason in (
+            ("converged", "plastic result is not converged"),
+            ("closed", "plastic envelope is not closed"),
+            ("check_util", "plastic utilisation was not checked"),
+            ("util_valid", "plastic utilisation is not valid"),
+        ):
+            if plastic.get(key) is not True:
+                valid = False
+                reasons.append(reason)
+        if r_m is None:
+            valid = False
+            reasons.append("plastic utilisation is not finite")
+    return valid, r_m, tuple(reasons)
+
+
+def combined_plastic_prerequisite_is_valid(plastic: object) -> bool:
+    """Return whether bending evidence may influence a combined M-V-T check."""
+
+    valid, _utilisation, _reasons = _combined_plastic_prerequisite(plastic)
+    return valid
+
+
+def _evaluate_combined_prerequisites(
+    inp: Mapping[str, Any],
+    out: Mapping[str, Any],
+    *,
+    require_final_evidence: bool,
+) -> CombinedPrerequisiteAssessment:
+    """Evaluate component evidence, optionally including post-scan evidence.
+
+    Link authority comes only from ``inp['shear_links']``.  A retained links
+    payload is therefore ignored when links are inactive, while an active links
+    check must own its own valid result and finite utilisation.
+    """
+
+    method = selected_combined_code(inp.get("combined_method")).label
+    for key, family in (
+        ("shear_method", "shear"),
+        ("torsion_method", "torsion"),
+    ):
+        component_method = inp.get(key)
+        if type(component_method) is not str or component_method != method:
+            raise CapacityInputError(
+                f"combined {family} method must equal the combined method"
+            )
+    m_v_independent = inp.get("combined_mv_independent")
+    if type(m_v_independent) is not bool:
+        raise CapacityInputError(
+            "combined M-V independence must be a concrete Boolean"
+        )
+    links_required = inp.get("shear_links")
+    if type(links_required) is not bool:
+        raise CapacityInputError(
+            "combined shear-links authority must be a concrete Boolean"
+        )
+
+    reasons: list[str] = []
+
+    plastic_valid, r_m, plastic_reasons = _combined_plastic_prerequisite(
+        out.get("plastic")
+    )
+    reasons.extend(plastic_reasons)
+
+    shear_out = out.get("shear")
+    shear_valid = (
+        isinstance(shear_out, Mapping)
+        and isinstance(shear_out.get("res"), Mapping)
+        and shear_out["res"].get("valid") is True
+    )
+    if not isinstance(shear_out, Mapping):
+        reasons.append("shear result is missing or malformed")
+    else:
+        if not shear_valid:
+            reasons.append("shear resistance result is not valid")
+        if type(shear_out.get("method")) is not str or shear_out.get(
+            "method"
+        ) != method:
+            shear_valid = False
+            reasons.append("shear method is missing or inconsistent")
+
+    links_valid = not links_required
+    r_v: float | None = None
+    if links_required:
+        links = shear_out.get("links") if isinstance(shear_out, Mapping) else None
+        links_valid = (
+            isinstance(links, Mapping)
+            and isinstance(links.get("res"), Mapping)
+            and links["res"].get("valid") is True
+        )
+        if not isinstance(links, Mapping):
+            reasons.append("active shear-links result is missing or malformed")
+        elif not links_valid:
+            reasons.append("active shear-links resistance result is not valid")
+        r_v = _optional_finite_result(
+            links.get("util") if isinstance(links, Mapping) else None
+        )
+        if r_v is None:
+            links_valid = False
+            reasons.append("active shear-links utilisation is not finite")
+        if isinstance(links, Mapping):
+            link_res = links.get("res")
+            delta_ftd = _optional_finite_result(links.get("delta_ftd", _MISSING))
+            v_ed = _optional_finite_result(
+                shear_out.get("v_ed") if isinstance(shear_out, Mapping) else None
+            )
+            cot = _optional_positive_finite_result(
+                link_res.get("cot") if isinstance(link_res, Mapping) else None
+            )
+            if (
+                delta_ftd is None
+                or v_ed is None
+                or cot is None
+                or not math.isclose(
+                    delta_ftd,
+                    0.5 * v_ed * cot,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
+            ):
+                links_valid = False
+                reasons.append(
+                    "active shear-links force increment is malformed or inconsistent"
+                )
+    else:
+        r_v = _optional_finite_result(
+            shear_out.get("util") if isinstance(shear_out, Mapping) else None
+        )
+        if r_v is None:
+            shear_valid = False
+            reasons.append("shear utilisation is not finite")
+
+    torsion_out = out.get("torsion")
+    r_t = _optional_finite_result(
+        torsion_out.get("util") if isinstance(torsion_out, Mapping) else None
+    )
+    torsion_valid = (
+        isinstance(torsion_out, Mapping)
+        and torsion_out.get("valid") is True
+        and r_t is not None
+    )
+    torsion_asl = None
+    torsion_asw_over_s = None
+    torsion_t_ed = None
+    torsion_subdivided = None
+    if not isinstance(torsion_out, Mapping):
+        reasons.append("torsion result is missing or malformed")
+    else:
+        if torsion_out.get("valid") is not True:
+            reasons.append("torsion result is not valid")
+        if r_t is None:
+            reasons.append("torsion utilisation is not finite")
+        torsion_asl = _optional_finite_result(torsion_out.get("asl_req"))
+        torsion_asw_over_s = _optional_finite_result(
+            torsion_out.get("asw_over_s")
+        )
+        torsion_t_ed = _optional_finite_result(torsion_out.get("t_ed"))
+        torsion_subdivided = torsion_out.get("subdivided")
+        if torsion_asl is None:
+            torsion_valid = False
+            reasons.append("torsion longitudinal reinforcement result is malformed")
+        if torsion_asw_over_s is None:
+            torsion_valid = False
+            reasons.append("torsion stirrup result is malformed")
+        if torsion_t_ed is None:
+            torsion_valid = False
+            reasons.append("torsion design action is missing or malformed")
+        if type(torsion_subdivided) is not bool:
+            torsion_valid = False
+            reasons.append("torsion subdivision state is missing or malformed")
+        if type(torsion_out.get("method")) is not str or torsion_out.get(
+            "method"
+        ) != method:
+            torsion_valid = False
+            reasons.append("torsion method is missing or inconsistent")
+
+    if require_final_evidence:
+        links = shear_out.get("links") if isinstance(shear_out, Mapping) else None
+        primary = (
+            torsion_out.get("primary")
+            if isinstance(torsion_out, Mapping)
+            else None
+        )
+        primary_t_ed = _optional_finite_result(
+            primary.get("t_ed") if isinstance(primary, Mapping) else None
+        )
+        v_ed = _optional_finite_result(
+            shear_out.get("v_ed") if isinstance(shear_out, Mapping) else None
+        )
+        shear_live = links_required and v_ed is not None and v_ed > 0.0
+        top_level_torsion_live = (
+            torsion_t_ed is not None and torsion_t_ed > 0.0
+        )
+        primary_torsion_live = primary_t_ed is not None and primary_t_ed > 0.0
+        torsion_live = top_level_torsion_live or primary_torsion_live
+
+        chord_candidates = (
+            links.get("chord_candidates")
+            if isinstance(links, Mapping)
+            else None
+        )
+        chord_evidence = links_required and isinstance(links, Mapping) and (
+            any(
+                isinstance(links.get(key), Mapping)
+                for key in (
+                    "chord",
+                    "chord_off",
+                    "governing_longitudinal",
+                    "longitudinal_fallback",
+                )
+            )
+            or (
+                isinstance(chord_candidates, (list, tuple))
+                and bool(chord_candidates)
+            )
+        )
+
+        if torsion_subdivided is False and isinstance(primary, Mapping):
+            if (
+                torsion_t_ed is None
+                or primary_t_ed is None
+                or not math.isclose(
+                    torsion_t_ed,
+                    primary_t_ed,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
+            ):
+                torsion_valid = False
+                reasons.append(
+                    "non-subdivided torsion primary action is inconsistent"
+                )
+        if primary_torsion_live and not top_level_torsion_live:
+            torsion_valid = False
+            reasons.append("torsion primary action exceeds the retained total")
+        if (
+            torsion_subdivided is True
+            and primary_t_ed is not None
+            and torsion_t_ed is not None
+            and primary_t_ed > torsion_t_ed + 1.0e-12
+        ):
+            torsion_valid = False
+            reasons.append("torsion primary action exceeds the retained total")
+
+        if torsion_subdivided is False and (torsion_live or chord_evidence):
+            primary_asl = _optional_finite_result(
+                primary.get("asl_req")
+                if isinstance(primary, Mapping)
+                else None
+            )
+            if (
+                torsion_asl is None
+                or primary_asl is None
+                or not math.isclose(
+                    torsion_asl,
+                    primary_asl,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
+            ):
+                torsion_valid = False
+                reasons.append(
+                    "non-subdivided torsion longitudinal force is inconsistent"
+                )
+        if shear_live or torsion_live:
+            torsion_selection = (
+                torsion_out.get("member_angle_selection")
+                if isinstance(torsion_out, Mapping)
+                else None
+            )
+            torsion_selection_cot = _combined_member_angle_selection_cot(
+                torsion_selection
+            )
+            input_cot_a = _optional_positive_finite_result(
+                inp.get("strut_cot_min")
+            )
+            input_cot_b = _optional_positive_finite_result(
+                inp.get("strut_cot_max")
+            )
+            selection_cot_min = _optional_positive_finite_result(
+                torsion_selection.get("cot_min")
+                if isinstance(torsion_selection, Mapping)
+                else None
+            )
+            selection_cot_max = _optional_positive_finite_result(
+                torsion_selection.get("cot_max")
+                if isinstance(torsion_selection, Mapping)
+                else None
+            )
+            link_res = links.get("res") if isinstance(links, Mapping) else None
+            link_cot = _optional_positive_finite_result(
+                link_res.get("cot") if isinstance(link_res, Mapping) else None
+            )
+            primary_cot = _optional_positive_finite_result(
+                primary.get("cot") if isinstance(primary, Mapping) else None
+            )
+            selections_match = bool(
+                torsion_selection_cot is not None
+                and input_cot_a is not None
+                and input_cot_b is not None
+                and selection_cot_min is not None
+                and selection_cot_max is not None
+                and math.isclose(
+                    selection_cot_min,
+                    min(input_cot_a, input_cot_b),
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
+                and math.isclose(
+                    selection_cot_max,
+                    max(input_cot_a, input_cot_b),
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
+            )
+            if links_required:
+                link_selection = (
+                    links.get("member_angle_selection")
+                    if isinstance(links, Mapping)
+                    else None
+                )
+                link_selection_cot = _combined_member_angle_selection_cot(
+                    link_selection
+                )
+                selections_match = bool(
+                    selections_match
+                    and link_selection_cot is not None
+                    and isinstance(link_selection, Mapping)
+                    and isinstance(torsion_selection, Mapping)
+                    and dict(link_selection) == dict(torsion_selection)
+                    and "DK NA governing interaction"
+                    in tuple(torsion_selection.get("objective_labels", ()))
+                )
+            if shear_live:
+                selections_match = bool(
+                    selections_match
+                    and link_cot is not None
+                    and math.isclose(
+                        torsion_selection_cot,
+                        link_cot,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                )
+            if torsion_live:
+                selections_match = bool(
+                    selections_match
+                    and primary_t_ed is not None
+                    and primary_t_ed > 0.0
+                    and primary_cot is not None
+                    and (
+                        torsion_subdivided is True
+                        or (
+                            torsion_t_ed is not None
+                            and math.isclose(
+                                primary_t_ed,
+                                torsion_t_ed,
+                                rel_tol=1.0e-12,
+                                abs_tol=1.0e-12,
+                            )
+                        )
+                    )
+                    and math.isclose(
+                        torsion_selection_cot,
+                        primary_cot,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                )
+            selection_utilisation = _optional_finite_result(
+                torsion_selection.get("utilisation")
+                if isinstance(torsion_selection, Mapping)
+                else None
+            )
+            if not selections_match or selection_utilisation is None:
+                selections_match = False
+            elif links_required:
+                if r_m is None or r_v is None or r_t is None:
+                    selections_match = False
+                else:
+                    dkna_utilisation = _module("combined").dkna_sum(
+                        r_m,
+                        r_v,
+                        r_t,
+                        m_v_independent=m_v_independent,
+                    )
+                    governing_labels = (
+                        tuple(torsion_selection.get("governing_objectives", ()))
+                        if isinstance(torsion_selection, Mapping)
+                        else ()
+                    )
+                    runner_up_utilisation = _optional_finite_result(
+                        torsion_selection.get("runner_up_utilisation")
+                        if isinstance(torsion_selection, Mapping)
+                        else None
+                    )
+                    dkna_governs = (
+                        "DK NA governing interaction" in governing_labels
+                    )
+                    dkna_matches = math.isclose(
+                        selection_utilisation,
+                        dkna_utilisation,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                    if (
+                        selection_utilisation + 1.0e-12 < dkna_utilisation
+                        or (dkna_governs and not dkna_matches)
+                        or (
+                            not dkna_governs
+                            and selection_utilisation == dkna_utilisation
+                        )
+                        or (
+                            not dkna_governs
+                            and (
+                                runner_up_utilisation is None
+                                or runner_up_utilisation < dkna_utilisation
+                            )
+                        )
+                    ):
+                        selections_match = False
+            elif (
+                r_t is None
+                or not math.isclose(
+                    selection_utilisation,
+                    r_t,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
+            ):
+                selections_match = False
+            if not selections_match:
+                if links_required:
+                    links_valid = False
+                torsion_valid = False
+                reasons.append(
+                    "live common member-angle selection is missing or inconsistent"
+                )
+
+    if links_required and torsion_asw_over_s is not None and torsion_asw_over_s > 0.0:
+        links = shear_out.get("links") if isinstance(shear_out, Mapping) else None
+        link_res = links.get("res") if isinstance(links, Mapping) else None
+        shear_res = shear_out.get("res") if isinstance(shear_out, Mapping) else None
+        if (
+            _optional_finite_result(
+                shear_out.get("v_ed") if isinstance(shear_out, Mapping) else None
+            )
+            is None
+            or _optional_finite_result(
+                shear_res.get("vrd_c") if isinstance(shear_res, Mapping) else None
+            )
+            is None
+        ):
+            shear_valid = False
+            reasons.append("shear transverse-interaction evidence is malformed")
+        if (
+            not isinstance(link_res, Mapping)
+            or _optional_positive_finite_result(link_res.get("cot")) is None
+            or any(
+                _optional_finite_result(link_res.get(key)) is None
+                for key in ("vrd_s", "vrd_max")
+            )
+        ):
+            links_valid = False
+            reasons.append("shear-links transverse-interaction evidence is malformed")
+        primary = torsion_out.get("primary") if isinstance(torsion_out, Mapping) else None
+        if not isinstance(primary, Mapping) or any(
+            _optional_finite_result(primary.get(key)) is None
+            for key in ("t_ed", "trd_s")
+        ):
+            torsion_valid = False
+            reasons.append("torsion transverse-interaction evidence is malformed")
+
+    if links_required and isinstance(torsion_out, Mapping):
+        interaction = torsion_out.get("interaction", _MISSING)
+        interaction_required = (
+            torsion_asw_over_s is not None and torsion_asw_over_s > 0.0
+        )
+        if interaction is _MISSING or interaction is None:
+            interaction_malformed = interaction_required
+        else:
+            links = shear_out.get("links") if isinstance(shear_out, Mapping) else None
+            link_res = links.get("res") if isinstance(links, Mapping) else None
+            primary = torsion_out.get("primary")
+            interaction_values = {
+                key: _optional_finite_result(interaction.get(key))
+                if isinstance(interaction, Mapping)
+                else None
+                for key in ("theta_deg", "t_ed", "v_ed", "value")
+            }
+            interaction_cot = _optional_positive_finite_result(
+                interaction.get("cot") if isinstance(interaction, Mapping) else None
+            )
+            interaction_trd_max = _optional_positive_finite_result(
+                interaction.get("trd_max")
+                if isinstance(interaction, Mapping)
+                else None
+            )
+            interaction_vrd_max = _optional_positive_finite_result(
+                interaction.get("vrd_max")
+                if isinstance(interaction, Mapping)
+                else None
+            )
+            source_values = {
+                "v_ed": _optional_finite_result(
+                    shear_out.get("v_ed")
+                    if isinstance(shear_out, Mapping)
+                    else None
+                ),
+                "cot": _optional_positive_finite_result(
+                    link_res.get("cot") if isinstance(link_res, Mapping) else None
+                ),
+                "vrd_max": _optional_positive_finite_result(
+                    link_res.get("vrd_max")
+                    if isinstance(link_res, Mapping)
+                    else None
+                ),
+                "t_ed": _optional_finite_result(
+                    primary.get("t_ed") if isinstance(primary, Mapping) else None
+                ),
+                "primary_trd_max": _optional_positive_finite_result(
+                    primary.get("trd_max") if isinstance(primary, Mapping) else None
+                ),
+                "primary_cot": _optional_positive_finite_result(
+                    primary.get("cot") if isinstance(primary, Mapping) else None
+                ),
+            }
+            operands_complete = (
+                interaction_cot is not None
+                and interaction_trd_max is not None
+                and interaction_vrd_max is not None
+                and all(value is not None for value in interaction_values.values())
+                and all(
+                    source_values[key] is not None
+                    for key in ("v_ed", "cot", "vrd_max", "t_ed")
+                )
+            )
+            operands_coherent = False
+            if operands_complete:
+                source_t_ed = source_values["t_ed"]
+                source_v_ed = source_values["v_ed"]
+                source_cot = source_values["cot"]
+                source_vrd_max = source_values["vrd_max"]
+                interaction_theta = interaction_values["theta_deg"]
+                interaction_t_ed = interaction_values["t_ed"]
+                interaction_v_ed = interaction_values["v_ed"]
+                interaction_value = interaction_values["value"]
+                assert (
+                    source_t_ed is not None
+                    and source_v_ed is not None
+                    and source_cot is not None
+                    and source_vrd_max is not None
+                    and interaction_theta is not None
+                    and interaction_t_ed is not None
+                    and interaction_v_ed is not None
+                    and interaction_value is not None
+                    and interaction_cot is not None
+                    and interaction_trd_max is not None
+                    and interaction_vrd_max is not None
+                )
+                expected_value = (
+                    source_t_ed / interaction_trd_max
+                    + source_v_ed / interaction_vrd_max
+                )
+                torsion_live = source_t_ed > 0.0
+                shear_live = source_v_ed > 0.0
+                primary_angle_matches = not torsion_live or (
+                    source_values["primary_trd_max"] is not None
+                    and source_values["primary_cot"] is not None
+                    and math.isclose(
+                        interaction_trd_max,
+                        source_values["primary_trd_max"],
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                    and math.isclose(
+                        interaction_cot,
+                        source_values["primary_cot"],
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                )
+                shear_angle_matches = not shear_live or (
+                    math.isclose(
+                        interaction_cot,
+                        source_cot,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                    and math.isclose(
+                        interaction_vrd_max,
+                        source_vrd_max,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                )
+                operands_coherent = (
+                    primary_angle_matches
+                    and shear_angle_matches
+                    and math.isclose(
+                        interaction_t_ed,
+                        source_t_ed,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                    and math.isclose(
+                        interaction_v_ed,
+                        source_v_ed,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                    and math.isclose(
+                        interaction_theta,
+                        math.degrees(math.atan2(1.0, interaction_cot)),
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                    and math.isclose(
+                        interaction_value,
+                        expected_value,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                )
+            interaction_malformed = (
+                not isinstance(interaction, Mapping)
+                or interaction.get("valid") is not True
+                or not operands_coherent
+            )
+        if interaction_malformed:
+            torsion_valid = False
+            reasons.append("shared strut-interaction evidence is malformed")
+
+    have_m = plastic_valid
+    have_v = shear_valid and links_valid and r_v is not None
+    have_t = torsion_valid
+    valid = have_m and have_v and have_t
+    return CombinedPrerequisiteAssessment(
+        method=method,
+        m_v_independent=m_v_independent,
+        valid=valid,
+        r_m=r_m,
+        r_v=r_v,
+        r_t=r_t,
+        have_m=have_m,
+        have_v=have_v,
+        have_t=have_t,
+        plastic_valid=plastic_valid,
+        shear_valid=shear_valid,
+        links_required=links_required,
+        links_valid=links_valid,
+        torsion_valid=torsion_valid,
+        reasons=tuple(reasons),
+    )
+
+
+def evaluate_combined_prerequisites(
+    inp: Mapping[str, Any],
+    out: Mapping[str, Any],
+) -> CombinedPrerequisiteAssessment:
+    """Evaluate the fail-closed final prerequisite contract for combined M-V-T."""
+
+    return _evaluate_combined_prerequisites(
+        inp,
+        out,
+        require_final_evidence=True,
+    )
+
+
+def combined_angle_objective_r_m(
+    inp: Mapping[str, Any],
+    out: Mapping[str, Any],
+) -> float | None:
+    """Return validated bending utilisation for the pre-selection angle scan.
+
+    The scan necessarily precedes retained member-angle evidence.  This narrow
+    helper therefore exposes only a scalar and cannot issue a final certificate.
+    """
+
+    assessment = _evaluate_combined_prerequisites(
+        inp,
+        out,
+        require_final_evidence=False,
+    )
+    return assessment.r_m if assessment.valid else None
+
+
 
 
 def _solver_flag(value: object, label: str) -> bool:
