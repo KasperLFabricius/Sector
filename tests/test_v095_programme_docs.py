@@ -19,6 +19,8 @@ BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
 AMENDMENT_BASE = "ed3a94098eed7e76521e5e9a3e27e86c66226f60"
 AMENDMENT_TREE = "790083ac2694bc2bfa7578dd8062a047be66c0b5"
+GRAPH_MERGE = "9282a7ff56512b123fbb53a55ebf32565c093fe5"
+GRAPH_TREE = "7e6980bb3d107f19336efbb0c2c4ef40f1b6cde1"
 HISTORICAL_DEVELOPMENT_PRS = [f"PR-{i:02d}" for i in range(1, 15)]
 OWNER_DEVELOPMENT_PRS = [
     "PR-A00a1",
@@ -77,9 +79,13 @@ def test_programme_freezes_exact_release_base_and_fifteen_slices() -> None:
 
     rows = re.findall(r"^\| (\d+) \| PR-(\d+) - ", text, flags=re.MULTILINE)
     assert rows == [(str(i), f"{i:02d}") for i in range(1, 16)]
-    assert "PR-01 through PR-14 retain product version 0.94" in text
-    assert "gate G1 is the sole complete pre-bump qualification" in text
-    assert "Only PR-15 may change\ngoverned version surfaces" in text
+    assert re.search(
+        r"PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10\s+"
+        r"retain product version 0\.94",
+        text,
+    )
+    assert "It is the sole complete pre-bump qualification" in text
+    assert "Only PR-15 may change governed version surfaces" in " ".join(text.split())
 
 
 def test_owner_sequence_graph_is_exact_resolvable_and_acyclic() -> None:
@@ -146,6 +152,55 @@ def test_owner_sequence_graph_freezes_cross_sequence_and_release_gates() -> None
     )
 
 
+def test_owner_sequence_narrative_and_lifecycle_match_reviewed_graph() -> None:
+    fixture = _fixture()
+    graph = fixture["owner_sequence_graph"]
+    dependencies = graph["dependencies"]
+    programme = _text(PROGRAMME)
+    compact_programme = " ".join(programme.split())
+
+    assert AMENDMENT_BASE in programme
+    assert AMENDMENT_TREE in programme
+    assert GRAPH_MERGE in programme
+    assert GRAPH_TREE in programme
+    assert graph["narrative_contract_owner"] == "PR-A00a2"
+    assert graph["scope_contract_owner"] == "PR-A00b"
+    assert graph["implementation_contracts_frozen_here"] is False
+
+    historical_rows = re.findall(
+        r"^\| (\d+) \| (PR-\d{2}) - [^|]+ \| ([^|]+) \|",
+        programme,
+        flags=re.MULTILINE,
+    )
+    historical = {pr: dependency.strip() for _, pr, dependency in historical_rows}
+    assert historical["PR-01"] == "released v0.94 baseline"
+    for pr in HISTORICAL_DEVELOPMENT_PRS[1:]:
+        assert historical[pr] == ", ".join(dependencies[pr])
+    assert historical["PR-15"] == "G1"
+
+    owner_rows = re.findall(
+        r"^\| (A(?:00a1|00a2|00b|\d{2})) \| "
+        r"(PR-A(?:00a1|00a2|00b|\d{2})) - [^|]+ \| ([^|]+) \| ([^|]+) \|$",
+        programme,
+        flags=re.MULTILINE,
+    )
+    assert [row[1] for row in owner_rows] == OWNER_DEVELOPMENT_PRS
+    assert owner_rows[0][2:] == ("exact amendment base", "Merged")
+    assert owner_rows[1][2:] == ("PR-A00a1", "In progress")
+    for _, pr, dependency, status in owner_rows[2:]:
+        assert dependency == ", ".join(dependencies[pr])
+        assert status == "Planned"
+
+    g1_prs = ", ".join(dependencies["G1"][:-1])
+    g1_prs = f"{g1_prs} and {dependencies['G1'][-1]}"
+    assert f"implicit or omitted prerequisite: {g1_prs}." in compact_programme
+    assert "PR-15 depends only on G1, and G2 depends only on PR-15" in compact_programme
+    assert fixture["lifecycle_policy"]["development_prs"] == graph["development_prs"]
+    assert "owner_authorized_scope" not in fixture
+    assert "deferred_acceptance_contracts" not in fixture
+    assert "does not freeze an implementation equation" in compact_programme
+
+
 def test_live_identity_remains_v094_and_schema_25_during_pr01() -> None:
     assert __version__ == "0.94"
     assert re.search(r"^VERSION\s*=\s*25$", _text(PROJECT_IO), re.MULTILINE)
@@ -162,8 +217,12 @@ def test_decision_register_has_unique_contiguous_owner_decisions() -> None:
     ids = re.findall(
         r"^\| (D095-\d{3}) \|", _text(DECISIONS), flags=re.MULTILINE
     )
-    assert ids == [f"D095-{i:03d}" for i in range(1, 23)]
+    assert ids == [f"D095-{i:03d}" for i in range(1, 24)]
     assert len(ids) == len(set(ids))
+    decisions = _text(DECISIONS)
+    assert "PR-A00a1 owns the complete machine-resolvable dependency graph" in decisions
+    assert "PR-A00a2 projects that unchanged graph" in decisions
+    assert "PR-A00b separately freezes owner outcomes" in decisions
 
 
 def test_lifecycle_policy_defers_full_ci_and_requires_both_reviews() -> None:
@@ -171,7 +230,7 @@ def test_lifecycle_policy_defers_full_ci_and_requires_both_reviews() -> None:
     assert policy == {
         "development_version": "0.94",
         "target_version": "0.95",
-        "development_prs": [f"PR-{i:02d}" for i in range(1, 15)],
+        "development_prs": _fixture()["owner_sequence_graph"]["development_prs"],
         "development_full_ci_allowed": False,
         "development_commit_subject_contains": "[skip ci]",
         "development_merge_subject_contains": "[skip ci]",
@@ -340,11 +399,12 @@ def test_upload_vectors_regenerate_with_the_documented_frozen_clock(
     assert project_io.parse_project(fixed.decode("utf-8")) is not None
 
 
-def test_programme_is_maintenance_only_and_preserves_non_findings() -> None:
+def test_programme_bounds_owner_sequence_and_preserves_non_findings() -> None:
     programme = _text(PROGRAMME)
     decisions = _text(DECISIONS)
-    assert "does not add a new design method" in programme
-    assert "no new product feature enters" in programme
+    assert "adds no selectable design basis" in programme
+    assert "no unapproved feature enters" in programme
+    assert "PR-A00a1 and PR-A00a2 freeze sequencing only" in decisions
     assert "global compliance" in decisions
     deferred = _fixture()["deferred_observations"]
     assert [row["topic"] for row in deferred] == [

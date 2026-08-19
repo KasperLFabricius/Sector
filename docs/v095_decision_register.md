@@ -9,7 +9,9 @@ maintenance programme.
 - Baseline tree: `f5e98754f0f970749919e354957bfa34dd4eb7fe`
 - Baseline product version: Sector 0.94
 - Baseline project schema: 25
-- Decision freeze date: 2026-08-14
+- Initial decision freeze date: 2026-08-14
+- Owner-sequence graph merge: 2026-08-19
+- Owner-sequence narrative integration: 2026-08-19
 - Target release: Sector 0.95
 - Detailed contract: [Sector v0.95 PR programme](v095_pr_programme.md)
 
@@ -23,7 +25,7 @@ verification, design judgement and acceptance of every result.
 |---|---|---|---|---|
 | D095-001 | Keep every development slice at product version 0.94. | Only PR-15 may change governed version surfaces after G1 passes. | Runtime, Windows, package, manual and source identity guards. | All; PR-15 closes |
 | D095-002 | Use focused change-family testing during development. | Full repository, publication and package gates are deferred to G1 and G2, not omitted. | Per-PR evidence and exact final full-gate receipts. | All; G1/G2 close |
-| D095-003 | Prevent accidental early full CI runs. | PR-01 through PR-14 and any G1 repair use `[skip ci]` in candidate and merge subjects. PR-15's candidate also uses `[skip ci]`; its complete reviewed squash-merge message contains no recognised CI-skip directive, so the exact main push triggers G2 once. | Exact commit messages and same-SHA Actions inventory. | PR-01 through PR-15 |
+| D095-003 | Prevent accidental early full CI runs. | PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b, PR-A01 through PR-A10 and any G1 repair use `[skip ci]` in candidate and merge subjects. PR-15's candidate also uses `[skip ci]`; its complete reviewed squash-merge message contains no recognised CI-skip directive, so the exact main push triggers G2 once. | Exact commit messages and same-SHA Actions inventory. | Every development PR; PR-15 closes |
 | D095-004 | Require two adversarial reviews on each exact final head. | A fresh independent reviewer and official GitHub Codex Review must both bind the same SHA; any push invalidates both. | SHA-bound receipts. | Every PR |
 | D095-005 | Merge only with zero unresolved review findings. | Correct and retrigger after findings; terminal GraphQL/thread-aware inspection must show unchanged head and zero unresolved threads. | Final PR state receipt. | Every PR |
 | D095-006 | Reslice instead of broadening. | One substantive correction class is allowed; repeated P1/P2 or a second change family closes or reslices the candidate. | Diff/range audit and review history. | Every PR |
@@ -41,8 +43,9 @@ verification, design judgement and acceptance of every result.
 | D095-018 | Make the manual PDF token guard mandatory. | The supported locked QA environment cannot silently skip the raw-dollar check because an undeclared parser is absent. | Locked-dependency and positive/negative artifact tests. | PR-13 |
 | D095-019 | Contain portable build subprocess and manifest failure. | Every phase has a deadline, owned process-tree cleanup and diagnostics; required metadata-copy failure is fatal; dependency ownership matches package imports. | Timeout, manifest, import and diagnostic tests. | PR-14 |
 | D095-020 | Defer unproven maintenance cleanup. | Cache, collapsed-work or dead-code changes require a separately approved bounded PR with static/dynamic proof and measurement; otherwise they remain unchanged. | Explicit exclusion or separate acceptance matrix. | Outside frozen sequence |
-| D095-021 | Add no feature or global compliance scope. | Sector 0.95 adds no design basis, design method, geometry or certification/approval claim; schema remains 25 unless a later explicit owner decision changes it. | Diff, status-vocabulary and schema guards. | All |
-| D095-022 | Qualify and publish in two phases. | G1 qualifies final 0.94 main, PR-15 performs one governed bump, G2 qualifies 0.95, then tag/main/release identity and exactly the qualified portable ZIP plus checksum are proven. | QA, package, tag, asset and digest receipts. | G1, PR-15, G2 |
+| D095-021 | Add no unapproved feature or global compliance scope. | Sector 0.95 adds no selectable design basis, geometry family, global verdict, certification claim or engineering-approval claim. PR-A00a1 and PR-A00a2 freeze sequencing only; PR-A00b owns the bounded addition outcomes and any schema decision before implementation. | Diff, status-vocabulary and schema guards. | All |
+| D095-022 | Qualify and publish in two phases. | G1 begins only after every development PR named in `owner_sequence_graph.dependencies.G1` has merged on 0.94 main. PR-15 then performs one governed bump, G2 qualifies 0.95, and tag/main/release identity plus exactly the qualified portable ZIP and checksum are proven. | QA, package, graph, tag, asset and digest receipts. | G1, PR-15, G2 |
+| D095-023 | Freeze owner-addition sequencing before scope or code. | PR-A00a1 owns the complete machine-resolvable dependency graph. PR-A00a2 projects that unchanged graph into the programme narrative and lifecycle policy. PR-A00b separately freezes owner outcomes and acceptance ownership; no PR-A01 through PR-A10 implementation starts first. | Exact amendment base, graph equality, narrative projection and complete G1 prerequisite guard. | PR-A00a1, PR-A00a2 |
 
 ## Excluded and corrected audit interpretations
 
@@ -54,10 +57,11 @@ D095-020 evidence.
 
 ## Standards boundary
 
-The supported standards and Danish National Annex routes remain those of
-Sector 0.94. This programme corrects software implementation contracts; it does
-not extend code coverage. Source applicability and engineering approval remain
-outside the product claim.
+The selectable standards and Danish National Annex routes remain those of
+Sector 0.94. The sequence graph and its narrative projection add no standard
+coverage; PR-A00b must explicitly bound any authorized outcome before its
+implementation slice starts. Source applicability and engineering approval
+remain outside the product claim.
 
 ## Change control
 
