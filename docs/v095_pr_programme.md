@@ -2,14 +2,21 @@
 
 ## 1. Programme outcome
 
-Sector 0.95 is a maintenance and engineering-correctness release. It closes
-the bounded numerical, fail-closed, persistence, publication-lifecycle,
-browser-safety and qualification weaknesses found by the adversarial review of
-Sector 0.94. It does not add a new design method, standard, geometry family or
-global compliance claim.
+Sector 0.95 is a maintenance, engineering-correctness and bounded-usability
+release. It closes the numerical, fail-closed, persistence,
+publication-lifecycle, browser-safety and qualification weaknesses found by
+the adversarial review of Sector 0.94, together with bounded additions that the
+owner has authorized for this release. It adds no selectable design basis,
+geometry family, global compliance claim, certification claim or engineering-
+approval claim.
 
-The immutable owner choices are recorded in the
-[v0.95 decision register](v095_decision_register.md). Each implementation slice
+The historical immutable owner choices are recorded in the
+[v0.95 decision register](v095_decision_register.md). The reviewed
+`owner_sequence_graph` in `tests/fixtures/v095_review_cases.json` is the
+machine-readable authority for PR identities and dependencies. PR-A00a2 makes
+that graph visible in this narrative and the lifecycle policy only; PR-A00b
+separately freezes the authorized outcomes and acceptance ownership. Each
+implementation slice
 must start from the accepted code and the structured adversarial cases in
 `tests/fixtures/v095_review_cases.json`; this narrative is not a substitute for
 an independent acceptance matrix.
@@ -26,11 +33,13 @@ Exact starting point:
 
 ## 2. Pull-request sequence
 
-The controlled lifecycle is `Planned` -> `In progress` -> `Merged`. Completed
-slices form one contiguous prefix and at most one following slice is in
-progress. PR-01 through PR-14 retain product version 0.94. After those slices,
-gate G1 is the sole complete pre-bump qualification. Only PR-15 may change
-governed version surfaces; gate G2 qualifies that bumped head for release.
+The controlled lifecycle is `Planned` -> `In progress` -> `Merged`. The
+dependency graph, rather than table order, controls when a slice may start.
+PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10
+retain product version 0.94. Gate G1 starts only after every one of those
+development PRs has merged. It is the sole complete pre-bump qualification.
+Only PR-15 may change governed version surfaces; gate G2 qualifies that bumped
+head for release.
 
 | Order | Slice | Depends on | Initial status |
 |---|---|---|---|
@@ -38,17 +47,64 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
 | 2 | PR-02 - Plastic M-M envelope origin containment | PR-01 | Planned |
 | 3 | PR-03 - Prestress-only cracking classification | PR-01 | Planned |
 | 4 | PR-04 - Hollow torsion real-wall cap | PR-01 | Planned |
-| 5 | PR-05 - Combined M-V-T prerequisite closure | PR-02 through PR-04 | Planned |
+| 5 | PR-05 - Combined M-V-T prerequisite closure | PR-02, PR-03, PR-04, PR-A03 | Planned |
 | 6 | PR-06 - Material constructor domain invariants | PR-05 | Planned |
 | 7 | PR-07 - Section and elastic finite-result invariants | PR-06 | Planned |
 | 8 | PR-08 - Plastic sweep range and endpoint contract | PR-02, PR-07 | Planned |
-| 9 | PR-09 - Killable and recoverable publication exporter | PR-01 | Planned |
-| 10 | PR-10 - Decoded-content upload identity | PR-07 | Planned |
+| 9 | PR-09 - Killable and recoverable publication exporter | PR-03, PR-07 | Planned |
+| 10 | PR-10 - Decoded-content upload identity | PR-06, PR-07 | Planned |
 | 11 | PR-11 - Locked atomic autosave and visible retry | PR-07 | Planned |
 | 12 | PR-12 - Point-grid DOM text safety | PR-01 | Planned |
 | 13 | PR-13 - Mandatory manual PDF QA guard | PR-09 | Planned |
 | 14 | PR-14 - Portable-build subprocess and manifest containment | PR-09, PR-13 | Planned |
-| 15 | PR-15 - Governed Sector 0.95 version bump | G1 after PR-01 through PR-14 | Planned |
+| 15 | PR-15 - Governed Sector 0.95 version bump | G1 | Planned |
+
+### 2.1 Owner-addition sequence and release gates
+
+The sequence amendment starts from the first main head after the reviewed
+torsion subdivision partition-authority slice merged:
+
+- amendment base: `main@ed3a94098eed7e76521e5e9a3e27e86c66226f60`
+- amendment base tree: `790083ac2694bc2bfa7578dd8062a047be66c0b5`
+- reviewed graph merge: `main@9282a7ff56512b123fbb53a55ebf32565c093fe5`
+- reviewed graph tree: `7e6980bb3d107f19336efbb0c2c4ef40f1b6cde1`
+- product version: Sector 0.94
+- project schema at the amendment base: 25
+
+Historical PR-01 through PR-15 identities are not renumbered. The additions use
+PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10:
+
+| Order | Slice | Depends on | Initial status |
+|---|---|---|---|
+| A00a1 | PR-A00a1 - Machine-resolvable owner sequence graph | exact amendment base | Merged |
+| A00a2 | PR-A00a2 - Programme narrative and lifecycle integration | PR-A00a1 | In progress |
+| A00b | PR-A00b - Owner-addition scope and acceptance ownership | PR-A00a2 | Planned |
+| A01 | PR-A01 - Standard-report curvature equation compaction | PR-A00b | Planned |
+| A02 | PR-A02 - Closed-stirrup torsion resistance authority | PR-A00b | Planned |
+| A03 | PR-A03 - Torsion-link input and publication semantics | PR-A02 | Planned |
+| A04 | PR-A04 - Dual user-owned crack-width criteria and schema migration | PR-A00b | Planned |
+| A05 | PR-A05 - Simplified reinforcement-fatigue screen | PR-A00b | Planned |
+| A06 | PR-A06 - Governing Results Overview | PR-05, PR-A04, PR-A05 | Planned |
+| A07 | PR-A07 - Analysis-result hover semantics | PR-A00b | Planned |
+| A08 | PR-A08 - Input Eurocode reference provenance | PR-A00b | Planned |
+| A09 | PR-A09 - Plastic compression-zone depth summary | PR-A00b | Planned |
+| A10 | PR-A10 - End-user manual reference cleanup | PR-A00b | Planned |
+
+The table is a readable projection of `owner_sequence_graph.dependencies`; the
+fixture remains authoritative. In particular, PR-A02 and PR-A03 precede PR-05,
+and PR-A06 follows PR-05, PR-A04 and PR-A05. No PR-A01 through PR-A10 code may
+start before PR-A00b freezes the corresponding outcome and acceptance owner.
+
+`owner_sequence_graph.dependencies.G1` is exactly this complete list, with no
+implicit or omitted prerequisite: PR-01, PR-02, PR-03, PR-04, PR-05, PR-06,
+PR-07, PR-08, PR-09, PR-10, PR-11, PR-12, PR-13, PR-14, PR-A00a1, PR-A00a2,
+PR-A00b, PR-A01, PR-A02, PR-A03, PR-A04, PR-A05, PR-A06, PR-A07, PR-A08,
+PR-A09 and PR-A10. PR-15 depends only on G1, and G2 depends only on PR-15.
+
+This narrative integration does not freeze an implementation equation, schema
+key, threshold, status precedence, tie-break or publication behavior. Those
+outcomes and their owning acceptance matrices remain the bounded responsibility
+of PR-A00b and the named implementation PRs.
 
 ## 3. Frozen engineering boundaries
 
@@ -121,12 +177,13 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
 - Cache narrowing, collapsed-work optimisation and dead-code deletion are not
   mandatory v0.95 slices. They require a separately approved bounded PR with
   static and dynamic reachability evidence plus a retained measurement. Absent
-  that proof they remain unchanged; no new product feature enters through
-  maintenance work.
+  that proof they remain unchanged; no unapproved feature enters through the
+  v0.95 programme.
 
 ## 6. Development test and CI policy
 
-PR-01 through PR-14 run only:
+PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10 run
+only:
 
 1. independent oracle, contract or adversarial tests for the changed family;
 2. directly affected existing tests; and
@@ -147,7 +204,8 @@ case-insensitively to contain none of `[skip ci]`, `[ci skip]`, `[no ci]`,
 `Release Sector 0.95` main push is the G2 trigger, and its exact-SHA Actions run
 receipt is required before qualification evidence can be accepted.
 
-After PR-14 merges, the release sequence is:
+After every development PR in `owner_sequence_graph.dependencies.G1` merges,
+the release sequence is:
 
 1. G1 runs the complete static, numerical, UI, schema, report, manual, real-image,
    portable-build and packaged-startup gate while the product is still 0.94;
@@ -186,6 +244,8 @@ rather than an expanding PR.
 Sector 0.95 is complete only when:
 
 - PR-01 through PR-14 are merged as accepted bounded slices with version 0.94;
+- PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10 are merged as accepted
+  bounded slices with version 0.94;
 - every confirmed P1/P2 adversarial case has objective fail-closed closure;
 - every final development head has both required exact-head review receipts and
   zero unresolved threads;
