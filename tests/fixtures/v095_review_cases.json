@@ -7,6 +7,16 @@
     "project_schema": 25,
     "tag": "v0.94"
   },
+  "owner_additions_amendment": {
+    "date": "2026-08-19",
+    "base_commit": "ed3a94098eed7e76521e5e9a3e27e86c66226f60",
+    "base_tree": "790083ac2694bc2bfa7578dd8062a047be66c0b5",
+    "product_version": "0.94",
+    "project_schema_before": 25,
+    "project_schema_after_crack_migration": 26,
+    "selectable_design_basis_added": false,
+    "global_compliance_claim_added": false
+  },
   "release_baseline": {
     "qa_run_id": 31769606607,
     "qa_attempt": 1,
@@ -34,6 +44,19 @@
       "PR-12",
       "PR-13",
       "PR-14"
+    ],
+    "owner_addition_prs": [
+      "PR-A00",
+      "PR-A01",
+      "PR-A02",
+      "PR-A03",
+      "PR-A04",
+      "PR-A05",
+      "PR-A06",
+      "PR-A07",
+      "PR-A08",
+      "PR-A09",
+      "PR-A10"
     ],
     "development_full_ci_allowed": false,
     "development_commit_subject_contains": "[skip ci]",
@@ -505,6 +528,218 @@
         "focused_packaged_startup_smoke": true
       },
       "excluded_behavior": "Relying only on the coarse CI job timeout, swallowing required metadata failure or bundling application behaviour changes."
+    }
+  ],
+  "owner_additions": [
+    {
+      "id": "A095-001",
+      "severity": "P1",
+      "owning_prs": ["PR-A01"],
+      "source_locations": [
+        "app/sector_report.py:5700",
+        "app/sector_report.py:5747"
+      ],
+      "reproduction": {
+        "profile": "Standard",
+        "curvature_candidates": 30,
+        "unbreakable_atom_width_pt": 872.46,
+        "available_width_pt": 309.45,
+        "observed": "report generation failed"
+      },
+      "accepted_behavior": {
+        "complete_candidate_table_retained": true,
+        "selection_substitution": "indexed governing minimum and selected value",
+        "standard_report_generates": true,
+        "committed_fixture_is_sanitised": true
+      },
+      "excluded_behavior": "Committing project-identifying input or broadening the slice into a generic equation-layout rewrite."
+    },
+    {
+      "id": "A095-002",
+      "severity": "P1",
+      "owning_prs": ["PR-A02", "PR-A03"],
+      "source_locations": [
+        "sector/torsion.py:488",
+        "app/sector_app.py:5188"
+      ],
+      "reproduction": {
+        "asw_over_s": 0.0,
+        "trd_s_knm": 0.0,
+        "trd_max_knm": 100.0,
+        "observed_resistance_knm": 100.0,
+        "observed_governing": "crushing (TRd,max)"
+      },
+      "accepted_behavior": {
+        "full_torsion_requires_current_closed_stirrups": true,
+        "trd_max_is_standalone_capacity_without_links": false,
+        "lower_torsion_route_must_be_explicit": true,
+        "shear_link_use_and_torsion_link_presence_are_distinct_inputs": true,
+        "all_result_surfaces_fail_closed": true
+      },
+      "excluded_behavior": "Treating the compression-strut ceiling as complete torsion resistance when transverse torsion reinforcement is absent."
+    },
+    {
+      "id": "A095-003",
+      "severity": "P2",
+      "owning_prs": ["PR-A04"],
+      "source_locations": [
+        "sector/sls.py:284",
+        "app/sector_app.py:4828",
+        "app/project_io.py:47"
+      ],
+      "reproduction": {
+        "long_term_width_mm": 0.30,
+        "short_term_width_mm": 0.20,
+        "old_single_limit_mm": 0.25,
+        "observed_selected_width_mm": 0.30,
+        "observed_selection": "maximum across duration branches"
+      },
+      "accepted_behavior": {
+        "long_term_limit_key": "sls_crack_limit_long_mm",
+        "short_term_limit_key": "sls_crack_limit_short_mm",
+        "positive_limit_compares_matching_response_only": true,
+        "exact_zero_means_calculated_acceptance_not_assessed": true,
+        "negative_nonfinite_or_boolean_limit_is_invalid": true,
+        "cross_duration_maximum": false,
+        "missing_selected_response_falls_back_to_other_duration": false,
+        "schema_25_positive_single_limit_migration": "copy to both limits",
+        "schema_25_blank_limit_migration": "two numeric zeros",
+        "current_project_schema_after_slice": 26,
+        "heightened_formula_uses_separate_positive_operand": true,
+        "standard_limit_is_inferred": false
+      },
+      "excluded_behavior": "Applying one duration's limit to the other, interpreting zero as failure, or passing zero into DK NA Formula 7.100 NA."
+    },
+    {
+      "id": "A095-004",
+      "severity": "P2",
+      "owning_prs": ["PR-A05"],
+      "source_locations": [
+        "sector/fatigue.py",
+        "app/sector_report.py:9286"
+      ],
+      "reproduction": {
+        "unwelded_stress_range_mpa": 70.0,
+        "welded_stress_range_mpa": 35.0,
+        "observed_route": "detailed S-N and Miner calculation always runs"
+      },
+      "accepted_behavior": {
+        "supported_simplified_screen_precedes_detailed_reinforcement_check": true,
+        "eligible_detail_class_is_explicit": true,
+        "screen_pass_may_skip_reinforcement_miner": true,
+        "proof_or_yield_check_still_runs": true,
+        "concrete_fatigue_still_runs": true,
+        "unsupported_detail_inherits_threshold": false
+      },
+      "excluded_behavior": "Using the S-N curve knee as the simplified threshold or suppressing independent fatigue checks."
+    },
+    {
+      "id": "A095-005",
+      "severity": "P2",
+      "owning_prs": ["PR-A06"],
+      "source_locations": [
+        "app/result_presentation.py:1611",
+        "app/sector_app.py:9077"
+      ],
+      "reproduction": {
+        "observed_layout": "fixed-height scrolling multi-case table",
+        "maximum_height_px": 560,
+        "per_case_rows_retained_in_overview": true
+      },
+      "accepted_behavior": {
+        "always_visible_non_scrolling_table": true,
+        "one_row_per_stable_check_family": true,
+        "numeric_governing_result_is_most_unfavourable": true,
+        "fail_closed_status_precedence": true,
+        "case_and_direction_provenance_retained": true,
+        "global_project_verdict": false
+      },
+      "excluded_behavior": "Selecting a PASS while hiding a failed, invalid, stale or not-assessed member of the same check family."
+    },
+    {
+      "id": "A095-006",
+      "severity": "P3",
+      "owning_prs": ["PR-A07"],
+      "source_locations": [
+        "app/viz.py:2529",
+        "app/viz.py:2625",
+        "app/sector_app.py:9999"
+      ],
+      "reproduction": {
+        "plastic_trace_name": "capacity",
+        "elastic_analysis_hover": "section-coordinate default"
+      },
+      "accepted_behavior": {
+        "plastic_hover_has_resistance_ordinate_and_state": true,
+        "applied_and_resistance_values_are_distinguished": true,
+        "elastic_hover_has_element_material_stress_and_strain": true,
+        "analysis_output_hover_has_coordinates": false,
+        "input_preview_hover_keeps_coordinates": true
+      },
+      "excluded_behavior": "Recomputing engineering values in Plotly instead of using retained result evidence."
+    },
+    {
+      "id": "A095-007",
+      "severity": "P3",
+      "owning_prs": ["PR-A08"],
+      "source_locations": [
+        "app/sector_app.py:4782",
+        "app/sector_app.py:5188",
+        "sector/detailing.py:1104"
+      ],
+      "reproduction": {
+        "creep_help_has_clause": false,
+        "detailing_checkbox_help_has_selected_edition_clause": false
+      },
+      "accepted_behavior": {
+        "creep_help_discloses_implemented_source": true,
+        "detailing_help_uses_registered_edition_metadata": true,
+        "unsupported_applicability_claim": false
+      },
+      "excluded_behavior": "Hard-coding one edition's clause beside a control that can select another edition."
+    },
+    {
+      "id": "A095-008",
+      "severity": "P3",
+      "owning_prs": ["PR-A09"],
+      "source_locations": [
+        "app/sector_app.py:9740",
+        "app/sector_report.py:5770",
+        "sector/plastic.py:185"
+      ],
+      "reproduction": {
+        "retained_field": "compression_depth",
+        "shown_in_selected_ui_summary": false
+      },
+      "accepted_behavior": {
+        "summary_label": "compression-zone depth c",
+        "ui_and_standard_report_publish_retained_value": true,
+        "legacy_missing_value_is_not_reconstructed": true,
+        "generic_effective_depth_d_claim": false
+      },
+      "excluded_behavior": "Inventing a biaxial effective reinforcement depth from geometry or relabelling compression depth as d."
+    },
+    {
+      "id": "A095-009",
+      "severity": "P3",
+      "owning_prs": ["PR-A10"],
+      "source_locations": [
+        "app/manual.py:732",
+        "app/manual.py:3294",
+        "app/reproducible_example.py"
+      ],
+      "reproduction": {
+        "end_user_heading": "Complete reproducible reference",
+        "manual_download_expander": true,
+        "qa_oracle_exists": true
+      },
+      "accepted_behavior": {
+        "end_user_manual_section_removed": true,
+        "manual_download_expander_removed": true,
+        "reference_generator_retained_for_qa": true,
+        "independent_oracle_and_tests_retained": true
+      },
+      "excluded_behavior": "Deleting reproducibility infrastructure merely because its end-user manual presentation is removed."
     }
   ],
   "deferred_observations": [

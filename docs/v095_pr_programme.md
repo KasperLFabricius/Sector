@@ -5,8 +5,16 @@
 Sector 0.95 is a maintenance and engineering-correctness release. It closes
 the bounded numerical, fail-closed, persistence, publication-lifecycle,
 browser-safety and qualification weaknesses found by the adversarial review of
-Sector 0.94. It does not add a new design method, standard, geometry family or
-global compliance claim.
+Sector 0.94. It does not add a new selectable design basis, geometry family or
+global compliance claim. The only newly implemented calculation route is the
+explicitly bounded existing-standard fatigue screen owned by PR-A05.
+
+An owner-authorised amendment on 2026-08-19 adds bounded correctness,
+publication and usability work found during continued v0.95 use. The amendment
+does not add a selectable design basis, infer project acceptance limits, or
+change the rule that Sector is an internal calculation tool rather than an
+engineering certification or approval system. It does authorise one deliberate
+project-schema migration for two independent user-owned crack-width criteria.
 
 The immutable owner choices are recorded in the
 [v0.95 decision register](v095_decision_register.md). Each implementation slice
@@ -26,9 +34,10 @@ Exact starting point:
 
 ## 2. Pull-request sequence
 
-The controlled lifecycle is `Planned` -> `In progress` -> `Merged`. Completed
-slices form one contiguous prefix and at most one following slice is in
-progress. PR-01 through PR-14 retain product version 0.94. After those slices,
+The controlled lifecycle is `Planned` -> `In progress` -> `Merged`. Within each
+dependency sequence, completed slices form one contiguous prefix and at most
+one following slice is in progress.
+PR-01 through PR-14 retain product version 0.94. After those slices,
 gate G1 is the sole complete pre-bump qualification. Only PR-15 may change
 governed version surfaces; gate G2 qualifies that bumped head for release.
 
@@ -48,7 +57,44 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
 | 12 | PR-12 - Point-grid DOM text safety | PR-01 | Planned |
 | 13 | PR-13 - Mandatory manual PDF QA guard | PR-09 | Planned |
 | 14 | PR-14 - Portable-build subprocess and manifest containment | PR-09, PR-13 | Planned |
-| 15 | PR-15 - Governed Sector 0.95 version bump | G1 after PR-01 through PR-14 | Planned |
+| 15 | PR-15 - Governed Sector 0.95 version bump | G1 after PR-01 through PR-14 and PR-A00 through PR-A10 | Planned |
+
+### 2.1 Owner-authorised addition sequence
+
+This amendment is based on the first main head after the reviewed torsion
+subdivision partition-authority slice merged:
+
+- amendment base: `main@ed3a94098eed7e76521e5e9a3e27e86c66226f60`
+- amendment base tree: `790083ac2694bc2bfa7578dd8062a047be66c0b5`
+- product version: Sector 0.94
+- project schema at amendment base: 25
+
+The historical PR-01 through PR-15 identifiers above are not renumbered.
+PR-A00 through PR-A10 are additional development slices which must also merge
+before G1. Their order relative to the unfinished historical slices is:
+
+| Order | Slice | Depends on | Initial status |
+|---|---|---|---|
+| A00 | PR-A00 - Owner additions programme and acceptance freeze | PR-05 partition authority on main | In progress |
+| A01 | PR-A01 - Standard-report curvature equation compaction | PR-A00 | Planned |
+| A02 | PR-A02 - Closed-stirrup torsion resistance authority | PR-A00 | Planned |
+| A03 | PR-A03 - Torsion link input and publication semantics | PR-A02 | Planned |
+| A04 | PR-A04 - Dual user-owned crack-width criteria and schema migration | PR-A00 | Planned |
+| A05 | PR-A05 - Simplified reinforcement fatigue stress-range screen | PR-A00 | Planned |
+| A06 | PR-A06 - Governing Results Overview register | PR-05 publication closure | Planned |
+| A07 | PR-A07 - Analysis-result hover semantics | PR-A00 | Planned |
+| A08 | PR-A08 - Input Eurocode reference provenance | PR-A00 | Planned |
+| A09 | PR-A09 - Plastic compression-zone depth summary | PR-A00 | Planned |
+| A10 | PR-A10 - End-user manual reference cleanup | PR-A00 | Planned |
+
+PR-A01 may proceed directly after PR-A00 because it is an isolated report
+layout defect. PR-A02 and PR-A03 precede final activation of PR-05 so combined
+assessment cannot consume a torsion resistance that lacks current closed-link
+authority. PR-A06 follows PR-05 publication closure so the overview reduces
+the accepted shared result rows rather than introducing a competing verdict
+path. The remaining historical PR-06 through PR-14 follow these prerequisites;
+G1 remains the first complete qualification and PR-15 remains the sole product
+version bump.
 
 ## 3. Frozen engineering boundaries
 
@@ -73,6 +119,39 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
   real wall. Values below or equal to that wall retain their explicit meaning;
   values above it are rejected before resistance is evaluated. The report must
   disclose the selected or capped basis without silently increasing capacity.
+- Full truss-model torsion resistance requires current, positive closed-stirrup
+  evidence. `TRd,max` is the concrete compression-strut ceiling and cannot by
+  itself become a complete torsion resistance when transverse torsion
+  reinforcement is absent. Any lower-torsion cracking or minimum-reinforcement
+  route must be explicit and must not be inferred from a missing link payload.
+- Ordinary crack width retains two independent user-owned criteria: one for the
+  long-term response and one for the short-term response. A positive finite
+  value compares only its matching response; exact zero means calculate and
+  state that response without an acceptance comparison. Sector never selects a
+  maximum across durations and never infers a criterion from the selected
+  standard. Schema-25 positive single criteria migrate to both values; a blank
+  criterion migrates to two zeros in schema 26. The optional DK heightened
+  Formula 7.100 NA check retains a separate positive formula operand when
+  enabled; a zero ordinary criterion is not passed into that formula.
+
+### Result registers, plots and engineering traceability
+
+- Results Overview is one always-visible, non-scrolling register with one
+  governing row per stable check family. Numeric checks select the most
+  unfavourable current result, while fail-closed status precedence prevents
+  `INVALID`, `STALE`, `NOT ASSESSED` or `FAIL` evidence from disappearing behind
+  a `PASS`. It does not issue a global project verdict.
+- Plastic M-M and N-M capacity hovers identify resistance ordinates and retained
+  state instead of only a generic `capacity` label. Elastic analysis hovers show
+  element identity, material, stress and strain; coordinates remain in section
+  input and preview plots rather than analysis-output hovers.
+- Creep and detailing controls disclose the clause provenance actually owned by
+  the selected implemented edition. Reinforcement-fatigue screening uses only
+  a supported simplified stress-range provision and does not suppress the
+  independent proof/yield or concrete-fatigue checks.
+- The selected plastic summary publishes the retained compression-zone depth
+  `c`. It does not relabel that biaxial solver quantity as a generic effective
+  reinforcement depth `d` without a separately defined convention.
 
 ### Core input and sweep contracts
 
@@ -121,12 +200,20 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
 - Cache narrowing, collapsed-work optimisation and dead-code deletion are not
   mandatory v0.95 slices. They require a separately approved bounded PR with
   static and dynamic reachability evidence plus a retained measurement. Absent
-  that proof they remain unchanged; no new product feature enters through
-  maintenance work.
+  that proof they remain unchanged; no unapproved product feature enters
+  through maintenance work.
+- The Standard report keeps the complete ultimate-curvature candidate table but
+  renders a compact governing-minimum substitution rather than one unbreakable
+  fraction containing every candidate. The attached failing project is local
+  reproduction evidence; committed regression data is minimal and contains no
+  project-identifying metadata.
+- The end-user manual no longer presents the complete reproducible reference as
+  a user workflow. Its project generator, independent oracle and regression
+  tests remain developer QA assets and are not deleted.
 
 ## 6. Development test and CI policy
 
-PR-01 through PR-14 run only:
+PR-01 through PR-14 and PR-A00 through PR-A10 run only:
 
 1. independent oracle, contract or adversarial tests for the changed family;
 2. directly affected existing tests; and
@@ -147,7 +234,7 @@ case-insensitively to contain none of `[skip ci]`, `[ci skip]`, `[no ci]`,
 `Release Sector 0.95` main push is the G2 trigger, and its exact-SHA Actions run
 receipt is required before qualification evidence can be accepted.
 
-After PR-14 merges, the release sequence is:
+After PR-14 and PR-A00 through PR-A10 merge, the release sequence is:
 
 1. G1 runs the complete static, numerical, UI, schema, report, manual, real-image,
    portable-build and packaged-startup gate while the product is still 0.94;
@@ -186,6 +273,8 @@ rather than an expanding PR.
 Sector 0.95 is complete only when:
 
 - PR-01 through PR-14 are merged as accepted bounded slices with version 0.94;
+- PR-A00 through PR-A10 are merged as accepted bounded slices and the current
+  project schema is 26 after PR-A04;
 - every confirmed P1/P2 adversarial case has objective fail-closed closure;
 - every final development head has both required exact-head review receipts and
   zero unresolved threads;

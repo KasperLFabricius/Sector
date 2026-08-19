@@ -9,7 +9,8 @@ maintenance programme.
 - Baseline tree: `f5e98754f0f970749919e354957bfa34dd4eb7fe`
 - Baseline product version: Sector 0.94
 - Baseline project schema: 25
-- Decision freeze date: 2026-08-14
+- Initial decision freeze date: 2026-08-14
+- Owner-additions amendment date: 2026-08-19
 - Target release: Sector 0.95
 - Detailed contract: [Sector v0.95 PR programme](v095_pr_programme.md)
 
@@ -23,7 +24,7 @@ verification, design judgement and acceptance of every result.
 |---|---|---|---|---|
 | D095-001 | Keep every development slice at product version 0.94. | Only PR-15 may change governed version surfaces after G1 passes. | Runtime, Windows, package, manual and source identity guards. | All; PR-15 closes |
 | D095-002 | Use focused change-family testing during development. | Full repository, publication and package gates are deferred to G1 and G2, not omitted. | Per-PR evidence and exact final full-gate receipts. | All; G1/G2 close |
-| D095-003 | Prevent accidental early full CI runs. | PR-01 through PR-14 and any G1 repair use `[skip ci]` in candidate and merge subjects. PR-15's candidate also uses `[skip ci]`; its complete reviewed squash-merge message contains no recognised CI-skip directive, so the exact main push triggers G2 once. | Exact commit messages and same-SHA Actions inventory. | PR-01 through PR-15 |
+| D095-003 | Prevent accidental early full CI runs. | PR-01 through PR-14, PR-A00 through PR-A10 and any G1 repair use `[skip ci]` in candidate and merge subjects. PR-15's candidate also uses `[skip ci]`; its complete reviewed squash-merge message contains no recognised CI-skip directive, so the exact main push triggers G2 once. | Exact commit messages and same-SHA Actions inventory. | Every development PR; PR-15 closes |
 | D095-004 | Require two adversarial reviews on each exact final head. | A fresh independent reviewer and official GitHub Codex Review must both bind the same SHA; any push invalidates both. | SHA-bound receipts. | Every PR |
 | D095-005 | Merge only with zero unresolved review findings. | Correct and retrigger after findings; terminal GraphQL/thread-aware inspection must show unchanged head and zero unresolved threads. | Final PR state receipt. | Every PR |
 | D095-006 | Reslice instead of broadening. | One substantive correction class is allowed; repeated P1/P2 or a second change family closes or reslices the candidate. | Diff/range audit and review history. | Every PR |
@@ -41,8 +42,18 @@ verification, design judgement and acceptance of every result.
 | D095-018 | Make the manual PDF token guard mandatory. | The supported locked QA environment cannot silently skip the raw-dollar check because an undeclared parser is absent. | Locked-dependency and positive/negative artifact tests. | PR-13 |
 | D095-019 | Contain portable build subprocess and manifest failure. | Every phase has a deadline, owned process-tree cleanup and diagnostics; required metadata-copy failure is fatal; dependency ownership matches package imports. | Timeout, manifest, import and diagnostic tests. | PR-14 |
 | D095-020 | Defer unproven maintenance cleanup. | Cache, collapsed-work or dead-code changes require a separately approved bounded PR with static/dynamic proof and measurement; otherwise they remain unchanged. | Explicit exclusion or separate acceptance matrix. | Outside frozen sequence |
-| D095-021 | Add no feature or global compliance scope. | Sector 0.95 adds no design basis, design method, geometry or certification/approval claim; schema remains 25 unless a later explicit owner decision changes it. | Diff, status-vocabulary and schema guards. | All |
+| D095-021 | Add no unapproved feature or global compliance scope. | Sector 0.95 adds no selectable design basis, geometry or certification/approval claim. Only the explicit D095-023 through D095-032 additions are authorised; schema changes only under D095-026. | Diff, status-vocabulary and schema guards. | All |
 | D095-022 | Qualify and publish in two phases. | G1 qualifies final 0.94 main, PR-15 performs one governed bump, G2 qualifies 0.95, then tag/main/release identity and exactly the qualified portable ZIP plus checksum are proven. | QA, package, tag, asset and digest receipts. | G1, PR-15, G2 |
+| D095-023 | Add the explicitly owner-authorised v0.95 correctness, publication and usability slices. | The additions are limited to PR-A00 through PR-A10 and add no selectable design basis, geometry family, global compliance, certification or approval claim. Schema may change only as frozen by D095-026. | Addition fixture, exact scope guards and per-slice acceptance evidence. | PR-A00 through PR-A10 |
+| D095-024 | Compact the unbreakable Standard-report ultimate-curvature substitution. | The complete retained candidate table remains; only the redundant all-candidate `min(...)` substitution is replaced by a compact indexed minimum and selected result. No generic equation-layout rewrite enters this slice. | Sanitised many-candidate regression, exact failing-project local replay and Standard PDF structural/raster checks. | PR-A01 |
+| D095-025 | Require current closed transverse reinforcement for full torsion resistance. | `TRd,max` is not a standalone torsion capacity when closed stirrups are absent. Any lower-torsion cracking/minimum route is explicit; UI wording separates links used for shear from closed torsion stirrups. | Zero/missing/stale link evidence, current closed-link controls, direct core, adapter and publication tests. | PR-A02, PR-A03 |
+| D095-026 | Use two independent user-owned ordinary crack-width criteria. | Long-term and short-term responses compare only with their matching positive finite criterion. Exact zero disables only that comparison while retaining the calculated width; no cross-duration maximum or inferred standard limit is issued. Schema 25 positive single criteria migrate to both values, blank migrates to two zeros, and schema 26 owns the new keys. The optional DK heightened formula uses a separate positive operand when enabled. | Zero/positive/malformed matrices, independent statuses, no-fallback controls, schema migration and UI/report round trips. | PR-A04 |
+| D095-027 | Publish one always-visible governing Results Overview register. | One row per stable check family is selected by deterministic adverse-result and fail-closed status precedence. Per-case detail remains elsewhere and no global project verdict is introduced. | Multi-case numeric/status/tie controls and shared UI/report reducer tests. | PR-A06 |
+| D095-028 | Make analysis-result plot hovers describe engineering results. | Plastic interaction hovers disclose resistance ordinates/state; elastic bar/tendon hovers disclose identity, material, stress and strain. Coordinate hovers remain on input/preview plots. | Exact Plotly hover-template/customdata tests and focused Streamlit controls. | PR-A07 |
+| D095-029 | Put implemented Eurocode provenance beside creep and detailing inputs. | Help text is driven by the selected registered edition and retained clause metadata; it does not imply unsupported applicability or complete compliance. | Edition matrix, UI help and report/input-provenance tests. | PR-A08 |
+| D095-030 | Add the supported simplified reinforcement-fatigue stress-range screen. | Eligible unwelded and welded reinforcing bars use the applicable simplified threshold before detailed S-N/Miner work. A screen PASS does not suppress proof/yield or concrete-fatigue checks, and unsupported detail types do not inherit a threshold. | Exact-boundary/detail-class/fallback and independent-check controls. | PR-A05 |
+| D095-031 | Add retained compression-zone depth to the plastic summary. | Publish solver-owned `c`; do not call it generic effective depth `d` under biaxial bending without an approved convention. | UI/report retained-field, legacy-missing and unit tests. | PR-A09 |
+| D095-032 | Remove the complete reproducible reference from the end-user manual while retaining it as QA. | Manual narrative/download UI is removed; generator, independent oracle, fixture and developer tests remain available to qualification. | Manual content/navigation negatives plus unchanged oracle and reference-project tests. | PR-A10 |
 
 ## Excluded and corrected audit interpretations
 
@@ -54,10 +65,11 @@ D095-020 evidence.
 
 ## Standards boundary
 
-The supported standards and Danish National Annex routes remain those of
-Sector 0.94. This programme corrects software implementation contracts; it does
-not extend code coverage. Source applicability and engineering approval remain
-outside the product claim.
+The selectable standards and Danish National Annex routes remain those of
+Sector 0.94. The owner additions do not add a bridge basis or infer crack-width
+limits. They add user-owned comparison inputs, clause provenance for existing
+implemented routes and one supported simplified fatigue screen. Source
+applicability and engineering approval remain outside the product claim.
 
 ## Change control
 

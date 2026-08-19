@@ -17,6 +17,8 @@ FIXTURE = ROOT / "tests" / "fixtures" / "v095_review_cases.json"
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
+AMENDMENT_BASE = "ed3a94098eed7e76521e5e9a3e27e86c66226f60"
+AMENDMENT_TREE = "790083ac2694bc2bfa7578dd8062a047be66c0b5"
 
 
 def _text(path: Path) -> str:
@@ -41,6 +43,29 @@ def test_programme_freezes_exact_release_base_and_fifteen_slices() -> None:
     assert "Only PR-15 may change\ngoverned version surfaces" in text
 
 
+def test_owner_additions_freeze_exact_amendment_base_and_sequence() -> None:
+    text = _text(PROGRAMME)
+    assert AMENDMENT_BASE in text
+    assert AMENDMENT_TREE in text
+    rows = re.findall(r"^\| A(\d{2}) \| PR-A(\d{2}) - ", text, flags=re.MULTILINE)
+    assert rows == [(f"{i:02d}", f"{i:02d}") for i in range(11)]
+    assert "PR-A00 through PR-A10" in text
+    assert "PR-A02 and PR-A03 precede final activation of PR-05" in text
+    assert "PR-A06 follows PR-05 publication closure" in text
+
+    amendment = _fixture()["owner_additions_amendment"]
+    assert amendment == {
+        "date": "2026-08-19",
+        "base_commit": AMENDMENT_BASE,
+        "base_tree": AMENDMENT_TREE,
+        "product_version": "0.94",
+        "project_schema_before": 25,
+        "project_schema_after_crack_migration": 26,
+        "selectable_design_basis_added": False,
+        "global_compliance_claim_added": False,
+    }
+
+
 def test_live_identity_remains_v094_and_schema_25_during_pr01() -> None:
     assert __version__ == "0.94"
     assert re.search(r"^VERSION\s*=\s*25$", _text(PROJECT_IO), re.MULTILINE)
@@ -57,7 +82,7 @@ def test_decision_register_has_unique_contiguous_owner_decisions() -> None:
     ids = re.findall(
         r"^\| (D095-\d{3}) \|", _text(DECISIONS), flags=re.MULTILINE
     )
-    assert ids == [f"D095-{i:03d}" for i in range(1, 23)]
+    assert ids == [f"D095-{i:03d}" for i in range(1, 33)]
     assert len(ids) == len(set(ids))
 
 
@@ -67,6 +92,7 @@ def test_lifecycle_policy_defers_full_ci_and_requires_both_reviews() -> None:
         "development_version": "0.94",
         "target_version": "0.95",
         "development_prs": [f"PR-{i:02d}" for i in range(1, 15)],
+        "owner_addition_prs": [f"PR-A{i:02d}" for i in range(11)],
         "development_full_ci_allowed": False,
         "development_commit_subject_contains": "[skip ci]",
         "development_merge_subject_contains": "[skip ci]",
@@ -133,6 +159,65 @@ def test_adversarial_findings_are_unique_owned_and_complete() -> None:
         assert row["reproduction"]
         assert row["accepted_behavior"]
         assert row["excluded_behavior"]
+
+
+def test_owner_additions_are_unique_owned_and_complete() -> None:
+    additions = _fixture()["owner_additions"]
+    ids = [row["id"] for row in additions]
+    assert ids == [f"A095-{i:03d}" for i in range(1, 10)]
+    assert len(ids) == len(set(ids))
+    assert {row["severity"] for row in additions} == {"P1", "P2", "P3"}
+    assert [row["owning_prs"] for row in additions] == [
+        ["PR-A01"],
+        ["PR-A02", "PR-A03"],
+        ["PR-A04"],
+        ["PR-A05"],
+        ["PR-A06"],
+        ["PR-A07"],
+        ["PR-A08"],
+        ["PR-A09"],
+        ["PR-A10"],
+    ]
+    for row in additions:
+        assert row["source_locations"]
+        assert row["reproduction"]
+        assert row["accepted_behavior"]
+        assert row["excluded_behavior"]
+
+
+def test_dual_crack_limits_are_independent_user_owned_and_zero_disables() -> None:
+    additions = {row["id"]: row for row in _fixture()["owner_additions"]}
+    crack = additions["A095-003"]
+    accepted = crack["accepted_behavior"]
+    assert accepted["long_term_limit_key"] == "sls_crack_limit_long_mm"
+    assert accepted["short_term_limit_key"] == "sls_crack_limit_short_mm"
+    assert accepted["positive_limit_compares_matching_response_only"] is True
+    assert accepted["exact_zero_means_calculated_acceptance_not_assessed"] is True
+    assert accepted["cross_duration_maximum"] is False
+    assert accepted["missing_selected_response_falls_back_to_other_duration"] is False
+    assert accepted["schema_25_positive_single_limit_migration"] == (
+        "copy to both limits"
+    )
+    assert accepted["schema_25_blank_limit_migration"] == "two numeric zeros"
+    assert accepted["current_project_schema_after_slice"] == 26
+    assert accepted["heightened_formula_uses_separate_positive_operand"] is True
+    assert accepted["standard_limit_is_inferred"] is False
+
+
+def test_owner_additions_keep_no_global_verdict_or_selectable_bridge_basis() -> None:
+    additions = {row["id"]: row for row in _fixture()["owner_additions"]}
+    assert additions["A095-005"]["accepted_behavior"][
+        "global_project_verdict"
+    ] is False
+    assert additions["A095-002"]["accepted_behavior"][
+        "trd_max_is_standalone_capacity_without_links"
+    ] is False
+    assert additions["A095-008"]["accepted_behavior"][
+        "generic_effective_depth_d_claim"
+    ] is False
+    decisions = _text(DECISIONS)
+    assert "do not add a bridge basis or infer crack-width\nlimits" in decisions
+    assert "engineering certification or approval system" in _text(PROGRAMME)
 
 
 def test_engineering_false_pass_cases_are_frozen_fail_closed() -> None:
@@ -235,11 +320,12 @@ def test_upload_vectors_regenerate_with_the_documented_frozen_clock(
     assert project_io.parse_project(fixed.decode("utf-8")) is not None
 
 
-def test_programme_is_maintenance_only_and_preserves_non_findings() -> None:
+def test_programme_bounds_owner_additions_and_preserves_non_findings() -> None:
     programme = _text(PROGRAMME)
     decisions = _text(DECISIONS)
-    assert "does not add a new design method" in programme
-    assert "no new product feature enters" in programme
+    assert "does not add a new selectable design basis" in programme
+    assert "no unapproved product feature enters" in programme
+    assert "Only the explicit D095-023 through D095-032 additions" in decisions
     assert "global compliance" in decisions
     deferred = _fixture()["deferred_observations"]
     assert [row["topic"] for row in deferred] == [
