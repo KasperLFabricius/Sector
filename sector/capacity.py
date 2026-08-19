@@ -482,6 +482,94 @@ def combined_torsion_subdivision_geometry_is_valid(inp: object) -> bool:
     return True
 
 
+def combined_torsion_subdivision_input_is_valid(inp: object) -> bool:
+    """Validate one requested subdivision's partition and wall-override input.
+
+    Retained sub-tube results are deliberately outside this dormant seam. A
+    later assessment may compare them only after the exact geometry authority,
+    automatic wall-thickness choice, and rectangle partition pass here.
+    """
+
+    def finite_number(value: object) -> float | None:
+        if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
+    def millimetres_to_metres(value: object) -> float | None:
+        if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+            return None
+        try:
+            metres = value / 1000.0  # type: ignore[operator]
+            number = float(metres)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return number if math.isfinite(number) else None
+
+    if (
+        not isinstance(inp, Mapping)
+        or inp.get("torsion_subdivide", _MISSING) is not True
+        or not combined_torsion_subdivision_geometry_is_valid(inp)
+    ):
+        return False
+
+    wall_override = finite_number(inp.get("torsion_tef", _MISSING))
+    raw_rectangles = inp.get("torsion_subrects", _MISSING)
+    if (
+        wall_override is None
+        or wall_override != 0.0
+        or not isinstance(raw_rectangles, (list, tuple))
+        or not raw_rectangles
+    ):
+        return False
+
+    rectangles_m: list[tuple[float, float, float, float]] = []
+    total_rectangle_area_m2 = 0.0
+    for raw_rectangle in raw_rectangles:
+        if not isinstance(raw_rectangle, (list, tuple)) or len(raw_rectangle) != 4:
+            return False
+        x_m = millimetres_to_metres(raw_rectangle[0])
+        y_m = millimetres_to_metres(raw_rectangle[1])
+        b_m = millimetres_to_metres(raw_rectangle[2])
+        h_m = millimetres_to_metres(raw_rectangle[3])
+        if (
+            x_m is None
+            or y_m is None
+            or b_m is None
+            or h_m is None
+            or b_m <= 0.0
+            or h_m <= 0.0
+        ):
+            return False
+        rectangle_m = (x_m, y_m, b_m, h_m)
+        rectangle_area_m2 = rectangle_m[2] * rectangle_m[3]
+        total_rectangle_area_m2 += rectangle_area_m2
+        if (
+            not all(math.isfinite(value) for value in rectangle_m)
+            or rectangle_area_m2 <= 0.0
+            or not math.isfinite(rectangle_area_m2)
+            or not math.isfinite(total_rectangle_area_m2)
+        ):
+            return False
+        rectangles_m.append(rectangle_m)
+
+    raw_holes = [] if inp["holes"] is None else inp["holes"]
+    try:
+        partition_valid, _reason = _module(
+            "geometry"
+        ).rectangles_partition_concrete(
+            inp["outer"],
+            raw_holes,
+            rectangles_m,
+        )
+    except (ArithmeticError, KeyError, TypeError, ValueError, OverflowError):
+        return False
+    return partition_valid is True
+
+
 def _selected_code(
     methods: Mapping[str, codes.DesignCode],
     value: object,

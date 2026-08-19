@@ -8,6 +8,7 @@ import dataclasses
 import inspect
 import math
 import pathlib
+from decimal import Decimal
 from types import SimpleNamespace
 
 import numpy as np
@@ -103,6 +104,14 @@ def _checked_plastic(util=0.20):
 class _ValueErrorFloat:
     def __float__(self) -> float:
         raise ValueError("hostile conversion")
+
+
+@dataclasses.dataclass(frozen=True)
+class _FloatOnly:
+    value: float
+
+    def __float__(self) -> float:
+        return self.value
 
 
 def test_combined_angle_objective_r_m_accepts_valid_plastic_evidence():
@@ -1225,6 +1234,257 @@ def test_torsion_subdivision_geometry_rejects_stale_raw_with_valid_section(
 def test_torsion_subdivision_geometry_has_dormant_one_object_boundary():
     signature = inspect.signature(
         capacity.combined_torsion_subdivision_geometry_is_valid
+    )
+    parameters = tuple(signature.parameters.values())
+    assert tuple(parameter.name for parameter in parameters) == ("inp",)
+    assert parameters[0].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters[0].default is inspect.Parameter.empty
+
+
+def _torsion_subdivision_input(
+    *,
+    section=...,
+    outer=None,
+    holes=...,
+    rectangles=...,
+    wall_override=0.0,
+):
+    inp = {
+        "outer": _rect() if outer is None else outer,
+        "holes": [] if holes is ... else holes,
+        "torsion_subdivide": True,
+        "torsion_tef": wall_override,
+        "torsion_subrects": (
+            [(150.0, 300.0, 300.0, 600.0)]
+            if rectangles is ...
+            else rectangles
+        ),
+    }
+    if section is not ...:
+        inp["section"] = section
+    return inp
+
+
+@pytest.mark.parametrize(
+    "inp",
+    [
+        _torsion_subdivision_input(),
+        _torsion_subdivision_input(
+            outer=[
+                (-0.15, -0.30),
+                (0.15, -0.30),
+                (0.15, 0.30),
+                (-0.15, 0.30),
+            ],
+            rectangles=(
+                (-75.0, 0.0, 150.0, 600.0),
+                (75.0, 0.0, 150.0, 600.0),
+            ),
+            wall_override=-0.0,
+        ),
+        _torsion_subdivision_input(
+            rectangles=[
+                (50.0, 300.0, 100.0, 600.0),
+                (150.0, 300.0, 100.0, 600.0),
+                (250.0, 300.0, 100.0, 600.0),
+            ],
+            wall_override=np.float64(0.0),
+        ),
+        _torsion_subdivision_input(
+            holes=[
+                [(0.1, 0.2), (0.2, 0.2), (0.2, 0.4), (0.1, 0.4)]
+            ],
+            rectangles=[
+                (150.0, 100.0, 300.0, 200.0),
+                (150.0, 500.0, 300.0, 200.0),
+                (50.0, 300.0, 100.0, 200.0),
+                (250.0, 300.0, 100.0, 200.0),
+            ],
+        ),
+        _torsion_subdivision_input(
+            section=section_core.Section.from_polygon(_rect()),
+        ),
+        _torsion_subdivision_input(
+            holes=None,
+            rectangles=[[150.0, 300.0, 300.0, 600.0]],
+        ),
+    ],
+)
+def test_torsion_subdivision_input_accepts_exact_producer_partition(inp):
+    retained_section = inp.get("section")
+    retained_wall_override = inp["torsion_tef"]
+    before_outer = copy.deepcopy(inp["outer"])
+    before_holes = copy.deepcopy(inp["holes"])
+    before_rectangles = copy.deepcopy(inp["torsion_subrects"])
+
+    result = capacity.combined_torsion_subdivision_input_is_valid(inp)
+
+    assert result is True
+    assert inp.get("section") is retained_section
+    assert inp["outer"] == before_outer
+    assert inp["holes"] == before_holes
+    assert inp["torsion_subrects"] == before_rectangles
+    assert inp["torsion_tef"] is retained_wall_override
+
+
+@pytest.mark.parametrize(
+    "bad_input",
+    [None, False, 0, 1, "mapping", b"mapping", [], (), object()],
+)
+def test_torsion_subdivision_input_rejects_malformed_top_level(bad_input):
+    assert not capacity.combined_torsion_subdivision_input_is_valid(bad_input)
+
+
+@pytest.mark.parametrize("authority", [None, False, 0, 1, "true", [], ()])
+def test_torsion_subdivision_input_requires_exact_active_authority(authority):
+    inp = _torsion_subdivision_input()
+    inp["torsion_subdivide"] = authority
+    before = copy.deepcopy(inp)
+
+    assert not capacity.combined_torsion_subdivision_input_is_valid(inp)
+    assert inp == before
+
+    missing = _torsion_subdivision_input()
+    del missing["torsion_subdivide"]
+    missing_before = copy.deepcopy(missing)
+    assert not capacity.combined_torsion_subdivision_input_is_valid(missing)
+    assert missing == missing_before
+
+
+@pytest.mark.parametrize(
+    "wall_override",
+    [
+        None,
+        False,
+        True,
+        np.bool_(False),
+        "0",
+        b"0",
+        -1.0,
+        -1.0e-300,
+        1.0e-300,
+        math.nan,
+        math.inf,
+        -math.inf,
+        10**400,
+        SimpleNamespace(),
+        _ValueErrorFloat(),
+    ],
+)
+def test_torsion_subdivision_input_requires_exact_zero_wall_override(
+    wall_override,
+):
+    inp = _torsion_subdivision_input(wall_override=wall_override)
+    before = copy.deepcopy(inp)
+
+    assert not capacity.combined_torsion_subdivision_input_is_valid(inp)
+    assert inp == before
+
+    missing = _torsion_subdivision_input()
+    del missing["torsion_tef"]
+    missing_before = copy.deepcopy(missing)
+    assert not capacity.combined_torsion_subdivision_input_is_valid(missing)
+    assert missing == missing_before
+
+
+@pytest.mark.parametrize(
+    "rectangles",
+    [
+        None,
+        [],
+        "rectangles",
+        b"rectangles",
+        {},
+        [None],
+        [{0: 150.0, 1: 300.0, 2: 300.0, 3: 600.0}],
+        [(150.0, 300.0, 300.0)],
+        [(150.0, 300.0, 300.0, 600.0, 1.0)],
+        [(True, 300.0, 300.0, 600.0)],
+        [(150.0, "300", 300.0, 600.0)],
+        [(Decimal("150"), 300.0, 300.0, 600.0)],
+        [(150.0, Decimal("300"), 300.0, 600.0)],
+        [(150.0, 300.0, Decimal("300"), 600.0)],
+        [(150.0, 300.0, 300.0, Decimal("600"))],
+        [(_FloatOnly(150.0), 300.0, 300.0, 600.0)],
+        [(150.0, _FloatOnly(300.0), 300.0, 600.0)],
+        [(150.0, 300.0, _FloatOnly(300.0), 600.0)],
+        [(150.0, 300.0, 300.0, _FloatOnly(600.0))],
+        [(150.0, _ValueErrorFloat(), 300.0, 600.0)],
+        [(150.0, SimpleNamespace(), 300.0, 600.0)],
+        [(150.0, 300.0, 0.0, 600.0)],
+        [(150.0, 300.0, -1.0, 600.0)],
+        [(150.0, 300.0, math.nan, 600.0)],
+        [(150.0, 300.0, math.inf, 600.0)],
+        [(150.0, 300.0, 10**400, 600.0)],
+        [(0.0, 0.0, 1.0e308, 1.0e308)],
+        [
+            (0.0, 0.0, 1.0e157, 1.0e157),
+            (0.0, 0.0, 1.0e157, 1.0e157),
+        ],
+        [(145.0, 300.0, 290.0, 600.0)],
+        [
+            (100.0, 300.0, 200.0, 600.0),
+            (200.0, 300.0, 200.0, 600.0),
+        ],
+        [(350.0, 300.0, 300.0, 600.0)],
+    ],
+)
+def test_torsion_subdivision_input_rejects_malformed_or_invalid_partition(
+    rectangles,
+):
+    inp = _torsion_subdivision_input(rectangles=rectangles)
+    before = copy.deepcopy(inp)
+
+    assert not capacity.combined_torsion_subdivision_input_is_valid(inp)
+    assert inp == before
+
+    missing = _torsion_subdivision_input()
+    del missing["torsion_subrects"]
+    missing_before = copy.deepcopy(missing)
+    assert not capacity.combined_torsion_subdivision_input_is_valid(missing)
+    assert missing == missing_before
+
+
+def test_torsion_subdivision_input_rejects_partition_iterator_without_consuming():
+    rectangle = (150.0, 300.0, 300.0, 600.0)
+    rectangles = iter((rectangle,))
+    inp = _torsion_subdivision_input(rectangles=rectangles)
+
+    assert not capacity.combined_torsion_subdivision_input_is_valid(inp)
+    assert next(rectangles) == rectangle
+
+    rectangle_values = iter(rectangle)
+    item_iterator = _torsion_subdivision_input(rectangles=[rectangle_values])
+    assert not capacity.combined_torsion_subdivision_input_is_valid(
+        item_iterator
+    )
+    assert next(rectangle_values) == rectangle[0]
+
+
+def test_torsion_subdivision_input_delegates_exact_geometry_authority():
+    malformed_hole = _torsion_subdivision_input(
+        holes=[[(0.0, 0.0), (0.1, 0.0)]],
+    )
+    assert not capacity.combined_torsion_subdivision_input_is_valid(
+        malformed_hole
+    )
+
+    section = section_core.Section.from_polygon(_rect(b=0.4))
+    mismatched_section = _torsion_subdivision_input(section=section)
+    before_rings = [ring.copy() for ring in section.concrete]
+
+    assert not capacity.combined_torsion_subdivision_input_is_valid(
+        mismatched_section
+    )
+    assert all(
+        np.array_equal(actual, retained)
+        for actual, retained in zip(section.concrete, before_rings, strict=True)
+    )
+
+
+def test_torsion_subdivision_input_has_dormant_one_object_boundary():
+    signature = inspect.signature(
+        capacity.combined_torsion_subdivision_input_is_valid
     )
     parameters = tuple(signature.parameters.values())
     assert tuple(parameter.name for parameter in parameters) == ("inp",)
