@@ -21,12 +21,15 @@ AMENDMENT_BASE = "ed3a94098eed7e76521e5e9a3e27e86c66226f60"
 AMENDMENT_TREE = "790083ac2694bc2bfa7578dd8062a047be66c0b5"
 GRAPH_MERGE = "9282a7ff56512b123fbb53a55ebf32565c093fe5"
 GRAPH_TREE = "7e6980bb3d107f19336efbb0c2c4ef40f1b6cde1"
+NARRATIVE_MERGE = "9fcb328e290f952c12b90778e5f0efe599a9381a"
+NARRATIVE_TREE = "19fdb72b1d2300a67c94167df27e2b10b3662574"
 HISTORICAL_DEVELOPMENT_PRS = [f"PR-{i:02d}" for i in range(1, 15)]
+OWNER_IMPLEMENTATION_PRS = [f"PR-A{i:02d}" for i in range(1, 11)]
 OWNER_DEVELOPMENT_PRS = [
     "PR-A00a1",
     "PR-A00a2",
     "PR-A00b",
-    *[f"PR-A{i:02d}" for i in range(1, 11)],
+    *OWNER_IMPLEMENTATION_PRS,
 ]
 EXPECTED_OWNER_SEQUENCE_DEPENDENCIES = {
     "PR-01": [],
@@ -186,8 +189,9 @@ def test_owner_sequence_narrative_and_lifecycle_match_reviewed_graph() -> None:
     )
     assert [row[1] for row in owner_rows] == OWNER_DEVELOPMENT_PRS
     assert owner_rows[0][2:] == ("exact amendment base", "Merged")
-    assert owner_rows[1][2:] == ("PR-A00a1", "In progress")
-    for _, pr, dependency, status in owner_rows[2:]:
+    assert owner_rows[1][2:] == ("PR-A00a1", "Merged")
+    assert owner_rows[2][2:] == ("PR-A00a2", "In progress")
+    for _, pr, dependency, status in owner_rows[3:]:
         assert dependency == ", ".join(dependencies[pr])
         assert status == "Planned"
 
@@ -196,9 +200,207 @@ def test_owner_sequence_narrative_and_lifecycle_match_reviewed_graph() -> None:
     assert f"implicit or omitted prerequisite: {g1_prs}." in compact_programme
     assert "PR-15 depends only on G1, and G2 depends only on PR-15" in compact_programme
     assert fixture["lifecycle_policy"]["development_prs"] == graph["development_prs"]
-    assert "owner_authorized_scope" not in fixture
-    assert "deferred_acceptance_contracts" not in fixture
-    assert "does not freeze an implementation equation" in compact_programme
+    assert "owner_authorized_scope" in fixture
+    assert "deferred_acceptance_contracts" in fixture
+    assert "PR-A00b now freezes the bounded outcomes" in compact_programme
+
+
+def test_owner_scope_freezes_exact_amendment_identity_and_ownership() -> None:
+    fixture = _fixture()
+    graph = fixture["owner_sequence_graph"]
+    amendment = fixture["owner_scope_amendment"]
+    assert amendment == {
+        "contract": "owner-scope-contract-v1",
+        "owner_request_date": "2026-08-19",
+        "contract_freeze_date": "2026-08-20",
+        "amendment_base_commit": AMENDMENT_BASE,
+        "amendment_base_tree": AMENDMENT_TREE,
+        "graph_merge_commit": GRAPH_MERGE,
+        "graph_merge_tree": GRAPH_TREE,
+        "narrative_merge_commit": NARRATIVE_MERGE,
+        "narrative_merge_tree": NARRATIVE_TREE,
+        "product_version": "0.94",
+        "project_schema_at_base": 25,
+        "project_schema_after_pr_a04": 26,
+        "scope_contract_owner": "PR-A00b",
+        "implementation_prs": OWNER_IMPLEMENTATION_PRS,
+        "selectable_design_basis_added": False,
+        "geometry_family_added": False,
+        "global_project_verdict_added": False,
+        "certification_or_approval_claim_added": False,
+    }
+    assert amendment["scope_contract_owner"] == graph["scope_contract_owner"]
+    assert all(pr in graph["nodes"] for pr in amendment["implementation_prs"])
+
+    expected = [
+        (
+            "OA095-001",
+            (
+                "Compact the Standard-report ultimate-curvature substitution while "
+                "retaining the complete candidate evidence."
+            ),
+            ["PR-A01"],
+        ),
+        (
+            "OA095-002",
+            (
+                "Require current closed torsion links for full torsion resistance and "
+                "make shear-link versus torsion-link semantics explicit across input, "
+                "Results and publication."
+            ),
+            ["PR-A02", "PR-A03"],
+        ),
+        (
+            "OA095-003",
+            (
+                "Use separate user-owned long-term and short-term ordinary crack-width "
+                "criteria, with persistence, migration and heightened-formula "
+                "isolation frozen in PR-A04."
+            ),
+            ["PR-A04"],
+        ),
+        (
+            "OA095-004",
+            (
+                "Add a supported simplified reinforcement-fatigue screen before "
+                "detailed reinforcement fatigue assessment."
+            ),
+            ["PR-A05"],
+        ),
+        (
+            "OA095-005",
+            (
+                "Publish one always-visible governing Results Overview row per stable "
+                "check family without a global project verdict."
+            ),
+            ["PR-A06"],
+        ),
+        (
+            "OA095-006",
+            (
+                "Make analysis plot hovers disclose retained capacity, material, "
+                "stress and strain evidence while coordinates remain in section "
+                "input and preview plots."
+            ),
+            ["PR-A07"],
+        ),
+        (
+            "OA095-007",
+            (
+                "Add selected-edition Eurocode provenance to creep and detailing "
+                "inputs without extending supported applicability."
+            ),
+            ["PR-A08"],
+        ),
+        (
+            "OA095-008",
+            (
+                "Publish retained plastic compression-zone depth c in the summary "
+                "without relabelling it as generic effective reinforcement depth d."
+            ),
+            ["PR-A09"],
+        ),
+        (
+            "OA095-009",
+            (
+                "Remove the complete reproducible reference from the end-user manual "
+                "while retaining its generator, independent oracle, fixture and tests "
+                "as QA assets."
+            ),
+            ["PR-A10"],
+        ),
+    ]
+    scope = fixture["owner_authorized_scope"]
+    assert [
+        (row["id"], row["outcome"], row["owning_prs"]) for row in scope
+    ] == expected
+    assert [pr for row in scope for pr in row["owning_prs"]] == OWNER_IMPLEMENTATION_PRS
+    for row in scope:
+        assert row["acceptance_matrix_owners"] == row["owning_prs"]
+        assert row["owner_outcome_frozen_here"] is True
+        assert row["implementation_contract_frozen_here"] is False
+
+    outcome_by_id = {row["id"]: row["outcome"] for row in scope}
+    required_narrative_terms = {
+        "OA095-002": ("input", "Results", "publication"),
+        "OA095-006": ("section input", "preview plots"),
+        "OA095-008": ("in the summary",),
+        "OA095-009": ("independent oracle",),
+    }
+    for scope_id, terms in required_narrative_terms.items():
+        assert all(term in outcome_by_id[scope_id] for term in terms)
+
+    programme = _text(PROGRAMME)
+    compact_programme = " ".join(programme.split())
+    assert "The authorized outcomes are limited to" in compact_programme
+    for phrase in [
+        "ultimate-curvature substitution",
+        "full torsion resistance from being assessed without current closed",
+        "independent long-term and short-term user criteria",
+        "simplified reinforcement-fatigue screen",
+        "one always-visible governing row per stable check family",
+        "analysis plot hovers publish retained capacity, material, stress and strain",
+        "selected-edition Eurocode provenance to creep and detailing inputs",
+        "plastic compression-zone depth `c`",
+        "complete reproducible reference from the end-user manual",
+    ]:
+        assert phrase in compact_programme
+
+
+def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> None:
+    contracts = _fixture()["deferred_acceptance_contracts"]
+    assert set(contracts) == {"PR-A04", "PR-A05", "PR-A06"}
+
+    crack = contracts["PR-A04"]
+    assert crack == {
+        "state": "must be frozen in owning PR before code",
+        "required_matrix_topics": [
+            "separate schema-26 ordinary persistence keys",
+            "duration-matched positive and zero-no-comparison behavior",
+            "schema-25 ordinary positive and blank migration",
+            "schema-25 heightened Formula 7.100 operand migration",
+            "heightened enable-disable and formula isolation",
+            "malformed input and backward-save policy",
+        ],
+        "schema_keys_frozen_here": False,
+        "migration_values_frozen_here": False,
+        "implementation_evidence": False,
+    }
+
+    fatigue = contracts["PR-A05"]
+    assert fatigue == {
+        "state": "must be frozen in owning PR before code",
+        "required_matrix_topics": [
+            "eligible detail class to threshold mapping",
+            "below boundary outcome",
+            "exact equality outcome",
+            "above boundary outcome",
+            "unsupported detail fallback",
+            "independent fatigue checks retained",
+        ],
+        "threshold_values_frozen_here": False,
+        "implementation_evidence": False,
+    }
+
+    overview = contracts["PR-A06"]
+    assert overview == {
+        "state": "must be frozen in owning PR before code",
+        "required_matrix_topics": [
+            "complete emitted status vocabulary",
+            "ordered status precedence",
+            "numeric governing selection",
+            "numeric tie break",
+            "status tie break",
+            "case and direction provenance selection",
+        ],
+        "status_order_frozen_here": False,
+        "tie_break_frozen_here": False,
+        "implementation_evidence": False,
+    }
+
+    programme = " ".join(_text(PROGRAMME).split())
+    assert "Formula 7.100 operand in a separate schema-26 field" in programme
+    assert "PR-A00b intentionally owns none of those implementation matrices" in programme
 
 
 def test_live_identity_remains_v094_and_schema_25_during_pr01() -> None:
@@ -217,12 +419,14 @@ def test_decision_register_has_unique_contiguous_owner_decisions() -> None:
     ids = re.findall(
         r"^\| (D095-\d{3}) \|", _text(DECISIONS), flags=re.MULTILINE
     )
-    assert ids == [f"D095-{i:03d}" for i in range(1, 24)]
+    assert ids == [f"D095-{i:03d}" for i in range(1, 26)]
     assert len(ids) == len(set(ids))
     decisions = _text(DECISIONS)
     assert "PR-A00a1 owns the complete machine-resolvable dependency graph" in decisions
     assert "PR-A00a2 projects that unchanged graph" in decisions
     assert "PR-A00b separately freezes owner outcomes" in decisions
+    assert "Only the D095-024 outcomes are authorized" in decisions
+    assert "PR-A00b freezes scope and ownership only" in decisions
 
 
 def test_lifecycle_policy_defers_full_ci_and_requires_both_reviews() -> None:
@@ -399,12 +603,12 @@ def test_upload_vectors_regenerate_with_the_documented_frozen_clock(
     assert project_io.parse_project(fixed.decode("utf-8")) is not None
 
 
-def test_programme_bounds_owner_sequence_and_preserves_non_findings() -> None:
+def test_programme_bounds_owner_additions_and_preserves_non_findings() -> None:
     programme = _text(PROGRAMME)
     decisions = _text(DECISIONS)
     assert "adds no selectable design basis" in programme
     assert "no unapproved feature enters" in programme
-    assert "PR-A00a1 and PR-A00a2 freeze sequencing only" in decisions
+    assert "Only the D095-024 outcomes are authorized" in decisions
     assert "global compliance" in decisions
     deferred = _fixture()["deferred_observations"]
     assert [row["topic"] for row in deferred] == [

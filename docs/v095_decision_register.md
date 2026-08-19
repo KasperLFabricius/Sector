@@ -12,6 +12,7 @@ maintenance programme.
 - Initial decision freeze date: 2026-08-14
 - Owner-sequence graph merge: 2026-08-19
 - Owner-sequence narrative integration: 2026-08-19
+- Owner-scope contract freeze: 2026-08-20
 - Target release: Sector 0.95
 - Detailed contract: [Sector v0.95 PR programme](v095_pr_programme.md)
 
@@ -43,9 +44,11 @@ verification, design judgement and acceptance of every result.
 | D095-018 | Make the manual PDF token guard mandatory. | The supported locked QA environment cannot silently skip the raw-dollar check because an undeclared parser is absent. | Locked-dependency and positive/negative artifact tests. | PR-13 |
 | D095-019 | Contain portable build subprocess and manifest failure. | Every phase has a deadline, owned process-tree cleanup and diagnostics; required metadata-copy failure is fatal; dependency ownership matches package imports. | Timeout, manifest, import and diagnostic tests. | PR-14 |
 | D095-020 | Defer unproven maintenance cleanup. | Cache, collapsed-work or dead-code changes require a separately approved bounded PR with static/dynamic proof and measurement; otherwise they remain unchanged. | Explicit exclusion or separate acceptance matrix. | Outside frozen sequence |
-| D095-021 | Add no unapproved feature or global compliance scope. | Sector 0.95 adds no selectable design basis, geometry family, global verdict, certification claim or engineering-approval claim. PR-A00a1 and PR-A00a2 freeze sequencing only; PR-A00b owns the bounded addition outcomes and any schema decision before implementation. | Diff, status-vocabulary and schema guards. | All |
+| D095-021 | Add no unapproved feature or global compliance scope. | Sector 0.95 adds no selectable design basis, geometry family, global verdict, certification claim or engineering-approval claim. Only the D095-024 outcomes are authorized; the schema change may occur only under PR-A04. | Diff, status-vocabulary and schema guards. | All |
 | D095-022 | Qualify and publish in two phases. | G1 begins only after every development PR named in `owner_sequence_graph.dependencies.G1` has merged on 0.94 main. PR-15 then performs one governed bump, G2 qualifies 0.95, and tag/main/release identity plus exactly the qualified portable ZIP and checksum are proven. | QA, package, graph, tag, asset and digest receipts. | G1, PR-15, G2 |
 | D095-023 | Freeze owner-addition sequencing before scope or code. | PR-A00a1 owns the complete machine-resolvable dependency graph. PR-A00a2 projects that unchanged graph into the programme narrative and lifecycle policy. PR-A00b separately freezes owner outcomes and acceptance ownership; no PR-A01 through PR-A10 implementation starts first. | Exact amendment base, graph equality, narrative projection and complete G1 prerequisite guard. | PR-A00a1, PR-A00a2 |
+| D095-024 | Add only the explicitly owner-authorized v0.95 outcome areas. | PR-A00b and PR-A01 through PR-A10 own the Standard-report equation fix, closed-link torsion authority and semantics, dual crack criteria, simplified reinforcement-fatigue screen, governing Results Overview, analysis hovers, EC input provenance, plastic compression-zone depth and end-user manual cleanup. They add no selectable design basis, geometry family, global verdict, certification claim or engineering-approval claim. | Exact amendment identity, scope fixture and per-slice ownership tests. | PR-A00b, PR-A01 through PR-A10 |
+| D095-025 | Freeze each addition's detailed acceptance matrix in its owning PR before code. | PR-A00b freezes scope and ownership only. PR-A04 owns ordinary crack-limit persistence, migration and separate heightened Formula 7.100 operand handling; PR-A05 owns the exact eligible fatigue class-to-threshold map and boundary outcomes; PR-A06 owns complete status precedence, deterministic ties and provenance. No deferred matrix is implementation evidence until its bounded PR freezes it. | Per-slice matrix, exclusions, hostile controls and exact-head review. | PR-A01 through PR-A10 |
 
 ## Excluded and corrected audit interpretations
 
@@ -58,10 +61,11 @@ D095-020 evidence.
 ## Standards boundary
 
 The selectable standards and Danish National Annex routes remain those of
-Sector 0.94. The sequence graph and its narrative projection add no standard
-coverage; PR-A00b must explicitly bound any authorized outcome before its
-implementation slice starts. Source applicability and engineering approval
-remain outside the product claim.
+Sector 0.94. The owner additions add no bridge basis and infer no project
+acceptance criterion. They add user-owned comparison inputs, clause provenance
+for existing implemented routes and a bounded simplified fatigue screen whose
+exact supported mapping belongs to PR-A05. Source applicability and engineering
+approval remain outside the product claim.
 
 ## Change control
 
