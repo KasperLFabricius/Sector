@@ -17,6 +17,47 @@ FIXTURE = ROOT / "tests" / "fixtures" / "v095_review_cases.json"
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
+AMENDMENT_BASE = "ed3a94098eed7e76521e5e9a3e27e86c66226f60"
+AMENDMENT_TREE = "790083ac2694bc2bfa7578dd8062a047be66c0b5"
+HISTORICAL_DEVELOPMENT_PRS = [f"PR-{i:02d}" for i in range(1, 15)]
+OWNER_DEVELOPMENT_PRS = [
+    "PR-A00a1",
+    "PR-A00a2",
+    "PR-A00b",
+    *[f"PR-A{i:02d}" for i in range(1, 11)],
+]
+EXPECTED_OWNER_SEQUENCE_DEPENDENCIES = {
+    "PR-01": [],
+    "PR-02": ["PR-01"],
+    "PR-03": ["PR-01"],
+    "PR-04": ["PR-01"],
+    "PR-05": ["PR-02", "PR-03", "PR-04", "PR-A03"],
+    "PR-06": ["PR-05"],
+    "PR-07": ["PR-06"],
+    "PR-08": ["PR-02", "PR-07"],
+    "PR-09": ["PR-03", "PR-07"],
+    "PR-10": ["PR-06", "PR-07"],
+    "PR-11": ["PR-07"],
+    "PR-12": ["PR-01"],
+    "PR-13": ["PR-09"],
+    "PR-14": ["PR-09", "PR-13"],
+    "PR-A00a1": [],
+    "PR-A00a2": ["PR-A00a1"],
+    "PR-A00b": ["PR-A00a2"],
+    "PR-A01": ["PR-A00b"],
+    "PR-A02": ["PR-A00b"],
+    "PR-A03": ["PR-A02"],
+    "PR-A04": ["PR-A00b"],
+    "PR-A05": ["PR-A00b"],
+    "PR-A06": ["PR-05", "PR-A04", "PR-A05"],
+    "PR-A07": ["PR-A00b"],
+    "PR-A08": ["PR-A00b"],
+    "PR-A09": ["PR-A00b"],
+    "PR-A10": ["PR-A00b"],
+    "G1": [*HISTORICAL_DEVELOPMENT_PRS, *OWNER_DEVELOPMENT_PRS],
+    "PR-15": ["G1"],
+    "G2": ["PR-15"],
+}
 
 
 def _text(path: Path) -> str:
@@ -39,6 +80,70 @@ def test_programme_freezes_exact_release_base_and_fifteen_slices() -> None:
     assert "PR-01 through PR-14 retain product version 0.94" in text
     assert "gate G1 is the sole complete pre-bump qualification" in text
     assert "Only PR-15 may change\ngoverned version surfaces" in text
+
+
+def test_owner_sequence_graph_is_exact_resolvable_and_acyclic() -> None:
+    graph = _fixture()["owner_sequence_graph"]
+    development_prs = [*HISTORICAL_DEVELOPMENT_PRS, *OWNER_DEVELOPMENT_PRS]
+    nodes = [*development_prs, "G1", "PR-15", "G2"]
+
+    assert graph["contract"] == "owner-sequence-graph-v1"
+    assert graph["base_commit"] == AMENDMENT_BASE
+    assert graph["base_tree"] == AMENDMENT_TREE
+    assert graph["product_version"] == "0.94"
+    assert graph["project_schema"] == 25
+    assert graph["sequencing_only"] is True
+    assert graph["narrative_contract_owner"] == "PR-A00a2"
+    assert graph["scope_contract_owner"] == "PR-A00b"
+    assert graph["implementation_contracts_frozen_here"] is False
+    assert graph["development_prs"] == development_prs
+    assert graph["nodes"] == nodes
+    assert len(nodes) == len(set(nodes))
+
+    dependencies = graph["dependencies"]
+    assert dependencies == EXPECTED_OWNER_SEQUENCE_DEPENDENCIES
+    assert list(dependencies) == nodes
+    known = set(nodes)
+    assert all(dependency in known for row in dependencies.values() for dependency in row)
+    assert all(node not in row for node, row in dependencies.items())
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node: str) -> None:
+        assert node not in visiting
+        if node in visited:
+            return
+        visiting.add(node)
+        for dependency in dependencies[node]:
+            visit(dependency)
+        visiting.remove(node)
+        visited.add(node)
+
+    for node in nodes:
+        visit(node)
+    assert visited == known
+
+
+def test_owner_sequence_graph_freezes_cross_sequence_and_release_gates() -> None:
+    graph = _fixture()["owner_sequence_graph"]
+    dependencies = graph["dependencies"]
+
+    assert dependencies["PR-A00a1"] == []
+    assert dependencies["PR-A00a2"] == ["PR-A00a1"]
+    assert dependencies["PR-A00b"] == ["PR-A00a2"]
+    assert dependencies["PR-A03"] == ["PR-A02"]
+    assert dependencies["PR-05"] == ["PR-02", "PR-03", "PR-04", "PR-A03"]
+    assert dependencies["PR-A06"] == ["PR-05", "PR-A04", "PR-A05"]
+    assert dependencies["G1"] == graph["development_prs"]
+    assert dependencies["PR-15"] == ["G1"]
+    assert dependencies["G2"] == ["PR-15"]
+
+    assert all(
+        dependency.startswith("PR-") or dependency in {"G1", "G2"}
+        for row in dependencies.values()
+        for dependency in row
+    )
 
 
 def test_live_identity_remains_v094_and_schema_25_during_pr01() -> None:
