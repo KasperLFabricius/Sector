@@ -14,10 +14,10 @@ The historical immutable owner choices are recorded in the
 [v0.95 decision register](v095_decision_register.md). The reviewed
 `owner_sequence_graph` in `tests/fixtures/v095_review_cases.json` is the
 machine-readable authority for PR identities and dependencies. PR-A00a2 makes
-that graph visible in this narrative and the lifecycle policy only; PR-A00b
-separately freezes the authorized outcomes and acceptance ownership. Each
-implementation slice
-must start from the accepted code and the structured adversarial cases in
+that graph visible in this narrative and the lifecycle policy. PR-A00b freezes
+the authorized outcomes and their acceptance owners, while each named
+implementation PR still owns its exact matrix. Each implementation slice must
+start from the accepted code and the structured adversarial cases in
 `tests/fixtures/v095_review_cases.json`; this narrative is not a substitute for
 an independent acceptance matrix.
 
@@ -77,8 +77,8 @@ PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10:
 | Order | Slice | Depends on | Initial status |
 |---|---|---|---|
 | A00a1 | PR-A00a1 - Machine-resolvable owner sequence graph | exact amendment base | Merged |
-| A00a2 | PR-A00a2 - Programme narrative and lifecycle integration | PR-A00a1 | In progress |
-| A00b | PR-A00b - Owner-addition scope and acceptance ownership | PR-A00a2 | Planned |
+| A00a2 | PR-A00a2 - Programme narrative and lifecycle integration | PR-A00a1 | Merged |
+| A00b | PR-A00b - Owner-addition scope and acceptance ownership | PR-A00a2 | In progress |
 | A01 | PR-A01 - Standard-report curvature equation compaction | PR-A00b | Planned |
 | A02 | PR-A02 - Closed-stirrup torsion resistance authority | PR-A00b | Planned |
 | A03 | PR-A03 - Torsion-link input and publication semantics | PR-A02 | Planned |
@@ -101,10 +101,60 @@ PR-07, PR-08, PR-09, PR-10, PR-11, PR-12, PR-13, PR-14, PR-A00a1, PR-A00a2,
 PR-A00b, PR-A01, PR-A02, PR-A03, PR-A04, PR-A05, PR-A06, PR-A07, PR-A08,
 PR-A09 and PR-A10. PR-15 depends only on G1, and G2 depends only on PR-15.
 
-This narrative integration does not freeze an implementation equation, schema
-key, threshold, status precedence, tie-break or publication behavior. Those
-outcomes and their owning acceptance matrices remain the bounded responsibility
-of PR-A00b and the named implementation PRs.
+PR-A00a1 and PR-A00a2 do not freeze an implementation equation, schema key,
+threshold, status precedence, tie-break or publication behavior. PR-A00b now
+freezes the bounded outcomes and their acceptance owners; the detailed
+implementation matrices remain with the named implementation PRs.
+
+### 2.2 Scope outcomes and acceptance ownership
+
+PR-A00b freezes the owner-authorized outcomes and their PR ownership; it does
+not substitute a broad umbrella fixture for each implementation contract. Each
+PR-A01 through PR-A10 must first freeze its own exact acceptance matrix,
+including applicability, authoritative inputs, retained evidence, equations,
+units, statuses, ordering, provenance, ties, malformed states, migration,
+publication surfaces and exclusions relevant to that slice. Code starts only
+after that matrix is reviewable in the same bounded PR.
+
+The authorized outcomes are limited to:
+
+- compact the unbreakable Standard-report ultimate-curvature substitution
+  while retaining the complete candidate evidence;
+- prevent full torsion resistance from being assessed without current closed
+  torsion links, then make shear-link and torsion-link semantics explicit in
+  input, results and publication;
+- replace the single ordinary crack criterion with independent long-term and
+  short-term user criteria, with the exact persistence, migration and Formula
+  7.100 isolation contract frozen in PR-A04 before code;
+- add a supported simplified reinforcement-fatigue screen before detailed
+  reinforcement fatigue assessment;
+- replace the scrolling multi-case Results Overview with one always-visible
+  governing row per stable check family, without a global project verdict;
+- make analysis plot hovers publish retained capacity, material, stress and
+  strain evidence while coordinates remain in section input and preview plots;
+- add selected-edition Eurocode provenance to creep and detailing inputs;
+- publish retained plastic compression-zone depth `c` in the summary without
+  relabelling it as generic effective reinforcement depth `d`; and
+- remove the complete reproducible reference from the end-user manual while
+  retaining its generator, independent oracle, fixture and tests as QA assets.
+
+The detailed contracts intentionally remain with their owning bounded PRs:
+
+- PR-A04 must freeze the two ordinary crack-limit persistence keys and
+  duration-matched comparison rules, exact zero/no-comparison behavior, the
+  schema-25 ordinary positive/blank migration, and preservation of an enabled
+  schema-25 Formula 7.100 operand in a separate schema-26 field. It must also
+  freeze malformed-input, disabled-heightened and backward-save behavior before
+  implementation; ordinary zero must never become the heightened operand.
+- PR-A05 must freeze the exact eligible fatigue detail-class-to-threshold map,
+  below/equal/above outcomes, unsupported-detail fallback and preservation of
+  independent fatigue checks before implementation.
+- PR-A06 must freeze the complete emitted Results Overview status vocabulary
+  and precedence, numeric and status tie-breaking, and selected case/direction
+  provenance before implementation.
+
+PR-A00b intentionally owns none of those implementation matrices and cannot be
+used as implementation evidence for PR-A04, PR-A05 or PR-A06.
 
 ## 3. Frozen engineering boundaries
 
