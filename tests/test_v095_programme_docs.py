@@ -17,6 +17,8 @@ FIXTURE = ROOT / "tests" / "fixtures" / "v095_review_cases.json"
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
+AMENDMENT_BASE = "ed3a94098eed7e76521e5e9a3e27e86c66226f60"
+AMENDMENT_TREE = "790083ac2694bc2bfa7578dd8062a047be66c0b5"
 
 
 def _text(path: Path) -> str:
@@ -36,9 +38,60 @@ def test_programme_freezes_exact_release_base_and_fifteen_slices() -> None:
 
     rows = re.findall(r"^\| (\d+) \| PR-(\d+) - ", text, flags=re.MULTILINE)
     assert rows == [(str(i), f"{i:02d}") for i in range(1, 16)]
-    assert "PR-01 through PR-14 retain product version 0.94" in text
-    assert "gate G1 is the sole complete pre-bump qualification" in text
-    assert "Only PR-15 may change\ngoverned version surfaces" in text
+    assert "PR-01 through PR-14 and PR-A00 through\nPR-A10 retain product version 0.94" in text
+    assert re.search(r"gate G1 is the sole\s+complete pre-bump qualification", text)
+    assert "Only PR-15 may change governed version" in text
+
+
+def test_owner_scope_freezes_exact_amendment_base_sequence_and_ownership() -> None:
+    text = _text(PROGRAMME)
+    assert AMENDMENT_BASE in text
+    assert AMENDMENT_TREE in text
+    rows = re.findall(r"^\| A(\d{2}) \| PR-A(\d{2}) - ", text, flags=re.MULTILINE)
+    assert rows == [(f"{i:02d}", f"{i:02d}") for i in range(11)]
+    pr05_row = re.search(
+        r"^\| 5 \| PR-05 - Combined M-V-T prerequisite closure \| (.+?) \| Planned \|$",
+        text,
+        flags=re.MULTILINE,
+    )
+    assert pr05_row is not None
+    assert pr05_row.group(1) == "PR-02 through PR-04, PR-A03"
+    assert "PR-A02 and PR-A03 precede final PR-05 activation" in text
+    assert "PR-A06 follows PR-05 publication closure" in text
+
+    amendment = _fixture()["owner_scope_amendment"]
+    assert amendment == {
+        "date": "2026-08-19",
+        "base_commit": AMENDMENT_BASE,
+        "base_tree": AMENDMENT_TREE,
+        "product_version": "0.94",
+        "project_schema_at_base": 25,
+        "project_schema_after_pr_a04": 26,
+        "authorized_prs": [f"PR-A{i:02d}" for i in range(11)],
+        "selectable_design_basis_added": False,
+        "geometry_family_added": False,
+        "global_project_verdict_added": False,
+        "certification_or_approval_claim_added": False,
+    }
+
+    scope = _fixture()["owner_authorized_scope"]
+    assert [row["id"] for row in scope] == [f"OA095-{i:03d}" for i in range(1, 10)]
+    assert [row["owning_prs"] for row in scope] == [
+        ["PR-A01"],
+        ["PR-A02", "PR-A03"],
+        ["PR-A04"],
+        ["PR-A05"],
+        ["PR-A06"],
+        ["PR-A07"],
+        ["PR-A08"],
+        ["PR-A09"],
+        ["PR-A10"],
+    ]
+    for row in scope:
+        assert row["outcome"]
+        assert row["acceptance_matrix_owners"] == row["owning_prs"]
+        assert row["owner_outcome_frozen_here"] is True
+        assert row["implementation_contract_frozen_here"] is False
 
 
 def test_live_identity_remains_v094_and_schema_25_during_pr01() -> None:
@@ -57,7 +110,7 @@ def test_decision_register_has_unique_contiguous_owner_decisions() -> None:
     ids = re.findall(
         r"^\| (D095-\d{3}) \|", _text(DECISIONS), flags=re.MULTILINE
     )
-    assert ids == [f"D095-{i:03d}" for i in range(1, 23)]
+    assert ids == [f"D095-{i:03d}" for i in range(1, 25)]
     assert len(ids) == len(set(ids))
 
 
@@ -67,6 +120,7 @@ def test_lifecycle_policy_defers_full_ci_and_requires_both_reviews() -> None:
         "development_version": "0.94",
         "target_version": "0.95",
         "development_prs": [f"PR-{i:02d}" for i in range(1, 15)],
+        "owner_addition_prs": [f"PR-A{i:02d}" for i in range(11)],
         "development_full_ci_allowed": False,
         "development_commit_subject_contains": "[skip ci]",
         "development_merge_subject_contains": "[skip ci]",
@@ -107,6 +161,56 @@ def test_lifecycle_policy_defers_full_ci_and_requires_both_reviews() -> None:
     assert "complete reviewed merge\ncommit message" in programme
     assert "subject, body and trailers" in programme
     assert "exact-SHA Actions run\nreceipt is required" in programme
+
+
+def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> None:
+    contracts = _fixture()["deferred_acceptance_contracts"]
+    assert set(contracts) == {"PR-A04", "PR-A05", "PR-A06"}
+
+    crack = contracts["PR-A04"]
+    assert crack["state"] == "must be frozen in owning PR before code"
+    assert crack["required_matrix_topics"] == [
+        "separate schema-26 ordinary persistence keys",
+        "duration-matched positive and zero-no-comparison behavior",
+        "schema-25 ordinary positive and blank migration",
+        "schema-25 heightened Formula 7.100 operand migration",
+        "heightened enable-disable and formula isolation",
+        "malformed input and backward-save policy",
+    ]
+    assert crack["schema_keys_frozen_here"] is False
+    assert crack["migration_values_frozen_here"] is False
+    assert crack["implementation_evidence"] is False
+
+    fatigue = contracts["PR-A05"]
+    assert fatigue["state"] == "must be frozen in owning PR before code"
+    assert fatigue["required_matrix_topics"] == [
+        "eligible detail class to threshold mapping",
+        "below boundary outcome",
+        "exact equality outcome",
+        "above boundary outcome",
+        "unsupported detail fallback",
+        "independent fatigue checks retained",
+    ]
+    assert fatigue["threshold_values_frozen_here"] is False
+    assert fatigue["implementation_evidence"] is False
+
+    overview = contracts["PR-A06"]
+    assert overview["state"] == "must be frozen in owning PR before code"
+    assert overview["required_matrix_topics"] == [
+        "complete emitted status vocabulary",
+        "ordered status precedence",
+        "numeric governing selection",
+        "numeric tie break",
+        "status tie break",
+        "case and direction provenance selection",
+    ]
+    assert overview["status_order_frozen_here"] is False
+    assert overview["tie_break_frozen_here"] is False
+    assert overview["implementation_evidence"] is False
+
+    programme = _text(PROGRAMME)
+    assert "Formula 7.100 operand in a separate schema-26 field" in programme
+    assert "PR-A00 intentionally owns none of those implementation matrices" in programme
 
 
 def test_g1_pr15_g2_gate_order_is_unambiguous() -> None:
@@ -235,11 +339,12 @@ def test_upload_vectors_regenerate_with_the_documented_frozen_clock(
     assert project_io.parse_project(fixed.decode("utf-8")) is not None
 
 
-def test_programme_is_maintenance_only_and_preserves_non_findings() -> None:
+def test_programme_bounds_owner_additions_and_preserves_non_findings() -> None:
     programme = _text(PROGRAMME)
     decisions = _text(DECISIONS)
-    assert "does not add a new design method" in programme
-    assert "no new product feature enters" in programme
+    assert "adds no selectable design basis" in programme
+    assert "no unapproved feature enters" in programme
+    assert "Only D095-023 additions are authorized" in decisions
     assert "global compliance" in decisions
     deferred = _fixture()["deferred_observations"]
     assert [row["topic"] for row in deferred] == [

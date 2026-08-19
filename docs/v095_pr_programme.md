@@ -2,11 +2,12 @@
 
 ## 1. Programme outcome
 
-Sector 0.95 is a maintenance and engineering-correctness release. It closes
-the bounded numerical, fail-closed, persistence, publication-lifecycle,
-browser-safety and qualification weaknesses found by the adversarial review of
-Sector 0.94. It does not add a new design method, standard, geometry family or
-global compliance claim.
+Sector 0.95 is a maintenance, engineering-correctness and bounded-usability
+release. It closes the numerical, fail-closed, persistence,
+publication-lifecycle, browser-safety and qualification weaknesses found by
+the adversarial review of Sector 0.94, together with the explicit owner
+additions recorded below. It adds no selectable design basis, geometry family,
+global compliance claim, certification or engineering-approval claim.
 
 The immutable owner choices are recorded in the
 [v0.95 decision register](v095_decision_register.md). Each implementation slice
@@ -26,11 +27,12 @@ Exact starting point:
 
 ## 2. Pull-request sequence
 
-The controlled lifecycle is `Planned` -> `In progress` -> `Merged`. Completed
-slices form one contiguous prefix and at most one following slice is in
-progress. PR-01 through PR-14 retain product version 0.94. After those slices,
-gate G1 is the sole complete pre-bump qualification. Only PR-15 may change
-governed version surfaces; gate G2 qualifies that bumped head for release.
+The controlled lifecycle is `Planned` -> `In progress` -> `Merged`. Within each
+dependency sequence, completed slices form one contiguous prefix and at most
+one following slice is in progress. PR-01 through PR-14 and PR-A00 through
+PR-A10 retain product version 0.94. After those slices, gate G1 is the sole
+complete pre-bump qualification. Only PR-15 may change governed version
+surfaces; gate G2 qualifies that bumped head for release.
 
 | Order | Slice | Depends on | Initial status |
 |---|---|---|---|
@@ -38,7 +40,7 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
 | 2 | PR-02 - Plastic M-M envelope origin containment | PR-01 | Planned |
 | 3 | PR-03 - Prestress-only cracking classification | PR-01 | Planned |
 | 4 | PR-04 - Hollow torsion real-wall cap | PR-01 | Planned |
-| 5 | PR-05 - Combined M-V-T prerequisite closure | PR-02 through PR-04 | Planned |
+| 5 | PR-05 - Combined M-V-T prerequisite closure | PR-02 through PR-04, PR-A03 | Planned |
 | 6 | PR-06 - Material constructor domain invariants | PR-05 | Planned |
 | 7 | PR-07 - Section and elastic finite-result invariants | PR-06 | Planned |
 | 8 | PR-08 - Plastic sweep range and endpoint contract | PR-02, PR-07 | Planned |
@@ -48,7 +50,92 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
 | 12 | PR-12 - Point-grid DOM text safety | PR-01 | Planned |
 | 13 | PR-13 - Mandatory manual PDF QA guard | PR-09 | Planned |
 | 14 | PR-14 - Portable-build subprocess and manifest containment | PR-09, PR-13 | Planned |
-| 15 | PR-15 - Governed Sector 0.95 version bump | G1 after PR-01 through PR-14 | Planned |
+| 15 | PR-15 - Governed Sector 0.95 version bump | G1 after PR-01 through PR-14 and PR-A00 through PR-A10 | Planned |
+
+### 2.1 Owner-authorized addition sequence
+
+This amendment starts from the first main head after the reviewed torsion
+subdivision partition-authority slice merged:
+
+- amendment base: `main@ed3a94098eed7e76521e5e9a3e27e86c66226f60`
+- amendment base tree: `790083ac2694bc2bfa7578dd8062a047be66c0b5`
+- product version: Sector 0.94
+- project schema at amendment base: 25
+
+Historical PR-01 through PR-15 identities are not renumbered. The additions
+use PR-A00 through PR-A10 and must also merge before G1:
+
+| Order | Slice | Depends on | Initial status |
+|---|---|---|---|
+| A00 | PR-A00 - Owner additions scope and ownership freeze | reviewed partition authority on main | In progress |
+| A01 | PR-A01 - Standard-report curvature equation compaction | PR-A00 | Planned |
+| A02 | PR-A02 - Closed-stirrup torsion resistance authority | PR-A00 | Planned |
+| A03 | PR-A03 - Torsion-link input and publication semantics | PR-A02 | Planned |
+| A04 | PR-A04 - Dual user-owned crack-width criteria and schema migration | PR-A00 | Planned |
+| A05 | PR-A05 - Simplified reinforcement-fatigue screen | PR-A00 | Planned |
+| A06 | PR-A06 - Governing Results Overview | PR-05 publication closure | Planned |
+| A07 | PR-A07 - Analysis-result hover semantics | PR-A00 | Planned |
+| A08 | PR-A08 - Input Eurocode reference provenance | PR-A00 | Planned |
+| A09 | PR-A09 - Plastic compression-zone depth summary | PR-A00 | Planned |
+| A10 | PR-A10 - End-user manual reference cleanup | PR-A00 | Planned |
+
+PR-A01 may follow PR-A00 immediately because it is an isolated Standard-report
+layout defect. PR-A02 and PR-A03 precede final PR-05 activation so combined
+assessment cannot consume torsion resistance without the accepted closed-link
+authority. PR-A06 follows PR-05 publication closure and reduces the accepted
+shared result rows instead of creating a competing verdict path. The remaining
+historical slices continue after their named prerequisites. G1 remains the
+first complete qualification and PR-15 remains the only product-version bump.
+
+### 2.2 Scope outcomes and acceptance ownership
+
+PR-A00 freezes the owner-authorized outcomes and their PR ownership; it does
+not substitute a broad umbrella fixture for each implementation contract. Each
+PR-A01 through PR-A10 must first freeze its own exact acceptance matrix,
+including applicability, authoritative inputs, retained evidence, equations,
+units, statuses, ordering, provenance, ties, malformed states, migration,
+publication surfaces and exclusions relevant to that slice. Code starts only
+after that matrix is reviewable in the same bounded PR.
+
+The authorized outcomes are limited to:
+
+- compact the unbreakable Standard-report ultimate-curvature substitution
+  while retaining the complete candidate evidence;
+- prevent full torsion resistance from being assessed without current closed
+  torsion links, then make shear-link and torsion-link semantics explicit in
+  input, results and publication;
+- replace the single ordinary crack criterion with independent long-term and
+  short-term user criteria, with the exact persistence, migration and Formula
+  7.100 isolation contract frozen in PR-A04 before code;
+- add a supported simplified reinforcement-fatigue screen before detailed
+  reinforcement fatigue assessment;
+- replace the scrolling multi-case Results Overview with one always-visible
+  governing row per stable check family, without a global project verdict;
+- make analysis plot hovers publish retained capacity, material, stress and
+  strain evidence while coordinates remain in section input/preview plots;
+- add selected-edition Eurocode provenance to creep and detailing inputs;
+- publish retained plastic compression-zone depth `c` in the summary without
+  relabelling it as generic effective reinforcement depth `d`; and
+- remove the complete reproducible reference from the end-user manual while
+  retaining its generator, independent oracle, fixture and tests as QA assets.
+
+The detailed contracts intentionally remain with their owning bounded PRs:
+
+- PR-A04 must freeze the two ordinary crack-limit persistence keys and
+  duration-matched comparison rules, exact zero/no-comparison behavior, the
+  schema-25 ordinary positive/blank migration, and preservation of an enabled
+  schema-25 Formula 7.100 operand in a separate schema-26 field. It must also
+  freeze malformed-input, disabled-heightened and backward-save behavior before
+  implementation; ordinary zero must never become the heightened operand.
+- PR-A05 must freeze the exact eligible fatigue detail-class-to-threshold map,
+  below/equal/above outcomes, unsupported-detail fallback and preservation of
+  independent fatigue checks before implementation.
+- PR-A06 must freeze the complete emitted Results Overview status vocabulary
+  and precedence, numeric and status tie-breaking, and selected case/direction
+  provenance before implementation.
+
+PR-A00 intentionally owns none of those implementation matrices and cannot be
+used as implementation evidence for PR-A04, PR-A05 or PR-A06.
 
 ## 3. Frozen engineering boundaries
 
@@ -121,12 +208,12 @@ governed version surfaces; gate G2 qualifies that bumped head for release.
 - Cache narrowing, collapsed-work optimisation and dead-code deletion are not
   mandatory v0.95 slices. They require a separately approved bounded PR with
   static and dynamic reachability evidence plus a retained measurement. Absent
-  that proof they remain unchanged; no new product feature enters through
-  maintenance work.
+  that proof they remain unchanged; no unapproved feature enters through the
+  v0.95 programme.
 
 ## 6. Development test and CI policy
 
-PR-01 through PR-14 run only:
+PR-01 through PR-14 and PR-A00 through PR-A10 run only:
 
 1. independent oracle, contract or adversarial tests for the changed family;
 2. directly affected existing tests; and
@@ -147,7 +234,7 @@ case-insensitively to contain none of `[skip ci]`, `[ci skip]`, `[no ci]`,
 `Release Sector 0.95` main push is the G2 trigger, and its exact-SHA Actions run
 receipt is required before qualification evidence can be accepted.
 
-After PR-14 merges, the release sequence is:
+After PR-14 and PR-A00 through PR-A10 merge, the release sequence is:
 
 1. G1 runs the complete static, numerical, UI, schema, report, manual, real-image,
    portable-build and packaged-startup gate while the product is still 0.94;
@@ -186,6 +273,8 @@ rather than an expanding PR.
 Sector 0.95 is complete only when:
 
 - PR-01 through PR-14 are merged as accepted bounded slices with version 0.94;
+- PR-A00 through PR-A10 are merged as accepted bounded slices, with schema 26
+  introduced only by PR-A04;
 - every confirmed P1/P2 adversarial case has objective fail-closed closure;
 - every final development head has both required exact-head review receipts and
   zero unresolved threads;

@@ -35,6 +35,19 @@
       "PR-13",
       "PR-14"
     ],
+    "owner_addition_prs": [
+      "PR-A00",
+      "PR-A01",
+      "PR-A02",
+      "PR-A03",
+      "PR-A04",
+      "PR-A05",
+      "PR-A06",
+      "PR-A07",
+      "PR-A08",
+      "PR-A09",
+      "PR-A10"
+    ],
     "development_full_ci_allowed": false,
     "development_commit_subject_contains": "[skip ci]",
     "development_merge_subject_contains": "[skip ci]",
@@ -62,6 +75,148 @@
     "post_bump_full_ci_trigger": "PR-15 exact main push",
     "post_bump_exact_main_actions_receipt_required": true,
     "release_version": "0.95"
+  },
+  "owner_scope_amendment": {
+    "date": "2026-08-19",
+    "base_commit": "ed3a94098eed7e76521e5e9a3e27e86c66226f60",
+    "base_tree": "790083ac2694bc2bfa7578dd8062a047be66c0b5",
+    "product_version": "0.94",
+    "project_schema_at_base": 25,
+    "project_schema_after_pr_a04": 26,
+    "authorized_prs": [
+      "PR-A00",
+      "PR-A01",
+      "PR-A02",
+      "PR-A03",
+      "PR-A04",
+      "PR-A05",
+      "PR-A06",
+      "PR-A07",
+      "PR-A08",
+      "PR-A09",
+      "PR-A10"
+    ],
+    "selectable_design_basis_added": false,
+    "geometry_family_added": false,
+    "global_project_verdict_added": false,
+    "certification_or_approval_claim_added": false
+  },
+  "owner_authorized_scope": [
+    {
+      "id": "OA095-001",
+      "outcome": "Compact the Standard-report ultimate-curvature substitution while retaining the complete candidate evidence.",
+      "owning_prs": ["PR-A01"],
+      "acceptance_matrix_owners": ["PR-A01"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-002",
+      "outcome": "Require current closed torsion links for full torsion resistance and make shear-link versus torsion-link semantics explicit across input and publication.",
+      "owning_prs": ["PR-A02", "PR-A03"],
+      "acceptance_matrix_owners": ["PR-A02", "PR-A03"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-003",
+      "outcome": "Use separate user-owned long-term and short-term ordinary crack-width criteria, with persistence, migration and heightened-formula isolation frozen in PR-A04.",
+      "owning_prs": ["PR-A04"],
+      "acceptance_matrix_owners": ["PR-A04"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-004",
+      "outcome": "Add a supported simplified reinforcement-fatigue screen before detailed reinforcement fatigue assessment.",
+      "owning_prs": ["PR-A05"],
+      "acceptance_matrix_owners": ["PR-A05"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-005",
+      "outcome": "Publish one always-visible governing Results Overview row per stable check family without a global project verdict.",
+      "owning_prs": ["PR-A06"],
+      "acceptance_matrix_owners": ["PR-A06"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-006",
+      "outcome": "Make analysis plot hovers disclose retained capacity, material, stress and strain evidence while coordinates remain in input previews.",
+      "owning_prs": ["PR-A07"],
+      "acceptance_matrix_owners": ["PR-A07"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-007",
+      "outcome": "Add selected-edition Eurocode provenance to creep and detailing inputs without extending supported applicability.",
+      "owning_prs": ["PR-A08"],
+      "acceptance_matrix_owners": ["PR-A08"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-008",
+      "outcome": "Publish retained plastic compression-zone depth c without relabelling it as generic effective reinforcement depth d.",
+      "owning_prs": ["PR-A09"],
+      "acceptance_matrix_owners": ["PR-A09"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    },
+    {
+      "id": "OA095-009",
+      "outcome": "Remove the complete reproducible reference from the end-user manual while retaining its generator, oracle, fixture and tests as QA assets.",
+      "owning_prs": ["PR-A10"],
+      "acceptance_matrix_owners": ["PR-A10"],
+      "owner_outcome_frozen_here": true,
+      "implementation_contract_frozen_here": false
+    }
+  ],
+  "deferred_acceptance_contracts": {
+    "PR-A04": {
+      "state": "must be frozen in owning PR before code",
+      "required_matrix_topics": [
+        "separate schema-26 ordinary persistence keys",
+        "duration-matched positive and zero-no-comparison behavior",
+        "schema-25 ordinary positive and blank migration",
+        "schema-25 heightened Formula 7.100 operand migration",
+        "heightened enable-disable and formula isolation",
+        "malformed input and backward-save policy"
+      ],
+      "schema_keys_frozen_here": false,
+      "migration_values_frozen_here": false,
+      "implementation_evidence": false
+    },
+    "PR-A05": {
+      "state": "must be frozen in owning PR before code",
+      "required_matrix_topics": [
+        "eligible detail class to threshold mapping",
+        "below boundary outcome",
+        "exact equality outcome",
+        "above boundary outcome",
+        "unsupported detail fallback",
+        "independent fatigue checks retained"
+      ],
+      "threshold_values_frozen_here": false,
+      "implementation_evidence": false
+    },
+    "PR-A06": {
+      "state": "must be frozen in owning PR before code",
+      "required_matrix_topics": [
+        "complete emitted status vocabulary",
+        "ordered status precedence",
+        "numeric governing selection",
+        "numeric tie break",
+        "status tie break",
+        "case and direction provenance selection"
+      ],
+      "status_order_frozen_here": false,
+      "tie_break_frozen_here": false,
+      "implementation_evidence": false
+    }
   },
   "findings": [
     {
