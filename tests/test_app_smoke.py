@@ -2839,15 +2839,12 @@ def test_save_load_round_trip_through_the_app():
     assert any("hash verified" in caption.value for caption in at.caption)
 
 
-def test_schema_24_conflicting_crack_widths_migrate_with_visible_warning():
+def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     import load_cases
     import project_io
 
     elastic = load_cases.normalise_table(
-        [
-            {"name": "EL-A", "calculate_crack_width": True},
-            {"name": "EL-B", "calculate_crack_width": False},
-        ],
+        [{"name": "EL-A", "calculate_crack_width": True}],
         load_cases.ELASTIC_TABLE_KEY,
     )
     payload = json.loads(project_io.dump_project(
@@ -2855,18 +2852,19 @@ def test_schema_24_conflicting_crack_widths_migrate_with_visible_warning():
         {
             "mode": "Elastic",
             "sls_code": _SLS_DK,
-            "sls_permitted_crack_width_mm": None,
+            "sls_long_term_permitted_crack_width_mm": 0.30,
+            "sls_short_term_permitted_crack_width_mm": 0.25,
+            "sls_heightened_permitted_crack_width_mm": 0.0,
         },
     ))
     payload["version"] = project_io.MIGRATABLE_VERSION
-    payload["scalars"].pop("sls_permitted_crack_width_mm")
-    payload["scalars"][
-        project_io.LEGACY_HEIGHTENED_CRACK_WIDTH_KEY
-    ] = 0.20
-    legacy = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
-    legacy["columns"].append(project_io.LEGACY_ORDINARY_CRACK_WIDTH_KEY)
-    for row, criterion in zip(legacy["rows"], (0.30, 0.25), strict=True):
-        row.append(criterion)
+    for key in (
+        "sls_long_term_permitted_crack_width_mm",
+        "sls_short_term_permitted_crack_width_mm",
+        "sls_heightened_permitted_crack_width_mm",
+    ):
+        payload["scalars"].pop(key)
+    payload["scalars"][project_io.LEGACY_SHARED_CRACK_WIDTH_KEY] = 0.20
     payload["provenance"]["input_sha256"] = project_io._input_digest({
         "tables": payload["tables"],
         "scalars": payload["scalars"],
@@ -2878,32 +2876,34 @@ def test_schema_24_conflicting_crack_widths_migrate_with_visible_warning():
     at.run()
 
     assert not at.exception
-    assert at.session_state["sls_permitted_crack_width_mm"] == pytest.approx(
-        0.20
-    )
-    assert at.number_input(key="sls_permitted_crack_width_mm").value == (
-        pytest.approx(0.20)
-    )
+    for key in (
+        "sls_long_term_permitted_crack_width_mm",
+        "sls_short_term_permitted_crack_width_mm",
+    ):
+        assert at.session_state[key] == pytest.approx(0.20)
+        assert at.number_input(key=key).value == pytest.approx(0.20)
+    assert at.session_state[
+        "sls_heightened_permitted_crack_width_mm"
+    ] == 0.0
     assert any(
-        "conflicting permitted crack widths" in warning.value
-        and "0.2 mm" in warning.value
+        "copied the positive value" in warning.value
+        and "long-term and short-term" in warning.value
         for warning in at.warning
     )
     assert at.session_state["_loaded_project_provenance"][
         "schema_version"
-    ] == 24
+    ] == 25
     expected_migration = {
-        "source_schema_version": 24,
-        "target_schema_version": 25,
+        "source_schema_version": 25,
+        "target_schema_version": 26,
         "warnings": [at.session_state["_project_migration_warnings"][0]],
         "migration_provenance": {
-            "criterion_sources": [
-                {"source": "Elastic case EL-A", "value_mm": 0.30},
-                {"source": "Elastic case EL-B", "value_mm": 0.25},
-                {"source": "Heightened crack control", "value_mm": 0.20},
-            ],
-            "selection_policy": "conservative-minimum",
-            "selected_value_mm": 0.20,
+            "source_key": project_io.LEGACY_SHARED_CRACK_WIDTH_KEY,
+            "shared_value_mm": 0.20,
+            "long_term_value_mm": 0.20,
+            "short_term_value_mm": 0.20,
+            "heightened_value_mm": 0.0,
+            "heightened_preserved": False,
         },
     }
     assert at.session_state["_loaded_project_migration"] == expected_migration
@@ -2920,9 +2920,12 @@ def test_schema_24_conflicting_crack_widths_migrate_with_visible_warning():
     at.run()
 
     assert not at.exception
-    assert at.session_state["sls_permitted_crack_width_mm"] == pytest.approx(
-        0.20
-    )
+    assert at.session_state[
+        "sls_long_term_permitted_crack_width_mm"
+    ] == pytest.approx(0.20)
+    assert at.session_state[
+        "sls_short_term_permitted_crack_width_mm"
+    ] == pytest.approx(0.20)
     assert at.session_state["_loaded_project_migration"] == expected_migration
     assert tuple(at.session_state["_project_migration_warnings"]) == expected_warnings
     assert at.session_state["_project_msg"][0] == "error"
@@ -3103,7 +3106,9 @@ def test_loading_project_without_heightened_check_clears_prior_dk_state():
             "sls_heightened_reference_case": "Reference SLS",
             "sls_heightened_reinforcement_surface": "smooth",
             "sls_heightened_effective_tensile_strength_mpa": 2.9,
-            "sls_permitted_crack_width_mm": 0.20,
+            "sls_long_term_permitted_crack_width_mm": 0.20,
+            "sls_short_term_permitted_crack_width_mm": 0.20,
+            "sls_heightened_permitted_crack_width_mm": 0.20,
             "sls_heightened_fine_effective_tension_area_mm2": 60_000.0,
             "sls_heightened_coarse_effective_tension_area_mm2": 80_000.0,
         },
@@ -3127,6 +3132,7 @@ def test_loading_project_without_heightened_check_clears_prior_dk_state():
         "sls_heightened_reference_case": "",
         "sls_heightened_reinforcement_surface": "ribbed",
         "sls_heightened_effective_tensile_strength_mpa": 0.0,
+        "sls_heightened_permitted_crack_width_mm": 0.0,
         "sls_heightened_fine_effective_tension_area_mm2": 0.0,
         "sls_heightened_coarse_effective_tension_area_mm2": 0.0,
     }
@@ -5460,8 +5466,8 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     at.run()
     _goto_input_tab(at, "Loads")
     assert any(
-        "One optional permitted width in Analysis settings is shared by every "
-        "ordinary and heightened crack check"
+        "Independent long-term and short-term user limits apply only to their "
+        "matching ordinary branches"
         in item.value
         for item in at.caption
     )
@@ -6449,8 +6455,13 @@ def test_crack_width_off_by_default():
     e = at.session_state["results"]["elastic"]
     assert e["show_cw"] is False
     assert e["crack"] is None              # crack width toggle off
-    assert e["crack_output"]["calculation_state"] == "NOT REQUESTED"
-    assert e["crack_output"]["criterion_mm"] is None
+    output = e["crack_output"]
+    assert set(output) == {"long_term", "short_term"}
+    for duration in ("long_term", "short_term"):
+        assert output[duration]["calculation_state"] == "NOT REQUESTED"
+        assert output[duration]["criterion_mm"] == 0.0
+        assert output[duration]["value"] is None
+        assert output[duration]["ratio"] is None
 
 
 def test_crack_width_reports_both_load_cases():
@@ -6487,15 +6498,21 @@ def test_crack_output_and_candidate_table_are_retained_without_verdict():
     )
     assert not at.exception
     e = at.session_state["results"]["elastic"]
-    assert e["crack_output"]["calculation_state"] == (
-        "CALCULATED - ACCEPTANCE NOT ASSESSED"
-    )
-    assert e["crack_output"]["value"] > 0.0
-    assert e["crack_output"]["case"] in {"Long-term", "Short-term"}
-    assert e["crack_output"]["governing"].startswith(("R", "P"))
-    assert e["crack_output"]["criterion_mm"] is None
-    assert e["crack_output"]["ratio"] is None
-    assert not {"limit", "util", "status"} & set(e["crack_output"])
+    assert set(e["crack_output"]) == {"long_term", "short_term"}
+    for duration, output in e["crack_output"].items():
+        assert output["duration"] == duration
+        assert output["calculation_state"] == (
+            "CALCULATED - ACCEPTANCE NOT ASSESSED"
+        )
+        assert output["value"] > 0.0
+        expected_label = (
+            "Long-term" if duration == "long_term" else "Short-term"
+        )
+        assert output["case"].startswith(expected_label)
+        assert output["governing"].startswith(("R", "P"))
+        assert output["criterion_mm"] == 0.0
+        assert output["ratio"] is None
+        assert not {"limit", "util", "status"} & set(output)
     assert e["crack"]["candidates"]
     assert e["crack"]["candidates"][0]["wk"] == pytest.approx(e["crack"]["wk"])
     assert {"element_id", "x_mm", "y_mm", "area_mm2", "cover",
@@ -6503,13 +6520,13 @@ def test_crack_output_and_candidate_table_are_retained_without_verdict():
         e["crack"]["candidates"][0].keys()
     _select_view(at, "Elastic Results")
     assert any(
-        "Criterion: not specified; acceptance is not assessed" in item.value
+        "User limit: 0 mm; no comparison requested" in item.value
         for item in at.caption
     )
     assert not any("FAIL - Crack width" in item.value for item in at.error)
 
 
-def test_shared_analysis_crack_criterion_is_assessed_for_elastic_rows():
+def test_independent_duration_crack_criteria_are_assessed_for_elastic_rows():
     import load_cases
 
     at = _fresh()
@@ -6519,26 +6536,46 @@ def test_shared_analysis_crack_criterion_is_assessed_for_elastic_rows():
     cases.at[0, "mx_long_ed_knm"] = 400.0
     cases.at[0, "calculate_crack_width"] = True
     _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, cases)
-    _set(at, ("number_input", "sls_permitted_crack_width_mm", 0.001))
+    _set(
+        at,
+        ("number_input", "sls_long_term_permitted_crack_width_mm", 0.001),
+        ("number_input", "sls_short_term_permitted_crack_width_mm", 1.0),
+    )
     _calculate(at)
 
     assert not at.exception
-    output = at.session_state["results"]["elastic"]["crack_output"]
-    assert output["calculation_state"] == "EXCEEDS USER-SPECIFIED LIMIT"
-    assert output["criterion_mm"] == pytest.approx(0.001)
-    assert output["ratio"] == pytest.approx(output["value"] / 0.001)
-    assert output["criterion_source"] == "User input - Analysis settings"
-    assert output["comparison_equation"] == "w_k / w_k,criterion"
-    assert not {"status", "pass", "fail", "global_compliance"} & set(output)
+    outputs = at.session_state["results"]["elastic"]["crack_output"]
+    long_term = outputs["long_term"]
+    short_term = outputs["short_term"]
+    assert long_term["calculation_state"] == "EXCEEDS USER-SPECIFIED LIMIT"
+    assert long_term["criterion_mm"] == pytest.approx(0.001)
+    assert long_term["ratio"] == pytest.approx(long_term["value"] / 0.001)
+    assert long_term["criterion_source"] == (
+        "User input - Analysis settings - long-term"
+    )
+    assert short_term["calculation_state"] == "WITHIN USER-SPECIFIED LIMIT"
+    assert short_term["criterion_mm"] == pytest.approx(1.0)
+    assert short_term["ratio"] == pytest.approx(short_term["value"] / 1.0)
+    assert short_term["criterion_source"] == (
+        "User input - Analysis settings - short-term"
+    )
+    for output in outputs.values():
+        assert output["comparison_equation"] == "w_k / w_k,criterion"
+        assert not {"status", "pass", "fail", "global_compliance"} & set(
+            output
+        )
 
     _select_view(at, "Elastic Results")
     assert any(
         "EXCEEDS USER-SPECIFIED LIMIT" in item.value
-        and "User-specified criterion: 0.001 mm" in item.value
+        and "User limit: 0.001 mm" in item.value
         for item in at.caption
     )
 
-    _set(at, ("number_input", "sls_permitted_crack_width_mm", 1.0))
+    _set(
+        at,
+        ("number_input", "sls_long_term_permitted_crack_width_mm", 1.0),
+    )
     _select_view(at, "Elastic Results")
     assert any("press Calculate" in item.value for item in at.warning)
 
@@ -6556,13 +6593,17 @@ def test_no_crack_width_is_not_assessed_without_a_numerical_result():
     assert not at.exception
     e = at.session_state["results"]["elastic"]
     assert e["crack"] is None and e["crack_short"] is None
-    assert e["crack_output"]["calculation_state"] == "NOT ASSESSED"
-    assert e["crack_output"]["value"] is None
+    for output in e["crack_output"].values():
+        assert output["calculation_state"] == "NOT ASSESSED"
+        assert output["value"] is None
     assert "sls_limit_source" not in e
     _select_view(at, "Elastic Results")
-    reason = e["crack_output"]["reason"]
-    assert reason
-    assert any(reason in item.value for item in at.info)
+    reasons = {
+        output["reason"] for output in e["crack_output"].values()
+        if output.get("reason")
+    }
+    assert reasons
+    assert all(any(reason in item.value for item in at.info) for reason in reasons)
     assert not any(
         "No crack width: section uncracked or no reinforcement" in item.value
         for item in at.info
@@ -6712,7 +6753,11 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
             "sls_heightened_effective_tensile_strength_mpa",
             2.9,
         ),
-        ("number_input", "sls_permitted_crack_width_mm", 0.2),
+        (
+            "number_input",
+            "sls_heightened_permitted_crack_width_mm",
+            0.2,
+        ),
         (
             "number_input",
             "sls_heightened_fine_effective_tension_area_mm2",
@@ -6835,7 +6880,9 @@ def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
         "sls_heightened_reference_case": "Elastic 1",
         "sls_heightened_reinforcement_surface": "ribbed",
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
-        "sls_permitted_crack_width_mm": 0.2,
+        "sls_long_term_permitted_crack_width_mm": 0.0,
+        "sls_short_term_permitted_crack_width_mm": 0.0,
+        "sls_heightened_permitted_crack_width_mm": 0.2,
         "sls_heightened_fine_effective_tension_area_mm2": 100000.0,
         "sls_heightened_coarse_effective_tension_area_mm2": 150000.0,
     }
@@ -6867,9 +6914,11 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
         "sls_heightened_on": True,
         "sls_heightened_reinforcement_surface": "ribbed",
         "sls_heightened_effective_tensile_strength_mpa": 0.0,
-        # A blank global criterion is the supported missing/required state. It
-        # remains valid for ordinary crack output and blocks heightened control.
-        "sls_permitted_crack_width_mm": None,
+        # Zero disables each ordinary comparison but remains invalid for the
+        # separately enabled heightened Formula 7.100 NA operand.
+        "sls_long_term_permitted_crack_width_mm": 0.0,
+        "sls_short_term_permitted_crack_width_mm": 0.0,
+        "sls_heightened_permitted_crack_width_mm": 0.0,
         "sls_heightened_fine_effective_tension_area_mm2": 0.0,
         "sls_heightened_coarse_effective_tension_area_mm2": 0.0,
         "_material_tab": "Mild steel",
@@ -6897,6 +6946,10 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
     assert len(
         [message for message in errors if "positive finite number" in message]
     ) == 4
+    assert any(
+        button.key and button.key.endswith("heightened-2")
+        for button in at.button
+    )
 
     at.button(
         key="analysis-input-issue-1-heightened-1"
@@ -6915,18 +6968,6 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
         "Correction target: **Effective tensile strength**" in item.value
         for item in at.info
     )
-
-    # The shared schema-25 width keeps its own exact actionable destination.
-    _goto_page(at, "Analysis")
-    at.button(
-        key="analysis-input-issue-2-heightened-2"
-    ).click().run()
-    assert at.number_input(key="sls_permitted_crack_width_mm")
-    assert any(
-        "Correction target: **Permitted crack width (shared)**" in item.value
-        for item in at.info
-    )
-
 
 def test_material_blocker_navigates_to_its_material_family(monkeypatch):
     import material_catalog
