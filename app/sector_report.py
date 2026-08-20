@@ -2902,7 +2902,9 @@ class ReportBuilder:
             self._h2("Shear, torsion and detailing settings", reserve=75)
             resistance_rows = [["Setting", "Value"]]
             shear_active = bool(inp.get("shear_on"))
-            shear_links_active = bool(shear_active and inp.get("shear_links"))
+            shear_links_active = bool(
+                shear_active and inp.get("shear_links") is True
+            )
             minimum_active = bool(inp.get("minimum_reinforcement_on"))
             transverse_active = bool(inp.get("transverse_detailing_on"))
             clear_active = bool(inp.get("clear_spacing_on"))
@@ -2930,7 +2932,6 @@ class ReportBuilder:
                     ["Shear method", _html_escape(str(effective_shear_method or "-"))],
                     ["V<sub>x</sub> web width", self._brief_auto_dimension(inp.get("shear_vx_bw"))],
                     ["V<sub>y</sub> web width", self._brief_auto_dimension(inp.get("shear_vy_bw"))],
-                    ["Shear links present", self._brief_switch(inp.get("shear_links"))],
                 ])
                 if shear_2023:
                     resistance_rows.append([
@@ -2942,7 +2943,10 @@ class ReportBuilder:
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],
                     ["Torsion wall thickness t<sub>ef</sub>", self._brief_auto_dimension(inp.get("torsion_tef"))],
                     ["Concrete tensile factor gamma<sub>ct</sub>", _fmt(inp.get("torsion_gamma_ct"), 3)],
-                    ["Use nu<sub>t</sub> = nu<sub>v</sub>", self._brief_switch(inp.get("torsion_nu_v"))],
+                    [
+                        "Requested nu<sub>t</sub> = nu<sub>v</sub> detailing allowance",
+                        self._brief_switch(inp.get("torsion_nu_v") is True),
+                    ],
                     ["Subdivide torsion tube", self._brief_switch(inp.get("torsion_subdivide"))],
                 ])
                 if inp.get("torsion_subdivide"):
@@ -2967,13 +2971,18 @@ class ReportBuilder:
                                 f"{_fmt(height, 1)} mm"
                             ),
                         ])
-            shared_links = bool(
-                shear_links_active or inp.get("torsion_on")
+            member_transverse_active = bool(
+                shear_active or inp.get("torsion_on")
             )
-            if shared_links:
+            shared_links = inp.get("shear_links") is True
+            if member_transverse_active:
                 resistance_rows.extend([
+                    ["Shared links / closed torsion stirrup present", self._brief_switch(shared_links)],
                     ["Member-check reinforcing material", _html_escape(str(inp.get("capacity_steel_material_id") or "-"))],
                     ["Compression-strut cot theta range", f"{_fmt(inp.get('strut_cot_min'), 2)} to {_fmt(inp.get('strut_cot_max'), 2)}"],
+                ])
+            if member_transverse_active and shared_links:
+                resistance_rows.extend([
                     ["Closed-link diameter", self._brief_auto_dimension(inp.get("shear_link_dia"))],
                     ["Closed-link longitudinal spacing", self._brief_auto_dimension(inp.get("shear_link_s"))],
                     ["Closed-link characteristic yield", self._brief_auto_dimension(inp.get("shear_fywk"), decimals=1, unit="MPa")],
@@ -4250,6 +4259,10 @@ class ReportBuilder:
             ])
             rows.extend([
                 [
+                    "Shared links / closed torsion stirrup present",
+                    self._brief_switch(inp.get("shear_links") is True),
+                ],
+                [
                     "Shared compression-strut cot theta<sub>min</sub>",
                     _fmt(inp.get("strut_cot_min"), 2),
                 ],
@@ -4270,6 +4283,10 @@ class ReportBuilder:
                         ),
                         3,
                     ),
+                ],
+                [
+                    "Requested nu<sub>t</sub> = nu<sub>v</sub> detailing allowance",
+                    self._brief_switch(inp.get("torsion_nu_v") is True),
                 ],
             ])
         plastic_results = self._result_values("plastic")
@@ -4357,7 +4374,7 @@ class ReportBuilder:
                     ],
                 ])
         if (
-            inp.get("shear_links")
+            inp.get("shear_links") is True
             and "2023" in str(inp.get("shear_method") or "")
             and not (
                 inp.get("transverse_detailing_on")
@@ -6163,9 +6180,14 @@ class ReportBuilder:
             links = item.get("links") or {}
             resistance = (
                 (links.get("res") or {}).get("vrd")
-                if self.inp.get("shear_links") else (item.get("res") or {}).get("vrd_c")
+                if self.inp.get("shear_links") is True
+                else (item.get("res") or {}).get("vrd_c")
             )
-            utilisation = links.get("util") if self.inp.get("shear_links") else item.get("util")
+            utilisation = (
+                links.get("util")
+                if self.inp.get("shear_links") is True
+                else item.get("util")
+            )
             rows.append([
                 "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
                 f"{_fmt(item.get('signed_v_ed', item.get('v_ed')), 3)} kN",
@@ -7495,18 +7517,61 @@ class ReportBuilder:
         t = self.out["torsion"]
         tube = t["tube"]
         critical = self._selected_family("torsion", self.inp) is not None
+        tube_valid = (
+            t.get("tube_valid") is True
+            if "tube_valid" in t
+            else t.get("valid") is True
+        )
+        full_resistance_assessed = (
+            t.get("full_resistance_assessed") is True
+            if "full_resistance_assessed" in t
+            else t.get("valid") is True
+        )
+        full_resistance_available = bool(
+            tube_valid
+            and full_resistance_assessed
+            and (
+                t.get("closed_links_present") is True
+                if "closed_links_present" in t
+                else t.get("valid") is True
+            )
+            and t.get("valid") is True
+        )
         self._case_heading("Torsion (thin-walled tube)", "plastic")
-        self._p("Torsion resistance from the thin-walled closed-tube idealisation "
-                "(EN 1992-1-1 sec. 6.3), method <b>" + str(t["method"]) + "</b>. The "
-                "tube is derived from the outline; the closed stirrups and the "
-                "concrete struts give the resistance at the member strut angle "
-                + ("(one angle shared with the shear check, 6.3.2(2), selected to "
-                   "minimise the governing utilisation)."
-                   if t.get("theta_mode") == "utilisation"
-                   else "(auto-optimised for the torsion resistance)."))
+        if full_resistance_available:
+            self._p("Torsion resistance from the thin-walled closed-tube "
+                    "idealisation (EN 1992-1-1 sec. 6.3), method <b>"
+                    + str(t["method"]) + "</b>. The tube is derived from the "
+                    "outline; the current closed stirrups and concrete struts "
+                    "give the resistance at the member strut angle "
+                    + ("(one angle shared with the shear check, 6.3.2(2), "
+                       "selected to minimise the governing utilisation)."
+                       if t.get("theta_mode") == "utilisation"
+                       else "(auto-optimised for the torsion resistance)."))
+        elif tube_valid and not full_resistance_assessed:
+            self._p(
+                "Full torsion resistance is <b>NOT ASSESSED</b> under the "
+                "thin-walled closed-tube model, method <b>"
+                + str(t["method"])
+                + "</b>. Current shared links / closed torsion stirrups are "
+                "required before the transverse and concrete components can "
+                "form one full resistance."
+            )
+        else:
+            self._p(
+                "Full torsion resistance is <b>NOT ASSESSED</b> because the "
+                "thin-walled tube or retained tube evidence is invalid. "
+                "No resistance or verdict is published from this state."
+            )
         status = (
-            "NOT ASSESSED" if not t.get("valid")
+            "NOT ASSESSED"
+            if not full_resistance_available
             else _demand_resistance_verdict(viz.util_ok(t.get("util")))
+        )
+        reported_trd = t.get("trd") if full_resistance_available else None
+        reported_util = t.get("util") if full_resistance_available else None
+        reported_governing = (
+            t.get("governs") if full_resistance_available else None
         )
         self._table(
             [
@@ -7514,16 +7579,20 @@ class ReportBuilder:
                  "Governing resistance", "Status"],
                 [
                     f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
-                    f"{_fmt(t.get('trd'), 3)} kN&#183;m",
-                    _pct(t.get("util")),
-                    t.get("governs") or "-",
+                    (
+                        f"{_fmt(reported_trd, 3)} kN&#183;m"
+                        if reported_trd is not None
+                        else "-"
+                    ),
+                    _pct(reported_util),
+                    reported_governing or "-",
                     status,
                 ],
             ],
             [31 * mm, 31 * mm, 31 * mm, 46 * mm, 31 * mm],
         )
         directional = t.get("directional_interactions") or {}
-        if directional:
+        if directional and full_resistance_available:
             self._small(
                 "Generic V<sub>x,Ed</sub> + V<sub>y,Ed</sub> + T<sub>Ed</sub> "
                 "interaction is <b>NOT CALCULATED</b>. Standalone torsion is reported "
@@ -7589,6 +7658,36 @@ class ReportBuilder:
                     "reinforcement is sufficient; it is not an overall resistance "
                     "verdict."
                 )
+        if tube_valid and not full_resistance_assessed:
+            reason = str(
+                t.get("assessment_reason")
+                or t.get("reason")
+                or "full torsion resistance not assessed"
+            )
+            self._small(
+                "Reason: " + _html_escape(reason.replace("_", " ")) + ". "
+                "T<sub>Rd,max</sub> is retained only as the concrete-strut cap "
+                "and T<sub>Rd,c</sub> as cracking transparency. Neither is "
+                "promoted to T<sub>Rd</sub>; no utilisation, governing "
+                "resistance or PASS/FAIL verdict is issued."
+            )
+            self._table(
+                [
+                    ["Quantity", "Value", "Publication state"],
+                    ["T<sub>Ed</sub>", f"{_fmt(t.get('t_ed'), 3)} kN&#183;m", "Applied action"],
+                    ["T<sub>Rd,max</sub>", f"{_fmt(t.get('trd_max'), 3)} kN&#183;m", "Concrete cap only"],
+                    ["T<sub>Rd,c</sub>", f"{_fmt(t.get('trd_c'), 3)} kN&#183;m", "Cracking transparency"],
+                    ["Required longitudinal steel", f"{_fmt(t.get('asl_req'), 0)} mm<sup>2</sup>", "Informational requirement"],
+                ],
+                [55 * mm, 45 * mm, 80 * mm],
+            )
+            self._small(
+                "Displayed cap angle: theta = "
+                f"{_fmt(t.get('theta_deg'), 1)}&#176;, cot theta = "
+                f"{_fmt(t.get('cot'), 3)}. This is not an accepted resistance "
+                "angle while full resistance is not assessed."
+            )
+            return
         if not t["valid"]:
             if t.get("reason") == "multi-cell (2+ voids)":
                 self._small("Torsion not evaluated: a multi-cell section (two or "

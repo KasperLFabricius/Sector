@@ -943,6 +943,109 @@ def test_shear_without_links_retains_concrete_screening_verdict():
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
+def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
+    torsion = {
+        "tube_valid": True,
+        "closed_links_present": False,
+        "full_resistance_assessed": False,
+        "assessment_reason": "closed_links_not_present",
+        "valid": False,
+        "trd": None,
+        "trd_max": 88.0,
+        "trd_c": 12.0,
+        "util": None,
+        "governs": None,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=False,
+        ),
+        {"plastic": _plastic(), "torsion": torsion},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    torsion_row = by_check["Torsion"]
+    assert torsion_row["status"] == "NOT ASSESSED"
+    assert torsion_row["result"] == "-"
+    assert torsion_row["criterion"] == "-"
+    assert torsion_row["util"] is None
+    assert torsion_row["note"] == "closed_links_not_present"
+
+    combined_row = by_check["Combined M-V-T"]
+    assert combined_row["status"] == "NOT ASSESSED"
+    assert combined_row["util"] is None
+    assert combined_row["note"] == "closed_links_not_present"
+
+
+def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
+    torsion = {
+        "tube_valid": True,
+        "closed_links_present": False,
+        "full_resistance_assessed": True,
+        "assessment_reason": "closed_links_not_present",
+        "valid": True,
+        "util": 0.10,
+    }
+    results = {
+        "plastic": _plastic(),
+        "torsion": torsion,
+        "combined": {
+            "valid": True,
+            "dkna_sum": 0.10,
+            "dkna_ok": True,
+        },
+    }
+
+    blocker = presentation.combined_bending_assessment_blocker(results)
+    assert blocker == (
+        "Torsion prerequisite is not assessed: closed_links_not_present"
+    )
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=False,
+        ),
+        results,
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert combined_rows
+    assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
+    assert all(row["util"] is None for row in combined_rows)
+    assert (
+        presentation.worked_example_selection({}, results)["families"].get(
+            "combined"
+        )
+        is None
+    )
+
+
+def test_torsion_geometry_failure_remains_distinct_from_missing_links():
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", torsion_on=True, shear_links=True),
+        {
+            "plastic": _plastic(),
+            "torsion": {
+                "tube_valid": False,
+                "closed_links_present": True,
+                "full_resistance_assessed": True,
+                "valid": False,
+                "util": None,
+                "reason": "compound outline requires subdivision",
+            },
+        },
+    )
+    torsion_row = next(row for row in rows if row["check"] == "Torsion")
+
+    assert torsion_row["status"] == "INVALID"
+    assert torsion_row["note"] == "compound outline requires subdivision"
+
+
 def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
     vx = {
         "res": {"valid": True, "vrd_c": 100.0},

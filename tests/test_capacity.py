@@ -1987,6 +1987,301 @@ def _torsion_cracking_result(method, gamma_ct, demand=28.0):
     return ctx, result
 
 
+@pytest.mark.parametrize(
+    "method",
+    [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
+)
+def test_tube_torsion_requires_current_closed_link_authority(method):
+    absent_input = _member_input(
+        torsion_on=True,
+        torsion_method=method,
+        torsion_gamma_ct=(
+            codes.EC2_2005.gamma_ct
+            if method == codes.EC2_2005.label
+            else codes.EC2_2005_DKNA.gamma_ct
+        ),
+        shear_links=False,
+        shear_link_dia=16.0,
+        shear_link_s=100.0,
+    )
+    absent_section = absent_input["section"]
+    absent_before = copy.deepcopy(
+        {key: value for key, value in absent_input.items() if key != "section"}
+    )
+    absent_context = capacity.build_torsion_context(absent_input, 0.0)
+    absent = capacity.tube_torsion(
+        absent_context["tube"],
+        absent_context["t_ed"],
+        **absent_context["_tk"],
+    )
+
+    assert absent_input["section"] is absent_section
+    assert {
+        key: value for key, value in absent_input.items() if key != "section"
+    } == absent_before
+    assert absent_context["closed_links_present"] is False
+    assert absent_context["asw_t"] == 0.0
+    assert absent_context["asw_over_s_t"] == 0.0
+    assert absent["tube_valid"] is True
+    assert absent["closed_links_present"] is False
+    assert absent["full_resistance_assessed"] is False
+    assert absent["assessment_reason"] == "closed_links_not_present"
+    assert absent["valid"] is False
+    assert absent["trd_s"] == 0.0
+    assert absent["trd"] is None
+    assert absent["util"] is None
+    assert absent["governs"] is None
+    assert absent["trd_max"] > 0.0
+    assert absent["trd_c"] > 0.0
+
+    stale_detail_kwargs = dict(absent_context["_tk"])
+    stale_detail_kwargs["nu_detail"] = True
+    stale_detail = capacity.tube_torsion(
+        absent_context["tube"],
+        absent_context["t_ed"],
+        **stale_detail_kwargs,
+    )
+    assert stale_detail["nu"] == pytest.approx(absent["nu"])
+    assert stale_detail["trd_max"] == pytest.approx(absent["trd_max"])
+
+    absent_missing_link_inputs = dict(absent_input)
+    for key in ("shear_link_dia", "shear_link_s", "shear_fywk"):
+        absent_missing_link_inputs.pop(key)
+    absent_missing_context = capacity.build_torsion_context(
+        absent_missing_link_inputs,
+        0.0,
+    )
+    assert absent_missing_context["asw_t"] == 0.0
+    assert absent_missing_context["asw_over_s_t"] == 0.0
+    assert absent_missing_context["_tk"]["fywd"] == 0.0
+
+    absent_zero_geometry_context = capacity.build_torsion_context(
+        dict(
+            absent_input,
+            shear_link_dia=0.0,
+            shear_link_s=0.0,
+        ),
+        0.0,
+    )
+    absent_zero_geometry = capacity.tube_torsion(
+        absent_zero_geometry_context["tube"],
+        absent_zero_geometry_context["t_ed"],
+        **absent_zero_geometry_context["_tk"],
+    )
+    assert absent_zero_geometry["assessment_reason"] == (
+        "closed_links_not_present"
+    )
+    assert absent_zero_geometry["trd"] is None
+    assert absent_zero_geometry["trd_max"] > 0.0
+
+    current_input = dict(absent_input, shear_links=True)
+    current_context = capacity.build_torsion_context(current_input, 0.0)
+    current = capacity.tube_torsion(
+        current_context["tube"],
+        current_context["t_ed"],
+        **current_context["_tk"],
+    )
+
+    assert current_context["closed_links_present"] is True
+    assert current_context["asw_over_s_t"] > 0.0
+    assert current["closed_links_present"] is True
+    assert current["full_resistance_assessed"] is True
+    assert current["valid"] is True
+    assert current["trd"] == pytest.approx(
+        min(current["trd_s"], current["trd_max"])
+    )
+    assert current["util"] == pytest.approx(
+        current["t_ed"] / current["trd"]
+    )
+
+    steel_governing_context = capacity.build_torsion_context(
+        dict(
+            absent_input,
+            shear_links=True,
+            shear_link_dia=2.0,
+            shear_link_s=500.0,
+        ),
+        0.0,
+    )
+    steel_governing = capacity.tube_torsion(
+        steel_governing_context["tube"],
+        steel_governing_context["t_ed"],
+        **steel_governing_context["_tk"],
+    )
+    assert steel_governing["full_resistance_assessed"] is True
+    assert steel_governing["governs"] == "stirrups (TRd,s)"
+
+    concrete_governing_context = capacity.build_torsion_context(
+        dict(
+            absent_input,
+            shear_links=True,
+            shear_link_dia=32.0,
+            shear_link_s=50.0,
+        ),
+        0.0,
+    )
+    concrete_governing = capacity.tube_torsion(
+        concrete_governing_context["tube"],
+        concrete_governing_context["t_ed"],
+        **concrete_governing_context["_tk"],
+    )
+    assert concrete_governing["full_resistance_assessed"] is True
+    assert concrete_governing["governs"] == "crushing (TRd,max)"
+
+    zero_resistance_kwargs = dict(current_context["_tk"])
+    zero_resistance_kwargs["fcd"] = 0.0
+    assessed_zero = capacity.tube_torsion(
+        current_context["tube"],
+        current_context["t_ed"],
+        **zero_resistance_kwargs,
+    )
+    assert assessed_zero["full_resistance_assessed"] is True
+    assert assessed_zero["valid"] is True
+    assert assessed_zero["trd"] == 0.0
+    assert math.isinf(assessed_zero["util"])
+    assert assessed_zero["governs"] == "crushing (TRd,max)"
+
+    zero_input = dict(current_input, shear_link_dia=0.0)
+    zero_context = capacity.build_torsion_context(zero_input, 0.0)
+    zero = capacity.tube_torsion(
+        zero_context["tube"],
+        zero_context["t_ed"],
+        **zero_context["_tk"],
+    )
+    assert zero["closed_links_present"] is True
+    assert zero["full_resistance_assessed"] is False
+    assert (
+        zero["assessment_reason"]
+        == "closed_link_reinforcement_not_positive"
+    )
+
+
+def test_torsion_uses_one_closed_loop_leg_independent_of_shear_leg_count():
+    one_leg = capacity.build_torsion_context(
+        _member_input(
+            torsion_on=True,
+            shear_links=True,
+            shear_link_legs=1.0,
+        ),
+        0.0,
+    )
+    many_legs = capacity.build_torsion_context(
+        _member_input(
+            torsion_on=True,
+            shear_links=True,
+            shear_link_legs=8.0,
+        ),
+        0.0,
+    )
+
+    assert many_legs["asw_t"] == pytest.approx(one_leg["asw_t"])
+    assert many_legs["asw_over_s_t"] == pytest.approx(
+        one_leg["asw_over_s_t"]
+    )
+    one_result = capacity.tube_torsion(
+        one_leg["tube"], one_leg["t_ed"], **one_leg["_tk"]
+    )
+    many_result = capacity.tube_torsion(
+        many_legs["tube"], many_legs["t_ed"], **many_legs["_tk"]
+    )
+    assert many_result["trd_s"] == pytest.approx(one_result["trd_s"])
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [None, 0, 1, "false", np.bool_(False), [], ()],
+)
+def test_build_torsion_context_rejects_non_boolean_link_authority(authority):
+    inp = _member_input(
+        section=None,
+        torsion_on=True,
+        shear_links=authority,
+    )
+    before = copy.deepcopy(inp)
+
+    with pytest.raises(
+        capacity.CapacityInputError,
+        match="shared links / closed torsion stirrups must be a Boolean",
+    ):
+        capacity.build_torsion_context(inp, 0.0)
+
+    if isinstance(authority, np.bool_):
+        assert isinstance(inp["shear_links"], np.bool_)
+        assert bool(inp["shear_links"]) is bool(before["shear_links"])
+    else:
+        assert inp == before
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [None, 0, 1, "false", np.bool_(False), [], ()],
+)
+def test_build_shear_context_rejects_non_boolean_link_authority(authority):
+    inp = _member_input(shear_on=True, shear_links=authority)
+
+    with pytest.raises(
+        capacity.CapacityInputError,
+        match="shared links / closed torsion stirrups must be a Boolean",
+    ):
+        capacity.build_shear_context(inp, 0.0, 0.0)
+
+
+def test_directional_shear_rejects_malformed_authority_without_live_action():
+    inp = _member_input(
+        shear_links="false",
+        shear_Vx=0.0,
+        shear_Vy=0.0,
+    )
+    section = inp.get("section")
+    before = copy.deepcopy({
+        key: value for key, value in inp.items() if key != "section"
+    })
+
+    with pytest.raises(
+        capacity.CapacityInputError,
+        match="shared links / closed torsion stirrups must be a Boolean",
+    ):
+        capacity.build_directional_shear_contexts(inp, 0.0, 0.0)
+
+    assert inp.get("section") is section
+    assert {
+        key: value for key, value in inp.items() if key != "section"
+    } == before
+
+
+def test_build_torsion_context_requires_link_authority_and_gates_nu_v():
+    missing = _member_input(torsion_on=True)
+    del missing["shear_links"]
+    with pytest.raises(
+        capacity.CapacityInputError,
+        match="shared links / closed torsion stirrups must be a Boolean",
+    ):
+        capacity.build_torsion_context(missing, 0.0)
+
+    no_links = capacity.build_torsion_context(
+        _member_input(
+            torsion_on=True,
+            shear_links=False,
+            torsion_nu_v=True,
+        ),
+        0.0,
+    )
+    assert no_links["nu_detail_requested"] is True
+    assert no_links["nu_detail"] is False
+    assert no_links["nu_detail_applied"] is False
+
+    malformed = _member_input(
+        torsion_on=True,
+        shear_links=True,
+        torsion_nu_v=1,
+    )
+    with pytest.raises(
+        capacity.CapacityInputError,
+        match="torsion closed-detailing allowance must be a Boolean",
+    ):
+        capacity.build_torsion_context(malformed, 0.0)
+
+
 def test_torsion_method_defaults_keep_distinct_tensile_factors():
     assert codes.EC2_2005.gamma_ct == pytest.approx(1.50)
     assert codes.EC2_2005_DKNA.gamma_ct == pytest.approx(1.70)

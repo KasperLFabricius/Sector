@@ -852,6 +852,7 @@ def tube_torsion(
     tube,
     t_ed,
     *,
+    closed_links_present,
     tcode,
     fck,
     fcd,
@@ -865,7 +866,13 @@ def tube_torsion(
     fyd_long,
 ):
     """Build the resistance/utilisation payload for one thin-walled tube."""
-    nu_t = tcode.torsion_nu(fck, closed_detailing=nu_detail)
+    closed_detailing_applied = bool(
+        closed_links_present is True and nu_detail is True
+    )
+    nu_t = tcode.torsion_nu(
+        fck,
+        closed_detailing=closed_detailing_applied,
+    )
     a_t = asw_over_s * fywd
     b_t = nu_t * alpha_cw * fcd * tube["tef"]
     shear = _module("shear")
@@ -889,15 +896,36 @@ def tube_torsion(
     steel = torsion.trd_s_result(tube["Ak"], fywd, asw_over_s, cot)
     strut = torsion.trd_max_result(
         fck, tcode, tube["Ak"], tube["tef"], alpha_cw, cot,
-        closed_detailing=nu_detail, fcd_mpa=fcd,
+        closed_detailing=closed_detailing_applied, fcd_mpa=fcd,
     )
-    selection = torsion.select_torsion_resistance(
-        steel.trd_s, strut.trd_max, asw_over_s=asw_over_s
+    selection = torsion.select_full_torsion_resistance(
+        steel.trd_s,
+        strut.trd_max,
+        closed_links_present=closed_links_present,
+        asw_over_s=asw_over_s,
     )
     cracking = torsion.trd_c_result(fctd, tube["Ak"], tube["tef"])
-    util = t_ed / selection.resistance if selection.resistance > 0.0 else math.inf
+    util = (
+        t_ed / selection.resistance
+        if selection.full_resistance_assessed and selection.resistance > 0.0
+        else (
+            math.inf
+            if selection.full_resistance_assessed
+            else None
+        )
+    )
     longitudinal = torsion.asl_required_result(
         t_ed, tube["uk"], tube["Ak"], fyd_long, cot
+    )
+    tube_valid = bool(tube["valid"])
+    full_resistance_assessed = bool(
+        selection.full_resistance_assessed
+    )
+    valid = bool(tube_valid and full_resistance_assessed)
+    assessment_reason = (
+        None
+        if full_resistance_assessed
+        else selection.reason
     )
     return {
         "tube": tube,
@@ -912,7 +940,11 @@ def tube_torsion(
         "asl_req": longitudinal.asl_required_mm2,
         "nu": nu_t,
         "governs": selection.governs,
-        "valid": tube["valid"],
+        "valid": valid,
+        "tube_valid": tube_valid,
+        "closed_links_present": selection.closed_links_present,
+        "full_resistance_assessed": full_resistance_assessed,
+        "assessment_reason": assessment_reason,
         "angle_selection": angle_selection,
         "steel_resistance": asdict(steel),
         "strut_resistance": asdict(strut),
@@ -1091,7 +1123,7 @@ def _build_shear_face_context(
         "ddg": ddg,
         "fyd_flex": fyd_flex,
     }
-    if not inp.get("shear_links"):
+    if not _shared_links_present(inp):
         return payload, None
 
     cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
@@ -1159,6 +1191,17 @@ def _build_shear_face_context(
     return payload, context
 
 
+def _shared_links_present(inp):
+    """Return the exact shared-link authority or reject malformed evidence."""
+
+    authority = inp.get("shear_links", _MISSING)
+    if type(authority) is not bool:
+        raise CapacityInputError(
+            "shared links / closed torsion stirrups must be a Boolean"
+        )
+    return authority
+
+
 def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
     """Return every required face candidate for active Vx,Ed and Vy,Ed checks.
 
@@ -1168,6 +1211,7 @@ def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
     """
     if not inp.get("shear_on"):
         return {}
+    _shared_links_present(inp)
     code = selected_shear_code(inp.get("shear_method"))
     _require_valid_input_geometry(inp)
     definitions = shear_direction_specs(inp)
@@ -1211,6 +1255,7 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
     """
     if not inp.get("shear_on"):
         return None, None
+    _shared_links_present(inp)
     code = selected_shear_code(inp.get("shear_method"))
     _require_valid_input_geometry(inp)
     axis = inp["shear_axis"]
@@ -1233,6 +1278,12 @@ def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
     if not inp.get("torsion_on"):
         return None
+    closed_links_present = _shared_links_present(inp)
+    nu_detail_requested = inp.get("torsion_nu_v", _MISSING)
+    if type(nu_detail_requested) is not bool:
+        raise CapacityInputError(
+            "torsion closed-detailing allowance must be a Boolean"
+        )
     tcode = selected_torsion_code(inp.get("torsion_method"))
     if inp["section"] is None:
         return None
@@ -1257,13 +1308,25 @@ def build_torsion_context(inp, n_ed_comp):
         inp["outer"], inp["holes"], tef_override=inp["torsion_tef"]
     )
     gamma_s = inp["steel"].gamma_y
-    fywd = inp["shear_fywk"] / gamma_s
+    fywd = (
+        inp["shear_fywk"] / gamma_s
+        if closed_links_present
+        else 0.0
+    )
     fyd_long = design_yield(inp["steel"])
-    asw = _module("templates").bar_area(inp["shear_link_dia"])
-    asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
+    asw = (
+        _module("templates").bar_area(inp["shear_link_dia"])
+        if closed_links_present
+        else 0.0
+    )
+    asw_over_s = (
+        asw / inp["shear_link_s"]
+        if closed_links_present and inp["shear_link_s"] > 0.0
+        else 0.0
+    )
     cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
     cot_max = max(inp["strut_cot_min"], inp["strut_cot_max"])
-    nu_detail = inp["torsion_nu_v"]
+    nu_detail = bool(closed_links_present and nu_detail_requested)
     nu_detail_applied = bool(
         nu_detail
         and tcode.torsion_nu(fck, closed_detailing=True)
@@ -1275,6 +1338,7 @@ def build_torsion_context(inp, n_ed_comp):
     fctd = fctk_005 / gamma_ct
     t_ed = inp["torsion_T"]
     tube_kwargs = {
+        "closed_links_present": closed_links_present,
         "tcode": tcode,
         "fck": fck,
         "fcd": fcd,
@@ -1361,6 +1425,8 @@ def build_torsion_context(inp, n_ed_comp):
         "gamma_c": gamma_c,
         "gamma_ct": gamma_ct,
         "gamma_s": gamma_s,
+        "closed_links_present": closed_links_present,
+        "nu_detail_requested": nu_detail_requested,
         "compound_detected": compound_detected,
         "subdivision_requested": subdivision_requested,
         "subdivision_valid": subdivision_valid,

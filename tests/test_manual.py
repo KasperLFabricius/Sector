@@ -336,6 +336,13 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     assert "shared closed stirrup" in text                # note (b)
     assert "one compression-strut range" in text
     assert "three physical component checks" in text
+    assert "one current shared physical input" in text
+    assert "Positive stored diameter or spacing does not imply" in text
+    assert "Without the shared-link authority" in text
+    assert "does not publish $T_{Rd}$, utilisation" in text
+    assert "informational requirement" in text
+    assert "not proof of provided torsion reinforcement" in text
+    assert "applied only when current closed links are present" in text
     assert "bands not overlap" not in text
     assert "reverts to each" not in text
 

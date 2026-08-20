@@ -59,7 +59,9 @@ or PASS/FAIL from them.
    rejected rather than truthiness-coerced.
 6. The existing project schema stays at 25. Project hashes and calculation
    signatures continue to include `shear_links`, so changing the authority makes
-   a retained calculation stale.
+   a retained calculation stale. The capacity-result contract token is advanced,
+   so a live pre-A03 Streamlit session must recalculate even when its input values
+   have not changed.
 
 ## Retained calculation contract
 

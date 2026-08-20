@@ -4760,6 +4760,67 @@ def test_report_includes_torsion_section():
     )
 
 
+def test_report_withholds_full_torsion_verdict_without_current_closed_links():
+    torsion = _torsion_out()
+    stale_full_resistance = 999.123
+    torsion.update(
+        tube_valid=True,
+        closed_links_present=False,
+        full_resistance_assessed=False,
+        assessment_reason="closed_links_not_present",
+        valid=False,
+        trd=stale_full_resistance,
+        util=9.99,
+        governs="STALE FULL RESISTANCE",
+        directional_interactions={
+            "vx": {
+                "directional_interaction_status": "STALE DIRECTIONAL PASS",
+                "directional_governing_face": "positive",
+                "directional_governing_cot": 1.5,
+                "util": 0.10,
+                "interaction": {"value": 0.10},
+            },
+        },
+    )
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        shear_links=False,
+        torsion_nu_v=True,
+    )
+
+    for profile in ("Brief", "Standard", "Audit"):
+        text = " ".join(
+            _pdf_text(
+                sector_report.build_report(
+                    {},
+                    inp,
+                    {"torsion": torsion},
+                    figures=False,
+                    profile=profile,
+                )
+            ).split()
+        )
+
+        assert "Torsion" in text
+        assert "NOT ASSESSED" in text
+        assert "Shared links / closed torsion stirrup present" in text
+        assert "Requested" in text and "detailing allowance" in text
+        assert sector_report._fmt(stale_full_resistance, 3) not in text
+        assert "STALE FULL RESISTANCE" not in text
+        assert "STALE DIRECTIONAL PASS" not in text
+        if profile == "Brief":
+            continue
+        assert "Full torsion resistance is NOT ASSESSED" in text
+        assert "Concrete cap only" in text
+        assert "Cracking transparency" in text
+        assert "Informational requirement" in text
+        assert "not an accepted resistance angle" in text
+        assert "no utilisation, governing resistance or PASS/FAIL verdict" in text
+        assert "Torsion resistance from the thin-walled closed-tube" not in text
+        assert "T Rd = min" not in text
+
+
 def test_report_directional_vt_table_retains_actual_verdict_outside_default_range():
     out = _out()
     torsion = _torsion_out(interaction=True)
@@ -4807,6 +4868,7 @@ def test_report_compound_torsion_requires_subdivision():
     assert "Torsion not evaluated" in txt
     assert "6.3.1(3)" in txt
     assert "Enable sub-tubes" in txt
+    assert "Current shared links / closed torsion stirrups are required" not in txt
 
 
 def _subtube(b, h, tef, ak, c, ted, trd, util, gov, cx=0.0, cy=0.0):

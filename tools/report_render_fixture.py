@@ -639,6 +639,7 @@ def _results(inp: dict | None = None) -> dict:
             fywd=fywd, asw_over_s=torsion_asw_over_s,
             cot_min=cot, cot_max=cot, nu_detail=False,
             fctd=fctd, fyd_long=fyd_long,
+            closed_links_present=True,
         )
 
     def longitudinal_at(cot: float) -> dict:
@@ -1558,6 +1559,7 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             asw_over_s=torsion_out["asw_over_s"],
             cot_min=cot, cot_max=cot, nu_detail=False,
             fctd=torsion_out["fctd"], fyd_long=expected_fyd_long,
+            closed_links_present=True,
         )
 
     def longitudinal_util(cot: float) -> float:

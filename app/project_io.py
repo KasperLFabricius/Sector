@@ -433,6 +433,11 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
         for key in SCALAR_KEYS
         if key in scalars
     }
+    for key in ("shear_links", "torsion_nu_v"):
+        if key not in payload:
+            payload[key] = False
+        elif type(payload[key]) is not bool:
+            raise ValueError(f"{key} must be a Boolean")
     for key in _POSITIVE_FACTOR_KEYS.intersection(payload):
         payload[key] = _positive_real(payload[key], key)
     permitted_width = payload.get(PERMITTED_CRACK_WIDTH_KEY)

@@ -228,6 +228,70 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert json.loads(second)["version"] == project_io.VERSION
 
 
+def test_shared_link_authority_round_trips_and_missing_defaults_false():
+    tables, scalars = _current_project()
+    scalars.update(
+        torsion_on=True,
+        shear_links=True,
+        torsion_nu_v=True,
+    )
+
+    text = project_io.dump_project(tables, scalars)
+    _, loaded = project_io.parse_project(text)
+    payload = json.loads(text)
+
+    assert payload["version"] == 25
+    assert payload["scalars"]["shear_links"] is True
+    assert payload["scalars"]["torsion_nu_v"] is True
+    assert loaded["shear_links"] is True
+    assert loaded["torsion_nu_v"] is True
+
+    missing_payload = json.loads(text)
+    missing_payload["scalars"].pop("shear_links")
+    missing_payload["scalars"].pop("torsion_nu_v")
+    missing_payload["provenance"]["input_sha256"] = (
+        project_io._input_digest({
+            "tables": missing_payload["tables"],
+            "scalars": missing_payload["scalars"],
+        })
+    )
+    missing_text = json.dumps(missing_payload)
+    missing_tables, missing_loaded = project_io.parse_project(missing_text)
+
+    assert missing_payload["version"] == 25
+    assert "shear_links" not in missing_payload["scalars"]
+    assert "torsion_nu_v" not in missing_payload["scalars"]
+    assert missing_loaded["shear_links"] is False
+    assert missing_loaded["torsion_nu_v"] is False
+
+    resaved = json.loads(
+        project_io.dump_project(missing_tables, missing_loaded)
+    )
+    assert resaved["version"] == 25
+    assert resaved["scalars"]["shear_links"] is False
+    assert resaved["scalars"]["torsion_nu_v"] is False
+
+
+@pytest.mark.parametrize("key", ("shear_links", "torsion_nu_v"))
+@pytest.mark.parametrize("invalid", (None, 0, 1, "true", [], {}))
+def test_shared_link_authorities_must_be_serialized_booleans(key, invalid):
+    tables, scalars = _current_project()
+    valid_text = project_io.dump_project(tables, scalars)
+    scalars[key] = invalid
+
+    with pytest.raises(ValueError, match=rf"^{key} must be a Boolean$"):
+        project_io.dump_project(tables, scalars)
+
+    payload = json.loads(valid_text)
+    payload["scalars"][key] = invalid
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    with pytest.raises(ValueError, match=rf"^{key} must be a Boolean$"):
+        project_io.parse_project(json.dumps(payload))
+
+
 @pytest.mark.parametrize(
     ("shape", "settings"),
     [

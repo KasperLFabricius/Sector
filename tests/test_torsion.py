@@ -507,6 +507,7 @@ def test_app_nu_v_detailing_flag_gated_to_dk_na():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
     _set_and_click(
         at,
         "calculate",
@@ -693,18 +694,120 @@ def _apply_box_section(at, b=600.0, h=600.0, wall=100.0):
     return at
 
 
-def test_app_torsion_produces_a_resistance():
+def _enable_shared_links(at):
+    _set(at, ("checkbox", "shear_links", True))
+    return at
+
+
+def test_app_torsion_without_current_closed_links_is_not_assessed():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
     assert not at.exception
     t = at.session_state["results"]["torsion"]
+    assert t["tube_valid"] is True
+    assert t["closed_links_present"] is False
+    assert t["full_resistance_assessed"] is False
+    assert t["assessment_reason"] == "closed_links_not_present"
+    assert t["valid"] is False
+    assert t["asw_over_s"] == 0.0
+    assert t["trd_s"] == 0.0
+    assert t["trd"] is None
+    assert t["util"] is None
+    assert t["governs"] is None
+    assert t["trd_max"] > 0.0
+    assert t["trd_c"] > 0.0
+    assert t["asl_req"] > 0.0
+    assert t["theta_mode"] == "transparency"
+    _select_view(at, "Torsion")
+    assert any("NOT ASSESSED" in item.value for item in at.warning)
+    labels = [metric.label for metric in at.metric]
+    assert r"Concrete cap $T_{Rd,max}$" in labels
+    assert not any("Utilisation" in label for label in labels)
+
+
+def test_app_retains_but_does_not_apply_nu_v_request_without_current_links():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "torsion_nu_v", True),
+        ("number_input", "torsion_T", 40.0),
+    )
+    with_links = at.session_state["results"]["torsion"]
+    assert with_links["nu_v_detailing"] is True
+
+    _set_and_click(at, "calculate", ("checkbox", "shear_links", False))
+    without_links = at.session_state["results"]["torsion"]
+
+    assert at.session_state["torsion_nu_v"] is True
+    assert without_links["closed_links_present"] is False
+    assert without_links["nu_v_detailing"] is False
+    assert without_links["nu"] < with_links["nu"]
+    assert without_links["trd"] is None
+
+
+def test_app_torsion_produces_a_resistance_with_current_closed_links():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
+    _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["tube_valid"] is True
+    assert t["closed_links_present"] is True
+    assert t["full_resistance_assessed"] is True
     assert t["valid"] and t["trd"] > 0.0
     assert t["trd"] == pytest.approx(min(t["trd_s"], t["trd_max"]))
     assert 1.0 <= t["cot"] <= 2.5
     assert t["util"] == pytest.approx(40.0 / t["trd"])
     assert t["asl_req"] > 0.0                       # torsion needs longitudinal steel
+
+
+def test_app_combined_without_links_withholds_torsion_dependent_verdicts():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 20.0),
+    )
+    _calculate(at)
+
+    assert not at.exception
+    results = at.session_state["results"]
+    torsion_result = results["torsion"]
+    assert torsion_result["closed_links_present"] is False
+    assert torsion_result["full_resistance_assessed"] is False
+    assert torsion_result.get("interaction") is None
+
+    combined_result = results["combined"]
+    assert set(combined_result) == {
+        "valid",
+        "have_m",
+        "have_v",
+        "have_t",
+        "method",
+        "component",
+        "governing_face",
+        "governing_cot",
+    }
+    assert combined_result["valid"] is False
+    assert combined_result["have_m"] is True
+    assert combined_result["have_v"] is True
+    assert combined_result["have_t"] is False
+    assert combined_result["method"] == at.session_state["combined_method"]
+    assert "dkna_sum" not in combined_result
+    assert "crushing" not in combined_result
+    assert "transverse" not in combined_result
 
 
 def test_app_hollow_override_above_real_wall_preserves_completed_result():
@@ -719,6 +822,7 @@ def test_app_hollow_override_above_real_wall_preserves_completed_result():
         ("checkbox", "torsion_on", True),
         ("number_input", "torsion_T", 40.0),
     )
+    _enable_shared_links(at)
     _calculate(at)
     assert not at.exception
     baseline = at.session_state["results"]["torsion"]
@@ -810,6 +914,7 @@ def test_app_torsion_uses_final_material_factors():
         ("number_input", "torsion_gamma_ct", 2.0),
         ("number_input", "torsion_T", 40.0),
     )
+    _enable_shared_links(at)
     _calculate(at)
     assert not at.exception
     t = at.session_state["results"]["torsion"]
@@ -832,6 +937,7 @@ def test_torsion_gamma_ct_change_marks_results_stale_and_recalculates():
         ("checkbox", "torsion_on", True),
         ("number_input", "torsion_T", 28.0),
     )
+    _enable_shared_links(at)
     _calculate(at)
     old_signature = at.session_state["result_sig"]
     initial = at.session_state["results"]["torsion"]
@@ -855,10 +961,43 @@ def test_torsion_gamma_ct_change_marks_results_stale_and_recalculates():
     )
 
 
+def test_shared_link_authority_change_marks_torsion_stale_and_recalculates():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 28.0),
+    )
+    _enable_shared_links(at)
+    _calculate(at)
+    old_signature = at.session_state["result_sig"]
+    assert at.session_state["results"]["torsion"][
+        "full_resistance_assessed"
+    ] is True
+
+    _goto_page(at, "Inputs")
+    _set(at, ("checkbox", "shear_links", False))
+    assert at.session_state["_latest_inputs"]["signature"] != old_signature
+    assert at.session_state["result_sig"] == old_signature
+    assert at.session_state["results"]["torsion"][
+        "full_resistance_assessed"
+    ] is True
+
+    _calculate(at)
+    result = at.session_state["results"]["torsion"]
+    assert result["closed_links_present"] is False
+    assert result["full_resistance_assessed"] is False
+    assert result["assessment_reason"] == "closed_links_not_present"
+    assert result["trd"] is None
+    assert result["util"] is None
+
+
 def test_app_torsion_view_renders():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 30.0))
     _select_view(at, "Torsion")
     assert not at.exception
@@ -873,6 +1012,7 @@ def test_app_torsion_view_renders():
 def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
     _apply_t_section(at, bf=b1, hf=h1, bw=b0, hw=h0)
     _set(at, ("checkbox", "torsion_on", True))
+    _enable_shared_links(at)
     _set(
         at,
         ("number_input", "torsion_T", T),
@@ -907,6 +1047,47 @@ def test_app_torsion_subdivided_sums_capacities():
     assert t["governing_sub"] == max(range(len(t["subtubes"])),
                                      key=lambda i: t["subtubes"][i]["util"])
     assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
+
+
+def test_app_torsion_subdivided_without_links_withholds_capacity_sum():
+    at = _fresh()
+    at.run()
+    _subdivided(at)
+    _set(at, ("checkbox", "shear_links", False))
+    _calculate(at)
+
+    assert not at.exception
+    torsion_result = at.session_state["results"]["torsion"]
+    assert torsion_result["subdivided"] is True
+    assert len(torsion_result["subtubes"]) == 2
+    assert torsion_result["tube_valid"] is True
+    assert torsion_result["closed_links_present"] is False
+    assert torsion_result["full_resistance_assessed"] is False
+    assert torsion_result["assessment_reason"] == "closed_links_not_present"
+    assert torsion_result["valid"] is False
+    assert torsion_result["trd"] is None
+    assert torsion_result["util"] is None
+    assert torsion_result["governing_sub"] is None
+    assert sum(
+        sub["t_ed"] for sub in torsion_result["subtubes"]
+    ) == pytest.approx(40.0)
+    assert all(
+        sub["tube_valid"] is True
+        and sub["full_resistance_assessed"] is False
+        and sub["trd"] is None
+        and sub["util"] is None
+        and sub["governs"] is None
+        and sub["trd_max"] > 0.0
+        and sub["trd_c"] > 0.0
+        for sub in torsion_result["subtubes"]
+    )
+
+    _select_view(at, "Torsion")
+    assert any("NOT ASSESSED" in item.value for item in at.warning)
+    assert not any("Utilisation" in metric.label for metric in at.metric)
+    assert any(
+        "No sum of full capacities" in item.value for item in at.caption
+    )
 
 
 def test_app_subdivision_override_blocks_and_preserves_completed_result():
@@ -955,6 +1136,7 @@ def test_app_compound_torsion_requires_subdivision():
     at.run()
     _apply_t_section(at)
     at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
     assert not at.exception
     t = at.session_state["results"]["torsion"]
@@ -1181,6 +1363,7 @@ def test_app_torsion_only_axial_input_enabled():
         ("radio", "mode", "Elastic"),
         ("checkbox", "torsion_on", True),
     )
+    _enable_shared_links(at)
     _set(at, ("number_input", "torsion_T", 30.0))
     goto_input_stage(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
@@ -1204,6 +1387,7 @@ def test_app_torsion_multi_void_rejected():
         "x (mm)": [-100.0, -40.0, -70.0, None, 40.0, 100.0, 70.0],
         "y (mm)": [-50.0, -50.0, 50.0, None, -50.0, -50.0, 50.0]})
     at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
     assert not at.exception
     assert not at.session_state["results"]["torsion"]["valid"]
@@ -1218,7 +1402,13 @@ def test_app_torsion_uses_the_shared_stirrup():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
-    assert not at.number_input(key="shear_link_dia").disabled   # enabled for torsion
+    assert at.number_input(key="shear_link_dia").disabled
+    assert at.number_input(key="shear_link_s").disabled
+    _enable_shared_links(at)
+    assert not at.number_input(key="shear_link_dia").disabled
+    assert not at.number_input(key="shear_link_s").disabled
+    assert at.number_input(key="shear_vx_link_legs").disabled
+    assert at.number_input(key="shear_vy_link_legs").disabled
     _set_and_click(
         at,
         "calculate",
@@ -1239,6 +1429,7 @@ def test_app_torsion_longitudinal_uses_mild_fyd():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
     t = at.session_state["results"]["torsion"]
     fytk = at.session_state["mild_fytk"]
@@ -1264,6 +1455,7 @@ def test_app_torsion_prestress_raises_alpha_cw():
         ("number_input", "pre_IS", 3.0),
         ("checkbox", "torsion_on", True),
     )
+    _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
     assert not at.exception
     t = at.session_state["results"]["torsion"]
@@ -1340,6 +1532,7 @@ def test_biaxial_torsion_retains_and_presents_directional_631_screens():
         ("checkbox", "shear_on", True),
         ("checkbox", "torsion_on", True),
     )
+    _enable_shared_links(at)
     _set_and_click(
         at,
         "calculate",
@@ -1425,6 +1618,7 @@ def test_app_torsion_nu_v_toggle_raises_trd_max():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 30.0))
     base = at.session_state["results"]["torsion"]["trd_max"]
     _set_and_click(at, "calculate", ("checkbox", "torsion_nu_v", True))
@@ -1437,6 +1631,7 @@ def test_app_torsion_out_of_default_range_warns_and_retains_verdict():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
+    _enable_shared_links(at)
     _set_and_click(
         at,
         "calculate",

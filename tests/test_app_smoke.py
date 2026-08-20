@@ -757,6 +757,28 @@ def test_pre_expansion_project_load_clears_stale_expanded_quick_section_state():
         assert key not in at.session_state["_durable_input_scalars"]
 
 
+def test_project_load_without_link_authorities_clears_stale_true_state():
+    import project_io
+
+    at = _fresh()
+    at.session_state["shear_links"] = True
+    at.session_state["torsion_nu_v"] = True
+    at.session_state["_durable_input_scalars"] = {
+        "shear_links": True,
+        "torsion_nu_v": True,
+    }
+    at.session_state["_pending_project"] = project_io.dump_project({}, {})
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["shear_links"] is False
+    assert at.session_state["torsion_nu_v"] is False
+    assert at.session_state["_durable_input_scalars"]["shear_links"] is False
+    assert at.session_state["_durable_input_scalars"]["torsion_nu_v"] is False
+    assert at.checkbox(key="shear_links").value is False
+    assert at.checkbox(key="torsion_nu_v").value is False
+
+
 def test_current_expanded_quick_section_keys_apply_after_hot_project_load():
     import project_io
 
@@ -1632,6 +1654,7 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
     )
     latest = at.session_state["_latest_inputs"]
     token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    assert token[-1] == "closed-torsion-link-authority-v1"
 
     for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
         assert tuple(latest[key]).count(token) == 1
@@ -6211,9 +6234,17 @@ def test_combined_preflight_warns_when_prerequisites_missing():
     assert any("Combined M-V-T needs all of these" in w for w in warns)
     assert any(f"{cross} Shear check" in w and f"{cross} Torsion check" in w
                for w in warns)
-    # enabling both clears the warning (now a success checklist instead)
+    # Enabling both component checks still leaves the current physical
+    # shared-link authority missing.
     at.checkbox(key="shear_on").set_value(True).run()
     at.checkbox(key="torsion_on").set_value(True).run()
+    assert any(
+        f"{cross} Shared links / closed torsion stirrups present" in w.value
+        for w in at.warning
+    )
+
+    # Selecting the shared physical link authority completes the preflight.
+    at.checkbox(key="shear_links").set_value(True).run()
     assert not any("needs all of these" in w.value for w in at.warning)
     assert any("requirements met" in s.value for s in at.success)
 
