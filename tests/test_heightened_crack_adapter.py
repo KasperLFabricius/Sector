@@ -15,7 +15,20 @@ def _case_entry(*, retained_as_eff_m2: float = 0.0015) -> dict:
         "name": "SLS-2",
         "results": {
             "elastic": {
-                "crack_output": {"case": "Short-term (fine)"},
+                "crack_output": {
+                    "long_term": {
+                        "value": 0.20,
+                        "case": "Long-term (fine)",
+                    },
+                    "short_term": {
+                        "value": 0.30,
+                        "case": "Short-term (fine)",
+                    },
+                },
+                "crack": {
+                    "as_eff": retained_as_eff_m2,
+                    "effective_reinforcement": [],
+                },
                 "crack_short": {
                     "as_eff": retained_as_eff_m2,
                     "effective_reinforcement": [

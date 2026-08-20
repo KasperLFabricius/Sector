@@ -548,9 +548,9 @@ def manual_blocks() -> list:
        "stresses from long- and short-term action components, on the cracked "
        "(tension-ignored) section, with creep through the modular ratio.\n"
        "- **Elastic and crack outputs.** Cracking threshold, transformed section "
-       "properties, stresses and optional crack width. With no criterion the "
-       "width remains a calculated output; an entered user criterion produces "
-       "only a specified-limit comparison with its source.\n"
+       "properties, stresses and requested long- and short-term crack widths. "
+       "A 0 mm limit leaves only that duration's calculated width; a positive "
+       "limit produces only the matching specified-limit comparison and source.\n"
        "- **Grouped fatigue.** Reinforcement S-N/Miner and concrete compression "
        "checks from named spectra of sustained states and cyclic increments.\n"
        "- **Longitudinal detailing.** Edition-specific minimum-reinforcement "
@@ -722,9 +722,11 @@ def manual_blocks() -> list:
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
        "earlier results; press *Calculate* to create current results. Current "
-       "projects use schema version 25. Schema 24 is migrated in memory through "
-       "the bounded permitted-crack-width rule and resaves cleanly as schema 25; "
-       "the source file is not changed. Schema 23 remains unsupported.")
+       "projects use schema version 26. Schema 25 is migrated in memory by "
+       "splitting the former single crack-width value into independent long-term "
+       "and short-term user limits and, when it was active, a separate Formula "
+       "7.100 NA operand. It resaves cleanly as schema 26; the source file is not "
+       "changed. Schema 24 remains unsupported.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
@@ -959,17 +961,20 @@ def manual_blocks() -> list:
         "standard",
         f"Sector {APP_VERSION} reports the DK NA fine and coarse crack systems "
         "side by side, each for the long-term and short-term load (four crack "
-        "widths). One optional positive permitted width in Analysis settings is "
-        "shared by every selected Elastic row. Blank means the width is calculated "
-        "without an acceptance assessment; when a value is entered, Sector reports "
-        "only a bounded comparison with that user-specified value and does not infer "
-        "exposure, durability, prestress category or owner requirements. Part C "
-        "derives every model in full with the critical worked crack width.",
+        "widths) for each crack-width-enabled Elastic row. Analysis settings "
+        "provide independent long-term and short-term user limits. Zero means "
+        "that duration is "
+        "calculated without an acceptance comparison; when a positive value is "
+        "entered, Sector reports only a bounded duration-matched comparison and "
+        "does not infer exposure, durability, load-combination classification, "
+        "prestress category or owner requirements. Part C derives every model in "
+        "full with the critical worked crack width.",
     )
     md("For the first-generation Danish basis only, **DK heightened crack-control "
        "minimum** is a separate section-level opt-in. The user must declare its "
-       "applicability and supply the shared permitted width, reinforcement surface, "
-       "effective tensile strength and separate fine/coarse effective tension areas. "
+       "applicability and supply the separate Formula 7.100 NA permitted width, "
+       "reinforcement surface, effective tensile strength and separate fine/coarse "
+       "effective tension areas. "
        "Sector calculates both systems together. It derives bar diameter, reinforcement "
        "modulus and provided area from one retained ordinary crack-enabled Elastic "
        "case: the sole such case is automatic, otherwise the user selects it explicitly.")
@@ -1228,10 +1233,13 @@ def manual_blocks() -> list:
        "stresses are reported per bar for the long-term, "
        "short-term and total states, with the peak concrete compression and the "
        "neutral-axis position. The cracking threshold and section properties are "
-       "always reported. Without a criterion, optional crack width is a numerical "
-       "output without an acceptance verdict. With a criterion, Sector reports "
+       "always reported. The per-action request remains authoritative. "
+       "Independent long-term and short-term crack-width limits are applied "
+       "only for a crack-width-enabled case and only to their matching durations. "
+       "A 0 mm limit leaves the "
+       "calculated width without comparison; a positive limit produces "
        "**WITHIN USER-SPECIFIED LIMIT** or **EXCEEDS USER-SPECIFIED LIMIT** and "
-       "the criterion source; this is not a code-compliance conclusion.")
+       "its source. This is not a code-compliance conclusion.")
     h2("Fatigue results")
     md("The **Fatigue Results** view first lists every spectrum and its governing "
        "utilisation. Select a spectrum to see the section utilisation map, then "
@@ -1628,8 +1636,8 @@ def manual_blocks() -> list:
        "{4E_{sk}kw_k}}$$\n\n"
        "where $k=1$ for the fine crack system and $k=2$ for the coarse system; "
        "$m_s=1$ for ribbed reinforcement and $m_s=\\sqrt{2}$ for smooth "
-       "reinforcement. Sector uses the shared Analysis permitted width and calculates "
-       "the fine and coarse systems together, each with its own user-supplied "
+       "reinforcement. Sector uses the separate Formula 7.100 NA permitted-width "
+       "input and calculates the fine and coarse systems together, each with its own user-supplied "
        "$A_{c,eff}$. Bar diameter uses the ordinary crack override when positive, "
        "otherwise the largest contributing mild bar; $E_{sk}$ is the conservative "
        "minimum among contributing mild materials and $A_{s,prov}$ is their retained "
@@ -2018,9 +2026,10 @@ def manual_blocks() -> list:
 
     h1("Limitations & troubleshooting")
     md("Use this indexed chapter for explicit model boundaries and for the "
-       "symptom/cause/correction path shown by the application. A blank ordinary "
-       "crack criterion is an intentional no-comparison state; a blank enabled "
-       "heightened criterion is invalid and must be corrected.")
+       "symptom/cause/correction path shown by the application. A zero long-term "
+       "or short-term ordinary crack criterion is an intentional no-comparison "
+       "state; a zero enabled heightened criterion is invalid and must be "
+       "corrected.")
     h2("Key assumptions & limitations")
     md("- **One plane section.** Plane sections remain plane; the strain field is "
        "linear across the section.\n"

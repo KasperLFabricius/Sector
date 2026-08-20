@@ -76,12 +76,17 @@ def case_signature(
     key: str,
     context: Mapping | None = None,
 ) -> tuple:
-    """Stable row signature including the shared crack criterion where used."""
+    """Stable row signature including all crack-width inputs where used."""
 
     signature = tuple(record[column] for column in load_cases.TABLE_COLUMNS[key])
     if key == load_cases.ELASTIC_TABLE_KEY:
-        signature += (
-            (context or {}).get(sls_core.PERMITTED_CRACK_WIDTH_KEY),
+        signature += tuple(
+            (context or {}).get(criterion_key)
+            for criterion_key in (
+                sls_core.LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
+                sls_core.SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
+                sls_core.HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
+            )
         )
     return signature
 
@@ -177,13 +182,24 @@ def elastic_case_input(base: Mapping, record: Mapping) -> dict:
     """Map one Elastic row and its optional crack-width calculation."""
     out = dict(base)
     calculate_crack_width = bool(record["calculate_crack_width"])
-    criterion = base.get(sls_core.PERMITTED_CRACK_WIDTH_KEY)
+    long_term_criterion = base.get(
+        sls_core.LONG_TERM_PERMITTED_CRACK_WIDTH_KEY, 0.0
+    )
+    short_term_criterion = base.get(
+        sls_core.SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY, 0.0
+    )
     out.update(
         mode="Elastic",
         elastic_case=_metadata(record),
         calculate_crack_width=calculate_crack_width,
-        sls_permitted_crack_width_mm=criterion,
-        sls_permitted_crack_width_source=sls_core.crack_criterion_source(),
+        sls_long_term_permitted_crack_width_mm=long_term_criterion,
+        sls_short_term_permitted_crack_width_mm=short_term_criterion,
+        sls_long_term_permitted_crack_width_source=(
+            sls_core.crack_criterion_source("long_term")
+        ),
+        sls_short_term_permitted_crack_width_source=(
+            sls_core.crack_criterion_source("short_term")
+        ),
         P_el_l=float(record["n_long_ed_kn"]),
         Mx_el_l=float(record["mx_long_ed_knm"]),
         My_el_l=float(record["my_long_ed_knm"]),
@@ -203,28 +219,41 @@ def _with_ordinary_crack_assessment(
     record: Mapping,
     base: Mapping,
 ) -> dict:
-    """Attach the shared Analysis criterion to one Elastic result."""
+    """Attach both duration-matched Analysis criteria to one Elastic result."""
 
     copied = dict(result)
     elastic = copied.get("elastic")
     if not isinstance(elastic, Mapping):
         return copied
     elastic_copy = dict(elastic)
-    raw_output = elastic_copy.get("crack_output")
-    if not isinstance(raw_output, Mapping):
-        raw_output = {
-            "value": None,
-            "case": None,
-            "governing": None,
-            "unit": "mm",
-            "reason": "No crack-width output was returned by the calculation.",
-        }
-    elastic_copy["crack_output"] = sls_core.assess_crack_output(
-        raw_output,
-        requested=bool(record["calculate_crack_width"]),
-        criterion_mm=base.get(sls_core.PERMITTED_CRACK_WIDTH_KEY),
-        criterion_source=sls_core.crack_criterion_source(),
-    )
+    raw_outputs = elastic_copy.get("crack_output")
+    if not isinstance(raw_outputs, Mapping):
+        raw_outputs = {}
+    assessed = {}
+    for duration, key in (
+        ("long_term", sls_core.LONG_TERM_PERMITTED_CRACK_WIDTH_KEY),
+        ("short_term", sls_core.SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY),
+    ):
+        raw_output = raw_outputs.get(duration)
+        if not isinstance(raw_output, Mapping):
+            raw_output = {
+                "value": None,
+                "case": None,
+                "governing": None,
+                "unit": "mm",
+                "reason": (
+                    f"No {duration.replace('_', '-')} crack-width output was "
+                    "returned by the calculation."
+                ),
+            }
+        assessed[duration] = sls_core.assess_crack_output(
+            raw_output,
+            duration=duration,
+            requested=bool(record["calculate_crack_width"]),
+            criterion_mm=base.get(key, 0.0),
+            criterion_source=sls_core.crack_criterion_source(duration),
+        )
+    elastic_copy["crack_output"] = assessed
     copied["elastic"] = elastic_copy
     return copied
 

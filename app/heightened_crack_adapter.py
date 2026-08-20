@@ -93,10 +93,37 @@ def _selected_crack_result(elastic: Mapping) -> tuple[str, Mapping]:
         raise ValueError(
             "The heightened reference case has no retained ordinary crack output"
         )
-    branch = str(output.get("case") or "").strip()
+    candidates = []
+    for tie_order, duration in enumerate(("long_term", "short_term")):
+        assessment = output.get(duration)
+        if not isinstance(assessment, Mapping):
+            continue
+        value = assessment.get("value")
+        if isinstance(value, bool):
+            continue
+        try:
+            width = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        branch = str(assessment.get("case") or "").strip()
+        if math.isfinite(width) and width >= 0.0 and branch:
+            candidates.append((width, -tie_order, branch, assessment))
+    if not candidates:
+        reasons = [
+            str(assessment.get("reason") or "").strip()
+            for duration in ("long_term", "short_term")
+            if isinstance((assessment := output.get(duration)), Mapping)
+            and str(assessment.get("reason") or "").strip()
+        ]
+        suffix = f": {'; '.join(dict.fromkeys(reasons))}" if reasons else ""
+        raise ValueError(
+            "The heightened reference case has no governing calculated ordinary "
+            f"crack branch{suffix}"
+        )
+    _width, _order, branch, _assessment = max(candidates)
     result_key = _CRACK_RESULT_KEYS.get(branch)
     if result_key is None:
-        reason = str(output.get("reason") or "").strip()
+        reason = str(_assessment.get("reason") or "").strip()
         suffix = f": {reason}" if reason else ""
         raise ValueError(
             "The heightened reference case has no governing calculated ordinary "

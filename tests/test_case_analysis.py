@@ -28,7 +28,9 @@ def _base(**overrides):
         "shear_on": True,
         "torsion_on": True,
         "combined_on": True,
-        "sls_permitted_crack_width_mm": None,
+        "sls_long_term_permitted_crack_width_mm": 0.0,
+        "sls_short_term_permitted_crack_width_mm": 0.0,
+        "sls_heightened_permitted_crack_width_mm": 0.0,
         "plastic_cases": _plastic([
             {
                 "name": "PL-A",
@@ -317,7 +319,7 @@ def test_rejects_names_duplicated_across_solver_tables():
         case_analysis.run_case_tables(inp, lambda _inp, **_kwargs: {})
 
 
-def test_elastic_case_maps_shared_analysis_criterion_and_source():
+def test_elastic_case_maps_both_analysis_criteria_and_sources():
     record = case_analysis.case_records(
         {
             "elastic_cases": _elastic([{
@@ -329,38 +331,64 @@ def test_elastic_case_maps_shared_analysis_criterion_and_source():
     )[0]
 
     mapped = case_analysis.elastic_case_input(
-        _base(sls_permitted_crack_width_mm=0.30), record
+        _base(
+            sls_long_term_permitted_crack_width_mm=0.25,
+            sls_short_term_permitted_crack_width_mm=0.30,
+        ),
+        record,
     )
 
-    assert mapped["sls_permitted_crack_width_mm"] == pytest.approx(0.30)
-    assert mapped["sls_permitted_crack_width_source"] == (
-        "User input - Analysis settings"
+    assert mapped["sls_long_term_permitted_crack_width_mm"] == pytest.approx(
+        0.25
+    )
+    assert mapped["sls_short_term_permitted_crack_width_mm"] == pytest.approx(
+        0.30
+    )
+    assert mapped["sls_long_term_permitted_crack_width_source"] == (
+        "User input - Analysis settings - long-term"
+    )
+    assert mapped["sls_short_term_permitted_crack_width_source"] == (
+        "User input - Analysis settings - short-term"
     )
 
 
-def test_optional_criterion_changes_elastic_case_signature_and_reuse_boundary():
+def test_each_crack_width_input_changes_elastic_signature_and_reuse_boundary():
     calls = []
 
     def runner(case_inp):
-        calls.append(case_inp["sls_permitted_crack_width_mm"])
+        calls.append((
+            case_inp["sls_long_term_permitted_crack_width_mm"],
+            case_inp["sls_short_term_permitted_crack_width_mm"],
+            case_inp["sls_heightened_permitted_crack_width_mm"],
+        ))
         return {
             "elastic": {
                 "crack_output": {
-                    "value": 0.24,
-                    "case": "Short-term",
-                    "governing": "R1",
-                    "unit": "mm",
+                    "long_term": {
+                        "value": 0.20,
+                        "case": "Long-term",
+                        "governing": "R1",
+                        "unit": "mm",
+                    },
+                    "short_term": {
+                        "value": 0.24,
+                        "case": "Short-term",
+                        "governing": "R1",
+                        "unit": "mm",
+                    },
                 }
             }
         }
 
-    def inputs(criterion):
+    def inputs(long_term, short_term, heightened):
         return _base(
             mode="Elastic",
             shear_on=False,
             torsion_on=False,
             combined_on=False,
-            sls_permitted_crack_width_mm=criterion,
+            sls_long_term_permitted_crack_width_mm=long_term,
+            sls_short_term_permitted_crack_width_mm=short_term,
+            sls_heightened_permitted_crack_width_mm=heightened,
             plastic_cases=load_cases.empty_table(
                 load_cases.PLASTIC_TABLE_KEY
             ),
@@ -370,25 +398,36 @@ def test_optional_criterion_changes_elastic_case_signature_and_reuse_boundary():
             }]),
         )
 
-    first = case_analysis.run_case_tables(inputs(0.30), runner)
+    first = case_analysis.run_case_tables(inputs(0.25, 0.30, 0.20), runner)
     second = case_analysis.run_case_tables(
-        inputs(0.40), runner, reuse_elastic=first["elastic_cases"]
+        inputs(0.25, 0.40, 0.20), runner, reuse_elastic=first["elastic_cases"]
+    )
+    third = case_analysis.run_case_tables(
+        inputs(0.25, 0.40, 0.21), runner, reuse_elastic=second["elastic_cases"]
     )
 
-    assert calls == [0.30, 0.40]
+    assert calls == [
+        (0.25, 0.30, 0.20),
+        (0.25, 0.40, 0.20),
+        (0.25, 0.40, 0.21),
+    ]
     assert first["elastic_cases"][0]["signature"] != (
         second["elastic_cases"][0]["signature"]
     )
     assert second["elastic_cases"][0]["reused"] is False
+    assert second["elastic_cases"][0]["signature"] != (
+        third["elastic_cases"][0]["signature"]
+    )
 
 
-def test_case_orchestration_publishes_only_the_controlled_crack_comparison():
+def test_case_orchestration_publishes_only_duration_matched_comparisons():
     inp = _base(
         mode="Elastic",
         shear_on=False,
         torsion_on=False,
         combined_on=False,
-        sls_permitted_crack_width_mm=0.30,
+        sls_long_term_permitted_crack_width_mm=0.40,
+        sls_short_term_permitted_crack_width_mm=0.30,
         plastic_cases=load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY),
         elastic_cases=_elastic([{
             "name": "EL-governing",
@@ -401,10 +440,18 @@ def test_case_orchestration_publishes_only_the_controlled_crack_comparison():
         lambda _case_inp: {
             "elastic": {
                 "crack_output": {
-                    "value": 0.36,
-                    "case": "Short-term",
-                    "governing": "R7",
-                    "unit": "mm",
+                    "long_term": {
+                        "value": 0.36,
+                        "case": "Long-term",
+                        "governing": "R5",
+                        "unit": "mm",
+                    },
+                    "short_term": {
+                        "value": 0.36,
+                        "case": "Short-term",
+                        "governing": "R7",
+                        "unit": "mm",
+                    },
                 }
             }
         },
@@ -413,12 +460,20 @@ def test_case_orchestration_publishes_only_the_controlled_crack_comparison():
         "crack_output"
     ]
 
-    assert output["calculation_state"] == "EXCEEDS USER-SPECIFIED LIMIT"
-    assert output["ratio"] == pytest.approx(1.2)
-    assert output["criterion_source"] == (
-        "User input - Analysis settings"
+    assert output["long_term"]["calculation_state"] == (
+        "WITHIN USER-SPECIFIED LIMIT"
     )
-    assert output["comparison_equation"] == "w_k / w_k,criterion"
+    assert output["long_term"]["ratio"] == pytest.approx(0.9)
+    assert output["short_term"]["calculation_state"] == (
+        "EXCEEDS USER-SPECIFIED LIMIT"
+    )
+    assert output["short_term"]["ratio"] == pytest.approx(1.2)
+    assert output["short_term"]["criterion_source"] == (
+        "User input - Analysis settings - short-term"
+    )
+    assert output["short_term"]["comparison_equation"] == (
+        "w_k / w_k,criterion"
+    )
     assert "status" not in output
 
 
@@ -428,7 +483,8 @@ def test_stored_criterion_is_not_assessed_when_width_was_not_requested():
         shear_on=False,
         torsion_on=False,
         combined_on=False,
-        sls_permitted_crack_width_mm=0.30,
+        sls_long_term_permitted_crack_width_mm=0.25,
+        sls_short_term_permitted_crack_width_mm=0.30,
         plastic_cases=load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY),
         elastic_cases=_elastic([{
             "name": "EL-stored",
@@ -441,6 +497,9 @@ def test_stored_criterion_is_not_assessed_when_width_was_not_requested():
     )
     output = result["elastic"]["crack_output"]
 
-    assert output["calculation_state"] == "NOT REQUESTED"
-    assert output["criterion_mm"] == pytest.approx(0.30)
-    assert output["value"] is None
+    assert output["long_term"]["calculation_state"] == "NOT REQUESTED"
+    assert output["short_term"]["calculation_state"] == "NOT REQUESTED"
+    assert output["long_term"]["criterion_mm"] == pytest.approx(0.25)
+    assert output["short_term"]["criterion_mm"] == pytest.approx(0.30)
+    assert output["long_term"]["value"] is None
+    assert output["short_term"]["value"] is None

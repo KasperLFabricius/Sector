@@ -93,6 +93,71 @@ def test_required_workflow_and_troubleshooting_inventories_are_complete():
         ia.warning_reference("missing")
 
 
+def test_crack_comparison_guidance_uses_independent_zero_value_contract():
+    warning = ia.warning_reference("crack-criterion-missing")
+    guidance = f"{warning.symptom} {warning.cause} {warning.correction}"
+    for token in (
+        "long-term or short-term permitted width",
+        "0 mm",
+        "positive value for that duration",
+        "without comparison",
+    ):
+        assert token in guidance
+    for retired in ("blank", "shared value"):
+        assert retired not in guidance
+
+    readme = " ".join(
+        (ROOT / "README.md").read_text(encoding="utf-8").split()
+    )
+    for token in (
+        "independent user-specified long-term and short-term criteria",
+        "When an Elastic action requests crack width",
+        "criterion of 0 mm",
+        "duration-matched criterion source",
+    ):
+        assert token in readme
+    for retired in ("If no criterion is entered", "criterion is entered"):
+        assert retired not in readme
+
+    manual_text = " ".join(
+        item
+        for block in manual.manual_blocks()
+        for item in block
+        if isinstance(item, str)
+    )
+    product_identity = (ROOT / "docs" / "product_identity.md").read_text(
+        encoding="utf-8"
+    )
+    load_case_contract = (ROOT / "app" / "load_cases.py").read_text(
+        encoding="utf-8"
+    )
+    assert "A 0 mm limit leaves only that duration's calculated width" in manual_text
+    assert "crack-width-enabled Elastic row" in manual_text
+    assert "Independent long-term and short-term crack-width limits" in manual_text
+    assert "Independent long-term and short-term crack-width limits" in product_identity
+    assert "Elastic action that requests crack width" in product_identity
+    assert "0 mm value leaves that duration's calculated width" in product_identity
+    assert "Independent long-term and short-term permitted" in load_case_contract
+
+    current_publication = "\n".join(
+        (guidance, readme, manual_text, product_identity, load_case_contract)
+    ).casefold()
+    for retired in (
+        "with no criterion",
+        "without a criterion",
+        "if no criterion is entered",
+        "if a criterion is entered",
+        "optional user-specified crack-width criterion",
+        "one optional positive permitted width",
+        "blank ordinary crack criterion",
+        "one optional permitted width in analysis settings is shared by",
+        "shared by every ordinary and heightened crack check",
+        "shared analysis permitted width",
+        "supply the shared permitted width",
+    ):
+        assert retired not in current_publication
+
+
 def test_portable_workflow_names_the_real_double_click_and_unsigned_boundary():
     workflow = next(item for item in ia.WORKFLOWS if item.key == "portable-build")
     warning = ia.warning_reference(workflow.warning_key)

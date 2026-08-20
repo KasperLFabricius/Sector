@@ -124,10 +124,13 @@ def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():
                 "results": {"elastic": {
                     "converged": True,
                     "crack_output": {
-                        "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
-                        "value": 0.30,
-                        "criterion_mm": 0.40,
-                        "ratio": 0.75,
+                        "long_term": {
+                            "duration": "long_term",
+                            "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
+                            "value": 0.30,
+                            "criterion_mm": 0.40,
+                            "ratio": 0.75,
+                        },
                     },
                 }},
             },
@@ -136,10 +139,13 @@ def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():
                 "results": {"elastic": {
                     "converged": True,
                     "crack_output": {
-                        "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
-                        "value": 0.20,
-                        "criterion_mm": 0.10,
-                        "ratio": 2.0,
+                        "long_term": {
+                            "duration": "long_term",
+                            "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                            "value": 0.20,
+                            "criterion_mm": 0.10,
+                            "ratio": 2.0,
+                        },
                     },
                 }},
             },
@@ -150,6 +156,7 @@ def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():
 
     assert selection["crack_comparison"] == {
         "case_id": "EL-LARGEST-WIDTH",
+        "duration": "long_term",
     }
 
 
@@ -162,12 +169,15 @@ def test_unassessed_global_crack_width_suppresses_noncritical_comparison():
                     "converged": True,
                     "crack": {"wk": 0.40},
                     "crack_output": {
-                        "calculation_state": (
-                            "CALCULATED - ACCEPTANCE NOT ASSESSED"
-                        ),
-                        "value": 0.40,
-                        "criterion_mm": None,
-                        "ratio": None,
+                        "long_term": {
+                            "duration": "long_term",
+                            "calculation_state": (
+                                "CALCULATED - ACCEPTANCE NOT ASSESSED"
+                            ),
+                            "value": 0.40,
+                            "criterion_mm": None,
+                            "ratio": None,
+                        },
                     },
                 }},
             },
@@ -177,10 +187,13 @@ def test_unassessed_global_crack_width_suppresses_noncritical_comparison():
                     "converged": True,
                     "crack": {"wk": 0.20},
                     "crack_output": {
-                        "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
-                        "value": 0.20,
-                        "criterion_mm": 0.10,
-                        "ratio": 2.0,
+                        "long_term": {
+                            "duration": "long_term",
+                            "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                            "value": 0.20,
+                            "criterion_mm": 0.10,
+                            "ratio": 2.0,
+                        },
                     },
                 }},
             },
@@ -205,8 +218,8 @@ def test_unassessed_global_crack_width_suppresses_noncritical_comparison():
         ("NOT ASSESSED", 0.20, "User-specified limit 0.200 mm"),
         (
             "CALCULATED - ACCEPTANCE NOT ASSESSED",
-            None,
-            "User criterion not specified",
+            0.0,
+            "No comparison requested",
         ),
         ("WITHIN USER-SPECIFIED LIMIT", 0.30, "User-specified limit 0.300 mm"),
         ("EXCEEDS USER-SPECIFIED LIMIT", 0.10, "User-specified limit 0.100 mm"),
@@ -216,6 +229,7 @@ def test_crack_summary_preserves_exact_bounded_state(
     state, criterion, expected_criterion,
 ):
     output = {
+        "duration": "long_term",
         "calculation_state": state,
         "value": None if state in {"NOT REQUESTED", "NOT ASSESSED"} else 0.25,
         "criterion_mm": criterion,
@@ -233,10 +247,12 @@ def test_crack_summary_preserves_exact_bounded_state(
             "converged": True,
             "stress_outputs": {},
             "lambda_cr": 1.0,
-            "crack_output": output,
+            "crack_output": {"long_term": output},
         }},
     )
-    crack = next(row for row in rows if row["check"] == "Crack width")
+    crack = next(
+        row for row in rows if row["check"] == "Crack width - Long-term"
+    )
 
     assert crack["status"] == state
     assert crack["criterion"] == expected_criterion
