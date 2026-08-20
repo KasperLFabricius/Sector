@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import pathlib
 import re
@@ -21,6 +22,72 @@ import reinforcement_table
 
 from app import modelled_direction
 from sector import capacity, codes, design_standards
+
+
+class _FloatTypeError:
+    def __float__(self):
+        raise TypeError("hostile conversion")
+
+
+class _FloatValueError:
+    def __float__(self):
+        raise ValueError("hostile conversion")
+
+
+class _FloatOverflowError:
+    def __float__(self):
+        raise OverflowError("hostile conversion")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0, 0.0),
+        (0.25, 0.25),
+        (1.75, 1.75),
+        (np.int64(2), 2.0),
+        (np.float32(0.375), 0.375),
+    ],
+)
+def test_nonnegative_project_scalar_normalizes_finite_reals(value, expected):
+    before_type = type(value)
+    result = project_io._nonnegative_real(value, "criterion")
+    assert type(result) is float
+    assert result == pytest.approx(expected)
+    assert type(value) is before_type
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        True,
+        False,
+        np.bool_(True),
+        np.bool_(False),
+        "0.25",
+        b"0.25",
+        -0.001,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        _FloatTypeError(),
+        _FloatValueError(),
+        _FloatOverflowError(),
+    ],
+)
+def test_nonnegative_project_scalar_rejects_non_numeric_or_invalid_values(value):
+    with pytest.raises(
+        ValueError, match="criterion must be a non-negative finite real number"
+    ):
+        project_io._nonnegative_real(value, "criterion")
+
+
+def test_nonnegative_project_scalar_has_exact_required_boundary():
+    parameters = list(
+        inspect.signature(project_io._nonnegative_real).parameters.values()
+    )
+    assert [parameter.name for parameter in parameters] == ["value", "label"]
+    assert all(parameter.default is inspect.Parameter.empty for parameter in parameters)
 
 
 @pytest.mark.parametrize(
