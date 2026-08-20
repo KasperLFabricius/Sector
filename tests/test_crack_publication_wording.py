@@ -66,6 +66,54 @@ def test_unrelated_shared_mechanics_and_phrase_boundaries_are_allowed(
     assert retired_crack_wording_rules(passage) == ()
 
 
+@pytest.mark.parametrize(
+    "passage",
+    (
+        "If no criterion is entered",
+        "With no criteria the widths remain calculated",
+        "Without a criterion, crack width is numerical",
+        "No criterion is supplied",
+        "With no permitted width the result is calculated",
+        "If no permitted crack width is entered",
+        "Without a permitted width, crack width is numerical",
+        "No permitted crack width is provided",
+        "If no crack criterion is entered",
+        "Without a crack-width criterion the result remains numerical",
+        "No crack width is set",
+        "Without crack width, reinforcement stress is still reported",
+    ),
+)
+def test_retired_explicit_no_field_variants_are_detected(passage: str) -> None:
+    before = passage
+    assert retired_crack_wording_rules(passage) == (
+        "no-crack-limit-field-language",
+    )
+    assert passage == before
+
+
+@pytest.mark.parametrize(
+    "passage",
+    (
+        "The crack result evidence is absent.",
+        "The retained crack branch is missing or unsupported.",
+        "With no crack result evidence the row is not assessed.",
+        "Without a fatigue criterion the fatigue screen remains unavailable.",
+        "If no torsion criterion is entered, torsion is not assessed.",
+        "No reinforcement criterion is supplied.",
+        "Blank material rows are rejected.",
+        "An absent retained result remains NOT ASSESSED.",
+    ),
+)
+def test_unrelated_no_field_and_absence_language_are_allowed(passage: str) -> None:
+    assert retired_crack_wording_rules(passage) == ()
+
+
+def test_existing_shared_rule_remains_independent_of_no_field_rule() -> None:
+    assert retired_crack_wording_rules("the shared crack criterion") == (
+        "shared-crack-limit-language",
+    )
+
+
 @pytest.mark.parametrize("value", (None, False, 0, (), [], {}))
 def test_non_text_passages_fail_closed(value: object) -> None:
     assert retired_crack_wording_rules(value) == ("invalid-text",)
