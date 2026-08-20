@@ -1615,6 +1615,140 @@ def test_report_shared_preparation_survives_poisoned_calculators(monkeypatch):
     assert "Elastic material transformation" in text
 
 
+def _many_retained_curvature_candidates(candidate_count=29):
+    candidates = [{
+        "mode": "concrete_crushing",
+        "element_index": None,
+        "element_id": None,
+        "strain_limit": 0.003440392741656883,
+        "distance_from_na_m": 0.175,
+        "curvature_per_m": 0.01965938709518219,
+        "selected": True,
+    }]
+    for index in range(1, candidate_count):
+        curvature = 0.03 + index / 1000.0
+        candidates.append({
+            "mode": "bar_tension_rupture",
+            "element_index": index - 1,
+            "element_id": f"A01-R-{index:02d}",
+            "strain_limit": curvature * 0.05,
+            "distance_from_na_m": 0.05,
+            "curvature_per_m": curvature,
+            "selected": False,
+        })
+    return candidates
+
+
+def test_curvature_selection_substitution_is_bounded_and_retained():
+    one = [{"selected": True, "curvature_per_m": 0.02}]
+    one_before = copy.deepcopy(one)
+    selected = {"curvature_per_m": 0.02}
+    selected_before = copy.deepcopy(selected)
+
+    assert sector_report._curvature_selection_substitution(one, selected) == (
+        "= min(kappa<sub>1</sub>) = kappa<sub>1</sub> = 0.020000000 1/m"
+    )
+    assert one == one_before
+    assert selected == selected_before
+
+    tied = [
+        {"selected": False, "curvature_per_m": 0.02},
+        {"selected": True, "curvature_per_m": 0.02},
+    ]
+    assert sector_report._curvature_selection_substitution(tied, selected) == (
+        "= min(kappa<sub>i=1:2</sub>) = kappa<sub>2</sub> = "
+        "0.020000000 1/m"
+    )
+
+    many = _many_retained_curvature_candidates()
+    many_before = copy.deepcopy(many)
+    substitution = sector_report._curvature_selection_substitution(
+        many,
+        {"curvature_per_m": many[0]["curvature_per_m"]},
+    )
+    assert substitution == (
+        "= min(kappa<sub>i=1:29</sub>) = kappa<sub>1</sub> = "
+        "0.019659387 1/m"
+    )
+    assert "," not in substitution
+    assert all(
+        sector_report._fmt(candidate["curvature_per_m"], 9) not in substitution
+        for candidate in many[1:]
+    )
+    assert many == many_before
+
+
+def test_complete_profiles_compact_many_curvature_candidates_without_loss():
+    out = _out()
+    candidates = _many_retained_curvature_candidates()
+    point = out["plastic"]["points"][0]
+    point["curvature_candidates"] = copy.deepcopy(candidates)
+    point["curvature_selection"] = {
+        "mode": candidates[0]["mode"],
+        "element_index": candidates[0]["element_index"],
+        "curvature_per_m": candidates[0]["curvature_per_m"],
+    }
+    before = copy.deepcopy(out)
+
+    for profile in ("Standard", "Audit"):
+        pdf = sector_report.build_report(
+            {}, _inp(), out, figures=False, profile=profile
+        )
+        assert pdf[:4] == b"%PDF"
+        text = " ".join(_pdf_text(pdf).split())
+        assert "Ultimate-curvature candidates" in text
+        assert "i = 1 : 29" in text
+        assert "1.966e-2" in text
+        assert "0.01965939" in text
+        for candidate in candidates[1:]:
+            assert candidate["element_id"] in text
+            assert sector_report._fmt(candidate["curvature_per_m"], 8) in text
+
+    brief = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Brief"
+    )).split())
+    assert "Ultimate-curvature candidates" not in brief
+    assert out == before
+
+
+def test_curvature_selection_is_not_inferred_from_incomplete_retained_evidence(
+    monkeypatch,
+):
+    out = _out()
+    point = out["plastic"]["points"][0]
+    point["curvature_candidates"] = _many_retained_curvature_candidates(2)
+    for candidate in point["curvature_candidates"]:
+        candidate["selected"] = False
+    before = copy.deepcopy(out)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("report inferred a missing selected candidate")
+
+    monkeypatch.setattr(
+        sector_report,
+        "_curvature_selection_substitution",
+        forbidden,
+    )
+    pdf = sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Standard"
+    )
+    text = " ".join(_pdf_text(pdf).split())
+    assert "Ultimate-curvature candidates" in text
+    assert "governing ultimate curvature" not in text
+    assert out == before
+
+    absent = copy.deepcopy(out)
+    absent_point = absent["plastic"]["points"][0]
+    absent_point.pop("curvature_candidates")
+    absent_point.pop("curvature_selection")
+    absent_before = copy.deepcopy(absent)
+    absent_text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), absent, figures=False, profile="Standard"
+    )).split())
+    assert "Ultimate-curvature candidates" not in absent_text
+    assert absent == absent_before
+
+
 def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
     text = " ".join(_pdf_text(sector_report.build_report(
         {}, _inp(), _out(), figures=False, qa_appendix=False,
