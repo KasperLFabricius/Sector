@@ -334,6 +334,153 @@ def test_retained_torsion_formula_results_match_legacy_scalars():
     )
 
 
+@pytest.mark.parametrize(
+    ("trd_s_value", "trd_max_value", "resistance", "governs"),
+    [
+        (40.0, 60.0, 40.0, "stirrups (TRd,s)"),
+        (60.0, 40.0, 40.0, "crushing (TRd,max)"),
+        (40.0, 40.0, 40.0, "stirrups (TRd,s)"),
+        (0.0, 60.0, 0.0, "stirrups (TRd,s)"),
+        (60.0, 0.0, 0.0, "crushing (TRd,max)"),
+    ],
+)
+def test_full_torsion_resistance_selects_only_under_current_closed_links(
+    trd_s_value, trd_max_value, resistance, governs
+):
+    selected = torsion.select_full_torsion_resistance(
+        trd_s_value,
+        trd_max_value,
+        closed_links_present=True,
+        asw_over_s=0.5,
+    )
+    assert selected.full_resistance_assessed is True
+    assert selected.trd_s == pytest.approx(trd_s_value)
+    assert selected.trd_max == pytest.approx(trd_max_value)
+    assert selected.closed_links_present is True
+    assert selected.asw_over_s == pytest.approx(0.5)
+    assert selected.resistance == pytest.approx(resistance)
+    assert selected.governs == governs
+    assert selected.reason is None
+
+
+@pytest.mark.parametrize(
+    ("asw_over_s", "trd_s_value"),
+    [(0.0, 0.0), (0.5, 40.0)],
+)
+def test_full_torsion_resistance_never_infers_absent_link_authority(
+    asw_over_s, trd_s_value
+):
+    selected = torsion.select_full_torsion_resistance(
+        trd_s_value,
+        60.0,
+        closed_links_present=False,
+        asw_over_s=asw_over_s,
+    )
+    assert selected.full_resistance_assessed is False
+    assert selected.trd_s == pytest.approx(trd_s_value)
+    assert selected.trd_max == pytest.approx(60.0)
+    assert selected.closed_links_present is False
+    assert selected.asw_over_s == pytest.approx(asw_over_s)
+    assert selected.resistance is None
+    assert selected.governs is None
+    assert selected.reason == "closed_links_not_present"
+
+
+def test_full_torsion_resistance_rejects_zero_current_link_reinforcement():
+    selected = torsion.select_full_torsion_resistance(
+        0.0,
+        60.0,
+        closed_links_present=True,
+        asw_over_s=0.0,
+    )
+    assert selected.full_resistance_assessed is False
+    assert selected.trd_s == pytest.approx(0.0)
+    assert selected.trd_max == pytest.approx(60.0)
+    assert selected.closed_links_present is True
+    assert selected.asw_over_s == pytest.approx(0.0)
+    assert selected.resistance is None
+    assert selected.governs is None
+    assert selected.reason == "closed_link_reinforcement_not_positive"
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [None, 0, 1, "", "true", np.bool_(False), np.bool_(True), object()],
+)
+def test_full_torsion_resistance_requires_exact_boolean_authority(authority):
+    with pytest.raises(ValueError, match="built-in Boolean"):
+        torsion.select_full_torsion_resistance(
+            40.0,
+            60.0,
+            closed_links_present=authority,
+            asw_over_s=0.5,
+        )
+
+
+class _FloatRaisesValueError:
+    def __float__(self):
+        raise ValueError("hostile numeric evidence")
+
+
+@pytest.mark.parametrize("field", ["trd_s", "trd_max", "asw_over_s"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        False,
+        "0.5",
+        b"0.5",
+        object(),
+        _FloatRaisesValueError(),
+        10**400,
+        -0.1,
+        math.nan,
+        math.inf,
+        -math.inf,
+    ],
+)
+def test_full_torsion_resistance_rejects_malformed_numeric_evidence(field, value):
+    values = {"trd_s": 40.0, "trd_max": 60.0, "asw_over_s": 0.5}
+    values[field] = value
+    with pytest.raises(ValueError, match="finite non-negative real number"):
+        torsion.select_full_torsion_resistance(
+            values["trd_s"],
+            values["trd_max"],
+            closed_links_present=True,
+            asw_over_s=values["asw_over_s"],
+        )
+
+
+def test_full_torsion_resistance_normalizes_and_freezes_retained_selection():
+    trd_s_value = np.float64(40.0)
+    trd_max_value = np.int64(60)
+    asw_over_s = np.float64(0.5)
+    selected = torsion.select_full_torsion_resistance(
+        trd_s_value,
+        trd_max_value,
+        closed_links_present=True,
+        asw_over_s=asw_over_s,
+    )
+    assert type(selected.trd_s) is float
+    assert type(selected.trd_max) is float
+    assert type(selected.asw_over_s) is float
+    assert type(selected.resistance) is float
+    assert not hasattr(selected, "__dict__")
+    with pytest.raises(AttributeError):
+        selected.resistance = 1.0
+    assert trd_s_value == np.float64(40.0)
+    assert trd_max_value == np.int64(60)
+    assert asw_over_s == np.float64(0.5)
+
+
+def test_full_torsion_resistance_authority_is_a_required_keyword():
+    with pytest.raises(TypeError):
+        torsion.select_full_torsion_resistance(40.0, 60.0, asw_over_s=0.5)
+    with pytest.raises(TypeError):
+        torsion.select_full_torsion_resistance(40.0, 60.0, True, 0.5)
+
+
 def test_retained_torsion_wrappers_preserve_invalid_legacy_boundaries():
     result = torsion.asl_required_result(10.0, 1.0, -0.1, -500.0, 1.0)
     assert result.asl_required_mm2 == 0.0
