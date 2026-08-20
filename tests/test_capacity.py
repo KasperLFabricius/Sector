@@ -2034,6 +2034,25 @@ def test_tube_torsion_requires_current_closed_link_authority(method):
     assert absent["trd_max"] > 0.0
     assert absent["trd_c"] > 0.0
 
+    below_unity_band_context = capacity.build_torsion_context(
+        dict(
+            absent_input,
+            strut_cot_min=0.5,
+            strut_cot_max=0.8,
+        ),
+        0.0,
+    )
+    below_unity_band = capacity.tube_torsion(
+        below_unity_band_context["tube"],
+        below_unity_band_context["t_ed"],
+        **below_unity_band_context["_tk"],
+    )
+    assert below_unity_band["cot"] == pytest.approx(0.8)
+    assert below_unity_band["angle_selection"]["cot"] == pytest.approx(0.8)
+    assert below_unity_band["theta_deg"] == pytest.approx(
+        math.degrees(math.atan2(1.0, 0.8))
+    )
+
     stale_detail_kwargs = dict(absent_context["_tk"])
     stale_detail_kwargs["nu_detail"] = True
     stale_detail = capacity.tube_torsion(

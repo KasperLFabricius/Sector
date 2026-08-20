@@ -881,7 +881,7 @@ def tube_torsion(
         cot = angle.cot
         angle_selection = asdict(angle)
     else:
-        cot = max(cot_min, 1.0)
+        cot = min(max(cot_min, 1.0), cot_max)
         angle_selection = {
             "cot": cot,
             "tan": (math.inf if cot == 0.0 else 1.0 / cot),
