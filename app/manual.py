@@ -39,7 +39,6 @@ import publication_image_export
 from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
 import publication_theme
-import reproducible_example
 from app import manual_information_architecture as manual_ia
 from app import project_io, report_profiles
 from app import table_field_definitions as table_fields
@@ -728,18 +727,6 @@ def manual_blocks() -> list:
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
        "an issued deliverable.")
-    h2("Complete reproducible reference")
-    md("The manual dialog provides a current-schema **complete reference project** "
-       "and a separate **independent checking pack**. The project is deliberately "
-       "small but enables every main report calculation family: plastic capacity, "
-       "cracked elastic and crack width, fatigue, shear, torsion, combined M-V-T, "
-       "longitudinal and transverse detailing, and clear spacing. Load it, press "
-       "*Calculate*, then open **Report** and generate the required publication. "
-       "The checking pack reconstructs representative results from "
-       "the original inputs without calling a Sector solver and records the exact "
-       "project/input SHA-256. It is evidence for reproducibility, not an approval or "
-       "signing record.")
-
     h1("Defining the section")
     md("A section is a set of explicit points in millimetres -- the concrete "
        "corners, any voids, the bars and the tendons. The point tables are the "
@@ -3375,32 +3362,6 @@ def render_manual_streamlit():
 
     st.caption("What Sector computes, the theory it applies, its features, and how "
                "to use it.")
-
-    with st.expander("Complete reproducible reference", expanded=False):
-        st.caption(
-            "A current-schema all-family project and its separate independent "
-            "checking record. Their displayed input SHA-256 is "
-            f"{reproducible_example.input_sha256()}."
-        )
-        with st.container(horizontal=True):
-            st.download_button(
-                "Reference project",
-                reproducible_example.project_json(),
-                file_name=reproducible_example.PROJECT_NAME,
-                mime="application/json",
-                key="manual_dl_complete_reference_project",
-                icon=":material/download:",
-                on_click="ignore",
-            )
-            st.download_button(
-                "Independent checking pack",
-                reproducible_example.checking_pack(),
-                file_name=reproducible_example.CHECK_NAME,
-                mime="text/markdown",
-                key="manual_dl_complete_reference_check",
-                icon=":material/fact_check:",
-                on_click="ignore",
-            )
 
     parts = manual_published_item_parts()
     selected_part = st.selectbox(
