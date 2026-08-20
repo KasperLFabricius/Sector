@@ -54,7 +54,7 @@ def test_retired_bridge_engineering_api_is_not_available():
 
 
 def test_current_schema_has_no_retired_bridge_input_identity():
-    assert project_io.VERSION == 25
+    assert project_io.VERSION == 26
     assert not set(RETIRED_KEYS).intersection(project_io.PROJECT_TABLE_KEYS)
     assert not set(RETIRED_KEYS).intersection(project_io.SCALAR_KEYS)
     assert not (ROOT / "app" / "bridge_inputs.py").exists()

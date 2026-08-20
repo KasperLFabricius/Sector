@@ -403,9 +403,9 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
     assert "PR-A00b intentionally owns none of those implementation matrices" in programme
 
 
-def test_live_identity_remains_v094_and_schema_25_during_pr01() -> None:
+def test_live_identity_remains_v094_and_uses_a04_schema_26() -> None:
     assert __version__ == "0.94"
-    assert re.search(r"^VERSION\s*=\s*25$", _text(PROJECT_IO), re.MULTILINE)
+    assert re.search(r"^VERSION\s*=\s*26$", _text(PROJECT_IO), re.MULTILINE)
     assert _fixture()["programme_base"] == {
         "commit": BASE,
         "tree": TREE,
@@ -535,11 +535,11 @@ def test_transaction_browser_and_qa_acceptance_is_fail_closed() -> None:
         "failed_decode_advances_identity"
     ] is False
     uploads = findings["F095-009"]["reproduction"]
-    assert uploads["first_upload"]["size"] == uploads["changed_upload"]["size"] == 2147
+    assert uploads["first_upload"]["size"] == uploads["changed_upload"]["size"] == 2313
     assert uploads["first_upload"]["sha256"] != uploads["changed_upload"]["sha256"]
     assert re.fullmatch(r"[0-9a-f]{64}", uploads["first_upload"]["sha256"])
     assert re.fullmatch(r"[0-9a-f]{64}", uploads["changed_upload"]["sha256"])
-    assert uploads["invalid_then_fixed_pair"]["size"] == 2147
+    assert uploads["invalid_then_fixed_pair"]["size"] == 2313
     assert uploads["invalid_then_fixed_pair"]["invalid_decode"] == "failure"
     assert findings["F095-010"]["accepted_behavior"][
         "saved_hash_updates_after_replace_only"

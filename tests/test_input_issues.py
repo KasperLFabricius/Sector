@@ -64,15 +64,15 @@ def test_target_registry_rejects_impossible_stage_family_combinations():
         )
 
 
-def test_heightened_permitted_width_routes_to_schema25_global_setting():
+def test_heightened_permitted_width_routes_to_dedicated_setting():
     issue = input_issues.heightened_issues(
-        ["Permitted crack width must be a positive finite number"]
+        ["Heightened permitted crack width must be a positive finite number"]
     )[0]
 
     assert issue.target == input_issues.InputTarget(
         input_issues.ANALYSIS_SETTINGS,
-        "sls_permitted_crack_width_mm",
-        "Permitted crack width (shared)",
+        "sls_heightened_permitted_crack_width_mm",
+        "Heightened permitted crack width",
     )
 
 

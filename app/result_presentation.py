@@ -296,7 +296,7 @@ def _worked_crack_selection(out):
 
 
 def _worked_crack_comparison_selection(out):
-    """Select a comparison only when the global retained width is assessed.
+    """Select a comparison only when the largest retained width is assessed.
 
     The optional comparison must not change which physical crack result is
     critical.  In particular, a smaller width paired with a tighter user limit
@@ -310,16 +310,23 @@ def _worked_crack_comparison_selection(out):
     }
     for order, (case_id, case_out) in enumerate(_publication_cases(out, "elastic")):
         elastic = case_out.get("elastic") or {}
-        output = elastic.get("crack_output") or {}
-        value = _publication_metric(output.get("value"))
-        if value is None or value < 0.0:
-            continue
-        score = (value, -order)
-        if best is None or score > best[0]:
-            best = (score, case_id, output.get("calculation_state"))
-    if best is None or best[2] not in assessed_states:
+        outputs = elastic.get("crack_output") or {}
+        for duration_order, duration in enumerate(("long_term", "short_term")):
+            output = outputs.get(duration) or {}
+            value = _publication_metric(output.get("value"))
+            if value is None or value < 0.0:
+                continue
+            score = (value, -order, -duration_order)
+            if best is None or score > best[0]:
+                best = (
+                    score,
+                    case_id,
+                    duration,
+                    output.get("calculation_state"),
+                )
+    if best is None or best[3] not in assessed_states:
         return None
-    return {"case_id": best[1]}
+    return {"case_id": best[1], "duration": best[2]}
 
 
 def _cracking_threshold_selection(out):
@@ -576,7 +583,7 @@ def _summary_row(check, family, status, result="-", criterion="-", util=None,
 
 
 def _ordinary_crack_summary_row(inp, output):
-    """Format one retained ordinary crack output without deriving a verdict."""
+    """Format one retained duration-specific output without deriving a verdict."""
     status = str(output.get("calculation_state") or "NOT ASSESSED")
     value = _publication_metric(output.get("value"))
     criterion = _publication_metric(output.get("criterion_mm"))
@@ -584,6 +591,8 @@ def _ordinary_crack_summary_row(inp, output):
     result = "-" if value is None else f"{value:.3f} mm"
     if criterion is None:
         criterion_text = "User criterion not specified"
+    elif criterion == 0.0:
+        criterion_text = "No comparison requested"
     else:
         criterion_text = f"User-specified limit {criterion:.3f} mm"
     note_parts = [
@@ -592,8 +601,13 @@ def _ordinary_crack_summary_row(inp, output):
     ]
     if ratio is not None:
         note_parts.append(f"w_k / w_k,criterion = {ratio:.3f}")
+    duration = str(output.get("duration") or "").strip()
+    duration_label = {
+        "long_term": "Long-term",
+        "short_term": "Short-term",
+    }.get(duration, "Unspecified duration")
     return _summary_row(
-        "Crack width",
+        f"Crack width - {duration_label}",
         "elastic",
         status,
         result,
@@ -1021,7 +1035,12 @@ def result_summary_rows(inp, results, *, stale=False):
         ))
         output = elastic.get("crack_output")
         if isinstance(output, Mapping):
-            rows.append(_ordinary_crack_summary_row(inp, output))
+            for duration in ("long_term", "short_term"):
+                duration_output = output.get(duration)
+                if isinstance(duration_output, Mapping):
+                    rows.append(
+                        _ordinary_crack_summary_row(inp, duration_output)
+                    )
         elif elastic.get("show_cw") or inp.get("sls_cw"):
             rows.append(_summary_row(
                 "Crack width", "elastic", "NOT ASSESSED",

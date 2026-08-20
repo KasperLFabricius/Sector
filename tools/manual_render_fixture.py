@@ -32,11 +32,11 @@ from tools.report_render_fixture import validate_outline_destinations  # noqa: E
 
 _EXPECTED_FIGURE_COUNT = 16
 _CURRENT_SCHEMA_COMPATIBILITY = (
-    "Current projects use schema version 25"
+    "Current projects use schema version 26"
 )
-_SCHEMA_24_MIGRATION_COMPATIBILITY = (
-    "Schema 24 is migrated in memory through the bounded permitted-crack-width "
-    "rule and resaves cleanly as schema 25"
+_SCHEMA_25_MIGRATION_COMPATIBILITY = (
+    "Schema 25 is migrated in memory by splitting the former shared crack-width "
+    "value into independent long-term and short-term user limits"
 )
 _OBSOLETE_SCHEMA_COMPATIBILITY = "in-development Sector v0.93 line"
 _UNRENDERED_MATH_TOKENS = (
@@ -180,7 +180,7 @@ def validate_html_content(html: bytes) -> str:
         "Audit",
         "Limitations &amp; troubleshooting",
         _CURRENT_SCHEMA_COMPATIBILITY,
-        _SCHEMA_24_MIGRATION_COMPATIBILITY,
+        _SCHEMA_25_MIGRATION_COMPATIBILITY,
     ):
         if expected not in text:
             raise AssertionError(f"expected manual HTML content is missing: {expected}")
@@ -214,10 +214,10 @@ def _validate_release_compatibility_wording(flat_text: str) -> None:
             "expected manual content is missing: "
             f"{_CURRENT_SCHEMA_COMPATIBILITY}"
         )
-    if _SCHEMA_24_MIGRATION_COMPATIBILITY not in flat_text:
+    if _SCHEMA_25_MIGRATION_COMPATIBILITY not in flat_text:
         raise AssertionError(
             "expected manual content is missing: "
-            f"{_SCHEMA_24_MIGRATION_COMPATIBILITY}"
+            f"{_SCHEMA_25_MIGRATION_COMPATIBILITY}"
         )
 
 
@@ -355,8 +355,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Optional-null fields remain absent rather than becoming zero",
         "retains the entered numeric precision internally",
         _CURRENT_SCHEMA_COMPATIBILITY,
-        _SCHEMA_24_MIGRATION_COMPATIBILITY,
-        "Schema 23 remains unsupported",
+        _SCHEMA_25_MIGRATION_COMPATIBILITY,
+        "Schema 24 remains unsupported",
         "published project-adoption basis",
         "no Danish National Annex",
         "confinement enhancement is not included or assessed",

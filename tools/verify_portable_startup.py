@@ -33,7 +33,7 @@ _HOSTILE_REPORT_PROFILE = "Unknown pre-v0.94 report profile"
 _LEGACY_SCENARIO = "legacy-report-profile"
 _HOSTILE_SCENARIO = "hostile-report-profile"
 _AUTOSAVE_NAME = "autosave.json"
-_CURRENT_PROJECT_VERSION = 25
+_CURRENT_PROJECT_VERSION = 26
 _AUTOSAVE_RESTORED_TEXT = "Restored autosaved session."
 _AUTOSAVE_REJECTED_PREFIX = "Autosave not restored: unknown persisted report profile"
 _MAX_WEBSOCKET_HEADERS = 16 * 1024
@@ -340,7 +340,11 @@ def _autosave_payload(report_profile: str) -> bytes:
                 "my_short_ed_knm",
             )),
         },
-        "scalars": {"sls_permitted_crack_width_mm": None},
+        "scalars": {
+            "sls_long_term_permitted_crack_width_mm": 0.0,
+            "sls_short_term_permitted_crack_width_mm": 0.0,
+            "sls_heightened_permitted_crack_width_mm": 0.0,
+        },
     }
     canonical = json.dumps(
         content, sort_keys=True, separators=(",", ":"), ensure_ascii=True

@@ -45,7 +45,13 @@ from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, design_standards  # noqa: E402
 from sector.build_info import short_revision, source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
-from sector.sls_identity import PERMITTED_CRACK_WIDTH_SOURCE  # noqa: E402
+from sector.sls_identity import (  # noqa: E402
+    HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
+    LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
+    LONG_TERM_PERMITTED_CRACK_WIDTH_SOURCE,
+    SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
+    SHORT_TERM_PERMITTED_CRACK_WIDTH_SOURCE,
+)
 
 # The app has many independent calculation and publication surfaces. Keep their
 # modules inert until the active input stage or requested result actually reaches
@@ -2086,9 +2092,10 @@ def _load_case_editors(box):
     box.caption(
         "Long and short action parts share the global creep coefficient below. "
         "Stresses are always reported. Crack width is an optional calculation "
-        "for each user-defined action. One optional permitted width in Analysis "
-        "settings is shared by every ordinary and heightened crack check; no "
-        "combination completeness is inferred."
+        "for each user-defined action. Independent long-term and short-term user "
+        "limits apply only to their matching ordinary branches; the heightened "
+        "Formula 7.100 NA operand is separate. No combination completeness is "
+        "inferred."
     )
     _table_field_guide(box, load_cases.ELASTIC_TABLE_KEY)
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
@@ -3112,20 +3119,7 @@ def _apply_pending_project() -> None:
             "source_schema_version": parse_info["source_schema_version"],
             "target_schema_version": parse_info["target_schema_version"],
             "warnings": list(migration_warnings),
-            "migration_provenance": {
-                "criterion_sources": [
-                    dict(item)
-                    for item in migration_provenance.get(
-                        "criterion_sources", ()
-                    )
-                ],
-                "selection_policy": migration_provenance.get(
-                    "selection_policy"
-                ),
-                "selected_value_mm": migration_provenance.get(
-                    "selected_value_mm"
-                ),
-            },
+            "migration_provenance": copy.deepcopy(dict(migration_provenance)),
         }
     if migration_warnings:
         st.session_state["_project_migration_warnings"] = migration_warnings
@@ -3229,13 +3223,14 @@ def _save_load_panel() -> None:
     loaded_migration = st.session_state.get("_loaded_project_migration")
     if loaded_migration:
         migration = loaded_migration.get("migration_provenance") or {}
-        selected = migration.get("selected_value_mm")
-        selected_text = "none" if selected is None else f"{selected:g} mm"
+        shared = migration.get("shared_value_mm")
+        if shared is not None:
+            detail = f"shared width {float(shared):g} mm split by duration"
+        else:
+            detail = "migration details retained"
         box.caption(
             f"Migrated schema {loaded_migration['source_schema_version']} to "
-            f"{loaded_migration['target_schema_version']} | "
-            f"{migration.get('selection_policy') or 'policy unavailable'} | "
-            f"selected {selected_text}"
+            f"{loaded_migration['target_schema_version']} | {detail}"
         )
     _autosave_panel(box)
     up = box.file_uploader("Load project", type=["json"], key="project_upload",
@@ -4378,6 +4373,7 @@ _PLASTIC_RESULT_CONTRACT_TOKEN = (
 _ELASTIC_RESULT_CONTRACT_TOKEN = (
     "elastic-result-contract",
     "prestress-only-cracking-v1",
+    "dual-crack-criteria-v1",
 )
 _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "capacity-result-contract",
@@ -4387,7 +4383,9 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
-    "sls_permitted_crack_width_mm",
+    LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
+    SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
+    HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
     "sls_heightened_on", "sls_heightened_reference_case",
     "sls_heightened_reinforcement_surface",
     "sls_heightened_effective_tensile_strength_mpa",
@@ -4823,26 +4821,40 @@ def build_inputs(host=st):
     scw.caption(
         "Concrete and reinforcement stresses are always reported for every "
         "Elastic action. Ordinary crack width is enabled per action in the Loads "
-        "table. One optional permitted width in Analysis settings is shared by "
-        "every ordinary and heightened crack check."
+        "table. Long-term and short-term widths have independent user limits; "
+        "zero states a width without comparing it."
     )
-    sls_permitted_crack_width_mm = _seeded_number(
-        scw,
-        r"Permitted crack width $w_k$ (mm, optional)",
-        0.001,
+    cw_long, cw_short = scw.columns(2)
+    sls_long_term_permitted_crack_width_mm = _seeded_number(
+        cw_long,
+        r"Long-term limit $w_{k,long}$ (mm; 0 = no comparison)",
+        0.0,
         10.0,
-        None,
+        0.0,
         0.01,
-        "sls_permitted_crack_width_mm",
+        LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
         disabled=not elastic_on,
-        placeholder="No acceptance assessment",
         help=(
-            "Shared user-specified permitted crack width. Leave blank to "
-            "calculate ordinary crack widths without an acceptance assessment. "
-            "Sector does not infer a project acceptance limit from the selected "
-            "Eurocode. The optional DK NA heightened check requires this as its "
-            "user-supplied permitted-width operand (DS/EN 1992-1-1 DK NA:2024, "
-            "supplementary provision to 7.3.2(1)P, Formula 7.100 NA)."
+            "User-specified limit applied only to the retained long-term branch "
+            "(existing sustained action and kt = 0.4). Enter zero to state the "
+            "calculated width without a comparison. Sector does not infer a "
+            "project limit or load-combination classification."
+        ),
+    )
+    sls_short_term_permitted_crack_width_mm = _seeded_number(
+        cw_short,
+        r"Short-term limit $w_{k,short}$ (mm; 0 = no comparison)",
+        0.0,
+        10.0,
+        0.0,
+        0.01,
+        SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
+        disabled=not elastic_on,
+        help=(
+            "User-specified limit applied only to the retained short-term branch "
+            "(existing instantaneous total action and kt = 0.6). Enter zero to "
+            "state the calculated width without a comparison. Sector does not "
+            "infer a project limit or load-combination classification."
         ),
     )
     crack_basis_options = tuple(
@@ -4988,6 +5000,22 @@ def build_inputs(host=st):
                 f"{heightened_guidance.tooltip}"
             ),
         )
+        sls_heightened_permitted_crack_width_mm = _seeded_number(
+            scw,
+            r"Heightened permitted width $w_{k,Formula\ 7.100}$ (mm)",
+            0.0,
+            10.0,
+            0.0,
+            0.01,
+            HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
+            disabled=not (elastic_on and sls_heightened_on),
+            help=(
+                "Dedicated user-specified Formula 7.100 NA operand. It is "
+                "independent of both ordinary duration limits and must be "
+                "positive when heightened control is enabled. Sector does not "
+                "infer whether the heightened calculation applies."
+            ),
+        )
         crack_reference_names = list(
             heightened_adapter.crack_enabled_case_names(
                 case_frames[load_cases.ELASTIC_TABLE_KEY].to_dict("records")
@@ -5119,6 +5147,9 @@ def build_inputs(host=st):
         # basis switch does not erase user input. An enabled incompatible state is
         # rejected by the shared calculation/report validation below.
         sls_heightened_on = _retained_input_scalar("sls_heightened_on", False)
+        sls_heightened_permitted_crack_width_mm = _retained_input_scalar(
+            HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY, 0.0
+        )
         sls_heightened_reference_case = _retained_input_scalar(
             "sls_heightened_reference_case", ""
         )
@@ -6410,9 +6441,22 @@ def build_inputs(host=st):
                 sls_bond=sls_bond, sls_k1=sls_k1, sls_dk_na=sls_dk_na,
                 sls_tendon_xi=sls_tendon_xi,
                 sls_edition=sls_edition, sls_code=sls_code, sls_member=sls_member,
-                sls_permitted_crack_width_mm=sls_permitted_crack_width_mm,
-                sls_permitted_crack_width_source=PERMITTED_CRACK_WIDTH_SOURCE,
+                sls_long_term_permitted_crack_width_mm=(
+                    sls_long_term_permitted_crack_width_mm
+                ),
+                sls_short_term_permitted_crack_width_mm=(
+                    sls_short_term_permitted_crack_width_mm
+                ),
+                sls_long_term_permitted_crack_width_source=(
+                    LONG_TERM_PERMITTED_CRACK_WIDTH_SOURCE
+                ),
+                sls_short_term_permitted_crack_width_source=(
+                    SHORT_TERM_PERMITTED_CRACK_WIDTH_SOURCE
+                ),
                 sls_heightened_on=sls_heightened_on,
+                sls_heightened_permitted_crack_width_mm=(
+                    sls_heightened_permitted_crack_width_mm
+                ),
                 sls_heightened_reference_case=(
                     sls_heightened_reference_case
                 ),
@@ -7565,26 +7609,46 @@ def _run_single_analysis(
                 )
         eout = out["elastic"]
         if report_coarse:
-            crack_cases = {
+            long_term_crack_cases = {
                 name: crack_evaluations.get(name)
                 for name in (
                     "Long-term (fine)",
-                    "Short-term (fine)",
                     "Long-term (coarse)",
+                )
+            }
+            short_term_crack_cases = {
+                name: crack_evaluations.get(name)
+                for name in (
+                    "Short-term (fine)",
                     "Short-term (coarse)",
                 )
             }
         else:
-            crack_cases = {
+            long_term_crack_cases = {
                 name: crack_evaluations.get(name)
-                for name in ("Long-term", "Short-term")
+                for name in ("Long-term",)
+            }
+            short_term_crack_cases = {
+                name: crack_evaluations.get(name)
+                for name in ("Short-term",)
             }
         eout["crack_output"] = sls_core.crack_outputs(
-            crack_cases,
+            long_term_crack_cases,
+            short_term_crack_cases,
             valid=eout["converged"],
             requested=bool(inp["sls_cw"]),
-            criterion_mm=inp.get("sls_permitted_crack_width_mm"),
-            criterion_source=inp.get("sls_permitted_crack_width_source"),
+            long_term_criterion_mm=inp.get(
+                LONG_TERM_PERMITTED_CRACK_WIDTH_KEY, 0.0
+            ),
+            short_term_criterion_mm=inp.get(
+                SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY, 0.0
+            ),
+            long_term_criterion_source=inp.get(
+                "sls_long_term_permitted_crack_width_source"
+            ),
+            short_term_criterion_source=inp.get(
+                "sls_short_term_permitted_crack_width_source"
+            ),
         )
     if inp.get("minimum_reinforcement_on"):
         if inp.get("detailing_edition") == detailing.EC2_2023:
@@ -7632,7 +7696,10 @@ _HEIGHTENED_POSITIVE_INPUTS = (
         "sls_heightened_effective_tensile_strength_mpa",
         "Effective tensile strength",
     ),
-    ("sls_permitted_crack_width_mm", "Permitted crack width"),
+    (
+        HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
+        "Heightened permitted crack width",
+    ),
     (
         "sls_heightened_fine_effective_tension_area_mm2",
         "Fine-system effective tension area",
@@ -7728,7 +7795,7 @@ def _heightened_crack_control_payload(inp, analysis_result):
             "sls_heightened_effective_tensile_strength_mpa"
         ],
         reinforcement_modulus_mpa=derived.reinforcement_modulus_mpa,
-        permitted_crack_width_mm=inp["sls_permitted_crack_width_mm"],
+        permitted_crack_width_mm=inp[HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY],
         fine_effective_tension_area_mm2=inp[
             "sls_heightened_fine_effective_tension_area_mm2"
         ],
@@ -10308,39 +10375,54 @@ def _crack_width_panel(e):
     clc, csc = e.get("crack_coarse"), e.get("crack_short_coarse")
     st.markdown(f"**Crack width $w_k$** ({e.get('crack_code', 'EC2 7.3.4')})")
     no_results = cl is None and cs is None and clc is None and csc is None
-    output = e.get("crack_output", {})
-    value = output.get("value")
-    case = output.get("case") or "-"
-    governing = output.get("governing") or "-"
-    state = output.get("calculation_state", "NOT CALCULATED")
-    criterion = output.get("criterion_mm")
-    criterion_source = output.get("criterion_source")
-    ratio = output.get("ratio")
-    reason = str(output.get("reason") or "").strip()
-    st.metric(
-        "Governing calculated crack width",
-        "-" if value is None else f"{value:.3f} mm",
-    )
-    identity = f"action part {case}; longitudinal element {governing}"
-    if criterion is None:
-        comparison = "Criterion: not specified; acceptance is not assessed."
-    else:
-        comparison = (
-            f"User-specified criterion: {criterion:.3f} mm"
-            + (f" ({criterion_source})" if criterion_source else "")
-            + (
-                f"; retained wk / criterion ratio = {ratio:.3f}."
-                if ratio is not None
-                else "."
+    outputs = e.get("crack_output", {})
+    if not isinstance(outputs, dict):
+        outputs = {}
+    duration_columns = st.columns(2)
+    retained_reasons = []
+    for column, duration, label in zip(
+        duration_columns,
+        ("long_term", "short_term"),
+        ("Long-term", "Short-term"),
+        strict=True,
+    ):
+        output = outputs.get(duration, {})
+        value = output.get("value")
+        case = output.get("case") or "-"
+        governing = output.get("governing") or "-"
+        state = output.get("calculation_state", "NOT CALCULATED")
+        criterion = output.get("criterion_mm")
+        criterion_source = output.get("criterion_source")
+        ratio = output.get("ratio")
+        reason = str(output.get("reason") or "").strip()
+        if reason:
+            retained_reasons.append(reason)
+        column.metric(
+            f"{label} calculated crack width",
+            "-" if value is None else f"{value:.3f} mm",
+        )
+        identity = f"branch {case}; longitudinal element {governing}"
+        if criterion in (None, 0.0):
+            comparison = "User limit: 0 mm; no comparison requested."
+        else:
+            comparison = (
+                f"User limit: {criterion:.3f} mm"
+                + (f" ({criterion_source})" if criterion_source else "")
+                + (
+                    f"; retained wk / limit ratio = {ratio:.3f}."
+                    if ratio is not None
+                    else "."
+                )
             )
-        )
-    st.caption(f"{state}; {identity}. {comparison}")
-    if reason:
-        (st.warning if state == "EXCEEDS USER-SPECIFIED LIMIT" else st.info)(
-            reason
-        )
+        column.caption(f"{state}; {identity}. {comparison}")
+        if reason:
+            (
+                column.warning
+                if state == "EXCEEDS USER-SPECIFIED LIMIT"
+                else column.info
+            )(reason)
     if no_results:
-        if not reason:
+        if not retained_reasons:
             st.info(
                 "No calculated crack-width value is available; Sector does not "
                 "infer a physical reason."
@@ -12586,12 +12668,20 @@ def _render_selected_case_actions(family, actions, inp=None):
         hide_index=True,
         width="stretch",
     )
-    criterion = (inp or {}).get("sls_permitted_crack_width_mm")
-    criterion_text = (
-        "not specified; acceptance is not assessed"
-        if criterion is None or pd.isna(criterion)
-        else f"global Analysis setting {float(criterion):.3f} mm"
-    )
+    criteria = []
+    for label, key in (
+        ("long-term", LONG_TERM_PERMITTED_CRACK_WIDTH_KEY),
+        ("short-term", SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY),
+    ):
+        criterion = (inp or {}).get(key, 0.0)
+        criterion_text = (
+            "no comparison"
+            if criterion is None
+            or pd.isna(criterion)
+            or float(criterion) == 0.0
+            else f"{float(criterion):.3f} mm"
+        )
+        criteria.append(f"{label} {criterion_text}")
     st.caption(
         "Stresses are reported for this action. Crack width: "
         + (
@@ -12599,7 +12689,7 @@ def _render_selected_case_actions(family, actions, inp=None):
             if actions.get("calculate_crack_width")
             else "not requested"
         )
-        + f". Criterion: {criterion_text}."
+        + ". User criteria: " + "; ".join(criteria) + "."
     )
 
 
@@ -12670,7 +12760,7 @@ def _store_completed_analysis(
             ),
             "sector_version": APP_VERSION,
             "source_revision": calculation_revision,
-            # ``input_sha256`` preserves the schema-25 project correlation used
+            # ``input_sha256`` preserves the schema-26 project correlation used
             # by existing files. Result reuse is governed by the explicit frozen
             # engineering identity, which excludes report metadata/preferences.
             "input_sha256": project_input_sha256,

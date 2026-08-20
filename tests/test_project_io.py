@@ -114,7 +114,9 @@ def _current_project():
         "fatigue_edition": (
             design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
         ),
-        "sls_permitted_crack_width_mm": None,
+        "sls_long_term_permitted_crack_width_mm": 0.0,
+        "sls_short_term_permitted_crack_width_mm": 0.0,
+        "sls_heightened_permitted_crack_width_mm": 0.0,
         "rep_proj_no": "P-001",
     }
     return tables, scalars
@@ -126,7 +128,7 @@ def _heightened_inputs() -> dict[str, object]:
         "sls_heightened_reference_case": "One Elastic action",
         "sls_heightened_reinforcement_surface": "ribbed",
         "sls_heightened_effective_tensile_strength_mpa": 2.9,
-        "sls_permitted_crack_width_mm": 0.2,
+        "sls_heightened_permitted_crack_width_mm": 0.2,
         "sls_heightened_fine_effective_tension_area_mm2": 120_000.0,
         "sls_heightened_coarse_effective_tension_area_mm2": 180_000.0,
     }
@@ -135,30 +137,28 @@ def _heightened_inputs() -> dict[str, object]:
 _MISSING = object()
 
 
-def _schema24_payload(
+def _schema25_payload(
     tables=None,
     scalars=None,
     *,
-    criteria=None,
-    heightened_width=_MISSING,
+    shared_width=_MISSING,
 ):
-    """Build an integrity-valid legacy payload from current test inputs."""
+    """Build an integrity-valid schema-25 shared-width payload."""
 
     if tables is None or scalars is None:
         tables, scalars = _current_project()
     payload = json.loads(project_io.dump_project(tables, scalars))
     payload["version"] = project_io.MIGRATABLE_VERSION
-    payload["scalars"].pop("sls_permitted_crack_width_mm", None)
-    elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
-    elastic["columns"].append(project_io.LEGACY_ORDINARY_CRACK_WIDTH_KEY)
-    values = list(criteria or [None] * len(elastic["rows"]))
-    assert len(values) == len(elastic["rows"])
-    for row, criterion in zip(elastic["rows"], values, strict=True):
-        row.append(criterion)
-    if heightened_width is not _MISSING:
-        payload["scalars"][
-            project_io.LEGACY_HEIGHTENED_CRACK_WIDTH_KEY
-        ] = heightened_width
+    for key in (
+        "sls_long_term_permitted_crack_width_mm",
+        "sls_short_term_permitted_crack_width_mm",
+        "sls_heightened_permitted_crack_width_mm",
+    ):
+        payload["scalars"].pop(key, None)
+    if shared_width is not _MISSING:
+        payload["scalars"][project_io.LEGACY_SHARED_CRACK_WIDTH_KEY] = (
+            shared_width
+        )
     payload["provenance"]["input_sha256"] = project_io._input_digest({
         "tables": payload["tables"],
         "scalars": payload["scalars"],
@@ -175,7 +175,14 @@ def _legacy_heightened_schema25_payload(tables=None) -> dict:
         _, scalars = _current_project()
     scalars.update(_heightened_inputs())
     payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["version"] = project_io.MIGRATABLE_VERSION
     persisted = payload["scalars"]
+    heightened_width = persisted.pop(
+        "sls_heightened_permitted_crack_width_mm"
+    )
+    persisted.pop("sls_long_term_permitted_crack_width_mm")
+    persisted.pop("sls_short_term_permitted_crack_width_mm")
+    persisted[project_io.LEGACY_SHARED_CRACK_WIDTH_KEY] = heightened_width
     persisted.pop("sls_heightened_reference_case", None)
     persisted.pop("sls_heightened_fine_effective_tension_area_mm2", None)
     persisted.pop("sls_heightened_coarse_effective_tension_area_mm2", None)
@@ -240,7 +247,7 @@ def test_shared_link_authority_round_trips_and_missing_defaults_false():
     _, loaded = project_io.parse_project(text)
     payload = json.loads(text)
 
-    assert payload["version"] == 25
+    assert payload["version"] == project_io.VERSION
     assert payload["scalars"]["shear_links"] is True
     assert payload["scalars"]["torsion_nu_v"] is True
     assert loaded["shear_links"] is True
@@ -258,7 +265,7 @@ def test_shared_link_authority_round_trips_and_missing_defaults_false():
     missing_text = json.dumps(missing_payload)
     missing_tables, missing_loaded = project_io.parse_project(missing_text)
 
-    assert missing_payload["version"] == 25
+    assert missing_payload["version"] == project_io.VERSION
     assert "shear_links" not in missing_payload["scalars"]
     assert "torsion_nu_v" not in missing_payload["scalars"]
     assert missing_loaded["shear_links"] is False
@@ -267,7 +274,7 @@ def test_shared_link_authority_round_trips_and_missing_defaults_false():
     resaved = json.loads(
         project_io.dump_project(missing_tables, missing_loaded)
     )
-    assert resaved["version"] == 25
+    assert resaved["version"] == project_io.VERSION
     assert resaved["scalars"]["shear_links"] is False
     assert resaved["scalars"]["torsion_nu_v"] is False
 
@@ -337,102 +344,113 @@ def test_expanded_quick_section_settings_round_trip(shape, settings):
     assert project_io.project_provenance(text)["input_hash_valid"] is True
 
 
-def test_schema_25_serializes_only_the_shared_analysis_criterion():
+def test_schema_26_serializes_exact_three_crack_width_inputs():
     tables, scalars = _current_project()
-    scalars["sls_permitted_crack_width_mm"] = 0.30
+    scalars.update(
+        sls_long_term_permitted_crack_width_mm=0.25,
+        sls_short_term_permitted_crack_width_mm=0.30,
+        sls_heightened_permitted_crack_width_mm=0.20,
+    )
 
     payload = json.loads(project_io.dump_project(tables, scalars))
     elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
 
-    assert payload["version"] == 25
+    assert payload["version"] == 26
     assert tuple(elastic["columns"]) == load_cases.ELASTIC_COLUMNS
-    assert project_io.LEGACY_ORDINARY_CRACK_WIDTH_KEY not in elastic["columns"]
-    assert project_io.LEGACY_HEIGHTENED_CRACK_WIDTH_KEY not in payload["scalars"]
-    assert payload["scalars"]["sls_permitted_crack_width_mm"] == 0.30
+    assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in payload["scalars"]
+    assert payload["scalars"][
+        "sls_long_term_permitted_crack_width_mm"
+    ] == pytest.approx(0.25)
+    assert payload["scalars"][
+        "sls_short_term_permitted_crack_width_mm"
+    ] == pytest.approx(0.30)
+    assert payload["scalars"][
+        "sls_heightened_permitted_crack_width_mm"
+    ] == pytest.approx(0.20)
 
 
-def test_schema_24_blank_criteria_migrate_to_unassessed_schema_25_state():
-    payload = _schema24_payload(criteria=[None])
+@pytest.mark.parametrize("shared", (_MISSING, None, "", "   ", 0.0))
+def test_schema_25_blank_or_zero_shared_width_migrates_to_three_zeroes(shared):
+    payload = _schema25_payload(shared_width=shared)
     source = json.dumps(payload)
 
-    tables, scalars, info = project_io.parse_project_with_info(source)
+    _tables, scalars, info = project_io.parse_project_with_info(source)
 
     assert info["migrated"] is True
-    assert info["source_schema_version"] == 24
-    assert info["target_schema_version"] == 25
+    assert info["source_schema_version"] == 25
+    assert info["target_schema_version"] == 26
     assert info["migration_warnings"] == ()
-    assert scalars["sls_permitted_crack_width_mm"] is None
-    assert project_io.LEGACY_ORDINARY_CRACK_WIDTH_KEY not in tables[
-        load_cases.ELASTIC_TABLE_KEY
-    ]
+    assert scalars["sls_long_term_permitted_crack_width_mm"] == 0.0
+    assert scalars["sls_short_term_permitted_crack_width_mm"] == 0.0
+    assert scalars["sls_heightened_permitted_crack_width_mm"] == 0.0
 
 
-def test_schema_24_disabled_heightened_zero_placeholder_migrates_as_blank():
+def test_schema_25_positive_shared_width_splits_only_into_ordinary_when_disabled():
     tables, scalars = _current_project()
     scalars["sls_heightened_on"] = False
-    payload = _schema24_payload(
-        tables,
-        scalars,
-        criteria=[None],
-        heightened_width=0.0,
+    payload = _schema25_payload(tables, scalars, shared_width=0.30)
+
+    _tables, migrated, info = project_io.parse_project_with_info(
+        json.dumps(payload)
+    )
+
+    assert migrated["sls_long_term_permitted_crack_width_mm"] == pytest.approx(
+        0.30
+    )
+    assert migrated["sls_short_term_permitted_crack_width_mm"] == pytest.approx(
+        0.30
+    )
+    assert migrated["sls_heightened_permitted_crack_width_mm"] == 0.0
+    assert len(info["migration_warnings"]) == 1
+    assert "copied" in info["migration_warnings"][0]
+    assert info["migration_provenance"] == {
+        "source_key": project_io.LEGACY_SHARED_CRACK_WIDTH_KEY,
+        "shared_value_mm": 0.30,
+        "long_term_value_mm": 0.30,
+        "short_term_value_mm": 0.30,
+        "heightened_value_mm": 0.0,
+        "heightened_preserved": False,
+    }
+
+
+def test_schema_25_enabled_heightened_preserves_shared_formula_operand():
+    tables, scalars = _current_project()
+    scalars.update(_heightened_inputs())
+    payload = _schema25_payload(
+        tables, scalars, shared_width=0.20
     )
 
     _tables, migrated, info = project_io.parse_project_with_info(
         json.dumps(payload)
     )
 
-    assert migrated["sls_permitted_crack_width_mm"] is None
-    assert info["migration_warnings"] == ()
-    assert info["migration_provenance"] == {
-        "criterion_sources": (),
-        "selection_policy": "blank",
-        "selected_value_mm": None,
-    }
+    assert migrated["sls_long_term_permitted_crack_width_mm"] == pytest.approx(
+        0.20
+    )
+    assert migrated["sls_short_term_permitted_crack_width_mm"] == pytest.approx(
+        0.20
+    )
+    assert migrated["sls_heightened_permitted_crack_width_mm"] == pytest.approx(
+        0.20
+    )
+    assert info["migration_provenance"]["heightened_preserved"] is True
 
 
-def test_schema_24_enabled_heightened_zero_is_rejected():
+@pytest.mark.parametrize("shared", (_MISSING, None, "", 0.0))
+def test_schema_25_enabled_heightened_requires_positive_shared_operand(shared):
     tables, scalars = _current_project()
     scalars.update(_heightened_inputs())
-    payload = _schema24_payload(
-        tables,
-        scalars,
-        criteria=[None],
-        heightened_width=0.0,
-    )
+    payload = _schema25_payload(tables, scalars, shared_width=shared)
 
-    with pytest.raises(ValueError, match="must be a positive finite number"):
+    with pytest.raises(ValueError, match="must be positive when schema-25"):
         project_io.parse_project(json.dumps(payload))
 
 
-def test_schema_24_identical_criteria_migrate_directly_without_warning():
-    payload = _schema24_payload(criteria=[0.30], heightened_width=0.30)
-
-    _tables, scalars, info = project_io.parse_project_with_info(
-        json.dumps(payload)
-    )
-
-    assert scalars["sls_permitted_crack_width_mm"] == pytest.approx(0.30)
-    assert info["migration_warnings"] == ()
-    migration = info["migration_provenance"]
-    assert migration["selection_policy"] == "single-value"
-    assert migration["selected_value_mm"] == pytest.approx(0.30)
-    assert [item["source"] for item in migration["criterion_sources"]] == [
-        "Elastic case One Elastic action",
-        "Heightened crack control",
-    ]
-
-
-def test_schema_24_conflicts_use_conservative_minimum_warn_and_resave_clean():
+def test_schema_25_migration_does_not_mutate_source_and_resaves_only_schema_26_keys():
     tables, scalars = _current_project()
-    tables[load_cases.ELASTIC_TABLE_KEY] = load_cases.normalise_table(
-        [
-            {"name": "EL-A", "calculate_crack_width": True},
-            {"name": "EL-B", "calculate_crack_width": False},
-        ],
-        load_cases.ELASTIC_TABLE_KEY,
-    )
-    payload = _schema24_payload(
-        tables, scalars, criteria=[0.30, 0.25], heightened_width=0.20
+    scalars.update(_heightened_inputs())
+    payload = _schema25_payload(
+        tables, scalars, shared_width=0.20
     )
     source = json.dumps(payload)
     original = source[:]
@@ -443,69 +461,49 @@ def test_schema_24_conflicts_use_conservative_minimum_warn_and_resave_clean():
 
     assert source == original
     assert project_io.project_provenance(source)["input_hash_valid"] is True
-    assert migrated_scalars["sls_permitted_crack_width_mm"] == pytest.approx(
-        0.20
-    )
-    assert info["migration_provenance"]["selection_policy"] == (
-        "conservative-minimum"
-    )
-    assert len(info["migration_warnings"]) == 1
-    assert "0.2 mm" in info["migration_warnings"][0]
+    assert info["source_schema_version"] == 25
 
     resaved = json.loads(
         project_io.dump_project(migrated_tables, migrated_scalars)
     )
-    assert resaved["version"] == 25
-    assert project_io.LEGACY_HEIGHTENED_CRACK_WIDTH_KEY not in (
-        resaved["scalars"]
-    )
-    assert project_io.LEGACY_ORDINARY_CRACK_WIDTH_KEY not in resaved[
-        "tables"
-    ][load_cases.ELASTIC_TABLE_KEY]["columns"]
+    assert resaved["version"] == 26
+    assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in resaved["scalars"]
+    assert {
+        "sls_long_term_permitted_crack_width_mm",
+        "sls_short_term_permitted_crack_width_mm",
+        "sls_heightened_permitted_crack_width_mm",
+    }.issubset(resaved["scalars"])
 
 
 @pytest.mark.parametrize(
-    ("location", "invalid"),
-    (
-        ("ordinary", True),
-        ("ordinary", 0.0),
-        ("ordinary", -0.1),
-        ("ordinary", "NaN"),
-        ("heightened", -0.1),
-    ),
+    "invalid",
+    (True, False, -0.1, "0.30", "NaN"),
 )
-def test_schema_24_rejects_invalid_populated_criteria_even_when_inactive(
-    location,
-    invalid,
-):
-    payload = _schema24_payload(
-        criteria=[invalid if location == "ordinary" else None],
-        heightened_width=(invalid if location == "heightened" else _MISSING),
-    )
+def test_schema_25_rejects_malformed_shared_width(invalid):
+    payload = _schema25_payload(shared_width=invalid)
 
-    with pytest.raises(ValueError, match="must be a positive finite number"):
+    with pytest.raises(ValueError, match="non-negative finite real number"):
         project_io.parse_project(json.dumps(payload))
 
 
-@pytest.mark.parametrize("mutation", ("extra", "reordered"))
-def test_schema_24_rejects_every_nonexact_elastic_column_shape(mutation):
-    data = _schema24_payload(criteria=[None])
-    elastic = data["tables"][load_cases.ELASTIC_TABLE_KEY]
-    if mutation == "extra":
-        elastic["columns"].append("legacy_crack_limit")
-        for row in elastic["rows"]:
-            row.append(None)
-    else:
-        elastic["columns"][-2:] = reversed(elastic["columns"][-2:])
-        for row in elastic["rows"]:
-            row[-2:] = reversed(row[-2:])
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+@pytest.mark.parametrize(
+    "key",
+    (
+        "sls_long_term_permitted_crack_width_mm",
+        "sls_short_term_permitted_crack_width_mm",
+        "sls_heightened_permitted_crack_width_mm",
+    ),
+)
+@pytest.mark.parametrize(
+    "invalid",
+    (True, -0.1, "0.30", float("nan"), float("inf")),
+)
+def test_schema_26_rejects_malformed_width_inputs(key, invalid):
+    tables, scalars = _current_project()
+    scalars[key] = invalid
 
-    with pytest.raises(ValueError, match="exact legacy Elastic columns"):
-        project_io.parse_project(json.dumps(data))
+    with pytest.raises(ValueError, match="non-negative finite real number"):
+        project_io.dump_project(tables, scalars)
 
 
 def test_direction_alias_round_trips_outside_calculation_inputs():
@@ -561,7 +559,7 @@ def test_report_profile_is_presentation_only_but_changes_persistence_identity():
         ("Audit", "Audit"),
     ),
 )
-def test_schema_24_migrates_exact_legacy_report_labels_and_scalar_placement(
+def test_current_schema_migrates_exact_legacy_report_labels_and_scalar_placement(
     legacy_label,
     expected,
 ):
@@ -959,18 +957,24 @@ def test_corrupt_current_input_is_rejected_by_hash():
         project_io.parse_project(json.dumps(data))
 
 
-def test_schema_23_fails_first_with_the_exact_current_only_message():
+@pytest.mark.parametrize("version", (23, 24))
+def test_retired_schemas_name_the_current_and_migratable_versions(version):
     text = json.dumps({
         "format": project_io.FORMAT,
-        "version": 23,
+        "version": version,
         "tables": "deliberately malformed",
         "scalars": None,
     })
 
     for reader in (project_io.project_provenance, project_io.parse_project):
-        with pytest.raises(ValueError) as caught:
+        with pytest.raises(
+            ValueError,
+            match=(
+                rf"unsupported Sector project schema {version}; only current "
+                r"schema 26 and migration from schema 25"
+            ),
+        ):
             reader(text)
-        assert str(caught.value) == project_io.V23_UNSUPPORTED_MESSAGE
 
 
 def test_noncurrent_non_v23_schema_names_current_and_migratable_versions():
@@ -979,14 +983,14 @@ def test_noncurrent_non_v23_schema_names_current_and_migratable_versions():
     with pytest.raises(
         ValueError,
         match=(
-            r"unsupported Sector project schema 22; only current schema 25 "
-            r"and migration from schema 24"
+            r"unsupported Sector project schema 22; only current schema 26 "
+            r"and migration from schema 25"
         ),
     ):
         project_io.parse_project(text)
 
 
-def test_schema_25_serialization_contains_no_retired_bridge_inputs():
+def test_schema_26_serialization_contains_no_retired_bridge_inputs():
     tables, scalars = _current_project()
     tables.update({
         "bridge_brittle_base": {"retired": True},
@@ -997,7 +1001,7 @@ def test_schema_25_serialization_contains_no_retired_bridge_inputs():
 
     data = json.loads(project_io.dump_project(tables, scalars))
 
-    assert data["version"] == 25
+    assert data["version"] == 26
     assert set(data["tables"]) == set(project_io.PROJECT_TABLE_KEYS)
     assert not {
         "bridge_brittle_base",
@@ -1016,7 +1020,7 @@ def test_schema_25_serialization_contains_no_retired_bridge_inputs():
         "bridge_minimum_crack_base",
     ),
 )
-def test_rehashed_schema_24_rejects_each_retired_table_as_unknown(
+def test_rehashed_current_schema_rejects_each_retired_table_as_unknown(
     retired_table,
 ):
     tables, scalars = _current_project()
@@ -1034,7 +1038,7 @@ def test_rehashed_schema_24_rejects_each_retired_table_as_unknown(
         project_io.parse_project(json.dumps(data))
 
 
-def test_rehashed_schema_24_rejects_retired_bridge_scalar_as_unknown():
+def test_rehashed_current_schema_rejects_retired_bridge_scalar_as_unknown():
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
     data["scalars"]["bridge_standard"] = "retired"
@@ -1083,7 +1087,7 @@ def test_fatigue_edition_rejects_labels_legacy_tokens_and_near_matches(
         project_io.dump_project(tables, scalars)
 
 
-def test_rehashed_schema_24_rejects_an_unregistered_fatigue_edition():
+def test_rehashed_current_schema_rejects_an_unregistered_fatigue_edition():
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
     data["scalars"]["fatigue_edition"] = "DS/EN 1992-1-1:2023"
@@ -1163,8 +1167,9 @@ def test_legacy_schema25_heightened_operands_migrate_to_dual_contract():
     _, loaded, info = project_io.parse_project_with_info(json.dumps(payload))
 
     assert info["migrated"] is True
-    assert len(info["migration_warnings"]) == 1
-    assert "copied to both systems" in info["migration_warnings"][0]
+    assert len(info["migration_warnings"]) == 2
+    assert "copied the positive value" in info["migration_warnings"][0]
+    assert "copied to both systems" in info["migration_warnings"][1]
     assert loaded["sls_heightened_reference_case"] == "One Elastic action"
     assert loaded[
         "sls_heightened_fine_effective_tension_area_mm2"
@@ -1237,6 +1242,7 @@ def test_active_heightened_check_requires_every_selector_and_operand(missing):
     heightened = _heightened_inputs()
     heightened.pop(missing)
     scalars.update(heightened)
+    scalars.pop(missing, None)
 
     with pytest.raises(ValueError, match=rf"^{re.escape(missing)} is required"):
         project_io.dump_project(tables, scalars)
@@ -1286,7 +1292,7 @@ def test_active_heightened_selectors_are_exact(key, invalid, message):
     "key",
     (
         "sls_heightened_effective_tensile_strength_mpa",
-        "sls_permitted_crack_width_mm",
+        "sls_heightened_permitted_crack_width_mm",
         "sls_heightened_fine_effective_tension_area_mm2",
         "sls_heightened_coarse_effective_tension_area_mm2",
     ),

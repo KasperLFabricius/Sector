@@ -37,9 +37,11 @@ method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
 Sector 0.94 is the current internal product identity and uses project schema
-25. Schema 24 has one bounded migration for the shared
-permitted crack width; conflicting populated legacy values migrate to the
-conservative minimum with a visible warning. Schema 23 and future schemas remain
+26. Schema 25 has one bounded migration: its former shared permitted crack
+width is copied to the independent long-term and short-term ordinary inputs,
+and is preserved separately as the Formula 7.100 NA operand only when that
+heightened calculation was enabled. Zero means no ordinary comparison and is
+never promoted to the heightened operand. Schema 24 and future schemas remain
 unsupported. Earlier compliance, cover-calculator or authority metadata is not
 carried forward. Its portable Windows ZIP is unsigned; no trusted-publisher
 reputation or administrator approval is claimed.
