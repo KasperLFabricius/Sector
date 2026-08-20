@@ -900,6 +900,26 @@ def _compact_equation_numbers(source):
     return _EQUATION_NEGATIVE_ZERO_RE.sub(remove_negative_zero, compacted)
 
 
+def _curvature_selection_substitution(candidates, selected):
+    """Summarise the retained candidate population without repeating its table."""
+
+    selected_ordinal = next(
+        index
+        for index, candidate in enumerate(candidates, start=1)
+        if candidate.get("selected")
+    )
+    candidate_count = len(candidates)
+    population = (
+        "kappa<sub>1</sub>"
+        if candidate_count == 1
+        else f"kappa<sub>i=1:{candidate_count}</sub>"
+    )
+    return (
+        f"= min({population}) = kappa<sub>{selected_ordinal}</sub> = "
+        f"{_fmt(selected.get('curvature_per_m'), 9)} 1/m"
+    )
+
+
 _pct = viz.pct   # shared util-% formatter (see app/viz.py); keeps report == screen
 
 
@@ -5749,10 +5769,7 @@ class ReportBuilder:
                     "kappa<sub>s,i</sub>, kappa<sub>p,j</sub>)",
                     equation_key="plastic.worked.curvature-selection",
                     ref="Sector governing-curvature minimum; exact candidate operands above.",
-                    subst=("= min(" + ", ".join(
-                        _fmt(candidate["curvature_per_m"], 9)
-                        for candidate in candidates
-                    ) + ") 1/m"),
+                    subst=_curvature_selection_substitution(candidates, selected),
                     result=(
                         f"kappa<sub>u</sub> = "
                         f"{_fmt(selected.get('curvature_per_m'), 9)} 1/m; "
