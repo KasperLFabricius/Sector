@@ -72,7 +72,8 @@ governing identity and stable reason token.
    finite zero `trd_s` or `trd_max` remains an assessed zero resistance. A later
    demand/utilisation layer may therefore issue an honest failure rather than
    treating zero capacity as missing evidence.
-6. **Malformed input.** A non-Boolean authority or a Boolean, text,
+6. **Malformed input.** An omitted authority fails at the required keyword
+   boundary. A provided non-Boolean authority or a Boolean, text,
    non-convertible, negative, NaN or infinite numeric operand raises
    `ValueError`. The selector never returns a valid-looking partial result.
 
@@ -91,12 +92,13 @@ calculate utilisation or issue PASS/FAIL.
 | A02-05 | Closed links false; zero reinforcement | Full resistance is not assessed with the absent-authority reason. |
 | A02-06 | Closed links true; zero reinforcement | Full resistance is not assessed with the non-positive-reinforcement reason. |
 | A02-07 | Closed links true; positive reinforcement; either resistance is zero | Full resistance is assessed as zero with the correct governing identity. |
-| A02-08 | Authority is missing, `None`, integer, string or NumPy Boolean | `ValueError`; no truthiness coercion. |
-| A02-09 | `Asw/s` is Boolean, text, non-convertible, negative, NaN or infinity | `ValueError`; no partial selection. |
-| A02-10 | Either resistance is Boolean, text, non-convertible, negative, NaN or infinity | `ValueError`; no partial selection. |
-| A02-11 | Supported integer/real scalar inputs | Result fields are normalized built-in floats. |
-| A02-12 | Returned result is inspected or an input object is reused | Result is frozen/slotted and input objects are unchanged. |
-| A02-13 | Repository runtime before PR-A03 | New selector has no non-test call site; existing application/report behavior is unchanged. |
+| A02-08 | Authority is omitted | Required keyword raises `TypeError`; no default authority exists. |
+| A02-09 | Authority is `None`, integer, string or NumPy Boolean | `ValueError`; no truthiness coercion. |
+| A02-10 | `Asw/s` is Boolean, text, non-convertible, negative, NaN or infinity | `ValueError`; no partial selection. |
+| A02-11 | Either resistance is Boolean, text, non-convertible, negative, NaN or infinity | `ValueError`; no partial selection. |
+| A02-12 | Supported integer/real scalar inputs | Result fields are normalized built-in floats. |
+| A02-13 | Returned result is inspected or an input object is reused | Result is frozen/slotted and input objects are unchanged. |
+| A02-14 | Repository runtime before PR-A03 | New selector has no non-test call site; existing application/report behavior is unchanged. |
 
 ## Focused verification
 

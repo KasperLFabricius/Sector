@@ -125,6 +125,20 @@ class TorsionResistanceSelection:
     governs: str
 
 
+@dataclass(frozen=True, slots=True)
+class FullTorsionResistanceSelection:
+    """Fail-closed full resistance selected under current closed-link authority."""
+
+    trd_s: float
+    trd_max: float
+    closed_links_present: bool
+    asw_over_s: float
+    full_resistance_assessed: bool
+    resistance: Optional[float]
+    governs: Optional[str]
+    reason: Optional[str]
+
+
 def _perimeter(ring: Sequence) -> float:
     """Closed-polygon perimeter (same length units as the vertices)."""
     n = len(ring)
@@ -499,4 +513,87 @@ def select_torsion_resistance(
         governs = "crushing (TRd,max)"
     return TorsionResistanceSelection(
         trd_s_value, trd_max_value, with_stirrups, resistance, governs
+    )
+
+
+def _nonnegative_finite_selection_operand(value: object, name: str) -> float:
+    """Normalize one full-resistance operand without accepting Boolean or text."""
+
+    if (
+        type(value) is bool
+        or type(value).__name__ == "bool_"
+        or isinstance(value, (str, bytes))
+    ):
+        raise ValueError(f"{name} must be a finite non-negative real number")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"{name} must be a finite non-negative real number"
+        ) from exc
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"{name} must be a finite non-negative real number")
+    return normalized
+
+
+def select_full_torsion_resistance(
+    trd_s_value: object,
+    trd_max_value: object,
+    *,
+    closed_links_present: object,
+    asw_over_s: object,
+) -> FullTorsionResistanceSelection:
+    """Select full torsion resistance only under explicit current link authority.
+
+    ``TRd,max`` is the concrete-strut maximum, not a standalone torsion
+    resistance. A full resistance therefore requires both an exact current
+    closed-link authority and positive current transverse reinforcement.
+    """
+
+    if type(closed_links_present) is not bool:
+        raise ValueError("closed_links_present must be a built-in Boolean")
+    trd_s_value = _nonnegative_finite_selection_operand(trd_s_value, "trd_s")
+    trd_max_value = _nonnegative_finite_selection_operand(
+        trd_max_value, "trd_max"
+    )
+    asw_over_s = _nonnegative_finite_selection_operand(asw_over_s, "asw_over_s")
+
+    if not closed_links_present:
+        return FullTorsionResistanceSelection(
+            trd_s=trd_s_value,
+            trd_max=trd_max_value,
+            closed_links_present=False,
+            asw_over_s=asw_over_s,
+            full_resistance_assessed=False,
+            resistance=None,
+            governs=None,
+            reason="closed_links_not_present",
+        )
+    if asw_over_s == 0.0:
+        return FullTorsionResistanceSelection(
+            trd_s=trd_s_value,
+            trd_max=trd_max_value,
+            closed_links_present=True,
+            asw_over_s=asw_over_s,
+            full_resistance_assessed=False,
+            resistance=None,
+            governs=None,
+            reason="closed_link_reinforcement_not_positive",
+        )
+
+    if trd_s_value <= trd_max_value:
+        resistance = trd_s_value
+        governs = "stirrups (TRd,s)"
+    else:
+        resistance = trd_max_value
+        governs = "crushing (TRd,max)"
+    return FullTorsionResistanceSelection(
+        trd_s=trd_s_value,
+        trd_max=trd_max_value,
+        closed_links_present=True,
+        asw_over_s=asw_over_s,
+        full_resistance_assessed=True,
+        resistance=resistance,
+        governs=governs,
+        reason=None,
     )
