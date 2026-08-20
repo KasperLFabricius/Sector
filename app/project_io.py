@@ -252,6 +252,21 @@ def _positive_real(value, label: str) -> float:
     return number
 
 
+def _nonnegative_real(value, label: str) -> float:
+    """Normalize one non-negative project scalar without Boolean coercion."""
+    if isinstance(value, (bool, np.bool_)) or isinstance(value, (str, bytes)):
+        raise ValueError(f"{label} must be a non-negative finite real number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"{label} must be a non-negative finite real number"
+        ) from exc
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError(f"{label} must be a non-negative finite real number")
+    return number
+
+
 def _normalise_table(value, key: str) -> pd.DataFrame:
     if key in CASE_TABLE_KEYS:
         return load_cases.normalise_table(value, key)
