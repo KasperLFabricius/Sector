@@ -18,6 +18,24 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    (
+        "blank-or-absent-criterion-language",
+        re.compile(
+            r"(?:\b(?:with|if)\s+no\s+criteri(?:on|a)\b|"
+            r"\bwithout\s+(?:a\s+)?criteri(?:on|a)\b|"
+            r"\bno\s+criteri(?:on|a)(?:\s+is)?\s+"
+            r"(?:entered|supplied|provided|set)\b|"
+            r"\b(?:blank|absent)\b"
+            r"(?:[^\w.!?;:]+\w+){0,6}[^\w.!?;:]+\b"
+            r"(?:crack(?:[^\w.!?;:]+width)?|"
+            r"permitted[^\w.!?;:]+width|criteri(?:on|a))\b|"
+            r"\b(?:crack(?:[^\w.!?;:]+width)?|"
+            r"permitted[^\w.!?;:]+width|criteri(?:on|a))\b"
+            r"(?:[^\w.!?;:]+\w+){0,6}[^\w.!?;:]+\b"
+            r"(?:blank|absent)\b)",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 

@@ -66,6 +66,53 @@ def test_unrelated_shared_mechanics_and_phrase_boundaries_are_allowed(
     assert retired_crack_wording_rules(passage) == ()
 
 
+@pytest.mark.parametrize(
+    "passage",
+    (
+        "If no criterion is entered",
+        "With no criterion the width remains calculated",
+        "Without a criterion, crack width is numerical",
+        "no criterion is supplied",
+        "The optional permitted crack width in Analysis settings is blank",
+        "Leave blank to calculate ordinary crack widths without comparison",
+        "The crack-width criterion is absent",
+        "An absent permitted width suppresses only the comparison",
+    ),
+)
+def test_retired_blank_or_absent_criterion_variants_are_detected(
+    passage: str,
+) -> None:
+    before = passage
+    assert retired_crack_wording_rules(passage) == (
+        "blank-or-absent-criterion-language",
+    )
+    assert passage == before
+
+
+@pytest.mark.parametrize(
+    "passage",
+    (
+        "A 0 mm limit states the matching width without comparison.",
+        "The permitted crack width is 0 mm.",
+        "Blank reinforcement rows are rejected.",
+        "Crack widths are calculated. Blank material IDs are rejected.",
+        "The retained crack branch is missing or unsupported.",
+        "The crack result is incomplete (missing: strain evidence).",
+        "crack-criterion-missing",
+    ),
+)
+def test_numeric_no_comparison_and_unrelated_blank_language_are_allowed(
+    passage: str,
+) -> None:
+    assert retired_crack_wording_rules(passage) == ()
+
+
+def test_existing_shared_rule_remains_independent() -> None:
+    assert retired_crack_wording_rules("the shared crack criterion") == (
+        "shared-crack-limit-language",
+    )
+
+
 @pytest.mark.parametrize("value", (None, False, 0, (), [], {}))
 def test_non_text_passages_fail_closed(value: object) -> None:
     assert retired_crack_wording_rules(value) == ("invalid-text",)
