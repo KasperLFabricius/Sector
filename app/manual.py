@@ -722,9 +722,11 @@ def manual_blocks() -> list:
     md("A downloaded project file stores the section, materials, settings, named "
        "load cases and provenance. Loading a project restores its inputs and clears "
        "earlier results; press *Calculate* to create current results. Current "
-       "projects use schema version 25. Schema 24 is migrated in memory through "
-       "the bounded permitted-crack-width rule and resaves cleanly as schema 25; "
-       "the source file is not changed. Schema 23 remains unsupported.")
+       "projects use schema version 26. Schema 25 is migrated in memory by "
+       "splitting the former shared crack-width value into independent long-term "
+       "and short-term user limits and, when it was active, a separate Formula "
+       "7.100 NA operand. It resaves cleanly as schema 26; the source file is not "
+       "changed. Schema 24 remains unsupported.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
@@ -959,17 +961,19 @@ def manual_blocks() -> list:
         "standard",
         f"Sector {APP_VERSION} reports the DK NA fine and coarse crack systems "
         "side by side, each for the long-term and short-term load (four crack "
-        "widths). One optional positive permitted width in Analysis settings is "
-        "shared by every selected Elastic row. Blank means the width is calculated "
-        "without an acceptance assessment; when a value is entered, Sector reports "
-        "only a bounded comparison with that user-specified value and does not infer "
-        "exposure, durability, prestress category or owner requirements. Part C "
-        "derives every model in full with the critical worked crack width.",
+        "widths). Analysis settings provide independent long-term and short-term "
+        "user limits for every selected Elastic row. Zero means that duration is "
+        "calculated without an acceptance comparison; when a positive value is "
+        "entered, Sector reports only a bounded duration-matched comparison and "
+        "does not infer exposure, durability, load-combination classification, "
+        "prestress category or owner requirements. Part C derives every model in "
+        "full with the critical worked crack width.",
     )
     md("For the first-generation Danish basis only, **DK heightened crack-control "
        "minimum** is a separate section-level opt-in. The user must declare its "
-       "applicability and supply the shared permitted width, reinforcement surface, "
-       "effective tensile strength and separate fine/coarse effective tension areas. "
+       "applicability and supply the separate Formula 7.100 NA permitted width, "
+       "reinforcement surface, effective tensile strength and separate fine/coarse "
+       "effective tension areas. "
        "Sector calculates both systems together. It derives bar diameter, reinforcement "
        "modulus and provided area from one retained ordinary crack-enabled Elastic "
        "case: the sole such case is automatic, otherwise the user selects it explicitly.")
@@ -1628,8 +1632,8 @@ def manual_blocks() -> list:
        "{4E_{sk}kw_k}}$$\n\n"
        "where $k=1$ for the fine crack system and $k=2$ for the coarse system; "
        "$m_s=1$ for ribbed reinforcement and $m_s=\\sqrt{2}$ for smooth "
-       "reinforcement. Sector uses the shared Analysis permitted width and calculates "
-       "the fine and coarse systems together, each with its own user-supplied "
+       "reinforcement. Sector uses the separate Formula 7.100 NA permitted-width "
+       "input and calculates the fine and coarse systems together, each with its own user-supplied "
        "$A_{c,eff}$. Bar diameter uses the ordinary crack override when positive, "
        "otherwise the largest contributing mild bar; $E_{sk}$ is the conservative "
        "minimum among contributing mild materials and $A_{s,prov}$ is their retained "
@@ -2018,9 +2022,10 @@ def manual_blocks() -> list:
 
     h1("Limitations & troubleshooting")
     md("Use this indexed chapter for explicit model boundaries and for the "
-       "symptom/cause/correction path shown by the application. A blank ordinary "
-       "crack criterion is an intentional no-comparison state; a blank enabled "
-       "heightened criterion is invalid and must be corrected.")
+       "symptom/cause/correction path shown by the application. A zero long-term "
+       "or short-term ordinary crack criterion is an intentional no-comparison "
+       "state; a zero enabled heightened criterion is invalid and must be "
+       "corrected.")
     h2("Key assumptions & limitations")
     md("- **One plane section.** Plane sections remain plane; the strain field is "
        "linear across the section.\n"

@@ -2820,12 +2820,29 @@ class ReportBuilder:
         if crack_requested or inp.get("sls_heightened_on"):
             self._h2("Crack-control settings", reserve=75)
             crack_rows = [["Setting", "Value"]]
-            permitted = inp.get("sls_permitted_crack_width_mm")
+            long_term_limit = inp.get(
+                "sls_long_term_permitted_crack_width_mm", 0.0
+            )
+            short_term_limit = inp.get(
+                "sls_short_term_permitted_crack_width_mm", 0.0
+            )
             crack_rows.extend([
                 ["Ordinary crack-width design basis", _html_escape(str(basis))],
                 [
-                    "Permitted crack width w<sub>k</sub>",
-                    "not specified" if permitted is None else f"{_fmt(permitted, 3)} mm",
+                    "Long-term user limit w<sub>k,long</sub>",
+                    (
+                        "0.000 mm - no comparison"
+                        if not long_term_limit
+                        else f"{_fmt(long_term_limit, 3)} mm"
+                    ),
+                ],
+                [
+                    "Short-term user limit w<sub>k,short</sub>",
+                    (
+                        "0.000 mm - no comparison"
+                        if not short_term_limit
+                        else f"{_fmt(short_term_limit, 3)} mm"
+                    ),
                 ],
                 [
                     "Crack-width diameter",
@@ -2875,6 +2892,10 @@ class ReportBuilder:
             if inp.get("sls_heightened_on"):
                 crack_rows.extend([
                     ["DK heightened crack control", "fine and coarse calculated together"],
+                    [
+                        "Formula 7.100 NA permitted width",
+                        f"{_fmt(inp.get('sls_heightened_permitted_crack_width_mm'), 3)} mm",
+                    ],
                     ["Heightened reference case", _html_escape(str(inp.get("sls_heightened_reference_case") or "-"))],
                     ["Reinforcement surface", _html_escape(str(inp.get("sls_heightened_reinforcement_surface") or "-"))],
                     ["Effective tensile strength f<sub>ct,eff</sub>", f"{_fmt(inp.get('sls_heightened_effective_tensile_strength_mpa'), 3)} MPa"],
@@ -3300,8 +3321,11 @@ class ReportBuilder:
             ])
         if isinstance(self._selected_crack_comparison, Mapping):
             rows.append([
-                "Global permitted crack width",
-                "Analysis settings",
+                "User crack-width comparison",
+                "Analysis settings / "
+                + _html_escape(str(
+                    self._selected_crack_comparison.get("duration") or "-"
+                ).replace("_", "-")),
             ])
         if isinstance(self._selected_cracking_threshold, Mapping):
             rows.append([
@@ -4151,8 +4175,8 @@ class ReportBuilder:
                 self._small(
                     "N in kN; M in kNm. Stresses are always reported and "
                     "crack-width calculation is optional per case. The optional "
-                    "permitted crack width is shared from Analysis settings; no "
-                    "stress limit is applied."
+                    "long-term and short-term permitted crack widths are separate "
+                    "user inputs; no stress limit is applied."
                 )
             fatigue_rows = (
                 fatigue_inputs.spectrum_records(
@@ -4425,22 +4449,14 @@ class ReportBuilder:
             if crack_results:
                 crack_el = crack_results[0]
                 rows.append(["Crack-width code", str(crack_el.get("crack_code", "-"))])
-                permitted_width = inp.get("sls_permitted_crack_width_mm")
                 rows.append([
                     "Crack-width treatment",
-                    (
-                        "Calculated without acceptance assessment"
-                        if permitted_width is None
-                        else "Compared with the shared Analysis criterion"
-                    ),
+                    "Duration-matched user comparisons; zero means no comparison",
                 ])
                 rows.append([
-                    "Permitted crack width w<sub>k</sub>",
-                    (
-                        "not specified"
-                        if permitted_width is None
-                        else f"{_fmt(permitted_width, 3)} mm"
-                    ),
+                    "Long-term / short-term user limits",
+                    f"{_fmt(inp.get('sls_long_term_permitted_crack_width_mm', 0.0), 3)} / "
+                    f"{_fmt(inp.get('sls_short_term_permitted_crack_width_mm', 0.0), 3)} mm",
                 ])
                 if crack_el.get("crack_member"):
                     rows.append(["Member type", str(crack_el["crack_member"])])
@@ -8361,6 +8377,11 @@ class ReportBuilder:
             isinstance(self._selected_crack_comparison, Mapping)
             and self._selected_crack_comparison.get("case_id") == case_id
         )
+        comparison_duration = (
+            self._selected_crack_comparison.get("duration")
+            if publish_comparison
+            else None
+        )
         if publish_threshold and publish_crack_width:
             heading = "Cracking threshold and governing crack width"
         elif publish_crack_width:
@@ -8450,17 +8471,26 @@ class ReportBuilder:
                 "is irreversible."
             )
         if not publish_crack_width:
-            assessment = el.get("crack_output") or {}
-            self._ordinary_crack_assessment(
-                assessment,
-                publish_comparison=publish_comparison,
-            )
+            assessments = el.get("crack_output") or {}
+            if not isinstance(assessments, Mapping):
+                assessments = {}
+            for duration in ("long_term", "short_term"):
+                assessment = assessments.get(duration)
+                if isinstance(assessment, Mapping):
+                    self._ordinary_crack_assessment(
+                        assessment,
+                        publish_comparison=(comparison_duration == duration),
+                    )
             if (
                 el.get("crack") is None
                 and el.get("crack_short") is None
                 and el.get("crack_coarse") is None
                 and el.get("crack_short_coarse") is None
-                and not str(assessment.get("reason") or "").strip()
+                and not any(
+                    str(item.get("reason") or "").strip()
+                    for item in assessments.values()
+                    if isinstance(item, Mapping)
+                )
             ):
                 self._small(
                     "No calculated crack-width value is available; the report "
@@ -8470,21 +8500,34 @@ class ReportBuilder:
         cl, cs = el.get("crack"), el.get("crack_short")
         clc, csc = el.get("crack_coarse"), el.get("crack_short_coarse")
         no_results = cl is None and cs is None and clc is None and csc is None
-        assessment = el.get("crack_output") or {}
-        value = assessment.get("value")
-        text = (
-            f"Crack-width output | governing w<sub>k</sub> "
-            f"{'-' if value is None else _fmt(value, 3) + ' mm'} | "
-            f"case {assessment.get('case') or '-'} | "
-            f"element {assessment.get('governing') or '-'}"
-        )
-        self._p(text)
-        self._ordinary_crack_assessment(
-            assessment,
-            publish_comparison=publish_comparison,
-        )
+        assessments = el.get("crack_output") or {}
+        if not isinstance(assessments, Mapping):
+            assessments = {}
+        for duration, label in (
+            ("long_term", "Long-term"),
+            ("short_term", "Short-term"),
+        ):
+            assessment = assessments.get(duration)
+            if not isinstance(assessment, Mapping):
+                continue
+            value = assessment.get("value")
+            text = (
+                f"{label} crack-width output | w<sub>k</sub> "
+                f"{'-' if value is None else _fmt(value, 3) + ' mm'} | "
+                f"branch {assessment.get('case') or '-'} | "
+                f"element {assessment.get('governing') or '-'}"
+            )
+            self._p(text)
+            self._ordinary_crack_assessment(
+                assessment,
+                publish_comparison=(comparison_duration == duration),
+            )
         if no_results:
-            if not str(assessment.get("reason") or "").strip():
+            if not any(
+                str(item.get("reason") or "").strip()
+                for item in assessments.values()
+                if isinstance(item, Mapping)
+            ):
                 self._small(
                     "No calculated crack-width value is available; the report "
                     "does not infer a physical reason."
@@ -8521,6 +8564,8 @@ class ReportBuilder:
         """Publish one retained user comparison without inferring a code limit."""
         status = str(assessment.get("calculation_state") or "NOT ASSESSED")
         criterion = assessment.get("criterion_mm")
+        duration = str(assessment.get("duration") or "").replace("_", "-")
+        duration_label = duration.capitalize() if duration else "Duration"
         source = str(assessment.get("criterion_source") or "").strip()
         reason = str(assessment.get("reason") or "").strip()
         if criterion is None:
@@ -8533,8 +8578,19 @@ class ReportBuilder:
                 self._small(_html_escape(reason))
             return
 
+        if criterion == 0.0:
+            self._small(
+                f"{_html_escape(duration_label)} calculation state: "
+                f"{_html_escape(status)}. The user criterion is 0.000 mm, so "
+                "the calculated width is stated without an acceptance comparison."
+            )
+            if reason:
+                self._small(_html_escape(reason))
+            return
+
         self._small(
-            f"Calculation state: {_html_escape(status)}. User-specified "
+            f"{_html_escape(duration_label)} calculation state: "
+            f"{_html_escape(status)}. User-specified "
             f"criterion = {_fmt(criterion, 3)} mm; source: "
             f"{_html_escape(source or 'NOT RETAINED')}. This is a bounded "
             "comparison only; no exposure or owner criterion is inferred."
@@ -8560,7 +8616,11 @@ class ReportBuilder:
                 + "). The report does not reconstruct it."
             )
             return
-        self._h2("User-specified crack-width comparison - critical case")
+        self._h2(
+            "User-specified crack-width comparison - critical "
+            + _html_escape(duration_label.lower())
+            + " case"
+        )
         self._formula(
             "u<sub>w</sub> = w<sub>k</sub> / w<sub>k,criterion</sub>",
             equation_key="crack.user-limit.comparison",

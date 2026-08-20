@@ -71,20 +71,26 @@ def test_reference_fixture_engineering_is_internally_consistent():
     validate_fixture_engineering(inp, _results(inp))
 
 
-def test_reference_fixture_uses_one_global_crack_width_criterion():
+def test_reference_fixture_uses_independent_duration_crack_width_criteria():
     inp = _inputs()
     elastic_cases = inp["elastic_cases"]
 
-    assert inp["sls_permitted_crack_width_mm"] == pytest.approx(0.20)
+    assert inp["sls_long_term_permitted_crack_width_mm"] == pytest.approx(0.20)
+    assert inp["sls_short_term_permitted_crack_width_mm"] == pytest.approx(0.20)
+    assert inp["sls_heightened_permitted_crack_width_mm"] == pytest.approx(0.20)
     assert all(
         "ordinary_crack_criterion_mm" not in case for case in elastic_cases
     )
-    assert "sls_heightened_permitted_crack_width_mm" not in inp
     output = _results(inp)["elastic_cases"][0]["results"]["elastic"][
         "crack_output"
     ]
-    assert output["criterion_mm"] == pytest.approx(0.20)
-    assert output["criterion_source"] == "User input - Analysis settings"
+    assert set(output) == {"long_term", "short_term"}
+    for duration in ("long_term", "short_term"):
+        assert output[duration]["duration"] == duration
+        assert output[duration]["criterion_mm"] == pytest.approx(0.20)
+        assert output[duration]["criterion_source"] == (
+            f"User input - Analysis settings - {duration.replace('_', '-')}"
+        )
 
 
 def test_reference_fixture_retains_governing_worked_chains_without_figures():
@@ -129,7 +135,7 @@ def test_audit_fixture_flags_sparse_non_opener_pages_for_visual_review():
         page_texts,
         opener_pages=opener_pages,
     )
-    assert tuple(page for page, _coverage in sparse) == (3, 17, 48, 58)
+    assert tuple(page for page, _coverage in sparse) == (3, 17, 38, 49, 59)
     assert all(0.0 < coverage < 0.35 for _page, coverage in sparse)
 
 

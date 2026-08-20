@@ -174,11 +174,11 @@ _HEIGHTENED_TARGETS = (
         ),
     ),
     (
-        "Permitted crack width",
+        "Heightened permitted crack width",
         InputTarget(
             ANALYSIS_SETTINGS,
-            "sls_permitted_crack_width_mm",
-            "Permitted crack width (shared)",
+            "sls_heightened_permitted_crack_width_mm",
+            "Heightened permitted crack width",
         ),
     ),
     (

@@ -24,7 +24,7 @@ import sector_report  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "8e1ceb8617996d329136fab6670f09642da71fbaa73a77b174e79b1b13f41169"
+    "e3a079a72e0c5fb5d74e94107a1d596e036ad326783401e00715e335b85fdca4"
 )
 
 
@@ -127,19 +127,42 @@ def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
         expected_elastic["steel_stress_mpa"][0], rel=5.0e-12
     )
     assert elastic["crack_output"] == {
-        "value": pytest.approx(expected_elastic["crack_width_mm"], rel=5.0e-12),
-        "case": "Short-term (fine)",
-        "governing": "R1",
-        "unit": "mm",
-        "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
-        "criterion_mm": 0.20,
-        "ratio": pytest.approx(
-            expected_elastic["crack_width_mm"] / 0.20,
-            rel=5.0e-12,
-        ),
-        "criterion_source": "User input - Analysis settings",
-        "reason": "The calculated crack width is within the user-specified limit.",
-        "comparison_equation": "w_k / w_k,criterion",
+        "long_term": {
+            "duration": "long_term",
+            "value": None,
+            "case": None,
+            "governing": None,
+            "unit": "mm",
+            "calculation_state": "NOT ASSESSED",
+            "criterion_mm": 0.20,
+            "ratio": None,
+            "criterion_source": "User input - Analysis settings - long-term",
+            "reason": (
+                "The load state has no reinforcement in tension, so no crack "
+                "opening is applicable."
+            ),
+            "comparison_equation": None,
+        },
+        "short_term": {
+            "duration": "short_term",
+            "value": pytest.approx(
+                expected_elastic["crack_width_mm"], rel=5.0e-12
+            ),
+            "case": "Short-term (fine)",
+            "governing": "R1",
+            "unit": "mm",
+            "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
+            "criterion_mm": 0.20,
+            "ratio": pytest.approx(
+                expected_elastic["crack_width_mm"] / 0.20,
+                rel=5.0e-12,
+            ),
+            "criterion_source": "User input - Analysis settings - short-term",
+            "reason": (
+                "The calculated crack width is within the user-specified limit."
+            ),
+            "comparison_equation": "w_k / w_k,criterion",
+        },
     }
 
     heightened = results["heightened_crack_control"]
@@ -272,7 +295,9 @@ def test_checking_pack_is_separate_and_covers_every_main_family():
     for text in (
         "Plastic capacity and applied ray", "Cracked elastic and crack width",
         "DK NA heightened crack-control minimum",
-        "wk,criterion=0.20 mm, shared by every ordinary and heightened check",
+        "the user-specified long-term and short-term ordinary limits are both "
+        "0.20 mm",
+        "The separate Formula 7.100 NA permitted-width operand is also 0.20 mm",
         "0.1343977823/0.20=0.6719889115",
         "phi=max(25.23132522,25.23132522)=25.23132522 mm",
         "Fine gives base ratio",
@@ -330,7 +355,7 @@ def test_tables_only_report_contains_every_main_calculation_chapter(
         "Section and materials", "Basis of analysis", "Plastic section capacity",
         "Elastic section response and stresses",
         "Cracking threshold and governing crack width - EL-COMPLETE",
-        "User-specified crack-width comparison - critical case",
+        "User-specified crack-width comparison - critical short-term case",
         "DK heightened crack-control minimum",
         "Grouped fatigue", "Shear resistance", "Torsion (thin-walled tube)",
         "Combined bending + shear + torsion (M-V-T)", "minimum reinforcement",

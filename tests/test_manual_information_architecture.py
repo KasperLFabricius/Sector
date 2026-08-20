@@ -93,6 +93,32 @@ def test_required_workflow_and_troubleshooting_inventories_are_complete():
         ia.warning_reference("missing")
 
 
+def test_crack_comparison_guidance_uses_independent_zero_value_contract():
+    warning = ia.warning_reference("crack-criterion-missing")
+    guidance = f"{warning.symptom} {warning.cause} {warning.correction}"
+    for token in (
+        "long-term or short-term permitted width",
+        "0 mm",
+        "positive value for that duration",
+        "without comparison",
+    ):
+        assert token in guidance
+    for retired in ("blank", "shared value"):
+        assert retired not in guidance
+
+    readme = " ".join(
+        (ROOT / "README.md").read_text(encoding="utf-8").split()
+    )
+    for token in (
+        "independent user-specified long-term and short-term criteria",
+        "criterion of 0 mm",
+        "duration-matched criterion source",
+    ):
+        assert token in readme
+    for retired in ("If no criterion is entered", "criterion is entered"):
+        assert retired not in readme
+
+
 def test_portable_workflow_names_the_real_double_click_and_unsigned_boundary():
     workflow = next(item for item in ia.WORKFLOWS if item.key == "portable-build")
     warning = ia.warning_reference(workflow.warning_key)

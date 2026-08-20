@@ -41,78 +41,60 @@ def test_stress_outputs_reject_invalid_solver_state_without_a_verdict():
     assert outputs["concrete"]["calculation_state"] == "INVALID"
 
 
-def test_crack_outputs_select_largest_actual_calculation():
-    output = sls.crack_outputs(
-        {
-            "Named sustained part": {"wk": 0.19, "element_id": "B-2"},
-            "Named instantaneous part": {"wk": 0.31, "element_id": "B-7"},
+def _duration_outputs(**overrides):
+    kwargs = {
+        "long_term_cases": {
+            "Long-term (fine)": {"wk": 0.19, "element_id": "B-2"},
+            "Long-term (coarse)": {"wk": 0.21, "element_id": "B-3"},
         },
-        valid=True,
-    )
-
-    assert output == {
-        "value": pytest.approx(0.31),
-        "case": "Named instantaneous part",
-        "governing": "B-7",
-        "unit": "mm",
-        "calculation_state": "CALCULATED - ACCEPTANCE NOT ASSESSED",
-        "criterion_mm": None,
-        "ratio": None,
-        "criterion_source": None,
-        "reason": (
-            "No permitted crack width was specified in Analysis settings; "
-            "acceptance is not assessed."
-        ),
-        "comparison_equation": None,
+        "short_term_cases": {
+            "Short-term (fine)": {"wk": 0.31, "element_id": "B-7"},
+            "Short-term (coarse)": {"wk": 0.29, "element_id": "B-8"},
+        },
+        "valid": True,
+        "long_term_criterion_mm": 0.0,
+        "short_term_criterion_mm": 0.0,
+        "long_term_criterion_source": sls.crack_criterion_source("long_term"),
+        "short_term_criterion_source": sls.crack_criterion_source("short_term"),
     }
-    assert "limit" not in output
-    assert "status" not in output
+    kwargs.update(overrides)
+    return sls.crack_outputs(**kwargs)
 
 
-def test_crack_output_not_requested_retains_stored_criterion_without_a_width():
-    source = sls.crack_criterion_source()
-    output = sls.crack_outputs(
-        {"Short-term": {"wk": 0.31, "element_id": "B-7"}},
-        valid=True,
-        requested=False,
-        criterion_mm=0.30,
-        criterion_source=source,
+def test_crack_outputs_select_largest_candidate_inside_each_duration():
+    output = _duration_outputs()
+
+    assert tuple(output) == ("long_term", "short_term")
+    assert output["long_term"]["value"] == pytest.approx(0.21)
+    assert output["long_term"]["case"] == "Long-term (coarse)"
+    assert output["long_term"]["governing"] == "B-3"
+    assert output["short_term"]["value"] == pytest.approx(0.31)
+    assert output["short_term"]["case"] == "Short-term (fine)"
+    assert output["short_term"]["governing"] == "B-7"
+    assert all(
+        item["calculation_state"]
+        == "CALCULATED - ACCEPTANCE NOT ASSESSED"
+        and item["criterion_mm"] == 0.0
+        and item["ratio"] is None
+        and item["comparison_equation"] is None
+        for item in output.values()
     )
 
-    assert output["calculation_state"] == "NOT REQUESTED"
-    assert output["value"] is None
-    assert output["criterion_mm"] == pytest.approx(0.30)
-    assert output["criterion_source"] == source
-    assert output["ratio"] is None
 
-
-def test_crack_output_preserves_evaluation_reason_when_width_is_unavailable():
-    reason = "The tested reinforcement is outside the validated crack scope."
-    output = sls.crack_outputs(
-        {"Short-term": CrackWidthEvaluation("NOT ASSESSED", reason)},
-        valid=True,
-        requested=True,
-        criterion_mm=0.30,
-        criterion_source=sls.crack_criterion_source(),
+def test_crack_outputs_never_compare_a_duration_with_the_other_limit():
+    output = _duration_outputs(
+        long_term_criterion_mm=0.20,
+        short_term_criterion_mm=0.40,
     )
 
-    assert output["calculation_state"] == "NOT ASSESSED"
-    assert output["value"] is None
-    assert output["reason"] == reason
-
-
-def test_invalid_requested_crack_result_is_not_assessed_with_retained_reason():
-    reason = "The cracked-section iteration did not converge."
-    output = sls.crack_outputs(
-        {"Short-term": CrackWidthEvaluation("NOT ASSESSED", reason)},
-        valid=False,
-        requested=True,
-        criterion_mm=0.30,
-        criterion_source=sls.crack_criterion_source(),
+    assert output["long_term"]["calculation_state"] == (
+        "EXCEEDS USER-SPECIFIED LIMIT"
     )
-
-    assert output["calculation_state"] == "NOT ASSESSED"
-    assert output["reason"] == reason
+    assert output["long_term"]["ratio"] == pytest.approx(0.21 / 0.20)
+    assert output["short_term"]["calculation_state"] == (
+        "WITHIN USER-SPECIFIED LIMIT"
+    )
+    assert output["short_term"]["ratio"] == pytest.approx(0.31 / 0.40)
 
 
 @pytest.mark.parametrize(
@@ -123,53 +105,106 @@ def test_invalid_requested_crack_result_is_not_assessed_with_retained_reason():
         (0.30, "EXCEEDS USER-SPECIFIED LIMIT", 0.31 / 0.30),
     ],
 )
-def test_crack_output_compares_only_with_a_user_criterion(
+def test_short_term_crack_boundary_uses_only_the_short_term_criterion(
     criterion, expected_status, expected_ratio
 ):
-    source = sls.crack_criterion_source()
-    output = sls.crack_outputs(
-        {"Short-term": {"wk": 0.31, "element_id": "B-7"}},
-        valid=True,
-        requested=True,
-        criterion_mm=criterion,
-        criterion_source=source,
-    )
+    output = _duration_outputs(short_term_criterion_mm=criterion)["short_term"]
 
     assert output["calculation_state"] == expected_status
     assert output["ratio"] == pytest.approx(expected_ratio)
     assert output["criterion_mm"] == pytest.approx(criterion)
-    assert output["criterion_source"] == source
+    assert output["criterion_source"] == sls.crack_criterion_source(
+        "short_term"
+    )
     assert output["comparison_equation"] == "w_k / w_k,criterion"
     assert "PASS" not in str(output) and "FAIL" not in str(output)
 
 
+def test_zero_criterion_is_an_explicit_no_comparison_state():
+    output = _duration_outputs(
+        long_term_criterion_mm=0.0,
+        short_term_criterion_mm=0.30,
+    )
+
+    long_term = output["long_term"]
+    assert long_term["criterion_mm"] == 0.0
+    assert long_term["calculation_state"] == (
+        "CALCULATED - ACCEPTANCE NOT ASSESSED"
+    )
+    assert long_term["ratio"] is None
+    assert long_term["comparison_equation"] is None
+    assert "no comparison was requested" in long_term["reason"]
+    assert output["short_term"]["calculation_state"] == (
+        "EXCEEDS USER-SPECIFIED LIMIT"
+    )
+
+
+def test_crack_output_not_requested_retains_both_criteria_without_widths():
+    output = _duration_outputs(
+        requested=False,
+        long_term_criterion_mm=0.25,
+        short_term_criterion_mm=0.30,
+    )
+
+    assert all(
+        item["calculation_state"] == "NOT REQUESTED"
+        and item["value"] is None
+        and item["ratio"] is None
+        for item in output.values()
+    )
+    assert output["long_term"]["criterion_mm"] == pytest.approx(0.25)
+    assert output["short_term"]["criterion_mm"] == pytest.approx(0.30)
+
+
+def test_one_unavailable_duration_does_not_suppress_the_other():
+    reason = "The tested reinforcement is outside the validated crack scope."
+    output = _duration_outputs(
+        long_term_cases={
+            "Long-term": CrackWidthEvaluation("NOT ASSESSED", reason)
+        },
+        short_term_cases={
+            "Short-term": {"wk": 0.20, "element_id": "B-1"}
+        },
+        long_term_criterion_mm=0.30,
+        short_term_criterion_mm=0.30,
+    )
+
+    assert output["long_term"]["calculation_state"] == "NOT ASSESSED"
+    assert output["long_term"]["reason"] == reason
+    assert output["short_term"]["calculation_state"] == (
+        "WITHIN USER-SPECIFIED LIMIT"
+    )
+
+
+def test_invalid_requested_crack_result_is_not_assessed_for_both_durations():
+    output = _duration_outputs(valid=False)
+
+    assert all(
+        item["calculation_state"] == "NOT ASSESSED"
+        and item["value"] is None
+        for item in output.values()
+    )
+
+
 @pytest.mark.parametrize(
     "criterion",
-    [True, np.bool_(True), 0.0, -0.1, float("inf"), "bad"],
+    [True, np.bool_(True), -0.1, float("nan"), float("inf"), "0.30", b"0.30"],
 )
 def test_crack_output_invalid_criterion_fails_closed(criterion):
-    output = sls.crack_outputs(
-        {"Short-term": {"wk": 0.20, "element_id": "B-1"}},
-        valid=True,
-        requested=True,
-        criterion_mm=criterion,
-        criterion_source=sls.crack_criterion_source(),
-    )
+    output = _duration_outputs(long_term_criterion_mm=criterion)["long_term"]
 
     assert output["calculation_state"] == "NOT ASSESSED"
     assert output["ratio"] is None
     assert output["reason"] == (
-        "The crack-width criterion must be a positive finite number."
+        "The crack-width criterion must be a non-negative finite number."
     )
 
 
 def test_crack_comparison_requires_user_source_and_millimetre_output():
-    without_source = sls.crack_outputs(
-        {"Short-term": {"wk": 0.20, "element_id": "B-1"}},
-        valid=True,
-        criterion_mm=0.30,
-        criterion_source=" ",
-    )
+    without_source = _duration_outputs(
+        long_term_criterion_mm=0.30,
+        long_term_criterion_source=" ",
+    )["long_term"]
     wrong_unit = sls.assess_crack_output(
         {
             "value": 0.20,
@@ -177,15 +212,24 @@ def test_crack_comparison_requires_user_source_and_millimetre_output():
             "governing": "B-1",
             "unit": "m",
         },
+        duration="short_term",
         requested=True,
         criterion_mm=0.30,
-        criterion_source=sls.crack_criterion_source(),
+        criterion_source=sls.crack_criterion_source("short_term"),
     )
 
     assert without_source["calculation_state"] == "NOT ASSESSED"
     assert "nonblank criterion source" in without_source["reason"]
     assert wrong_unit["calculation_state"] == "NOT ASSESSED"
     assert "retained in millimetres" in wrong_unit["reason"]
+
+
+def test_crack_criterion_source_rejects_unknown_duration():
+    with pytest.raises(
+        ValueError,
+        match="duration must be exactly 'long_term' or 'short_term'",
+    ):
+        sls.crack_criterion_source("frequent")
 
 
 def test_element_rows_keep_bar_and_tendon_identity():

@@ -3,8 +3,9 @@
 A case name and description are user-controlled. The Elastic table retains the
 sustained and instantaneous decomposition required by the combined creep solver.
 Stresses are always calculation outputs; crack width is an optional numerical
-calculation per Elastic action. The permitted crack width is a shared Analysis
-setting, not part of an action row. No required combinations are inferred.
+calculation per Elastic action. Independent long-term and short-term permitted
+widths are Analysis settings, not action-row fields. No required combinations
+are inferred.
 """
 
 from __future__ import annotations

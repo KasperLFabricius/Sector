@@ -1,9 +1,10 @@
 """Headless serviceability output and result-table helpers.
 
 The elastic solver returns numerical section states. This module exposes those
-states as reproducible calculation outputs. An ordinary crack-width result may
-optionally be compared with one positive permitted width from Analysis settings;
-no exposure, durability, decompression or load-combination criterion is inferred.
+states as reproducible calculation outputs. Long-term and short-term ordinary
+crack widths may each be compared with their own positive user criterion from
+Analysis settings; no exposure, durability, decompression or load-combination
+criterion is inferred.
 """
 
 from __future__ import annotations
@@ -12,8 +13,11 @@ import math
 from typing import Iterable, Mapping, Sequence
 
 from .sls_identity import (
-    PERMITTED_CRACK_WIDTH_KEY,
-    PERMITTED_CRACK_WIDTH_SOURCE,
+    HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
+    LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
+    LONG_TERM_PERMITTED_CRACK_WIDTH_SOURCE,
+    SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
+    SHORT_TERM_PERMITTED_CRACK_WIDTH_SOURCE,
 )
 
 CRACK_NOT_REQUESTED = "NOT REQUESTED"
@@ -32,10 +36,14 @@ def _is_boolean_scalar(value: object) -> bool:
     )
 
 
-def crack_criterion_source() -> str:
-    """Return the stable provenance label for the shared Analysis setting."""
+def crack_criterion_source(duration: str) -> str:
+    """Return the stable provenance label for one duration-specific setting."""
 
-    return PERMITTED_CRACK_WIDTH_SOURCE
+    if duration == "long_term":
+        return LONG_TERM_PERMITTED_CRACK_WIDTH_SOURCE
+    if duration == "short_term":
+        return SHORT_TERM_PERMITTED_CRACK_WIDTH_SOURCE
+    raise ValueError("duration must be exactly 'long_term' or 'short_term'")
 
 
 def _element_id(ids: Sequence[str] | None, index: int, fallback: str) -> str:
@@ -123,19 +131,29 @@ def stress_outputs(
     }
 
 
-def _positive_criterion(value: object) -> tuple[float | None, str | None]:
-    """Return a positive finite criterion or a fail-closed reason."""
+def _ordinary_criterion(value: object) -> tuple[float | None, str | None]:
+    """Return a finite non-negative criterion or a fail-closed reason."""
 
     if value is None:
-        return None, None
+        return 0.0, None
     if _is_boolean_scalar(value):
-        return None, "The crack-width criterion must be a positive finite number."
+        return None, (
+            "The crack-width criterion must be a non-negative finite number."
+        )
+    if isinstance(value, (str, bytes)):
+        return None, (
+            "The crack-width criterion must be a non-negative finite number."
+        )
     try:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError, OverflowError):
-        return None, "The crack-width criterion must be a positive finite number."
-    if not math.isfinite(number) or number <= 0.0:
-        return None, "The crack-width criterion must be a positive finite number."
+        return None, (
+            "The crack-width criterion must be a non-negative finite number."
+        )
+    if not math.isfinite(number) or number < 0.0:
+        return None, (
+            "The crack-width criterion must be a non-negative finite number."
+        )
     return number, None
 
 
@@ -154,18 +172,21 @@ def _finite_crack_value(value: object) -> float | None:
 def assess_crack_output(
     output: Mapping,
     *,
+    duration: str,
     requested: bool,
-    criterion_mm: object = None,
+    criterion_mm: object = 0.0,
     criterion_source: str | None = None,
 ) -> dict:
-    """Apply only the optional, user-owned ordinary crack comparison.
+    """Apply one duration-matched, user-owned ordinary crack comparison.
 
     The returned ``calculation_state`` is the single authoritative public state;
     no parallel verdict is emitted. Existing crack identity fields are retained
     and the comparison is deliberately local to the crack-width family.
     """
 
-    criterion, criterion_error = _positive_criterion(criterion_mm)
+    if duration not in {"long_term", "short_term"}:
+        raise ValueError("duration must be exactly 'long_term' or 'short_term'")
+    criterion, criterion_error = _ordinary_criterion(criterion_mm)
     source = (
         str(criterion_source).strip()
         if criterion_mm is not None and criterion_source is not None
@@ -173,6 +194,7 @@ def assess_crack_output(
     )
     value = _finite_crack_value(output.get("value"))
     result = {
+        "duration": duration,
         "value": value,
         "case": output.get("case"),
         "governing": output.get("governing"),
@@ -199,7 +221,7 @@ def assess_crack_output(
         result.update(calculation_state=CRACK_NOT_ASSESSED, reason=criterion_error)
         return result
 
-    if criterion is not None and not source:
+    if criterion is not None and criterion > 0.0 and not source:
         result.update(
             calculation_state=CRACK_NOT_ASSESSED,
             reason=(
@@ -220,12 +242,13 @@ def assess_crack_output(
         )
         return result
 
-    if criterion is None:
+    if criterion == 0.0:
+        label = "Long-term" if duration == "long_term" else "Short-term"
         result.update(
             calculation_state=CRACK_CALCULATED_UNASSESSED,
             reason=(
-                "No permitted crack width was specified in Analysis settings; "
-                "acceptance is not assessed."
+                f"The {label.lower()} permitted crack width is 0 mm; no "
+                "comparison was requested."
             ),
         )
         return result
@@ -281,20 +304,16 @@ def _result_field(value: object, key: str, default: object = None) -> object:
     return getattr(value, key, default)
 
 
-def crack_outputs(
+def _duration_crack_output(
     cases: Mapping[str, object | None],
     *,
+    duration: str,
     valid: bool,
-    requested: bool = True,
-    criterion_mm: object = None,
+    requested: bool,
+    criterion_mm: object,
     criterion_source: str | None = None,
 ) -> dict:
-    """Return the largest width and its optional ordinary comparison.
-
-    A case may be an existing flattened crack mapping or a
-    ``CrackWidthEvaluation``-like object. The latter keeps the exact reason from
-    :func:`sector.serviceability.evaluate_crack_width` when no width is available.
-    """
+    """Return one duration's largest width and optional comparison."""
 
     available: list[tuple[str, object]] = []
     unavailable_reasons: list[str] = []
@@ -362,10 +381,50 @@ def crack_outputs(
         }
     return assess_crack_output(
         raw,
+        duration=duration,
         requested=requested,
         criterion_mm=criterion_mm,
         criterion_source=criterion_source,
     )
+
+
+def crack_outputs(
+    long_term_cases: Mapping[str, object | None],
+    short_term_cases: Mapping[str, object | None],
+    *,
+    valid: bool,
+    requested: bool = True,
+    long_term_criterion_mm: object = 0.0,
+    short_term_criterion_mm: object = 0.0,
+    long_term_criterion_source: str | None = None,
+    short_term_criterion_source: str | None = None,
+) -> dict:
+    """Return independent long-term and short-term crack assessments.
+
+    Each mapping may contain an existing flattened crack mapping or a
+    ``CrackWidthEvaluation``-like object. The latter keeps the exact reason from
+    :func:`sector.serviceability.evaluate_crack_width` when no width is
+    available. Candidates never compete across durations.
+    """
+
+    return {
+        "long_term": _duration_crack_output(
+            long_term_cases,
+            duration="long_term",
+            valid=valid,
+            requested=requested,
+            criterion_mm=long_term_criterion_mm,
+            criterion_source=long_term_criterion_source,
+        ),
+        "short_term": _duration_crack_output(
+            short_term_cases,
+            duration="short_term",
+            valid=valid,
+            requested=requested,
+            criterion_mm=short_term_criterion_mm,
+            criterion_source=short_term_criterion_source,
+        ),
+    }
 
 
 def element_rows(

@@ -453,9 +453,22 @@ def _out():
                                  "Iy": 1.0e-4, "Ixy": 0.0},
                     "crack": _crack(), "crack_short": _crack(),
                     "crack_output": {
-                        "value": 0.213,
-                        "case": "Long-term", "governing": "bar 1",
-                        "unit": "mm", "calculation_state": "CALCULATED",
+                        "long_term": {
+                            "duration": "long_term",
+                            "value": 0.213,
+                            "case": "Long-term",
+                            "governing": "bar 1",
+                            "unit": "mm",
+                            "calculation_state": "CALCULATED",
+                        },
+                        "short_term": {
+                            "duration": "short_term",
+                            "value": 0.213,
+                            "case": "Short-term",
+                            "governing": "bar 1",
+                            "unit": "mm",
+                            "calculation_state": "CALCULATED",
+                        },
                     },
                     "crack_code": "EN 1992-1-1:2005", "crack_member": None,
                     "accepted_states": {
@@ -3067,7 +3080,8 @@ def test_report_mirrors_the_views():
     assert "PASS - Plastic bending" in txt
     assert " pp" not in flat
     assert "does not exceed" not in flat
-    assert "Crack-width output | governing" in flat
+    assert "Long-term crack-width output" in flat
+    assert "Short-term crack-width output" in flat
     assert "Calculation state: CALCULATED" in flat
     assert "Governing concrete corner response" in txt
     assert "Governing reinforcement and tendon response" in txt
@@ -3136,8 +3150,9 @@ def test_report_marks_nonconverged_elastic_results_invalid():
     for item in out["elastic"]["stress_outputs"].values():
         item["calculation_state"] = "INVALID"
         item["value"] = None
-    out["elastic"]["crack_output"]["calculation_state"] = "INVALID"
-    out["elastic"]["crack_output"]["value"] = None
+    for assessment in out["elastic"]["crack_output"].values():
+        assessment["calculation_state"] = "INVALID"
+        assessment["value"] = None
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "INVALID - Elastic result" in txt
     assert "diagnostic only" in txt
@@ -3152,12 +3167,24 @@ def test_report_marks_no_crack_width_as_output_not_applicable():
         crack=None,
         crack_short=None,
         crack_output={
-            "value": None,
-            "calculation_state": "NOT ASSESSED",
-            "case": None,
-            "governing": None,
-            "unit": "mm",
-            "reason": "Section uncracked; no width is available.",
+            "long_term": {
+                "duration": "long_term",
+                "value": None,
+                "calculation_state": "NOT ASSESSED",
+                "case": None,
+                "governing": None,
+                "unit": "mm",
+                "reason": "Section uncracked; no width is available.",
+            },
+            "short_term": {
+                "duration": "short_term",
+                "value": None,
+                "calculation_state": "NOT ASSESSED",
+                "case": None,
+                "governing": None,
+                "unit": "mm",
+                "reason": "Section uncracked; no width is available.",
+            },
         },
     )
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
@@ -3180,16 +3207,20 @@ def test_threshold_case_with_unrequested_width_keeps_only_retained_reason():
         crack_coarse=None,
         crack_short_coarse=None,
         crack_output={
-            "value": None,
-            "case": None,
-            "governing": None,
-            "unit": "mm",
-            "calculation_state": "NOT REQUESTED",
-            "criterion_mm": None,
-            "ratio": None,
-            "criterion_source": None,
-            "reason": "Crack width was not requested for this run.",
-            "comparison_equation": None,
+            duration: {
+                "duration": duration,
+                "value": None,
+                "case": None,
+                "governing": None,
+                "unit": "mm",
+                "calculation_state": "NOT REQUESTED",
+                "criterion_mm": None,
+                "ratio": None,
+                "criterion_source": None,
+                "reason": "Crack width was not requested for this run.",
+                "comparison_equation": None,
+            }
+            for duration in ("long_term", "short_term")
         },
     )
 
@@ -3217,16 +3248,20 @@ def test_stale_crack_selection_with_no_values_never_infers_physical_reason():
         crack_coarse=None,
         crack_short_coarse=None,
         crack_output={
-            "value": None,
-            "case": None,
-            "governing": None,
-            "unit": "mm",
-            "calculation_state": "NOT ASSESSED",
-            "criterion_mm": None,
-            "ratio": None,
-            "criterion_source": None,
-            "reason": retained_reason,
-            "comparison_equation": None,
+            duration: {
+                "duration": duration,
+                "value": None,
+                "case": None,
+                "governing": None,
+                "unit": "mm",
+                "calculation_state": "NOT ASSESSED",
+                "criterion_mm": None,
+                "ratio": None,
+                "criterion_source": None,
+                "reason": retained_reason,
+                "comparison_equation": None,
+            }
+            for duration in ("long_term", "short_term")
         },
     )
 
@@ -3240,23 +3275,30 @@ def test_stale_crack_selection_with_no_values_never_infers_physical_reason():
 def test_report_publishes_one_retained_critical_user_crack_comparison():
     out = _out()
     out["elastic"]["crack_output"] = {
-        "value": 0.213,
-        "case": "Long-term",
-        "governing": "bar 1",
-        "unit": "mm",
-        "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
-        "criterion_mm": 0.300,
-        "ratio": 0.710,
-        "criterion_source": "User input - Analysis settings",
-        "reason": "The calculated crack width is within the user-specified limit.",
-        "comparison_equation": "w_k / w_k,criterion",
+        "long_term": {
+            "duration": "long_term",
+            "value": 0.213,
+            "case": "Long-term",
+            "governing": "bar 1",
+            "unit": "mm",
+            "calculation_state": "WITHIN USER-SPECIFIED LIMIT",
+            "criterion_mm": 0.300,
+            "ratio": 0.710,
+            "criterion_source": "User input - Analysis settings - long-term",
+            "reason": (
+                "The calculated crack width is within the user-specified limit."
+            ),
+            "comparison_equation": "w_k / w_k,criterion",
+        },
     }
 
     flat = " ".join(_pdf_text(sector_report.build_report(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
-    assert flat.count("User-specified crack-width comparison - critical case") == 1
+    assert flat.count(
+        "User-specified crack-width comparison - critical long-term case"
+    ) == 1
     assert "EQ-CRACK.USER-LIMIT.COMPARISON" not in flat
     assert "0.213 mm / 0.3 mm" in flat
     assert "u w = 0.71" in flat or "uw = 0.71" in flat
@@ -3264,9 +3306,9 @@ def test_report_publishes_one_retained_critical_user_crack_comparison():
     assert "No user-specified crack-width criterion" not in flat
 
 
-def test_report_applies_one_global_criterion_without_noncritical_chapter():
+def test_report_applies_one_duration_criterion_without_noncritical_chapter():
     inp = _inp()
-    inp["sls_permitted_crack_width_mm"] = 0.10
+    inp["sls_long_term_permitted_crack_width_mm"] = 0.10
     rows = [
         {
             "name": "EL-GLOBAL-WIDTH",
@@ -3299,16 +3341,21 @@ def test_report_applies_one_global_criterion_without_noncritical_chapter():
         crack_coarse=None,
         crack_short_coarse=None,
         crack_output={
-            "value": 0.40,
-            "case": "Long-term",
-            "governing": "bar 1",
-            "unit": "mm",
-            "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
-            "criterion_mm": 0.10,
-            "ratio": 4.0,
-            "criterion_source": "User input - Analysis settings",
-            "reason": "The calculated crack width exceeds the user-specified limit.",
-            "comparison_equation": "w_k / w_k,criterion",
+            "long_term": {
+                "duration": "long_term",
+                "value": 0.40,
+                "case": "Long-term",
+                "governing": "bar 1",
+                "unit": "mm",
+                "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                "criterion_mm": 0.10,
+                "ratio": 4.0,
+                "criterion_source": "User input - Analysis settings - long-term",
+                "reason": (
+                    "The calculated crack width exceeds the user-specified limit."
+                ),
+                "comparison_equation": "w_k / w_k,criterion",
+            },
         },
     )
     assessed_result = copy.deepcopy(_out()["elastic"])
@@ -3318,18 +3365,21 @@ def test_report_applies_one_global_criterion_without_noncritical_chapter():
         crack_coarse=None,
         crack_short_coarse=None,
         crack_output={
-            "value": 0.20,
-            "case": "Long-term",
-            "governing": "bar 1",
-            "unit": "mm",
-            "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
-            "criterion_mm": 0.10,
-            "ratio": 2.0,
-            "criterion_source": "User input - Analysis settings",
-            "reason": (
-                "The calculated crack width exceeds the user-specified limit."
-            ),
-            "comparison_equation": "w_k / w_k,criterion",
+            "long_term": {
+                "duration": "long_term",
+                "value": 0.20,
+                "case": "Long-term",
+                "governing": "bar 1",
+                "unit": "mm",
+                "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                "criterion_mm": 0.10,
+                "ratio": 2.0,
+                "criterion_source": "User input - Analysis settings - long-term",
+                "reason": (
+                    "The calculated crack width exceeds the user-specified limit."
+                ),
+                "comparison_equation": "w_k / w_k,criterion",
+            },
         },
     )
     out = _out()
@@ -3346,7 +3396,7 @@ def test_report_applies_one_global_criterion_without_noncritical_chapter():
     summaries = result_presentation.multi_case_summary_rows(inp, out)
     assert any(
         row["case"] == "EL-NONCRITICAL-LIMIT"
-        and row["check"] == "Crack width"
+        and row["check"] == "Crack width - Long-term"
         and row["status"] == "EXCEEDS USER-SPECIFIED LIMIT"
         for row in summaries
     )
@@ -3359,7 +3409,7 @@ def test_report_applies_one_global_criterion_without_noncritical_chapter():
     assert "Governing crack width - EL-NONCRITICAL-LIMIT" not in flat
     assert "Governing crack-width comparison - EL-NONCRITICAL-LIMIT" not in flat
     assert flat.count(
-        "User-specified crack-width comparison - critical case"
+        "User-specified crack-width comparison - critical long-term case"
     ) == 1
     assert "EQ-CRACK.USER-LIMIT.COMPARISON" not in flat
 

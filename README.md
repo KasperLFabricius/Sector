@@ -20,10 +20,10 @@ cross-section and reports, for the same section:
   traced as a full biaxial M-M envelope with optional applied-action utilisation.
 * **Elastic outputs and crack width** - concrete/reinforcement stresses,
   cracking threshold, transformed properties and optional crack width `wk`,
-  with an optional user-specified criterion. If no criterion is entered, the
-  crack width remains a calculated output without an acceptance verdict; if a
-  criterion is entered, Sector reports `WITHIN USER-SPECIFIED LIMIT` or
-  `EXCEEDS USER-SPECIFIED LIMIT` with the criterion source.
+  with independent user-specified long-term and short-term criteria. A criterion
+  of 0 mm keeps that duration's crack width as a calculated output without a
+  comparison; a positive criterion produces `WITHIN USER-SPECIFIED LIMIT` or
+  `EXCEEDS USER-SPECIFIED LIMIT` with the duration-matched criterion source.
 * **Section capacity checks** - shear, torsion and combined M-V-T checks where
   supported by the selected Eurocode method. Torsional cracking uses the direct
   positive-finite `gamma_ct` input (EN default 1.50; DK/NA default 1.70), and
