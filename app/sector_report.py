@@ -5763,6 +5763,7 @@ class ReportBuilder:
                         f"{_fmt(gov['eps_s_comp'], 3)} %"]] if comp else
                       [["Most-tensile bar strain", "eps<sub>s</sub>",
                         f"{_fmt(gov['eps_s'], 3)} %"]])
+        compression_depth_mm = presentation.plastic_compression_depth_mm(gov)
         rows = [["Quantity", "Symbol", "Value"],
                 ["NA intercepts", "x<sub>na</sub>, y<sub>na</sub>",
                  f"{_fmt(gov['na_x']*_MM, 3)}, {_fmt(gov['na_y']*_MM, 3)} mm"],
@@ -5771,6 +5772,10 @@ class ReportBuilder:
                 ["Curvature", "kappa", f"{_fmt(gov['kappa'],4)} 1/m"],
                 ["Compression resultant", "F<sub>comp</sub>",
                  f"{_fmt(gov['comp_force'], 3)} kN"],
+                ["Compression-zone depth", "c", (
+                    "-" if compression_depth_mm is None
+                    else f"{_fmt(compression_depth_mm, 3)} mm"
+                )],
                 ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM, 3)} mm"],
                 ["Lever components", "d<sub>x</sub>, d<sub>y</sub>",
                  f"{_fmt(gov['dx']*_MM, 3)}, {_fmt(gov['dy']*_MM, 3)} mm"],
@@ -5878,7 +5883,10 @@ class ReportBuilder:
             "axial_residual",
             "axial_tolerance",
         )
-        if all(gov.get(key) is not None for key in search_keys):
+        if (
+            compression_depth_mm is not None
+            and all(gov.get(key) is not None for key in search_keys)
+        ):
             self._h2("Compression-depth solution")
             search_rows = [["Quantity", "Value"], [
                 "Initial depth bracket",
@@ -5892,7 +5900,7 @@ class ReportBuilder:
                 "Bisection iterations", str(gov["search_iterations"]),
             ], [
                 "Accepted compression depth",
-                f"{_fmt(gov['compression_depth'] * _MM, 6)} mm",
+                f"{_fmt(compression_depth_mm, 6)} mm",
             ], [
                 "Requested / achieved internal N",
                 f"{_fmt(gov['axial_requested'], 6)} / "

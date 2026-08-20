@@ -9927,10 +9927,17 @@ def plastic_view(inp, results):
                                             or [inp["steel"]]))
                        and bool(inp["bars"])
                        and "eps_s_comp" in pt)
+        compression_depth_mm = presentation.plastic_compression_depth_mm(pt)
+        compression_depth_text = (
+            "-"
+            if compression_depth_mm is None
+            else f"{compression_depth_mm:.3f} mm"
+        )
         lines = [
             f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
             f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
             f"- **Compression force**: {pt['comp_force']:.3f} kN",
+            f"- **Compression-zone depth $c$**: {compression_depth_text}",
             f"- **Lever arm $L$**: {pt['lever'] * _MM:.3f} mm  "
             f"($D_x$ {pt['dx'] * _MM:.3f}, $D_y$ {pt['dy'] * _MM:.3f})",
             f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",

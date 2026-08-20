@@ -27,6 +27,9 @@ ANALYSIS_HOVER_ACCEPTANCE = (
 INPUT_REFERENCE_ACCEPTANCE = (
     ROOT / "docs" / "pr_a08_v095_input_reference_provenance_acceptance.md"
 )
+PLASTIC_DEPTH_ACCEPTANCE = (
+    ROOT / "docs" / "pr_a09_v095_plastic_compression_depth_acceptance.md"
+)
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
@@ -370,6 +373,7 @@ def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
         "PR-A06",
         "PR-A07",
         "PR-A08",
+        "PR-A09",
     }
 
     crack = contracts["PR-A04"]
@@ -462,6 +466,25 @@ def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
         "implementation_evidence": True,
     }
 
+    plastic_depth = contracts["PR-A09"]
+    assert plastic_depth == {
+        "state": "frozen and implemented by PR-A09",
+        "acceptance_document": (
+            "docs/pr_a09_v095_plastic_compression_depth_acceptance.md"
+        ),
+        "required_matrix_topics": [
+            "retained compression-depth authority",
+            "metre-to-millimetre conversion",
+            "exact-zero preservation",
+            "malformed and missing fallback",
+            "selected-state UI publication",
+            "worked-report publication",
+            "no result recomputation",
+        ],
+        "result_values_recomputed_here": False,
+        "implementation_evidence": True,
+    }
+
 
 def test_pr_a07_acceptance_freezes_analysis_and_input_hover_boundary() -> None:
     text = _text(ANALYSIS_HOVER_ACCEPTANCE)
@@ -495,6 +518,25 @@ def test_pr_a08_acceptance_freezes_input_provenance_without_new_routes() -> None
         "2023 11.2(2)",
         "Existing preset-prefill and edition-routing behavior remains",
         "No new basis, solver route, schema, persistence, report, status",
+    ):
+        assert required in compact
+
+
+def test_pr_a09_acceptance_freezes_retained_compression_depth_publication() -> None:
+    text = _text(PLASTIC_DEPTH_ACCEPTANCE)
+    compact = " ".join(text.split())
+
+    for required in (
+        "only authority is the selected plastic point's existing",
+        "converts that retained value to millimetres",
+        "Boolean, text, missing, negative, non-finite",
+        "Unavailable legacy or malformed evidence is shown as `-`",
+        "Compression-zone depth `c`",
+        "project schema remains 26",
+        "selected neutral-axis summary",
+        "governing worked plastic table",
+        "does not reconstruct depth",
+        "no new calculation",
     ):
         assert required in compact
 

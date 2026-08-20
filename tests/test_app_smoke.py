@@ -1448,6 +1448,22 @@ def test_plastic_strains_are_reported_tension_positive():
     assert pt["eps_s"] > 0.0     # most tensile bar -> tension -> positive
 
 
+def test_plastic_selected_state_lists_retained_compression_zone_depth():
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    _select_view(at, "Plastic Results")
+    result = at.session_state["results"]["plastic"]
+    point = result["points"][at.session_state["pl_state"]]
+    expected = point["compression_depth"] * 1000.0
+
+    assert any(
+        "Compression-zone depth" in item.value
+        and f"{expected:.3f} mm" in item.value
+        for item in at.markdown
+    )
+
+
 def test_plastic_table_splits_steel_strain_when_active_in_compression():
     # With the mild steel active in compression the per-angle table reports both the
     # tensile and the compression bar-strain extreme (eps_s,t / eps_s,c); tension-only

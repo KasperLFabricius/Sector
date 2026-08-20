@@ -7,6 +7,7 @@ import inspect
 import pathlib
 import sys
 
+import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -16,6 +17,55 @@ import result_presentation as presentation  # noqa: E402
 
 from app import modelled_direction  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("retained", "expected_mm"),
+    ((0.275, 275.0), (0.0, 0.0), (-0.0, 0.0), (np.float64(0.125), 125.0)),
+)
+def test_plastic_compression_depth_uses_only_retained_nonnegative_value(
+    retained,
+    expected_mm,
+):
+    point = {"compression_depth": retained, "na_y": 999.0}
+    before = dict(point)
+
+    result = presentation.plastic_compression_depth_mm(point)
+
+    assert type(result) is float
+    assert result == pytest.approx(expected_mm)
+    if expected_mm == 0.0:
+        assert math.copysign(1.0, result) == 1.0
+    assert point == before
+
+
+@pytest.mark.parametrize(
+    "retained",
+    (
+        None,
+        True,
+        np.bool_(False),
+        "0.275",
+        -0.1,
+        math.nan,
+        math.inf,
+        -math.inf,
+        np.finfo(float).max,
+    ),
+)
+def test_plastic_compression_depth_rejects_unavailable_or_malformed_evidence(
+    retained,
+):
+    point = {"compression_depth": retained, "na_y": 0.275}
+    before = dict(point)
+
+    assert presentation.plastic_compression_depth_mm(point) is None
+    assert point == before
+
+
+def test_plastic_compression_depth_requires_a_retained_mapping_field():
+    assert presentation.plastic_compression_depth_mm({"na_y": 0.275}) is None
+    assert presentation.plastic_compression_depth_mm(None) is None
 
 
 def test_worked_example_selection_retains_named_cases_branches_and_directions():

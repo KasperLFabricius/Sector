@@ -317,6 +317,21 @@
       ],
       "supported_applicability_extended_here": false,
       "implementation_evidence": true
+    },
+    "PR-A09": {
+      "state": "frozen and implemented by PR-A09",
+      "acceptance_document": "docs/pr_a09_v095_plastic_compression_depth_acceptance.md",
+      "required_matrix_topics": [
+        "retained compression-depth authority",
+        "metre-to-millimetre conversion",
+        "exact-zero preservation",
+        "malformed and missing fallback",
+        "selected-state UI publication",
+        "worked-report publication",
+        "no result recomputation"
+      ],
+      "result_values_recomputed_here": false,
+      "implementation_evidence": true
     }
   },
   "release_baseline": {

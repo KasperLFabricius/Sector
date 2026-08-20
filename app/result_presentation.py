@@ -526,6 +526,26 @@ def plastic_state_rows(point):
     }
 
 
+def plastic_compression_depth_mm(point):
+    """Return only the retained plastic compression-zone depth in millimetres."""
+
+    if not isinstance(point, Mapping):
+        return None
+    value = point.get("compression_depth")
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        depth_m = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(depth_m) or depth_m < 0.0:
+        return None
+    if depth_m == 0.0:
+        return 0.0
+    depth_mm = depth_m * 1000.0
+    return depth_mm if math.isfinite(depth_mm) else None
+
+
 def nm_boundary_rows(interaction):
     """Return a point-by-point table for both numerical N-M boundaries."""
     x_data = (interaction or {}).get("x") or {}
