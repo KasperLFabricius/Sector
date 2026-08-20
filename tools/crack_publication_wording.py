@@ -5,6 +5,18 @@ from __future__ import annotations
 import re
 
 
+_CRACK_LIMIT_FIELD = (
+    r"(?:criteri(?:on|a)|"
+    r"crack(?:[-\s]+widths?)?[-\s]+criteri(?:on|a)|"
+    r"permitted(?:[-\s]+crack)?[-\s]+widths?|"
+    r"crack[-\s]+widths?)"
+)
+
+_RETAINED_RESULT_SUFFIX = (
+    r"(?![-\s]+(?:result|evidence|branch|calculation|output)\b)"
+)
+
+
 _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "shared-crack-limit-language",
@@ -15,6 +27,14 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"\b(?:crack(?:[^\w,.!?;:]+width)?|"
             r"permitted[^\w,.!?;:]+width|criteri(?:on|a))\b"
             r"(?:[^\w,.!?;:]+\w+){0,5}[^\w,.!?;:]+\bshared\b)",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "with-or-if-no-crack-limit-field-language",
+        re.compile(
+            rf"\b(?:with|if)\s+no\s+{_CRACK_LIMIT_FIELD}\b"
+            rf"{_RETAINED_RESULT_SUFFIX}",
             re.IGNORECASE,
         ),
     ),

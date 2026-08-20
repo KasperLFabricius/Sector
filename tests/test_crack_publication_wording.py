@@ -66,6 +66,54 @@ def test_unrelated_shared_mechanics_and_phrase_boundaries_are_allowed(
     assert retired_crack_wording_rules(passage) == ()
 
 
+@pytest.mark.parametrize(
+    "passage",
+    (
+        "If no criterion is entered",
+        "With no criteria the widths remain calculated",
+        "With no permitted width the result is calculated",
+        "If no permitted crack width is entered",
+        "If no crack criterion is entered",
+        "With no crack-width criteria, only numerical widths are stated",
+        "If no crack width is set",
+        "With no permitted widths the comparison remains disabled",
+    ),
+)
+def test_retired_with_or_if_no_field_variants_are_detected(passage: str) -> None:
+    before = passage
+    assert retired_crack_wording_rules(passage) == (
+        "with-or-if-no-crack-limit-field-language",
+    )
+    assert passage == before
+
+
+@pytest.mark.parametrize(
+    "passage",
+    (
+        "Without a criterion, crack width is numerical",
+        "Without criterion, crack width is numerical",
+        "No criterion was entered",
+        "No permitted crack width was provided",
+        "With no crack result evidence the row is not assessed",
+        "If no crack width result is retained, the row is not assessed",
+        "With no permitted width branch the comparison is unavailable",
+        "If no fatigue criterion is entered, fatigue is not assessed",
+        "With no torsion criterion the torsion row remains unavailable",
+        "The crack result evidence is absent",
+    ),
+)
+def test_unowned_no_field_and_retained_result_forms_are_allowed(
+    passage: str,
+) -> None:
+    assert retired_crack_wording_rules(passage) == ()
+
+
+def test_existing_shared_rule_remains_independent_of_with_if_rule() -> None:
+    assert retired_crack_wording_rules("the shared crack criterion") == (
+        "shared-crack-limit-language",
+    )
+
+
 @pytest.mark.parametrize("value", (None, False, 0, (), [], {}))
 def test_non_text_passages_fail_closed(value: object) -> None:
     assert retired_crack_wording_rules(value) == ("invalid-text",)
