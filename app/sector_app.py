@@ -4382,6 +4382,7 @@ _ELASTIC_RESULT_CONTRACT_TOKEN = (
 _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "capacity-result-contract",
     "torsion-subdivision-automatic-tef-v1",
+    "closed-torsion-link-authority-v1",
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
@@ -5358,30 +5359,19 @@ def build_inputs(host=st):
         "shear_vy_bw", disabled=not shear_on,
         help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
     )
-    # Shear reinforcement (vertical links). When present, the member's resistance is
-    # VRd = min(VRd,s, VRd,max) under 6.2.3 or 8.2.3 rather than VRd,c; the strut
-    # angle theta is auto-optimised within the shared cot(theta) bounds in the
-    # Links / stirrups block below.
-    shear_links = _seeded_checkbox(
-        sts, "Shear reinforcement (links) present", False, "shear_links",
-        disabled=not shear_on,
-        help="Add vertical links (stirrups). The resistance becomes the smaller "
-             "of link yielding and compression-field crushing (6.2.3 for the "
-             "2005 family; 8.2.3 for 2023); "
-             r"$V_{Rd,c}$ is still "
-             "shown to indicate whether links are strictly required.")
-    _links = shear_on and shear_links
-
     sts.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
     sts.caption("Torsion resistance from the thin-walled tube idealisation "
                  r"(EN 1992-1-1 sec. 6.3): closed stirrups $T_{Rd,s}$, strut crushing "
                  r"$T_{Rd,max}$, cracking $T_{Rd,c}$, and the required longitudinal steel. "
-                 r"The tube ($A$, $u$, $t_{ef}$, $A_k$, $u_k$) is derived from the outline.")
+                 r"The tube ($A$, $u$, $t_{ef}$, $A_k$, $u_k$) is derived from the outline. "
+                 "Full resistance is assessed only when the shared closed links below "
+                 "are current; otherwise concrete values are transparency only.")
     torsion_on = _seeded_checkbox(
         sts, "Check torsion capacity", False, "torsion_on",
-        help=r"Compute $T_{Rd}=\min(T_{Rd,s},T_{Rd,max})$ and $T_{Ed}/T_{Rd}$, "
-             "plus the combined shear-torsion crushing check "
-             "(6.29) when links are also defined.")
+        help=r"With current closed links, compute $T_{Rd}=\min(T_{Rd,s},T_{Rd,max})$ "
+             r"and $T_{Ed}/T_{Rd}$, plus the combined shear-torsion crushing check "
+             "(6.29). Without them, retain only explicitly labelled concrete and "
+             "reinforcement-demand transparency.")
     torsion_method = _seeded_selectbox(
         sts, "Torsion method", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label,
@@ -5404,9 +5394,9 @@ def build_inputs(host=st):
     torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
-    sts.caption("Torsion uses the shared closed stirrup defined in Links / stirrups "
-                 "below (one leg carries the shear flow); the required longitudinal "
-                 "steel uses the mild-reinforcement design yield.")
+    sts.caption("Torsion uses one leg of the shared closed, anchored stirrup defined "
+                 "below; the required longitudinal steel uses the mild-reinforcement "
+                 "design yield. Stored geometry is never treated as link presence.")
     torsion_tef = _seeded_number(
         sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
@@ -5463,11 +5453,15 @@ def build_inputs(host=st):
         )
     torsion_nu_v = _seeded_checkbox(
         sts, r"$\nu_t = \nu_v$ (closed stirrups + distributed long. steel)", False,
-        "torsion_nu_v", disabled=not _tors,
+        "torsion_nu_v",
+        disabled=not (
+            _tors and st.session_state.get("shear_links") is True
+        ),
         help="DK NA Figur 5.100 NA: when every tube wall has closed stirrups round "
              "the periphery and uniformly distributed longitudinal steel on both "
              "faces, the torsion strut factor may be raised from nu_t to the "
-             "pure-shear nu_v. Only affects the DK NA edition.")
+             "pure-shear nu_v. Current shared links must be present. Only affects "
+             "the DK NA edition.")
     torsion_subdivide = _seeded_checkbox(
         sts, "Subdivide into sub-tubes (T / compound section)", False,
         "torsion_subdivide", disabled=not _tors,
@@ -5517,14 +5511,37 @@ def build_inputs(host=st):
                     "intrusion into a void. Sector validates that partition before "
                     "issuing a torsion result. The first rectangle is the web and "
                     "pairs with shear in the combined checks (6.3.1(3)).")
-    # One shared stirrup definition for both the shear links and the torsion tube:
-    # physically it is the same closed stirrup, whose vertical legs resist shear and
-    # whose closed loop resists torsion. Shear uses n legs; torsion uses one leg.
-    sts.markdown("**Links / stirrups (shear + torsion)**")
-    _stirrups = (shear_on and shear_links) or torsion_on
-    sts.caption("The same closed stirrup carries shear (through its legs) and "
-                 "torsion (through the closed loop). For torsion the stirrup must be "
-                 "closed. Enabled when shear links or the torsion check is on.")
+    # One current authority and one stored geometry serve both physical roles. Shear
+    # uses the selected number of vertical legs; torsion uses one leg of the same
+    # closed, anchored loop. Stored positive geometry never implies presence.
+    sts.markdown("**Compression strut and shared links (shear + torsion)**")
+    shear_links = _seeded_checkbox(
+        sts,
+        "Shared links / closed torsion stirrups present",
+        False,
+        "shear_links",
+        disabled=not (shear_on or torsion_on),
+        help=(
+            "One current physical authority for the shared stirrup. Shear uses "
+            "the selected effective vertical legs. Torsion requires the same bar "
+            "to form a closed, anchored loop and uses one leg in Asw/s. Positive "
+            "stored diameter or spacing never overrides an unticked authority."
+        ),
+    )
+    _links = bool(shear_on and shear_links)
+    _torsion_links = bool(torsion_on and shear_links)
+    _shared_links = bool(_links or _torsion_links)
+    _strut_model = bool(_links or torsion_on)
+    if torsion_nu_v and not _torsion_links:
+        sts.caption(
+            "The retained nu_t = nu_v detailing request is not applied while "
+            "current shared links / closed torsion stirrups are absent."
+        )
+    sts.caption(
+        "The compression-strut band remains available for torsion concrete-cap "
+        "transparency. Stirrup geometry is active only when the shared-link "
+        "authority is on. Shear uses n legs; torsion uses one closed-loop leg."
+    )
     strut_lo, strut_hi = sts.columns(2)
     strut_cot_min = _seeded_number(
         strut_lo,
@@ -5534,7 +5551,7 @@ def build_inputs(host=st):
         1.0,
         0.1,
         "strut_cot_min",
-        disabled=not _stirrups,
+        disabled=not _strut_model,
         help=r"Lower bound for the compression-strut angle shared by shear and "
              r"torsion. The 2005 family permits $1\leq\cot\theta\leq2.5$; "
              "values outside the selected method's range are warned, not blocked.",
@@ -5547,12 +5564,12 @@ def build_inputs(host=st):
         2.5,
         0.1,
         "strut_cot_max",
-        disabled=not _stirrups,
+        disabled=not _strut_model,
         help=r"Upper bound for the same physical compression strut. Sector selects "
              "one angle within this range for all live shear, torsion, concrete, "
              "stirrup and longitudinal-reinforcement checks.",
     )
-    if _stirrups:
+    if _strut_model:
         active_strut_codes = []
         if _links:
             active_strut_codes.append(shear_methods_by_label[_eff_shear_method])
@@ -5644,20 +5661,20 @@ def build_inputs(host=st):
     )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
-        disabled=not _stirrups,
+        disabled=not _shared_links,
         help=r"Stirrup bar diameter $\phi$; one leg has area $\pi\phi^2/4$.")
     shear_link_s = _seeded_number(
         sts, r"Stirrup spacing $s$ (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
-        disabled=not _stirrups, help="Longitudinal spacing of the stirrups.")
+        disabled=not _shared_links, help="Longitudinal spacing of the stirrups.")
     shear_fywk = _seeded_number(
         sts, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
-        disabled=not _stirrups,
+        disabled=not _shared_links,
         help="Characteristic yield strength of the stirrup steel; the design value "
              r"is $f_{ywk}$ divided by the final effective $\gamma_s$ of the selected "
              "reference material. If the stirrup is not fully anchored, reduce "
              r"$f_{ywk}$ here; Sector assumes anchorage and applies no hidden category "
              "multiplier.")
-    if transverse_detailing_on and not _stirrups:
+    if transverse_detailing_on and not _shared_links:
         _manual_warning(
             sts,
             "calculation-warning",
@@ -5674,6 +5691,7 @@ def build_inputs(host=st):
             (check_util, "Check utilisation against applied moment"),
             (shear_on, "Shear check enabled"),
             (torsion_on, "Torsion check enabled"),
+            (shear_links, "Shared links / closed torsion stirrups present"),
         ]
         lines = "  \n".join(f"{ok_mark if met else no_mark} {name}"
                             for met, name in reqs)
@@ -7898,8 +7916,12 @@ def _run_uniaxial_capacity_checks(inp, out):
                     if link_ctx is not None else None)
         links_valid = bool(lk_probe is not None and lk_probe["valid"]
                            and lk_probe["vrd_s"] > 0.0 and lk_probe["vrd_max"] > 0.0)
-        tors_valid = bool(tors_ctx is not None
-                          and all(tb["valid"] for tb in tors_ctx["subtubes"]))
+        tors_valid = bool(
+            tors_ctx is not None
+            and tors_ctx["closed_links_present"]
+            and tors_ctx["asw_over_s_t"] > 0.0
+            and all(tb["valid"] for tb in tors_ctx["subtubes"])
+        )
         shear_live = links_valid and v_ed_s > 0.0
         tors_live = tors_valid and t_ed_s > 0.0
 
@@ -8157,21 +8179,46 @@ def _run_uniaxial_capacity_checks(inp, out):
                     r["stiffness"] = c
                     (r["x_mm"], r["y_mm"],
                      r["b_mm"], r["h_mm"]) = dims
-                valid = all(r["valid"] for r in sub_res)
-                trd = sum(r["trd"] for r in sub_res) if valid else 0.0
+                tube_valid = all(r["tube_valid"] for r in sub_res)
+                full_resistance_assessed = all(
+                    r["full_resistance_assessed"] for r in sub_res
+                )
+                valid = bool(tube_valid and full_resistance_assessed)
+                trd = sum(r["trd"] for r in sub_res) if valid else None
                 asl_req = sum(r["asl_req"] for r in sub_res)
                 primary = sub_res[0]
                 tube_main = primary["tube"]
                 # Governing = the WORST sub-tube (each carries its stiffness share).
-                governing_sub = max(range(len(sub_res)),
-                                    key=lambda i: sub_res[i]["util"])
-                util_t = sub_res[governing_sub]["util"]
+                if valid:
+                    governing_sub = max(
+                        range(len(sub_res)),
+                        key=lambda i: sub_res[i]["util"],
+                    )
+                    util_t = sub_res[governing_sub]["util"]
+                else:
+                    governing_sub = None
+                    util_t = None
             else:
                 primary = sub_res[0]
                 sub_res = None
                 trd, asl_req = primary["trd"], primary["asl_req"]
-                tube_main, valid = tors_ctx["tube"], tors_ctx["tube"]["valid"]
-                util_t = (t_ed / trd) if trd > 0.0 else math.inf
+                tube_main = tors_ctx["tube"]
+                tube_valid = primary["tube_valid"]
+                full_resistance_assessed = primary[
+                    "full_resistance_assessed"
+                ]
+                valid = bool(tube_valid and full_resistance_assessed)
+                util_t = primary["util"] if valid else None
+            assessment_reason = (
+                None
+                if full_resistance_assessed
+                else primary["assessment_reason"]
+            )
+            reason = (
+                tube_main.get("reason")
+                if not tube_valid
+                else assessment_reason
+            )
             tcode = tors_ctx["tcode"]
             tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
             lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
@@ -8194,7 +8241,12 @@ def _run_uniaxial_capacity_checks(inp, out):
                 dia=inp["shear_link_dia"], s=inp["shear_link_s"], cot_min=tcot_min,
                 cot_max=tcot_max, method=inp["torsion_method"],
                 governs=primary["governs"], valid=valid,
-                reason=tube_main.get("reason"), cot_limit_lo=lo_t, cot_limit_hi=hi_t,
+                tube_valid=tube_valid,
+                closed_links_present=tors_ctx["closed_links_present"],
+                full_resistance_assessed=full_resistance_assessed,
+                assessment_reason=assessment_reason,
+                resistance_selection=primary["resistance_selection"],
+                reason=reason, cot_limit_lo=lo_t, cot_limit_hi=hi_t,
                 out_of_limits=torsion_out_of_limits,
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
@@ -8202,7 +8254,15 @@ def _run_uniaxial_capacity_checks(inp, out):
                 subdivision_requested=tors_ctx["subdivision_requested"],
                 subdivision_valid=tors_ctx["subdivision_valid"],
                 subdivision_reason=tors_ctx["subdivision_reason"],
-                theta_mode=(theta_mode_str if tors_live else "resistance"),
+                theta_mode=(
+                    theta_mode_str
+                    if full_resistance_assessed and tors_live
+                    else (
+                        "resistance"
+                        if full_resistance_assessed
+                        else "transparency"
+                    )
+                ),
                 torque_distribution=tors_ctx["torque_distribution"],
                 member_angle_selection=member_angle_selection)
 
@@ -8424,7 +8484,7 @@ def _directional_shear_status(inp, shear_out):
     """Acceptance state for one directional shear calculation."""
     if not shear_out or not (shear_out.get("res") or {}).get("valid"):
         return "INVALID"
-    if inp.get("shear_links"):
+    if inp.get("shear_links") is True:
         links = shear_out.get("links")
         if links is None or not (links.get("res") or {}).get("valid"):
             return "NOT ASSESSED"
@@ -8445,7 +8505,11 @@ def _shear_candidate_assessment(inp, candidate_out):
     # acceptance resistance. Rank faces/components by the same applicable metric
     # used by _directional_shear_status so presentation and verdicts cannot diverge.
     metric = float(
-        (links.get("util") if inp.get("shear_links") else shear_out.get("util"))
+        (
+            links.get("util")
+            if inp.get("shear_links") is True
+            else shear_out.get("util")
+        )
         or 0.0
     )
     return status, (math.inf if status == "INVALID" else metric)
@@ -8849,7 +8913,7 @@ def _transverse_detailing_result(inp, out):
                 links_required = None
             shear_specs.append({
                 "component": component,
-                "links_present": bool(inp.get("shear_links")),
+                "links_present": inp.get("shear_links") is True,
                 "links_required": links_required,
                 "requirement_clause": (
                     "8.2.2"
@@ -11134,14 +11198,14 @@ def shear_view(inp, results):
             item = directions[component]
             governing_util = (
                 (item.get("links") or {}).get("util")
-                if inp.get("shear_links") else item.get("util")
+                if inp.get("shear_links") is True else item.get("util")
             )
             summary.append({
                 "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
                 "VEd [kN]": item.get("signed_v_ed", item.get("v_ed")),
                 "VRd [kN]": (
                     ((item.get("links") or {}).get("res") or {}).get("vrd")
-                    if inp.get("shear_links")
+                    if inp.get("shear_links") is True
                     else (item.get("res") or {}).get("vrd_c")
                 ),
                 "Utilisation": governing_util,
@@ -11683,8 +11747,29 @@ def torsion_view(inp, results):
         return
     t = results["torsion"]
     _member_material_note(inp)
+    tube = t["tube"]
+    tube_valid = (
+        t.get("tube_valid") is True
+        if "tube_valid" in t
+        else t.get("valid") is True
+    )
+    full_resistance_assessed = (
+        t.get("full_resistance_assessed") is True
+        if "full_resistance_assessed" in t
+        else t.get("valid") is True
+    )
+    full_resistance_available = bool(
+        tube_valid
+        and full_resistance_assessed
+        and (
+            t.get("closed_links_present") is True
+            if "closed_links_present" in t
+            else t.get("valid") is True
+        )
+        and t.get("valid") is True
+    )
     directional_interactions = t.get("directional_interactions") or {}
-    if directional_interactions:
+    if directional_interactions and full_resistance_available:
         st.info(
             "Generic Vx,Ed + Vy,Ed + TEd interaction is not calculated. The table "
             "shows independent Vx+T and Vy+T calculations; the torsion result below "
@@ -11741,7 +11826,107 @@ def torsion_view(inp, results):
                 "verdict."
             )
             st.dataframe(min_reinf_rows, hide_index=True, width="stretch")
-    tube = t["tube"]
+    if tube_valid and not full_resistance_assessed:
+        reason = str(
+            t.get("assessment_reason")
+            or t.get("reason")
+            or "full torsion resistance not assessed"
+        )
+        if reason == "closed_links_not_present":
+            detail = (
+                "Current shared links / closed torsion stirrups are not present."
+            )
+        elif reason == "closed_link_reinforcement_not_positive":
+            detail = (
+                "Current closed torsion stirrups are selected, but their one-leg "
+                "reinforcement per unit length is not positive."
+            )
+        else:
+            detail = reason.replace("_", " ").capitalize() + "."
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "Full torsion resistance is NOT ASSESSED. "
+            + detail
+            + " TRd,max below is only the concrete-strut cap and TRd,c is "
+            "cracking transparency; neither is promoted to TRd and no "
+            "utilisation or PASS/FAIL verdict is issued.",
+        )
+        m1, m2, m3 = st.columns(3)
+        m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
+        m2.metric(
+            r"Concrete cap $T_{Rd,max}$",
+            f"{t['trd_max']:.3f} kNm",
+            help="Transparency only; not a standalone full torsion resistance.",
+        )
+        m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
+        st.caption(
+            "Informational cap angle only (not an accepted resistance angle): "
+            f"theta = {t['theta_deg']:.1f} deg, cot theta = {t['cot']:.3f}. "
+            "The Formula 6.28 longitudinal-reinforcement value is a calculated "
+            "requirement at that displayed angle, not evidence of provided "
+            "torsion reinforcement or capacity."
+        )
+        if t.get("subdivided"):
+            subs = t.get("subtubes") or []
+            st.markdown("**Validated sub-tube transparency (no full resistance)**")
+            st.dataframe(
+                {
+                    "Sub-tube": [
+                        "web" if i == 0 else f"part {i + 1}"
+                        for i in range(len(subs))
+                    ],
+                    "TEd,i (kNm)": [f"{item['t_ed']:.3f}" for item in subs],
+                    "TRd,max cap (kNm)": [
+                        f"{item['trd_max']:.3f}" for item in subs
+                    ],
+                    "TRd,c (kNm)": [
+                        f"{item['trd_c']:.3f}" for item in subs
+                    ],
+                    "Required Asl (mm2)": [
+                        f"{item['asl_req']:.0f}" for item in subs
+                    ],
+                },
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption(
+                "No sum of full capacities, governing sub-tube or utilisation "
+                "is published while current closed links are absent."
+            )
+            st.plotly_chart(viz.subtube_figure(subs), width="stretch")
+        else:
+            st.markdown("**Tube idealisation and informational demand**")
+            st.dataframe(
+                {
+                    "Quantity": [
+                        "Gross area A",
+                        "Wall thickness tef",
+                        "Enclosed area Ak",
+                        "Centre-line perimeter uk",
+                        "Required longitudinal steel Asl",
+                    ],
+                    "Value": [
+                        f"{tube['A'] * 1e6:.0f} mm2",
+                        f"{tube['tef']:.1f} mm",
+                        f"{tube['Ak'] * 1e6:.0f} mm2",
+                        f"{tube['uk'] * 1e3:.0f} mm",
+                        f"{t['asl_req']:.0f} mm2",
+                    ],
+                },
+                hide_index=True,
+                width="stretch",
+            )
+            st.plotly_chart(
+                viz.tube_figure(
+                    inp["outer"],
+                    inp.get("holes"),
+                    tube["tef"],
+                    ak_m2=tube["Ak"],
+                ),
+                width="stretch",
+            )
+        return
     if not t["valid"]:
         if t.get("reason") == "multi-cell (2+ voids)":
             _manual_warning(

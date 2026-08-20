@@ -63,9 +63,45 @@ def plastic_result_predates_origin_contract(result):
 
 
 def combined_bending_assessment_blocker(results):
-    """Return why retained combined evidence cannot trust its bending term."""
+    """Return why retained combined evidence cannot trust a prerequisite."""
 
     results = results or {}
+    combined = results.get("combined")
+    torsion = results.get("torsion")
+    if (
+        combined is not None
+        and isinstance(torsion, Mapping)
+        and (
+            "tube_valid" in torsion
+            or "full_resistance_assessed" in torsion
+        )
+    ):
+        if torsion.get("tube_valid") is not True:
+            reason = str(
+                torsion.get("reason") or "torsion tube evidence is invalid"
+            )
+        elif (
+            "closed_links_present" in torsion
+            and torsion.get("closed_links_present") is not True
+        ):
+            reason = str(
+                torsion.get("assessment_reason")
+                or "closed_links_not_present"
+            )
+        elif torsion.get("full_resistance_assessed") is not True:
+            reason = str(
+                torsion.get("assessment_reason")
+                or torsion.get("reason")
+                or "full torsion resistance not assessed"
+            )
+        elif torsion.get("valid") is not True:
+            reason = str(
+                torsion.get("reason") or "torsion result is invalid"
+            )
+        else:
+            reason = ""
+        if reason:
+            return "Torsion prerequisite is not assessed: " + reason
     plastic = results.get("plastic")
     if (
         results.get("combined") is not None
@@ -1206,7 +1242,7 @@ def result_summary_rows(inp, results, *, stale=False):
             view="Shear", note="Calculate required", inp=inp,
         ))
     elif shear is not None:
-        links_selected = bool(inp.get("shear_links"))
+        links_selected = inp.get("shear_links") is True
 
         def append_direction(component, direction):
             suffix = {"vx": " Vx", "vy": " Vy"}.get(component, "")
@@ -1283,32 +1319,86 @@ def result_summary_rows(inp, results, *, stale=False):
             append_direction("", shear)
 
     torsion = results.get("torsion")
+    torsion_tube_valid = False
+    torsion_full_resistance_assessed = False
     if torsion is None and inp.get("torsion_on"):
         rows.append(_summary_row(
             "Torsion", "plastic", "NOT RUN",
             view="Torsion", note="Calculate required", inp=inp,
         ))
     elif torsion is not None:
-        rows.append(_summary_row(
-            "Torsion",
-            "plastic",
-            _util_summary_status(
+        torsion_tube_valid = (
+            torsion.get("tube_valid") is True
+            if "tube_valid" in torsion
+            else torsion.get("valid") is True
+        )
+        torsion_full_resistance_assessed = (
+            torsion.get("full_resistance_assessed") is True
+            if "full_resistance_assessed" in torsion
+            else torsion.get("valid") is True
+        )
+        if (
+            "closed_links_present" in torsion
+            and torsion.get("closed_links_present") is not True
+        ):
+            torsion_full_resistance_assessed = False
+        if (
+            torsion_tube_valid
+            and not torsion_full_resistance_assessed
+        ):
+            rows.append(_summary_row(
+                "Torsion",
+                "plastic",
+                "NOT ASSESSED",
+                "-",
+                "-",
+                None,
+                "Torsion",
+                str(
+                    torsion.get("assessment_reason")
+                    or torsion.get("reason")
+                    or "full torsion resistance not assessed"
+                ),
+                inp,
+            ))
+        else:
+            rows.append(_summary_row(
+                "Torsion",
+                "plastic",
+                _util_summary_status(
+                    torsion.get("util"),
+                    valid=torsion.get("valid") is True,
+                ),
+                _percent(torsion.get("util")),
+                "<= 100 %",
                 torsion.get("util"),
-                valid=bool(torsion.get("valid")),
-            ),
-            _percent(torsion.get("util")),
-            "<= 100 %",
-            torsion.get("util"),
-            "Torsion",
-            str(torsion.get("governs") or torsion.get("reason") or ""),
-            inp,
-        ))
+                "Torsion",
+                str(torsion.get("governs") or torsion.get("reason") or ""),
+                inp,
+            ))
 
     combined = results.get("combined")
     if combined is None and inp.get("combined_on"):
+        torsion_not_assessed = (
+            torsion is not None
+            and torsion_tube_valid
+            and not torsion_full_resistance_assessed
+        )
         rows.append(_summary_row(
-            "Combined M-V-T", "plastic", "NOT RUN",
-            view="M-V-T Combined", note="Calculate required", inp=inp,
+            "Combined M-V-T",
+            "plastic",
+            "NOT ASSESSED" if torsion_not_assessed else "NOT RUN",
+            view="M-V-T Combined",
+            note=(
+                str(
+                    torsion.get("assessment_reason")
+                    or torsion.get("reason")
+                    or "full torsion resistance not assessed"
+                )
+                if torsion_not_assessed
+                else "Calculate required"
+            ),
+            inp=inp,
         ))
     elif (combined_blocker := combined_bending_assessment_blocker(results)) is not None:
         rows.append(_summary_row(
