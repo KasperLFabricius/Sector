@@ -126,6 +126,39 @@ def _pid_alive(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def _protocol_threads() -> tuple[threading.Thread, ...]:
+    return tuple(
+        thread
+        for thread in threading.enumerate()
+        if thread.name.startswith("sector-image-export-protocol-")
+    )
+
+
+def _wait_for_no_protocol_threads(timeout: float = 3.0) -> None:
+    deadline = time.monotonic() + timeout
+    while _protocol_threads() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert _protocol_threads() == ()
+
+
+def _capture_export_error(
+    coordinator: image_export.KaleidoExportCoordinator,
+    figure: object,
+    errors: list[BaseException],
+) -> None:
+    try:
+        coordinator.export_png(
+            figure,
+            width=96,
+            height=96,
+            scale=1,
+            timeout=0.2,
+            description="blocked oversized export",
+        )
+    except BaseException as exc:
+        errors.append(exc)
+
+
 def test_ready_is_published_only_after_worker_warmup(tmp_path) -> None:
     release = tmp_path / "release"
     coordinator, pages, registered = _coordinator({"ready_file": str(release)})
@@ -216,6 +249,52 @@ def test_request_and_png_larger_than_a_pipe_buffer_round_trip_within_timeout() -
         assert launches.calls == 1
     finally:
         coordinator.close()
+
+
+def test_oversized_write_to_a_worker_that_never_reads_is_bounded_and_recovers() -> None:
+    coordinator, launches, _registered = _coordinator(
+        {"never_read_render": True},
+        {},
+    )
+    errors: list[BaseException] = []
+    caller = threading.Thread(
+        target=lambda: _capture_export_error(
+            coordinator,
+            _figure("retained-" + ("x" * (8 * 1024 * 1024))),
+            errors,
+        )
+    )
+    coordinator.ensure_ready(timeout=10.0)
+    caller.start()
+    caller.join(3.0)
+    completed_within_bound = not caller.is_alive()
+    try:
+        if not completed_within_bound:
+            process = coordinator._process
+            assert process is not None
+            process.kill()
+            process.join(5.0)
+            caller.join(5.0)
+        assert completed_within_bound
+        assert len(errors) == 1
+        assert isinstance(errors[0], image_export.KaleidoExportTimeout)
+        assert coordinator.state is image_export.KaleidoExportState.NOT_STARTED
+        _wait_for_no_protocol_threads()
+
+        payload = coordinator.export_png(
+            _figure("recovered"),
+            width=96,
+            height=96,
+            scale=1,
+            timeout=10.0,
+            description="recovered export",
+        )
+        assert _decoded_result(payload)["figure"]["data"][0]["name"] == "recovered"
+        assert launches.calls == 2
+    finally:
+        coordinator.close()
+        caller.join(5.0)
+        _wait_for_no_protocol_threads()
 
 
 @pytest.mark.parametrize("failure", ["startup_error", "startup_block"])
@@ -610,6 +689,55 @@ def test_source_worker_command_is_a_dedicated_script_not_the_streamlit_app(
     assert "multiprocessing.get_context" not in source
 
 
+def test_worker_protocol_uses_private_noninheritable_native_handles() -> None:
+    script = textwrap.dedent(
+        f"""
+        import os
+        import subprocess
+        import sys
+
+        sys.path.insert(0, {str(ROOT / "app")!r})
+        import publication_image_export_worker as worker
+
+        reader, writer = worker._protocol_streams()
+        assert not os.get_inheritable(reader.fileno())
+        assert not os.get_inheritable(writer.fileno())
+        os.write(1, b"native diagnostic\\n")
+        sys.__stdout__.write("Python diagnostic\\n")
+        sys.__stdout__.flush()
+        subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(3)"],
+            close_fds=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        inherited_defaults = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            close_fds=False,
+        )
+        assert inherited_defaults.wait(timeout=1) == 0
+        writer.write(b'["isolated"]\\n')
+        writer.flush()
+        writer.close()
+        reader.close()
+        """
+    )
+    started = time.monotonic()
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=1.5,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout == b'["isolated"]\n'
+    assert time.monotonic() - started < 1.5
+
+
 def test_frozen_worker_command_uses_the_pre_streamlit_launcher_route(
     monkeypatch,
 ) -> None:
@@ -825,6 +953,68 @@ def test_worker_launch_failure_is_wrapped_as_exporter_error() -> None:
     ):
         coordinator.ensure_ready(timeout=1)
     assert coordinator.state is image_export.KaleidoExportState.NOT_STARTED
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (RuntimeError("cannot start writer thread"), image_export.KaleidoExportError),
+        (KeyboardInterrupt(), KeyboardInterrupt),
+    ],
+)
+def test_partial_protocol_thread_start_reaps_worker_and_recovers(
+    monkeypatch,
+    failure,
+    expected,
+) -> None:
+    original_start = image_export.threading.Thread.start
+    original_popen = image_export.subprocess.Popen
+    starts = 0
+    processes = []
+
+    def record_popen(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def fail_second_protocol_start(thread) -> None:
+        nonlocal starts
+        if thread.name.startswith("sector-image-export-protocol-"):
+            starts += 1
+            if starts == 2:
+                raise failure
+        original_start(thread)
+
+    coordinator, launches, _registered = _coordinator({}, {})
+    with monkeypatch.context() as isolated:
+        isolated.setattr(image_export.subprocess, "Popen", record_popen)
+        isolated.setattr(
+            image_export.threading.Thread,
+            "start",
+            fail_second_protocol_start,
+        )
+        expected_message = (
+            None
+            if expected is KeyboardInterrupt
+            else "cannot start writer thread"
+        )
+        with pytest.raises(expected, match=expected_message):
+            coordinator.ensure_ready(timeout=3.0)
+
+    assert len(processes) == 1
+    assert processes[0].poll() is not None
+    assert processes[0].stdin is not None and processes[0].stdin.closed
+    assert processes[0].stdout is not None and processes[0].stdout.closed
+    assert coordinator.state is image_export.KaleidoExportState.NOT_STARTED
+    _wait_for_no_protocol_threads()
+
+    try:
+        coordinator.ensure_ready(timeout=10.0)
+        assert coordinator.state is image_export.KaleidoExportState.READY
+        assert launches.calls == 2
+    finally:
+        coordinator.close()
+        _wait_for_no_protocol_threads()
 
 
 @pytest.mark.parametrize(

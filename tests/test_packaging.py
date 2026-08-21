@@ -24,6 +24,7 @@ def test_single_packaging_path_is_present_and_retired_paths_are_absent():
         "packaging/README.md",
         "packaging/README-PORTABLE.txt",
         "tools/build_portable_windows.py",
+        "tools/verify_portable_image_export.py",
         "tools/verify_portable_startup.py",
     ):
         assert (ROOT / relative).is_file()

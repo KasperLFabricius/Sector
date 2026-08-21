@@ -119,6 +119,7 @@ class _StreamConnection:
         writer: BinaryIO,
         *,
         async_writes: bool = False,
+        start_threads: bool = True,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -134,15 +135,28 @@ class _StreamConnection:
             name="sector-image-export-protocol-reader",
             daemon=True,
         )
-        self._reader_thread.start()
-        self._writer_thread: threading.Thread | None = None
-        if self._writes is not None:
-            self._writer_thread = threading.Thread(
+        self._writer_thread: threading.Thread | None = (
+            threading.Thread(
                 target=self._write_messages,
                 name="sector-image-export-protocol-writer",
                 daemon=True,
             )
+            if self._writes is not None
+            else None
+        )
+        self._started = False
+        if start_threads:
+            self.start()
+
+    def start(self) -> None:
+        """Start both protocol loops after their owner is ready to clean up."""
+
+        if self._started:
+            raise RuntimeError("image-export protocol threads already started")
+        self._reader_thread.start()
+        if self._writer_thread is not None:
             self._writer_thread.start()
+        self._started = True
 
     def _read_messages(self) -> None:
         try:
@@ -215,7 +229,11 @@ class _StreamConnection:
         if self._writes is not None:
             self._writes.put(_END_OF_WRITES)
         for thread in (self._writer_thread, self._reader_thread):
-            if thread is not None and thread is not threading.current_thread():
+            if (
+                thread is not None
+                and thread.ident is not None
+                and thread is not threading.current_thread()
+            ):
                 thread.join(_WORKER_SHUTDOWN_GRACE_S)
         # Never close a buffered stream while its I/O thread may hold the
         # stream's internal lock.  Parent-side teardown has already killed or
@@ -312,6 +330,8 @@ def _worker_command() -> list[str]:
 
 def _launch_worker_command(
     command: list[str],
+    *,
+    stderr: int | BinaryIO = subprocess.DEVNULL,
 ) -> tuple[_StreamConnection, _SubprocessHandle]:
     """Start one dedicated worker command with a private framed protocol."""
 
@@ -322,7 +342,7 @@ def _launch_worker_command(
         command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr,
         bufsize=-1,
         close_fds=True,
         creationflags=creation_flags,
@@ -331,11 +351,39 @@ def _launch_worker_command(
         process.kill()
         process.wait()
         raise OSError("image-export worker protocol pipes were not created")
-    connection = _StreamConnection(
-        process.stdout,
-        process.stdin,
-        async_writes=True,
-    )
+    connection: _StreamConnection | None = None
+    try:
+        # Keep the process locally owned until both protocol loops exist.  A
+        # failed Thread.start() must not strand a child waiting for "proceed".
+        connection = _StreamConnection(
+            process.stdout,
+            process.stdin,
+            async_writes=True,
+            start_threads=False,
+        )
+        connection.start()
+    except BaseException:
+        try:
+            if process.poll() is None:
+                process.kill()
+        except BaseException:
+            pass
+        try:
+            process.wait(timeout=_WORKER_SHUTDOWN_GRACE_S)
+        except BaseException:
+            pass
+        if connection is not None:
+            try:
+                connection.close()
+            except BaseException:
+                pass
+        else:
+            for stream in (process.stdin, process.stdout):
+                try:
+                    stream.close()
+                except BaseException:
+                    pass
+        raise
     return connection, _SubprocessHandle(process)
 
 

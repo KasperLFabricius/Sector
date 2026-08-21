@@ -14,12 +14,12 @@ def main() -> None:
     if len(sys.argv) != 2:
         raise RuntimeError("test image worker requires one encoded scenario")
     scenario = json.loads(base64.urlsafe_b64decode(sys.argv[1]).decode("utf-8"))
-    reader = sys.stdin.buffer
-    writer = sys.stdout.buffer
-    sys.stdout = sys.stderr
 
     root = pathlib.Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "app"))
+    import publication_image_export_worker as worker_entry
+
+    reader, writer = worker_entry._protocol_streams()
     import publication_image_export as image_export
 
     connection = image_export._SynchronousStreamConnection(reader, writer)
@@ -64,6 +64,9 @@ def main() -> None:
                 str(descendant.pid), encoding="ascii"
             )
         connection.send(("ready",))
+        if scenario.get("never_read_render"):
+            time.sleep(30)
+            return
         while True:
             message = connection.recv()
             if message == ("stop",):
