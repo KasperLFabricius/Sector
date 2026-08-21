@@ -103,13 +103,28 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
         "no Danish National Annex",
         "confinement enhancement is not included or assessed",
         "Current projects use schema version 26",
-        "Schema 25 is migrated in memory",
-        "Schema 24 remains unsupported",
+        "Every downloaded project save uses the current schema",
+        (
+            "Report metadata and publication controls are grouped separately from "
+            "the Project input stage."
+        ),
+        (
+            "Report labels identify the physical quantity represented by each "
+            "result field."
+        ),
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
     ):
         assert retained in text
-    assert "in-development Sector v0.93 line" not in text
+    for replaced in (
+        "Schema 25 is migrated in memory",
+        "Schema 24 remains unsupported",
+        "in-development Sector v0.93 line",
+        "Released Sector 0.92 projects used schema version 23",
+        "Report metadata and publication controls are no longer mixed",
+        "Legacy result-field names remain for compatibility",
+    ):
+        assert replaced not in text
     assert "WITHIN USER-SPECIFIED LIMIT" in text
     assert "EXCEEDS USER-SPECIFIED LIMIT" in text
 

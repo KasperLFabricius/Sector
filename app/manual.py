@@ -41,7 +41,7 @@ from publication_notation import normalize_trusted_markup
 import publication_theme
 import reproducible_example
 from app import manual_information_architecture as manual_ia
-from app import report_profiles
+from app import project_io, report_profiles
 from app import table_field_definitions as table_fields
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
@@ -709,9 +709,9 @@ def manual_blocks() -> list:
        "signature matches the current inputs; otherwise Sector recalculates for the "
        "report and records that source. A metadata or input edit marks an existing "
        "PDF out of date and blocks its download until it is regenerated.")
-    call("tip", "Report metadata and publication controls are no longer mixed with "
-         "the Project input stage. Save/load and autosave remain under **Inputs > "
-         "Project**; publication remains under **Report**.")
+    call("tip", "Report metadata and publication controls are grouped separately "
+         "from the Project input stage. Save/load and autosave remain under "
+         "**Inputs > Project**; publication remains under **Report**.")
     call("tip", "*Auto-calc all derived values* (in Material parameters) "
          "recomputes every auto quantity from the current grade at once: the concrete "
          "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
@@ -720,13 +720,10 @@ def manual_blocks() -> list:
     h1("Project")
     h2("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
-       "load cases and provenance. Loading a project restores its inputs and clears "
-       "earlier results; press *Calculate* to create current results. Current "
-       "projects use schema version 26. Schema 25 is migrated in memory by "
-       "splitting the former single crack-width value into independent long-term "
-       "and short-term user limits and, when it was active, a separate Formula "
-       "7.100 NA operand. It resaves cleanly as schema 26; the source file is not "
-       "changed. Schema 24 remains unsupported.")
+       "load cases and provenance. Every downloaded project save uses the current "
+       "schema. Loading a project restores its inputs and clears earlier results; "
+       "press *Calculate* to create current results. Current projects use schema "
+       f"version {project_io.VERSION}.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
@@ -1555,9 +1552,9 @@ def manual_blocks() -> list:
        "refinement off, so the reported stresses and section properties use "
        "$n\\,A$ throughout.) The Elastic solver stores an $E_c=1$ reference-stress "
        "plane $(\\sigma_0,g_x,g_y)$, not a physical strain/curvature plane. The "
-       "physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$. Legacy "
-       "result-field names remain for compatibility, but the report labels the "
-       "stored quantities by their actual stress units. Newton iteration solves the "
+       "physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$. Report "
+       "labels identify the physical quantity represented by each result field. "
+       "Newton iteration solves the "
        "reference-stress plane so the transformed-section resultants equal "
        "$(N,M_x,M_y)$, updating the compression zone until it settles.")
     md("Creep enters through the modular ratio: the long-term state uses "
