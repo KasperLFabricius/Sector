@@ -260,11 +260,11 @@ def _section_hover_from_result_view(at):
             and data
             and data[0].get("fill") == "toself"
         ):
-            return "\n".join(
+            return [
                 str(value)
                 for trace in data
                 for value in (trace.get("customdata") or [])
-            )
+            ]
     raise AssertionError("No section-state Plotly figure was rendered")
 
 
@@ -1494,15 +1494,16 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
         {
             "stress_mpa": 500.0,
             "strain_permille": 5.0,
-            "material_id": "M1",
-            "material_name": "B500B",
+            "material_id": "M<br>1 &",
+            "material_name": "B500 <i>trial</i>",
         },
         {"stress_mpa": -420.0, "strain_permille": -5.0, "material_id": "M2"},
     ]
     hover = _plastic_state_hover(rows)
     assert "500.0 MPa" in hover[0]
     assert "= 0.500 %" in hover[0]
-    assert "material M1 - B500B" in hover[0]
+    assert "material M&lt;br&gt;1 &amp; - B500 &lt;i&gt;trial&lt;/i&gt;" in hover[0]
+    assert "M<br>1" not in hover[0] and "<i>trial</i>" not in hover[0]
     assert "= -0.500 %" in hover[1]
     assert "material M2" in hover[1]
     assert _plastic_state_hover([]) is None
@@ -1511,8 +1512,8 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
         {
             "total_mpa": 212.3456,
             "strain_permille": 1.0617,
-            "material_id": "M1",
-            "material_name": "B500B",
+            "material_id": "M<br>1 &",
+            "material_name": "B500 <i>trial</i>",
         },
         {
             "total_mpa": 900.0,
@@ -1523,7 +1524,11 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
     ])
     assert "212.346 MPa" in elastic[0]
     assert "1.0617 permille" in elastic[0]
-    assert "material = M1 - B500B" in elastic[0]
+    assert (
+        "material = M&lt;br&gt;1 &amp; - B500 &lt;i&gt;trial&lt;/i&gt;"
+        in elastic[0]
+    )
+    assert "M<br>1" not in elastic[0] and "<i>trial</i>" not in elastic[0]
     assert "900.000 MPa" in elastic[1]
     assert "material" not in elastic[1]
     assert _elastic_state_hover([]) is None
@@ -1543,26 +1548,42 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
 
 
 def test_plastic_and_elastic_result_views_route_response_only_section_hover():
-    at = _fresh()
-    at.run()
+    at = _fresh_qs()
+    _set_and_click(
+        at, "qs_apply", ("number_input", "tnd_n", 4)
+    )
     _set_and_click(at, "calculate", ("radio", "mode", "Both"))
 
     _select_view(at, "Plastic Results")
     plastic_hover = _section_hover_from_result_view(at)
-    assert "Bar" in plastic_hover
-    assert "MPa" in plastic_hover
-    assert "material" in plastic_hover
-    assert "x =" not in plastic_hover and "y =" not in plastic_hover
-    assert "area =" not in plastic_hover
+    plastic_bar = next(value for value in plastic_hover if value.startswith("Bar "))
+    plastic_tendon = next(
+        value for value in plastic_hover if value.startswith("Tendon ")
+    )
+    for value in (plastic_bar, plastic_tendon):
+        assert "MPa" in value and "%" in value
+        assert "material" in value
+        assert "x =" not in value and "y =" not in value
+        assert "area =" not in value
+    assert "material P1" in plastic_tendon
 
     _select_view(at, "Elastic Results")
     elastic_hover = _section_hover_from_result_view(at)
-    assert "Bar" in elastic_hover
-    assert "total" in elastic_hover
-    assert "Outer point" in elastic_hover
-    assert "MPa" in elastic_hover and "permille" in elastic_hover
-    assert "x =" not in elastic_hover and "y =" not in elastic_hover
-    assert "area =" not in elastic_hover
+    elastic_bar = next(value for value in elastic_hover if value.startswith("Bar "))
+    elastic_tendon = next(
+        value for value in elastic_hover if value.startswith("Tendon ")
+    )
+    elastic_corner = next(
+        value for value in elastic_hover if value.startswith("Corner ")
+    )
+    for value in (elastic_bar, elastic_tendon, elastic_corner):
+        assert "MPa" in value and "permille" in value
+        assert "x =" not in value and "y =" not in value
+        assert "area =" not in value
+    for value in (elastic_bar, elastic_tendon):
+        assert "total" in value and "material" in value
+    assert "material = P1" in elastic_tendon
+    assert "Outer point" in elastic_corner
 
 
 def test_both_mode_runs_elastic_and_plastic():

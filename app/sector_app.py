@@ -16,6 +16,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
+from html import escape as _html_escape
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
 # importable when run as a script or via Streamlit's AppTest.
@@ -9679,8 +9680,12 @@ def _plastic_state_hover(rows):
         return None
     out = []
     for row in rows:
-        material_id = str(row.get("material_id") or "").strip()
-        material_name = str(row.get("material_name") or "").strip()
+        material_id = _html_escape(
+            str(row.get("material_id") or "").strip(), quote=True
+        )
+        material_name = _html_escape(
+            str(row.get("material_name") or "").strip(), quote=True
+        )
         suffix = f", material {material_id}" if material_id else ""
         if suffix and material_name:
             suffix += f" - {material_name}"
@@ -9698,8 +9703,12 @@ def _elastic_state_hover(rows):
         return None
     out = []
     for row in rows:
-        material_id = str(row.get("material_id") or "").strip()
-        material_name = str(row.get("material_name") or "").strip()
+        material_id = _html_escape(
+            str(row.get("material_id") or "").strip(), quote=True
+        )
+        material_name = _html_escape(
+            str(row.get("material_name") or "").strip(), quote=True
+        )
         material = ""
         if material_id:
             material = f"<br>material = {material_id}"

@@ -645,8 +645,11 @@ def _point_hover(
     dec = 3 if unit == "m" else 0
     lines = []
     for i, p in enumerate(points):
-        point_id = (str(ids[i]) if ids is not None and i < len(ids)
-                    else str(first_number + i))
+        point_id = _html_escape(
+            str(ids[i]) if ids is not None and i < len(ids)
+            else str(first_number + i),
+            quote=True,
+        )
         s = f"{kind} {point_id}"
         if include_geometry:
             s += (
@@ -830,6 +833,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         x0, y0, x1, y1 = na_line
         fig.add_trace(go.Scatter(x=[x0, x1], y=[y0, y1], mode="lines",
                                  line=dict(color=NA_LINE, width=2, dash="dash"),
+                                 hoverinfo=(None if geometry_hover else "skip"),
                                  name="neutral axis"))
     if show_labels:
         _add_point_labels(
