@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import inspect
 import pathlib
@@ -1453,6 +1454,29 @@ def test_governing_overview_preserves_family_order_and_selected_provenance():
     assert selected[4]["case"] == "PL-E"
 
 
+def test_non_governing_overview_rows_preserve_exact_complement_order_and_copies():
+    rows = [
+        _overview_row("PASS", case="PL-A", util=0.80),
+        _overview_row("FAIL", case="PL-B", util=1.25),
+        _overview_row(
+            "CALCULATED", case="EL-A", check="Concrete stress", util=None
+        ),
+        _overview_row(
+            "CALCULATED", case="EL-B", check="Concrete stress", util=None
+        ),
+    ]
+    before = [dict(row) for row in rows]
+
+    non_governing = presentation.non_governing_summary_rows(rows)
+
+    assert [row["case"] for row in non_governing] == ["PL-A", "EL-B"]
+    assert rows == before
+    non_governing[0]["case"] = "changed copy"
+    assert rows[0]["case"] == "PL-A"
+    with pytest.raises(ValueError, match="rows must be objects"):
+        presentation.non_governing_summary_rows([rows[0], None])
+
+
 def test_governing_overview_keeps_unknown_status_visible_and_rejects_bad_rows():
     rows = [
         _overview_row("PASS", case="known", util=0.5),
@@ -1556,6 +1580,57 @@ def test_stale_fatigue_summary_uses_the_calculated_basis_not_live_edits():
     assert row["case"] == "OLD SPECTRUM"
     assert row["case_type"] == "CALCULATED EDITION"
     assert row["source"] == "CALCULATED SOURCE"
+
+
+def test_non_governing_fatigue_spectra_are_retained_without_mutation():
+    inp = _inp(
+        mode="",
+        fatigue_on=True,
+        fatigue_edition=DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+        fatigue_basis={"method": "LIVE METHOD"},
+    )
+    fatigue = {
+        "basis_label": "CALCULATED EDITION",
+        "basis": {"spectrum_source": "CALCULATED SOURCE"},
+        "governing_spectrum": "Road traffic",
+        "spectra": [
+            {
+                "spectrum_name": "Road traffic",
+                "converged": True,
+                "passed": False,
+                "utilisation": 1.20,
+            },
+            {
+                "spectrum_name": "Rail traffic",
+                "converged": True,
+                "passed": True,
+                "utilisation": 0.23,
+            },
+        ],
+    }
+    before = copy.deepcopy(fatigue)
+
+    rows = presentation.non_governing_fatigue_spectrum_rows(
+        inp, {"fatigue": fatigue}
+    )
+
+    assert rows == [{
+        "check": "Fatigue",
+        "family": "fatigue",
+        "case": "Rail traffic",
+        "case_type": "CALCULATED EDITION",
+        "source": "CALCULATED SOURCE",
+        "status": "PASS",
+        "result": "23.0 %",
+        "criterion": "<= 100 %",
+        "util": 0.23,
+        "view": "Fatigue Results",
+        "note": "Independently checked non-governing spectrum",
+    }]
+    assert fatigue == before
+    assert presentation.non_governing_fatigue_spectrum_rows(
+        inp, {"fatigue": fatigue}, stale=True
+    )[0]["status"] == "STALE"
 
 
 def test_fatigue_summary_formats_stable_keys_and_prefers_result_basis_label():

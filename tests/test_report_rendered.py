@@ -135,7 +135,7 @@ def test_audit_fixture_flags_sparse_non_opener_pages_for_visual_review():
         page_texts,
         opener_pages=opener_pages,
     )
-    assert tuple(page for page, _coverage in sparse) == (3, 17, 38, 49, 59)
+    assert tuple(page for page, _coverage in sparse) == (18, 39, 50, 53)
     assert all(0.0 < coverage < 0.35 for _page, coverage in sparse)
 
 

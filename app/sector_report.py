@@ -3321,12 +3321,15 @@ class ReportBuilder:
 
         self._h1("Governing calculation register", reserve=130)
         self._p(
-            "This rapid-review profile retains every requested result and status "
-            "in the overview. The register below identifies the precomputed "
-            "globally critical worked examples; no report-side ranking or "
-            "calculation is performed. Generate Standard or Audit for the full "
-            "numerical derivations."
+            "The overview publishes one governing row per stable check family. "
+            "The compact listing below retains every other requested result and "
+            "status without its derivation. The governing register then identifies "
+            "the precomputed globally critical worked examples; no report-side "
+            "ranking or calculation is performed. Generate Standard or Audit for "
+            "the full numerical derivations."
         )
+        self._non_governing_status_register()
+        self._h2("Selected governing worked examples", reserve=90)
         rows = [["Calculation", "Selected case / branch"]]
         labels = {
             "plastic": "Plastic capacity",
@@ -3398,6 +3401,36 @@ class ReportBuilder:
             "separate export choice. Audit is evidence depth, not approval, "
             "compliance or certification."
         )
+
+    def _non_governing_status_register(self):
+        """Publish every retained row excluded from the governing overview."""
+
+        retained_rows = presentation.multi_case_summary_rows(
+            self._base_inp, self._base_out
+        )
+        non_governing = presentation.non_governing_summary_rows(retained_rows)
+        non_governing.extend(
+            presentation.non_governing_fatigue_spectrum_rows(
+                self._base_inp, self._base_out
+            )
+        )
+        if non_governing:
+            self._h2("Non-governing requested results", reserve=90)
+            self._table(
+                [["Check", "Action set", "Status", "Result"], *[
+                    [
+                        _html_escape(row["check"]),
+                        _html_escape(row["case"]),
+                        _html_escape(row["status"]),
+                        _html_escape(row["result"]),
+                    ]
+                    for row in non_governing
+                ]],
+                [49 * mm, 30 * mm, 41 * mm, 45 * mm],
+                font=7.2,
+                keep=False,
+                caption="Compact non-governing requested results",
+            )
 
     def _cover(self):
         m = self.meta
@@ -3495,6 +3528,8 @@ class ReportBuilder:
         ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
         self._results_overview()
+        if self.profile.non_governing_scope == "complete":
+            self._non_governing_status_register()
         self.flow.append(NotAtTopPageBreak())
 
     def _conventions(self):

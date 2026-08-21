@@ -785,12 +785,10 @@ def test_app_dead_shear_companion_uses_the_shared_strut_band():
     assert 1.0 - 1e-9 <= r["torsion"]["cot"] <= 1.2 + 1e-9
 
 
-def test_app_infinite_bending_util_does_not_poison_the_member_angle():
-    # Workflow finding: an INFINITE plastic (bending) utilisation -- the applied N/M
-    # ray misses the plastic M-M envelope -- must not poison the strut-angle objective
-    # via the constant DK NA term. Guard mirrors the invalid-tube inf guard: with an
-    # inf r_m the member angle is chosen by the FINITE terms exactly as if the combined
-    # check were off, instead of being pinned to the band edge by the inf.
+def test_app_invalid_bending_evidence_does_not_poison_the_member_angle():
+    # An unreachable N/M request produces invalid plastic evidence, not an invented
+    # infinite utilisation. The combined check must fail closed while the independent
+    # V/T member-angle selection remains the same as when combined interaction is off.
     def run(combined):
         at = _fresh()
         at.run()
@@ -805,12 +803,13 @@ def test_app_infinite_bending_util_does_not_poison_the_member_angle():
         return at.session_state["results"]
     r_on = run(True)
     r_off = run(False)
-    assert not math.isfinite(r_on["plastic"]["util"])            # inf bending util
-    assert not math.isfinite(r_on["combined"]["dkna_sum"])       # verdict still FAIL
+    assert r_on["plastic"]["util"] is None
+    assert r_on["plastic"]["util_valid"] is False
+    assert r_on["combined"]["valid"] is False
+    assert r_on["combined"]["have_m"] is False
     cot_on = r_on["shear"]["links"]["res"]["cot"]
     cot_off = r_off["shear"]["links"]["res"]["cot"]
-    assert cot_on == pytest.approx(cot_off)                      # inf did not move the angle
-    assert cot_on > 1.05                                          # NOT pinned to the band edge
+    assert cot_on == pytest.approx(cot_off)
 
 
 def test_app_combined_angle_minimises_the_dkna_governing_sum():

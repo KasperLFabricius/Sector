@@ -956,6 +956,54 @@ def fatigue_summary_rows(inp, results, *, stale=False):
     }]
 
 
+def non_governing_fatigue_spectrum_rows(inp, results, *, stale=False):
+    """Return retained independently checked spectra outside the aggregate row."""
+
+    inp = inp or {}
+    results = results or {}
+    if not bool(inp.get("fatigue_on")):
+        return []
+    fatigue = results.get("fatigue")
+    if fatigue is None:
+        return []
+    basis = fatigue.get("basis") or inp.get("fatigue_basis") or {}
+    edition = str(
+        fatigue.get("basis_label")
+        or fatigue.get("edition")
+        or _registered_fatigue_basis_label(fatigue.get("basis_key"))
+        or _registered_fatigue_basis_label(inp.get("fatigue_edition"))
+        or "-"
+    )
+    governing_name = str(fatigue.get("governing_spectrum") or "")
+    governing_skipped = False
+    rows = []
+    for spectrum in fatigue_presentation.spectrum_rows(fatigue):
+        name = str(spectrum.get("spectrum") or "-")
+        if not governing_skipped and name == governing_name:
+            governing_skipped = True
+            continue
+        status = str(spectrum.get("status") or "INVALID")
+        if stale:
+            status = "STALE"
+        util = spectrum.get("utilisation")
+        rows.append({
+            "check": "Fatigue",
+            "family": "fatigue",
+            "case": name,
+            "case_type": edition,
+            "source": str(
+                basis.get("spectrum_source") or basis.get("method") or "-"
+            ),
+            "status": status,
+            "result": _percent(util),
+            "criterion": "<= 100 %",
+            "util": util,
+            "view": "Fatigue Results",
+            "note": "Independently checked non-governing spectrum",
+        })
+    return rows
+
+
 def result_summary_rows(inp, results, *, stale=False):
     """Build the shared UI/PDF overview without rerunning any solver."""
     inp = inp or {}
@@ -1727,23 +1775,25 @@ def _governing_overview_utilisation(row):
     return metric
 
 
-def governing_summary_rows(rows):
-    """Select one conservative retained row per exact check family."""
+def _governing_summary_selection(rows):
+    """Return retained rows and the selected source index for each family."""
 
+    retained = []
     selected = {}
     order = []
-    for row in rows:
+    for index, row in enumerate(rows):
         if not isinstance(row, Mapping):
             raise ValueError("result overview rows must be objects")
+        retained.append(row)
         key = (str(row.get("family") or ""), str(row.get("check") or ""))
         status = str(row.get("status") or "")
         rank = _GOVERNING_OVERVIEW_STATUS_RANK.get(status, -1)
         utilisation = _governing_overview_utilisation(row)
         if key not in selected:
             order.append(key)
-            selected[key] = (row, rank, utilisation)
+            selected[key] = (index, row, rank, utilisation)
             continue
-        _current, current_rank, current_utilisation = selected[key]
+        _current_index, _current, current_rank, current_utilisation = selected[key]
         replace_current = rank < current_rank
         if rank == current_rank:
             replace_current = bool(
@@ -1754,8 +1804,27 @@ def governing_summary_rows(rows):
                 )
             )
         if replace_current:
-            selected[key] = (row, rank, utilisation)
-    return [dict(selected[key][0]) for key in order]
+            selected[key] = (index, row, rank, utilisation)
+    return retained, order, selected
+
+
+def governing_summary_rows(rows):
+    """Select one conservative retained row per exact check family."""
+
+    _retained, order, selected = _governing_summary_selection(rows)
+    return [dict(selected[key][1]) for key in order]
+
+
+def non_governing_summary_rows(rows):
+    """Return every retained row not selected for the governing overview."""
+
+    retained, _order, selected = _governing_summary_selection(rows)
+    selected_indices = {item[0] for item in selected.values()}
+    return [
+        dict(row)
+        for index, row in enumerate(retained)
+        if index not in selected_indices
+    ]
 
 
 def summary_governing_flags(rows):

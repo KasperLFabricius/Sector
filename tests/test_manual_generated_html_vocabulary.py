@@ -373,7 +373,7 @@ def test_fragment_href_grammar_accepts_generated_forms(href):
 
 @pytest.mark.parametrize(
     "href",
-    ("#", "section", "#manual.section", "#a/b", "#å", "#a onclick=alert(1)"),
+    ("#", "section", "#manual.section", "#a/b", "#\u00e5", "#a onclick=alert(1)"),
 )
 def test_fragment_href_grammar_rejects_non_generator_forms(href):
     pattern = re.compile(CURRENT_GENERATED_MANUAL_HTML_VOCABULARY.fragment_href_pattern)
