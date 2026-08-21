@@ -5266,6 +5266,95 @@ def test_degenerate_rupture_stress_does_not_crash():
     assert not at.exception
 
 
+def test_creep_help_follows_concrete_preset_without_changing_phi():
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Loads")
+    at.number_input(key="el_phi").set_value(1.75).run()
+    retained_phi = at.number_input(key="el_phi").value
+    assert retained_phi == 1.75
+
+    dk_help = at.number_input(key="el_phi").help
+    assert "DK NA:2024, 3.1.4(1)-(2)" in dk_help
+    assert "phi = 3 is conditional" in dk_help
+    assert "does not infer whether creep is decisive" in dk_help
+
+    _goto_material_tab(at, "Concrete")
+    at.selectbox(key="conc_preset").set_value("EN 1992-1-1:2005").run()
+    _goto_input_tab(at, "Loads")
+    base_help = at.number_input(key="el_phi").help
+    assert "3.1.4 and Annex B.1" in base_help
+    assert "DK NA:2024" not in base_help
+    assert at.number_input(key="el_phi").value == retained_phi
+
+    _goto_material_tab(at, "Concrete")
+    at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
+    _goto_input_tab(at, "Loads")
+    published_help = at.number_input(key="el_phi").help
+    assert "5.1.5, Table 5.2 and Annex B.5" in published_help
+    assert "project adoption required" in published_help
+    assert "no Danish National Annex" in published_help
+    assert at.number_input(key="el_phi").value == retained_phi
+
+    _goto_material_tab(at, "Concrete")
+    at.selectbox(key="conc_preset").set_value(
+        "Curve 2 (parabola-rectangle)"
+    ).run()
+    _goto_input_tab(at, "Loads")
+    project_help = at.number_input(key="el_phi").help
+    assert "project-defined" in project_help
+    assert "no Eurocode source is inferred" in project_help
+    assert "DS/EN 1992" not in project_help
+    assert at.number_input(key="el_phi").value == retained_phi
+    assert not at.exception
+
+
+def test_detailing_checkbox_help_follows_selected_edition_only():
+    at = _fresh()
+    at.run()
+
+    minimum = at.checkbox(key="minimum_reinforcement_on")
+    links = at.checkbox(key="transverse_detailing_on")
+    spacing = at.checkbox(key="clear_spacing_on")
+    assert "9.2.1.1(1)" in minimum.help
+    assert "Formula (9.1N)" in minimum.help
+    assert "high-beam-web provision is not included" in minimum.help
+    assert "DK NA:2024, 9.2.2(5), Formula (9.5N NA)" in links.help
+    assert "DK NA:2024, 8.2(2) unchanged" in spacing.help
+
+    minimum.set_value(True).run()
+    at.selectbox(key="detailing_edition").set_value(
+        "EN 1992-1-1:2005"
+    ).run()
+    base_minimum_help = at.checkbox(key="minimum_reinforcement_on").help
+    base_links_help = at.checkbox(key="transverse_detailing_on").help
+    base_spacing_help = at.checkbox(key="clear_spacing_on").help
+    assert "9.2.1.1(1)" in base_minimum_help
+    assert "9.3.1.1(1)-(2)" in base_minimum_help
+    assert "9.2.2(5)-(8)" in base_links_help
+    assert "9.3.2(2), (4)-(5)" in base_links_help
+    assert "8.2(2)" in base_spacing_help
+    for help_text in (base_minimum_help, base_links_help, base_spacing_help):
+        assert "DK NA:2024" not in help_text
+
+    at.selectbox(key="detailing_edition").set_value(
+        "DS/EN 1992-1-1:2023"
+    ).run()
+    published_minimum = at.checkbox(key="minimum_reinforcement_on").help
+    published_links = at.checkbox(key="transverse_detailing_on").help
+    published_spacing = at.checkbox(key="clear_spacing_on").help
+    assert "12.2(2), Formulae (12.1)-(12.2)" in published_minimum
+    assert "Tables 12.1 and 12.2, 12.3.3 and 12.4.2" in published_links
+    assert "11.2(2)" in published_spacing
+    for help_text in (published_minimum, published_links, published_spacing):
+        assert "project adoption required" in help_text
+        assert "no Danish National Annex" in help_text
+    assert at.checkbox(key="minimum_reinforcement_on").value is True
+    assert at.checkbox(key="transverse_detailing_on").value is False
+    assert at.checkbox(key="clear_spacing_on").value is False
+    assert not at.exception
+
+
 def test_crack_input_tooltips_follow_the_exact_selected_basis():
     at = _fresh()
     at.run()

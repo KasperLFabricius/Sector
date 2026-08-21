@@ -39,6 +39,10 @@ COMMON_INPUT_GUIDANCE = (
     standards.InputGuidanceKey.FATIGUE_CONCRETE_LIFE_C,
     standards.InputGuidanceKey.ORDINARY_CRACK_DIAMETER,
     standards.InputGuidanceKey.ORDINARY_CRACK_MILD_BOND,
+    standards.InputGuidanceKey.CREEP_COEFFICIENT,
+    standards.InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+    standards.InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+    standards.InputGuidanceKey.DETAILING_CLEAR_SPACING,
 )
 
 
@@ -372,6 +376,87 @@ def test_input_guidance_registry_is_complete_basis_bound_and_exact():
         "7.3.2(1)P, Formula 7.100 NA"
     )
     assert heightened.tooltip.endswith(f"Source: {heightened.source}.")
+
+
+def test_creep_and_detailing_guidance_has_exact_selected_basis_sources():
+    expected_sources = {
+        standards.InputGuidanceKey.CREEP_COEFFICIENT: (
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.4 and Annex B.1",
+            (
+                "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.4 and "
+                "Annex B.1; DS/EN 1992-1-1 DK NA:2024, 3.1.4(1)-(2)"
+            ),
+            "DS/EN 1992-1-1:2023, 5.1.5, Table 5.2 and Annex B.5",
+        ),
+        standards.InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT: (
+            (
+                "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 9.2.1.1(1), "
+                "Formula (9.1N), and 9.3.1.1(1)-(2)"
+            ),
+            (
+                "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 9.2.1.1(1), "
+                "Formula (9.1N), and 9.3.1.1(1)-(2); DS/EN 1992-1-1 "
+                "DK NA:2024, 9.2.1.1(1)"
+            ),
+            (
+                "DS/EN 1992-1-1:2023, 12.2(2), Formulae (12.1)-(12.2), "
+                "and Table 12.2"
+            ),
+        ),
+        standards.InputGuidanceKey.DETAILING_TRANSVERSE_LINKS: (
+            (
+                "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 9.2.2(2), "
+                "9.2.2(5)-(8), Formulae (9.4)-(9.8), 9.2.3(3), and "
+                "9.3.2(2), (4)-(5)"
+            ),
+            (
+                "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 9.2.2(2), "
+                "9.2.2(5)-(8), Formulae (9.4)-(9.8), 9.2.3(3), and "
+                "9.3.2(2), (4)-(5); DS/EN 1992-1-1 DK NA:2024, "
+                "9.2.2(5), Formula (9.5N NA)"
+            ),
+            (
+                "DS/EN 1992-1-1:2023, 8.2.1(2), 12.2(4), Tables 12.1 "
+                "and 12.2, 12.3.3 and 12.4.2"
+            ),
+        ),
+        standards.InputGuidanceKey.DETAILING_CLEAR_SPACING: (
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 8.2(2)",
+            (
+                "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 8.2(2); "
+                "DS/EN 1992-1-1 DK NA:2024, 8.2(2) unchanged"
+            ),
+            "DS/EN 1992-1-1:2023, 11.2(2)",
+        ),
+    }
+    basis_order = (
+        standards.DesignBasisKey.FIRST_GEN_BASE,
+        standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        standards.DesignBasisKey.PUBLISHED_2023,
+    )
+
+    for key, sources in expected_sources.items():
+        for basis, source in zip(basis_order, sources, strict=True):
+            guidance = standards.input_guidance(basis, key)
+            assert guidance.source == source
+            assert guidance.tooltip.endswith(f"Source: {source}.")
+
+    dk_creep = standards.input_guidance(
+        standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        standards.InputGuidanceKey.CREEP_COEFFICIENT,
+    )
+    assert "phi = 3 is conditional" in dk_creep.guidance
+    assert "does not infer whether creep is decisive" in dk_creep.guidance
+    dk_minimum = standards.input_guidance(
+        standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        standards.InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+    )
+    assert "high-beam-web provision is not included" in dk_minimum.guidance
+    published = standards.get_design_basis(
+        standards.DesignBasisKey.PUBLISHED_2023
+    )
+    assert "project adoption required" in published.disclosure
+    assert "no Danish National Annex" in published.disclosure
 
 
 def test_input_guidance_lookup_fails_closed_for_unknown_or_unsupported_keys():

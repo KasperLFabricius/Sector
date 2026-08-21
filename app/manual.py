@@ -1199,6 +1199,14 @@ def manual_blocks() -> list:
        "Crack width includes both the sustained and total long-plus-short response "
        "for each selected row. No stress, crack-width, exposure, durability, "
        "decompression or required-combination acceptance is applied.")
+    md("The creep-coefficient input help follows the selected concrete preset. "
+       "The first-generation source is 3.1.4 and Annex B.1. The Danish preset "
+       "also identifies DK NA:2024 3.1.4(1)-(2), including the conditional "
+       "$\\varphi=3$ simplification. The 2023 source is 5.1.5, Table 5.2 and "
+       "Annex B.5; project adoption is required and no Danish National Annex is "
+       "applied. A named curve without an edition is project-defined and receives "
+       "no inferred Eurocode source. Sector never changes the entered coefficient "
+       "or decides whether a cited simplification applies.")
     md("A fatigue bin uses the long-term fields for the sustained/basic state and "
        "the short-term fields for the cyclic increment. Sector solves both states "
        "with the Elastic solver; their stress difference is the range. Reuse one "
@@ -1478,6 +1486,12 @@ def manual_blocks() -> list:
         "one solved neutral-axis angle.")
 
     h1("Reinforcement detailing")
+    md("Each detailing checkbox identifies the clauses used by the selected "
+       "Detailing edition. The help adds no separate calculation state: selecting "
+       "an edition continues to choose the edition-specific rules described below, "
+       "while the help itself does not change checkbox state or entered geometry. "
+       "The 2023 edition is a published reference that requires project adoption, "
+       "and no Danish National Annex is applied.")
     h2("EN 1992-1-1:2005 and DK NA:2024")
     md("Sector transfers the moments to the gross-concrete centroid and derives "
        "the uncracked gross-concrete strain plane for the complete $M_x$-$M_y$ "

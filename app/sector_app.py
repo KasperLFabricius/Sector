@@ -1053,6 +1053,60 @@ def _fatigue_detail_value_help(preset, selected_basis, purpose):
     )
 
 
+# Presentation-only mapping for input provenance. Solver dispatch continues to
+# use each calculation's existing stable key or edition input.
+_INPUT_PROVENANCE_BASIS_BY_EDITION = {
+    codes.EC2_2005.label: design_standards.DesignBasisKey.FIRST_GEN_BASE,
+    codes.EC2_2005_DKNA.label: (
+        design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024
+    ),
+    codes.EC2_2023.label: design_standards.DesignBasisKey.PUBLISHED_2023,
+}
+
+
+def _selected_basis_input_help(edition, key):
+    """Return source-bound help for one existing exact edition selection."""
+
+    try:
+        basis_key = _INPUT_PROVENANCE_BASIS_BY_EDITION[edition]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"no registered input provenance for edition {edition!r}"
+        ) from exc
+    basis = design_standards.get_design_basis(basis_key)
+    guidance = design_standards.input_guidance(basis_key, key)
+    return (
+        f"Selected basis: {basis.label}. {guidance.tooltip} "
+        f"Basis note: {basis.disclosure}"
+    )
+
+
+def _creep_coefficient_help(concrete_preset):
+    """Bind creep help to the existing concrete preset without changing phi."""
+
+    purpose = (
+        "One global final creep coefficient. Sustained actions use "
+        "Ec,eff = Ec/(1+phi)."
+    )
+    basis_key = (
+        _INPUT_PROVENANCE_BASIS_BY_EDITION.get(concrete_preset)
+        if type(concrete_preset) is str
+        else None
+    )
+    if basis_key is None:
+        return (
+            f"{purpose} The selected concrete preset is project-defined; "
+            "no Eurocode source is inferred."
+        )
+    selected_help = _selected_basis_input_help(
+        concrete_preset,
+        design_standards.InputGuidanceKey.CREEP_COEFFICIENT,
+    )
+    return (
+        f"{purpose} {selected_help}"
+    )
+
+
 def _seed_fatigue_detail_widgets(entry, prefix):
     values = {
         "name": entry["name"],
@@ -4784,11 +4838,11 @@ def build_inputs(host=st):
         ].any()
     )
     loads.markdown("**Global Elastic parameter**")
+    creep_concrete_preset = st.session_state.get("conc_preset", _DEFAULT_PRESET)
     phi_creep = _seeded_number(
         loads, r"Creep coefficient $\varphi$", 0.0, 5.0, 3.0, 0.1,
         "el_phi", disabled=not (elastic_on or fatigue_on),
-        help="One global final creep coefficient. Sustained actions use "
-             "Ec,eff = Ec/(1+phi).",
+        help=_creep_coefficient_help(creep_concrete_preset),
     )
     aset.markdown("**Neutral-axis sweep (plastic)**")
     v_min = _seeded_number(
@@ -5222,31 +5276,47 @@ def build_inputs(host=st):
     )
     det.info(f"Modelled reinforcement direction: {direction_label}")
 
+    detailing_help_edition = st.session_state.get(
+        "detailing_edition", detailing.EC2_2005_DKNA
+    )
+    if (
+        type(detailing_help_edition) is not str
+        or detailing_help_edition not in detailing.EDITIONS
+    ):
+        detailing_help_edition = detailing.EC2_2005_DKNA
+    minimum_reinforcement_help = _selected_basis_input_help(
+        detailing_help_edition,
+        design_standards.InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+    )
+    transverse_detailing_help = _selected_basis_input_help(
+        detailing_help_edition,
+        design_standards.InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+    )
+    clear_spacing_help = _selected_basis_input_help(
+        detailing_help_edition,
+        design_standards.InputGuidanceKey.DETAILING_CLEAR_SPACING,
+    )
+
     minimum_reinforcement_on = _seeded_checkbox(
         det,
         "Check minimum reinforcement in modelled direction",
         False,
         "minimum_reinforcement_on",
-        help="Run the selected edition's minimum-reinforcement criterion in the "
-             "modelled direction for each Plastic/capacity row whose Min. "
-             "reinforcement box is selected.",
+        help=minimum_reinforcement_help,
     )
     transverse_detailing_on = _seeded_checkbox(
         det,
         "Check shear/torsion link detailing",
         False,
         "transverse_detailing_on",
-        help="Check the minimum link-reinforcement ratio and maximum "
-             "longitudinal/transverse stirrup spacing for each active shear or "
-             "torsion action. Zero actions are not evaluated.",
+        help=transverse_detailing_help,
     )
     clear_spacing_on = _seeded_checkbox(
         det,
         "Check reinforcement clear spacing",
         False,
         "clear_spacing_on",
-        help="Check pairwise edge-to-edge clear distances from the entered bar "
-             "coordinates and diameters.",
+        help=clear_spacing_help,
     )
     detailing_edition = _seeded_selectbox(
         det,

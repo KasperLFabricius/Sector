@@ -301,6 +301,22 @@
       ],
       "result_values_recomputed_here": false,
       "implementation_evidence": true
+    },
+    "PR-A08": {
+      "state": "frozen and implemented by PR-A08",
+      "acceptance_document": "docs/pr_a08_v095_input_reference_provenance_acceptance.md",
+      "required_matrix_topics": [
+        "first-generation creep source",
+        "Danish conditional creep source",
+        "published 2023 creep disclosure",
+        "curve-only no-source fallback",
+        "edition-bound minimum reinforcement source",
+        "edition-bound link-detailing source",
+        "edition-bound clear-spacing source",
+        "help-only state preservation"
+      ],
+      "supported_applicability_extended_here": false,
+      "implementation_evidence": true
     }
   },
   "release_baseline": {
