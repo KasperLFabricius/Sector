@@ -174,7 +174,7 @@ def test_results_overview_retains_type_and_dense_padding(monkeypatch):
     assert introduction.getKeepWithNext()
 
 
-def test_results_overview_groups_rows_and_puts_attention_first(monkeypatch):
+def test_results_overview_preserves_selected_family_order_across_groups(monkeypatch):
     rows = [
         {
             "check": "Plastic bending",
@@ -225,6 +225,7 @@ def test_results_overview_groups_rows_and_puts_attention_first(monkeypatch):
         "Acceptance checks",
         "Calculated outputs",
         "Scope and not-run states",
+        "Acceptance checks",
     )
     values = [
         row[0].getPlainText()
@@ -232,10 +233,11 @@ def test_results_overview_groups_rows_and_puts_attention_first(monkeypatch):
     ]
     assert values == [
         "Acceptance checks",
-        "Shear",
         "Plastic bending",
         "Calculated outputs",
         "Centroid",
         "Scope and not-run states",
         "Fatigue",
+        "Acceptance checks",
+        "Shear",
     ]

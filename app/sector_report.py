@@ -1312,12 +1312,6 @@ class ReportBuilder:
         scope_states = {
             "NOT REQUESTED", "NOT APPLICABLE", "NOT RUN", "NOT CALCULATED",
         }
-        attention_states = {
-            "FAIL", "INVALID", "REVIEW", "NOT ASSESSED", "STALE",
-            "EXCEEDS USER-SPECIFIED LIMIT",
-            "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
-        }
-
         def _overview_group(row):
             status = str(row["status"]).upper()
             if status in scope_states:
@@ -1339,32 +1333,21 @@ class ReportBuilder:
                 parts.append(note)
             return "; ".join(parts) or "-"
 
-        grouped = {
-            "Acceptance checks": [],
-            "Calculated outputs": [],
-            "Scope and not-run states": [],
-        }
-        for original_index, row in enumerate(rows):
-            grouped[_overview_group(row)].append((original_index, row))
-        grouped["Acceptance checks"].sort(key=lambda item: (
-            str(item[1]["status"]).upper() not in attention_states,
-            item[0],
-        ))
-
         group_rows = []
         status_rows = []
-        for group_label, entries in grouped.items():
-            if not entries:
-                continue
-            group_rows.append((len(data), group_label))
-            data.append([group_label, "", "", "", "", ""])
-            for _original_index, row in entries:
-                status_rows.append((len(data), row["status"]))
-                data.append([
-                    _html_escape(row["check"]), _html_escape(row["case"]),
-                    row["status"], row["result"], row["criterion"],
-                    _html_escape(_overview_source_note(row)),
-                ])
+        previous_group = None
+        for row in rows:
+            group_label = _overview_group(row)
+            if group_label != previous_group:
+                group_rows.append((len(data), group_label))
+                data.append([group_label, "", "", "", "", ""])
+                previous_group = group_label
+            status_rows.append((len(data), row["status"]))
+            data.append([
+                _html_escape(row["check"]), _html_escape(row["case"]),
+                row["status"], row["result"], row["criterion"],
+                _html_escape(_overview_source_note(row)),
+            ])
         summary_font = 8.5 if self.profile.key == "Standard" else 7.2
         body = ParagraphStyle(
             "summary-cell", parent=self.s["body"], fontSize=summary_font,

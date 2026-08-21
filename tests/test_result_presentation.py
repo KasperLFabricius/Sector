@@ -1309,6 +1309,36 @@ def test_governing_overview_numeric_selection_and_ties_are_deterministic():
     assert rows[-2]["case"] == "infinite-first"
 
 
+def test_governing_overview_all_malformed_utilisation_keeps_first_row():
+    rows = [
+        _overview_row("FAIL", case="first-missing", util=None),
+        _overview_row("FAIL", case="later-string", util="9.0"),
+        _overview_row("FAIL", case="later-boolean", util=True),
+        _overview_row("FAIL", case="later-negative", util=-1.0),
+        _overview_row("FAIL", case="later-negative-infinity", util=-math.inf),
+        _overview_row("FAIL", case="later-nan", util=math.nan),
+    ]
+
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "first-missing"
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            _overview_row("FAIL", case="eligible", util=1.2),
+            _overview_row("FAIL", case="later-malformed", util="9.0"),
+        ],
+        [
+            _overview_row("FAIL", case="first-malformed", util="9.0"),
+            _overview_row("FAIL", case="eligible", util=1.2),
+        ],
+    ],
+)
+def test_governing_overview_eligible_utilisation_beats_malformed_in_both_orders(rows):
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "eligible"
+
+
 def test_governing_overview_preserves_family_order_and_selected_provenance():
     rows = [
         _overview_row("PASS", case="PL-A", util=0.60, source="Source A"),

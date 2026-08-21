@@ -693,7 +693,7 @@ def manual_blocks() -> list:
        "immediately to its right, owns document metadata, profile selection, "
        "generation and PDF download.")
     table(["View", "Shows"],
-          [["Results Overview", "All named cases, numerical outputs and individual resistance checks"],
+          [["Results Overview", "One governing action set per stable check family, with numerical outputs and individual resistance checks"],
            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
