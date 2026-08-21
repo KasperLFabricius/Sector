@@ -202,8 +202,14 @@ def test_prepare_maps_signs_materials_details_and_full_factors_once():
     assert bar.delta_sigma_rsk_mpa == 130.0
     assert bar.fytk_mpa == 550.0
     assert bar.fyck_mpa == 500.0
+    assert bar.simplified_screen_rule is not None
+    assert bar.simplified_screen_rule.threshold_mpa == 73.0
+    assert bar.simplified_screen_rule.range_basis == "design"
+    assert bar.simplified_screen_rule.max_cycles == 1.0e8
     assert tendon.bond_ratio_xi == 0.7
     assert tendon.bond_equivalent_diameter_mm == 12.5
+    assert tendon.simplified_screen_rule is not None
+    assert tendon.simplified_screen_rule.threshold_mpa == 95.0
     assert prepared.concrete.gamma_c == 1.595
     assert prepared.concrete.alpha_cc == 1.0
     assert prepared.concrete.k1 == 1.0
@@ -230,6 +236,13 @@ def test_bent_bar_reduction_is_resolved_per_element_diameter():
     expected = 130.0 * min(1.0, 0.35 + 0.026 * 80.0 / 20.0)
     assert prepared.reinforcement[0].delta_sigma_rsk_mpa == pytest.approx(
         expected
+    )
+    assert prepared.reinforcement[0].simplified_screen_rule is not None
+    assert (
+        prepared.reinforcement[0].simplified_screen_rule.threshold_mpa
+        == pytest.approx(
+            73.0 * min(1.0, 0.35 + 0.026 * 80.0 / 20.0)
+        )
     )
 
 

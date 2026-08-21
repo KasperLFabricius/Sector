@@ -4,6 +4,18 @@ import pandas as pd
 import pytest
 
 from app import fatigue_inputs as fi
+from sector.design_standards import DesignBasisKey
+
+
+_FIRST_GEN_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 6.8.6(1)-(2), "
+    "recommended values"
+)
+_FIRST_GEN_DK_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 6.8.6(1)-(2), "
+    "with DS/EN 1992-1-1 DK NA:2024, 6.8.6(1) unchanged"
+)
+_PUBLISHED_2023_SOURCE = "DS/EN 1992-1-1:2023, 10.4(1)"
 
 
 def test_builtin_detail_presets_match_the_two_eurocode_editions():
@@ -67,6 +79,142 @@ def test_bent_bar_factor_uses_mandrel_ratio_and_cannot_exceed_straight_bar():
 
     entry["mandrel_diameter_mm"] = 1000.0
     assert fi.bend_reduction_factor(entry, 16.0) == 1.0
+
+
+@pytest.mark.parametrize(
+    (
+        "preset", "basis", "diameter", "detail_class", "threshold",
+        "range_basis", "source", "cycles",
+    ),
+    [
+        (fi.PRESET_2005_BARS, DesignBasisKey.FIRST_GEN_BASE, 16.0,
+         "unwelded straight reinforcing bar", 70.0, "characteristic",
+         _FIRST_GEN_SOURCE, None),
+        (fi.PRESET_2005_BENT_BARS, DesignBasisKey.FIRST_GEN_DK_NA_2024,
+         16.0, "unwelded bent reinforcing bar", 70.0, "characteristic",
+         _FIRST_GEN_DK_SOURCE, None),
+        (fi.PRESET_2005_WELDED, DesignBasisKey.FIRST_GEN_BASE, 16.0,
+         "welded reinforcing bar or fabric", 35.0, "characteristic",
+         _FIRST_GEN_SOURCE, None),
+        (fi.PRESET_2023_BARS, DesignBasisKey.PUBLISHED_2023, 12.0,
+         "unwelded straight reinforcing bar", 90.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_BARS, DesignBasisKey.PUBLISHED_2023, 12.000001,
+         "unwelded straight reinforcing bar", 73.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_WELDED, DesignBasisKey.PUBLISHED_2023, 12.0,
+         "butt or tack welded reinforcing bar or fabric", 40.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_WELDED, DesignBasisKey.PUBLISHED_2023, 12.000001,
+         "butt or tack welded reinforcing bar or fabric", 30.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_COUPLERS, DesignBasisKey.PUBLISHED_2023, 20.0,
+         "reinforcing-steel coupler", 19.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_PRETENSION, DesignBasisKey.PUBLISHED_2023, 15.7,
+         "pretensioning steel", 95.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_PLASTIC_STRAND, DesignBasisKey.PUBLISHED_2023, 15.7,
+         "single strand in plastic duct", 95.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_PLASTIC_TENDON, DesignBasisKey.PUBLISHED_2023, 15.7,
+         "tendon in plastic duct", 80.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+        (fi.PRESET_2023_STEEL_CURVED, DesignBasisKey.PUBLISHED_2023, 15.7,
+         "curved tendon in steel duct", 55.0, "design",
+         _PUBLISHED_2023_SOURCE, 1.0e8),
+    ],
+)
+def test_simplified_reinforcement_screen_named_mapping(
+    preset, basis, diameter, detail_class, threshold, range_basis, source,
+    cycles,
+):
+    entry = fi.default_entry(preset=preset)
+
+    rule = fi.simplified_reinforcement_screen_rule(entry, diameter, basis)
+
+    assert rule["detail_class"] == detail_class
+    assert rule["threshold_mpa"] == pytest.approx(threshold)
+    assert rule["range_basis"] == range_basis
+    assert rule["max_cycles"] == cycles
+    assert rule["reason"] == ""
+    assert rule["source"] == source
+
+
+@pytest.mark.parametrize("diameter", [12.0, 12.000001])
+def test_2023_bent_screen_applies_the_existing_bend_factor_once(diameter):
+    entry = fi.default_entry(preset=fi.PRESET_2023_BENT_BARS)
+    entry["mandrel_diameter_mm"] = 80.0
+    base = 90.0 if diameter <= 12.0 else 73.0
+
+    rule = fi.simplified_reinforcement_screen_rule(
+        entry,
+        diameter,
+        DesignBasisKey.PUBLISHED_2023,
+    )
+
+    assert rule["threshold_mpa"] == pytest.approx(
+        base * fi.bend_reduction_factor(entry, diameter)
+    )
+
+
+@pytest.mark.parametrize(
+    ("preset", "basis", "detail_class", "source"),
+    [
+        (fi.PRESET_2005_COUPLERS, DesignBasisKey.FIRST_GEN_BASE,
+         "unsupported first-generation detail", _FIRST_GEN_SOURCE),
+        (fi.PRESET_2005_PRETENSION, DesignBasisKey.FIRST_GEN_DK_NA_2024,
+         "unsupported first-generation detail", _FIRST_GEN_DK_SOURCE),
+        (fi.PRESET_2005_BARS, DesignBasisKey.PUBLISHED_2023,
+         "edition-mismatched named detail", ""),
+        (fi.PRESET_2023_BARS, DesignBasisKey.FIRST_GEN_BASE,
+         "edition-mismatched named detail", ""),
+        (fi.PRESET_2023_PRESTRESS_COUPLER,
+         DesignBasisKey.PUBLISHED_2023,
+         "unsupported published-2023 detail", _PUBLISHED_2023_SOURCE),
+    ],
+)
+def test_simplified_reinforcement_screen_unsupported_mapping_falls_back(
+    preset, basis, detail_class, source
+):
+    rule = fi.simplified_reinforcement_screen_rule(
+        fi.default_entry(preset=preset),
+        16.0,
+        basis,
+    )
+
+    assert rule["detail_class"] == detail_class
+    assert rule["threshold_mpa"] is None
+    assert rule["range_basis"] == ""
+    assert rule["source"] == source
+    assert rule["max_cycles"] is None
+    assert rule["reason"]
+
+
+def test_custom_values_cannot_recreate_named_screen_provenance():
+    entry = fi.default_entry(preset=fi.PRESET_2023_BARS)
+    entry["n_star"] += 1.0
+    custom = fi.normalise_catalog({"items": [entry]})["items"][0]
+
+    rule = fi.simplified_reinforcement_screen_rule(
+        custom,
+        12.0,
+        DesignBasisKey.PUBLISHED_2023,
+    )
+
+    assert custom["preset"] == fi.CUSTOM_PRESET
+    assert rule["threshold_mpa"] is None
+    assert rule["detail_class"] == "custom/imported detail"
+
+
+@pytest.mark.parametrize("diameter", [None, True, 0.0, -1.0, math.inf])
+def test_simplified_reinforcement_screen_rejects_malformed_diameter(diameter):
+    with pytest.raises(ValueError, match="diameter_mm"):
+        fi.simplified_reinforcement_screen_rule(
+            fi.default_entry(preset=fi.PRESET_2023_BARS),
+            diameter,
+            DesignBasisKey.PUBLISHED_2023,
+        )
 
 
 def test_catalogue_ids_are_stable_and_lowest_unused_id_is_reused():

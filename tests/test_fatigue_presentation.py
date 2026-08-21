@@ -71,6 +71,20 @@ def _reinforcement(element_id="R1", utilisation=0.60):
         passed=utilisation <= 1.0,
         governing_criterion="Miner damage",
         governing_bin="FAT-1",
+        simplified_screen=NS(
+            status="DETAILED CHECK REQUIRED",
+            applicable=True,
+            passed=False,
+            detail_class="unwelded straight reinforcing bar",
+            range_basis="design",
+            threshold_mpa=73.0,
+            governing_range_mpa=66.0,
+            utilisation=66.0 / 73.0,
+            governing_bin="FAT-1",
+            total_cycles=2.0e5,
+            source="DS/EN 1992-1-1:2023, 10.4(1)",
+            reason="Detailed assessment governs",
+        ),
     )
 
 
@@ -233,6 +247,12 @@ def test_reinforcement_rows_expose_miner_yield_and_full_bin_evidence():
     assert row["governing"] == "Miner damage"
     assert row["damage"] == pytest.approx(0.60)
     assert row["yield_utilisation"] == pytest.approx(0.446)
+    assert row["screen_status"] == "DETAILED CHECK REQUIRED"
+    assert row["screen_range_basis"] == "design"
+    assert row["screen_threshold_mpa"] == pytest.approx(73.0)
+    assert row["screen_range_mpa"] == pytest.approx(66.0)
+    assert row["screen_utilisation"] == pytest.approx(66.0 / 73.0)
+    assert row["screen_source"] == "DS/EN 1992-1-1:2023, 10.4(1)"
     assert bins[0]["stress_total_elastic_mpa"] == pytest.approx(178.0)
     assert bins[0]["bond_adjustment"] == pytest.approx(1.0)
     assert bins[0]["design_stress_range_mpa"] == pytest.approx(66.0)
@@ -240,6 +260,17 @@ def test_reinforcement_rows_expose_miner_yield_and_full_bin_evidence():
     assert bins[0]["damage"] == pytest.approx(0.0625)
     assert bins[0]["bond_method"] == "Perfect bond"
     assert bins[0]["range_state"] == "Cyclic range"
+
+
+def test_missing_simplified_screen_evidence_is_disclosed_not_inferred():
+    result = _reinforcement()
+    del result.simplified_screen
+
+    screen = presentation.simplified_reinforcement_screen(result)
+
+    assert screen["status"] == "NOT AVAILABLE"
+    assert screen["threshold_mpa"] is None
+    assert "No simplified" in screen["reason"]
 
 
 def test_result_rows_preserve_infinite_life_and_failure_evidence():

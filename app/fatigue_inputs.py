@@ -35,7 +35,7 @@ from app.table_field_definitions import (
     parse_decimal,
     set_decimal_issue_ledger,
 )
-from sector.design_standards import DesignBasisKey
+from sector.design_standards import DesignBasisKey, parse_design_basis_key
 
 VERSION = 2
 
@@ -213,6 +213,17 @@ METHOD_REFERENCES = {
     ),
 }
 BASIS_FIELDS = ("method", "notes")
+
+_FIRST_GEN_SCREEN_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 6.8.6(1)-(2), "
+    "recommended values"
+)
+_FIRST_GEN_DK_SCREEN_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 6.8.6(1)-(2), "
+    "with DS/EN 1992-1-1 DK NA:2024, 6.8.6(1) unchanged"
+)
+_PUBLISHED_2023_SCREEN_SOURCE = "DS/EN 1992-1-1:2023, 10.4(1)"
+_PUBLISHED_2023_SCREEN_MAX_CYCLES = 1.0e8
 
 SPECTRUM = "spectrum"
 NAME = "name"
@@ -757,6 +768,122 @@ def bend_reduction_factor(entry: Mapping, diameter_mm: float) -> float:
     if not math.isfinite(mandrel) or mandrel <= 0.0:
         raise ValueError("mandrel_diameter_mm must be greater than zero")
     return min(1.0, 0.35 + 0.026 * mandrel / diameter)
+
+
+def simplified_reinforcement_screen_rule(
+    entry: Mapping,
+    diameter_mm: float,
+    basis_key: DesignBasisKey | str,
+) -> dict:
+    """Resolve the exact named-detail shortcut owned by PR-A05."""
+
+    if not isinstance(entry, Mapping):
+        raise ValueError("fatigue detail entry must be an object")
+    item = _normalise_entry(entry, _text(entry.get("id"), "F1"))
+    if isinstance(diameter_mm, bool):
+        raise ValueError("diameter_mm must be greater than zero")
+    diameter = _finite(diameter_mm, math.nan)
+    if not math.isfinite(diameter) or diameter <= 0.0:
+        raise ValueError("diameter_mm must be greater than zero")
+    selected_basis = parse_design_basis_key(basis_key)
+    preset = item["preset"]
+
+    def unsupported(detail_class: str, reason: str, source: str = "") -> dict:
+        return {
+            "detail_class": detail_class,
+            "threshold_mpa": None,
+            "range_basis": "",
+            "source": source,
+            "max_cycles": None,
+            "reason": reason,
+        }
+
+    if preset == CUSTOM_PRESET:
+        return unsupported(
+            "custom/imported detail",
+            "Custom/imported fatigue details are not assigned a simplified limit",
+        )
+
+    first_generation = selected_basis in (
+        DesignBasisKey.FIRST_GEN_BASE,
+        DesignBasisKey.FIRST_GEN_DK_NA_2024,
+    )
+    expected_edition = EC2_2005 if first_generation else EC2_2023
+    if preset_edition(preset) != expected_edition:
+        return unsupported(
+            "edition-mismatched named detail",
+            "Named fatigue detail does not belong to the selected design basis",
+        )
+
+    if first_generation:
+        source = (
+            _FIRST_GEN_DK_SCREEN_SOURCE
+            if selected_basis == DesignBasisKey.FIRST_GEN_DK_NA_2024
+            else _FIRST_GEN_SCREEN_SOURCE
+        )
+        mapping = {
+            PRESET_2005_BARS: ("unwelded straight reinforcing bar", 70.0),
+            PRESET_2005_BENT_BARS: ("unwelded bent reinforcing bar", 70.0),
+            PRESET_2005_WELDED: ("welded reinforcing bar or fabric", 35.0),
+        }
+        if preset not in mapping:
+            return unsupported(
+                "unsupported first-generation detail",
+                "DS/EN 1992-1-1 6.8.6 shortcut covers unwelded or welded reinforcing bars in tension",
+                source,
+            )
+        detail_class, threshold = mapping[preset]
+        return {
+            "detail_class": detail_class,
+            "threshold_mpa": threshold,
+            "range_basis": "characteristic",
+            "source": source,
+            "max_cycles": None,
+            "reason": "",
+        }
+
+    threshold: float | None
+    if preset in (PRESET_2023_BARS, PRESET_2023_BENT_BARS):
+        threshold = 90.0 if diameter <= 12.0 else 73.0
+        detail_class = (
+            "unwelded bent reinforcing bar"
+            if preset == PRESET_2023_BENT_BARS
+            else "unwelded straight reinforcing bar"
+        )
+        if preset == PRESET_2023_BENT_BARS:
+            threshold *= bend_reduction_factor(item, diameter)
+    elif preset == PRESET_2023_WELDED:
+        threshold = 40.0 if diameter <= 12.0 else 30.0
+        detail_class = "butt or tack welded reinforcing bar or fabric"
+    elif preset == PRESET_2023_COUPLERS:
+        threshold = 19.0
+        detail_class = "reinforcing-steel coupler"
+    elif preset == PRESET_2023_PRETENSION:
+        threshold = 95.0
+        detail_class = "pretensioning steel"
+    elif preset == PRESET_2023_PLASTIC_STRAND:
+        threshold = 95.0
+        detail_class = "single strand in plastic duct"
+    elif preset == PRESET_2023_PLASTIC_TENDON:
+        threshold = 80.0
+        detail_class = "tendon in plastic duct"
+    elif preset == PRESET_2023_STEEL_CURVED:
+        threshold = 55.0
+        detail_class = "curved tendon in steel duct"
+    else:
+        return unsupported(
+            "unsupported published-2023 detail",
+            "DS/EN 1992-1-1:2023 10.4 does not assign this preset a simplified limit",
+            _PUBLISHED_2023_SCREEN_SOURCE,
+        )
+    return {
+        "detail_class": detail_class,
+        "threshold_mpa": threshold,
+        "range_basis": "design",
+        "source": _PUBLISHED_2023_SCREEN_SOURCE,
+        "max_cycles": _PUBLISHED_2023_SCREEN_MAX_CYCLES,
+        "reason": "",
+    }
 
 
 def empty_spectrum_table() -> pd.DataFrame:
