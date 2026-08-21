@@ -1216,6 +1216,10 @@ def manual_blocks() -> list:
        "checks remain separate and keep their direction and source. A zero row "
        "action is shown as **Not applicable**, not as a pass. Headline counts "
        "describe the visible rows; they do not combine them into a project result.")
+    md("In analysis figures, hover text reports the retained capacity or material "
+       "response represented by the selected point. Section-result markers show "
+       "stress and strain; coordinates and reinforcement area remain in section "
+       "input previews and the complete result tables.")
     h2("Plastic results")
     md("Select a Plastic/capacity case at the top of the view. The "
        "$M_x$-$M_y$ envelope is drawn with the applied load marked; the "

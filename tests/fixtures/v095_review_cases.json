@@ -289,7 +289,7 @@
       "implementation_evidence": true
     },
     "PR-A07": {
-      "state": "frozen in PR-A07 before implementation",
+      "state": "frozen and implemented by PR-A07",
       "acceptance_document": "docs/pr_a07_v095_analysis_hover_acceptance.md",
       "required_matrix_topics": [
         "retained M-M and N-M capacity actions",
@@ -300,7 +300,7 @@
         "input and preview geometry preservation"
       ],
       "result_values_recomputed_here": false,
-      "implementation_evidence": false
+      "implementation_evidence": true
     }
   },
   "release_baseline": {

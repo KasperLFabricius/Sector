@@ -419,7 +419,7 @@ def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
 
     hover = contracts["PR-A07"]
     assert hover == {
-        "state": "frozen in PR-A07 before implementation",
+        "state": "frozen and implemented by PR-A07",
         "acceptance_document": "docs/pr_a07_v095_analysis_hover_acceptance.md",
         "required_matrix_topics": [
             "retained M-M and N-M capacity actions",
@@ -430,7 +430,7 @@ def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
             "input and preview geometry preservation",
         ],
         "result_values_recomputed_here": False,
-        "implementation_evidence": False,
+        "implementation_evidence": True,
     }
 
 

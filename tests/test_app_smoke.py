@@ -1459,7 +1459,11 @@ def test_plastic_view_tolerates_a_pre_split_payload():
 
 
 def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law():
-    from sector_app import _plastic_state_hover
+    from sector_app import (
+        _elastic_corner_hover,
+        _elastic_state_hover,
+        _plastic_state_hover,
+    )
 
     rows = [
         {"stress_mpa": 500.0, "strain_permille": 5.0, "material_id": "M1"},
@@ -1472,6 +1476,40 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
     assert "= -0.500 %" in hover[1]
     assert "material M2" in hover[1]
     assert _plastic_state_hover([]) is None
+
+    elastic = _elastic_state_hover([
+        {
+            "total_mpa": 212.3456,
+            "strain_permille": 1.0617,
+            "material_id": "M1",
+            "material_name": "B500B",
+        },
+        {
+            "total_mpa": 900.0,
+            "strain_permille": 4.5,
+            "material_id": None,
+            "material_name": None,
+        },
+    ])
+    assert "212.346 MPa" in elastic[0]
+    assert "1.0617 permille" in elastic[0]
+    assert "material = M1 - B500B" in elastic[0]
+    assert "900.000 MPa" in elastic[1]
+    assert "material" not in elastic[1]
+    assert _elastic_state_hover([]) is None
+
+    corner = _elastic_corner_hover([
+        {
+            "ring": "Outer",
+            "ring_point_no": 2,
+            "stress_mpa": -18.25,
+            "strain_permille": -0.6083,
+        }
+    ])
+    assert "Outer point 2" in corner[0]
+    assert "-18.250 MPa" in corner[0]
+    assert "-0.6083 permille" in corner[0]
+    assert _elastic_corner_hover([]) is None
 
 
 def test_both_mode_runs_elastic_and_plastic():

@@ -439,6 +439,13 @@ def test_manual_documents_current_governing_results_overview():
     assert "All named cases" not in text
 
 
+def test_manual_documents_current_analysis_hover_semantics():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert "hover text reports the retained capacity or material response" in text
+    assert "Section-result markers show stress and strain" in text
+    assert "coordinates and reinforcement area remain in section input previews" in text
+
+
 def test_manual_editable_table_matrix_is_generated_from_shared_registry():
     headers = ["Editable table", "Fields / notation", "Blank / default"]
     matrix_blocks = [

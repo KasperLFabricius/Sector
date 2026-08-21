@@ -260,6 +260,40 @@ def test_section_figure_appends_per_bar_and_tendon_hover():
     assert "sig = 1200 MPa" in str(tendon.customdata[0])
 
 
+def test_section_result_hover_reports_response_without_input_geometry():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    fig = viz.section_figure(
+        outer,
+        bars=[(-0.1, -0.25, 314.0)],
+        tendons=[(0.0, 0.26, 150.0)],
+        scale=1000.0,
+        unit="mm",
+        bar_ids=["R1"],
+        tendon_ids=["P1"],
+        bar_hover=["sig = 300 MPa<br>eps = 0.10 %"],
+        tendon_hover=["sig = 1200 MPa<br>eps = 5.90 %"],
+        corner_hover=[f"concrete response {index}" for index in range(4)],
+        geometry_hover=False,
+    )
+
+    corner = _corner_hover(fig)
+    bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
+    tendon = next(t for t in fig.data if getattr(t, "name", None) == "tendon")
+    values = [
+        *(str(value) for value in corner.customdata),
+        *(str(value) for value in bar.customdata),
+        *(str(value) for value in tendon.customdata),
+    ]
+
+    assert "Corner 1" in values[0] and "concrete response 0" in values[0]
+    assert "Bar R1" in str(bar.customdata[0])
+    assert "sig = 300 MPa" in str(bar.customdata[0])
+    assert "Tendon P1" in str(tendon.customdata[0])
+    assert "eps = 5.90 %" in str(tendon.customdata[0])
+    assert all("x =" not in value and "y =" not in value for value in values)
+    assert all("area =" not in value for value in values)
+
+
 def _corner_count(fig):
     texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
     return len(max(texts, key=lambda t: len(t.text)).text) if texts else 0
@@ -691,6 +725,29 @@ def test_mm_interaction_shows_fill_util_ray_and_angle_hover():
     assert any("util = 0.50" in (a.text or "") for a in fig.layout.annotations)
 
 
+def test_mm_interaction_hover_distinguishes_capacity_and_applied_actions():
+    fig = viz.interaction_figure(
+        [300.0, 0.0, -300.0, 0.0],
+        [0.0, 80.0, 0.0, -80.0],
+        applied=(150.0, 20.0),
+        angles=[0.0, 90.0, 180.0, 270.0],
+        util=0.5,
+    )
+    capacity = next(trace for trace in fig.data if trace.name == "capacity")
+    crossing = next(
+        trace for trace in fig.data if trace.name == "capacity (this direction)"
+    )
+    applied = next(trace for trace in fig.data if trace.name == "applied")
+
+    for label in ("M<sub>y,Rd</sub>", "M<sub>x,Rd</sub>", "kNm"):
+        assert label in capacity.hovertemplate
+        assert label in crossing.hovertemplate
+    assert "neutral-axis angle" in capacity.hovertemplate
+    assert "M<sub>y,Ed</sub>" in applied.hovertemplate
+    assert "M<sub>x,Ed</sub>" in applied.hovertemplate
+    assert "Rd" not in applied.hovertemplate
+
+
 def test_mm_interaction_without_util_has_no_ray():
     fig = viz.interaction_figure([100.0, 0.0, -100.0], [0.0, 30.0, 0.0],
                                  applied=(50.0, 10.0))
@@ -705,6 +762,26 @@ def test_nm_interaction_marks_landmarks():
     assert any(getattr(t, "name", None) == "landmarks" for t in fig.data)
     anns = " ".join(a.text for a in fig.layout.annotations)
     assert "squash" in anns and "tension" in anns and "max Mx" in anns
+
+
+def test_nm_interaction_hover_distinguishes_axis_capacity_and_applied_actions():
+    fig = viz.interaction_nm_figure(
+        [400.0, 0.0, -2500.0, 0.0],
+        [0.0, 300.0, 0.0, -300.0],
+        axis="y",
+        applied=(-500.0, 80.0),
+    )
+    capacity = next(trace for trace in fig.data if trace.name == "capacity")
+    landmarks = next(trace for trace in fig.data if trace.name == "landmarks")
+    applied = next(trace for trace in fig.data if trace.name == "applied")
+
+    for trace in (capacity, landmarks):
+        assert "M<sub>y,Rd</sub>" in trace.hovertemplate
+        assert "N<sub>Rd</sub>" in trace.hovertemplate
+        assert "kNm" in trace.hovertemplate and "kN" in trace.hovertemplate
+    assert "M<sub>y,Ed</sub>" in applied.hovertemplate
+    assert "N<sub>Ed</sub>" in applied.hovertemplate
+    assert "Rd" not in applied.hovertemplate
 
 
 def test_vt_interaction_shows_ray_and_interaction_sum():
