@@ -158,52 +158,51 @@ def test_report_and_manual_reconstruct_every_frozen_text_role():
 
 
 @pytest.mark.parametrize("path", ["report", "manual"])
-def test_export_path_hides_exact_server_kopts_noise_only(path, monkeypatch):
+def test_export_paths_delegate_figures_without_in_process_kaleido_calls(
+    path, monkeypatch
+):
     class Figure:
-        def emit(self):
-            warnings.warn_explicit(
-                publication_theme.KALEIDO_SERVER_KOPTS_WARNING,
-                UserWarning,
-                "plotly/io/_kaleido.py",
-                400,
-                module="plotly.io._kaleido",
-            )
-            warnings.warn_explicit(
-                "independent Kaleido warning",
-                UserWarning,
-                "plotly/io/_kaleido.py",
-                401,
-                module="plotly.io._kaleido",
-            )
-
         def to_image(self, **_kwargs):
-            self.emit()
-            return b"report-bytes"
+            raise AssertionError("report called Kaleido in the parent process")
 
         def write_image(self, target, **_kwargs):
-            self.emit()
-            target.write(b"manual-bytes")
+            del target
+            raise AssertionError("manual called Kaleido in the parent process")
 
     figure = Figure()
+    calls = []
+
+    def export(actual, **kwargs):
+        calls.append((actual, kwargs))
+        return b"worker-bytes"
+
     monkeypatch.setattr(
         publication_image_export,
         "export_png",
-        lambda render, **kwargs: render(),
+        export,
     )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        if path == "report":
-            result, timed_out = sector_report._fig_png(
-                figure, 100, 100, timeout=2
-            )
-            assert (result, timed_out) == (b"report-bytes", False)
-        else:
-            assert manual._fig_to_png(
-                lambda: figure, timeout=2
-            ) == b"manual-bytes"
-    assert [str(item.message) for item in caught] == [
-        "independent Kaleido warning"
-    ]
+    if path == "report":
+        result, timed_out = sector_report._fig_png(
+            figure, 100, 80, timeout=2
+        )
+        assert (result, timed_out) == (b"worker-bytes", False)
+        expected = {
+            "width": 100,
+            "height": 80,
+            "scale": 2,
+            "timeout": 2,
+            "description": "report figure export",
+        }
+    else:
+        assert manual._fig_to_png(
+            lambda: figure, timeout=2
+        ) == b"worker-bytes"
+        expected = {
+            "scale": 2,
+            "timeout": 2,
+            "description": "manual figure export",
+        }
+    assert calls == [(figure, expected)]
 
 
 @pytest.mark.parametrize(

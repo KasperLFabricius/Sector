@@ -22,6 +22,7 @@ _RUNTIME_SUFFIXES = {".dll", ".exe", ".pyd"}
 _REQUIRED_SOURCE_PATHS = (
     "LICENSE",
     "app/point_grid_frontend/LICENSE",
+    "app/publication_image_export_worker.py",
     "app/sector_app.py",
     "assets/logo.png",
     "requirements-build.txt",
@@ -31,6 +32,7 @@ _REQUIRED_SOURCE_PATHS = (
     "packaging/sector.spec",
     "packaging/windows_version_info.txt",
     "tools/generate_third_party_notices.py",
+    "tools/verify_portable_image_export.py",
     "tools/verify_portable_startup.py",
 )
 
@@ -241,6 +243,31 @@ def _run_page_smoke(
     )
 
 
+def _run_image_export_smoke(
+    python: Path,
+    source: Path,
+    package: Path,
+    workspace: Path,
+    runner: CommandRunner,
+    environment: dict[str, str],
+) -> None:
+    runner(
+        (
+            str(python),
+            "-I",
+            str(source / "tools" / "verify_portable_image_export.py"),
+            "--package",
+            str(package),
+            "--workspace",
+            str(workspace),
+            "--timeout-seconds",
+            "120",
+        ),
+        source,
+        environment,
+    )
+
+
 def build_portable_windows(
     root: Path,
     output: Path,
@@ -249,7 +276,7 @@ def build_portable_windows(
     source_revision: str | None = None,
     runner: CommandRunner = _run,
 ) -> PortableBuildResult:
-    """Build once, execute the first page, then publish one folder/ZIP/checksum."""
+    """Build once, smoke both runtime routes, then publish the package."""
     source = _validate_source(root)
     destination = _validate_output(source, output)
     version = _read_version(source)
@@ -337,6 +364,14 @@ def build_portable_windows(
             _render_readme(source / "packaging" / "README-PORTABLE.txt", version)
         )
         _runtime_path_budget(staged_folder, destination / folder_name)
+        _run_image_export_smoke(
+            venv_python,
+            source,
+            staged_folder,
+            build_root / "image-smoke",
+            runner,
+            environment,
+        )
         _run_page_smoke(
             python,
             source,

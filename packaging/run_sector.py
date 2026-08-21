@@ -8,8 +8,10 @@ location (e.g. Program Files) does not break startup.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import pathlib
+import runpy
 import sys
 
 
@@ -35,6 +37,7 @@ def _user_data_dir() -> pathlib.Path:
 # be open at once. Override with the SECTOR_PORT environment variable.
 _DEFAULT_PORT = "8502"
 _HEADLESS_ENV = "SECTOR_HEADLESS"
+_PUBLICATION_IMAGE_WORKER_FLAG = "--sector-publication-image-worker"
 
 
 def _port() -> str:
@@ -98,5 +101,27 @@ def main() -> None:
     sys.exit(stcli.main())
 
 
-if __name__ == "__main__":
+def _run_publication_image_worker() -> None:
+    """Run the bundled worker file without importing or starting Streamlit."""
+
+    worker = _bundle_base() / "app" / "publication_image_export_worker.py"
+    if not worker.is_file():
+        raise RuntimeError("publication image worker is missing from the bundle")
+    sys.argv = [str(worker)]
+    runpy.run_path(str(worker), run_name="__main__")
+
+
+def _entrypoint() -> None:
+    """Route private workers and frozen children before Streamlit starts."""
+
+    multiprocessing.freeze_support()
+    if sys.argv[1:] == [_PUBLICATION_IMAGE_WORKER_FLAG]:
+        _run_publication_image_worker()
+        return
+    if _PUBLICATION_IMAGE_WORKER_FLAG in sys.argv[1:]:
+        raise ValueError("invalid publication image worker invocation")
     main()
+
+
+if __name__ == "__main__":
+    _entrypoint()

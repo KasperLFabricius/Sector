@@ -16,6 +16,7 @@ def _source_tree(root: Path) -> Path:
     files = {
         "LICENSE": "internal licence\n",
         "app/point_grid_frontend/LICENSE": "frontend licence\n",
+        "app/publication_image_export_worker.py": "# worker\n",
         "app/sector_app.py": "# app\n",
         "assets/logo.png": "logo",
         "requirements-build.txt": "",
@@ -25,6 +26,7 @@ def _source_tree(root: Path) -> Path:
         "packaging/sector.spec": "# spec\n",
         "packaging/windows_version_info.txt": "# version\n",
         "tools/generate_third_party_notices.py": "# notices\n",
+        "tools/verify_portable_image_export.py": "# image smoke\n",
         "tools/verify_portable_startup.py": "# smoke\n",
     }
     for relative, content in files.items():
@@ -38,6 +40,7 @@ class _FakeRunner:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
         self.smoke_package: Path | None = None
+        self.image_smoke_package: Path | None = None
 
     def __call__(
         self, arguments: tuple[str, ...], cwd: Path, environment: dict[str, str]
@@ -57,6 +60,8 @@ class _FakeRunner:
             (dist / "_internal").mkdir(parents=True)
             (dist / "Sector.exe").write_bytes(b"MZ fake executable")
             (dist / "_internal" / "runtime.pyd").write_bytes(b"runtime")
+        elif "verify_portable_image_export.py" in " ".join(command):
+            self.image_smoke_package = Path(command[command.index("--package") + 1])
         elif "verify_portable_startup.py" in " ".join(command):
             self.smoke_package = Path(command[command.index("--package") + 1])
 
@@ -111,10 +116,19 @@ def test_single_build_runs_page_then_publishes_folder_zip_and_checksum(tmp_path)
     assert result.checksum.is_file()
     assert runner.smoke_package is not None
     assert runner.smoke_package.name == result.folder.name
+    assert runner.image_smoke_package is not None
+    assert runner.image_smoke_package.name == result.folder.name
     assert sum("PyInstaller" in command for command in runner.commands) == 1
     assert (
         sum(
             "verify_portable_startup.py" in " ".join(command)
+            for command in runner.commands
+        )
+        == 1
+    )
+    assert (
+        sum(
+            "verify_portable_image_export.py" in " ".join(command)
             for command in runner.commands
         )
         == 1
