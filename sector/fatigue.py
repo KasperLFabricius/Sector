@@ -49,6 +49,16 @@ CONCRETE_MINER_METHODS = (CONCRETE_MINER, CONCRETE_PROJECT_MINER)
 CONCRETE_METHODS = (*CONCRETE_MINER_METHODS, CONCRETE_EQUIVALENT)
 STANDARD_CONCRETE_MINER_C = 14.0
 DAMAGE_LIMIT = 1.0
+SIMPLIFIED_SCREEN_CHARACTERISTIC_RANGE = "characteristic"
+SIMPLIFIED_SCREEN_DESIGN_RANGE = "design"
+SIMPLIFIED_SCREEN_RANGE_BASES = (
+    SIMPLIFIED_SCREEN_CHARACTERISTIC_RANGE,
+    SIMPLIFIED_SCREEN_DESIGN_RANGE,
+)
+SIMPLIFIED_SCREEN_PASS = "PASS - DETAILED CHECK NOT REQUIRED"
+SIMPLIFIED_SCREEN_DETAILED = "DETAILED CHECK REQUIRED"
+SIMPLIFIED_SCREEN_NOT_APPLICABLE = "NOT APPLICABLE"
+SIMPLIFIED_SCREEN_INVALID = "INVALID"
 _MPA_DIVISOR = 1000.0
 _LOG10_FLOAT_MAX = math.log10(np.finfo(float).max)
 _LOG10_FLOAT_TINY = math.log10(np.nextafter(0.0, 1.0))
@@ -163,6 +173,58 @@ class SpectrumBin:
 
 
 @dataclass(frozen=True)
+class SimplifiedReinforcementFatigueRule:
+    """One source-bound shortcut rule resolved by the application adapter."""
+
+    detail_class: str
+    threshold_mpa: float | None
+    range_basis: str
+    source: str
+    max_cycles: float | None = None
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not str(self.detail_class).strip():
+            raise ValueError("simplified fatigue detail class is required")
+        threshold = self.threshold_mpa
+        if threshold is None:
+            if self.range_basis:
+                raise ValueError(
+                    "unsupported simplified fatigue rule cannot select a range basis"
+                )
+            if not str(self.reason).strip():
+                raise ValueError(
+                    "unsupported simplified fatigue rule requires a reason"
+                )
+        else:
+            _positive(threshold, "simplified fatigue threshold")
+            if self.range_basis not in SIMPLIFIED_SCREEN_RANGE_BASES:
+                raise ValueError("unknown simplified fatigue stress-range basis")
+            if not str(self.source).strip():
+                raise ValueError("simplified fatigue rule source is required")
+        if self.max_cycles is not None:
+            _positive(self.max_cycles, "simplified fatigue cycle limit")
+
+
+@dataclass(frozen=True)
+class SimplifiedReinforcementFatigueScreen:
+    """Retained outcome of the optional stress-range shortcut."""
+
+    status: str
+    applicable: bool
+    passed: bool | None
+    detail_class: str
+    range_basis: str
+    threshold_mpa: float | None
+    governing_range_mpa: float | None
+    utilisation: float | None
+    governing_bin: str | None
+    total_cycles: float
+    source: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class ReinforcementFatigueProperties:
     """Resolved S-N and yield data for one solver bar or tendon."""
 
@@ -178,6 +240,7 @@ class ReinforcementFatigueProperties:
     fyck_mpa: float | None = None
     bond_ratio_xi: float | None = None
     bond_equivalent_diameter_mm: float | None = None
+    simplified_screen_rule: SimplifiedReinforcementFatigueRule | None = None
 
     def __post_init__(self) -> None:
         if not str(self.element_id).strip():
@@ -206,6 +269,16 @@ class ReinforcementFatigueProperties:
             _positive(
                 self.bond_equivalent_diameter_mm,
                 f"{self.element_id}: bond_equivalent_diameter_mm",
+            )
+        if (
+            self.simplified_screen_rule is not None
+            and not isinstance(
+                self.simplified_screen_rule,
+                SimplifiedReinforcementFatigueRule,
+            )
+        ):
+            raise ValueError(
+                f"{self.element_id}: simplified_screen_rule has invalid type"
             )
 
 
@@ -362,6 +435,7 @@ class ReinforcementFatigueResult:
     passed: bool
     governing_criterion: str = ""
     governing_bin: str = ""
+    simplified_screen: SimplifiedReinforcementFatigueScreen | None = None
 
 
 @dataclass(frozen=True)
@@ -1748,6 +1822,227 @@ def _yield_assessment(
     )
 
 
+def assess_simplified_reinforcement_fatigue(
+    rule: SimplifiedReinforcementFatigueRule | None,
+    bins: Sequence[ReinforcementBinResult],
+) -> SimplifiedReinforcementFatigueScreen:
+    """Evaluate one element's source-bound shortcut without hiding fallback data."""
+
+    retained = tuple(bins)
+    if not retained:
+        raise ValueError("at least one reinforcement fatigue bin is required")
+    if any(not isinstance(item, ReinforcementBinResult) for item in retained):
+        raise ValueError(
+            "simplified reinforcement fatigue screen requires retained bin results"
+        )
+
+    try:
+        cycles = tuple(
+            _positive(item.cycles, f"{item.bin_name}: applied cycles")
+            for item in retained
+        )
+        total_cycles = math.fsum(cycles)
+    except (OverflowError, ValueError):
+        total_cycles = math.inf
+
+    if rule is None:
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_NOT_APPLICABLE,
+            applicable=False,
+            passed=None,
+            detail_class="unmapped detail",
+            range_basis="",
+            threshold_mpa=None,
+            governing_range_mpa=None,
+            utilisation=None,
+            governing_bin=None,
+            total_cycles=total_cycles,
+            source="",
+            reason="No supported simplified fatigue rule is assigned",
+        )
+    if rule.threshold_mpa is None:
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_NOT_APPLICABLE,
+            applicable=False,
+            passed=None,
+            detail_class=rule.detail_class,
+            range_basis="",
+            threshold_mpa=None,
+            governing_range_mpa=None,
+            utilisation=None,
+            governing_bin=None,
+            total_cycles=total_cycles,
+            source=rule.source,
+            reason=rule.reason,
+        )
+    if not math.isfinite(total_cycles):
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_INVALID,
+            applicable=False,
+            passed=None,
+            detail_class=rule.detail_class,
+            range_basis=rule.range_basis,
+            threshold_mpa=float(rule.threshold_mpa),
+            governing_range_mpa=None,
+            utilisation=None,
+            governing_bin=None,
+            total_cycles=total_cycles,
+            source=rule.source,
+            reason="Retained cycle evidence is not finite",
+        )
+    if any(not item.converged for item in retained):
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_INVALID,
+            applicable=False,
+            passed=None,
+            detail_class=rule.detail_class,
+            range_basis=rule.range_basis,
+            threshold_mpa=float(rule.threshold_mpa),
+            governing_range_mpa=None,
+            utilisation=None,
+            governing_bin=None,
+            total_cycles=total_cycles,
+            source=rule.source,
+            reason="One or more retained fatigue bins did not converge",
+        )
+
+    raw_ranges = (
+        tuple(item.stress_range_mpa for item in retained)
+        if rule.range_basis == SIMPLIFIED_SCREEN_CHARACTERISTIC_RANGE
+        else tuple(item.design_stress_range_mpa for item in retained)
+    )
+    raw_totals = (
+        tuple(item.stress_total_mpa for item in retained)
+        if rule.range_basis == SIMPLIFIED_SCREEN_CHARACTERISTIC_RANGE
+        else tuple(item.stress_total_design_mpa for item in retained)
+    )
+    raw_long_stresses = tuple(item.stress_long_mpa for item in retained)
+    try:
+        if any(
+            isinstance(value, bool) or type(value).__name__ == "bool_"
+            for value in (*raw_ranges, *raw_totals, *raw_long_stresses)
+        ):
+            raise ValueError("Boolean stress evidence is invalid")
+        ranges = tuple(
+            _finite(value, "retained fatigue stress range")
+            for value in raw_ranges
+        )
+        totals = tuple(
+            _finite(value, "retained fatigue total stress")
+            for value in raw_totals
+        )
+        long_stresses = tuple(
+            _finite(value, "retained fatigue long-term stress")
+            for value in raw_long_stresses
+        )
+    except (OverflowError, ValueError):
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_INVALID,
+            applicable=False,
+            passed=None,
+            detail_class=rule.detail_class,
+            range_basis=rule.range_basis,
+            threshold_mpa=float(rule.threshold_mpa),
+            governing_range_mpa=None,
+            utilisation=None,
+            governing_bin=None,
+            total_cycles=total_cycles,
+            source=rule.source,
+            reason="Retained stress-range evidence is malformed",
+        )
+    expected_ranges = tuple(
+        abs(total_stress - long_stress)
+        for total_stress, long_stress in zip(totals, long_stresses)
+    )
+    if any(value < 0.0 for value in ranges) or any(
+        not math.isclose(
+            value,
+            expected,
+            rel_tol=1.0e-12,
+            abs_tol=0.0,
+        )
+        for value, expected in zip(ranges, expected_ranges)
+    ):
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_INVALID,
+            applicable=False,
+            passed=None,
+            detail_class=rule.detail_class,
+            range_basis=rule.range_basis,
+            threshold_mpa=float(rule.threshold_mpa),
+            governing_range_mpa=None,
+            utilisation=None,
+            governing_bin=None,
+            total_cycles=total_cycles,
+            source=rule.source,
+            reason="Retained stress-range evidence is internally inconsistent",
+        )
+
+    governing_index = max(range(len(retained)), key=ranges.__getitem__)
+    governing_range = ranges[governing_index]
+    governing_bin = retained[governing_index].bin_name
+    if rule.max_cycles is not None and total_cycles > float(rule.max_cycles):
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_NOT_APPLICABLE,
+            applicable=False,
+            passed=None,
+            detail_class=rule.detail_class,
+            range_basis=rule.range_basis,
+            threshold_mpa=float(rule.threshold_mpa),
+            governing_range_mpa=governing_range,
+            utilisation=governing_range / float(rule.threshold_mpa),
+            governing_bin=governing_bin,
+            total_cycles=total_cycles,
+            source=rule.source,
+            reason=(
+                "Retained spectrum cycles exceed the simplified limit of "
+                f"{float(rule.max_cycles):.6g}"
+            ),
+        )
+    if any(
+        max(long_stress, total_stress) <= 0.0
+        for long_stress, total_stress in zip(long_stresses, totals)
+    ):
+        return SimplifiedReinforcementFatigueScreen(
+            status=SIMPLIFIED_SCREEN_NOT_APPLICABLE,
+            applicable=False,
+            passed=None,
+            detail_class=rule.detail_class,
+            range_basis=rule.range_basis,
+            threshold_mpa=float(rule.threshold_mpa),
+            governing_range_mpa=governing_range,
+            utilisation=governing_range / float(rule.threshold_mpa),
+            governing_bin=governing_bin,
+            total_cycles=total_cycles,
+            source=rule.source,
+            reason="At least one retained fatigue bin has no tensile endpoint",
+        )
+
+    threshold = float(rule.threshold_mpa)
+    utilisation = governing_range / threshold
+    passed = governing_range <= threshold
+    return SimplifiedReinforcementFatigueScreen(
+        status=(
+            SIMPLIFIED_SCREEN_PASS if passed else SIMPLIFIED_SCREEN_DETAILED
+        ),
+        applicable=True,
+        passed=passed,
+        detail_class=rule.detail_class,
+        range_basis=rule.range_basis,
+        threshold_mpa=threshold,
+        governing_range_mpa=governing_range,
+        utilisation=utilisation,
+        governing_bin=governing_bin,
+        total_cycles=total_cycles,
+        source=rule.source,
+        reason=(
+            "Stress range is within the supported simplified limit"
+            if passed
+            else "Stress range exceeds the shortcut limit; detailed assessment governs"
+        ),
+    )
+
+
 def assess_reinforcement_spectrum(
     properties: Sequence[ReinforcementFatigueProperties],
     states: Sequence[FatigueBinState],
@@ -1975,10 +2270,22 @@ def assess_reinforcement_spectrum(
             bins, key=lambda result: result.yield_utilisation
         )
         converged = all(result.converged for result in bins)
-        utilisation = max(damage, yield_governing.yield_utilisation)
-        if damage >= yield_governing.yield_utilisation:
-            governing_criterion = "Miner damage"
-            governing_bin = damage_governing.bin_name
+        simplified_screen = assess_simplified_reinforcement_fatigue(
+            item.simplified_screen_rule,
+            bins,
+        )
+        if simplified_screen.passed is True:
+            range_utilisation = float(simplified_screen.utilisation)
+            range_criterion = "simplified stress-range screen"
+            range_bin = str(simplified_screen.governing_bin or "")
+        else:
+            range_utilisation = damage
+            range_criterion = "Miner damage"
+            range_bin = damage_governing.bin_name
+        utilisation = max(range_utilisation, yield_governing.yield_utilisation)
+        if range_utilisation >= yield_governing.yield_utilisation:
+            governing_criterion = range_criterion
+            governing_bin = range_bin
         else:
             governing_criterion = "yield/proof stress"
             governing_bin = yield_governing.bin_name
@@ -1997,11 +2304,15 @@ def assess_reinforcement_spectrum(
             converged=converged,
             passed=bool(
                 converged
-                and damage <= DAMAGE_LIMIT
+                and (
+                    simplified_screen.passed is True
+                    or damage <= DAMAGE_LIMIT
+                )
                 and yield_governing.yield_utilisation <= 1.0
             ),
             governing_criterion=governing_criterion,
             governing_bin=governing_bin,
+            simplified_screen=simplified_screen,
         ))
     return tuple(output)
 

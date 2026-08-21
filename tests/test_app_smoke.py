@@ -3151,6 +3151,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     import fatigue_inputs
     import project_io
     import reinforcement_table as rt
+    import sector_app
     from sector import design_standards
 
     at = _fresh()
@@ -3215,6 +3216,42 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert at.session_state["result_fatigue_sig"] == (
         at.session_state["_latest_inputs"]["fatigue_sig"]
     )
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._FATIGUE_RESULT_CONTRACT_TOKEN
+    assert tuple(latest["fatigue_sig"]).count(token) == 1
+    for key in (
+        "plastic_bending_context_sig",
+        "plastic_case_context_sig",
+        "plastic_sig",
+        "elastic_case_context_sig",
+        "elastic_sig",
+    ):
+        assert token not in tuple(latest[key])
+
+    fatigue_before = fatigue
+    unaffected_before = {
+        key: at.session_state["results"][key]
+        for key in ("plastic", "elastic")
+        if key in at.session_state["results"]
+    }
+    pre_contract_fatigue_sig = tuple(
+        item for item in latest["fatigue_sig"] if item != token
+    )
+    at.session_state["result_fatigue_sig"] = pre_contract_fatigue_sig
+    at.session_state["result_sig"] = tuple(
+        pre_contract_fatigue_sig if item == latest["fatigue_sig"] else item
+        for item in latest["signature"]
+    )
+
+    _calculate(at)
+    results = at.session_state["results"]
+    fatigue = results["fatigue"]
+    assert fatigue is not fatigue_before
+    for key, value in unaffected_before.items():
+        assert results[key] is value
+    assert tuple(at.session_state["result_fatigue_sig"]).count(token) == 1
+    assert at.session_state["result_sig"] == latest["signature"]
+
     summary = next(
         frame.value for frame in at.dataframe
         if "Check" in frame.value.columns and "Status" in frame.value.columns
@@ -3271,12 +3308,93 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert spectrum_summary.iloc[0]["Spectrum"] == "Traffic"
     reinforcement = next(
         frame.value for frame in at.dataframe
-        if {"Element", "Detail", "Miner D", "Status"}.issubset(
+        if {
+            "Element", "Detail", "Simplified screen", "Screen limit [MPa]",
+            "Miner D", "Status",
+        }.issubset(
             frame.value.columns
         )
     )
     assert reinforcement.iloc[0]["Element"] == "R1"
+    assert reinforcement.iloc[0]["Screen limit [MPa]"] == pytest.approx(70.0)
+    assert reinforcement.iloc[0]["Simplified screen"] in {
+        "PASS - DETAILED CHECK NOT REQUIRED",
+        "DETAILED CHECK REQUIRED",
+    }
+    screen_table = next(
+        frame.value for frame in at.dataframe
+        if {
+            "Status", "Detail class", "Range basis", "Limit [MPa]",
+            "Governing bin", "Total cycles",
+        }.issubset(frame.value.columns)
+    )
+    assert screen_table.iloc[0]["Range basis"] == "Characteristic"
+    assert screen_table.iloc[0]["Limit [MPa]"] == pytest.approx(70.0)
 
+    unsupported_source = (
+        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 6.8.6(1)-(2), "
+        "with DS/EN 1992-1-1 DK NA:2024, 6.8.6(1) unchanged"
+    )
+    unsupported_reason = (
+        "DS/EN 1992-1-1 6.8.6 shortcut covers unwelded or welded "
+        "reinforcing bars in tension"
+    )
+    assert changed_steel_result.simplified_screen is not None
+    unsupported_screen = dataclasses.replace(
+        changed_steel_result.simplified_screen,
+        status="NOT APPLICABLE",
+        applicable=False,
+        passed=None,
+        detail_class="unsupported first-generation detail",
+        range_basis="",
+        threshold_mpa=None,
+        governing_range_mpa=None,
+        utilisation=None,
+        governing_bin=None,
+        source=unsupported_source,
+        reason=unsupported_reason,
+    )
+    unsupported_steel_result = dataclasses.replace(
+        changed_steel_result,
+        simplified_screen=unsupported_screen,
+        governing_criterion="Miner damage",
+        governing_bin=changed_steel_result.governing_damage_bin,
+        utilisation=changed_steel_result.damage,
+    )
+    fatigue["spectra"] = (
+        dataclasses.replace(
+            fatigue["spectra"][0],
+            reinforcement=(
+                unsupported_steel_result,
+                *fatigue["spectra"][0].reinforcement[1:],
+            ),
+        ),
+    )
+    at.run()
+    unsupported_summary = next(
+        frame.value for frame in at.dataframe
+        if {
+            "Element", "Detail", "Simplified screen", "Screen limit [MPa]",
+            "Miner D", "Status",
+        }.issubset(frame.value.columns)
+    )
+    assert unsupported_summary.iloc[0]["Simplified screen"] == "NOT APPLICABLE"
+    unsupported_table = next(
+        frame.value for frame in at.dataframe
+        if {
+            "Status", "Detail class", "Range basis", "Limit [MPa]",
+            "Governing bin", "Total cycles",
+        }.issubset(frame.value.columns)
+    )
+    assert unsupported_table.iloc[0]["Status"] == "NOT APPLICABLE"
+    assert unsupported_table.iloc[0]["Detail class"] == (
+        "unsupported first-generation detail"
+    )
+    captions = "\n".join(str(item.value) for item in at.caption)
+    assert unsupported_reason in captions
+    assert "Reference: " + unsupported_source in captions
+
+    detail = at.segmented_control(key="_fatigue_result_detail")
     detail.set_value("Spectrum bins").run()
     assert not at.exception
     action_table = next(

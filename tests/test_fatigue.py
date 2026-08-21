@@ -1,9 +1,12 @@
 import math
+from dataclasses import replace
 
 import numpy as np
 import pytest
 
+from app import fatigue_inputs
 from sector import fatigue
+from sector.design_standards import DesignBasisKey
 from sector.section import Section
 
 
@@ -50,6 +53,7 @@ def _steel_properties(
     diameter=16.0,
     bond_ratio=None,
     bond_diameter=None,
+    screen_rule=None,
 ):
     return fatigue.ReinforcementFatigueProperties(
         element_id=element_id,
@@ -64,6 +68,7 @@ def _steel_properties(
         fyck_mpa=fyck,
         bond_ratio_xi=bond_ratio,
         bond_equivalent_diameter_mm=bond_diameter,
+        simplified_screen_rule=screen_rule,
     )
 
 
@@ -656,6 +661,389 @@ def test_gamma_ff_is_visible_as_design_range_but_not_hidden_in_raw_stress():
     assert result.governing_stress_mpa == 160.0
 
 
+def _screen_rule(
+    threshold=70.0,
+    *,
+    range_basis=fatigue.SIMPLIFIED_SCREEN_CHARACTERISTIC_RANGE,
+    max_cycles=None,
+):
+    return fatigue.SimplifiedReinforcementFatigueRule(
+        detail_class="test named detail",
+        threshold_mpa=threshold,
+        range_basis=range_basis,
+        source="test source clause",
+        max_cycles=max_cycles,
+    )
+
+
+@pytest.mark.parametrize(
+    ("stress_range", "expected_status", "screen_passed"),
+    [
+        (69.999, fatigue.SIMPLIFIED_SCREEN_PASS, True),
+        (70.0, fatigue.SIMPLIFIED_SCREEN_PASS, True),
+        (70.001, fatigue.SIMPLIFIED_SCREEN_DETAILED, False),
+    ],
+)
+def test_simplified_screen_has_inclusive_limit_and_retains_detailed_damage(
+    stress_range, expected_status, screen_passed
+):
+    cycles = 1.0e12 if screen_passed else 1.0e9
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule()),),
+        (
+            _state(
+                "screen bin",
+                cycles,
+                bar_long=(10.0,),
+                bar_total=(10.0 + stress_range,),
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    screen = result.simplified_screen
+    assert screen is not None
+    assert screen.status == expected_status
+    assert screen.passed is screen_passed
+    assert screen.governing_range_mpa == pytest.approx(stress_range)
+    assert screen.utilisation == pytest.approx(stress_range / 70.0)
+    assert result.damage == pytest.approx(sum(item.damage for item in result.bins))
+    if screen_passed:
+        assert result.damage > 1.0
+        assert result.passed is True
+        assert result.governing_criterion == "simplified stress-range screen"
+        assert result.utilisation == pytest.approx(screen.utilisation)
+    else:
+        assert result.passed is True
+        assert result.governing_criterion == "Miner damage"
+        assert result.utilisation == pytest.approx(result.damage)
+
+
+def test_published_screen_uses_action_factored_design_range():
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule(
+            90.0,
+            range_basis=fatigue.SIMPLIFIED_SCREEN_DESIGN_RANGE,
+            max_cycles=1.0e8,
+        )),),
+        (
+            _state(
+                "factored bin",
+                1.0,
+                bar_long=(10.0,),
+                bar_total=(90.0,),
+                bar_design_total=(110.0,),
+                design_action_factor=1.25,
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.25,
+    )[0]
+
+    screen = result.simplified_screen
+    assert screen is not None
+    assert result.bins[0].stress_range_mpa == pytest.approx(80.0)
+    assert result.bins[0].design_stress_range_mpa == pytest.approx(100.0)
+    assert screen.governing_range_mpa == pytest.approx(100.0)
+    assert screen.status == fatigue.SIMPLIFIED_SCREEN_DETAILED
+    assert screen.passed is False
+
+
+@pytest.mark.parametrize(
+    ("cycles", "applicable", "passed"),
+    [(1.0e8, True, True), (1.0e8 + 1.0, False, None)],
+)
+def test_published_screen_cycle_cap_is_inclusive(cycles, applicable, passed):
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule(
+            90.0,
+            range_basis=fatigue.SIMPLIFIED_SCREEN_DESIGN_RANGE,
+            max_cycles=1.0e8,
+        )),),
+        (
+            _state(
+                "cycle cap",
+                cycles,
+                bar_long=(10.0,),
+                bar_total=(40.0,),
+                bar_design_total=(50.0,),
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    screen = result.simplified_screen
+    assert screen is not None
+    assert screen.applicable is applicable
+    assert screen.passed is passed
+    assert screen.total_cycles == cycles
+    if not applicable:
+        assert screen.status == fatigue.SIMPLIFIED_SCREEN_NOT_APPLICABLE
+        assert "exceed" in screen.reason
+
+
+def test_published_screen_cycle_cap_uses_the_sum_of_all_retained_bins():
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule(
+            90.0,
+            range_basis=fatigue.SIMPLIFIED_SCREEN_DESIGN_RANGE,
+            max_cycles=1.0e8,
+        )),),
+        (
+            _state("first", 6.0e7, bar_long=(10.0,), bar_total=(40.0,)),
+            _state("second", 4.0e7 + 1.0, bar_long=(10.0,), bar_total=(40.0,)),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.total_cycles == 1.0e8 + 1.0
+    assert result.simplified_screen.status == (
+        fatigue.SIMPLIFIED_SCREEN_NOT_APPLICABLE
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("stress_range_mpa", "not-a-number"),
+        ("stress_range_mpa", True),
+        ("stress_range_mpa", 1.0),
+        ("stress_total_mpa", math.nan),
+    ],
+)
+def test_simplified_screen_fails_closed_on_malformed_retained_evidence(
+    field,
+    value,
+):
+    baseline = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule()),),
+        (_state("screen", 1.0, bar_long=(10.0,), bar_total=(60.0,)),),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+    malformed = replace(baseline.bins[0], **{field: value})
+
+    screen = fatigue.assess_simplified_reinforcement_fatigue(
+        _screen_rule(),
+        (malformed,),
+    )
+
+    assert screen.status == fatigue.SIMPLIFIED_SCREEN_INVALID
+    assert screen.passed is None
+    assert screen.utilisation is None
+
+
+def test_simplified_screen_falls_back_for_compression_only_or_unconverged_bin():
+    properties = (_steel_properties(screen_rule=_screen_rule()),)
+    compression = fatigue.assess_reinforcement_spectrum(
+        properties,
+        (
+            _state(
+                "compression",
+                1.0,
+                bar_long=(-100.0,),
+                bar_total=(-50.0,),
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+    unconverged = fatigue.assess_reinforcement_spectrum(
+        properties,
+        (
+            _state(
+                "unconverged",
+                1.0,
+                bar_long=(10.0,),
+                bar_total=(20.0,),
+                converged=False,
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert compression.simplified_screen is not None
+    assert compression.simplified_screen.status == (
+        fatigue.SIMPLIFIED_SCREEN_NOT_APPLICABLE
+    )
+    assert "no tensile endpoint" in compression.simplified_screen.reason
+    assert unconverged.simplified_screen is not None
+    assert unconverged.simplified_screen.status == fatigue.SIMPLIFIED_SCREEN_INVALID
+    assert unconverged.converged is False
+    assert unconverged.passed is False
+
+
+@pytest.mark.parametrize("bad_kind", ["compression", "unconverged"])
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_one_ineligible_bin_disables_screen_for_the_complete_spectrum(
+    bad_kind,
+    reverse_order,
+):
+    eligible = _state(
+        "eligible",
+        5.0e11,
+        bar_long=(10.0,),
+        bar_total=(60.0,),
+    )
+    if bad_kind == "compression":
+        ineligible = _state(
+            "compression",
+            5.0e11,
+            bar_long=(-100.0,),
+            bar_total=(-50.0,),
+        )
+        expected_status = fatigue.SIMPLIFIED_SCREEN_NOT_APPLICABLE
+        expected_reason = "no tensile endpoint"
+    else:
+        ineligible = _state(
+            "unconverged",
+            5.0e11,
+            bar_long=(10.0,),
+            bar_total=(60.0,),
+            converged=False,
+        )
+        expected_status = fatigue.SIMPLIFIED_SCREEN_INVALID
+        expected_reason = "did not converge"
+    states = (ineligible, eligible) if reverse_order else (eligible, ineligible)
+
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule()),),
+        states,
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.status == expected_status
+    assert expected_reason in result.simplified_screen.reason
+    assert result.simplified_screen.passed is None
+    assert result.damage > 1.0
+    assert result.governing_criterion == "Miner damage"
+    assert result.utilisation == pytest.approx(result.damage)
+    assert result.passed is False
+
+
+def test_passing_screen_cannot_override_independent_yield_failure():
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(fytk=50.0, screen_rule=_screen_rule()),),
+        (
+            _state(
+                "yield",
+                1.0,
+                bar_long=(10.0,),
+                bar_total=(60.0,),
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.passed is True
+    assert result.yield_utilisation > 1.0
+    assert result.governing_criterion == "yield/proof stress"
+    assert result.passed is False
+
+
+@pytest.mark.parametrize(
+    ("preset", "basis"),
+    [
+        (fatigue_inputs.PRESET_2005_COUPLERS, DesignBasisKey.FIRST_GEN_BASE),
+        (fatigue_inputs.PRESET_2005_PRETENSION,
+         DesignBasisKey.FIRST_GEN_DK_NA_2024),
+        (fatigue_inputs.PRESET_2023_PRESTRESS_COUPLER,
+         DesignBasisKey.PUBLISHED_2023),
+    ],
+)
+def test_unsupported_screen_rules_keep_miner_as_the_range_criterion(
+    preset,
+    basis,
+):
+    entry = fatigue_inputs.default_entry(preset=preset)
+    rule = fatigue.SimplifiedReinforcementFatigueRule(
+        **fatigue_inputs.simplified_reinforcement_screen_rule(
+            entry,
+            16.0,
+            basis,
+        )
+    )
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=rule),),
+        (
+            _state(
+                "unsupported shortcut",
+                1.0e12,
+                bar_long=(10.0,),
+                bar_total=(60.0,),
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert rule.threshold_mpa is None
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.status == (
+        fatigue.SIMPLIFIED_SCREEN_NOT_APPLICABLE
+    )
+    assert result.simplified_screen.applicable is False
+    assert result.simplified_screen.passed is None
+    assert result.damage > 1.0
+    assert result.governing_criterion == "Miner damage"
+    assert result.utilisation == pytest.approx(result.damage)
+    assert result.passed is False
+
+
+def test_exact_screen_and_yield_tie_retains_the_screen_range_criterion():
+    result = fatigue.assess_reinforcement_spectrum(
+        (
+            _steel_properties(
+                fytk=100.0,
+                screen_rule=_screen_rule(50.0),
+            ),
+        ),
+        (
+            _state(
+                "exact tie",
+                1.0,
+                bar_long=(25.0,),
+                bar_total=(50.0,),
+            ),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.passed is True
+    assert result.simplified_screen.utilisation == 0.5
+    assert result.yield_utilisation == 0.5
+    assert result.utilisation == 0.5
+    assert result.governing_criterion == "simplified stress-range screen"
+    assert result.governing_bin == "exact tie"
+    assert result.passed is True
+
+
+def test_simplified_screen_tie_retains_first_bin_order():
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule()),),
+        (
+            _state("first", 1.0, bar_long=(10.0,), bar_total=(60.0,)),
+            _state("second", 1.0, bar_long=(20.0,), bar_total=(70.0,)),
+        ),
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.governing_bin == "first"
+
+
 def test_nonconverged_bin_cannot_pass_reinforcement_fatigue():
     state = _state(
         "B1",
@@ -800,6 +1188,100 @@ def test_constant_concrete_overload_fails_strength_even_with_zero_damage():
 
     assert result.damage == 0.0
     assert result.stress_utilisation > 1.0
+    assert result.passed is False
+
+
+def test_passing_reinforcement_screen_cannot_override_concrete_failure(
+    monkeypatch,
+):
+    section = _section()
+    state = _state(
+        "independent materials",
+        1.0,
+        bar_long=(10.0, 10.0),
+        bar_total=(20.0, 20.0),
+        concrete_long=(0.0,),
+        concrete_total=(0.0,),
+    )
+    failed_concrete = fatigue.ConcreteFibreFatigueResult(
+        fibre_index=0,
+        x_m=0.0,
+        y_m=0.0,
+        bins=(),
+        fcd_fat_mpa=20.0,
+        damage=0.0,
+        damage_utilisation=0.0,
+        governing_damage_bin="independent materials",
+        stress_utilisation=1.2,
+        governing_stress_bin="independent materials",
+        utilisation=1.2,
+        converged=True,
+        passed=False,
+        governing_criterion="compressive stress",
+        governing_bin="independent materials",
+    )
+    search = fatigue.ConcreteFibreSearch(
+        x_m=0.0,
+        y_m=0.0,
+        damage=0.0,
+        upper_damage=0.25,
+        divisions=4,
+        boxes_evaluated=1,
+        points_evaluated=1,
+        absolute_gap=0.25,
+        relative_gap=1.0,
+        converged=True,
+    )
+    monkeypatch.setattr(
+        fatigue,
+        "solve_fatigue_bin",
+        lambda *_args, **_kwargs: state,
+    )
+    monkeypatch.setattr(
+        fatigue,
+        "locate_governing_concrete_fibre",
+        lambda *_args, **_kwargs: search,
+    )
+    monkeypatch.setattr(
+        fatigue,
+        "_states_at_concrete_fibres",
+        lambda states, _fibres: tuple(states),
+    )
+    monkeypatch.setattr(
+        fatigue,
+        "assess_concrete_spectrum",
+        lambda *_args, **_kwargs: (failed_concrete,),
+    )
+
+    result = fatigue.analyse_fatigue_spectrum(
+        "Independent checks",
+        section,
+        (fatigue.SpectrumBin("independent materials", 1.0),),
+        nl=10.0,
+        ns=10.0,
+        reinforcement=(
+            _steel_properties("R1", screen_rule=_screen_rule()),
+            _steel_properties("R2", screen_rule=_screen_rule()),
+        ),
+        concrete=fatigue.ConcreteFatigueProperties(
+            edition="2005",
+            fck_mpa=40.0,
+            gamma_c=1.5,
+            beta_cc_t0=1.0,
+        ),
+        fatigue_edition="2005",
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )
+
+    assert all(
+        item.simplified_screen is not None
+        and item.simplified_screen.passed is True
+        for item in result.reinforcement
+    )
+    assert result.concrete == (failed_concrete,)
+    assert result.governing_domain == "concrete"
+    assert result.governing_criterion == "compressive stress"
     assert result.passed is False
 
 

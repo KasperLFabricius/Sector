@@ -201,7 +201,7 @@
       "owning_prs": ["PR-A05"],
       "acceptance_matrix_owners": ["PR-A05"],
       "owner_outcome_frozen_here": true,
-      "implementation_contract_frozen_here": false
+      "implementation_contract_frozen_here": true
     },
     {
       "id": "OA095-005",
@@ -260,7 +260,8 @@
       "implementation_evidence": false
     },
     "PR-A05": {
-      "state": "must be frozen in owning PR before code",
+      "state": "frozen; calculation and UI implemented in PR-A05a, publication pending PR-A05b",
+      "acceptance_document": "docs/pr_a05_v095_simplified_reinforcement_fatigue_screen_acceptance.md",
       "required_matrix_topics": [
         "eligible detail class to threshold mapping",
         "below boundary outcome",
@@ -269,7 +270,7 @@
         "unsupported detail fallback",
         "independent fatigue checks retained"
       ],
-      "threshold_values_frozen_here": false,
+      "threshold_values_frozen_here": true,
       "implementation_evidence": false
     },
     "PR-A06": {

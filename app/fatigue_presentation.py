@@ -199,10 +199,11 @@ def spectrum_rows(payload):
 
 
 def reinforcement_rows(spectrum):
-    """Return element-level S-N/Miner and yield evidence."""
+    """Return element-level shortcut, S-N/Miner and yield evidence."""
 
     rows = []
     for result in items(spectrum, "reinforcement"):
+        screen = simplified_reinforcement_screen(result)
         rows.append({
             "element_id": str(value(result, "element_id", "-")),
             "kind": str(value(result, "kind", "-")),
@@ -229,8 +230,58 @@ def reinforcement_rows(spectrum):
             ),
             "utilisation": evidence_number(value(result, "utilisation")),
             "status": result_status(result),
+            "screen_status": screen["status"],
+            "screen_applicable": screen["applicable"],
+            "screen_passed": screen["passed"],
+            "screen_detail_class": screen["detail_class"],
+            "screen_range_basis": screen["range_basis"],
+            "screen_threshold_mpa": screen["threshold_mpa"],
+            "screen_range_mpa": screen["governing_range_mpa"],
+            "screen_utilisation": screen["utilisation"],
+            "screen_governing_bin": screen["governing_bin"],
+            "screen_total_cycles": screen["total_cycles"],
+            "screen_source": screen["source"],
+            "screen_reason": screen["reason"],
         })
     return rows
+
+
+def simplified_reinforcement_screen(result):
+    """Return the retained optional shortcut without hiding fallback status."""
+
+    screen = value(result, "simplified_screen")
+    if screen is None:
+        return {
+            "status": "NOT AVAILABLE",
+            "applicable": False,
+            "passed": None,
+            "detail_class": "-",
+            "range_basis": "-",
+            "threshold_mpa": None,
+            "governing_range_mpa": None,
+            "utilisation": None,
+            "governing_bin": "-",
+            "total_cycles": None,
+            "source": "",
+            "reason": "No simplified fatigue-screen evidence was retained",
+        }
+    passed = value(screen, "passed")
+    return {
+        "status": str(value(screen, "status", "INVALID") or "INVALID"),
+        "applicable": bool(value(screen, "applicable", False)),
+        "passed": passed if isinstance(passed, bool) else None,
+        "detail_class": str(value(screen, "detail_class", "-") or "-"),
+        "range_basis": str(value(screen, "range_basis", "-") or "-"),
+        "threshold_mpa": evidence_number(value(screen, "threshold_mpa")),
+        "governing_range_mpa": evidence_number(
+            value(screen, "governing_range_mpa")
+        ),
+        "utilisation": evidence_number(value(screen, "utilisation")),
+        "governing_bin": str(value(screen, "governing_bin", "-") or "-"),
+        "total_cycles": evidence_number(value(screen, "total_cycles")),
+        "source": str(value(screen, "source", "") or ""),
+        "reason": str(value(screen, "reason", "") or ""),
+    }
 
 
 def reinforcement_bin_rows(result):

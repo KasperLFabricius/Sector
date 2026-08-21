@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PROGRAMME = ROOT / "docs" / "v095_pr_programme.md"
 DECISIONS = ROOT / "docs" / "v095_decision_register.md"
 FIXTURE = ROOT / "tests" / "fixtures" / "v095_review_cases.json"
+FATIGUE_SCREEN_ACCEPTANCE = (
+    ROOT / "docs" /
+    "pr_a05_v095_simplified_reinforcement_fatigue_screen_acceptance.md"
+)
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
@@ -318,7 +322,9 @@ def test_owner_scope_freezes_exact_amendment_identity_and_ownership() -> None:
     for row in scope:
         assert row["acceptance_matrix_owners"] == row["owning_prs"]
         assert row["owner_outcome_frozen_here"] is True
-        assert row["implementation_contract_frozen_here"] is False
+        assert row["implementation_contract_frozen_here"] is (
+            row["id"] == "OA095-004"
+        )
 
     outcome_by_id = {row["id"]: row["outcome"] for row in scope}
     required_narrative_terms = {
@@ -369,7 +375,14 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
 
     fatigue = contracts["PR-A05"]
     assert fatigue == {
-        "state": "must be frozen in owning PR before code",
+        "state": (
+            "frozen; calculation and UI implemented in PR-A05a, "
+            "publication pending PR-A05b"
+        ),
+        "acceptance_document": (
+            "docs/pr_a05_v095_simplified_reinforcement_fatigue_screen_"
+            "acceptance.md"
+        ),
         "required_matrix_topics": [
             "eligible detail class to threshold mapping",
             "below boundary outcome",
@@ -378,7 +391,7 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
             "unsupported detail fallback",
             "independent fatigue checks retained",
         ],
-        "threshold_values_frozen_here": False,
+        "threshold_values_frozen_here": True,
         "implementation_evidence": False,
     }
 
@@ -397,6 +410,31 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
         "tie_break_frozen_here": False,
         "implementation_evidence": False,
     }
+
+
+def test_pr_a05_acceptance_freezes_mapping_boundaries_and_fallback() -> None:
+    text = _text(FATIGUE_SCREEN_ACCEPTANCE)
+    compact = " ".join(text.split())
+
+    for required in (
+        "70 MPa characteristic range",
+        "35 MPa characteristic range",
+        "90 MPa design range",
+        "73 MPa design range",
+        "40 MPa design range",
+        "30 MPa design range",
+        "19 MPa design range",
+        "95 MPa design range",
+        "80 MPa design range",
+        "55 MPa design range",
+        "range <= limit",
+        "Exact equality therefore passes",
+        "DETAILED CHECK REQUIRED",
+        "NOT APPLICABLE",
+        "yield/proof checks always remain independent",
+        "detailed S-N/Miner evidence",
+    ):
+        assert required in compact
 
     programme = " ".join(_text(PROGRAMME).split())
     assert "Formula 7.100 operand in a separate schema-26 field" in programme

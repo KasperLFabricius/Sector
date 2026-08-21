@@ -4380,6 +4380,10 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "torsion-subdivision-automatic-tef-v1",
     "closed-torsion-link-authority-v1",
 )
+_FATIGUE_RESULT_CONTRACT_TOKEN = (
+    "fatigue-result-contract",
+    "simplified-reinforcement-stress-range-screen-v1",
+)
 _ELASTIC_CONTEXT_SIG_KEYS = (
     "conc_Ec", "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
@@ -6328,6 +6332,7 @@ def build_inputs(host=st):
         (
             "fatigue",
             True,
+            _FATIGUE_RESULT_CONTRACT_TOKEN,
             geom_sig,
             material_sig,
             fatigue_edition,
@@ -10658,6 +10663,9 @@ def _fatigue_reinforcement_panel(payload, spectrum):
             "Type": row["kind"].capitalize(),
             "Detail": row["detail_id"],
             "Diameter [mm]": row["diameter_mm"],
+            "Simplified screen": row["screen_status"],
+            f"Screen {_DELTA}{_SIGMA} [MPa]": row["screen_range_mpa"],
+            "Screen limit [MPa]": row["screen_threshold_mpa"],
             "Miner D": row["damage"],
             "Yield / proof util. [%]": (
                 None if row["yield_utilisation"] is None
@@ -10696,6 +10704,32 @@ def _fatigue_reinforcement_panel(payload, spectrum):
     if result is None or properties is None:
         st.error("INVALID - Assigned fatigue properties are unavailable.")
         return
+
+    screen = fatigue_presentation.simplified_reinforcement_screen(result)
+    st.markdown("**Simplified stress-range screen**")
+    _fatigue_result_table([{
+        "Status": screen["status"],
+        "Detail class": screen["detail_class"],
+        "Range basis": screen["range_basis"].capitalize(),
+        f"Governing {_DELTA}{_SIGMA} [MPa]": screen["governing_range_mpa"],
+        "Limit [MPa]": screen["threshold_mpa"],
+        "Utilisation [%]": (
+            None
+            if screen["utilisation"] is None
+            else 100.0 * screen["utilisation"]
+        ),
+        "Governing bin": screen["governing_bin"],
+        "Total cycles": screen["total_cycles"],
+    }], height=120)
+    if screen["reason"]:
+        st.caption(screen["reason"])
+    if screen["source"]:
+        st.caption("Reference: " + screen["source"])
+    st.caption(
+        "A passing simplified screen makes the detailed stress-range check "
+        "unnecessary for this element, but Sector still retains and displays "
+        "the S-N/Miner calculation. Yield or proof stress remains independent."
+    )
 
     gamma_s = (payload.get("partial_factors") or {}).get("gamma_s")
     bin_rows = fatigue_presentation.reinforcement_bin_rows(result)

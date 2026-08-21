@@ -37,6 +37,7 @@ from sector.fatigue import (
     ConcreteFatigueProperties,
     FatigueSpectrumResult,
     ReinforcementFatigueProperties,
+    SimplifiedReinforcementFatigueRule,
     SpectrumBin,
     analyse_grouped_spectra,
 )
@@ -785,6 +786,7 @@ def _reinforcement_properties(
     proof_stresses: Sequence[float],
     details: Mapping[str, Mapping],
     kind: str,
+    basis_key: DesignBasisKey,
 ) -> list[ReinforcementFatigueProperties]:
     output = []
     for record, material, proof_stress in zip(
@@ -802,6 +804,13 @@ def _reinforcement_properties(
         )
         bond_ratio = float(detail["bond_ratio_xi"])
         bond_diameter = float(detail["bond_equivalent_diameter_mm"])
+        screen_rule = SimplifiedReinforcementFatigueRule(
+            **fatigue_inputs.simplified_reinforcement_screen_rule(
+                detail,
+                diameter,
+                basis_key,
+            )
+        )
         output.append(ReinforcementFatigueProperties(
             element_id=str(record["id"]).strip(),
             kind=kind,
@@ -821,6 +830,7 @@ def _reinforcement_properties(
             bond_equivalent_diameter_mm=(
                 bond_diameter if bond_diameter > 0.0 else None
             ),
+            simplified_screen_rule=screen_rule,
         ))
     return output
 
@@ -864,6 +874,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         inp.get(fatigue_inputs.DETAIL_CATALOG_KEY)
     )
     details = fatigue_inputs.entry_map(catalog)
+    basis_key = parse_design_basis_key(inp.get("fatigue_edition"))
     check_reinforcement = bool(inp.get("fatigue_check_steel"))
     check_concrete = bool(inp.get("fatigue_check_concrete"))
     concrete_method = (
@@ -911,6 +922,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             bar_proof_stresses,
             details,
             fatigue_inputs.MILD,
+            basis_key,
         )
         + _reinforcement_properties(
             tendons,
@@ -918,12 +930,12 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
             tendon_proof_stresses,
             details,
             fatigue_inputs.PRESTRESS,
+            basis_key,
         )
         if check_reinforcement
         else []
     )
 
-    basis_key = parse_design_basis_key(inp.get("fatigue_edition"))
     design_basis = get_design_basis(basis_key)
     selected_bindings = _selected_capability_bindings(
         basis_key,
@@ -1051,6 +1063,18 @@ def analysis_signature(inp: Mapping) -> tuple:
             item.fyck_mpa,
             item.bond_ratio_xi,
             item.bond_equivalent_diameter_mm,
+            (
+                None
+                if item.simplified_screen_rule is None
+                else (
+                    item.simplified_screen_rule.detail_class,
+                    item.simplified_screen_rule.threshold_mpa,
+                    item.simplified_screen_rule.range_basis,
+                    item.simplified_screen_rule.source,
+                    item.simplified_screen_rule.max_cycles,
+                    item.simplified_screen_rule.reason,
+                )
+            ),
         )
         for item in prepared.reinforcement
     )
