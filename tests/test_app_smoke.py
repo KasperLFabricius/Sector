@@ -243,6 +243,31 @@ def _section_outline_from_result_view(at):
     raise AssertionError("No section-state Plotly figure was rendered")
 
 
+def _section_hover_from_result_view(at):
+    """Return all custom hover text from a Plastic/Elastic section result."""
+
+    for chart in at.get("plotly_chart"):
+        spec = json.loads(chart.proto.spec)
+        x_title = (
+            spec.get("layout", {})
+            .get("xaxis", {})
+            .get("title", {})
+            .get("text")
+        )
+        data = spec.get("data", [])
+        if (
+            x_title == "x (mm)"
+            and data
+            and data[0].get("fill") == "toself"
+        ):
+            return "\n".join(
+                str(value)
+                for trace in data
+                for value in (trace.get("customdata") or [])
+            )
+    raise AssertionError("No section-state Plotly figure was rendered")
+
+
 def _replace_base_table(at, base_key, value):
     """Reseed a point-grid base exactly as the application does on project load."""
     _goto_page(at, "Inputs")
@@ -1515,6 +1540,29 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
     assert "-18.250 MPa" in corner[0]
     assert "-0.6083 permille" in corner[0]
     assert _elastic_corner_hover([]) is None
+
+
+def test_plastic_and_elastic_result_views_route_response_only_section_hover():
+    at = _fresh()
+    at.run()
+    _set_and_click(at, "calculate", ("radio", "mode", "Both"))
+
+    _select_view(at, "Plastic Results")
+    plastic_hover = _section_hover_from_result_view(at)
+    assert "Bar" in plastic_hover
+    assert "MPa" in plastic_hover
+    assert "material" in plastic_hover
+    assert "x =" not in plastic_hover and "y =" not in plastic_hover
+    assert "area =" not in plastic_hover
+
+    _select_view(at, "Elastic Results")
+    elastic_hover = _section_hover_from_result_view(at)
+    assert "Bar" in elastic_hover
+    assert "total" in elastic_hover
+    assert "Outer point" in elastic_hover
+    assert "MPa" in elastic_hover and "permille" in elastic_hover
+    assert "x =" not in elastic_hover and "y =" not in elastic_hover
+    assert "area =" not in elastic_hover
 
 
 def test_both_mode_runs_elastic_and_plastic():
