@@ -878,6 +878,56 @@ def test_simplified_screen_falls_back_for_compression_only_or_unconverged_bin():
     assert unconverged.passed is False
 
 
+@pytest.mark.parametrize("bad_kind", ["compression", "unconverged"])
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_one_ineligible_bin_disables_screen_for_the_complete_spectrum(
+    bad_kind,
+    reverse_order,
+):
+    eligible = _state(
+        "eligible",
+        5.0e11,
+        bar_long=(10.0,),
+        bar_total=(60.0,),
+    )
+    if bad_kind == "compression":
+        ineligible = _state(
+            "compression",
+            5.0e11,
+            bar_long=(-100.0,),
+            bar_total=(-50.0,),
+        )
+        expected_status = fatigue.SIMPLIFIED_SCREEN_NOT_APPLICABLE
+        expected_reason = "no tensile endpoint"
+    else:
+        ineligible = _state(
+            "unconverged",
+            5.0e11,
+            bar_long=(10.0,),
+            bar_total=(60.0,),
+            converged=False,
+        )
+        expected_status = fatigue.SIMPLIFIED_SCREEN_INVALID
+        expected_reason = "did not converge"
+    states = (ineligible, eligible) if reverse_order else (eligible, ineligible)
+
+    result = fatigue.assess_reinforcement_spectrum(
+        (_steel_properties(screen_rule=_screen_rule()),),
+        states,
+        gamma_s=1.0,
+        gamma_ff=1.0,
+    )[0]
+
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.status == expected_status
+    assert expected_reason in result.simplified_screen.reason
+    assert result.simplified_screen.passed is None
+    assert result.damage > 1.0
+    assert result.governing_criterion == "Miner damage"
+    assert result.utilisation == pytest.approx(result.damage)
+    assert result.passed is False
+
+
 def test_passing_screen_cannot_override_independent_yield_failure():
     result = fatigue.assess_reinforcement_spectrum(
         (_steel_properties(fytk=50.0, screen_rule=_screen_rule()),),
@@ -908,7 +958,6 @@ def test_passing_screen_cannot_override_independent_yield_failure():
          DesignBasisKey.FIRST_GEN_DK_NA_2024),
         (fatigue_inputs.PRESET_2023_PRESTRESS_COUPLER,
          DesignBasisKey.PUBLISHED_2023),
-        (fatigue_inputs.CUSTOM_PRESET, DesignBasisKey.PUBLISHED_2023),
     ],
 )
 def test_unsupported_screen_rules_keep_miner_as_the_range_criterion(

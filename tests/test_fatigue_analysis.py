@@ -19,6 +19,7 @@ import fatigue_presentation  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog as mat_catalog  # noqa: E402
 
+from sector import fatigue  # noqa: E402
 from sector.design_standards import (  # noqa: E402
     Capability,
     DesignBasisKey,
@@ -244,6 +245,84 @@ def test_bent_bar_reduction_is_resolved_per_element_diameter():
             73.0 * min(1.0, 0.35 + 0.026 * 80.0 / 20.0)
         )
     )
+
+
+def test_custom_clone_of_named_values_stays_on_detailed_miner_path():
+    inp = _base()
+    catalogue = inp[fatigue_inputs.DETAIL_CATALOG_KEY]
+    named = next(item for item in catalogue["items"] if item["id"] == "F1")
+    custom = {
+        **named,
+        "preset": fatigue_inputs.CUSTOM_PRESET,
+        "name": "Imported values matching the 2023 bar preset",
+        "source": "Project fatigue curve import SN-2023-copy",
+    }
+    catalogue["items"] = [
+        custom if item["id"] == "F1" else item
+        for item in catalogue["items"]
+    ]
+    inp[fatigue_inputs.DETAIL_CATALOG_KEY] = fatigue_inputs.normalise_catalog(
+        catalogue
+    )
+
+    assert fatigue_analysis.validation_errors(inp) == []
+    prepared = fatigue_analysis.prepare(inp)
+    detail = next(item for item in prepared.detail_records if item["id"] == "F1")
+    named_reference = fatigue_inputs.default_entry(
+        preset=fatigue_inputs.PRESET_2023_BARS
+    )
+    for field in (
+        "n_star",
+        "k1",
+        "k2",
+        "delta_sigma_rsk_mpa",
+        "stress_model",
+        "bend_reduction",
+    ):
+        assert detail[field] == named_reference[field]
+    assert detail["preset"] == fatigue_inputs.CUSTOM_PRESET
+    assert detail["custom"] is True
+
+    bar = prepared.reinforcement[0]
+    rule = bar.simplified_screen_rule
+    assert rule is not None
+    assert rule.detail_class == "custom/imported detail"
+    assert rule.threshold_mpa is None
+    assert rule.range_basis == ""
+    assert rule.max_cycles is None
+    assert "not assigned" in rule.reason
+
+    state = fatigue.FatigueBinState(
+        name="custom fallback",
+        description="",
+        cycles=1.0e12,
+        converged=True,
+        bar_stress_long_mpa=(10.0,),
+        bar_stress_total_mpa=(60.0,),
+        concrete_compression_long_mpa=(),
+        concrete_compression_total_mpa=(),
+        elastic_result=None,
+        bar_stress_fatigue_total_mpa=(60.0,),
+        design_action_factor=prepared.gamma_ff,
+        bar_stress_design_total_mpa=(65.0,),
+        bar_stress_fatigue_design_total_mpa=(65.0,),
+    )
+    result = fatigue.assess_reinforcement_spectrum(
+        (bar,),
+        (state,),
+        gamma_s=prepared.gamma_s,
+        gamma_ff=prepared.gamma_ff,
+    )[0]
+
+    assert result.simplified_screen is not None
+    assert result.simplified_screen.status == (
+        fatigue.SIMPLIFIED_SCREEN_NOT_APPLICABLE
+    )
+    assert result.simplified_screen.passed is None
+    assert result.damage > 1.0
+    assert result.governing_criterion == "Miner damage"
+    assert result.utilisation == pytest.approx(result.damage)
+    assert result.passed is False
 
 
 def test_mixed_section_requires_explicit_tendon_bond_inputs():

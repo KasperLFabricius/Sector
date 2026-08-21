@@ -156,6 +156,11 @@ def test_2023_bent_screen_applies_the_existing_bend_factor_once(diameter):
     assert rule["threshold_mpa"] == pytest.approx(
         base * fi.bend_reduction_factor(entry, diameter)
     )
+    assert rule["detail_class"] == "unwelded bent reinforcing bar"
+    assert rule["range_basis"] == "design"
+    assert rule["max_cycles"] == 1.0e8
+    assert rule["reason"] == ""
+    assert rule["source"] == _PUBLISHED_2023_SOURCE
 
 
 @pytest.mark.parametrize(
