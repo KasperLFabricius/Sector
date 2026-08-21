@@ -1333,6 +1333,14 @@ def test_governing_overview_all_malformed_utilisation_keeps_first_row():
             _overview_row("FAIL", case="first-malformed", util="9.0"),
             _overview_row("FAIL", case="eligible", util=1.2),
         ],
+        [
+            _overview_row("FAIL", case="eligible", util=0.0),
+            _overview_row("FAIL", case="later-malformed", util=None),
+        ],
+        [
+            _overview_row("FAIL", case="first-malformed", util=None),
+            _overview_row("FAIL", case="eligible", util=0.0),
+        ],
     ],
 )
 def test_governing_overview_eligible_utilisation_beats_malformed_in_both_orders(rows):
