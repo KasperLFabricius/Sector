@@ -24,6 +24,9 @@ GOVERNING_OVERVIEW_ACCEPTANCE = (
 ANALYSIS_HOVER_ACCEPTANCE = (
     ROOT / "docs" / "pr_a07_v095_analysis_hover_acceptance.md"
 )
+INPUT_REFERENCE_ACCEPTANCE = (
+    ROOT / "docs" / "pr_a08_v095_input_reference_provenance_acceptance.md"
+)
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
@@ -361,7 +364,13 @@ def test_owner_scope_freezes_exact_amendment_identity_and_ownership() -> None:
 
 def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
     contracts = _fixture()["deferred_acceptance_contracts"]
-    assert set(contracts) == {"PR-A04", "PR-A05", "PR-A06", "PR-A07"}
+    assert set(contracts) == {
+        "PR-A04",
+        "PR-A05",
+        "PR-A06",
+        "PR-A07",
+        "PR-A08",
+    }
 
     crack = contracts["PR-A04"]
     assert crack == {
@@ -433,6 +442,26 @@ def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
         "implementation_evidence": True,
     }
 
+    provenance = contracts["PR-A08"]
+    assert provenance == {
+        "state": "frozen and implemented by PR-A08",
+        "acceptance_document": (
+            "docs/pr_a08_v095_input_reference_provenance_acceptance.md"
+        ),
+        "required_matrix_topics": [
+            "first-generation creep source",
+            "Danish conditional creep source",
+            "published 2023 creep disclosure",
+            "curve-only no-source fallback",
+            "edition-bound minimum reinforcement source",
+            "edition-bound link-detailing source",
+            "edition-bound clear-spacing source",
+            "help-only state preservation",
+        ],
+        "supported_applicability_extended_here": False,
+        "implementation_evidence": True,
+    }
+
 
 def test_pr_a07_acceptance_freezes_analysis_and_input_hover_boundary() -> None:
     text = _text(ANALYSIS_HOVER_ACCEPTANCE)
@@ -448,6 +477,24 @@ def test_pr_a07_acceptance_freezes_analysis_and_input_hover_boundary() -> None:
         "geometry-preview figures keep their existing",
         "does not interpolate a new resistance",
         "No solver, result value, persistence, schema, report",
+    ):
+        assert required in compact
+
+
+def test_pr_a08_acceptance_freezes_input_provenance_without_new_routes() -> None:
+    text = _text(INPUT_REFERENCE_ACCEPTANCE)
+    compact = " ".join(text.split())
+
+    for required in (
+        "3.1.4 and Annex B.1",
+        "DK NA:2024, 3.1.4(1)-(2)",
+        "`phi = 3` is conditional",
+        "5.1.5, Table 5.2 and Annex B.5",
+        "project-defined and that no Eurocode source is inferred",
+        "Formula (9.5N NA)",
+        "2023 11.2(2)",
+        "Existing preset-prefill and edition-routing behavior remains",
+        "No new basis, solver route, schema, persistence, report, status",
     ):
         assert required in compact
 

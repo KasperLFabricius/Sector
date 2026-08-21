@@ -68,6 +68,10 @@ class InputGuidanceKey(StrEnum):
     ORDINARY_CRACK_TENDON_BOND = "ordinary_crack_tendon_bond"
     ORDINARY_CRACK_MEMBER_TYPE = "ordinary_crack_member_type"
     HEIGHTENED_CRACK_OPERANDS = "heightened_crack_operands"
+    CREEP_COEFFICIENT = "creep_coefficient"
+    DETAILING_MINIMUM_REINFORCEMENT = "detailing_minimum_reinforcement"
+    DETAILING_TRANSVERSE_LINKS = "detailing_transverse_links"
+    DETAILING_CLEAR_SPACING = "detailing_clear_spacing"
 
 
 class ContextRole(StrEnum):
@@ -266,6 +270,52 @@ _PUBLISHED_2023_CONCRETE_STRENGTH_SOURCE = (
     "Formula (10.5)"
 )
 _DK_CRACK_MEMBER_SOURCE = "DS/EN 1992-1-1 DK NA:2024, 7.3.4(1)"
+
+_FIRST_GEN_CREEP_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.4 and Annex B.1"
+)
+_DK_CREEP_SOURCE = (
+    f"{_FIRST_GEN_CREEP_SOURCE}; DS/EN 1992-1-1 DK NA:2024, "
+    "3.1.4(1)-(2)"
+)
+_PUBLISHED_2023_CREEP_SOURCE = (
+    "DS/EN 1992-1-1:2023, 5.1.5, Table 5.2 and Annex B.5"
+)
+_FIRST_GEN_MINIMUM_REINFORCEMENT_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 9.2.1.1(1), "
+    "Formula (9.1N), and 9.3.1.1(1)-(2)"
+)
+_DK_MINIMUM_REINFORCEMENT_SOURCE = (
+    f"{_FIRST_GEN_MINIMUM_REINFORCEMENT_SOURCE}; "
+    "DS/EN 1992-1-1 DK NA:2024, 9.2.1.1(1)"
+)
+_PUBLISHED_2023_MINIMUM_REINFORCEMENT_SOURCE = (
+    "DS/EN 1992-1-1:2023, 12.2(2), Formulae (12.1)-(12.2), "
+    "and Table 12.2"
+)
+_FIRST_GEN_TRANSVERSE_LINK_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 9.2.2(2), "
+    "9.2.2(5)-(8), Formulae (9.4)-(9.8), 9.2.3(3), and "
+    "9.3.2(2), (4)-(5)"
+)
+_DK_TRANSVERSE_LINK_SOURCE = (
+    f"{_FIRST_GEN_TRANSVERSE_LINK_SOURCE}; "
+    "DS/EN 1992-1-1 DK NA:2024, 9.2.2(5), Formula (9.5N NA)"
+)
+_PUBLISHED_2023_TRANSVERSE_LINK_SOURCE = (
+    "DS/EN 1992-1-1:2023, 8.2.1(2), 12.2(4), Tables 12.1 "
+    "and 12.2, 12.3.3 and 12.4.2"
+)
+_FIRST_GEN_CLEAR_SPACING_SOURCE = (
+    "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 8.2(2)"
+)
+_DK_CLEAR_SPACING_SOURCE = (
+    f"{_FIRST_GEN_CLEAR_SPACING_SOURCE}; "
+    "DS/EN 1992-1-1 DK NA:2024, 8.2(2) unchanged"
+)
+_PUBLISHED_2023_CLEAR_SPACING_SOURCE = (
+    "DS/EN 1992-1-1:2023, 11.2(2)"
+)
 
 
 def _binding(
@@ -681,6 +731,103 @@ _INPUT_GUIDANCE[
     "enabled heightened crack-control calculation.",
     _DK_HEIGHTENED_CRACK_SOURCE,
 )
+
+for (
+    _basis_key,
+    _creep_guidance,
+    _creep_source,
+    _minimum_guidance,
+    _minimum_source,
+    _links_source,
+    _spacing_source,
+) in (
+    (
+        DesignBasisKey.FIRST_GEN_BASE,
+        (
+            "Enter the final creep coefficient used in the effective concrete "
+            "modulus. Sector does not derive humidity, notional size, age at "
+            "loading or duration."
+        ),
+        _FIRST_GEN_CREEP_SOURCE,
+        (
+            "Run Sector's modelled-direction minimum-reinforcement check for "
+            "the selected member type and selected Plastic/capacity rows."
+        ),
+        _FIRST_GEN_MINIMUM_REINFORCEMENT_SOURCE,
+        _FIRST_GEN_TRANSVERSE_LINK_SOURCE,
+        _FIRST_GEN_CLEAR_SPACING_SOURCE,
+    ),
+    (
+        DesignBasisKey.FIRST_GEN_DK_NA_2024,
+        (
+            "Enter the final creep coefficient used in the effective concrete "
+            "modulus. The Danish value phi = 3 is conditional; Sector does not "
+            "infer whether creep is decisive or whether recycled-aggregate "
+            "documentation is required."
+        ),
+        _DK_CREEP_SOURCE,
+        (
+            "Run Sector's modelled-direction minimum-reinforcement check for "
+            "the selected member type and selected Plastic/capacity rows. The "
+            "separate Danish high-beam-web provision is not included."
+        ),
+        _DK_MINIMUM_REINFORCEMENT_SOURCE,
+        _DK_TRANSVERSE_LINK_SOURCE,
+        _DK_CLEAR_SPACING_SOURCE,
+    ),
+    (
+        DesignBasisKey.PUBLISHED_2023,
+        (
+            "Enter the final creep coefficient used in the effective concrete "
+            "modulus. Sector does not derive the Table 5.2 or Annex B.5 "
+            "operands or decide project adoption."
+        ),
+        _PUBLISHED_2023_CREEP_SOURCE,
+        (
+            "Run Sector's modelled-direction minimum-reinforcement check for "
+            "the selected member type and selected Plastic/capacity rows."
+        ),
+        _PUBLISHED_2023_MINIMUM_REINFORCEMENT_SOURCE,
+        _PUBLISHED_2023_TRANSVERSE_LINK_SOURCE,
+        _PUBLISHED_2023_CLEAR_SPACING_SOURCE,
+    ),
+):
+    for _key, _text, _source in (
+        (
+            InputGuidanceKey.CREEP_COEFFICIENT,
+            _creep_guidance,
+            _creep_source,
+        ),
+        (
+            InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+            _minimum_guidance,
+            _minimum_source,
+        ),
+        (
+            InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+            (
+                "Check the implemented minimum shear/torsion link ratio and "
+                "maximum link spacing for active actions. The selected member "
+                "type and retained link geometry govern the applied branches."
+            ),
+            _links_source,
+        ),
+        (
+            InputGuidanceKey.DETAILING_CLEAR_SPACING,
+            (
+                "Check pairwise edge-to-edge clear distance from the entered "
+                "bar geometry and aggregate size. Anchorage, laps, bundles, "
+                "cover and construction access remain outside this check."
+            ),
+            _spacing_source,
+        ),
+    ):
+        _INPUT_GUIDANCE[(_basis_key, _key)] = _guidance(
+            _basis_key,
+            _key,
+            _text,
+            _source,
+        )
 
 INPUT_GUIDANCE: Mapping[
     tuple[DesignBasisKey, InputGuidanceKey], InputGuidance

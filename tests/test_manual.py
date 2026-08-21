@@ -586,7 +586,13 @@ def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
 def test_manual_documents_modelled_direction_and_link_detailing_scope():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
+        "creep-coefficient input help follows the selected concrete preset",
+        "DK NA:2024 3.1.4(1)-(2)",
+        "5.1.5, Table 5.2 and Annex B.5",
+        "no inferred Eurocode source",
         "Reinforcement detailing",
+        "Each detailing checkbox identifies the clauses",
+        "published reference that requires project adoption",
         "9.2.1.1(1)",
         "Formula (9.1N)",
         "uncracked gross-concrete strain plane",
