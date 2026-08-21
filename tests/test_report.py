@@ -1900,6 +1900,7 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
         assert heading in text
     assert "3.5e-3" in text
     assert "0.175 m" in text
+    assert "Compression-zone depth c 175.000 mm" in text
     assert "Bisection iterations 8" in text
     assert "250 + -250 + 0 kN" in text
     assert "100 MPa" in text
@@ -1909,6 +1910,52 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
     )
     assert "raw reference-stress plane" in text
     assert "not a physical-unit norm" in text
+
+
+def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
+    out = _out()
+    first = out["plastic"]["points"][0]
+    first["compression_depth"] = 0.111
+    second = copy.deepcopy(first)
+    second["V"] = 45.0
+    second["compression_depth"] = 0.222
+    out["plastic"]["points"] = [first, second]
+    out["plastic"]["worked_point_index"] = 1
+    before = copy.deepcopy(out)
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Selected sweep point 2 of 2" in text
+    assert "Compression-zone depth c 222.000 mm" in text
+    assert "Accepted compression depth 222.000000 mm" in text
+    assert "Compression-zone depth c 111.000 mm" not in text
+    assert "Accepted compression depth 111.000000 mm" not in text
+    assert out == before
+
+
+@pytest.mark.parametrize(
+    "retained",
+    (None, True, "0.175", -0.175, math.nan, math.inf),
+)
+def test_report_keeps_malformed_compression_depth_unavailable(retained):
+    out = _out()
+    point = out["plastic"]["points"][0]
+    if retained is None:
+        point.pop("compression_depth")
+    else:
+        point["compression_depth"] = retained
+    before = copy.deepcopy(out)
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, qa_appendix=False,
+    )).split())
+
+    assert "Compression-zone depth c -" in text
+    assert "Compression-depth solution unavailable" in text
+    assert "Accepted compression depth" not in text
+    assert out == before
 
 
 def test_completed_textbook_report_never_calls_a_solver_or_material_law(monkeypatch):
