@@ -18,6 +18,9 @@ FATIGUE_SCREEN_ACCEPTANCE = (
     ROOT / "docs" /
     "pr_a05_v095_simplified_reinforcement_fatigue_screen_acceptance.md"
 )
+GOVERNING_OVERVIEW_ACCEPTANCE = (
+    ROOT / "docs" / "pr_a06_v095_governing_results_overview_acceptance.md"
+)
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
@@ -394,7 +397,10 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
 
     overview = contracts["PR-A06"]
     assert overview == {
-        "state": "must be frozen in owning PR before code",
+        "state": "frozen and implemented by PR-A06",
+        "acceptance_document": (
+            "docs/pr_a06_v095_governing_results_overview_acceptance.md"
+        ),
         "required_matrix_topics": [
             "complete emitted status vocabulary",
             "ordered status precedence",
@@ -403,10 +409,45 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
             "status tie break",
             "case and direction provenance selection",
         ],
-        "status_order_frozen_here": False,
-        "tie_break_frozen_here": False,
-        "implementation_evidence": False,
+        "status_order_frozen_here": True,
+        "tie_break_frozen_here": True,
+        "implementation_evidence": True,
     }
+
+
+def test_governing_overview_contract_freezes_status_and_tie_rules() -> None:
+    text = _text(GOVERNING_OVERVIEW_ACCEPTANCE)
+    compact = " ".join(text.split())
+    statuses = [
+        "INVALID",
+        "FAIL",
+        "EXCEEDS USER-SPECIFIED LIMIT",
+        "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+        "STALE",
+        "REVIEW",
+        "NOT ASSESSED",
+        "CALCULATED - ACCEPTANCE NOT ASSESSED",
+        "NOT RUN",
+        "NOT CALCULATED",
+        "PASS",
+        "WITHIN USER-SPECIFIED LIMIT",
+        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
+        "CALCULATED",
+        "NOT APPLICABLE",
+        "NOT REQUESTED",
+    ]
+    positions = [text.index(f"`{status}`") for status in statuses]
+    assert positions == sorted(positions)
+    for phrase in (
+        "exact `(family, check)` pair",
+        "largest value governs",
+        "first canonical emitted row",
+        "selected ahead of the frozen vocabulary",
+        "one dataframe only",
+        "without a vertical-height cap",
+        "does not create an overall section or project conclusion",
+    ):
+        assert phrase in compact
 
 
 def test_pr_a05_acceptance_freezes_mapping_boundaries_and_fallback() -> None:

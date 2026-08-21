@@ -3252,19 +3252,11 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert tuple(at.session_state["result_fatigue_sig"]).count(token) == 1
     assert at.session_state["result_sig"] == latest["signature"]
 
-    summary = next(
-        frame.value for frame in at.dataframe
-        if "Check" in frame.value.columns and "Status" in frame.value.columns
-    )
+    assert len(at.dataframe) == 1
+    summary = at.dataframe[0].value
     assert summary.loc[summary["Check"] == "Fatigue"].shape[0] == 1
-    register = next(
-        frame.value for frame in at.dataframe
-        if "Analysis" in frame.value.columns
-        and "Result state" in frame.value.columns
-    )
-    fatigue_register = register.loc[register["Analysis"] == "Fatigue"]
-    assert fatigue_register.iloc[0]["Case"] == "Traffic"
-    assert fatigue_register.iloc[0]["Result state"] == "Calculated"
+    fatigue_summary = summary.loc[summary["Check"] == "Fatigue"].iloc[0]
+    assert fatigue_summary["Action set"] == "Traffic"
 
     _select_view(at, "Fatigue Results")
     assert not at.exception
@@ -5772,14 +5764,12 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
     _calculate(at)
     assert not at.exception
 
-    summary = next(
-        frame.value for frame in at.dataframe if "Governing" in frame.value.columns
-    )
+    assert len(at.dataframe) == 1
+    frame = at.dataframe[0]
+    summary = frame.value
     bending = summary.loc[summary["Check"] == "Plastic bending"]
-    assert bending["Action set"].tolist() == ["PL-LOW", "PL-HIGH"]
-    assert bending.loc[bending["Governing"] == "Yes", "Action set"].tolist() == [
-        "PL-HIGH"
-    ]
+    assert bending["Action set"].tolist() == ["PL-HIGH"]
+    assert "Governing" not in summary.columns
 
     _select_view(at, "Plastic Results")
     picker = at.selectbox(key="_plastic_result_case_index")
@@ -5795,6 +5785,61 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
     )
     assert actions.iloc[0]["Mx_Ed [kNm]"] == pytest.approx(80.0)
     assert not at.exception
+
+
+def test_results_overview_expands_all_selected_rows_without_height_cap(monkeypatch):
+    import result_presentation
+    import sector_app
+
+    rows = [
+        {
+            "family": f"family-{index}",
+            "check": f"Check {index}",
+            "case": f"CASE-{index}",
+            "status": "PASS",
+            "result": f"{index}.0 %",
+            "criterion": "<= 100 %",
+            "source": f"Register {index}",
+            "case_type": "ULS",
+            "view": "Plastic Results",
+            "note": f"Source {index}",
+            "util": index / 100.0,
+        }
+        for index in range(20)
+    ]
+
+    class FakeStreamlit:
+        def __init__(self):
+            self.dataframes = []
+
+        def info(self, *_args, **_kwargs):
+            return None
+
+        def columns(self, count):
+            return [self] * count
+
+        def metric(self, *_args, **_kwargs):
+            return None
+
+        def dataframe(self, data, **kwargs):
+            self.dataframes.append((data, kwargs))
+
+    fake = FakeStreamlit()
+    monkeypatch.setattr(sector_app, "st", fake)
+    monkeypatch.setattr(sector_app, "presentation", result_presentation)
+    monkeypatch.setattr(
+        result_presentation,
+        "multi_case_summary_rows",
+        lambda _inp, _results, stale=False: rows,
+    )
+
+    sector_app.results_overview_view({}, {})
+
+    assert len(fake.dataframes) == 1
+    styled, options = fake.dataframes[0]
+    assert len(styled.data) == 20
+    assert options["height"] == 35 * (20 + 1) + 3
+    assert options["height"] > 560
 
 
 def test_elastic_case_picker_shows_action_parts_and_crack_choice():
@@ -5853,16 +5898,11 @@ def test_results_overview_shows_action_provenance_and_explicit_states():
         ("text_input", "pl_case_id", "PL-GOV-04"),
         ("text_input", "pl_case_source", "Combination register C1"),
     )
-    register = next(
-        frame.value for frame in at.dataframe
-        if "Result state" in frame.value.columns
-    )
-    status = next(
-        frame.value for frame in at.dataframe if "Status" in frame.value.columns
-    )
-    assert register.iloc[0]["Case"] == "PL-GOV-04"
-    assert register.iloc[0]["Description"] == "Source: Combination register C1"
-    assert register.iloc[0]["Result state"] == "Calculated"
+    assert len(at.dataframe) == 1
+    status = at.dataframe[0].value
+    bending = status.loc[status["Check"] == "Plastic bending"].iloc[0]
+    assert bending["Action set"] == "PL-GOV-04"
+    assert "Combination register C1" in bending["Source / description"]
     assert set(status["Status"]) == {"PASS"}
 
     _set(at, ("text_input", "pl_case_id", "PL-GOV-05"))
@@ -6921,7 +6961,7 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
     overview = next(
         frame.value
         for frame in at.dataframe
-        if {"Check", "Action set", "Status", "Governing"}.issubset(
+        if {"Check", "Action set", "Status", "Source / description"}.issubset(
             frame.value.columns
         )
     )

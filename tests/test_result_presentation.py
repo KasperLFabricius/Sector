@@ -1229,6 +1229,191 @@ def test_multi_case_summary_marks_governing_case_for_each_check():
     assert presentation.summary_governing_case_flags(rows) == [False, True]
 
 
+def _overview_row(
+    status,
+    *,
+    check="Plastic bending",
+    family="plastic",
+    case="PL-1",
+    util=None,
+    source="Case register",
+    view="Plastic Results",
+    note="Retained note",
+):
+    return {
+        "check": check,
+        "family": family,
+        "case": case,
+        "case_type": "ULS",
+        "source": source,
+        "status": status,
+        "result": "-" if util is None else f"{util}",
+        "criterion": "<= 100 %",
+        "util": util,
+        "view": view,
+        "note": note,
+    }
+
+
+def test_governing_overview_freezes_complete_status_precedence():
+    statuses = presentation.GOVERNING_OVERVIEW_STATUS_PRECEDENCE
+    assert statuses == (
+        "INVALID",
+        "FAIL",
+        "EXCEEDS USER-SPECIFIED LIMIT",
+        "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+        "STALE",
+        "REVIEW",
+        "NOT ASSESSED",
+        "CALCULATED - ACCEPTANCE NOT ASSESSED",
+        "NOT RUN",
+        "NOT CALCULATED",
+        "PASS",
+        "WITHIN USER-SPECIFIED LIMIT",
+        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
+        "CALCULATED",
+        "NOT APPLICABLE",
+        "NOT REQUESTED",
+    )
+    for more_governing, less_governing in zip(statuses, statuses[1:]):
+        for ordered in (
+            (less_governing, more_governing),
+            (more_governing, less_governing),
+        ):
+            selected = presentation.governing_summary_rows([
+                _overview_row(status, case=f"case-{index}")
+                for index, status in enumerate(ordered)
+            ])
+            assert len(selected) == 1
+            assert selected[0]["status"] == more_governing
+
+
+def test_governing_overview_numeric_selection_and_ties_are_deterministic():
+    rows = [
+        _overview_row("FAIL", case="missing", util=None),
+        _overview_row("FAIL", case="string", util="9.0"),
+        _overview_row("FAIL", case="boolean", util=True),
+        _overview_row("FAIL", case="negative", util=-1.0),
+        _overview_row("FAIL", case="nan", util=math.nan),
+        _overview_row("FAIL", case="finite", util=1.2),
+        _overview_row("FAIL", case="infinite-first", util=math.inf),
+        _overview_row("FAIL", case="infinite-second", util=math.inf),
+    ]
+    before = [dict(row) for row in rows]
+
+    selected = presentation.governing_summary_rows(rows)
+
+    assert selected[0]["case"] == "infinite-first"
+    assert rows == before
+    selected[0]["case"] = "changed copy"
+    assert rows[-2]["case"] == "infinite-first"
+
+
+def test_governing_overview_all_malformed_utilisation_keeps_first_row():
+    rows = [
+        _overview_row("FAIL", case="first-missing", util=None),
+        _overview_row("FAIL", case="later-string", util="9.0"),
+        _overview_row("FAIL", case="later-boolean", util=True),
+        _overview_row("FAIL", case="later-negative", util=-1.0),
+        _overview_row("FAIL", case="later-negative-infinity", util=-math.inf),
+        _overview_row("FAIL", case="later-nan", util=math.nan),
+    ]
+
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "first-missing"
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [
+            _overview_row("FAIL", case="eligible", util=1.2),
+            _overview_row("FAIL", case="later-malformed", util="9.0"),
+        ],
+        [
+            _overview_row("FAIL", case="first-malformed", util="9.0"),
+            _overview_row("FAIL", case="eligible", util=1.2),
+        ],
+        [
+            _overview_row("FAIL", case="eligible", util=0.0),
+            _overview_row("FAIL", case="later-malformed", util=None),
+        ],
+        [
+            _overview_row("FAIL", case="first-malformed", util=None),
+            _overview_row("FAIL", case="eligible", util=0.0),
+        ],
+    ],
+)
+def test_governing_overview_eligible_utilisation_beats_malformed_in_both_orders(rows):
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "eligible"
+
+
+def test_governing_overview_preserves_family_order_and_selected_provenance():
+    rows = [
+        _overview_row("PASS", case="PL-A", util=0.60, source="Source A"),
+        _overview_row(
+            "CALCULATED",
+            family="elastic",
+            check="Concrete stress",
+            case="EL-A",
+            source="Elastic source",
+            view="Elastic Results",
+        ),
+        _overview_row(
+            "FAIL",
+            case="PL-B",
+            util=1.20,
+            source="Source B",
+            note="Governing retained case",
+        ),
+        _overview_row(
+            "PASS",
+            check="Shear Vx with links",
+            case="PL-C",
+            util=0.80,
+        ),
+        _overview_row(
+            "FAIL",
+            check="Shear Vy with links",
+            case="PL-D",
+            util=1.10,
+        ),
+        _overview_row(
+            "FAIL",
+            family="independent-family",
+            case="PL-E",
+            util=1.30,
+        ),
+    ]
+
+    selected = presentation.governing_summary_rows(rows)
+
+    assert [row["check"] for row in selected] == [
+        "Plastic bending",
+        "Concrete stress",
+        "Shear Vx with links",
+        "Shear Vy with links",
+        "Plastic bending",
+    ]
+    assert selected[0]["case"] == "PL-B"
+    assert selected[0]["source"] == "Source B"
+    assert selected[0]["view"] == "Plastic Results"
+    assert selected[0]["note"] == "Governing retained case"
+    assert selected[2]["case"] == "PL-C"
+    assert selected[3]["case"] == "PL-D"
+    assert selected[4]["case"] == "PL-E"
+
+
+def test_governing_overview_keeps_unknown_status_visible_and_rejects_bad_rows():
+    rows = [
+        _overview_row("PASS", case="known", util=0.5),
+        _overview_row("FUTURE STATUS", case="future"),
+    ]
+
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "future"
+    with pytest.raises(ValueError, match="rows must be objects"):
+        presentation.governing_summary_rows([rows[0], None])
+
+
 @pytest.mark.parametrize(
     ("fatigue", "stale", "status"),
     [

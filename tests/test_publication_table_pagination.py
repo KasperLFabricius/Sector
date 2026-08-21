@@ -96,6 +96,65 @@ def test_data_table_inventory_uses_one_pagination_boundary(monkeypatch):
     assert overview.splitInRow == 1
 
 
+def test_report_overview_uses_governing_selector_and_retains_source(monkeypatch):
+    rows = [
+        {
+            "family": "plastic_bending",
+            "check": "Plastic bending",
+            "case": "PL-LOW",
+            "status": "PASS",
+            "result": "60.0 %",
+            "criterion": "<= 100 %",
+            "source": "register A",
+            "note": "Source: register A",
+            "util": 0.60,
+        },
+        {
+            "family": "plastic_bending",
+            "check": "Plastic bending",
+            "case": "PL-HIGH",
+            "status": "FAIL",
+            "result": "120.0 %",
+            "criterion": "<= 100 %",
+            "source": "register B",
+            "note": "Source: register B",
+            "util": 1.20,
+        },
+        {
+            "family": "elastic_stress",
+            "check": "Concrete stress",
+            "case": "EL-01",
+            "status": "CALCULATED",
+            "result": "12.0 MPa",
+            "criterion": "Output only",
+            "source": "register C",
+            "note": "Source: register C",
+            "util": None,
+        },
+    ]
+    monkeypatch.setattr(
+        sector_report.presentation,
+        "multi_case_summary_rows",
+        lambda _inp, _out: rows,
+    )
+
+    builder = _builder()
+    builder._results_overview()
+    overview = next(
+        table for table in _direct_tables(builder)
+        if getattr(table, "_sector_results_overview", False)
+    )
+    text = " ".join(
+        cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+        for row in overview._cellvalues
+        for cell in row
+    )
+
+    assert "PL-HIGH" in text and "register B" in text
+    assert "PL-LOW" not in text and "register A" not in text
+    assert "EL-01" in text and "register C" in text
+
+
 def test_ordinary_split_retains_three_data_rows_at_both_edges():
     data = [["Header"]] + [[f"row-{index}"] for index in range(10)]
     table = sector_report._PaginatedReportTable(
