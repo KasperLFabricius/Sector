@@ -35,8 +35,9 @@ Exact starting point:
 
 The controlled lifecycle is `Planned` -> `In progress` -> `Merged`. The
 dependency graph, rather than table order, controls when a slice may start.
-PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10
-retain product version 0.94. Gate G1 starts only after every one of those
+PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b, PR-A01 through PR-A10 and
+the separately approved PR-M01 maintenance addendum retain product version
+0.94. Gate G1 starts only after every one of those
 development PRs has merged. It is the sole complete pre-bump qualification.
 Only PR-15 may change governed version surfaces; gate G2 qualifies that bumped
 head for release.
@@ -68,8 +69,13 @@ torsion subdivision partition-authority slice merged:
 - amendment base tree: `790083ac2694bc2bfa7578dd8062a047be66c0b5`
 - reviewed graph merge: `main@9282a7ff56512b123fbb53a55ebf32565c093fe5`
 - reviewed graph tree: `7e6980bb3d107f19336efbb0c2c4ef40f1b6cde1`
+- PR-M01 graph-amendment base: `main@2e91bbcbe979a0debc0f7d8c07891c13a0d3e77f`
+- PR-M01 graph-amendment base tree: `5b98b9e6c937a9c6c4bbba1c6f36d6ad1bc70883`
 - product version: Sector 0.94
 - project schema at the amendment base: 25
+
+The v2 graph preserves every reviewed v1 node and edge, then adds only PR-M01,
+its dependency on PR-A10 and its required G1 edge under D095-020.
 
 Historical PR-01 through PR-15 identities are not renumbered. The additions use
 PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10:
@@ -90,6 +96,16 @@ PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10:
 | A09 | PR-A09 - Plastic compression-zone depth summary | PR-A00b | Planned |
 | A10 | PR-A10 - End-user manual reference cleanup | PR-A00b | Planned |
 
+### 2.2 Approved maintenance addendum
+
+PR-M01 was requested after historical PR-13 and PR-14 had already merged, so
+their recorded sequence is not rewritten. The bounded cleanup instead follows
+PR-A10 and becomes the final development prerequisite before G1.
+
+| Order | Slice | Depends on | Initial status |
+|---|---|---|---|
+| M01 | PR-M01 - Measured dead-code cleanup | PR-A10 | In progress |
+
 The table is a readable projection of `owner_sequence_graph.dependencies`; the
 fixture remains authoritative. In particular, PR-A02 and PR-A03 precede PR-05,
 and PR-A06 follows PR-05, PR-A04 and PR-A05. No PR-A01 through PR-A10 code may
@@ -99,14 +115,15 @@ start before PR-A00b freezes the corresponding outcome and acceptance owner.
 implicit or omitted prerequisite: PR-01, PR-02, PR-03, PR-04, PR-05, PR-06,
 PR-07, PR-08, PR-09, PR-10, PR-11, PR-12, PR-13, PR-14, PR-A00a1, PR-A00a2,
 PR-A00b, PR-A01, PR-A02, PR-A03, PR-A04, PR-A05, PR-A06, PR-A07, PR-A08,
-PR-A09 and PR-A10. PR-15 depends only on G1, and G2 depends only on PR-15.
+PR-A09, PR-A10 and PR-M01. PR-15 depends only on G1, and G2 depends only on
+PR-15.
 
 PR-A00a1 and PR-A00a2 do not freeze an implementation equation, schema key,
 threshold, status precedence, tie-break or publication behavior. PR-A00b now
 freezes the bounded outcomes and their acceptance owners; the detailed
 implementation matrices remain with the named implementation PRs.
 
-### 2.2 Scope outcomes and acceptance ownership
+### 2.3 Scope outcomes and acceptance ownership
 
 PR-A00b freezes the owner-authorized outcomes and their PR ownership; it does
 not substitute a broad umbrella fixture for each implementation contract. Each
@@ -224,16 +241,17 @@ used as implementation evidence for PR-A04, PR-A05 or PR-A06.
 - Dependency declarations match the APIs and direct imports actually used by
   product, tools and tests. In particular, the supported Kaleido lower bound
   in PR-09 must provide the exporter API Sector invokes.
-- Cache narrowing, collapsed-work optimisation and dead-code deletion are not
-  mandatory v0.95 slices. They require a separately approved bounded PR with
-  static and dynamic reachability evidence plus a retained measurement. Absent
-  that proof they remain unchanged; no unapproved feature enters through the
-  v0.95 programme.
+- Cache narrowing and collapsed-work optimisation remain deferred. The owner
+  separately approved PR-M01 for a measured dead-code cleanup after PR-13 and
+  PR-14 had already merged. PR-M01 is limited to six exact-base one-occurrence
+  functions, removes 72 production lines and no caller, and retains static and
+  dynamic reachability evidence. No other maintenance enters through this
+  addendum, and no unapproved feature enters through the v0.95 programme.
 
 ## 6. Development test and CI policy
 
-PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10 run
-only:
+PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b, PR-A01 through PR-A10 and
+PR-M01 run only:
 
 1. independent oracle, contract or adversarial tests for the changed family;
 2. directly affected existing tests; and
@@ -296,6 +314,8 @@ Sector 0.95 is complete only when:
 - PR-01 through PR-14 are merged as accepted bounded slices with version 0.94;
 - PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10 are merged as accepted
   bounded slices with version 0.94;
+- PR-M01 is merged as the separately approved, measured maintenance addendum
+  with version 0.94;
 - every confirmed P1/P2 adversarial case has objective fail-closed closure;
 - every final development head has both required exact-head review receipts and
   zero unresolved threads;

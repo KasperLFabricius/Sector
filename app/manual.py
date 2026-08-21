@@ -2183,22 +2183,6 @@ def manual_parts() -> dict[str, list]:
     return parts
 
 
-def manual_publication_parts() -> dict[str, list]:
-    """Return the fail-closed visible manual, grouped by navigable part."""
-
-    parts: dict[str, list] = {}
-    current = None
-    for block in manual_publication_blocks(manual_blocks()):
-        if block[0] == "part":
-            current = block[1]
-            parts[current] = [block]
-        elif current is not None:
-            parts[current].append(block)
-    if tuple(parts) != tuple(_PART_SUMMARIES):
-        raise ValueError("Published manual part identity changed.")
-    return parts
-
-
 def manual_published_item_parts():
     """Return the visible manual with validated figure/table identities."""
 

@@ -764,26 +764,6 @@ def _percent(util):
     return "infinite" if not math.isfinite(util) else f"{util * 100:.1f} %"
 
 
-def required_chord_candidates(payload):
-    """Return every retained longitudinal chord needed for a code verdict."""
-    payload = payload or {}
-    preserved = payload.get("longitudinal_candidates")
-    if preserved is None:
-        preserved = payload.get("chord_candidates")
-    if isinstance(preserved, (list, tuple)) and preserved:
-        return [
-            item for item in preserved
-            if item is not None and item.get("valid")
-        ]
-    return [
-        item for item in (
-            payload.get("longitudinal") or payload.get("chord"),
-            payload.get("chord_off"),
-        )
-        if item is not None and item.get("valid")
-    ]
-
-
 def required_chord_fallback(payload):
     """Return the retained required face using a pure-axis fallback, if any."""
     payload = payload or {}

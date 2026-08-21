@@ -33,6 +33,9 @@ PLASTIC_DEPTH_ACCEPTANCE = (
 MANUAL_REFERENCE_CLEANUP_ACCEPTANCE = (
     ROOT / "docs" / "pr_a10_v095_manual_reference_cleanup_acceptance.md"
 )
+MAINTENANCE_CLEANUP_ACCEPTANCE = (
+    ROOT / "docs" / "pr_m01_v095_measured_dead_code_cleanup_acceptance.md"
+)
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
@@ -50,6 +53,7 @@ OWNER_DEVELOPMENT_PRS = [
     "PR-A00b",
     *OWNER_IMPLEMENTATION_PRS,
 ]
+MAINTENANCE_DEVELOPMENT_PRS = ["PR-M01"]
 EXPECTED_OWNER_SEQUENCE_DEPENDENCIES = {
     "PR-01": [],
     "PR-02": ["PR-01"],
@@ -78,7 +82,12 @@ EXPECTED_OWNER_SEQUENCE_DEPENDENCIES = {
     "PR-A08": ["PR-A00b"],
     "PR-A09": ["PR-A00b"],
     "PR-A10": ["PR-A00b"],
-    "G1": [*HISTORICAL_DEVELOPMENT_PRS, *OWNER_DEVELOPMENT_PRS],
+    "PR-M01": ["PR-A10"],
+    "G1": [
+        *HISTORICAL_DEVELOPMENT_PRS,
+        *OWNER_DEVELOPMENT_PRS,
+        *MAINTENANCE_DEVELOPMENT_PRS,
+    ],
     "PR-15": ["G1"],
     "G2": ["PR-15"],
 }
@@ -102,8 +111,9 @@ def test_programme_freezes_exact_release_base_and_fifteen_slices() -> None:
     rows = re.findall(r"^\| (\d+) \| PR-(\d+) - ", text, flags=re.MULTILINE)
     assert rows == [(str(i), f"{i:02d}") for i in range(1, 16)]
     assert re.search(
-        r"PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b and PR-A01 through PR-A10\s+"
-        r"retain product version 0\.94",
+        r"PR-01 through PR-14, PR-A00a1, PR-A00a2, PR-A00b, PR-A01 through PR-A10 and\s+"
+        r"the separately approved PR-M01 maintenance addendum retain product version\s+"
+        r"0\.94",
         text,
     )
     assert "It is the sole complete pre-bump qualification" in text
@@ -112,12 +122,23 @@ def test_programme_freezes_exact_release_base_and_fifteen_slices() -> None:
 
 def test_owner_sequence_graph_is_exact_resolvable_and_acyclic() -> None:
     graph = _fixture()["owner_sequence_graph"]
-    development_prs = [*HISTORICAL_DEVELOPMENT_PRS, *OWNER_DEVELOPMENT_PRS]
+    development_prs = [
+        *HISTORICAL_DEVELOPMENT_PRS,
+        *OWNER_DEVELOPMENT_PRS,
+        *MAINTENANCE_DEVELOPMENT_PRS,
+    ]
     nodes = [*development_prs, "G1", "PR-15", "G2"]
 
-    assert graph["contract"] == "owner-sequence-graph-v1"
+    assert graph["contract"] == "owner-sequence-graph-v2"
     assert graph["base_commit"] == AMENDMENT_BASE
     assert graph["base_tree"] == AMENDMENT_TREE
+    assert graph["maintenance_amendment_base_commit"] == (
+        "2e91bbcbe979a0debc0f7d8c07891c13a0d3e77f"
+    )
+    assert graph["maintenance_amendment_base_tree"] == (
+        "5b98b9e6c937a9c6c4bbba1c6f36d6ad1bc70883"
+    )
+    assert graph["maintenance_amendment_owner"] == "PR-M01"
     assert graph["product_version"] == "0.94"
     assert graph["project_schema"] == 25
     assert graph["sequencing_only"] is True
@@ -163,6 +184,7 @@ def test_owner_sequence_graph_freezes_cross_sequence_and_release_gates() -> None
     assert dependencies["PR-A03"] == ["PR-A02"]
     assert dependencies["PR-05"] == ["PR-02", "PR-03", "PR-04", "PR-A03"]
     assert dependencies["PR-A06"] == ["PR-05", "PR-A04", "PR-A05"]
+    assert dependencies["PR-M01"] == ["PR-A10"]
     assert dependencies["G1"] == graph["development_prs"]
     assert dependencies["PR-15"] == ["G1"]
     assert dependencies["G2"] == ["PR-15"]
@@ -185,6 +207,8 @@ def test_owner_sequence_narrative_and_lifecycle_match_reviewed_graph() -> None:
     assert AMENDMENT_TREE in programme
     assert GRAPH_MERGE in programme
     assert GRAPH_TREE in programme
+    assert graph["maintenance_amendment_base_commit"] in programme
+    assert graph["maintenance_amendment_base_tree"] in programme
     assert graph["narrative_contract_owner"] == "PR-A00a2"
     assert graph["scope_contract_owner"] == "PR-A00b"
     assert graph["implementation_contracts_frozen_here"] is False
@@ -214,6 +238,13 @@ def test_owner_sequence_narrative_and_lifecycle_match_reviewed_graph() -> None:
         assert dependency == ", ".join(dependencies[pr])
         assert status == "Planned"
 
+    maintenance_rows = re.findall(
+        r"^\| (M\d{2}) \| (PR-M\d{2}) - [^|]+ \| ([^|]+) \| ([^|]+) \|$",
+        programme,
+        flags=re.MULTILINE,
+    )
+    assert maintenance_rows == [("M01", "PR-M01", "PR-A10", "In progress")]
+
     g1_prs = ", ".join(dependencies["G1"][:-1])
     g1_prs = f"{g1_prs} and {dependencies['G1'][-1]}"
     assert f"implicit or omitted prerequisite: {g1_prs}." in compact_programme
@@ -222,6 +253,49 @@ def test_owner_sequence_narrative_and_lifecycle_match_reviewed_graph() -> None:
     assert "owner_authorized_scope" in fixture
     assert "deferred_acceptance_contracts" in fixture
     assert "PR-A00b now freezes the bounded outcomes" in compact_programme
+
+
+def test_pr_m01_is_exactly_measured_and_removed_from_production() -> None:
+    fixture = _fixture()["maintenance_addendum"]
+    removed = {
+        "app/fatigue_inputs.py": "spectrum_signature",
+        "app/load_cases.py": "table_from_records",
+        "app/manual.py": "manual_publication_parts",
+        "app/report_equation_contract.py": "_calculation_relation",
+        "app/result_presentation.py": "required_chord_candidates",
+        "sector/serviceability.py": "_direct_tension_effective_area_2023",
+    }
+    assert fixture == {
+        "contract": "measured-dead-code-cleanup-v1",
+        "owner_request_date": "2026-08-20",
+        "implementation_pr": "PR-M01",
+        "base_commit": "2e91bbcbe979a0debc0f7d8c07891c13a0d3e77f",
+        "base_tree": "5b98b9e6c937a9c6c4bbba1c6f36d6ad1bc70883",
+        "product_version": "0.94",
+        "project_schema": 26,
+        "depends_on": ["PR-A10"],
+        "base_source_blobs": {
+            "app/fatigue_inputs.py": "c71bc1d94ff78cbe9c53e5bc3ea266a3b8d3c235",
+            "app/load_cases.py": "1edc0ad28f8a45758598c6746a2bcacba47becc3",
+            "app/manual.py": "72b05c0caa7f0e0feb5b1fa7a10005f10e248e9f",
+            "app/report_equation_contract.py": "4c2ec0f55640e8ec3a0fb6ced0fa5da8a705b5fb",
+            "app/result_presentation.py": "f6bc2860fddab4651ccf013eb1aadce4efa9c810",
+            "sector/serviceability.py": "4c04deb046bb312198a15f3ef50fa82b1e770b2c",
+        },
+        "removed_symbols": list(removed.values()),
+        "base_exact_identifier_occurrences": {
+            name: 1 for name in removed.values()
+        },
+        "production_lines_removed": 72,
+        "production_lines_added": 0,
+        "runtime_callers_removed": 0,
+        "public_sector_exports_removed": 0,
+        "schema_fields_removed": 0,
+        "cache_or_collapsed_work_changed": False,
+    }
+    assert "72 production lines" in _text(MAINTENANCE_CLEANUP_ACCEPTANCE)
+    for relative, name in removed.items():
+        assert not re.search(rf"^def {re.escape(name)}\b", _text(ROOT / relative), re.MULTILINE)
 
 
 def test_owner_scope_freezes_exact_amendment_identity_and_ownership() -> None:
@@ -664,8 +738,8 @@ def test_decision_register_has_unique_contiguous_owner_decisions() -> None:
     assert ids == [f"D095-{i:03d}" for i in range(1, 26)]
     assert len(ids) == len(set(ids))
     decisions = _text(DECISIONS)
-    assert "PR-A00a1 owns the complete machine-resolvable dependency graph" in decisions
-    assert "PR-A00a2 projects that unchanged graph" in decisions
+    assert "PR-A00a1 owns the original machine-resolvable dependency graph" in decisions
+    assert "PR-A00a2 projects that graph" in decisions
     assert "PR-A00b separately freezes owner outcomes" in decisions
     assert "Only the D095-024 outcomes are authorized" in decisions
     assert "PR-A00b freezes scope and ownership only" in decisions
@@ -714,6 +788,10 @@ def test_lifecycle_policy_defers_full_ci_and_requires_both_reviews() -> None:
     assert "Any push invalidates both receipts" in programme
     assert "every review thread is resolved" in programme
     assert "PR-15's candidate commit also contains `[skip ci]`" in programme
+    assert re.search(
+        r"PR-A01 through PR-A10, PR-M01 and any G1 repair use `\[skip ci\]`",
+        _text(DECISIONS),
+    )
     assert "complete reviewed merge\ncommit message" in programme
     assert "subject, body and trailers" in programme
     assert "exact-SHA Actions run\nreceipt is required" in programme
@@ -856,8 +934,11 @@ def test_programme_bounds_owner_additions_and_preserves_non_findings() -> None:
     assert [row["topic"] for row in deferred] == [
         "production export selector inventory",
         "manual hot-reload artifact identity",
-        "cache, collapsed-work and dead-code maintenance",
+        "cache and collapsed-work maintenance",
     ]
+    assert deferred[-1]["decision"] == (
+        "remains deferred; PR-M01 authorizes only its six named dead-code removals"
+    )
     non_findings = _fixture()["non_findings"]
     assert [row["id"] for row in non_findings] == [
         f"N095-{i:03d}" for i in range(1, 9)
