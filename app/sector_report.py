@@ -3235,6 +3235,49 @@ class ReportBuilder:
                         + "; ".join(modifiers)
                     ),
                 ])
+            if reinforcement_fatigue:
+                for spectrum in fatigue_presentation.items(
+                    fatigue, "spectra"
+                ):
+                    spectrum_name = str(fatigue_presentation.value(
+                        spectrum, "spectrum_name", "-"
+                    ))
+                    for row in fatigue_presentation.reinforcement_rows(
+                        spectrum
+                    ):
+                        fatigue_rows.append([
+                            "Simplified stress-range screen - "
+                            + _html_escape(spectrum_name)
+                            + " / "
+                            + _html_escape(row["element_id"]),
+                            (
+                                _html_escape(row["screen_status"])
+                                + "; detail = "
+                                + _html_escape(row["screen_detail_class"])
+                                + "; basis = "
+                                + _html_escape(row["screen_range_basis"])
+                                + "; range / limit = "
+                                + _fmt(row["screen_range_mpa"], 3)
+                                + " / "
+                                + _fmt(row["screen_threshold_mpa"], 3)
+                                + " MPa; utilisation = "
+                                + _pct(row["screen_utilisation"])
+                                + "; governing bin = "
+                                + _html_escape(row["screen_governing_bin"])
+                                + "; Miner D = "
+                                + _fmt_sig(row["damage"], 6)
+                                + "; Yield / proof util. = "
+                                + _pct(row["yield_utilisation"])
+                                + "; "
+                                + _html_escape(row["screen_reason"] or "-")
+                                + (
+                                    "; source = "
+                                    + _html_escape(row["screen_source"])
+                                    if row["screen_source"]
+                                    else ""
+                                )
+                            ),
+                        ])
             self._brief_settings_table(
                 fatigue_rows,
                 caption=(
@@ -4762,9 +4805,13 @@ class ReportBuilder:
             )
             if (fatigue.get("checks") or {}).get("reinforcement"):
                 self._p(
-                    "<b>Reinforcement fatigue.</b> The assigned two-slope S-N "
-                    "curve gives N<sub>R,i</sub> for each design stress range. "
-                    "The same bin also checks yield or proof stress."
+                    "<b>Reinforcement fatigue.</b> A supported named detail is "
+                    "first compared with its simplified stress-range limit. A "
+                    "passing shortcut makes the detailed range check unnecessary; "
+                    "otherwise the assigned two-slope S-N curve gives "
+                    "N<sub>R,i</sub> for each design stress range. Sector retains "
+                    "the detailed result in both cases. The same bin also checks "
+                    "yield or proof stress independently."
                 )
                 self._formula(
                     "D = &#8721;(n<sub>i</sub> / N<sub>R,i</sub>) &#8804; 1.00",
@@ -9653,13 +9700,67 @@ class ReportBuilder:
         self._small(
             "Miner sums are accumulated within each spectrum; different "
             "spectrum names are not combined. Governing utilisation is the "
-            "maximum of the applicable Miner, yield/proof and concrete criteria."
+            "maximum of the applicable simplified-screen or Miner range "
+            "criterion, yield/proof stress and concrete criteria."
         )
+
+        spectra = fatigue_presentation.items(payload, "spectra")
+        retained_screen_rows = [
+            (str(fatigue_presentation.value(spectrum, "spectrum_name", "-")), row)
+            for spectrum in spectra
+            for row in fatigue_presentation.reinforcement_rows(spectrum)
+        ]
+        if checks.get("reinforcement") and retained_screen_rows:
+            self._h2("Simplified reinforcement stress-range screens")
+            rows = [[
+                "Spectrum", "Element", "Status", "Detail class", "Basis",
+                "Range / limit", "Util.", "Governing bin",
+            ]]
+            rows.extend([
+                [
+                    _html_escape(spectrum_name),
+                    _html_escape(row["element_id"]),
+                    _html_escape(row["screen_status"]),
+                    _html_escape(row["screen_detail_class"]),
+                    _html_escape(row["screen_range_basis"]),
+                    (
+                        _fmt(row["screen_range_mpa"], 3)
+                        + " / "
+                        + _fmt(row["screen_threshold_mpa"], 3)
+                        + " MPa"
+                    ),
+                    _pct(row["screen_utilisation"]),
+                    _html_escape(row["screen_governing_bin"]),
+                ]
+                for spectrum_name, row in retained_screen_rows
+            ])
+            self._table(
+                rows,
+                [17 * mm, 13 * mm, 24 * mm, 28 * mm, 17 * mm,
+                 24 * mm, 15 * mm, 27 * mm],
+                font=5.2,
+                keep=False,
+                repeat_cols=2,
+            )
+            for spectrum_name, row in retained_screen_rows:
+                self._small(
+                    "<b>"
+                    + _html_escape(spectrum_name)
+                    + " / "
+                    + _html_escape(row["element_id"])
+                    + ":</b> "
+                    + _html_escape(row["screen_reason"] or "-")
+                    + (
+                        " <b>Reference:</b> "
+                        + _html_escape(row["screen_source"])
+                        if row["screen_source"]
+                        else ""
+                    )
+                )
 
         input_records = fatigue_inputs.spectrum_records(
             self._base_inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
         )
-        spectra = fatigue_presentation.items(payload, "spectra")
         reinforcement_example = payload.get("governing_reinforcement_example")
         concrete_example = payload.get("governing_concrete_example")
         selected_spectrum_names = {
@@ -9795,8 +9896,9 @@ class ReportBuilder:
             if reinforcement_rows and publish_reinforcement:
                 self._h2("Reinforcement fatigue")
                 rows = [[
-                    "Element", "Type", "Detail", "phi", "Miner D",
-                    "Yield / proof util.", "Governing", "Util.", "Status",
+                    "Element", "Type", "Detail", "phi", "Shortcut",
+                    "Miner D", "Yield / proof util.", "Governing", "Util.",
+                    "Status",
                 ]]
                 rows.extend([
                     [
@@ -9804,6 +9906,14 @@ class ReportBuilder:
                         _html_escape(row["kind"]),
                         _html_escape(row["detail_id"]),
                         f"{_fmt(row['diameter_mm'], 1)} mm",
+                        (
+                            _html_escape(row["screen_status"])
+                            + (
+                                "<br/>u = " + _pct(row["screen_utilisation"])
+                                if row["screen_utilisation"] is not None
+                                else ""
+                            )
+                        ),
                         _fmt_sig(row["damage"], 6),
                         _pct(row["yield_utilisation"]),
                         _html_escape(row["governing"]),
@@ -9814,9 +9924,9 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [18 * mm, 14 * mm, 15 * mm, 15 * mm, 18 * mm,
-                     23 * mm, 29 * mm, 19 * mm, 16 * mm],
-                    font=5.7,
+                    [16 * mm, 12 * mm, 14 * mm, 13 * mm, 29 * mm,
+                     15 * mm, 18 * mm, 25 * mm, 16 * mm, 14 * mm],
+                    font=5.2,
                     keep=False,
                     repeat_cols=3,
                 )
@@ -9828,6 +9938,11 @@ class ReportBuilder:
                     payload, governing_id
                 )
                 if result is not None and properties is not None:
+                    screen = (
+                        fatigue_presentation.simplified_reinforcement_screen(
+                            result
+                        )
+                    )
                     self._h2(
                         "Governing reinforcement element - "
                         + _html_escape(str(governing_id))
@@ -9863,6 +9978,47 @@ class ReportBuilder:
                         [22 * mm, 20 * mm, 15 * mm, 15 * mm,
                          32 * mm, 32 * mm, 24 * mm],
                         font=6.2,
+                    )
+                    self._h2("Simplified stress-range screen")
+                    self._table(
+                        [[
+                            "Status", "Detail class", "Range basis",
+                            "Governing range", "Limit", "Util.",
+                            "Governing bin", "Total cycles",
+                        ], [
+                            _html_escape(screen["status"]),
+                            _html_escape(screen["detail_class"]),
+                            _html_escape(screen["range_basis"]),
+                            (
+                                "-" if screen["governing_range_mpa"] is None
+                                else f"{_fmt(screen['governing_range_mpa'], 3)} MPa"
+                            ),
+                            (
+                                "-" if screen["threshold_mpa"] is None
+                                else f"{_fmt(screen['threshold_mpa'], 3)} MPa"
+                            ),
+                            _pct(screen["utilisation"]),
+                            _html_escape(screen["governing_bin"]),
+                            _fmt_sig(screen["total_cycles"], 8),
+                        ]],
+                        [25 * mm, 34 * mm, 18 * mm, 23 * mm,
+                         19 * mm, 17 * mm, 21 * mm, 22 * mm],
+                        font=5.5,
+                        keep=False,
+                    )
+                    self._small(
+                        _html_escape(screen["reason"] or "-")
+                        + (
+                            "<br/><b>Reference:</b> "
+                            + _html_escape(screen["source"])
+                            if screen["source"]
+                            else ""
+                        )
+                    )
+                    self._small(
+                        "A passing shortcut governs the stress-range criterion, "
+                        "while the complete S-N/Miner result remains below for "
+                        "transparency. Yield or proof stress remains independent."
                     )
                     self._fig(
                         viz.fatigue_sn_figure(
@@ -10272,6 +10428,11 @@ class ReportBuilder:
         utilisation = fatigue_presentation.evidence_number(
             fatigue_presentation.value(result, "utilisation")
         )
+        screen = fatigue_presentation.simplified_reinforcement_screen(result)
+        screen_passed = screen["passed"] is True
+        range_utilisation = (
+            screen["utilisation"] if screen_passed else damage_total
+        )
         damages = [row.get("damage") for row in bin_rows]
         if (
             reference is None
@@ -10284,6 +10445,7 @@ class ReportBuilder:
                 damage_total,
                 yield_total,
                 utilisation,
+                range_utilisation,
             )
             or any(value is None for value in damages)
         ):
@@ -10424,11 +10586,21 @@ class ReportBuilder:
             result=f"u<sub>yield</sub> = {_fmt(yield_util, 8)}",
         )
         self._formula(
-            "u = max(D, u<sub>yield</sub>)",
+            "u = max(u<sub>range</sub>, u<sub>yield</sub>)",
             equation_key="fatigue.reinforcement.utilisation",
-            ref=source,
+            ref=(
+                _html_escape(screen["source"])
+                if screen_passed and screen["source"]
+                else source
+            ),
             subst=(
-                f"max({_fmt_sig(damage_total, 8)}, "
+                (
+                    "u<sub>range</sub> = u<sub>screen</sub> = "
+                    if screen_passed
+                    else "u<sub>range</sub> = D = "
+                )
+                + f"{_fmt_sig(range_utilisation, 8)}; max("
+                f"{_fmt_sig(range_utilisation, 8)}, "
                 f"{_fmt(yield_total, 8)})"
             ),
             result=(

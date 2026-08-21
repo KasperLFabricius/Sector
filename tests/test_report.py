@@ -663,6 +663,25 @@ def _fatigue_report_fixture():
             governing_yield_check=yield_total,
             zero_cyclic_range=False,
         )
+        screen_utilisation = 66.0 / 73.0
+        screen = NS(
+            status="PASS - DETAILED CHECK NOT REQUIRED",
+            applicable=True,
+            passed=True,
+            detail_class="unwelded straight reinforcing bar",
+            range_basis="design",
+            threshold_mpa=73.0,
+            governing_range_mpa=66.0,
+            utilisation=screen_utilisation,
+            governing_bin=bin_name,
+            total_cycles=2.0e5,
+            source="DS/EN 1992-1-1:2023, 10.4(1)",
+            reason="Stress range is within the supported simplified limit",
+        )
+        steel_utilisation = max(
+            reinforcement_utilisation,
+            screen_utilisation,
+        )
         steel = NS(
             element_id="R1",
             kind="mild",
@@ -674,11 +693,16 @@ def _fatigue_report_fixture():
             governing_damage_bin=bin_name,
             yield_utilisation=reinforcement_utilisation,
             governing_yield_bin=bin_name,
-            utilisation=reinforcement_utilisation,
+            utilisation=steel_utilisation,
             converged=True,
             passed=True,
-            governing_criterion="yield/proof stress",
+            governing_criterion=(
+                "yield/proof stress"
+                if reinforcement_utilisation > screen_utilisation
+                else "simplified stress-range screen"
+            ),
             governing_bin=bin_name,
+            simplified_screen=screen,
         )
         fcd_fat_mpa = 14.72
         e_cd_min = 0.20
@@ -767,9 +791,9 @@ def _fatigue_report_fixture():
             eta_cc_fat=0.8,
             fcd_fat_mpa=fcd_fat_mpa,
         )
-        if reinforcement_utilisation >= concrete_utilisation:
+        if steel_utilisation >= concrete_utilisation:
             governing_domain = "reinforcement"
-            governing_criterion = "yield/proof stress"
+            governing_criterion = steel.governing_criterion
         else:
             governing_domain = "concrete"
             governing_criterion = "compressive stress"
@@ -782,7 +806,7 @@ def _fatigue_report_fixture():
             fcd_fat_mpa=fcd_fat_mpa,
             governing_reinforcement_id="R1",
             governing_concrete_fibre=4,
-            utilisation=max(reinforcement_utilisation, concrete_utilisation),
+            utilisation=max(steel_utilisation, concrete_utilisation),
             converged=True,
             passed=True,
             concrete_method=fatigue_core.CONCRETE_MINER,
@@ -891,8 +915,8 @@ def _fatigue_report_fixture():
         "governing_reinforcement_example": {
             "spectrum_name": "Traffic A",
             "element_id": "R1",
-            "utilisation": 0.82,
-            "criterion": "yield/proof stress",
+            "utilisation": 66.0 / 73.0,
+            "criterion": "simplified stress-range screen",
             "bin_name": "FAT-A1",
         },
         "governing_concrete_example": {
@@ -924,6 +948,11 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert all(name in text for name in ("Traffic A", "Traffic B", "Traffic C"))
     assert "FAT-A1" in text and "FAT-B1" in text
     assert "Reinforcement fatigue" in text
+    assert "Simplified stress-range screen" in text
+    assert "PASS - DETAILED CHECK NOT REQUIRED" in text
+    assert "unwelded straight reinforcing bar" in text
+    assert "DS/EN 1992-1-1:2023, 10.4(1)" in text
+    assert "66.000 MPa" in text and "73.000 MPa" in text
     assert "Concrete fatigue" in text
     assert "Bounded governing-fibre search" in text
     assert "Upper D" in text
@@ -958,6 +987,93 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "delta " + sigma not in text
     assert text.count(delta_sigma) >= 7
     assert chr(0x3B2) in text  # beta_cc(t0) uses the Greek symbol
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_publish_retained_simplified_fatigue_screen(profile):
+    inp, out = _fatigue_report_fixture()
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile=profile
+    )).split())
+
+    assert "Simplified stress-range screen" in text
+    assert "PASS - DETAILED CHECK NOT REQUIRED" in text
+    assert "66.000" in text
+    assert "73.000" in text
+    assert "DS/EN 1992-1-1:2023, 10.4(1)" in text
+    assert "Miner D" in text
+    assert "Yield / proof util." in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_publish_retained_unsupported_fatigue_fallback(profile):
+    inp, out = _fatigue_report_fixture()
+    result = out["fatigue"]["spectra"][0].reinforcement[0]
+    screen = result.simplified_screen
+    screen.status = "NOT APPLICABLE"
+    screen.applicable = False
+    screen.passed = None
+    screen.detail_class = "unsupported published-2023 detail"
+    screen.range_basis = ""
+    screen.threshold_mpa = None
+    screen.governing_range_mpa = None
+    screen.utilisation = None
+    screen.governing_bin = None
+    screen.source = "DS/EN 1992-1-1:2023, 10.4(1)"
+    screen.reason = (
+        "DS/EN 1992-1-1:2023 10.4 does not assign this preset a "
+        "simplified limit"
+    )
+    result.governing_criterion = "Miner damage"
+    result.governing_bin = result.governing_damage_bin
+    result.utilisation = result.damage
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile=profile
+    )).split())
+
+    assert "NOT APPLICABLE" in text
+    assert "unsupported published-2023 detail" in text
+    assert screen.reason in text
+    assert screen.source in text
+    assert "Miner D" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_publish_retained_invalid_fatigue_screen(profile):
+    inp, out = _fatigue_report_fixture()
+    payload = out["fatigue"]
+    payload["governing_reinforcement_example"] = None
+    expected = []
+    for index, spectrum in enumerate(payload["spectra"], start=1):
+        for result in spectrum.reinforcement:
+            result.element_id = f"SCREEN-R{index}"
+            screen = result.simplified_screen
+            screen.status = "INVALID"
+            screen.applicable = False
+            screen.passed = None
+            screen.detail_class = f"invalid retained screen class {index}"
+            screen.range_basis = f"retained range basis {index}"
+            screen.governing_range_mpa = None
+            screen.utilisation = None
+            screen.governing_bin = None
+            screen.source = f"retained invalid-screen source {index}"
+            screen.reason = f"Retained screen evidence group {index} is invalid"
+            expected.extend((
+                result.element_id,
+                screen.detail_class,
+                screen.range_basis,
+                screen.reason,
+                screen.source,
+            ))
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile=profile
+    )).split())
+
+    assert text.count("INVALID") == 3
+    assert all(token in text for token in expected)
 
 
 def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
@@ -1008,6 +1124,9 @@ def test_fatigue_worked_formulas_use_retained_operands(monkeypatch):
         "fatigue.reinforcement.design-resistance-range"
     ][0]["subst"]
     assert "7.654321" in calls["fatigue.reinforcement.sn-life"][0]["subst"]
+    utilisation_subst = calls["fatigue.reinforcement.utilisation"][0]["subst"]
+    assert "u<sub>screen</sub>" in utilisation_subst
+    assert "0.90410959" in utilisation_subst
     assert "0.92345600" in calls[
         "fatigue.concrete.strength"
     ][0]["subst"]

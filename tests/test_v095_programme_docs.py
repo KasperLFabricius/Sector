@@ -375,10 +375,7 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
 
     fatigue = contracts["PR-A05"]
     assert fatigue == {
-        "state": (
-            "frozen; calculation and UI implemented in PR-A05a, "
-            "publication pending PR-A05b"
-        ),
+        "state": "frozen and implemented by PR-A05a and PR-A05b",
         "acceptance_document": (
             "docs/pr_a05_v095_simplified_reinforcement_fatigue_screen_"
             "acceptance.md"
@@ -392,7 +389,7 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
             "independent fatigue checks retained",
         ],
         "threshold_values_frozen_here": True,
-        "implementation_evidence": False,
+        "implementation_evidence": True,
     }
 
     overview = contracts["PR-A06"]
