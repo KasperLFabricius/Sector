@@ -274,7 +274,8 @@
       "implementation_evidence": true
     },
     "PR-A06": {
-      "state": "must be frozen in owning PR before code",
+      "state": "frozen in PR-A06 before implementation",
+      "acceptance_document": "docs/pr_a06_v095_governing_results_overview_acceptance.md",
       "required_matrix_topics": [
         "complete emitted status vocabulary",
         "ordered status precedence",
@@ -283,8 +284,8 @@
         "status tie break",
         "case and direction provenance selection"
       ],
-      "status_order_frozen_here": false,
-      "tie_break_frozen_here": false,
+      "status_order_frozen_here": true,
+      "tie_break_frozen_here": true,
       "implementation_evidence": false
     }
   },
