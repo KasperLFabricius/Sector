@@ -125,13 +125,13 @@ for name in (
     'sector.kernels', 'sector.materials', 'sector.plastic', 'sector.section',
 ):
     assert name not in sys.modules, name
-assert sector.__version__ == '0.94'
+assert sector.__version__ == '0.95'
 assert tuple(sector.__all__) == {tuple(EXPECTED_EXPORTS)!r}
 print(json.dumps({{'version': sector.__version__, 'exports': len(sector.__all__)}}))
 """
     result = _run_isolated(source, no_site=True)
     _assert_process_ok(result)
-    assert json.loads(result.stdout) == {"exports": 32, "version": "0.94"}
+    assert json.loads(result.stdout) == {"exports": 32, "version": "0.95"}
 
 
 def test_lazy_public_registry_is_complete_ordered_and_explicit():

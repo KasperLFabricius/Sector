@@ -148,7 +148,7 @@ def __dir__():
 
 # Single source of truth for release and ownership metadata shown by the app,
 # reports, manuals, saved-project provenance and packaged-build manifest.
-__version__ = "0.94"
+__version__ = "0.95"
 __product_name__ = "Sector"
 __description__ = "Structural-analysis and design calculation tool"
 __author__ = "Kasper Lindskov Fabricius"
