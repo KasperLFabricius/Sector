@@ -16,6 +16,7 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
+from html import escape as _html_escape
 
 # Make both the repo root (for ``sector``) and this app folder (for ``viz``)
 # importable when run as a script or via Streamlit's AppTest.
@@ -9679,14 +9680,58 @@ def _plastic_state_hover(rows):
         return None
     out = []
     for row in rows:
-        suffix = (
-            f", material {row['material_id']}" if row.get("material_id") else ""
+        material_id = _html_escape(
+            str(row.get("material_id") or "").strip(), quote=True
         )
+        material_name = _html_escape(
+            str(row.get("material_name") or "").strip(), quote=True
+        )
+        suffix = f", material {material_id}" if material_id else ""
+        if suffix and material_name:
+            suffix += f" - {material_name}"
         out.append(
             f"{_SIGMA} = {row['stress_mpa']:.1f} MPa, "
             f"{_EPS} = {row['strain_permille'] / 10.0:.3f} %{suffix}"
         )
     return out
+
+
+def _elastic_state_hover(rows):
+    """Format retained Elastic bar/tendon responses for result-figure hover."""
+
+    if not rows:
+        return None
+    out = []
+    for row in rows:
+        material_id = _html_escape(
+            str(row.get("material_id") or "").strip(), quote=True
+        )
+        material_name = _html_escape(
+            str(row.get("material_name") or "").strip(), quote=True
+        )
+        material = ""
+        if material_id:
+            material = f"<br>material = {material_id}"
+            if material_name:
+                material += f" - {material_name}"
+        out.append(
+            f"{_SIGMA}<sub>total</sub> = {row['total_mpa']:.3f} MPa<br>"
+            f"{_EPS} = {row['strain_permille']:.4f} permille{material}"
+        )
+    return out
+
+
+def _elastic_corner_hover(rows):
+    """Format retained Elastic concrete-corner responses without coordinates."""
+
+    if not rows:
+        return None
+    return [
+        f"{row['ring']} point {row['ring_point_no']}<br>"
+        f"{_SIGMA}<sub>c</sub> = {row['stress_mpa']:.3f} MPa<br>"
+        f"{_EPS}<sub>c</sub> = {row['strain_permille']:.4f} permille"
+        for row in rows
+    ]
 
 
 def plastic_view(inp, results):
@@ -9795,7 +9840,8 @@ def plastic_view(inp, results):
                                show_labels=False, scale=_MM, unit="mm",
                                bar_hover=bar_hover, tendon_hover=tendon_hover,
                                bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
-                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
+                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])],
+                               geometry_hover=False),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds retain the "
@@ -10067,6 +10113,13 @@ def elastic_view(inp, results, *, global_results=None):
     sign = lambda s: viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
     bar_colors = [sign(s) for s in e["total"][:nb]]
     tendon_colors = [sign(s) for s in e["total"][nb:]]
+    element_rows = e.get("elements", [])
+    bar_states = [
+        row for row in element_rows if row.get("element_type") == "Bar"
+    ]
+    tendon_states = [
+        row for row in element_rows if row.get("element_type") == "Tendon"
+    ]
     section_col, strain_col = st.columns([3, 2])
     with section_col:
         st.plotly_chart(
@@ -10077,12 +10130,18 @@ def elastic_view(inp, results, *, global_results=None):
                                scale=_MM, unit="mm",
                                title="Elastic state (tension + / compression -)",
                                bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
-                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])]),
+                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])],
+                               bar_hover=_elastic_state_hover(bar_states),
+                               tendon_hover=_elastic_state_hover(tendon_states),
+                               corner_hover=_elastic_corner_hover(
+                                   e.get("concrete_corners", [])
+                               ),
+                               geometry_hover=False),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds identify the "
-                   "element type. Hover for the element ID; complete values are "
-                   "tabulated below.")
+                   "element type. Hover for retained material, stress and strain; "
+                   "geometry remains in the complete table below.")
     with strain_col:
         st.plotly_chart(
             viz.elastic_strain_figure(
@@ -10093,7 +10152,6 @@ def elastic_view(inp, results, *, global_results=None):
     # Complete, explicitly typed element evidence: no tendon is called a bar, and
     # geometry/area/strain stay beside every stress component for direct QA.
     st.markdown("**Reinforcement and tendon response (tension +)**")
-    element_rows = e.get("elements", [])
     if element_rows:
         material_labels = [
             (f"{row.get('material_id')} - {row.get('material_name')}"

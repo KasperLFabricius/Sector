@@ -621,7 +621,16 @@ def _legend_y(height: float) -> float:
     return -_LEGEND_GAP_PX / plot_h
 
 
-def _point_hover(points, first_number, kind, unit, extra=None, ids=None):
+def _point_hover(
+    points,
+    first_number,
+    kind,
+    unit,
+    extra=None,
+    ids=None,
+    *,
+    include_geometry=True,
+):
     """Per-point hover strings ``'Kind N<br>x, y[<br>area][<br>extra]'`` for the
     section drawing.
 
@@ -631,16 +640,24 @@ def _point_hover(points, first_number, kind, unit, extra=None, ids=None):
     m). A reinforcement ``area`` (a 3rd tuple element, always in mm2) is shown when
     present; concrete corners are 2-tuples and carry none. ``extra`` is an optional
     per-point string (e.g. a stress/strain read-out) appended on its own line.
+    ``include_geometry=False`` retains the identity and extra response only.
     """
     dec = 3 if unit == "m" else 0
     lines = []
     for i, p in enumerate(points):
-        point_id = (str(ids[i]) if ids is not None and i < len(ids)
-                    else str(first_number + i))
-        s = (f"{kind} {point_id}<br>"
-             f"x = {p[0]:.{dec}f} {unit}, y = {p[1]:.{dec}f} {unit}")
-        if len(p) > 2 and p[2] is not None:
-            s += f"<br>area = {p[2]:.0f} mm<sup>2</sup>"
+        point_id = _html_escape(
+            str(ids[i]) if ids is not None and i < len(ids)
+            else str(first_number + i),
+            quote=True,
+        )
+        s = f"{kind} {point_id}"
+        if include_geometry:
+            s += (
+                f"<br>x = {p[0]:.{dec}f} {unit}, "
+                f"y = {p[1]:.{dec}f} {unit}"
+            )
+            if len(p) > 2 and p[2] is not None:
+                s += f"<br>area = {p[2]:.0f} mm<sup>2</sup>"
         if extra is not None and i < len(extra) and extra[i]:
             s += f"<br>{extra[i]}"
         lines.append(s)
@@ -693,7 +710,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
                    height=440, scale=1.0, unit="m", bar_hover=None, tendon_hover=None,
-                   bar_ids=None, tendon_ids=None):
+                   bar_ids=None, tendon_ids=None, corner_hover=None,
+                   geometry_hover=True):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     Reinforcement is drawn consistently across the views: bars are circles and
@@ -704,6 +722,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     ``outer`` / ``holes`` / ``bars`` / ``na_line`` / ``zones`` are all given in
     metres; ``scale`` (and the matching axis ``unit`` label) converts them for
     display -- e.g. ``1000`` / ``"mm"`` draws the section in millimetres.
+    ``geometry_hover`` keeps coordinates and reinforcement area in input previews;
+    analysis-result callers disable it and provide response-only hover strings.
     ``show_labels`` numbers the reinforcement and concrete corners; ``label_scale``
     scales the label font and ``label_min_gap`` is the minimum label spacing
     (fraction of the section size) below which labels are thinned out -- the two
@@ -750,11 +770,18 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     # polygons skip hover, so these markers report each corner's coordinates without
     # drawing anything over the outline.
     corner_verts = [v for ring in [outer, *(holes or [])] for v in ring]
-    if corner_verts:
+    if corner_verts and (geometry_hover or corner_hover):
         fig.add_trace(go.Scatter(
             x=[v[0] for v in corner_verts], y=[v[1] for v in corner_verts],
             mode="markers", marker=dict(size=12, color="rgba(0,0,0,0)"),
-            customdata=_point_hover(corner_verts, 1, "Corner", unit),
+            customdata=_point_hover(
+                corner_verts,
+                1,
+                "Corner",
+                unit,
+                corner_hover,
+                include_geometry=geometry_hover,
+            ),
             hovertemplate="%{customdata}<extra></extra>", showlegend=False))
     if bars:
         bx = [b[0] for b in bars]
@@ -767,7 +794,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                              symbol=symbols, color=colors,
                                              line=dict(color="white", width=1)),
                                  customdata=_point_hover(
-                                     bars, 1, "Bar", unit, bar_hover, bar_ids),
+                                     bars, 1, "Bar", unit, bar_hover, bar_ids,
+                                     include_geometry=geometry_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
                                  showlegend=True))
     if tendons:
@@ -782,7 +810,8 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                              line=dict(color="white", width=1)),
                                  customdata=_point_hover(
                                      tendons, len(bars) + 1, "Tendon", unit,
-                                     tendon_hover, tendon_ids),
+                                     tendon_hover, tendon_ids,
+                                     include_geometry=geometry_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
                                  showlegend=True))
     state_colors = list(bar_colors or []) + list(tendon_colors or [])
@@ -804,6 +833,7 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
         x0, y0, x1, y1 = na_line
         fig.add_trace(go.Scatter(x=[x0, x1], y=[y0, y1], mode="lines",
                                  line=dict(color=NA_LINE, width=2, dash="dash"),
+                                 hoverinfo=(None if geometry_hover else "skip"),
                                  name="neutral axis"))
     if show_labels:
         _add_point_labels(
@@ -2567,10 +2597,18 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
         cap_angles = list(angles) if angles is not None else None
     if angles is not None and len(angles) == len(mx):
         cap.customdata = cap_angles
-        cap.hovertemplate = ("V = %{customdata:.0f} deg<br>My = %{x:.1f} kNm"
-                             "<br>Mx = %{y:.1f} kNm<extra></extra>")
+        cap.hovertemplate = (
+            "Capacity point<br>"
+            "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
+            "M<sub>x,Rd</sub> = %{y:.1f} kNm<br>"
+            "neutral-axis angle = %{customdata:.0f} deg<extra></extra>"
+        )
     else:
-        cap.hovertemplate = "My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"
+        cap.hovertemplate = (
+            "Capacity point<br>"
+            "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
+            "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
+        )
     fig.add_trace(cap)
 
     if applied is not None:
@@ -2588,11 +2626,19 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
                 x=[gx], y=[gy], mode="markers", name="capacity (this direction)",
                 marker=dict(size=11, color=ENVELOPE, symbol="circle-open",
                             line=dict(width=2)),
-                hovertemplate="My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"))
+                hovertemplate=(
+                    "Capacity in applied direction<br>"
+                    "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
+                    "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
+                )))
         fig.add_trace(go.Scatter(
             x=[a_my], y=[a_mx], mode="markers",
             marker=dict(size=11, color=LOAD_POINT, symbol="x"), name="applied",
-            hovertemplate="My = %{x:.1f} kNm<br>Mx = %{y:.1f} kNm<extra></extra>"))
+            hovertemplate=(
+                "Applied action<br>"
+                "M<sub>y,Ed</sub> = %{x:.1f} kNm<br>"
+                "M<sub>x,Ed</sub> = %{y:.1f} kNm<extra></extra>"
+            )))
         if util is not None and math.isfinite(util):
             # Below-right of the applied point, clear of the (up-and-out) load ray.
             fig.add_annotation(x=a_my, y=a_mx, text=f"util = {util:.2f}",
@@ -2633,7 +2679,16 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     scale = max((abs(v) for v in list(N) + list(M)), default=1.0) or 1.0
     snap = lambda v: 0.0 if abs(v) <= scale * 1e-4 else v
     Ms = [snap(v) for v in M]
-    hover = ("M = %{x:.1f} kNm<br>N = %{y:.1f} kN<extra></extra>")
+    capacity_hover = (
+        "Capacity point<br>"
+        f"M<sub>{axis},Rd</sub> = %{{x:.1f}} kNm<br>"
+        "N<sub>Rd</sub> = %{y:.1f} kN<extra></extra>"
+    )
+    applied_hover = (
+        "Applied action<br>"
+        f"M<sub>{axis},Ed</sub> = %{{x:.1f}} kNm<br>"
+        "N<sub>Ed</sub> = %{y:.1f} kN<extra></extra>"
+    )
 
     fig = go.Figure()
     # Close the polyline (repeat the first vertex) so the boundary is drawn all the
@@ -2642,7 +2697,8 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     Ns = list(N)
     fig.add_trace(go.Scatter(x=Ms + Ms[:1], y=Ns + Ns[:1], mode="lines", fill="toself",
                              line=dict(color=ENVELOPE, width=2), name="capacity",
-                             fillcolor=ENVELOPE_FILL, hovertemplate=hover))
+                             fillcolor=ENVELOPE_FILL,
+                             hovertemplate=capacity_hover))
     # Landmark points (derived from the boundary): the squash load (most
     # compression), the tension limit (most tension) and the max-moment apex. They
     # make the figure readable on its own.
@@ -2657,7 +2713,7 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
         fig.add_trace(go.Scatter(
             x=[Ms[i_sq], Ms[i_te], Ms[i_mm]], y=[Ns[i_sq], Ns[i_te], Ns[i_mm]],
             mode="markers", marker=dict(size=7, color=ENVELOPE, symbol="diamond"),
-            name="landmarks", hovertemplate=hover))
+            name="landmarks", hovertemplate=capacity_hover))
         # Short descriptors (the exact values are in the metrics row and on hover),
         # placed so they never clip the frame in the half-width side-by-side view:
         # squash below its apex, tension above its apex, max-moment just left of the
@@ -2672,7 +2728,7 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     if applied is not None:
         fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
                                  marker=dict(size=11, color=LOAD_POINT, symbol="x"),
-                                 name="applied", hovertemplate=hover))
+                                 name="applied", hovertemplate=applied_hover))
     # Which PHYSICAL state each positive axis half means: +Mx tensions the bottom
     # face / +My the left face (the solver's V = 90 / V = 0 convention), +N is
     # axial tension.

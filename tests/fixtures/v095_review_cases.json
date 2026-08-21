@@ -287,6 +287,20 @@
       "status_order_frozen_here": true,
       "tie_break_frozen_here": true,
       "implementation_evidence": true
+    },
+    "PR-A07": {
+      "state": "frozen and implemented by PR-A07",
+      "acceptance_document": "docs/pr_a07_v095_analysis_hover_acceptance.md",
+      "required_matrix_topics": [
+        "retained M-M and N-M capacity actions",
+        "capacity and applied action identity",
+        "plastic element stress and strain hover",
+        "elastic element and concrete response hover",
+        "analysis geometry exclusion",
+        "input and preview geometry preservation"
+      ],
+      "result_values_recomputed_here": false,
+      "implementation_evidence": true
     }
   },
   "release_baseline": {

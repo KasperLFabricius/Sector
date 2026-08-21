@@ -260,6 +260,61 @@ def test_section_figure_appends_per_bar_and_tendon_hover():
     assert "sig = 1200 MPa" in str(tendon.customdata[0])
 
 
+def test_section_result_hover_reports_response_without_input_geometry():
+    outer = [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)]
+    zone = [(-0.2, -0.3), (0.2, -0.3), (0.0, 0.0)]
+    fig = viz.section_figure(
+        outer,
+        bars=[(-0.1, -0.25, 314.0)],
+        tendons=[(0.0, 0.26, 150.0)],
+        zones=[(zone, viz.COMP_ZONE_FILL, "compression zone")],
+        na_line=(-0.2, 0.0, 0.2, 0.0),
+        scale=1000.0,
+        unit="mm",
+        bar_ids=["R<br>1 &"],
+        tendon_ids=["P<i>1"],
+        bar_hover=["sig = 300 MPa<br>eps = 0.10 %"],
+        tendon_hover=["sig = 1200 MPa<br>eps = 5.90 %"],
+        corner_hover=[f"concrete response {index}" for index in range(4)],
+        geometry_hover=False,
+    )
+
+    corner = _corner_hover(fig)
+    bar = next(t for t in fig.data if getattr(t, "name", None) == "reinforcing bar")
+    tendon = next(t for t in fig.data if getattr(t, "name", None) == "tendon")
+    values = [
+        *(str(value) for value in corner.customdata),
+        *(str(value) for value in bar.customdata),
+        *(str(value) for value in tendon.customdata),
+    ]
+
+    assert "Corner 1" in values[0] and "concrete response 0" in values[0]
+    assert "Bar R&lt;br&gt;1 &amp;" in str(bar.customdata[0])
+    assert "R<br>1" not in str(bar.customdata[0])
+    assert "sig = 300 MPa" in str(bar.customdata[0])
+    assert "Tendon P&lt;i&gt;1" in str(tendon.customdata[0])
+    assert "P<i>1" not in str(tendon.customdata[0])
+    assert "eps = 5.90 %" in str(tendon.customdata[0])
+    assert all("x =" not in value and "y =" not in value for value in values)
+    assert all("area =" not in value for value in values)
+    response_traces = {"reinforcing bar", "tendon"}
+    for trace in fig.data:
+        if trace.name in response_traces or trace.customdata is not None:
+            assert trace.hovertemplate == "%{customdata}<extra></extra>"
+        else:
+            assert trace.hoverinfo == "skip"
+
+    preview = viz.section_figure(
+        outer,
+        zones=[(zone, viz.COMP_ZONE_FILL, "compression zone")],
+        na_line=(-0.2, 0.0, 0.2, 0.0),
+    )
+    neutral_axis = next(
+        trace for trace in preview.data if trace.name == "neutral axis"
+    )
+    assert neutral_axis.hoverinfo is None
+
+
 def _corner_count(fig):
     texts = [t for t in fig.data if getattr(t, "mode", None) == "text"]
     return len(max(texts, key=lambda t: len(t.text)).text) if texts else 0
@@ -691,6 +746,55 @@ def test_mm_interaction_shows_fill_util_ray_and_angle_hover():
     assert any("util = 0.50" in (a.text or "") for a in fig.layout.annotations)
 
 
+def test_mm_interaction_hover_distinguishes_capacity_and_applied_actions():
+    fig = viz.interaction_figure(
+        [300.0, 0.0, -300.0, 0.0],
+        [0.0, 80.0, 0.0, -80.0],
+        applied=(150.0, 20.0),
+        angles=[0.0, 90.0, 180.0, 270.0],
+        util=0.5,
+    )
+    capacity = next(trace for trace in fig.data if trace.name == "capacity")
+    crossing = next(
+        trace for trace in fig.data if trace.name == "capacity (this direction)"
+    )
+    applied = next(trace for trace in fig.data if trace.name == "applied")
+
+    assert capacity.hovertemplate == (
+        "Capacity point<br>"
+        "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
+        "M<sub>x,Rd</sub> = %{y:.1f} kNm<br>"
+        "neutral-axis angle = %{customdata:.0f} deg<extra></extra>"
+    )
+    assert crossing.hovertemplate == (
+        "Capacity in applied direction<br>"
+        "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
+        "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
+    )
+    assert applied.hovertemplate == (
+        "Applied action<br>"
+        "M<sub>y,Ed</sub> = %{x:.1f} kNm<br>"
+        "M<sub>x,Ed</sub> = %{y:.1f} kNm<extra></extra>"
+    )
+
+
+@pytest.mark.parametrize("angles", [None, [0.0]])
+def test_mm_interaction_hover_does_not_invent_unavailable_angle(angles):
+    fig = viz.interaction_figure(
+        [300.0, 0.0, -300.0, 0.0],
+        [0.0, 80.0, 0.0, -80.0],
+        angles=angles,
+    )
+    capacity = next(trace for trace in fig.data if trace.name == "capacity")
+
+    assert capacity.customdata is None
+    assert capacity.hovertemplate == (
+        "Capacity point<br>"
+        "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
+        "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
+    )
+
+
 def test_mm_interaction_without_util_has_no_ray():
     fig = viz.interaction_figure([100.0, 0.0, -100.0], [0.0, 30.0, 0.0],
                                  applied=(50.0, 10.0))
@@ -705,6 +809,31 @@ def test_nm_interaction_marks_landmarks():
     assert any(getattr(t, "name", None) == "landmarks" for t in fig.data)
     anns = " ".join(a.text for a in fig.layout.annotations)
     assert "squash" in anns and "tension" in anns and "max Mx" in anns
+
+
+@pytest.mark.parametrize("axis", ["x", "y"])
+def test_nm_interaction_hover_distinguishes_axis_capacity_and_applied_actions(axis):
+    fig = viz.interaction_nm_figure(
+        [400.0, 0.0, -2500.0, 0.0],
+        [0.0, 300.0, 0.0, -300.0],
+        axis=axis,
+        applied=(-500.0, 80.0),
+    )
+    capacity = next(trace for trace in fig.data if trace.name == "capacity")
+    landmarks = next(trace for trace in fig.data if trace.name == "landmarks")
+    applied = next(trace for trace in fig.data if trace.name == "applied")
+
+    for trace in (capacity, landmarks):
+        assert trace.hovertemplate == (
+            "Capacity point<br>"
+            f"M<sub>{axis},Rd</sub> = %{{x:.1f}} kNm<br>"
+            "N<sub>Rd</sub> = %{y:.1f} kN<extra></extra>"
+        )
+    assert applied.hovertemplate == (
+        "Applied action<br>"
+        f"M<sub>{axis},Ed</sub> = %{{x:.1f}} kNm<br>"
+        "N<sub>Ed</sub> = %{y:.1f} kN<extra></extra>"
+    )
 
 
 def test_vt_interaction_shows_ray_and_interaction_sum():

@@ -21,6 +21,9 @@ FATIGUE_SCREEN_ACCEPTANCE = (
 GOVERNING_OVERVIEW_ACCEPTANCE = (
     ROOT / "docs" / "pr_a06_v095_governing_results_overview_acceptance.md"
 )
+ANALYSIS_HOVER_ACCEPTANCE = (
+    ROOT / "docs" / "pr_a07_v095_analysis_hover_acceptance.md"
+)
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
@@ -356,9 +359,9 @@ def test_owner_scope_freezes_exact_amendment_identity_and_ownership() -> None:
         assert phrase in compact_programme
 
 
-def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> None:
+def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
     contracts = _fixture()["deferred_acceptance_contracts"]
-    assert set(contracts) == {"PR-A04", "PR-A05", "PR-A06"}
+    assert set(contracts) == {"PR-A04", "PR-A05", "PR-A06", "PR-A07"}
 
     crack = contracts["PR-A04"]
     assert crack == {
@@ -413,6 +416,40 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
         "tie_break_frozen_here": True,
         "implementation_evidence": True,
     }
+
+    hover = contracts["PR-A07"]
+    assert hover == {
+        "state": "frozen and implemented by PR-A07",
+        "acceptance_document": "docs/pr_a07_v095_analysis_hover_acceptance.md",
+        "required_matrix_topics": [
+            "retained M-M and N-M capacity actions",
+            "capacity and applied action identity",
+            "plastic element stress and strain hover",
+            "elastic element and concrete response hover",
+            "analysis geometry exclusion",
+            "input and preview geometry preservation",
+        ],
+        "result_values_recomputed_here": False,
+        "implementation_evidence": True,
+    }
+
+
+def test_pr_a07_acceptance_freezes_analysis_and_input_hover_boundary() -> None:
+    text = _text(ANALYSIS_HOVER_ACCEPTANCE)
+    compact = " ".join(text.split())
+
+    for required in (
+        "retained `Mx,Rd` and `My,Rd`",
+        "retained `NRd`",
+        "applied marker remains explicitly labelled",
+        "design stress and strain",
+        "retained total stress and retained strain",
+        "Analysis section hovers omit x/y coordinates",
+        "geometry-preview figures keep their existing",
+        "does not interpolate a new resistance",
+        "No solver, result value, persistence, schema, report",
+    ):
+        assert required in compact
 
 
 def test_governing_overview_contract_freezes_status_and_tie_rules() -> None:
