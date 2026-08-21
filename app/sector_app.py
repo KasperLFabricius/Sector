@@ -9679,9 +9679,11 @@ def _plastic_state_hover(rows):
         return None
     out = []
     for row in rows:
-        suffix = (
-            f", material {row['material_id']}" if row.get("material_id") else ""
-        )
+        material_id = str(row.get("material_id") or "").strip()
+        material_name = str(row.get("material_name") or "").strip()
+        suffix = f", material {material_id}" if material_id else ""
+        if suffix and material_name:
+            suffix += f" - {material_name}"
         out.append(
             f"{_SIGMA} = {row['stress_mpa']:.1f} MPa, "
             f"{_EPS} = {row['strain_permille'] / 10.0:.3f} %{suffix}"

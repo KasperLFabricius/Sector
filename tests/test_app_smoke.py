@@ -1466,13 +1466,18 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
     )
 
     rows = [
-        {"stress_mpa": 500.0, "strain_permille": 5.0, "material_id": "M1"},
+        {
+            "stress_mpa": 500.0,
+            "strain_permille": 5.0,
+            "material_id": "M1",
+            "material_name": "B500B",
+        },
         {"stress_mpa": -420.0, "strain_permille": -5.0, "material_id": "M2"},
     ]
     hover = _plastic_state_hover(rows)
     assert "500.0 MPa" in hover[0]
     assert "= 0.500 %" in hover[0]
-    assert "material M1" in hover[0]
+    assert "material M1 - B500B" in hover[0]
     assert "= -0.500 %" in hover[1]
     assert "material M2" in hover[1]
     assert _plastic_state_hover([]) is None
