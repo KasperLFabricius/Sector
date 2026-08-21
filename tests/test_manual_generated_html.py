@@ -750,7 +750,7 @@ def test_manual_generated_html_text_has_one_required_typed_parameter():
     }
 
 
-def test_generated_manual_text_helper_is_dormant_and_text_only():
+def test_generated_manual_text_helper_has_only_the_issued_fixture_consumer():
     module_path = Path(inspect.getfile(manual_generated_html_text))
     source = module_path.read_text(encoding="utf-8")
     syntax = ast.parse(source)
@@ -764,7 +764,7 @@ def test_generated_manual_text_helper_is_dormant_and_text_only():
         ):
             callsites.append(path.relative_to(repository).as_posix())
 
-    assert callsites == []
+    assert callsites == ["tools/manual_render_fixture.py"]
     expected_assignments = {
         "_VOCABULARY": "CURRENT_GENERATED_MANUAL_HTML_VOCABULARY",
         "_BODY_BLOCK_TAGS": "_VOCABULARY.body_block_tags",

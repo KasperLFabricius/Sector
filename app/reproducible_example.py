@@ -198,7 +198,9 @@ def project_scalars() -> dict:
         "sls_tendon_xi": 0.0,
         "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "sls_member": "Beam",
-        "sls_permitted_crack_width_mm": 0.20,
+        "sls_long_term_permitted_crack_width_mm": 0.20,
+        "sls_short_term_permitted_crack_width_mm": 0.20,
+        "sls_heightened_permitted_crack_width_mm": 0.20,
         "sls_heightened_on": True,
         "sls_heightened_reference_case": "EL-COMPLETE",
         "sls_heightened_reinforcement_surface": "smooth",
@@ -297,8 +299,9 @@ def checking_pack() -> str:
         - Steel M1: fyk=550 MPa, gamma_s=1.20, Es=200000 MPa.
         - Plastic case PL-COMPLETE: N=0 kN, Mx=80 kNm, My=10 kNm,
           Vy=30 kN and T=20 kNm.
-        - Global Analysis setting: the user-specified permitted crack width is
-          wk,criterion=0.20 mm, shared by every ordinary and heightened check.
+        - Analysis settings: the user-specified long-term and short-term ordinary
+          limits are both 0.20 mm. The separate Formula 7.100 NA permitted-width
+          operand is also 0.20 mm; none is inferred from the selected standard.
         - Elastic case EL-COMPLETE: short-term Mx=55 kNm; all other
           long/short actions are zero; ordinary crack width is enabled.
         - Separate DK NA heightened check: both fine and coarse systems, smooth

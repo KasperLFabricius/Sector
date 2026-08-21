@@ -24,10 +24,12 @@ types that numerically coerce to zero or one, are malformed numerical inputs
 and are rejected rather than treated as coefficients.
 
 PASS/FAIL is reserved for an implemented demand-versus-resistance equation.
-Stresses, crack widths and other output-only quantities carry no acceptance
-verdict when no criterion is supplied. An optional user-specified crack-width
-criterion produces only `WITHIN USER-SPECIFIED LIMIT` or
-`EXCEEDS USER-SPECIFIED LIMIT`, publishes the criterion source and does not
+Stresses and other output-only quantities carry no acceptance verdict. For an
+Elastic action that requests crack width, that calculation remains optional.
+Independent long-term and short-term crack-width limits are user-specified: a
+0 mm value leaves that duration's calculated width without comparison, while a
+positive value produces only `WITHIN USER-SPECIFIED LIMIT` or
+`EXCEEDS USER-SPECIFIED LIMIT` and publishes the matching source. This does not
 become a code-compliance conclusion. Sector does not issue a global compliance
 verdict.
 
@@ -37,9 +39,11 @@ method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
 Sector 0.94 is the current internal product identity and uses project schema
-25. Schema 24 has one bounded migration for the shared
-permitted crack width; conflicting populated legacy values migrate to the
-conservative minimum with a visible warning. Schema 23 and future schemas remain
+26. Schema 25 has one bounded migration: its former single permitted crack
+width is copied to the independent long-term and short-term ordinary inputs,
+and is preserved separately as the Formula 7.100 NA operand only when that
+heightened calculation was enabled. Zero means no ordinary comparison and is
+never promoted to the heightened operand. Schema 24 and future schemas remain
 unsupported. Earlier compliance, cover-calculator or authority metadata is not
 carried forward. Its portable Windows ZIP is unsigned; no trusted-publisher
 reputation or administrator approval is claimed.

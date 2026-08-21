@@ -19,7 +19,21 @@ if str(ROOT) not in sys.path:
 import manual  # noqa: E402
 
 from app import manual_information_architecture as manual_ia  # noqa: E402
+from app import project_io  # noqa: E402
 from sector import __version__  # noqa: E402
+from tools.manual_current_program_statements import (  # noqa: E402
+    validate_current_manual_program_statements,
+)
+from tools.manual_current_schema_statements import (  # noqa: E402
+    validate_current_manual_schema_statements,
+)
+from tools.manual_generated_html import manual_generated_html_text  # noqa: E402
+from tools.manual_product_references import (  # noqa: E402
+    validate_no_noncurrent_manual_product_references,
+)
+from tools.manual_schema_references import (  # noqa: E402
+    validate_no_noncurrent_manual_schema_references,
+)
 from tools.publication_preflight import (  # noqa: E402
     MANUAL_FURNITURE,
     RasterCrop,
@@ -31,14 +45,6 @@ from tools.publication_preflight import (  # noqa: E402
 from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
 _EXPECTED_FIGURE_COUNT = 16
-_CURRENT_SCHEMA_COMPATIBILITY = (
-    "Current projects use schema version 25"
-)
-_SCHEMA_24_MIGRATION_COMPATIBILITY = (
-    "Schema 24 is migrated in memory through the bounded permitted-crack-width "
-    "rule and resaves cleanly as schema 25"
-)
-_OBSOLETE_SCHEMA_COMPATIBILITY = "in-development Sector v0.93 line"
 _UNRENDERED_MATH_TOKENS = (
     "sqrt",
     "Cfrac",
@@ -128,6 +134,8 @@ class _HTMLInventory(HTMLParser):
 def validate_html_content(html: bytes) -> str:
     """Validate the semantic HTML companion without starting a browser."""
     text = html.decode("utf-8")
+    reference_text = manual_generated_html_text(text)
+    flat_text = " ".join(reference_text.split())
     parser = _HTMLInventory()
     parser.feed(text)
     if not text.startswith("<!doctype html>") or parser.lang != "en":
@@ -179,11 +187,13 @@ def validate_html_content(html: bytes) -> str:
         "Standard",
         "Audit",
         "Limitations &amp; troubleshooting",
-        _CURRENT_SCHEMA_COMPATIBILITY,
-        _SCHEMA_24_MIGRATION_COMPATIBILITY,
     ):
         if expected not in text:
             raise AssertionError(f"expected manual HTML content is missing: {expected}")
+    _validate_current_manual_identity(
+        flat_text,
+        reference_text=reference_text,
+    )
     return text
 
 
@@ -204,21 +214,26 @@ def _unrendered_math_token(text: str) -> str | None:
     return None
 
 
-def _validate_release_compatibility_wording(flat_text: str) -> None:
-    if _OBSOLETE_SCHEMA_COMPATIBILITY in flat_text:
-        raise AssertionError(
-            "the manual contains obsolete v0.93 development wording"
-        )
-    if _CURRENT_SCHEMA_COMPATIBILITY not in flat_text:
-        raise AssertionError(
-            "expected manual content is missing: "
-            f"{_CURRENT_SCHEMA_COMPATIBILITY}"
-        )
-    if _SCHEMA_24_MIGRATION_COMPATIBILITY not in flat_text:
-        raise AssertionError(
-            "expected manual content is missing: "
-            f"{_SCHEMA_24_MIGRATION_COMPATIBILITY}"
-        )
+def _validate_current_manual_identity(
+    flat_text: str,
+    *,
+    reference_text: str,
+) -> None:
+    """Apply every bounded current-only rule to visible manual text."""
+
+    validate_current_manual_schema_statements(
+        flat_text,
+        project_schema=project_io.VERSION,
+    )
+    validate_no_noncurrent_manual_schema_references(
+        reference_text,
+        project_schema=project_io.VERSION,
+    )
+    validate_no_noncurrent_manual_product_references(
+        reference_text,
+        product_version=__version__,
+    )
+    validate_current_manual_program_statements(flat_text)
 
 
 def validate_visible_contents_destinations(reader, outline_entries) -> None:
@@ -254,7 +269,10 @@ def validate_pdf_content(pdf: bytes) -> str:
     flat_text = " ".join(text.split())
     if "figure unavailable" in text.lower():
         raise AssertionError("the manual contains an unavailable-figure placeholder")
-    _validate_release_compatibility_wording(flat_text)
+    _validate_current_manual_identity(
+        flat_text,
+        reference_text=text,
+    )
     leaked_token = _unrendered_math_token(text)
     if leaked_token is not None:
         raise AssertionError(
@@ -354,9 +372,6 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Blank ordinary action cells are normalised to canonical zero",
         "Optional-null fields remain absent rather than becoming zero",
         "retains the entered numeric precision internally",
-        _CURRENT_SCHEMA_COMPATIBILITY,
-        _SCHEMA_24_MIGRATION_COMPATIBILITY,
-        "Schema 23 remains unsupported",
         "published project-adoption basis",
         "no Danish National Annex",
         "confinement enhancement is not included or assessed",

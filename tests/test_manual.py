@@ -102,14 +102,29 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
         "published project-adoption basis",
         "no Danish National Annex",
         "confinement enhancement is not included or assessed",
-        "Current projects use schema version 25",
-        "Schema 24 is migrated in memory",
-        "Schema 23 remains unsupported",
+        "Current projects use schema version 26",
+        "Every downloaded project save uses the current schema",
+        (
+            "Report metadata and publication controls are grouped separately from "
+            "the Project input stage."
+        ),
+        (
+            "Report labels identify the physical quantity represented by each "
+            "result field."
+        ),
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
     ):
         assert retained in text
-    assert "in-development Sector v0.93 line" not in text
+    for replaced in (
+        "Schema 25 is migrated in memory",
+        "Schema 24 remains unsupported",
+        "in-development Sector v0.93 line",
+        "Released Sector 0.92 projects used schema version 23",
+        "Report metadata and publication controls are no longer mixed",
+        "Legacy result-field names remain for compatibility",
+    ):
+        assert replaced not in text
     assert "WITHIN USER-SPECIFIED LIMIT" in text
     assert "EXCEEDS USER-SPECIFIED LIMIT" in text
 
@@ -511,8 +526,16 @@ def test_manual_documents_optional_crack_criterion_and_dk_heightened_boundary():
         if isinstance(item, str)
     )
 
-    assert "One optional positive permitted width in Analysis settings" in text
-    assert "does not infer exposure, durability, prestress category" in text
+    assert "independent long-term and short-term user limits" in text
+    assert "does not infer exposure, durability, load-combination" in text
+    assert "separate Formula 7.100 NA permitted width" in text
+    assert "separate Formula 7.100 NA permitted-width input" in text
+    assert "A 0 mm limit leaves only that duration's calculated width" in text
+    assert "Independent long-term and short-term crack-width limits" in text
+    assert "shared Analysis permitted width" not in text
+    assert "supply the shared permitted width" not in text
+    assert "With no criterion" not in text
+    assert "Without a criterion" not in text
     assert "DK NA heightened crack-control minimum" in text
     assert r"m_s=\sqrt{2}" in text
     assert "option is unavailable for the 2023 basis" in text

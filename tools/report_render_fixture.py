@@ -356,7 +356,9 @@ def _inputs() -> dict:
         "sls_member": "Beam",
         "sls_bond": "Ribbed / high bond (k1 = 0.8)",
         "sls_k1": 0.8,
-        "sls_permitted_crack_width_mm": 0.20,
+        "sls_long_term_permitted_crack_width_mm": 0.20,
+        "sls_short_term_permitted_crack_width_mm": 0.20,
+        "sls_heightened_permitted_crack_width_mm": 0.20,
         "sls_heightened_on": True,
         "sls_heightened_reference_case": "EL-QA-1",
         "sls_heightened_reinforcement_surface": "smooth",
@@ -678,6 +680,9 @@ def _results(inp: dict | None = None) -> dict:
         "min_mx": -100.0,
         "min_my": -100.0,
         "util": 0.8,
+        "util_valid": True,
+        "util_reason": None,
+        "util_origin_inside_or_on": True,
         "closed": True,
         "check_util": True,
         "applied": (80.0, 0.0),
@@ -777,18 +782,40 @@ def _results(inp: dict | None = None) -> dict:
         "crack": _crack(),
         "crack_short": _crack(),
         "crack_output": {
-            "value": 0.213,
-            "case": "Long-term",
-            "governing": "bar 1",
-            "unit": "mm",
-            "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
-            "criterion_mm": 0.20,
-            "ratio": 1.065,
-            "criterion_source": "User input - Analysis settings",
-            "reason": (
-                "The calculated crack width exceeds the user-specified limit."
-            ),
-            "comparison_equation": "w_k / w_k,criterion",
+            "long_term": {
+                "duration": "long_term",
+                "value": 0.213,
+                "case": "Long-term",
+                "governing": "bar 1",
+                "unit": "mm",
+                "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                "criterion_mm": 0.20,
+                "ratio": 1.065,
+                "criterion_source": (
+                    "User input - Analysis settings - long-term"
+                ),
+                "reason": (
+                    "The calculated crack width exceeds the user-specified limit."
+                ),
+                "comparison_equation": "w_k / w_k,criterion",
+            },
+            "short_term": {
+                "duration": "short_term",
+                "value": 0.213,
+                "case": "Short-term",
+                "governing": "bar 1",
+                "unit": "mm",
+                "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
+                "criterion_mm": 0.20,
+                "ratio": 1.065,
+                "criterion_source": (
+                    "User input - Analysis settings - short-term"
+                ),
+                "reason": (
+                    "The calculated crack width exceeds the user-specified limit."
+                ),
+                "comparison_equation": "w_k / w_k,criterion",
+            },
         },
         "crack_code": "EN 1992-1-1:2005",
         "crack_member": None,
@@ -1006,18 +1033,24 @@ def _results(inp: dict | None = None) -> dict:
     elastic_2["crack"] = None
     elastic_2["crack_short"] = None
     elastic_2["crack_output"] = {
-        "value": None,
-        "case": None,
-        "governing": None,
-        "unit": "mm",
-        "calculation_state": "NOT REQUESTED",
-        "criterion_mm": None,
-        "ratio": None,
-        "criterion_source": None,
-        "reason": (
-            "Crack-width calculation was not requested for this Elastic case."
-        ),
-        "comparison_equation": None,
+        duration: {
+            "duration": duration,
+            "value": None,
+            "case": None,
+            "governing": None,
+            "unit": "mm",
+            "calculation_state": "NOT REQUESTED",
+            "criterion_mm": 0.20,
+            "ratio": None,
+            "criterion_source": (
+                f"User input - Analysis settings - {duration.replace('_', '-')}"
+            ),
+            "reason": (
+                "Crack-width calculation was not requested for this Elastic case."
+            ),
+            "comparison_equation": None,
+        }
+        for duration in ("long_term", "short_term")
     }
     elastic_2["max_steel"] = 245.0
     elastic_2["elements"][0]["total_mpa"] = 245.0
@@ -1128,7 +1161,9 @@ def _results(inp: dict | None = None) -> dict:
             "sls_heightened_effective_tensile_strength_mpa"
         ],
         reinforcement_modulus_mpa=200_000.0,
-        permitted_crack_width_mm=inp["sls_permitted_crack_width_mm"],
+        permitted_crack_width_mm=inp[
+            "sls_heightened_permitted_crack_width_mm"
+        ],
         fine_effective_tension_area_mm2=inp[
             "sls_heightened_fine_effective_tension_area_mm2"
         ],
@@ -1684,7 +1719,7 @@ def validate_worked_example_text(text: str) -> None:
         "Step 3 - accepted instantaneous combined state",
         "Crack width worked - governing case",
         "Formula (7.11) selected",
-        "User-specified crack-width comparison - critical case",
+        "User-specified crack-width comparison - critical long-term case",
         "DK heightened crack-control minimum",
         "Formula 7.100 NA",
     ):
