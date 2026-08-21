@@ -57,14 +57,6 @@ def _relation(*rows: tuple[str, str] | tuple[str, str, str]) -> EquationContract
     return EquationContract(_symbols(*rows))
 
 
-def _calculation_relation(
-    *rows: tuple[str, str] | tuple[str, str, str],
-) -> EquationContract:
-    """Mark an existing live calculation whose worked block is incomplete."""
-
-    return EquationContract(_symbols(*rows), publication_role="calculation")
-
-
 def _result(
     result_symbol: str,
     result_unit: str,

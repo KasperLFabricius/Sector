@@ -925,18 +925,6 @@ def _direct_tension_area_2023(
     )
 
 
-def _direct_tension_effective_area_2023(
-    section: Section,
-    phi_arr: np.ndarray,
-) -> tuple[np.ndarray, float, float, float] | str:
-    """Preserve the retained Figure 9.3 kernel's public internal shape."""
-
-    area = _direct_tension_area_2023(section, phi_arr)
-    if isinstance(area, str):
-        return area
-    return area.in_area, area.ac_eff, area.hc_eff, area.bc_eff
-
-
 def _crack_width(
     section: Section,
     cracked_state: ElasticResult,

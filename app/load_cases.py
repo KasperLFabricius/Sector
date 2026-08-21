@@ -417,15 +417,6 @@ def table_records(value, key: str) -> list[dict]:
     return records
 
 
-def table_from_records(records, key: str) -> pd.DataFrame:
-    """Read a JSON load-case list into a canonical DataFrame."""
-    if records is None:
-        return empty_table(key)
-    if not isinstance(records, list) or any(not isinstance(row, Mapping) for row in records):
-        raise ValueError(f"{key} is not a list of row objects")
-    return normalise_table(records, key)
-
-
 def default_tables() -> dict[str, pd.DataFrame]:
     """Build the app's initial one-row Plastic and Elastic tables."""
     plastic = normalise_table([{

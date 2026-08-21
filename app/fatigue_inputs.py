@@ -1115,13 +1115,6 @@ def spectrum_groups(value) -> dict[str, list[dict]]:
     return grouped
 
 
-def spectrum_signature(value) -> tuple:
-    return tuple(
-        tuple(record[column] for column in SPECTRUM_COLUMNS)
-        for record in spectrum_records(value)
-    )
-
-
 def catalog_signature(catalog) -> tuple:
     return tuple(
         tuple(item[field] for field in DETAIL_FIELDS)
