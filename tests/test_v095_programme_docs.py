@@ -397,7 +397,7 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
 
     overview = contracts["PR-A06"]
     assert overview == {
-        "state": "frozen in PR-A06 before implementation",
+        "state": "frozen and implemented by PR-A06",
         "acceptance_document": (
             "docs/pr_a06_v095_governing_results_overview_acceptance.md"
         ),
@@ -411,7 +411,7 @@ def test_crack_fatigue_and_overview_matrices_are_deferred_to_owning_prs() -> Non
         ],
         "status_order_frozen_here": True,
         "tie_break_frozen_here": True,
-        "implementation_evidence": False,
+        "implementation_evidence": True,
     }
 
 

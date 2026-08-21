@@ -9212,104 +9212,30 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
 
 def results_overview_view(inp, results, *, stale=False):
     """One-screen result register without a global calculation verdict."""
-    rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
+    all_rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
+    rows = presentation.governing_summary_rows(all_rows)
     counts = {status: sum(row["status"] == status for row in rows)
               for status in {
-                  "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
-                  "NOT APPLICABLE", "REVIEW", "CALCULATED",
-                  "NOT REQUESTED", "CALCULATED - ACCEPTANCE NOT ASSESSED",
-                  "WITHIN USER-SPECIFIED LIMIT", "EXCEEDS USER-SPECIFIED LIMIT",
-                  "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
-                  "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
-              }}
-    case_register = []
-    for family, label in (("plastic", "Plastic / capacity"),
-                          ("elastic", "Elastic")):
-        family_requested = (
-            inp.get("mode") in {"Plastic", "Both"}
-            or bool(inp.get("shear_on"))
-            or bool(inp.get("torsion_on"))
-            or bool(inp.get("combined_on"))
-            or bool(inp.get("minimum_reinforcement_on"))
-            or bool(inp.get("transverse_detailing_on"))
-        ) if family == "plastic" else inp.get("mode") in {"Elastic", "Both"}
-        if not family_requested:
-            continue
-        result_entries = (results or {}).get(f"{family}_cases")
-        if result_entries is None:
-            entries = [
-                {"actions": record, "evaluated": False, "results": {}}
-                for record in case_analysis.case_records(inp, family)
-            ]
-        else:
-            entries = result_entries
-        for entry in entries:
-            record = entry.get("actions") or {}
-            has_result = bool(entry.get("results"))
-            state = (
-                "Stale" if stale and has_result
-                else "Calculated" if entry.get("evaluated") and has_result
-                else "Not evaluated" if result_entries is not None
-                else "Not calculated"
-            )
-            case_register.append({
-                "Analysis": label,
-                "Case": entry.get("name") or record.get("name") or "-",
-                "Description": (
-                    entry.get("description") or record.get("description") or "-"
-                ),
-                "Result state": state,
-            })
-    if inp.get("fatigue_on"):
-        fatigue_result = (results or {}).get("fatigue")
-        fatigue_basis = (
-            (fatigue_result or {}).get("basis")
-            or inp.get("fatigue_basis")
-            or {}
-        )
-        fatigue_edition = (
-            (fatigue_result or {}).get("edition")
-            or inp.get("fatigue_edition")
-            or "-"
-        )
-        spectra = fatigue_presentation.items(fatigue_result, "spectra")
-        if not spectra:
-            spectra = (None,)
-        for spectrum in spectra:
-            case_register.append({
-                "Analysis": "Fatigue",
-                "Case": (
-                    str(
-                        fatigue_presentation.value(
-                            spectrum, "spectrum_name", "Grouped spectra"
-                        )
-                    )
-                    if spectrum is not None else "Grouped spectra"
-                ),
-                "Description": (
-                    fatigue_basis.get("method")
-                    or fatigue_edition
-                    or "-"
-                ),
-                "Result state": (
-                    "Stale" if stale and fatigue_result
-                    else "Invalid input" if (
-                        fatigue_result
-                        and fatigue_result.get("errors")
-                    )
-                    else "Calculated" if fatigue_result
-                    else "Not calculated"
-                ),
-            })
+                   "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
+                   "NOT APPLICABLE", "REVIEW", "CALCULATED",
+                   "NOT CALCULATED", "NOT REQUESTED",
+                   "CALCULATED - ACCEPTANCE NOT ASSESSED",
+                   "WITHIN USER-SPECIFIED LIMIT", "EXCEEDS USER-SPECIFIED LIMIT",
+                   "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
+                   "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+               }}
+    named_action_sets = {
+        str(row.get("case") or "").strip()
+        for row in all_rows
+        if str(row.get("case") or "").strip() not in {"", "-"}
+    }
 
     st.info(
-        f"{len(rows)} result rows across {len(case_register)} named action sets. "
+        f"{len(rows)} governing check-family rows across "
+        f"{len(named_action_sets)} named action sets. "
         "Demand-versus-resistance checks keep their individual verdicts; "
         "output-only quantities and the project as a whole have no verdict."
     )
-
-    if case_register:
-        st.dataframe(case_register, hide_index=True, width="stretch")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
@@ -9333,16 +9259,21 @@ def results_overview_view(inp, results, *, stale=False):
     )
     c4.metric("Stale", counts.get("STALE", 0))
 
-    governing_flags = presentation.summary_governing_case_flags(rows)
     display = []
-    for row, is_governing in zip(rows, governing_flags):
+    for row in rows:
+        source = str(row.get("source") or "").strip()
+        case_context = (
+            source
+            if source not in {"", "-"}
+            else str(row.get("case_type") or "-").strip() or "-"
+        )
         display.append({
             "Check": row["check"],
             "Action set": row["case"],
             "Status": row["status"],
             "Result": row["result"],
             "Criterion": row["criterion"],
-            "Governing": "Yes" if is_governing else "",
+            "Source / description": case_context,
             "View": row["view"],
             "Note": row["note"],
         })
@@ -9354,7 +9285,7 @@ def results_overview_view(inp, results, *, stale=False):
             "Status",
             "Result",
             "Criterion",
-            "Governing",
+            "Source / description",
             "View",
             "Note",
         ),
@@ -9367,6 +9298,9 @@ def results_overview_view(inp, results, *, stale=False):
             "background-color: #FFF4D6; color: #7A4E00; font-weight: 600"
         ),
         "NOT RUN": "background-color: #EEF2F6; color: #374151; font-weight: 600",
+        "NOT CALCULATED": (
+            "background-color: #EEF2F6; color: #374151; font-weight: 600"
+        ),
         "STALE": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
         "REVIEW": "background-color: #FFF4D6; color: #7A4E00; font-weight: 600",
         "NOT APPLICABLE": "background-color: #EEF2F6; color: #374151",
@@ -9392,8 +9326,12 @@ def results_overview_view(inp, results, *, stale=False):
         lambda value: status_colours.get(str(value), ""),
         subset=["Status"],
     )
-    st.dataframe(styled, hide_index=True, width="stretch",
-                 height=min(35 * (len(display) + 1) + 3, 560))
+    st.dataframe(
+        styled,
+        hide_index=True,
+        width="stretch",
+        height=35 * (len(display) + 1) + 3,
+    )
 
 
 def _detailing_status_callout(status, message):

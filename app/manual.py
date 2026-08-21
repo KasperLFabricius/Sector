@@ -1209,11 +1209,13 @@ def manual_blocks() -> list:
 
     h1("Reading the results")
     h2("Results overview")
-    md("The overview is the calculation register: one row per evaluated check and "
-       "case, with result, criterion and status. **Governing** marks the highest "
-       "assessed utilisation for each check (ties remain marked). A zero row action "
-       "is shown as **Not applicable**, not as a pass. Headline counts separate "
-       "failures, invalid results and checks that were not evaluated.")
+    md("The overview shows one fully expanded governing row for each stable check "
+       "family, with its selected action set, result, criterion and status. Status "
+       "state is considered before utilisation; equal states use the largest valid "
+       "utilisation and exact ties keep the first retained case. Direction-specific "
+       "checks remain separate and keep their direction and source. A zero row "
+       "action is shown as **Not applicable**, not as a pass. Headline counts "
+       "describe the visible rows; they do not combine them into a project result.")
     h2("Plastic results")
     md("Select a Plastic/capacity case at the top of the view. The "
        "$M_x$-$M_y$ envelope is drawn with the applied load marked; the "

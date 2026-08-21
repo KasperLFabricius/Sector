@@ -274,7 +274,7 @@
       "implementation_evidence": true
     },
     "PR-A06": {
-      "state": "frozen in PR-A06 before implementation",
+      "state": "frozen and implemented by PR-A06",
       "acceptance_document": "docs/pr_a06_v095_governing_results_overview_acceptance.md",
       "required_matrix_topics": [
         "complete emitted status vocabulary",
@@ -286,7 +286,7 @@
       ],
       "status_order_frozen_here": true,
       "tie_break_frozen_here": true,
-      "implementation_evidence": false
+      "implementation_evidence": true
     }
   },
   "release_baseline": {

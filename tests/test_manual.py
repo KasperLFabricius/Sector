@@ -430,6 +430,14 @@ def test_manual_documents_native_case_tables_results_and_report():
     assert "Default report + QA appendix" not in text
 
 
+def test_manual_documents_current_governing_results_overview():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert "one fully expanded governing row for each stable check family" in text
+    assert "Status state is considered before utilisation" in text
+    assert "Direction-specific checks remain separate" in text
+    assert "one row per evaluated check and case" not in text
+
+
 def test_manual_editable_table_matrix_is_generated_from_shared_registry():
     headers = ["Editable table", "Fields / notation", "Blank / default"]
     matrix_blocks = [

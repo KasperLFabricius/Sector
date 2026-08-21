@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import math
+from numbers import Real
 
 import case_analysis
 import fatigue_presentation
@@ -22,6 +23,29 @@ _THETA = chr(0x03B8)
 _RHO = chr(0x03C1)
 
 _SINGLE_CASE_ID = "__single__"
+
+GOVERNING_OVERVIEW_STATUS_PRECEDENCE = (
+    "INVALID",
+    "FAIL",
+    "EXCEEDS USER-SPECIFIED LIMIT",
+    "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+    "STALE",
+    "REVIEW",
+    "NOT ASSESSED",
+    "CALCULATED - ACCEPTANCE NOT ASSESSED",
+    "NOT RUN",
+    "NOT CALCULATED",
+    "PASS",
+    "WITHIN USER-SPECIFIED LIMIT",
+    "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
+    "CALCULATED",
+    "NOT APPLICABLE",
+    "NOT REQUESTED",
+)
+_GOVERNING_OVERVIEW_STATUS_RANK = {
+    status: rank
+    for rank, status in enumerate(GOVERNING_OVERVIEW_STATUS_PRECEDENCE)
+}
 
 
 def _publication_metric(value, *, allow_positive_infinity=False):
@@ -1687,6 +1711,51 @@ def overall_summary_status(rows):
         if status in states:
             return status
     return "NOT RUN"
+
+
+def _governing_overview_utilisation(row):
+    value = row.get("util")
+    if (
+        isinstance(value, bool)
+        or type(value).__name__ == "bool_"
+        or not isinstance(value, Real)
+    ):
+        return None
+    metric = float(value)
+    if metric < 0.0 or metric == -math.inf or math.isnan(metric):
+        return None
+    return metric
+
+
+def governing_summary_rows(rows):
+    """Select one conservative retained row per exact check family."""
+
+    selected = {}
+    order = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("result overview rows must be objects")
+        key = (str(row.get("family") or ""), str(row.get("check") or ""))
+        status = str(row.get("status") or "")
+        rank = _GOVERNING_OVERVIEW_STATUS_RANK.get(status, -1)
+        utilisation = _governing_overview_utilisation(row)
+        if key not in selected:
+            order.append(key)
+            selected[key] = (row, rank, utilisation)
+            continue
+        _current, current_rank, current_utilisation = selected[key]
+        replace_current = rank < current_rank
+        if rank == current_rank:
+            replace_current = bool(
+                utilisation is not None
+                and (
+                    current_utilisation is None
+                    or utilisation > current_utilisation
+                )
+            )
+        if replace_current:
+            selected[key] = (row, rank, utilisation)
+    return [dict(selected[key][0]) for key in order]
 
 
 def summary_governing_flags(rows):

@@ -1293,23 +1293,30 @@ class ReportBuilder:
         return rows, commands, tuple(labels)
 
     def _results_overview(self):
-        rows = presentation.multi_case_summary_rows(
+        retained_rows = presentation.multi_case_summary_rows(
             self._base_inp, self._base_out
         )
-        governing = presentation.summary_governing_case_flags(rows)
+        rows = presentation.governing_summary_rows(retained_rows)
         self._h2("Results overview")
         self._small(
-            "Demand-versus-resistance checks retain their individual verdicts. "
+            "Each stable check family retains its governing result row. "
+            "Demand-versus-resistance checks keep their individual verdicts. "
             "Output-only quantities and the project as a whole have no verdict."
         )
         # Keep the explanatory lead-in with the table's first page.  This still
         # lets genuinely oversized project overviews use the native row splitter.
         self.flow[-1].keepWithNext = 1
         data = [[
-            "Check", "Action set", "Status", "Result", "Criterion", "Gov."
+            "Check", "Action set", "Status", "Result", "Criterion", "Source / note"
         ]]
-        scope_states = {"NOT REQUESTED", "NOT APPLICABLE", "NOT RUN"}
-        attention_states = {"FAIL", "INVALID", "REVIEW", "NOT ASSESSED"}
+        scope_states = {
+            "NOT REQUESTED", "NOT APPLICABLE", "NOT RUN", "NOT CALCULATED",
+        }
+        attention_states = {
+            "FAIL", "INVALID", "REVIEW", "NOT ASSESSED", "STALE",
+            "EXCEEDS USER-SPECIFIED LIMIT",
+            "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+        }
 
         def _overview_group(row):
             status = str(row["status"]).upper()
@@ -1319,13 +1326,26 @@ class ReportBuilder:
                 return "Calculated outputs"
             return "Acceptance checks"
 
+        def _overview_source_note(row):
+            source = str(row.get("source") or "").strip()
+            case_type = str(row.get("case_type") or "").strip()
+            note = str(row.get("note") or "").strip()
+            parts = []
+            if source not in {"", "-"}:
+                parts.append("Source: " + source)
+            elif case_type not in {"", "-"}:
+                parts.append(case_type)
+            if note:
+                parts.append(note)
+            return "; ".join(parts) or "-"
+
         grouped = {
             "Acceptance checks": [],
             "Calculated outputs": [],
             "Scope and not-run states": [],
         }
-        for original_index, (row, is_governing) in enumerate(zip(rows, governing)):
-            grouped[_overview_group(row)].append((original_index, row, is_governing))
+        for original_index, row in enumerate(rows):
+            grouped[_overview_group(row)].append((original_index, row))
         grouped["Acceptance checks"].sort(key=lambda item: (
             str(item[1]["status"]).upper() not in attention_states,
             item[0],
@@ -1338,12 +1358,12 @@ class ReportBuilder:
                 continue
             group_rows.append((len(data), group_label))
             data.append([group_label, "", "", "", "", ""])
-            for _original_index, row, is_governing in entries:
+            for _original_index, row in entries:
                 status_rows.append((len(data), row["status"]))
                 data.append([
                     _html_escape(row["check"]), _html_escape(row["case"]),
                     row["status"], row["result"], row["criterion"],
-                    "YES" if is_governing else "-",
+                    _html_escape(_overview_source_note(row)),
                 ])
         summary_font = 8.5 if self.profile.key == "Standard" else 7.2
         body = ParagraphStyle(
@@ -1387,8 +1407,8 @@ class ReportBuilder:
         table = _PaginatedReportTable(
             formatted,
             colWidths=[
-                41 * mm, 24 * mm, 27 * mm,
-                33 * mm, 35 * mm, 10 * mm,
+                36 * mm, 22 * mm, 25 * mm,
+                28 * mm, 30 * mm, 29 * mm,
             ],
             repeatRows=1 + context_count + 1,
             hAlign="LEFT",
@@ -1431,7 +1451,12 @@ class ReportBuilder:
             "REVIEW": colors.HexColor("#FFF4D6"),
             "NOT ASSESSED": colors.HexColor("#FFF4D6"),
             "NOT RUN": colors.HexColor("#EEF2F6"),
+            "NOT CALCULATED": colors.HexColor("#EEF2F6"),
             "NOT APPLICABLE": colors.HexColor("#EEF2F6"),
+            "NOT REQUESTED": colors.HexColor("#EEF2F6"),
+            "STALE": colors.HexColor("#FFF4D6"),
+            "EXCEEDS USER-SPECIFIED LIMIT": colors.HexColor("#FFF4D6"),
+            "PROVIDED AREA BELOW CALCULATED REQUIREMENT": colors.HexColor("#FFF4D6"),
         }
         for data_index, status in status_rows:
             row_index = header_row + data_index
@@ -1457,13 +1482,13 @@ class ReportBuilder:
         self.flow.append(table)
         if self.profile.key == "Brief":
             governing_note = (
-                "Gov. marks the highest PASS/FAIL utilisation per check; ties "
-                "remain marked. NOT APPLICABLE means zero action."
+                "The table retains one governing row per stable check family. "
+                "NOT APPLICABLE means zero action."
             )
         else:
             governing_note = (
-                "Gov. marks the highest PASS/FAIL utilisation for each check; "
-                "ties remain marked. NOT APPLICABLE means the row action is zero."
+                "The table retains one governing row for each stable check family. "
+                "NOT APPLICABLE means the row action is zero."
             )
         self._small(governing_note)
         self._gap(4)
