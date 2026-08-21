@@ -16,6 +16,7 @@ def _source_tree(root: Path) -> Path:
     files = {
         "LICENSE": "internal licence\n",
         "app/point_grid_frontend/LICENSE": "frontend licence\n",
+        "app/publication_image_export_worker.py": "# worker\n",
         "app/sector_app.py": "# app\n",
         "assets/logo.png": "logo",
         "requirements-build.txt": "",

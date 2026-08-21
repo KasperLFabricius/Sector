@@ -2555,19 +2555,14 @@ def _png_size(png):
 def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
     """Render one manual figure through the shared process coordinator."""
 
-    def _render():
-        buf = io.BytesIO()
-        with publication_theme.without_kaleido_server_kopts_noise():
-            fig_callable().write_image(buf, format="png", scale=2)
-        return buf.getvalue()
-
     try:
         return publication_image_export.export_png(
-            _render,
+            fig_callable(),
+            scale=2,
             timeout=timeout,
             description="manual figure export",
         )
-    except publication_image_export.KaleidoExportError as exc:
+    except Exception as exc:
         raise ManualFigureError(
             "Manual figure export failed; manual not created."
         ) from exc

@@ -22,6 +22,7 @@ _RUNTIME_SUFFIXES = {".dll", ".exe", ".pyd"}
 _REQUIRED_SOURCE_PATHS = (
     "LICENSE",
     "app/point_grid_frontend/LICENSE",
+    "app/publication_image_export_worker.py",
     "app/sector_app.py",
     "assets/logo.png",
     "requirements-build.txt",

@@ -143,6 +143,88 @@ def test_bundle_base_resolves_to_the_app_tree_in_dev():
     assert run_sector._bundle_base() == ROOT
 
 
+def test_frozen_entrypoint_routes_multiprocessing_before_streamlit(monkeypatch):
+    calls = []
+    monkeypatch.setattr(run_sector.sys, "argv", ["Sector.exe"])
+    monkeypatch.setattr(
+        run_sector.multiprocessing,
+        "freeze_support",
+        lambda: calls.append("freeze"),
+    )
+    monkeypatch.setattr(run_sector, "main", lambda: calls.append("streamlit"))
+
+    run_sector._entrypoint()
+
+    assert calls == ["freeze", "streamlit"]
+
+
+def test_frozen_entrypoint_routes_image_worker_after_freeze_support_before_streamlit(
+    monkeypatch,
+):
+    calls = []
+    monkeypatch.setattr(
+        run_sector.sys,
+        "argv",
+        ["Sector.exe", run_sector._PUBLICATION_IMAGE_WORKER_FLAG],
+    )
+    monkeypatch.setattr(
+        run_sector, "_run_publication_image_worker", lambda: calls.append("worker")
+    )
+    monkeypatch.setattr(
+        run_sector.multiprocessing,
+        "freeze_support",
+        lambda: calls.append("freeze"),
+    )
+    monkeypatch.setattr(
+        run_sector,
+        "main",
+        lambda: pytest.fail("worker invocation reached Streamlit"),
+    )
+
+    run_sector._entrypoint()
+
+    assert calls == ["freeze", "worker"]
+
+
+def test_frozen_entrypoint_rejects_malformed_image_worker_invocation(monkeypatch):
+    monkeypatch.setattr(
+        run_sector.sys,
+        "argv",
+        ["Sector.exe", run_sector._PUBLICATION_IMAGE_WORKER_FLAG, "unexpected"],
+    )
+
+    with pytest.raises(ValueError, match="invalid publication image worker"):
+        run_sector._entrypoint()
+
+
+def test_frozen_worker_dispatch_executes_only_the_bundled_worker_file(
+    tmp_path, monkeypatch
+):
+    worker = tmp_path / "app" / "publication_image_export_worker.py"
+    worker.parent.mkdir()
+    worker.write_text("# worker\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(run_sector, "_bundle_base", lambda: tmp_path)
+    monkeypatch.setattr(
+        run_sector.runpy,
+        "run_path",
+        lambda path, *, run_name: calls.append(
+            (path, run_name, tuple(run_sector.sys.argv))
+        ),
+    )
+
+    run_sector._run_publication_image_worker()
+
+    assert calls == [(str(worker), "__main__", (str(worker),))]
+    exporter = (ROOT / "app" / "publication_image_export.py").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        f'_FROZEN_WORKER_FLAG = "{run_sector._PUBLICATION_IMAGE_WORKER_FLAG}"'
+        in exporter
+    )
+
+
 def test_user_data_dir_uses_localappdata(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert run_sector._user_data_dir() == tmp_path / "Sector"
