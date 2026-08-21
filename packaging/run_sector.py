@@ -8,6 +8,7 @@ location (e.g. Program Files) does not break startup.
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import pathlib
 import sys
@@ -98,5 +99,12 @@ def main() -> None:
     sys.exit(stcli.main())
 
 
-if __name__ == "__main__":
+def _entrypoint() -> None:
+    """Route frozen multiprocessing children before Streamlit starts."""
+
+    multiprocessing.freeze_support()
     main()
+
+
+if __name__ == "__main__":
+    _entrypoint()

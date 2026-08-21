@@ -143,6 +143,20 @@ def test_bundle_base_resolves_to_the_app_tree_in_dev():
     assert run_sector._bundle_base() == ROOT
 
 
+def test_frozen_entrypoint_routes_multiprocessing_before_streamlit(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        run_sector.multiprocessing,
+        "freeze_support",
+        lambda: calls.append("freeze"),
+    )
+    monkeypatch.setattr(run_sector, "main", lambda: calls.append("streamlit"))
+
+    run_sector._entrypoint()
+
+    assert calls == ["freeze", "streamlit"]
+
+
 def test_user_data_dir_uses_localappdata(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert run_sector._user_data_dir() == tmp_path / "Sector"

@@ -714,20 +714,27 @@ def test_manual_pdf_has_no_stray_dollar_delimiters():
 
 def test_manual_figure_export_uses_shared_coordinator(monkeypatch):
     class Figure:
-        @staticmethod
-        def write_image(target, **kwargs):
-            assert kwargs == {"format": "png", "scale": 2}
-            target.write(b"png")
+        pass
 
     calls = []
 
-    def export(render, *, timeout, description):
-        calls.append((timeout, description))
-        return render()
+    def export(figure, **kwargs):
+        calls.append((figure, kwargs))
+        return b"png"
 
     monkeypatch.setattr(publication_image_export, "export_png", export)
-    assert manual._fig_to_png(lambda: Figure(), timeout=4.0) == b"png"
-    assert calls == [(4.0, "manual figure export")]
+    figure = Figure()
+    assert manual._fig_to_png(lambda: figure, timeout=4.0) == b"png"
+    assert calls == [
+        (
+            figure,
+            {
+                "scale": 2,
+                "timeout": 4.0,
+                "description": "manual figure export",
+            },
+        )
+    ]
 
 
 def test_manual_pdf_builds_tables_only():

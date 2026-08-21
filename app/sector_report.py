@@ -812,19 +812,16 @@ def _fig_png(fig, w_px, h_px, timeout=_FIG_EXPORT_TIMEOUT_S):
     """Export through the serialized process coordinator.
 
     The tuple contract is retained for the report builder: a timeout is distinct
-    from another export failure, while either condition permanently poisons the
-    shared coordinator and makes later calls fail without starting more workers.
+    from another export failure. Either condition terminates the owned worker;
+    a later independent publication attempt can start a clean process.
     """
-
-    def _work():
-        with publication_theme.without_kaleido_server_kopts_noise():
-            return fig.to_image(
-                format="png", width=w_px, height=h_px, scale=2
-            )
 
     try:
         png = publication_image_export.export_png(
-            _work,
+            fig,
+            width=w_px,
+            height=h_px,
+            scale=2,
             timeout=timeout,
             description="report figure export",
         )
