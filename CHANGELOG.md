@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## 0.95 - 2026-08-21
+
+Sector 0.95 improves calculation currentness, serviceability controls, fatigue
+screening, result review and report reliability while retaining Sector's
+bounded internal calculation-tool identity.
+
+- Hardened plastic, cracking and torsion boundaries, including exact M-M
+  origin containment, prestress-only cracking, hollow/subdivided torsion
+  geometry and current closed-link evidence for a full torsion resistance
+  assessment. Torsional cracking may still be published transparently when a
+  full resistance assessment is unavailable.
+- Replaced the shared ordinary crack-width criterion with independent
+  long-term and short-term user limits. A zero limit keeps that duration's
+  calculated width without comparison; the Danish Formula 7.100 operand is
+  retained separately.
+- Added the simplified reinforcement-fatigue stress-range screen with its
+  selected Eurocode basis, while preserving detailed fatigue evidence whenever
+  the screen does not conclude the check.
+- Reworked Results Overview into one always-expanded governing table and a
+  separate complete status register for every other requested result,
+  including independently checked fatigue spectra.
+- Added retained capacity values to plastic and N-M plot hover, and retained
+  material, stress and strain information to analysis-point hover. Analysis
+  plots no longer use coordinate-only hover.
+- Added clause-specific help for creep and detailing inputs, and published the
+  retained plastic compression-zone depth in the UI and report.
+- Compacted the retained ultimate-curvature selection substitution so the
+  complete 29-candidate evidence no longer creates an unbreakable report atom,
+  and isolated image export in a bounded worker so PDF generation fails cleanly
+  without leaving browser descendants.
+- Kept the manual current-only, removed internal reference/checking-pack prose,
+  and removed measured obsolete code without changing supported behavior.
+
+Project schema is version 26. Schema 25 has one bounded in-memory migration for
+the former shared crack-width value; schema 24 and future schemas remain
+unsupported. The Windows deliverable is an unsigned portable ZIP and is not an
+installer or publisher certification.
+
 ## 0.94 - 2026-08-14
 
 Sector 0.94 improves calculation robustness, input navigation, report evidence

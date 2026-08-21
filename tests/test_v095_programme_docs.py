@@ -719,8 +719,8 @@ def test_pr_a05_acceptance_freezes_mapping_boundaries_and_fallback() -> None:
     assert "PR-A00b intentionally owns none of those implementation matrices" in programme
 
 
-def test_live_identity_remains_v094_and_uses_a04_schema_26() -> None:
-    assert __version__ == "0.94"
+def test_live_identity_is_v095_and_uses_schema_26() -> None:
+    assert __version__ == "0.95"
     assert re.search(r"^VERSION\s*=\s*26$", _text(PROJECT_IO), re.MULTILINE)
     assert _fixture()["programme_base"] == {
         "commit": BASE,

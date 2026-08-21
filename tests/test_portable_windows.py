@@ -20,7 +20,7 @@ def _source_tree(root: Path) -> Path:
         "app/sector_app.py": "# app\n",
         "assets/logo.png": "logo",
         "requirements-build.txt": "",
-        "sector/__init__.py": '__version__ = "0.94"\n',
+        "sector/__init__.py": '__version__ = "0.95"\n',
         "packaging/README-PORTABLE.txt": "Sector @SECTOR_VERSION@\n",
         "packaging/run_sector.py": "# launcher\n",
         "packaging/sector.spec": "# spec\n",
@@ -66,14 +66,14 @@ class _FakeRunner:
             self.smoke_package = Path(command[command.index("--package") + 1])
 
 
-def test_version_and_readme_use_094(tmp_path):
+def test_version_and_readme_use_095(tmp_path):
     root = _source_tree(tmp_path / "source")
-    assert portable._read_version(root) == "0.94"
+    assert portable._read_version(root) == "0.95"
     assert (
-        portable._render_readme(root / "packaging" / "README-PORTABLE.txt", "0.94")
+        portable._render_readme(root / "packaging" / "README-PORTABLE.txt", "0.95")
         .decode("ascii")
         .strip()
-        == "Sector 0.94"
+        == "Sector 0.95"
     )
 
 
@@ -107,8 +107,8 @@ def test_single_build_runs_page_then_publishes_folder_zip_and_checksum(tmp_path)
         runner=runner,
     )
 
-    assert result.version == "0.94"
-    assert result.folder.name == "Sector-v0.94-windows-portable"
+    assert result.version == "0.95"
+    assert result.folder.name == "Sector-v0.95-windows-portable"
     assert (result.folder / "Sector.exe").is_file()
     assert (result.folder / "LICENSE.txt").is_file()
     assert (result.folder / "THIRD_PARTY_NOTICES.txt").is_file()
