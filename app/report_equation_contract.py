@@ -315,7 +315,10 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ("fatigue.reinforcement.utilisation", None): _result(
         "u", "dimensionless",
         ("u", "governing reinforcement fatigue utilisation"),
-        ("D", "total reinforcement Miner damage"),
+        (
+            "u<sub>range</sub>",
+            "governing simplified-screen or Miner stress-range utilisation",
+        ),
         ("u<sub>yield</sub>", "reinforcement yield or proof-stress utilisation"),
         applicability_note_required=True,
     ),

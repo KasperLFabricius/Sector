@@ -260,7 +260,7 @@
       "implementation_evidence": false
     },
     "PR-A05": {
-      "state": "frozen; calculation and UI implemented in PR-A05a, publication pending PR-A05b",
+      "state": "frozen and implemented by PR-A05a and PR-A05b",
       "acceptance_document": "docs/pr_a05_v095_simplified_reinforcement_fatigue_screen_acceptance.md",
       "required_matrix_topics": [
         "eligible detail class to threshold mapping",
@@ -271,7 +271,7 @@
         "independent fatigue checks retained"
       ],
       "threshold_values_frozen_here": true,
-      "implementation_evidence": false
+      "implementation_evidence": true
     },
     "PR-A06": {
       "state": "must be frozen in owning PR before code",

@@ -1242,7 +1242,9 @@ def manual_blocks() -> list:
        "utilisation. Select a spectrum to see the section utilisation map, then "
        "open **Reinforcement**, **Concrete**, **Spectrum bins** or **Basis**. "
        "Element and fibre selectors expose the governing and all non-governing "
-       "results. The tables retain stresses, ranges, S-N life, per-bin damage, "
+       "results. Reinforcement rows state whether the simplified stress-range "
+       "screen passes, requires the detailed check, or is not applicable. The "
+       "tables retain stresses, ranges, S-N life, per-bin damage, "
        "yield/proof checks, concrete stress ratios, solver convergence, resistance "
        "sources and the bounded concrete-search result.")
     h2("Detailing results")
@@ -1690,6 +1692,51 @@ def manual_blocks() -> list:
          "design stress range enters the S-N or concrete-life check; it is not "
          "applied again to the resistance curve.")
 
+    h2("Simplified reinforcement stress-range screen")
+    md("Sector first evaluates the supported Eurocode shortcut for each assigned "
+       "named reinforcement or prestressing detail. The shortcut is used only "
+       "when every retained spectrum bin converged and has a tensile endpoint. "
+       "A stress range exactly equal to the stated limit passes. A lower range "
+       "passes; a higher range does not fail the member, but makes the detailed "
+       "S-N/Miner check necessary. Custom, imported or otherwise unsupported "
+       "details also continue to the detailed check.")
+    table(
+        ["Fatigue basis and named detail", "Simplified limit"],
+        [
+            ["2005 family - unwelded straight or bent reinforcing bar",
+             "70 MPa characteristic range"],
+            ["2005 family - welded reinforcing bar or fabric",
+             "35 MPa characteristic range"],
+            ["2023 - unwelded straight or bent bar, phi <= 12 mm",
+             "90 MPa design range"],
+            ["2023 - unwelded straight or bent bar, phi > 12 mm",
+             "73 MPa design range"],
+            ["2023 - welded bar or fabric, phi <= 12 / > 12 mm",
+             "40 / 30 MPa design range"],
+            ["2023 - reinforcing-steel coupler", "19 MPa design range"],
+            ["2023 - pretensioning steel or single strand in plastic duct",
+             "95 MPa design range"],
+            ["2023 - tendon in plastic duct", "80 MPa design range"],
+            ["2023 - curved tendon in steel duct", "55 MPa design range"],
+        ],
+    )
+    md("For a 2023 bent-bar preset, the selected mandrel-to-diameter reduction "
+       "also reduces the tabulated straight-bar limit. The 2023 shortcut is "
+       "limited to a retained total of $10^8$ cycles. The 2005-family screen "
+       "uses the characteristic fatigue range; the 2023 screen uses the design "
+       "range including the action-level $\\gamma_{Ff}$ factor. Sector always "
+       "retains the detailed S-N/Miner result for transparency, and the "
+       "yield/proof-stress check remains independent of the shortcut.")
+    md("References: DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, "
+       "6.8.6(1)-(2), with DS/EN 1992-1-1 DK NA:2024; and "
+       "DS/EN 1992-1-1:2023, 10.4(1) for the selectable published-2023 route.")
+    call(
+        "concept",
+        "A passing simplified screen means that a more detailed stress-range "
+        "assessment is not required for that element. It does not suppress the "
+        "reported detailed calculation or the independent strength checks.",
+    )
+
     h2("Reinforcement S-N and Miner check")
     md("For each bar or tendon, the selected fatigue detail supplies $N^*$, slopes "
        "$k_1$ and $k_2$, and the characteristic reference range "
@@ -1704,7 +1751,9 @@ def manual_blocks() -> list:
        "$$D=\\sum_i\\frac{n_i}{N_{R,i}}\\leq1.0.$$\n\n"
        "The long-term and design-total stresses are also checked against the "
        "element's tension or compression yield/proof strength divided by "
-       "$\\gamma_s$. The larger of Miner damage and yield/proof utilisation governs.")
+       "$\\gamma_s$. If the simplified screen passes, its stress-range utilisation "
+       "replaces Miner damage for the governing range criterion; otherwise Miner "
+       "damage applies. Yield/proof utilisation remains independent in both cases.")
     fig(fig_fatigue_sn, "Two-slope characteristic and design S-N curves. Each "
         "labelled marker is one applied spectrum bin; logarithmic axes retain the "
         "wide cycle and stress ranges without visual distortion.")
@@ -1756,15 +1805,15 @@ def manual_blocks() -> list:
     h2("Edition and scope summary")
     table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
           [["DS/EN 1992-1-1:2005",
-            "6.8.4; Tables 6.3N/6.4N",
+            "6.8.6 shortcut; 6.8.4 and Tables 6.3N/6.4N detailed check",
             "6.72 equivalent or corrected DS/EN 1992-2:2005/AC:2008 6.106 Miner",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
-            "Same method; explicit Danish project factors",
+            "6.8.6 shortcut unchanged; detailed method with Danish project factors",
             "Same selectable methods; explicit Danish project factors",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2023",
-            "Annex E.5; Tables E.1/E.2",
+            "10.4 shortcut; Annex E.5 and Tables E.1/E.2 detailed check",
             "E.2 equivalent or E.7-E.8 Miner",
             "10.3(2) equivalent tendon area"]])
     call("limit", "Each spectrum forms its own Miner sum and result. Sector does "
