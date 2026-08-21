@@ -408,7 +408,7 @@ def test_current_and_dormant_documents_share_exact_stylesheet(monkeypatch):
         )
 
 
-def test_generated_manual_html_vocabulary_is_data_only_and_dormant():
+def test_generated_manual_html_vocabulary_is_data_only_with_one_bounded_consumer():
     module_path = ROOT / "tools" / "manual_generated_html_vocabulary.py"
     source = module_path.read_text(encoding="utf-8")
     syntax = ast.parse(source)
@@ -524,7 +524,7 @@ def test_generated_manual_html_vocabulary_is_data_only_and_dormant():
         "frozenset": 60,
     }
     assert functions == []
-    assert callsites == []
+    assert callsites == ["tools/manual_generated_html.py"]
     for excluded in (
         "manual_schema_references",
         "manual_product_references",
