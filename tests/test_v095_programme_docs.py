@@ -30,6 +30,9 @@ INPUT_REFERENCE_ACCEPTANCE = (
 PLASTIC_DEPTH_ACCEPTANCE = (
     ROOT / "docs" / "pr_a09_v095_plastic_compression_depth_acceptance.md"
 )
+MANUAL_REFERENCE_CLEANUP_ACCEPTANCE = (
+    ROOT / "docs" / "pr_a10_v095_manual_reference_cleanup_acceptance.md"
+)
 PROJECT_IO = ROOT / "app" / "project_io.py"
 BASE = "9abd4c89f71d1379e32085ecc6773e14de882e33"
 TREE = "f5e98754f0f970749919e354957bfa34dd4eb7fe"
@@ -374,6 +377,7 @@ def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
         "PR-A07",
         "PR-A08",
         "PR-A09",
+        "PR-A10",
     }
 
     crack = contracts["PR-A04"]
@@ -485,6 +489,24 @@ def test_owner_addition_matrices_are_deferred_to_owning_prs() -> None:
         "implementation_evidence": True,
     }
 
+    manual_cleanup = contracts["PR-A10"]
+    assert manual_cleanup == {
+        "state": "frozen and implemented by PR-A10",
+        "acceptance_document": (
+            "docs/pr_a10_v095_manual_reference_cleanup_acceptance.md"
+        ),
+        "required_matrix_topics": [
+            "end-user reference prose removal",
+            "reference-download removal",
+            "repository QA asset retention",
+            "current manual dialog availability",
+            "current publication hash repair",
+            "no calculation or schema change",
+        ],
+        "end_user_reference_assets_removed_here": True,
+        "implementation_evidence": True,
+    }
+
 
 def test_pr_a07_acceptance_freezes_analysis_and_input_hover_boundary() -> None:
     text = _text(ANALYSIS_HOVER_ACCEPTANCE)
@@ -537,6 +559,24 @@ def test_pr_a09_acceptance_freezes_retained_compression_depth_publication() -> N
         "governing worked plastic table",
         "does not reconstruct depth",
         "no new calculation",
+    ):
+        assert required in compact
+
+
+def test_pr_a10_acceptance_freezes_manual_reference_cleanup_boundary() -> None:
+    text = _text(MANUAL_REFERENCE_CLEANUP_ACCEPTANCE)
+    compact = " ".join(text.split())
+
+    for required in (
+        "removes the Complete reproducible reference section",
+        "reference-project download",
+        "independent-checking-pack download",
+        "remain repository QA assets",
+        "live manual must still open",
+        "already-published current Results Overview row",
+        "does not change that table",
+        "changes no solver, result, schema, persistence, report profile",
+        "does not narrate earlier Sector behavior",
     ):
         assert required in compact
 

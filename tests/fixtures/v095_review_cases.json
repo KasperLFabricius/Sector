@@ -332,6 +332,20 @@
       ],
       "result_values_recomputed_here": false,
       "implementation_evidence": true
+    },
+    "PR-A10": {
+      "state": "frozen and implemented by PR-A10",
+      "acceptance_document": "docs/pr_a10_v095_manual_reference_cleanup_acceptance.md",
+      "required_matrix_topics": [
+        "end-user reference prose removal",
+        "reference-download removal",
+        "repository QA asset retention",
+        "current manual dialog availability",
+        "current publication hash repair",
+        "no calculation or schema change"
+      ],
+      "end_user_reference_assets_removed_here": true,
+      "implementation_evidence": true
     }
   },
   "release_baseline": {

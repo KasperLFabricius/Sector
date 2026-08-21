@@ -1,4 +1,4 @@
-"""F-036 complete downloadable example and independent-oracle acceptance."""
+"""F-036 reference QA asset and independent-oracle acceptance."""
 
 from __future__ import annotations
 
@@ -288,7 +288,7 @@ def test_fatigue_outputs_match_independent_equations(
     assert spectrum.concrete_search.converged is False
     assert results["fatigue"]["passed"] is False
 
-def test_checking_pack_is_separate_and_covers_every_main_family():
+def test_checking_pack_remains_a_qa_asset_outside_the_end_user_manual():
     pack = reproducible_example.checking_pack()
     assert EXPECTED_INPUT_SHA256 in pack
     flat_pack = " ".join(pack.split())
@@ -313,11 +313,12 @@ def test_checking_pack_is_separate_and_covers_every_main_family():
         block[1] for block in manual.manual_blocks()
         if block[0] in {"h1", "h2", "md"}
     )
-    assert "Complete reproducible reference" in manual_text
-    assert "independent checking pack" in manual_text
+    assert "Complete reproducible reference" not in manual_text
+    assert "complete reference project" not in manual_text
+    assert "independent checking pack" not in manual_text
 
 
-def test_manual_exposes_both_reference_downloads_with_stable_keys():
+def test_manual_omits_reference_downloads_and_keeps_normal_controls():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.session_state["_input_tab"] = "Project"
@@ -325,7 +326,7 @@ def test_manual_exposes_both_reference_downloads_with_stable_keys():
     at.button(key="open_manual").click().run()
     assert not at.exception
     elements = list(at._tree)
-    keys = {
+    download_keys = {
         getattr(element, "key", None)
         for element in elements
         if element.type == "download_button"
@@ -333,7 +334,21 @@ def test_manual_exposes_both_reference_downloads_with_stable_keys():
     assert {
         "manual_dl_complete_reference_project",
         "manual_dl_complete_reference_check",
-    } <= keys
+    }.isdisjoint(download_keys)
+    labels = {getattr(element, "label", None) for element in elements}
+    assert "Complete reproducible reference" not in labels
+    button_keys = {
+        getattr(element, "key", None)
+        for element in elements
+        if element.type == "button"
+    }
+    assert {"manual_gen_pdf", "manual_close"} <= button_keys
+    selectbox_keys = {
+        getattr(element, "key", None)
+        for element in elements
+        if element.type == "selectbox"
+    }
+    assert "manual_part" in selectbox_keys
 
 
 def test_tables_only_report_contains_every_main_calculation_chapter(
