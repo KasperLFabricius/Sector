@@ -116,7 +116,7 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     assert len(concrete_pages) == 1
     assert "EQ-MATERIALS.CONCRETE.FCD" in concrete_pages[0]
     assert "= 20 MPa" in concrete_pages[0]
-    assert validate_results_overview_pagination(page_texts) == (2, 3)
+    assert validate_results_overview_pagination(page_texts) == (2, 3, 4)
 
     validate_equation_source_colocation(page_texts)
 
