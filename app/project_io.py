@@ -256,7 +256,7 @@ def _nonnegative_real(value, label: str) -> float:
         ) from exc
     if not math.isfinite(number) or number < 0.0:
         raise ValueError(f"{label} must be a non-negative finite real number")
-    return number
+    return 0.0 if number == 0.0 else number
 
 
 def _normalise_table(value, key: str) -> pd.DataFrame:

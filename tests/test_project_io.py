@@ -43,6 +43,7 @@ class _FloatOverflowError:
     ("value", "expected"),
     [
         (0, 0.0),
+        (-0.0, 0.0),
         (0.25, 0.25),
         (1.75, 1.75),
         (np.int64(2), 2.0),
@@ -54,6 +55,8 @@ def test_nonnegative_project_scalar_normalizes_finite_reals(value, expected):
     result = project_io._nonnegative_real(value, "criterion")
     assert type(result) is float
     assert result == pytest.approx(expected)
+    if expected == 0.0:
+        assert not np.signbit(result)
     assert type(value) is before_type
 
 
@@ -434,6 +437,32 @@ def test_schema_26_serializes_exact_three_crack_width_inputs():
     assert payload["scalars"][
         "sls_heightened_permitted_crack_width_mm"
     ] == pytest.approx(0.20)
+
+
+def test_schema_26_signed_zero_crack_limits_use_the_canonical_zero_hash():
+    tables, zero_scalars = _current_project()
+    signed_scalars = copy.deepcopy(zero_scalars)
+    for key in (
+        "sls_long_term_permitted_crack_width_mm",
+        "sls_short_term_permitted_crack_width_mm",
+        "sls_heightened_permitted_crack_width_mm",
+    ):
+        zero_scalars[key] = 0.0
+        signed_scalars[key] = -0.0
+
+    zero_payload = json.loads(project_io.dump_project(tables, zero_scalars))
+    signed_payload = json.loads(project_io.dump_project(tables, signed_scalars))
+
+    for key in (
+        "sls_long_term_permitted_crack_width_mm",
+        "sls_short_term_permitted_crack_width_mm",
+        "sls_heightened_permitted_crack_width_mm",
+    ):
+        assert signed_payload["scalars"][key] == 0.0
+        assert not np.signbit(signed_payload["scalars"][key])
+    assert signed_payload["provenance"]["input_sha256"] == (
+        zero_payload["provenance"]["input_sha256"]
+    )
 
 
 @pytest.mark.parametrize("shared", (_MISSING, None, "", "   ", 0.0))
