@@ -44,7 +44,7 @@ def _set_elastic_result_fields(out: dict, **values) -> None:
 
 def test_brief_frozen_fixture_is_a_compact_auditable_engineering_report():
     reader = PdfReader(io.BytesIO(_profile_pdf("Brief")))
-    assert 4 <= len(reader.pages) <= 6
+    assert 8 <= len(reader.pages) <= 10
     text = _profile_text("Brief")
     for expected in (
         "Report profile Brief",
@@ -77,7 +77,9 @@ def test_brief_retains_relevant_input_rows_without_standard_derivations():
         "FAT-QA-H",
         "FAT-QA-M",
         "Neutral-axis sweep start 0",
-        "Permitted crack width wk 0.200 mm",
+        "Long-term user limit wk,long 0.200 mm",
+        "Short-term user limit wk,short 0.200 mm",
+        "Formula 7.100 NA permitted width 0.200 mm",
         "Fine effective tension area Ac,eff 60000.000 mm2",
         "Coarse effective tension area Ac,eff 90000.000 mm2",
         "Mild-steel bond selection Ribbed / high bond (k1 = 0.8)",
@@ -993,20 +995,59 @@ def test_standard_and_audit_output_is_unchanged_by_the_brief_input_inventory():
         assert "Section and materials" in text
 
 
-def test_every_profile_retains_requested_statuses_and_engineering_values():
+def test_every_profile_retains_governing_statuses_and_engineering_values():
     expected = (
-        "Plastic bending PL-QA-1 PASS 80.0 %",
         "Plastic bending PL-QA-2 FAIL 125.0 %",
-        "Crack width EL-QA-1 EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
-        "Crack width EL-QA-2 NOT REQUESTED",
+        "Crack width - Long-term EL-QA-1 "
+        "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
+        "Crack width - Short-term EL-QA-1 "
+        "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
         "Torsion PL-QA-1 FAIL 162.7 %",
         "Combined M-V-T - DK NA sum PL-QA-1 FAIL 266.2 %",
-        "Fatigue Road traffic PASS 29.5 %",
+        "Fatigue Road traffic PASS 46.1 %",
+    )
+    for profile in ("Brief", "Standard", "Audit"):
+        # A narrow table column can make PDF extraction separate the hyphen from
+        # USER-SPECIFIED even though the rendered label is unchanged.
+        text = _profile_text(profile).replace(
+            "USER -SPECIFIED", "USER-SPECIFIED"
+        )
+        for value in expected:
+            assert value in text
+
+
+def test_every_profile_retains_non_governing_requested_results_and_statuses():
+    expected = (
+        "Non-governing requested results",
+        "Plastic bending PL-QA-1 PASS 80.0 %",
+        "Crack width - Long-term EL-QA-2 NOT REQUESTED",
+        "Crack width - Short-term EL-QA-2 NOT REQUESTED",
     )
     for profile in ("Brief", "Standard", "Audit"):
         text = _profile_text(profile)
         for value in expected:
             assert value in text
+
+
+def test_every_profile_retains_each_non_governing_fatigue_spectrum():
+    inp = report_render_fixture._inputs()
+    inp[report_render_fixture.fatigue_inputs.SPECTRUM_TABLE_KEY][1][
+        "spectrum"
+    ] = "Rail traffic"
+    out = report_render_fixture._results(inp)
+    out["fatigue"] = report_render_fixture.fatigue_analysis.run_analysis(inp)
+
+    for profile in ("Brief", "Standard", "Audit"):
+        pdf = report_render_fixture.sector_report.build_report(
+            {}, inp, out, figures=False, profile=profile
+        )
+        reader = PdfReader(io.BytesIO(pdf))
+        text = " ".join(
+            " ".join((page.extract_text() or "").split())
+            for page in reader.pages
+        )
+        assert "Fatigue Road traffic PASS 46.1 %" in text
+        assert "Fatigue Rail traffic PASS 23.0 %" in text
 
 
 def test_every_profile_begins_with_the_same_freshness_and_basis_dashboard():

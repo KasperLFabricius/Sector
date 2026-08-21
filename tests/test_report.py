@@ -3197,7 +3197,10 @@ def test_report_publishes_one_globally_critical_cracking_threshold():
     assert "Cracking threshold - EL-A" not in flat
     assert "Cracking threshold - EL-C" not in flat
     assert "EQ-CRACKING.THRESHOLD" not in flat
-    assert "lambda_cr 0.800; cracked" in flat
+    assert (
+        "0.8 -> section is cracked "
+        "(strictly below 1: cracked; 1 or above: uncracked)"
+    ) in flat
 
 
 def test_report_publishes_ordinary_cracking_threshold_relation():

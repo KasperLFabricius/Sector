@@ -835,7 +835,7 @@ def test_protocol_round_trip_preserves_unicode_metadata_and_png_bytes() -> None:
         "result",
         17,
         image_export._PNG_SIGNATURE + (b"x" * (1024 * 1024)),
-        "tværsnit",
+        "tv\u00e6rsnit",
     )
 
     encoded = image_export._encode_protocol_message(message)

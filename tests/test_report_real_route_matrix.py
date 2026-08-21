@@ -583,15 +583,17 @@ def test_normal_report_routes_cover_the_complete_equation_catalogue(
     }
 
     # S0 intentionally retains a pre-origin-contract plastic payload, so the
-    # report suppresses its stale Combined worked blocks. S1 supplies the current
-    # contract and owns those routes, including the new prestress threshold.
-    assert len(raw["S0"]) == 76
-    assert len(actual["S0"]) == 75
-    assert len(expected - actual["S0"]) == 69
+    # report suppresses its stale Combined worked blocks. Its governing overview
+    # now publishes current equation families that previously appeared first in
+    # S1. S1 still owns the remaining current routes, including the prestress
+    # threshold.
+    assert len(raw["S0"]) == 88
+    assert len(actual["S0"]) == 87
+    assert len(expected - actual["S0"]) == 57
 
     covered = set(actual["S0"])
     for scenario, expected_increment in zip(
-        ("S1", "S2", "S3", "S4"), (44, 21, 3, 1), strict=True
+        ("S1", "S2", "S3", "S4"), (32, 21, 3, 1), strict=True
     ):
         increment = actual[scenario] - covered
         assert len(increment) == expected_increment

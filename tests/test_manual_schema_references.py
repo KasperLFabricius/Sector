@@ -50,20 +50,20 @@ _REFERENCE_TEMPLATES = (
     "Schema:version{}",
     "Schema-version{}",
     "Schema version{}",
-    "“schema version”: {}",
-    "Schema: “{}”",
-    "‘schema version’: {}",
-    "«schema version»: {}",
-    "„schema version‟: {}",
-    "‹schema version›: {}",
-    "»Schema {}«",
-    "Schema {}",
-    "Schema version {}",
-    "Schema‐{}",
-    "Schema‑{}",
-    "Schema‒{}",
-    "Schema–{}",
-    "Schema—{}",
+    "\u201cschema version\u201d: {}",
+    "Schema: \u201c{}\u201d",
+    "\u2018schema version\u2019: {}",
+    "\u00abschema version\u00bb: {}",
+    "\u201eschema version\u201f: {}",
+    "\u2039schema version\u203a: {}",
+    "\u00bbSchema {}\u00ab",
+    "Schema\u00a0{}",
+    "Schema\u202fversion\u202f{}",
+    "Schema\u2010{}",
+    "Schema\u2011{}",
+    "Schema\u2012{}",
+    "Schema\u2013{}",
+    "Schema\u2014{}",
 )
 
 
@@ -108,9 +108,9 @@ def test_schema_reference_check_rejects_old_and_future_identity_in_every_form(
         '"Schema 25"',
         "(Schema version 25)",
         "SCHEMA: VERSION V25;",
-        "“Schema 25”",
-        "Schema 25…",
-        "Schema 25。",
+        "\u201cSchema 25\u201d",
+        "Schema 25\u2026",
+        "Schema 25\u3002",
     ],
 )
 def test_schema_reference_check_accepts_current_punctuation_and_case(
@@ -130,15 +130,15 @@ def test_schema_reference_check_accepts_current_punctuation_and_case(
         "Schema 25+build",
         "Schema 25_legacy",
         "Schema 25/legacy",
-        "Schema 25β",
-        "Schema ٢٥",
+        "Schema 25\u03b2",
+        "Schema \u0662\u0665",
         'Schema: "v25-beta"',
         'Schema: "version v25-beta"',
         "Schema: 'v25-beta'",
         "Schema version 'v25-beta'",
         '"schema version": "v25-beta"',
-        "“Schema 25-beta”",
-        "Schema‑25-beta",
+        "\u201cSchema 25-beta\u201d",
+        "Schema\u201125-beta",
     ],
 )
 def test_schema_reference_check_rejects_qualified_current_identity(
@@ -172,13 +172,13 @@ def test_schema_reference_check_rejects_qualified_current_identity(
         "XSD-Schema 1.1",
         "json schema 2020-12",
         "Xml Schema 1.1",
-        "JSON Schema 2020-12",
-        "OpenAPI Schema 3.1",
-        "JSON‐Schema 2020-12",
-        "XML‑Schema 1.1",
-        "XSD‒Schema 1.1",
-        "OpenAPI–Schema 3.1",
-        "JSON—Schema 2020-12",
+        "JSON\u00a0Schema 2020-12",
+        "OpenAPI\u202fSchema 3.1",
+        "JSON\u2010Schema 2020-12",
+        "XML\u2011Schema 1.1",
+        "XSD\u2012Schema 1.1",
+        "OpenAPI\u2013Schema 3.1",
+        "JSON\u2014Schema 2020-12",
         "Every downloaded project save uses the current schema\n2. Project input",
         "Current schema\n24-hour support",
         "Current schema\v24-hour support",
@@ -220,7 +220,7 @@ def test_named_schema_exclusion_is_immediate_and_line_local(
 
 @pytest.mark.parametrize(
     "dash",
-    ["-", "‐", "‑", "‒", "–", "—"],
+    ["-", "\u2010", "\u2011", "\u2012", "\u2013", "\u2014"],
 )
 @pytest.mark.parametrize(
     "separator_template",
@@ -239,7 +239,7 @@ def test_named_schema_exclusion_accepts_each_spaced_dash(
 
 def test_named_schema_exclusion_accepts_nbsp_around_dash() -> None:
     validate_no_noncurrent_manual_schema_references(
-        "XML\u00a0‑\u00a0Schema 1.1",
+        "XML\u00a0\u2011\u00a0Schema 1.1",
         project_schema=25,
     )
 
