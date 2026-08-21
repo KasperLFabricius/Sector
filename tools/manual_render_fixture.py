@@ -362,7 +362,7 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Shear and torsion reinforcement",
         "Anchorage is assumed",
         "Bulk assignments",
-        "Governing",
+        "one fully expanded governing row for each stable check family",
         "PDF report",
         "Worked numerical derivations are limited to the globally governing or "
         "extremal calculation in each family",

@@ -1964,20 +1964,21 @@ def validate_pdf_content(
 
 
 def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ...]:
-    """Require one readable overview, with at most one semantic continuation."""
+    """Require one readable overview across its bounded native continuations."""
     caption = "Results overview across calculated checks"
     intro = (
-        "Demand-versus-resistance checks retain their individual verdicts"
+        "Demand-versus-resistance checks keep their individual verdicts"
     )
-    note = "Gov. marks the highest PASS/FAIL utilisation"
+    note = "The table retains one governing row for each stable check family."
+    normalized_pages = [" ".join(page_text.split()) for page_text in page_texts]
     overview_indexes = [
         index
         for index, page_text in enumerate(page_texts)
         if caption in page_text
     ]
-    if not 1 <= len(overview_indexes) <= 2:
+    if not 1 <= len(overview_indexes) <= 3:
         raise AssertionError(
-            "the stable results overview must occupy one or two pages"
+            "the stable results overview must occupy one to three pages"
         )
     if overview_indexes != list(
         range(overview_indexes[0], overview_indexes[-1] + 1)
@@ -1986,11 +1987,11 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
 
     first_index = overview_indexes[0]
     final_index = overview_indexes[-1]
-    if intro not in page_texts[first_index]:
+    if intro not in normalized_pages[first_index]:
         raise AssertionError("the results-overview lead-in left its first page")
     note_indexes = [
         index
-        for index, page_text in enumerate(page_texts)
+        for index, page_text in enumerate(normalized_pages)
         if note in page_text
     ]
     if note_indexes != [final_index]:
@@ -2013,10 +2014,11 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
             raise AssertionError(
                 f"results-overview content is missing: {expected}"
             )
-    if len(overview_indexes) == 2 and "(continued)" not in " ".join(
-        page_texts[final_index].split()
-    ):
-        raise AssertionError("the second results-overview page lacks its continuation")
+    for continuation_index in overview_indexes[1:]:
+        if "(continued)" not in normalized_pages[continuation_index]:
+            raise AssertionError(
+                "a results-overview continuation page lacks its continuation label"
+            )
     return tuple(index + 1 for index in overview_indexes)
 
 
