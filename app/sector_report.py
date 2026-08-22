@@ -5700,7 +5700,7 @@ class ReportBuilder:
                       if comp else ["eps<sub>s</sub>"])
         detail_head = (["NA angle", "eps<sub>c</sub>"] + eps_s_head
                        + ["kappa", "F<sub>c</sub>", "lever L",
-                          "d<sub>x</sub>", "d<sub>y</sub>"])
+                          "L<sub>x</sub>", "L<sub>y</sub>"])
         if cable:
             detail_head.append("eps<sub>p</sub>")
         detail_rows = [detail_head]
@@ -5737,9 +5737,11 @@ class ReportBuilder:
             font=7.2,
             keep=False,
         )
-        self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever L, d<sub>x</sub> "
-                    "and d<sub>y</sub> in mm; strain in %; kappa in 1/m; "
-                    "F<sub>c</sub> in kN.")
+        self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever L, "
+                    "L<sub>x</sub> and L<sub>y</sub> in mm; strain in %; "
+                    "kappa in 1/m; F<sub>c</sub> in kN. L<sub>x</sub> and "
+                    "L<sub>y</sub> are lever-arm components, not effective "
+                    "depth d.")
         if self._selected_family("plastic", self.inp) is not None:
             self._plastic_worked(pl)
         else:
@@ -5809,7 +5811,7 @@ class ReportBuilder:
                     else f"{_fmt(compression_depth_mm, 3)} mm"
                 )],
                 ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM, 3)} mm"],
-                ["Lever components", "d<sub>x</sub>, d<sub>y</sub>",
+                ["Lever components", "L<sub>x</sub>, L<sub>y</sub>",
                  f"{_fmt(gov['dx']*_MM, 3)}, {_fmt(gov['dy']*_MM, 3)} mm"],
                 ["Capacity", "M<sub>x</sub>, M<sub>y</sub>",
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]

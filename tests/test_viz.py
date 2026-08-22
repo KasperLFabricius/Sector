@@ -742,7 +742,12 @@ def test_mm_interaction_shows_fill_util_ray_and_angle_hover():
     assert any("capacity (this direction)" in n for n in names)  # the crossing marker
     cap = next(t for t in fig.data if getattr(t, "name", None) == "capacity")
     assert cap.fill == "toself"                            # filled envelope
-    assert cap.customdata is not None                      # per-vertex angle hover
+    assert cap.mode == "lines+markers"                    # each solved rotation is targetable
+    assert cap.hoveron == "points"                        # never fall back to fill-name hover
+    assert [list(row) for row in cap.customdata] == [
+        [300.0, 0.0], [80.0, 90.0], [300.0, 180.0],
+        [80.0, 270.0], [300.0, 0.0],
+    ]
     assert any("util = 0.50" in (a.text or "") for a in fig.layout.annotations)
 
 
@@ -761,11 +766,14 @@ def test_mm_interaction_hover_distinguishes_capacity_and_applied_actions():
     applied = next(trace for trace in fig.data if trace.name == "applied")
 
     assert capacity.hovertemplate == (
-        "Capacity point<br>"
+        "Plastic capacity point<br>"
+        "neutral-axis angle = %{customdata[1]:.0f} deg<br>"
+        "|M<sub>Rd</sub>| = %{customdata[0]:.1f} kNm<br>"
         "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
-        "M<sub>x,Rd</sub> = %{y:.1f} kNm<br>"
-        "neutral-axis angle = %{customdata:.0f} deg<extra></extra>"
+        "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
     )
+    assert capacity.hoveron == "points"
+    assert capacity.mode == "lines+markers"
     assert crossing.hovertemplate == (
         "Capacity in applied direction<br>"
         "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
@@ -787,9 +795,12 @@ def test_mm_interaction_hover_does_not_invent_unavailable_angle(angles):
     )
     capacity = next(trace for trace in fig.data if trace.name == "capacity")
 
-    assert capacity.customdata is None
+    assert [list(row) for row in capacity.customdata] == [
+        [300.0], [80.0], [300.0], [80.0], [300.0],
+    ]
     assert capacity.hovertemplate == (
-        "Capacity point<br>"
+        "Plastic capacity point<br>"
+        "|M<sub>Rd</sub>| = %{customdata[0]:.1f} kNm<br>"
         "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
         "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
     )
@@ -829,6 +840,8 @@ def test_nm_interaction_hover_distinguishes_axis_capacity_and_applied_actions(ax
             f"M<sub>{axis},Rd</sub> = %{{x:.1f}} kNm<br>"
             "N<sub>Rd</sub> = %{y:.1f} kN<extra></extra>"
         )
+    assert capacity.hoveron == "points"
+    assert capacity.mode == "lines+markers"
     assert applied.hovertemplate == (
         "Applied action<br>"
         f"M<sub>{axis},Ed</sub> = %{{x:.1f}} kNm<br>"

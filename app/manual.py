@@ -2144,7 +2144,7 @@ def manual_blocks() -> list:
            ["$D_{upper}$", "Upper aggregate size used in the clear-spacing rule; mm"],
            ["$A_{sw}/s$", "Shear-link area per spacing; mm2/mm"],
            ["$F_c$", "Concrete compression resultant; kN"],
-           ["$L$, $d_x$, $d_y$", "Internal lever arm and its components; mm"],
+           ["$L$, $L_x$, $L_y$", "Internal lever arm and its components; mm"],
            ["TOTAL", "Elastic stress from long- and short-term actions; MPa"],
            ["LONG", "Elastic stress from the long-term action alone; MPa"],
            ["DIF", "TOTAL minus LONG; MPa"],

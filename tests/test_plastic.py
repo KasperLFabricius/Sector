@@ -26,6 +26,7 @@ from sector.plastic import (
     solve_plastic,
 )
 from sector.section import Section
+from sector.shear import effective_depth, tension_reinforcement
 
 
 # Frozen from d01e6beb040f766985bf5547d99940d649f520c1, before the
@@ -248,6 +249,26 @@ def test_fundamentsbjaelke_matches_handcalc(case):
         assert math.isinf(r.na_y_intercept)
     else:
         assert r.na_y_intercept == pytest.approx(y_int, abs=0.002)
+
+
+def test_uniaxial_lever_component_is_not_effective_depth():
+    section, concrete, steel = fundamentsbjaelke()
+    result = plastic_capacity_at_angle(section, concrete, steel, 0.0, 90.0)
+    outer = [tuple(point) for point in section.concrete[0]]
+    bars = [(bar.x, bar.y, bar.area) for bar in section.bars]
+    _area, tension_cg = tension_reinforcement(
+        bars, "x", tension_low=True, centroid_coord=0.0
+    )
+    depth_mm = effective_depth(outer, "x", True, tension_cg)
+
+    assert result.dx == pytest.approx(0.0, abs=1.0e-12)
+    assert result.lever_arm == pytest.approx(abs(result.dy), abs=1.0e-12)
+    assert result.lever_arm == pytest.approx(
+        math.hypot(result.dx, result.dy), abs=1.0e-12
+    )
+    assert depth_mm == pytest.approx(544.0)
+    assert result.lever_arm * 1000.0 == pytest.approx(505.0, abs=3.0)
+    assert abs(result.lever_arm * 1000.0 - depth_mm) > 30.0
 
 
 def test_eps_steel_comp_is_the_most_compressed_bar_strain():

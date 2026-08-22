@@ -1929,6 +1929,8 @@ def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
 
     assert "Selected sweep point 2 of 2" in text
     assert "Compression-zone depth c 222.000 mm" in text
+    assert "Lever components Lx, Ly" in text
+    assert "lever-arm components, not effective depth d" in text
     assert "Accepted compression depth 222.000000 mm" in text
     assert "Compression-zone depth c 111.000 mm" not in text
     assert "Accepted compression depth 111.000000 mm" not in text

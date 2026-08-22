@@ -2578,6 +2578,13 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
     snap = lambda v: 0.0 if abs(v) <= scale * 1e-4 else v
     mx = [snap(v) for v in mx]
     my = [snap(v) for v in my]
+    magnitudes = [math.hypot(mx_i, my_i) for mx_i, my_i in zip(mx, my)]
+    angles_available = angles is not None and len(angles) == len(mx)
+    point_data = (
+        [[magnitude, angle] for magnitude, angle in zip(magnitudes, angles)]
+        if angles_available
+        else [[magnitude] for magnitude in magnitudes]
+    )
 
     fig = go.Figure()
     # My on the horizontal axis, Mx on the vertical -- see the note above. A full 360
@@ -2586,26 +2593,31 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
     # closing chord, no fill) -- filling it would shade a capacity area across the
     # artificial closing chord that was never computed.
     if closed:
-        cap = go.Scatter(x=my + my[:1], y=mx + mx[:1], mode="lines", fill="toself",
-                         fillcolor=ENVELOPE_FILL, line=dict(color=ENVELOPE, width=2),
-                         name="capacity")
-        cap_angles = (list(angles) + list(angles[:1])) if angles is not None else None
+        cap = go.Scatter(
+            x=my + my[:1], y=mx + mx[:1], mode="lines+markers", fill="toself",
+            fillcolor=ENVELOPE_FILL, line=dict(color=ENVELOPE, width=2),
+            marker=dict(size=5, color=ENVELOPE), name="capacity",
+            customdata=point_data + point_data[:1], hoveron="points",
+        )
     else:
-        cap = go.Scatter(x=list(my), y=list(mx), mode="lines",
-                         line=dict(color=ENVELOPE, width=2),
-                         name="capacity (partial arc)")
-        cap_angles = list(angles) if angles is not None else None
-    if angles is not None and len(angles) == len(mx):
-        cap.customdata = cap_angles
+        cap = go.Scatter(
+            x=list(my), y=list(mx), mode="lines+markers",
+            line=dict(color=ENVELOPE, width=2),
+            marker=dict(size=5, color=ENVELOPE), name="capacity (partial arc)",
+            customdata=point_data, hoveron="points",
+        )
+    if angles_available:
         cap.hovertemplate = (
-            "Capacity point<br>"
+            "Plastic capacity point<br>"
+            "neutral-axis angle = %{customdata[1]:.0f} deg<br>"
+            "|M<sub>Rd</sub>| = %{customdata[0]:.1f} kNm<br>"
             "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
-            "M<sub>x,Rd</sub> = %{y:.1f} kNm<br>"
-            "neutral-axis angle = %{customdata:.0f} deg<extra></extra>"
+            "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
         )
     else:
         cap.hovertemplate = (
-            "Capacity point<br>"
+            "Plastic capacity point<br>"
+            "|M<sub>Rd</sub>| = %{customdata[0]:.1f} kNm<br>"
             "M<sub>y,Rd</sub> = %{x:.1f} kNm<br>"
             "M<sub>x,Rd</sub> = %{y:.1f} kNm<extra></extra>"
         )
@@ -2695,10 +2707,13 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     # way round, not just filled: without this the outline has a gap between the two
     # tension apexes.
     Ns = list(N)
-    fig.add_trace(go.Scatter(x=Ms + Ms[:1], y=Ns + Ns[:1], mode="lines", fill="toself",
-                             line=dict(color=ENVELOPE, width=2), name="capacity",
-                             fillcolor=ENVELOPE_FILL,
-                             hovertemplate=capacity_hover))
+    fig.add_trace(go.Scatter(
+        x=Ms + Ms[:1], y=Ns + Ns[:1], mode="lines+markers", fill="toself",
+        line=dict(color=ENVELOPE, width=2),
+        marker=dict(size=5, color=ENVELOPE), name="capacity",
+        fillcolor=ENVELOPE_FILL, hoveron="points",
+        hovertemplate=capacity_hover,
+    ))
     # Landmark points (derived from the boundary): the squash load (most
     # compression), the tension limit (most tension) and the max-moment apex. They
     # make the figure readable on its own.
