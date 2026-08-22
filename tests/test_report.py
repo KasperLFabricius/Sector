@@ -1822,19 +1822,31 @@ def test_complete_profiles_compact_many_curvature_candidates_without_loss():
     }
     before = copy.deepcopy(out)
 
-    for profile in ("Standard", "Audit"):
-        pdf = sector_report.build_report(
-            {}, _inp(), out, figures=False, profile=profile
-        )
-        assert pdf[:4] == b"%PDF"
-        text = " ".join(_pdf_text(pdf).split())
-        assert "Ultimate-curvature candidates" in text
-        assert "i = 1 : 29" in text
-        assert "1.966e-2" in text
-        assert "0.01965939" in text
-        for candidate in candidates[1:]:
-            assert candidate["element_id"] in text
-            assert sector_report._fmt(candidate["curvature_per_m"], 8) in text
+    standard_pdf = sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Standard"
+    )
+    assert standard_pdf[:4] == b"%PDF"
+    standard = " ".join(_pdf_text(standard_pdf).split())
+    assert "Governing ultimate curvature" in standard
+    assert "Ultimate-curvature candidates" not in standard
+    assert "i = 1 : 29" in standard
+    assert "1.966e-2" in standard
+    for candidate in candidates[1:]:
+        assert candidate["element_id"] not in standard
+        assert sector_report._fmt(candidate["curvature_per_m"], 8) not in standard
+
+    audit_pdf = sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Audit"
+    )
+    assert audit_pdf[:4] == b"%PDF"
+    audit = " ".join(_pdf_text(audit_pdf).split())
+    assert "Ultimate-curvature candidates" in audit
+    assert "i = 1 : 29" in audit
+    assert "1.966e-2" in audit
+    assert "0.01965939" in audit
+    for candidate in candidates[1:]:
+        assert candidate["element_id"] in audit
+        assert sector_report._fmt(candidate["curvature_per_m"], 8) in audit
 
     brief = " ".join(_pdf_text(sector_report.build_report(
         {}, _inp(), out, figures=False, profile="Brief"
@@ -1865,9 +1877,14 @@ def test_curvature_selection_is_not_inferred_from_incomplete_retained_evidence(
         {}, _inp(), out, figures=False, profile="Standard"
     )
     text = " ".join(_pdf_text(pdf).split())
-    assert "Ultimate-curvature candidates" in text
+    assert "Ultimate-curvature candidates" not in text
     assert "governing ultimate curvature" not in text
     assert out == before
+
+    audit_text = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Audit"
+    )).split())
+    assert "Ultimate-curvature candidates" in audit_text
 
     absent = copy.deepcopy(out)
     absent_point = absent["plastic"]["points"][0]
@@ -1889,7 +1906,7 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
     for heading in (
         "Worked plastic calculation (utilisation direction)",
         "Accepted strain plane",
-        "Ultimate-curvature candidates",
+        "Governing ultimate curvature",
         "Compression-depth solution",
         "Accepted section resultants",
         "Step 1 - accepted long-term state",
@@ -4031,12 +4048,20 @@ def test_report_includes_the_nm_interaction_when_present():
     branch = dict(N=[-500.0, 0.0, 1500.0, 4000.0], M=[80.0, 300.0, 340.0, 0.0],
                   applied=(200.0, 100.0), converged=True)
     out["plastic"]["interaction"] = dict(x=branch, y=branch)
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Standard"
+    ))
     assert "interaction" in txt.lower()
     assert "squash" in txt.lower()
     assert "N-M" in txt or ("Mx" in txt and "My" in txt)   # both axes titled
-    assert "Numerical N-M boundary" in txt
-    assert "4000.000" in txt                               # exact boundary values tabulated
+    assert "Numerical N-M boundary" not in txt
+    assert "4000.000" not in txt
+
+    audit = _pdf_text(sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Audit"
+    ))
+    assert "Numerical N-M boundary" in audit
+    assert "4000.000" in audit
 
 
 def test_long_nm_boundary_repeats_its_numeric_traceability_header():
@@ -4048,7 +4073,9 @@ def test_long_nm_boundary_repeats_its_numeric_traceability_header():
         "converged": True,
     }
     out["plastic"]["interaction"] = {"x": branch, "y": branch}
-    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    pdf = sector_report.build_report(
+        {}, _inp(), out, figures=False, profile="Audit"
+    )
 
     import io
     import pypdf

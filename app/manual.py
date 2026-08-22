@@ -1310,9 +1310,9 @@ def manual_blocks() -> list:
        "non-governing result registers, substituted equations, derivations, candidate "
        "searches and the worked result chain. When figures are requested, Brief keeps "
        "only the selected governing Plastic and Elastic result plots when available. "
-       "Standard adds governing calculation steps for the active checks; Audit adds "
-       "complete retained branches, substitutions and provenance. **Audit does not "
-       "mean approved, compliant or certified**.")
+       "Standard adds one governing worked calculation for each active check family; "
+       "Audit adds complete retained candidates, traces, branches, substitutions and "
+       "provenance. **Audit does not mean approved, compliant or certified**.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
