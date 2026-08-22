@@ -433,9 +433,10 @@ def test_manual_documents_native_case_tables_results_and_report():
 
 def test_manual_documents_current_governing_results_overview():
     text = "\n".join(str(block) for block in manual.manual_blocks())
-    assert "one fully expanded governing row for each stable check family" in text
-    assert "Status state is considered before utilisation" in text
-    assert "Direction-specific checks remain separate" in text
+    assert "one fully expanded governing row for each semantic check type" in text
+    assert "An executed result takes precedence over an inactive state" in text
+    assert "Direction-specific rows of the same check type compete" in text
+    assert "listed separately as scope and calculation state" in text
     assert "one row per evaluated check and case" not in text
     assert "All named cases" not in text
 

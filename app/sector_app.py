@@ -9284,81 +9284,91 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
 def results_overview_view(inp, results, *, stale=False):
     """One-screen result register without a global calculation verdict."""
     all_rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
-    rows = presentation.governing_summary_rows(all_rows)
-    counts = {status: sum(row["status"] == status for row in rows)
-              for status in {
-                   "PASS", "FAIL", "INVALID", "NOT ASSESSED", "NOT RUN", "STALE",
-                   "NOT APPLICABLE", "REVIEW", "CALCULATED",
-                   "NOT CALCULATED", "NOT REQUESTED",
-                   "CALCULATED - ACCEPTANCE NOT ASSESSED",
-                   "WITHIN USER-SPECIFIED LIMIT", "EXCEEDS USER-SPECIFIED LIMIT",
-                   "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
-                   "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
-               }}
+    selected = presentation.governing_summary_rows(all_rows)
+    rows = presentation.governing_result_rows(selected)
+    information_rows = presentation.governing_information_rows(selected)
+    failure_states = {
+        "INVALID",
+        "FAIL",
+        "EXCEEDS USER-SPECIFIED LIMIT",
+        "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
+    }
+    warning_states = {
+        "STALE",
+        "REVIEW",
+        "NOT ASSESSED",
+        "CALCULATED - ACCEPTANCE NOT ASSESSED",
+    }
+    success_or_output_states = {
+        "PASS",
+        "WITHIN USER-SPECIFIED LIMIT",
+        "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
+        "CALCULATED",
+    }
+    failure_count = sum(row["status"] in failure_states for row in rows)
+    warning_count = sum(
+        row["status"] in warning_states
+        or row["status"] not in (
+            failure_states
+            | warning_states
+            | success_or_output_states
+            | presentation.GOVERNING_OVERVIEW_INFORMATION_STATUSES
+        )
+        for row in rows
+    )
     named_action_sets = {
         str(row.get("case") or "").strip()
         for row in all_rows
         if str(row.get("case") or "").strip() not in {"", "-"}
     }
 
-    st.info(
-        f"{len(rows)} governing check-family rows across "
+    context = (
+        f"{len(rows)} governing result types across "
         f"{len(named_action_sets)} named action sets. "
-        "Demand-versus-resistance checks keep their individual verdicts; "
-        "output-only quantities and the project as a whole have no verdict."
+        "Each comparison keeps its own status; this is not a section or "
+        "project compliance verdict."
     )
+    if failure_count:
+        st.error(
+            f"{failure_count} governing result(s) fail or are invalid. {context}"
+        )
+    elif warning_count:
+        st.warning(
+            f"{warning_count} governing result(s) require review. {context}"
+        )
+    elif rows:
+        st.info("No failing or warning governing result is retained. " + context)
+    else:
+        st.info(
+            "No applicable calculated result is retained. Scope and calculation "
+            "states are listed below; no pass conclusion is implied."
+        )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "Calculated outputs",
-        counts.get("CALCULATED", 0)
-        + counts.get("CALCULATED - ACCEPTANCE NOT ASSESSED", 0)
-        + counts.get("WITHIN USER-SPECIFIED LIMIT", 0)
-        + counts.get("EXCEEDS USER-SPECIFIED LIMIT", 0)
-        + counts.get("PROVIDED AREA AT LEAST CALCULATED REQUIREMENT", 0)
-        + counts.get("PROVIDED AREA BELOW CALCULATED REQUIREMENT", 0),
-    )
-    c2.metric("Pass / fail", counts.get("PASS", 0) + counts.get("FAIL", 0))
-    c3.metric(
-        "Review / not evaluated",
-        counts.get("REVIEW", 0)
-        + counts.get("NOT ASSESSED", 0)
-        + counts.get("NOT REQUESTED", 0)
-        + counts.get("NOT RUN", 0)
-        + counts.get("NOT APPLICABLE", 0)
-        + counts.get("INVALID", 0),
-    )
-    c4.metric("Stale", counts.get("STALE", 0))
+    c1.metric("Governing result types", len(rows))
+    c2.metric("Fail / invalid", failure_count)
+    c3.metric("Review / stale", warning_count)
+    c4.metric("Scope states", len(information_rows))
 
     display = []
     for row in rows:
-        source = str(row.get("source") or "").strip()
-        case_context = (
-            source
-            if source not in {"", "-"}
-            else str(row.get("case_type") or "-").strip() or "-"
-        )
         display.append({
             "Check": row["check"],
-            "Action set": row["case"],
+            "Governing action": row["case"],
             "Status": row["status"],
             "Result": row["result"],
             "Criterion": row["criterion"],
-            "Source / description": case_context,
             "View": row["view"],
-            "Note": row["note"],
         })
     summary = pd.DataFrame(
         display,
         columns=(
             "Check",
-            "Action set",
+            "Governing action",
             "Status",
             "Result",
             "Criterion",
-            "Source / description",
             "View",
-            "Note",
         ),
     )
     status_colours = {
@@ -9393,16 +9403,24 @@ def results_overview_view(inp, results, *, stale=False):
             "background-color: #FFF4D6; color: #7A4E00; font-weight: 600"
         ),
     }
-    styled = summary.style.map(
-        lambda value: status_colours.get(str(value), ""),
-        subset=["Status"],
-    )
-    st.dataframe(
-        styled,
-        hide_index=True,
-        width="stretch",
-        height=35 * (len(display) + 1) + 3,
-    )
+    if not summary.empty:
+        styled = summary.style.map(
+            lambda value: status_colours.get(str(value), ""),
+            subset=["Status"],
+        )
+        st.table(
+            styled,
+            hide_index=True,
+            width="stretch",
+            height="content",
+        )
+
+    if information_rows:
+        st.markdown("**Scope and calculation state**")
+        st.text("\n".join(
+            f"{row['check']} | {row['case']} | {row['status']} | {row['result']}"
+            for row in information_rows
+        ))
 
 
 def _detailing_status_callout(status, message):

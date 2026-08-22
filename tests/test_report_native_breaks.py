@@ -174,7 +174,7 @@ def test_results_overview_retains_type_and_dense_padding(monkeypatch):
     assert introduction.getKeepWithNext()
 
 
-def test_results_overview_preserves_selected_family_order_across_groups(monkeypatch):
+def test_results_overview_separates_scope_state_from_result_groups(monkeypatch):
     rows = [
         {
             "check": "Plastic bending",
@@ -224,7 +224,6 @@ def test_results_overview_preserves_selected_family_order_across_groups(monkeypa
     assert table._sector_overview_groups == (
         "Acceptance checks",
         "Calculated outputs",
-        "Scope and not-run states",
         "Acceptance checks",
     )
     values = [
@@ -236,8 +235,13 @@ def test_results_overview_preserves_selected_family_order_across_groups(monkeypa
         "Plastic bending",
         "Calculated outputs",
         "Centroid",
-        "Scope and not-run states",
-        "Fatigue",
         "Acceptance checks",
         "Shear",
     ]
+    plain_text = " | ".join(
+        item.getPlainText()
+        for item in builder.flow
+        if hasattr(item, "getPlainText")
+    )
+    assert "Scope and calculation state" in plain_text
+    assert "Fatigue | - | NOT RUN | -" in plain_text

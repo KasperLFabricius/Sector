@@ -56,8 +56,9 @@ accepted publication contract immediately before it.
 ### Results Overview
 
 - The overview is always fully visible and has no fixed-height vertical scroll.
-- It contains one governing row for every stable check family that is relevant
-  to the current results, not one conclusion per load case.
+- It contains one governing row for every stable semantic check type that is
+  relevant to the current results, not one conclusion per load case or
+  direction.
 - A family summary is derived from the same emitted subchecks and cannot say
   `NOT RUN`, `NOT APPLICABLE` or `PASS` when an applicable child row proves a
   contradictory state.

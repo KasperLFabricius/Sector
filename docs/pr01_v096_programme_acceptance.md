@@ -18,7 +18,7 @@ manual generator, persistence, schema, package or version surface.
 | Sequence | PR-01 through PR-09, G1, PR-10, G2; graph is acyclic and exact | Hidden or implicit release prerequisites |
 | Brief | Complete effective inputs for every reported active result, governing conclusions/values and only governing plastic/elastic plots | Worked result chain, derivations, inactive/unused inputs, secondary or geometry figures |
 | Standard/Audit | Governing family calculation vs exhaustive reconstruction | Same-depth profiles or page-count-only distinction |
-| Results Overview | Fully visible governing-family table with coherent states | Fixed-height scrolling, per-case conclusions or contradictory parents |
+| Results Overview | Fully visible governing-type table with coherent states | Fixed-height scrolling, per-case conclusions or contradictory parents |
 | Manual | Current user operation and interpretation; improved Section A workflows | Former-version narrative, internal build/schema/repository administration |
 | `gamma_V` | 2023-only positive finite input, 1.40 default, complete provenance | Hidden fixed 1.40, activation in first-generation/torsion routes |
 | References/notation | Exact editions/clauses and user-facing `‰` | Invented sources or user-facing `per mille` text |

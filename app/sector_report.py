@@ -1293,10 +1293,12 @@ class ReportBuilder:
         retained_rows = presentation.multi_case_summary_rows(
             self._base_inp, self._base_out
         )
-        rows = presentation.governing_summary_rows(retained_rows)
+        selected = presentation.governing_summary_rows(retained_rows)
+        rows = presentation.governing_result_rows(selected)
+        information_rows = presentation.governing_information_rows(selected)
         self._h2("Results overview")
         self._small(
-            "Each stable check family retains its governing result row. "
+            "Each stable semantic check type retains its governing result row. "
             "Demand-versus-resistance checks keep their individual verdicts. "
             "Output-only quantities and the project as a whole have no verdict."
         )
@@ -1306,13 +1308,8 @@ class ReportBuilder:
         data = [[
             "Check", "Action set", "Status", "Result", "Criterion", "Source / note"
         ]]
-        scope_states = {
-            "NOT REQUESTED", "NOT APPLICABLE", "NOT RUN", "NOT CALCULATED",
-        }
         def _overview_group(row):
             status = str(row["status"]).upper()
-            if status in scope_states:
-                return "Scope and not-run states"
             if status == "CALCULATED" or row["criterion"] == "Output only":
                 return "Calculated outputs"
             return "Acceptance checks"
@@ -1462,15 +1459,22 @@ class ReportBuilder:
         self.flow.append(table)
         if self.profile.key == "Brief":
             governing_note = (
-                "The table retains one governing row per stable check family. "
-                "NOT APPLICABLE means zero action."
+                "The table retains one governing row per semantic check type."
             )
         else:
             governing_note = (
-                "The table retains one governing row for each stable check family. "
-                "NOT APPLICABLE means the row action is zero."
+                "The table retains one governing row for each semantic check type."
             )
         self._small(governing_note)
+        if information_rows:
+            self._small("<b>Scope and calculation state</b>")
+            for row in information_rows:
+                self._small(
+                    f"{_html_escape(row['check'])} | "
+                    f"{_html_escape(row['case'])} | "
+                    f"{_html_escape(row['status'])} | "
+                    f"{_html_escape(row['result'])}"
+                )
         self._gap(4)
 
     def _gap(self, h=4):

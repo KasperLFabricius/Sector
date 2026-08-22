@@ -692,7 +692,7 @@ def manual_blocks() -> list:
        "immediately to its right, owns document metadata, profile selection, "
        "generation and PDF download.")
     table(["View", "Shows"],
-          [["Results Overview", "One governing action set per stable check family, with numerical outputs and individual resistance checks"],
+          [["Results Overview", "One most-unfavourable retained result per semantic check type, with the governing action or direction preserved"],
            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
@@ -1204,13 +1204,15 @@ def manual_blocks() -> list:
 
     h1("Reading the results")
     h2("Results overview")
-    md("The overview shows one fully expanded governing row for each stable check "
-       "family, with its selected action set, result, criterion and status. Status "
-       "state is considered before utilisation; equal states use the largest valid "
-       "utilisation and exact ties keep the first retained case. Direction-specific "
-       "checks remain separate and keep their direction and source. A zero row "
-       "action is shown as **Not applicable**, not as a pass. Headline counts "
-       "describe the visible rows; they do not combine them into a project result.")
+    md("The overview shows one fully expanded governing row for each semantic check "
+       "type, with its selected action set, direction or scope, result, criterion "
+       "and status. An executed result takes precedence over an inactive state; "
+       "equal states use the largest valid utilisation and exact ties keep the "
+       "first retained case. Direction-specific rows of the same check type compete "
+       "and the selected direction remains in the check label. **Not run**, **Not "
+       "calculated**, **Not applicable** and **Not requested** are listed separately "
+       "as scope and calculation state, not as conclusions. Headline counts describe "
+       "the visible rows; they do not combine them into a project result.")
     md("In analysis figures, hover text reports the retained capacity or material "
        "response represented by the selected point. Section-result markers show "
        "stress and strain; coordinates and reinforcement area remain in section "
