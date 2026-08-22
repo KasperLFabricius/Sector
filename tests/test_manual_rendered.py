@@ -100,8 +100,8 @@ def test_accessible_html_fixture_is_self_contained_and_semantic():
     text = validate_html_content(build_fixture_html())
     assert "Standard is the default" in text
     assert (
-        "Worked numerical derivations are limited to the globally governing or "
-        "extremal calculation in each family"
+        "Standard adds one governing worked calculation for each active check "
+        "family"
     ) in text
     assert "Audit does not mean approved, compliant or certified" in text
 

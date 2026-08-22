@@ -102,8 +102,10 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
         "published project-adoption basis",
         "no Danish National Annex",
         "confinement enhancement is not included or assessed",
-        "Current projects use schema version 26",
-        "Every downloaded project save uses the current schema",
+        (
+            "Loading a project restores its inputs and clears earlier results. "
+            "Review the restored inputs"
+        ),
         (
             "Report metadata and publication controls are grouped separately from "
             "the Project input stage."
@@ -119,6 +121,8 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
     for replaced in (
         "Schema 25 is migrated in memory",
         "Schema 24 remains unsupported",
+        "Current projects use schema version 26",
+        "Every downloaded project save uses the current schema",
         "in-development Sector v0.93 line",
         "Released Sector 0.92 projects used schema version 23",
         "Report metadata and publication controls are no longer mixed",

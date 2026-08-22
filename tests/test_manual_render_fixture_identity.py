@@ -16,10 +16,8 @@ def test_manual_fixture_routes_current_only_rules_to_visible_text(monkeypatch):
 
     monkeypatch.setattr(
         manual_fixture,
-        "validate_current_manual_schema_statements",
-        lambda text, *, project_schema: calls.append(
-            ("schema statements", text, project_schema)
-        ),
+        "validate_end_user_manual_scope",
+        lambda text: calls.append(("end-user scope", text)),
     )
     monkeypatch.setattr(
         manual_fixture,
@@ -47,11 +45,7 @@ def test_manual_fixture_routes_current_only_rules_to_visible_text(monkeypatch):
     )
 
     assert calls == [
-        (
-            "schema statements",
-            "flat manual text",
-            manual_fixture.project_io.VERSION,
-        ),
+        ("end-user scope", "flat manual text"),
         (
             "schema references",
             "line-preserving manual text",
