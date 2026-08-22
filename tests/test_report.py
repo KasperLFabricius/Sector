@@ -4646,7 +4646,7 @@ def test_report_legacy_blocker_sanitizes_both_face_combined_cells_only():
     assert out == before
 
 
-def test_brief_register_omits_stale_retained_combined_selection():
+def test_brief_governing_depth_does_not_publish_worked_selection_register():
     inp = _inp()
     actions = [
         {
@@ -4703,37 +4703,18 @@ def test_brief_register_omits_stale_retained_combined_selection():
 
     builder._brief_governing_register()
 
-    register = next(
-        rows for rows in tables
-        if rows[0] == ["Calculation", "Selected case / branch"]
+    rendered_text = " ".join(
+        item.getPlainText()
+        for item in builder.flow
+        if hasattr(item, "getPlainText")
     )
-    assert ["Combined M-V-T", "PL-LEGACY"] not in register
-    assert ["Combined M-V-T", "PL-CURRENT"] not in register
-    assert ["Shear resistance", "PL-CURRENT"] in register
+    assert tables == []
+    assert "Governing results and limitations" in rendered_text
+    assert "contains no worked derivation or result chain" in rendered_text
+    assert "Selected governing worked examples" not in rendered_text
+    assert "PL-LEGACY" not in rendered_text
+    assert "PL-CURRENT" not in rendered_text
     assert out["worked_example_selection"] == selection_before
-
-    current_out = copy.deepcopy(out)
-    current_out["worked_example_selection"]["families"]["combined"] = {
-        "case_id": "PL-CURRENT", "component": None,
-    }
-    current_builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, inp, current_out, figures=False, profile="Brief",
-    )
-    current_tables = []
-    current_builder._table = (
-        lambda rows, *args, **kwargs: current_tables.append(copy.deepcopy(rows))
-    )
-
-    current_builder._brief_governing_register()
-
-    current_register = next(
-        rows for rows in current_tables
-        if rows[0] == ["Calculation", "Selected case / branch"]
-    )
-    assert ["Combined M-V-T", "PL-CURRENT"] in current_register
-    assert current_out["worked_example_selection"]["families"]["combined"] == {
-        "case_id": "PL-CURRENT", "component": None,
-    }
 
 
 def test_audit_appendix_claims_combined_method_only_for_assessable_case():

@@ -18,10 +18,10 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
 
 ReportProfileKey: TypeAlias = Literal["Brief", "Standard", "Audit"]
-InputScope: TypeAlias = Literal["compact", "used", "canonical"]
-NonGoverningScope: TypeAlias = Literal["compact", "complete"]
+InputScope: TypeAlias = Literal["effective", "used", "canonical"]
+NonGoverningScope: TypeAlias = Literal["governing-only", "complete"]
 EquationScope: TypeAlias = Literal["interpretive", "used", "used-and-theory"]
-SubstitutionScope: TypeAlias = Literal["governing", "material", "every-retained"]
+SubstitutionScope: TypeAlias = Literal["none", "material", "every-retained"]
 ProvenanceScope: TypeAlias = Literal["revision", "key", "complete"]
 GlossaryScope: TypeAlias = Literal["short", "used", "complete"]
 
@@ -52,24 +52,21 @@ BRIEF_PROFILE: Final = ReportProfilePolicy(
     key="Brief",
     label="Brief",
     description=(
-        "Rapid-review report with a compact active-input inventory, every "
-        "requested calculation result and the governing result chain. "
-        "Non-governing results are compact."
+        "Rapid-review report with the complete effective inputs for every "
+        "reported active result, governing results and concise limitations."
     ),
     omitted_detail=(
-        "Complete non-governing derivations, full method theory, branch "
-        "inventories, hashes, and exhaustive provenance are omitted."
+        "Non-governing results, worked derivations, candidate and branch "
+        "inventories, full method theory, hashes and exhaustive provenance "
+        "are omitted."
     ),
-    input_scope="compact",
-    non_governing_scope="compact",
+    input_scope="effective",
+    non_governing_scope="governing-only",
     equation_scope="interpretive",
-    substitution_scope="governing",
+    substitution_scope="none",
     provenance_scope="revision",
     glossary_scope="short",
     include_qa_appendix=False,
-    target_page_limit=4,
-    target_exception_requires_reason=True,
-    target_exception_requires_visual_approval=True,
 )
 
 STANDARD_PROFILE: Final = ReportProfilePolicy(

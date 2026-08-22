@@ -419,10 +419,10 @@ def test_manual_documents_native_case_tables_results_and_report():
         "Results overview",
         "Select a Plastic/capacity case",
         "Select an Elastic case",
-        "Every profile publishes the complete requested-calculation status register",
-        "globally governing or extremal calculation",
-        "one global fine-system and one global coarse-system example",
-        "separate governing reinforcement and concrete examples",
+        "complete effective geometry",
+        "governing results and concise limitations",
+        "omits non-governing result registers",
+        "selected governing Plastic and Elastic result plots",
         "Brief",
         "Standard",
         "Audit does not mean approved, compliant or certified",
@@ -538,9 +538,11 @@ def test_manual_uses_exact_elastic_state_and_crack_example_terminology():
         "not a physical strain/curvature plane",
         "physical concrete strain",
         "three code options give four method/system results",
-        "one global governing worked crack width",
+        "globally governing worked crack width in Standard and Audit",
         "one global fine-system",
         "one global coarse-system worked example",
+        "Brief retains the complete effective inputs",
+        "no worked example or non-governing case register",
     ):
         assert expected in text
 
