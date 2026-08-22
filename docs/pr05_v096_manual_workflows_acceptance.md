@@ -15,15 +15,15 @@ route. Stage and view names below are the exact visible application labels.
 
 | Workflow | Required route |
 |---|---|
-| Create a section | `Inputs > Section`; define concrete, void and reinforcement geometry; confirm the preview; calculate. |
-| Define materials and reinforcement | `Inputs > Material parameters`; define material laws; use `Inputs > Section` for reinforcement assignments; calculate. |
-| Enter actions | `Inputs > Loads`; enter uniquely named rows; calculate. |
-| Calculate elastic response and crack width | Select Elastic and criteria under `Inputs > Analysis settings`; define the Elastic row under `Inputs > Loads`; calculate; open `Analysis > Elastic Results`. |
-| Calculate plastic capacity | Select Plastic under `Inputs > Analysis settings`; define the row under `Inputs > Loads`; calculate; open `Analysis > Plastic Results` or `Analysis > N-M Interaction`. |
-| Calculate grouped fatigue | Enable Fatigue under `Inputs > Analysis settings`; complete material/detail and spectrum inputs; calculate; open `Analysis > Fatigue Results`. |
-| Review detailing | Enable the required checks under `Inputs > Analysis settings`; complete dependent inputs; calculate; open `Analysis > Detailing`. |
-| Review results | Calculate after the final input edit; open `Analysis > Results Overview`; follow the governing row to its named detail view. |
-| Save or load a project | Use `Inputs > Project`; after loading, review restored inputs and calculate before using results. |
+| Create a section | `Inputs > Section`; define concrete, void and reinforcement geometry; confirm the preview. |
+| Define materials and reinforcement | `Inputs > Material parameters`; define material laws; use `Inputs > Section` for reinforcement assignments; confirm that used IDs resolve. |
+| Enter actions | `Inputs > Loads`; enter uniquely named rows; resolve every row error. |
+| Calculate elastic response and crack width | Select Elastic and criteria under `Inputs > Analysis settings`; define the Elastic row under `Inputs > Loads`; open `Analysis > Elastic Results`; calculate and review. |
+| Calculate plastic capacity | Select Plastic under `Inputs > Analysis settings`; define the row under `Inputs > Loads`; open `Analysis > Plastic Results` or `Analysis > N-M Interaction`; calculate and review. |
+| Calculate grouped fatigue | Enable Fatigue under `Inputs > Analysis settings`; complete material/detail and spectrum inputs; open `Analysis > Fatigue Results`; calculate and review. |
+| Review detailing | Enable the required checks under `Inputs > Analysis settings`; complete dependent inputs; for minimum reinforcement select the per-row option under `Inputs > Loads`; open `Analysis > Detailing`; calculate and review. |
+| Review results | Open `Analysis > Results Overview`; calculate after the final input edit; follow the governing row to its named detail view. |
+| Save or load a project | Use `Inputs > Project`; after loading, review restored inputs; open `Analysis > Results Overview`; calculate before using results. |
 | Choose a report profile | With current results, use `Report`; enter metadata, choose the profile, generate and download. |
 
 Troubleshooting corrections must name the input stage or result view the user

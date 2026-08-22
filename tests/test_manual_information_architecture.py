@@ -160,13 +160,13 @@ def test_crack_comparison_guidance_uses_independent_zero_value_contract():
 
 def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
     required_routes = {
-        "section-creation": ("Inputs > Section", "Calculate"),
+        "section-creation": ("Inputs > Section", "preview"),
         "materials-reinforcement": (
             "Inputs > Material parameters",
             "Inputs > Section",
-            "Calculate",
+            "every used ID resolves",
         ),
-        "action-tables": ("Inputs > Loads", "Calculate"),
+        "action-tables": ("Inputs > Loads", "row error"),
         "elastic-crack": (
             "Inputs > Analysis settings",
             "Inputs > Loads",
@@ -187,13 +187,19 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
         ),
         "detailing": (
             "Inputs > Analysis settings",
+            "Inputs > Loads",
+            "Check minimum reinforcement",
             "Analysis > Detailing",
         ),
         "review-results": (
             "Analysis > Results Overview",
             "View",
         ),
-        "save-load": ("Inputs > Project", "Calculate"),
+        "save-load": (
+            "Inputs > Project",
+            "Analysis > Results Overview",
+            "Calculate",
+        ),
         "report-profile": ("Report", "generate", "download"),
     }
     assert set(required_routes) == {item.key for item in ia.WORKFLOWS}
@@ -207,6 +213,22 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
         item.action for item in ia.WORKFLOWS if item.key == "report-profile"
     )
     assert "figure option" not in report_action.lower()
+
+    for workflow in ia.WORKFLOWS:
+        if "press Calculate" not in workflow.action:
+            continue
+        assert "Analysis >" in workflow.action
+        assert workflow.action.index("Analysis >") < workflow.action.index(
+            "press Calculate"
+        )
+
+    for warning in ia.WARNINGS:
+        if "press Calculate" not in warning.correction:
+            continue
+        assert "Analysis >" in warning.correction
+        assert warning.correction.index("Analysis >") < warning.correction.index(
+            "press Calculate"
+        )
 
     manual_text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "calculate or review as applicable" not in manual_text

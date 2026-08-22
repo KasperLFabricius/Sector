@@ -172,7 +172,7 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "The value is outside its declared range, conflicts with another input, "
         "or leaves an assignment incomplete.",
         "Open the Inputs stage named in the warning, correct the identified value "
-        "or assignment, then press Calculate.",
+        "or assignment, then open Analysis > Results Overview and press Calculate.",
     ),
     WarningReference(
         "method-applicability",
@@ -180,14 +180,16 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "The selected option has conditions that Sector cannot infer from the "
         "section geometry or action row.",
         "Open Inputs > Analysis settings, confirm the stated project condition "
-        "and selected design basis, then calculate again.",
+        "and selected design basis, then open Analysis > Results Overview and press "
+        "Calculate.",
     ),
     WarningReference(
         "geometry-invalid",
         "The section is rejected or no result is produced.",
         "The outer ring, a void, bar, tendon, or material assignment is malformed.",
         "Correct the highlighted geometry under Inputs > Section or the cited "
-        "assignment under Inputs > Material parameters, then press Calculate.",
+        "assignment under Inputs > Material parameters, then open Analysis > Results "
+        "Overview and press Calculate.",
     ),
     WarningReference(
         "loads-invalid",
@@ -195,7 +197,7 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "A required action value is missing or invalid, or a row name is empty or "
         "duplicates another row in the same table.",
         "Open Inputs > Loads, correct the named row, value or duplicate name, then "
-        "press Calculate.",
+        "open Analysis > Results Overview and press Calculate.",
     ),
     WarningReference(
         "crack-not-requested",
@@ -216,17 +218,19 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "results-stale",
         "Analysis results are marked stale after an input edit.",
         "A calculation input changed after the last calculation.",
-        "Press Calculate after the final input edit, then return to the named "
-        "Analysis view and verify that the stale marker has cleared.",
+        "Open Analysis > Results Overview, press Calculate after the final input "
+        "edit, then return to the named detail view and verify that the stale marker "
+        "has cleared.",
     ),
     WarningReference(
         "report-stale",
         "A report cannot be downloaded because its input or metadata changed.",
         "The retained PDF no longer matches the current calculation inputs or "
         "Report metadata.",
-        "If calculation inputs changed, finish the Inputs edit and press Calculate. "
-        "If only metadata changed, keep the current results. Then open Report and "
-        "select Generate report before downloading.",
+        "If calculation inputs changed, finish the Inputs edit, open Analysis > "
+        "Results Overview and press Calculate. If only metadata changed, keep the "
+        "current results. Then open Report and select Generate report before "
+        "downloading.",
     ),
     WarningReference(
         "results-review",
@@ -266,9 +270,9 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "report-generation",
         "PDF or HTML manual/report generation is unavailable.",
         "Required retained results or a publication dependency failed closed.",
-        "Read the displayed reason. Press Calculate only when stale or missing "
-        "results are cited; otherwise correct the named Report input or publication "
-        "dependency and retry.",
+        "Read the displayed reason. When stale or missing results are cited, open "
+        "Analysis > Results Overview and press Calculate; otherwise correct the named "
+        "Report input or publication dependency and retry.",
     ),
 )
 
@@ -279,7 +283,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "section", "Member geometry and coordinate convention", "Section preview is valid",
         "geometry-invalid",
         "Open Inputs > Section. Enter or generate the concrete outline and voids, "
-        "add reinforcement geometry, confirm the preview, then press Calculate.",
+        "add reinforcement geometry, then confirm that the preview is valid.",
     ),
     Workflow(
         "materials-reinforcement", "Define materials and reinforcement",
@@ -287,15 +291,16 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "Material grades and reinforcement layout", "Every used material ID resolves",
         "geometry-invalid",
         "Open Inputs > Material parameters and define the required material laws. "
-        "Use Inputs > Section to assign each reinforcement material ID, then press "
-        "Calculate.",
+        "Use Inputs > Section to assign each reinforcement material ID, then confirm "
+        "that every used ID resolves.",
     ),
     Workflow(
         "action-tables", "Enter actions", "Named Plastic, Elastic and fatigue actions",
         "loads", "Design action sets", "Rows are valid and uniquely named",
         "loads-invalid",
         "Open Inputs > Loads. Enter the uniquely named Plastic/capacity, Elastic "
-        "and grouped-fatigue rows required for the task, then press Calculate.",
+        "and grouped-fatigue rows required for the task, then resolve every displayed "
+        "row error.",
     ),
     Workflow(
         "elastic-crack", "Calculate elastic response and crack width",
@@ -304,8 +309,8 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "crack-criterion-missing",
         "Select Elastic and the crack-width method and limits under Inputs > "
         "Analysis settings. Define the Elastic row under Inputs > Loads, enable "
-        "Calculate crack width when required, press Calculate, then open Analysis > "
-        "Elastic Results.",
+        "Calculate crack width when required, then open Analysis > Elastic Results, "
+        "press Calculate, and review the retained result.",
     ),
     Workflow(
         "plastic-capacity", "Calculate plastic capacity",
@@ -313,8 +318,8 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "Valid section, materials and Plastic row", "Calculated capacity result",
         "results-stale",
         "Select Plastic under Inputs > Analysis settings. Define the Plastic/capacity "
-        "row under Inputs > Loads, press Calculate, then open Analysis > Plastic "
-        "Results or Analysis > N-M Interaction.",
+        "row under Inputs > Loads, then open Analysis > Plastic Results or Analysis > "
+        "N-M Interaction, press Calculate, and review the retained result.",
     ),
     Workflow(
         "fatigue", "Calculate grouped fatigue", "Spectrum and governing element results",
@@ -322,23 +327,25 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "Calculated or bounded not-assessed state", "results-stale",
         "Enable Fatigue under Inputs > Analysis settings. Define fatigue details "
         "under Inputs > Material parameters, assign them under Inputs > Section, "
-        "enter grouped spectra under Inputs > Loads, press Calculate, then open "
-        "Analysis > Fatigue Results.",
+        "enter grouped spectra under Inputs > Loads, then open Analysis > Fatigue "
+        "Results, press Calculate, and review the retained result.",
     ),
     Workflow(
         "detailing", "Review detailing", "Minimum reinforcement, links and spacing results",
         "detailing", "Calculated relevant action rows", "Each requested check has a bounded status",
         "results-stale",
         "Enable each required detailing check under Inputs > Analysis settings, "
-        "complete its dependent link or member inputs, press Calculate, then open "
-        "Analysis > Detailing.",
+        "and complete its dependent link or member inputs. For minimum reinforcement, "
+        "use Inputs > Loads to select Check minimum reinforcement for every relevant "
+        "Plastic/capacity row. Open Analysis > Detailing, press Calculate, and review "
+        "each requested status.",
     ),
     Workflow(
         "review-results", "Review results", "A complete requested-calculation register",
         "results-overview", "Current calculation results", "Warnings and governing rows are visible",
         "results-review",
-        "Press Calculate after the final input edit, then open Analysis > Results "
-        "Overview. Follow each governing row's View entry to its named detail view "
+        "Open Analysis > Results Overview, press Calculate after the final input edit, "
+        "then follow each governing row's View entry to its named detail view "
         "and review every warning or not-assessed state.",
     ),
     Workflow(
@@ -346,8 +353,9 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "project", "Current inputs or a supported project file",
         "Loaded inputs require a fresh calculation", "project-file",
         "Open Inputs > Project. Download the project to save the current inputs, or "
-        "select a project file to load it. After loading, review the restored inputs "
-        "and press Calculate before using results.",
+        "select a project file to load it. After loading, review the restored inputs, "
+        "then open Analysis > Results Overview, press Calculate, and review the fresh "
+        "results before using them.",
     ),
     Workflow(
         "report-profile", "Choose a report profile", "Brief, Standard or Audit publication",
