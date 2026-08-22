@@ -33,12 +33,12 @@ GOVERNING_OVERVIEW_STATUS_PRECEDENCE = (
     "REVIEW",
     "NOT ASSESSED",
     "CALCULATED - ACCEPTANCE NOT ASSESSED",
-    "NOT RUN",
-    "NOT CALCULATED",
     "PASS",
     "WITHIN USER-SPECIFIED LIMIT",
     "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
     "CALCULATED",
+    "NOT RUN",
+    "NOT CALCULATED",
     "NOT APPLICABLE",
     "NOT REQUESTED",
 )
@@ -46,6 +46,12 @@ _GOVERNING_OVERVIEW_STATUS_RANK = {
     status: rank
     for rank, status in enumerate(GOVERNING_OVERVIEW_STATUS_PRECEDENCE)
 }
+GOVERNING_OVERVIEW_INFORMATION_STATUSES = frozenset({
+    "NOT RUN",
+    "NOT CALCULATED",
+    "NOT APPLICABLE",
+    "NOT REQUESTED",
+})
 
 
 def _publication_metric(value, *, allow_positive_infinity=False):
@@ -608,10 +614,23 @@ def required_action_set_errors(inp):
     return errors
 
 
-def _summary_row(check, family, status, result="-", criterion="-", util=None,
-                 view="-", note="", inp=None):
+def _summary_row(
+    check,
+    family,
+    status,
+    result="-",
+    criterion="-",
+    util=None,
+    view="-",
+    note="",
+    inp=None,
+    *,
+    overview_key=None,
+    overview_parent=None,
+    overview_placeholder=False,
+):
     case = action_set(inp, family)
-    return {
+    row = {
         "check": check,
         "family": family,
         "case": case["id"] or "-",
@@ -624,6 +643,13 @@ def _summary_row(check, family, status, result="-", criterion="-", util=None,
         "view": view,
         "note": note,
     }
+    if overview_key is not None:
+        row["overview_key"] = str(overview_key)
+    if overview_parent is not None:
+        row["overview_parent"] = str(overview_parent)
+    if overview_placeholder:
+        row["overview_placeholder"] = True
+    return row
 
 
 def _ordinary_crack_summary_row(inp, output):
@@ -660,6 +686,8 @@ def _ordinary_crack_summary_row(inp, output):
         "Elastic Results",
         "; ".join(part for part in note_parts if part),
         inp,
+        overview_key=f"crack_width:{duration or 'unspecified'}",
+        overview_parent="crack_width",
     )
 
 
@@ -705,6 +733,7 @@ def _heightened_crack_summary_row(result):
         "Elastic Results",
         note,
         None,
+        overview_key="heightened_crack_control",
     )
 
 
@@ -953,6 +982,7 @@ def fatigue_summary_rows(inp, results, *, stale=False):
         "util": util,
         "view": "Fatigue Results",
         "note": note,
+        "overview_key": "fatigue",
     }]
 
 
@@ -1014,7 +1044,7 @@ def result_summary_rows(inp, results, *, stale=False):
     elastic_requested = mode in {"Elastic", "Both"}
 
     pl = results.get("plastic")
-    if pl is not None:
+    if pl is not None and plastic_requested:
         assessment = plastic_action_assessment(pl)
         rows.append(_summary_row(
             "Plastic bending",
@@ -1026,11 +1056,13 @@ def result_summary_rows(inp, results, *, stale=False):
             "Plastic Results",
             assessment["detail"],
             inp,
+            overview_key="plastic_bending",
         ))
     elif plastic_requested:
         rows.append(_summary_row(
             "Plastic bending", "plastic", "NOT RUN",
             view="Plastic Results", note="Calculate required", inp=inp,
+            overview_key="plastic_bending",
         ))
 
     elastic = results.get("elastic")
@@ -1038,13 +1070,19 @@ def result_summary_rows(inp, results, *, stale=False):
         rows.append(_summary_row(
             "Elastic stresses", "elastic", "NOT RUN",
             view="Elastic Results", note="Calculate required", inp=inp,
+            overview_key="elastic_stresses:scope",
+            overview_parent="elastic_stresses",
+            overview_placeholder=True,
         ))
         if inp.get("sls_cw"):
             rows.append(_summary_row(
                 "Crack width", "elastic", "NOT RUN",
                 view="Elastic Results", note="Calculate required", inp=inp,
+                overview_key="crack_width:scope",
+                overview_parent="crack_width",
+                overview_placeholder=True,
             ))
-    elif elastic is not None:
+    elif elastic is not None and elastic_requested:
         converged = bool(elastic.get("converged", True))
         outputs = elastic.get("stress_outputs") or {}
         names = [
@@ -1062,6 +1100,8 @@ def result_summary_rows(inp, results, *, stale=False):
                 note=("Solver did not converge" if not converged
                       else "No stress output returned"),
                 inp=inp,
+                overview_key="elastic_stresses",
+                overview_parent="elastic_stresses",
             ))
         else:
             for label, key in names:
@@ -1078,6 +1118,8 @@ def result_summary_rows(inp, results, *, stale=False):
                     label, "elastic", status, result, "Output only",
                     None, "Elastic Results",
                     output.get("governing") or output.get("quantity") or "", inp,
+                    overview_key=f"elastic_stress:{key}",
+                    overview_parent="elastic_stresses",
                 ))
         try:
             lambda_cr = float(elastic.get("lambda_cr"))
@@ -1104,6 +1146,7 @@ def result_summary_rows(inp, results, *, stale=False):
             "Cracking threshold/state", "elastic", cracking_status,
             cracking_result, "Output only", None, "Elastic Results",
             cracking_note, inp,
+            overview_key="cracking_threshold",
         ))
         output = elastic.get("crack_output")
         if isinstance(output, Mapping):
@@ -1119,6 +1162,8 @@ def result_summary_rows(inp, results, *, stale=False):
                 view="Elastic Results",
                 note="No authoritative crack-width output was retained",
                 inp=inp,
+                overview_key="crack_width",
+                overview_parent="crack_width",
             ))
 
     minimum = results.get("minimum_reinforcement")
@@ -1132,8 +1177,9 @@ def result_summary_rows(inp, results, *, stale=False):
         rows.append(_summary_row(
             minimum_label, "plastic", "NOT RUN",
             view="Detailing", note="Calculate required", inp=inp,
+            overview_key="minimum_reinforcement",
         ))
-    elif minimum is not None:
+    elif minimum is not None and inp.get("minimum_reinforcement_on"):
         checks = minimum.get("checks") or []
         if not checks:
             rows.append(_summary_row(
@@ -1143,6 +1189,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 view="Detailing",
                 note=str(minimum.get("reason") or minimum.get("clause") or ""),
                 inp=inp,
+                overview_key="minimum_reinforcement",
             ))
         for check in checks:
             util = check.get("utilisation")
@@ -1202,6 +1249,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 "Detailing",
                 "; ".join(part for part in note_parts if part),
                 inp,
+                overview_key="minimum_reinforcement",
             ))
 
     transverse = results.get("transverse_reinforcement")
@@ -1213,8 +1261,11 @@ def result_summary_rows(inp, results, *, stale=False):
             view="Detailing",
             note="Calculate required",
             inp=inp,
+            overview_key="link_detailing:scope",
+            overview_parent="link_detailing",
+            overview_placeholder=True,
         ))
-    elif transverse is not None:
+    elif transverse is not None and inp.get("transverse_detailing_on"):
         checks = transverse.get("checks") or []
         if not checks:
             rows.append(_summary_row(
@@ -1228,6 +1279,8 @@ def result_summary_rows(inp, results, *, stale=False):
                     or ""
                 ),
                 inp=inp,
+                overview_key="link_detailing",
+                overview_parent="link_detailing",
             ))
         labels = {
             "minimum_ratio": "minimum ratio",
@@ -1291,6 +1344,8 @@ def result_summary_rows(inp, results, *, stale=False):
                 "Detailing",
                 note,
                 inp,
+                overview_key=f"link_detailing:{kind or 'unspecified'}",
+                overview_parent="link_detailing",
             ))
 
     spacing = results.get("clear_spacing")
@@ -1298,8 +1353,9 @@ def result_summary_rows(inp, results, *, stale=False):
         rows.append(_summary_row(
             "Reinforcement clear spacing", "section", "NOT RUN",
             view="Detailing", note="Calculate required", inp=inp,
+            overview_key="clear_spacing",
         ))
-    elif spacing is not None:
+    elif spacing is not None and inp.get("clear_spacing_on"):
         governing = spacing.get("governing") or {}
         clear = governing.get("clear_mm")
         required = governing.get("required_mm")
@@ -1324,6 +1380,7 @@ def result_summary_rows(inp, results, *, stale=False):
             "Detailing",
             str(spacing.get("clause") or ""),
             inp,
+            overview_key="clear_spacing",
         ))
 
     shear = results.get("shear")
@@ -1331,8 +1388,11 @@ def result_summary_rows(inp, results, *, stale=False):
         rows.append(_summary_row(
             "Shear", "plastic", "NOT RUN",
             view="Shear", note="Calculate required", inp=inp,
+            overview_key="shear:scope",
+            overview_parent="shear",
+            overview_placeholder=True,
         ))
-    elif shear is not None:
+    elif shear is not None and inp.get("shear_on"):
         links_selected = inp.get("shear_links") is True
 
         def append_direction(component, direction):
@@ -1364,6 +1424,8 @@ def result_summary_rows(inp, results, *, stale=False):
                     if links_selected else str(direction.get("method") or "")
                 ),
                 inp,
+                overview_key="shear:without_links",
+                overview_parent="shear",
             ))
             if not links_selected:
                 return
@@ -1373,6 +1435,8 @@ def result_summary_rows(inp, results, *, stale=False):
                     f"Shear{suffix} with links", "plastic", "NOT ASSESSED",
                     view="Shear", note="Selected method does not evaluate links",
                     inp=inp,
+                    overview_key="shear:with_links",
+                    overview_parent="shear",
                 ))
             else:
                 rows.append(_summary_row(
@@ -1388,6 +1452,8 @@ def result_summary_rows(inp, results, *, stale=False):
                     "Shear",
                     str((links.get("res") or {}).get("governs") or ""),
                     inp,
+                    overview_key="shear:with_links",
+                    overview_parent="shear",
                 ))
 
         directions = shear.get("directions") or {}
@@ -1405,6 +1471,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     view="Shear",
                     note="No aggregate cross-direction verdict",
                     inp=inp,
+                    overview_key="shear:cross_direction",
                 ))
         else:
             append_direction("", shear)
@@ -1416,8 +1483,9 @@ def result_summary_rows(inp, results, *, stale=False):
         rows.append(_summary_row(
             "Torsion", "plastic", "NOT RUN",
             view="Torsion", note="Calculate required", inp=inp,
+            overview_key="torsion",
         ))
-    elif torsion is not None:
+    elif torsion is not None and inp.get("torsion_on"):
         torsion_tube_valid = (
             torsion.get("tube_valid") is True
             if "tube_valid" in torsion
@@ -1451,6 +1519,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     or "full torsion resistance not assessed"
                 ),
                 inp,
+                overview_key="torsion",
             ))
         else:
             rows.append(_summary_row(
@@ -1466,6 +1535,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 "Torsion",
                 str(torsion.get("governs") or torsion.get("reason") or ""),
                 inp,
+                overview_key="torsion",
             ))
 
     combined = results.get("combined")
@@ -1490,8 +1560,13 @@ def result_summary_rows(inp, results, *, stale=False):
                 else "Calculate required"
             ),
             inp=inp,
+            overview_key="combined:dkna_sum",
         ))
-    elif (combined_blocker := combined_bending_assessment_blocker(results)) is not None:
+    elif (
+        inp.get("combined_on")
+        and (combined_blocker := combined_bending_assessment_blocker(results))
+        is not None
+    ):
         rows.append(_summary_row(
             "Combined M-V-T - DK NA sum",
             "plastic",
@@ -1502,8 +1577,9 @@ def result_summary_rows(inp, results, *, stale=False):
             view="M-V-T Combined",
             note=combined_blocker,
             inp=inp,
+            overview_key="combined:dkna_sum",
         ))
-    elif combined is not None:
+    elif combined is not None and inp.get("combined_on"):
         directions = combined.get("directions") or {}
         if combined.get("biaxial") and directions:
             for component in ("vx", "vy"):
@@ -1527,6 +1603,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     "M-V-T Combined",
                     str(direction.get("method") or ""),
                     inp,
+                    overview_key="combined:dkna_sum",
                 ))
                 if direction.get("valid"):
                     for physical in combined_physical_components(direction):
@@ -1540,6 +1617,7 @@ def result_summary_rows(inp, results, *, stale=False):
                             "M-V-T Combined",
                             physical["note"],
                             inp,
+                            overview_key=f"combined:{physical['key']}",
                         ))
             rows.append(_summary_row(
                 "Generic Vx-Vy-T interaction",
@@ -1550,6 +1628,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 view="M-V-T Combined",
                 note="No aggregate cross-direction verdict",
                 inp=inp,
+                overview_key="combined:cross_direction",
             ))
             if stale and results:
                 for row in rows:
@@ -1595,6 +1674,7 @@ def result_summary_rows(inp, results, *, stale=False):
             "M-V-T Combined",
             combined_note,
             inp,
+            overview_key="combined:dkna_sum",
         ))
         if valid:
             for component in combined_physical_components(combined):
@@ -1608,6 +1688,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     "M-V-T Combined",
                     component["note"],
                     inp,
+                    overview_key=f"combined:{component['key']}",
                 ))
 
     heightened = results.get("heightened_crack_control")
@@ -1686,12 +1767,16 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                             f"Shear {component}", "plastic", "NOT APPLICABLE",
                             result=f"{component},Ed = 0", view="Shear",
                             note="Zero component; not evaluated", inp=case_inp,
+                            overview_key="shear:scope",
+                            overview_parent="shear",
+                            overview_placeholder=True,
                         ))
             if inp.get("torsion_on") and t_zero:
                 rows.append(_summary_row(
                     "Torsion", "plastic", "NOT APPLICABLE",
                     result="TEd = 0", view="Torsion",
                     note="Zero action; not evaluated", inp=case_inp,
+                    overview_key="torsion",
                 ))
             if inp.get("combined_on") and (v_zero or t_zero):
                 zero = (
@@ -1703,6 +1788,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                     "Combined M-V-T", "plastic", "NOT APPLICABLE",
                     result=zero, view="M-V-T Combined",
                     note="Zero action; not evaluated", inp=case_inp,
+                    overview_key="combined:dkna_sum",
                 ))
             shear_action_live = not v_zero and bool(inp.get("shear_on"))
             torsion_action_live = not t_zero and bool(inp.get("torsion_on"))
@@ -1716,6 +1802,9 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                     view="Detailing",
                     note="Zero relevant action; not evaluated",
                     inp=case_inp,
+                    overview_key="link_detailing:scope",
+                    overview_parent="link_detailing",
+                    overview_placeholder=True,
                 ))
     # Clear spacing is a section-wide result, not a load-case result. Add it once
     # after the case loops rather than repeating it for every Plastic row.
@@ -1776,7 +1865,7 @@ def _governing_overview_utilisation(row):
 
 
 def _governing_summary_selection(rows):
-    """Return retained rows and the selected source index for each family."""
+    """Return retained rows and the selected source index for each check type."""
 
     retained = []
     selected = {}
@@ -1785,7 +1874,18 @@ def _governing_summary_selection(rows):
         if not isinstance(row, Mapping):
             raise ValueError("result overview rows must be objects")
         retained.append(row)
-        key = (str(row.get("family") or ""), str(row.get("check") or ""))
+    parents_with_children = {
+        str(row.get("overview_parent"))
+        for row in retained
+        if row.get("overview_parent")
+        and not bool(row.get("overview_placeholder"))
+    }
+    for index, row in enumerate(retained):
+        parent = str(row.get("overview_parent") or "")
+        if row.get("overview_placeholder") and parent in parents_with_children:
+            continue
+        semantic_key = str(row.get("overview_key") or row.get("check") or "")
+        key = (str(row.get("family") or ""), semantic_key)
         status = str(row.get("status") or "")
         rank = _GOVERNING_OVERVIEW_STATUS_RANK.get(status, -1)
         utilisation = _governing_overview_utilisation(row)
@@ -1809,10 +1909,32 @@ def _governing_summary_selection(rows):
 
 
 def governing_summary_rows(rows):
-    """Select one conservative retained row per exact check family."""
+    """Select one conservative retained row per semantic check type."""
 
     _retained, order, selected = _governing_summary_selection(rows)
     return [dict(selected[key][1]) for key in order]
+
+
+def governing_result_rows(rows):
+    """Return selected rows that carry an applicable retained result."""
+
+    return [
+        dict(row)
+        for row in rows
+        if str(row.get("status") or "").upper()
+        not in GOVERNING_OVERVIEW_INFORMATION_STATUSES
+    ]
+
+
+def governing_information_rows(rows):
+    """Return selected scope and calculation-state rows outside conclusions."""
+
+    return [
+        dict(row)
+        for row in rows
+        if str(row.get("status") or "").upper()
+        in GOVERNING_OVERVIEW_INFORMATION_STATUSES
+    ]
 
 
 def non_governing_summary_rows(rows):

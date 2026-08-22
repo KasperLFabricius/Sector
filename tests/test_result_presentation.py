@@ -1290,8 +1290,11 @@ def _overview_row(
     source="Case register",
     view="Plastic Results",
     note="Retained note",
+    overview_key=None,
+    overview_parent=None,
+    overview_placeholder=False,
 ):
-    return {
+    row = {
         "check": check,
         "family": family,
         "case": case,
@@ -1304,6 +1307,13 @@ def _overview_row(
         "view": view,
         "note": note,
     }
+    if overview_key is not None:
+        row["overview_key"] = overview_key
+    if overview_parent is not None:
+        row["overview_parent"] = overview_parent
+    if overview_placeholder:
+        row["overview_placeholder"] = True
+    return row
 
 
 def test_governing_overview_freezes_complete_status_precedence():
@@ -1317,12 +1327,12 @@ def test_governing_overview_freezes_complete_status_precedence():
         "REVIEW",
         "NOT ASSESSED",
         "CALCULATED - ACCEPTANCE NOT ASSESSED",
-        "NOT RUN",
-        "NOT CALCULATED",
         "PASS",
         "WITHIN USER-SPECIFIED LIMIT",
         "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",
         "CALCULATED",
+        "NOT RUN",
+        "NOT CALCULATED",
         "NOT APPLICABLE",
         "NOT REQUESTED",
     )
@@ -1486,6 +1496,101 @@ def test_governing_overview_keeps_unknown_status_visible_and_rejects_bad_rows():
     assert presentation.governing_summary_rows(rows)[0]["case"] == "future"
     with pytest.raises(ValueError, match="rows must be objects"):
         presentation.governing_summary_rows([rows[0], None])
+
+
+def test_governing_overview_groups_directions_by_semantic_check_type():
+    rows = [
+        _overview_row(
+            "PASS", check="Shear Vx with links", case="PL-X", util=0.82,
+            overview_key="shear:with_links",
+        ),
+        _overview_row(
+            "FAIL", check="Shear Vy with links", case="PL-Y", util=1.08,
+            overview_key="shear:with_links",
+        ),
+    ]
+
+    selected = presentation.governing_summary_rows(rows)
+
+    assert len(selected) == 1
+    assert selected[0]["check"] == "Shear Vy with links"
+    assert selected[0]["case"] == "PL-Y"
+
+
+@pytest.mark.parametrize("inactive", ["NOT RUN", "NOT APPLICABLE", "NOT REQUESTED"])
+def test_governing_overview_executed_result_beats_inactive_state(inactive):
+    rows = [
+        _overview_row(
+            inactive, case="PL-ZERO", overview_key="torsion",
+        ),
+        _overview_row(
+            "PASS", case="PL-ACTIVE", util=0.72, overview_key="torsion",
+        ),
+    ]
+
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "PL-ACTIVE"
+
+
+def test_governing_overview_suppresses_generic_parent_when_child_exists():
+    rows = [
+        _overview_row(
+            "NOT RUN", check="Shear", case="PL-A",
+            overview_key="shear:scope", overview_parent="shear",
+            overview_placeholder=True,
+        ),
+        _overview_row(
+            "PASS", check="Shear Vx without links", case="PL-B", util=0.55,
+            overview_key="shear:without_links", overview_parent="shear",
+        ),
+    ]
+
+    selected = presentation.governing_summary_rows(rows)
+
+    assert [row["check"] for row in selected] == ["Shear Vx without links"]
+
+
+def test_governing_overview_separates_scope_states_from_retained_results():
+    rows = [
+        _overview_row("PASS", overview_key="plastic_bending", util=0.80),
+        _overview_row(
+            "NOT CALCULATED", check="Cross-direction interaction",
+            overview_key="cross_direction",
+        ),
+    ]
+    selected = presentation.governing_summary_rows(rows)
+
+    assert [row["status"] for row in presentation.governing_result_rows(selected)] == [
+        "PASS"
+    ]
+    assert [row["status"] for row in presentation.governing_information_rows(selected)] == [
+        "NOT CALCULATED"
+    ]
+
+
+def test_result_summary_ignores_payloads_for_disabled_checks():
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="",
+            minimum_reinforcement_on=False,
+            transverse_detailing_on=False,
+            clear_spacing_on=False,
+            shear_on=False,
+            torsion_on=False,
+            combined_on=False,
+        ),
+        {
+            "plastic": _plastic(),
+            "elastic": {"converged": True},
+            "minimum_reinforcement": {"status": "PASS", "checks": []},
+            "transverse_reinforcement": {"status": "PASS", "checks": []},
+            "clear_spacing": {"status": "PASS", "governing": {}},
+            "shear": {"valid": True, "util": 0.5, "res": {"valid": True}},
+            "torsion": {"valid": True, "util": 0.5},
+            "combined": {"valid": True, "dkna_sum": 0.5},
+        },
+    )
+
+    assert rows == []
 
 
 @pytest.mark.parametrize(
