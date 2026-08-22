@@ -24,7 +24,7 @@ route. Stage and view names below are the exact visible application labels.
 | Review detailing | Enable the required checks under `Inputs > Analysis settings`; complete dependent inputs; calculate; open `Analysis > Detailing`. |
 | Review results | Calculate after the final input edit; open `Analysis > Results Overview`; follow the governing row to its named detail view. |
 | Save or load a project | Use `Inputs > Project`; after loading, review restored inputs and calculate before using results. |
-| Choose a report profile | With current results, use `Report`; enter metadata, choose the profile/figure option, generate and download. |
+| Choose a report profile | With current results, use `Report`; enter metadata, choose the profile, generate and download. |
 
 Troubleshooting corrections must name the input stage or result view the user
 can act on. Recalculate is required after changed or loaded calculation inputs.

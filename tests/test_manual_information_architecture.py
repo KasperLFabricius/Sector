@@ -203,6 +203,11 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
             for token in required_routes[workflow.key]
         )
 
+    report_action = next(
+        item.action for item in ia.WORKFLOWS if item.key == "report-profile"
+    )
+    assert "figure option" not in report_action.lower()
+
     manual_text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "calculate or review as applicable" not in manual_text
     assert "portable-build" not in manual_text

@@ -354,7 +354,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "report-workspace", "Current inputs and project metadata",
         "Profile changes presentation depth only", "report-generation",
         "With current results, open Report, enter the project metadata, choose Brief, "
-        "Standard or Audit and the figure option, then generate and download the PDF.",
+        "Standard or Audit, then generate and download the PDF.",
     ),
 )
 
