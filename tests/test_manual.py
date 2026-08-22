@@ -197,9 +197,10 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     assert "the section, the material-law diagrams" not in text
     assert "Open *Analysis*, review *Results Overview*" in text
     for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{s,min}",
-                 "D_{upper}", "A_{sw}/s",
+                 "D_{upper}", "A_{sw}/s", "L_x", "L_y",
                  "TOTAL", "LONG", "DIF", "RST1", "F_c"):
         assert term in text
+    assert "$L$, $d_x$, $d_y$" not in text
     assert "No shear, torsion" not in text
 
 

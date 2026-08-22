@@ -9734,9 +9734,9 @@ def _plastic_table(pts, cable, steel_comp=False):
         **eps_s_cols,
         f"{_KAPPA} (1/m)": [round(pt["kappa"], 4) for pt in pts],
         "Fc (kN)": [round(pt["comp_force"], 3) for pt in pts],
-        "Lever L (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
-        "dx (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
-        "dy (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
+        "Internal lever L (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
+        "Lx (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
+        "Ly (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
     }
     if cable:
         cols[f"{_EPS}cable (%)"] = [round(pt["eps_cable"], 3) for pt in pts]
@@ -9938,8 +9938,9 @@ def plastic_view(inp, results):
             f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
             f"- **Compression force**: {pt['comp_force']:.3f} kN",
             f"- **Compression-zone depth $c$**: {compression_depth_text}",
-            f"- **Lever arm $L$**: {pt['lever'] * _MM:.3f} mm  "
-            f"($D_x$ {pt['dx'] * _MM:.3f}, $D_y$ {pt['dy'] * _MM:.3f})",
+            f"- **Internal lever arm $L$**: {pt['lever'] * _MM:.3f} mm",
+            f"- **Lever-arm components $L_x$ / $L_y$**: "
+            f"{pt['dx'] * _MM:.3f} / {pt['dy'] * _MM:.3f} mm",
             f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",
         ]
         if active_comp:
@@ -9954,6 +9955,12 @@ def plastic_view(inp, results):
         lines.append(f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
                      f"y {_fmt(pt['na_y'] * _MM)} mm")
         st.markdown("\n".join(lines))
+        st.caption(
+            "Lx and Ly are the Cartesian components of the internal "
+            "compression-to-tension resultant separation. They are not "
+            "effective depths d; when one component is zero, the magnitude L "
+            "equals the absolute value of the other component."
+        )
         st.caption("Strains are tension-positive (compression negative), agreeing "
                    "with N and the stresses -- so a crushing concrete strain reads "
                    "negative.")

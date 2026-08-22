@@ -1457,10 +1457,43 @@ def test_plastic_selected_state_lists_retained_compression_zone_depth():
     point = result["points"][at.session_state["pl_state"]]
     expected = point["compression_depth"] * 1000.0
 
-    assert any(
-        "Compression-zone depth" in item.value
-        and f"{expected:.3f} mm" in item.value
+    summary = next(
+        item.value
         for item in at.markdown
+        if "Compression-zone depth" in item.value
+    )
+    assert "Compression-zone depth" in summary
+    assert f"{expected:.3f} mm" in summary
+    assert "Internal lever arm $L$" in summary
+    assert "Lever-arm components $L_x$ / $L_y$" in summary
+    assert "$D_x$" not in summary and "$D_y$" not in summary
+    assert any(
+        "not effective depths d" in item.value
+        for item in at.caption
+    )
+
+    interaction = next(
+        json.loads(chart.proto.spec)
+        for chart in at.get("plotly_chart")
+        if (
+            json.loads(chart.proto.spec)
+            .get("layout", {})
+            .get("xaxis", {})
+            .get("title", {})
+            .get("text")
+            == "My - about the y-axis (kNm)"
+        )
+    )
+    capacity = next(
+        trace for trace in interaction["data"] if trace.get("name") == "capacity"
+    )
+    assert capacity["mode"] == "lines+markers"
+    assert capacity["hoveron"] == "points"
+    assert "neutral-axis angle = %{customdata[1]:.0f} deg" in (
+        capacity["hovertemplate"]
+    )
+    assert "|M<sub>Rd</sub>| = %{customdata[0]:.1f} kNm" in (
+        capacity["hovertemplate"]
     )
 
 
@@ -1477,6 +1510,9 @@ def test_plastic_table_splits_steel_strain_when_active_in_compression():
     active = _plastic_table(pts, False, True)
     assert any(",t (%)" in c for c in active) and any(",c (%)" in c for c in active)
     assert f"NA angle ({chr(0x00B0)})" in active
+    assert "Internal lever L (mm)" in active
+    assert "Lx (mm)" in active and "Ly (mm)" in active
+    assert "dx (mm)" not in active and "dy (mm)" not in active
     assert not any("deg" in c for c in active)
     tension = _plastic_table(pts, False, False)
     assert not any(",c (%)" in c for c in tension)          # no compression column

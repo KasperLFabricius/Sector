@@ -171,8 +171,8 @@ class PlasticPoint:
     # split differently, so they can differ (the capacity and strains do not).
     compression_force: float  # total compression resultant, kN
     lever_arm: float          # internal lever arm L, m
-    dx: float                 # X component of the lever arm, m
-    dy: float                 # Y component of the lever arm, m
+    dx: float                 # Cartesian X component Lx of the lever arm, m
+    dy: float                 # Cartesian Y component Ly of the lever arm, m
     converged: bool
 
     # Solver diagnostics are optional keyword-only tail state. ``None`` preserves
