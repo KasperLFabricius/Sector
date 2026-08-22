@@ -44,7 +44,7 @@ def _set_elastic_result_fields(out: dict, **values) -> None:
 
 def test_brief_frozen_fixture_is_a_compact_auditable_engineering_report():
     reader = PdfReader(io.BytesIO(_profile_pdf("Brief")))
-    assert 8 <= len(reader.pages) <= 10
+    assert reader.pages
     text = _profile_text("Brief")
     for expected in (
         "Report profile Brief",
@@ -57,8 +57,8 @@ def test_brief_frozen_fixture_is_a_compact_auditable_engineering_report():
         "Crack-control settings",
         "Shear, torsion and detailing settings",
         "Grouped fatigue settings",
-        "Governing calculation register",
-        "no report-side ranking or calculation is performed",
+        "Governing results and limitations",
+        "Brief contains no worked derivation or result chain",
     ):
         assert expected in text
 
@@ -991,7 +991,7 @@ def test_standard_and_audit_output_is_unchanged_by_the_brief_input_inventory():
     for profile in ("Standard", "Audit"):
         text = _profile_text(profile)
         assert "Analysis input summary" not in text
-        assert "Governing calculation register" not in text
+        assert "Governing results and limitations" not in text
         assert "Section and materials" in text
 
 
@@ -1016,20 +1016,22 @@ def test_every_profile_retains_governing_statuses_and_engineering_values():
             assert value in text
 
 
-def test_every_profile_retains_non_governing_requested_results_and_statuses():
+def test_brief_omits_non_governing_requested_results_and_statuses():
     expected = (
         "Non-governing requested results",
         "Plastic bending PL-QA-1 PASS 80.0 %",
         "Crack width - Long-term EL-QA-2 NOT REQUESTED",
         "Crack width - Short-term EL-QA-2 NOT REQUESTED",
     )
-    for profile in ("Brief", "Standard", "Audit"):
+    brief = _profile_text("Brief")
+    assert all(value not in brief for value in expected)
+    for profile in ("Standard", "Audit"):
         text = _profile_text(profile)
         for value in expected:
             assert value in text
 
 
-def test_every_profile_retains_each_non_governing_fatigue_spectrum():
+def test_brief_omits_non_governing_fatigue_spectra_but_deeper_profiles_retain_them():
     inp = report_render_fixture._inputs()
     inp[report_render_fixture.fatigue_inputs.SPECTRUM_TABLE_KEY][1][
         "spectrum"
@@ -1037,6 +1039,7 @@ def test_every_profile_retains_each_non_governing_fatigue_spectrum():
     out = report_render_fixture._results(inp)
     out["fatigue"] = report_render_fixture.fatigue_analysis.run_analysis(inp)
 
+    texts = {}
     for profile in ("Brief", "Standard", "Audit"):
         pdf = report_render_fixture.sector_report.build_report(
             {}, inp, out, figures=False, profile=profile
@@ -1046,8 +1049,11 @@ def test_every_profile_retains_each_non_governing_fatigue_spectrum():
             " ".join((page.extract_text() or "").split())
             for page in reader.pages
         )
+        texts[profile] = text
         assert "Fatigue Road traffic PASS 46.1 %" in text
-        assert "Fatigue Rail traffic PASS 23.0 %" in text
+    assert "Fatigue Rail traffic PASS 23.0 %" not in texts["Brief"]
+    assert "Fatigue Rail traffic PASS 23.0 %" in texts["Standard"]
+    assert "Fatigue Rail traffic PASS 23.0 %" in texts["Audit"]
 
 
 def test_every_profile_begins_with_the_same_freshness_and_basis_dashboard():

@@ -52,12 +52,19 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
         brief.substitution_scope,
         brief.provenance_scope,
         brief.glossary_scope,
-    ) == ("compact", "compact", "interpretive", "governing", "revision", "short")
+    ) == (
+        "effective",
+        "governing-only",
+        "interpretive",
+        "none",
+        "revision",
+        "short",
+    )
     assert not brief.include_qa_appendix
     assert brief.hard_page_limit is None
-    assert brief.target_page_limit == 4
-    assert brief.target_exception_requires_reason
-    assert brief.target_exception_requires_visual_approval
+    assert brief.target_page_limit is None
+    assert not brief.target_exception_requires_reason
+    assert not brief.target_exception_requires_visual_approval
     assert brief.sparse_page_body_coverage_threshold is None
 
     assert (
@@ -101,6 +108,8 @@ def test_profiles_describe_omissions_and_audit_disclaims_certification():
     assert "does not mean approved, compliant or certified" in (
         profiles.AUDIT_PROFILE.description
     )
+    assert "complete effective inputs" in profiles.BRIEF_PROFILE.description
+    assert "worked result chain" not in profiles.BRIEF_PROFILE.description
 
 
 def test_figures_remain_outside_the_profile_policy():

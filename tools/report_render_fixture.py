@@ -150,7 +150,7 @@ def _inputs() -> dict:
             "n_ed_kn": 0.0,
             "mx_ed_knm": 80.0,
             "my_ed_knm": 0.0,
-            "v_ed_kn": 30.0,
+            "vy_ed_kn": 30.0,
             "t_ed_knm": 25.0,
             "check_minimum_reinforcement": True,
         },
@@ -160,7 +160,7 @@ def _inputs() -> dict:
             "n_ed_kn": 0.0,
             "mx_ed_knm": 125.0,
             "my_ed_knm": 0.0,
-            "v_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
             "t_ed_knm": 0.0,
             "check_minimum_reinforcement": False,
         },
@@ -1435,7 +1435,7 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
     shear_out = out["shear"]
     links = shear_out["links"]
     lk = links["res"]
-    close("VEd", shear_out["v_ed"], case["v_ed_kn"])
+    close("VEd", shear_out["v_ed"], case["vy_ed_kn"])
     close(
         "VRd,s",
         lk["vrd_s"],

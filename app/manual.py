@@ -1292,24 +1292,27 @@ def manual_blocks() -> list:
                         f"Target {policy.target_page_limit} pages; an excess needs "
                         "a recorded content reason and visual approval"
                         if policy.target_page_limit is not None
-                        else "No hard cap; sparse pages are reviewed"
+                        else (
+                            "No page-count target; information depth and readability "
+                            "control"
+                            if policy.label == "Brief"
+                            else "No hard cap; sparse pages are reviewed"
+                        )
                     )
                 ),
             ]
             for policy in report_profiles.REPORT_PROFILES.values()
         ],
     )
-    md("Every profile publishes the complete requested-calculation status register. "
-       "Brief also includes compact geometry, assigned-material, reinforcement, "
-       "tendon, action and active-setting tables; four pages is the typical target, "
-       "while complex multi-case projects may need approximately four to six pages "
-       "to keep that evidence readable. "
-       "Worked numerical derivations are limited to the globally governing or "
-       "extremal calculation in each family. The DK/NA crack method retains one "
-       "global fine-system and one global coarse-system example, and fatigue may "
-       "retain separate governing reinforcement and concrete examples. Audit adds "
-       "complete retained evidence and provenance; **Audit does not mean approved, "
-       "compliant or certified**.")
+    md("Brief publishes the complete effective geometry, assigned-material, "
+       "reinforcement, tendon, action and active-setting inputs for every result it "
+       "reports, followed by governing results and concise limitations. It omits "
+       "non-governing result registers, substituted equations, derivations, candidate "
+       "searches and the worked result chain. When figures are requested, Brief keeps "
+       "only the selected governing Plastic and Elastic result plots when available. "
+       "Standard adds governing calculation steps for the active checks; Audit adds "
+       "complete retained branches, substitutions and provenance. **Audit does not "
+       "mean approved, compliant or certified**.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -1680,12 +1683,14 @@ def manual_blocks() -> list:
          "2005, DS/EN 1992-1-1 + DK NA and EN 1992-1-1:2023. The DK NA option "
          "reports the fine and the coarse system together (all four columns above), "
          "each for the long-term and short-term load. Ordinary methods show one "
-         "global governing worked crack width; DK/NA shows one global fine-system "
-         "and one global coarse-system worked example. All other elastic cases remain "
-         "in the compact report summaries. If user criteria are present, the report "
-         "shows one comparison for the largest calculated ordinary width -- never "
-         "the largest ratio -- plus at most one section-level Formula 7.100 NA "
-         "worked example when that separate DK option is enabled.")
+         "globally governing worked crack width in Standard and Audit; DK/NA shows "
+         "one global fine-system and one global coarse-system worked example there. "
+         "Brief retains the complete effective inputs and the semantic governing "
+         "crack-width rows, but no worked example or non-governing case register. "
+         "If user criteria are present, Standard and Audit show one comparison for "
+         "the largest calculated ordinary width -- never the largest ratio -- plus "
+         "at most one section-level Formula 7.100 NA worked example when that "
+         "separate DK option is enabled.")
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")

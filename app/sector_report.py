@@ -2160,6 +2160,7 @@ class ReportBuilder:
         if self.profile.key == "Brief":
             self._brief_input_summary()
             self._brief_governing_register()
+            self._brief_key_figures()
             self._write_pdf()
             return
         self._conventions()
@@ -3321,90 +3322,124 @@ class ReportBuilder:
         )
 
     def _brief_governing_register(self):
-        """Publish retained critical-example identities after the input inventory."""
+        """State the governing-only Brief depth after the complete input inventory."""
 
-        self._h1("Governing calculation register", reserve=130)
+        self._h1("Governing results and limitations", reserve=110)
         self._p(
-            "The overview publishes one governing row per stable check family. "
-            "The compact listing below retains every other requested result and "
-            "status without its derivation. The governing register then identifies "
-            "the precomputed globally critical worked examples; no report-side "
-            "ranking or calculation is performed. Generate Standard or Audit for "
-            "the full numerical derivations."
+            "The Results overview publishes the most unfavourable retained result "
+            "for each semantic check type, including its governing action or "
+            "direction, value, criterion and status. Brief contains no worked "
+            "derivation or result chain and does not reproduce non-governing "
+            "load-case or fatigue-spectrum results."
         )
-        self._non_governing_status_register()
-        self._h2("Selected governing worked examples", reserve=90)
-        rows = [["Calculation", "Selected case / branch"]]
-        labels = {
-            "plastic": "Plastic capacity",
-            "minimum_reinforcement": "Minimum reinforcement",
-            "transverse_reinforcement": "Link detailing",
-            "shear": "Shear resistance",
-            "torsion": "Torsion resistance",
-            "combined": "Combined M-V-T",
-            "elastic": "Elastic response",
-        }
-        for family in (
-            "plastic",
-            "minimum_reinforcement",
-            "transverse_reinforcement",
-            "shear",
-            "torsion",
-            "combined",
-            "elastic",
-        ):
-            selected = self._selected_families.get(family)
-            if not isinstance(selected, Mapping):
-                continue
-            if (
-                family == "combined"
-                and not self._combined_selection_is_authoritative(selected)
-            ):
-                continue
-            identity = str(selected.get("case_id") or "-")
-            component = selected.get("component")
-            if component is not None:
-                identity += " / " + str(component)
-            rows.append([labels[family], _html_escape(identity)])
-        for selected in self._selected_crack_examples:
-            rows.append([
-                "Crack width",
-                _html_escape(
-                    f"{selected.get('case_id') or '-'} / "
-                    f"{selected.get('label') or selected.get('branch') or '-'}"
-                ),
-            ])
-        if isinstance(self._selected_crack_comparison, Mapping):
-            rows.append([
-                "User crack-width comparison",
-                "Analysis settings / "
-                + _html_escape(str(
-                    self._selected_crack_comparison.get("duration") or "-"
-                ).replace("_", "-")),
-            ])
-        if isinstance(self._selected_cracking_threshold, Mapping):
-            rows.append([
-                "Cracking threshold",
-                _html_escape(str(
-                    self._selected_cracking_threshold.get("case_id") or "-"
-                )),
-            ])
-        if isinstance(self._selected_heightened_crack_control, Mapping):
-            rows.append(["DK heightened crack control", "Global result"])
-        if self._base_out.get("fatigue") is not None:
-            rows.append([
-                "Grouped fatigue",
-                "Governing reinforcement and concrete results in overview",
-            ])
-        if len(rows) == 1:
-            rows.append(["Worked example selection", "Not available"])
-        self._table(rows, [70 * mm, 95 * mm], font=8.5, keep=False)
         self._small(
-            "Brief omits complete non-governing derivations, full method theory, "
-            "branch inventories, hashes and exhaustive provenance. Figures are a "
-            "separate export choice. Audit is evidence depth, not approval, "
-            "compliance or certification."
+            "The preceding Analysis input summary retains the complete effective "
+            "inputs for every active result reported here. Generate Standard for "
+            "governing calculation steps or Audit for complete retained branches, "
+            "substitutions and provenance."
         )
+
+    def _selected_brief_result_context(self, result_key, family):
+        """Return one exact retained selected context without report-side ranking."""
+
+        selected = self._selected_families.get(result_key)
+        if not isinstance(selected, Mapping):
+            return None
+        matches = [
+            (case_inp, case_out[result_key])
+            for case_inp, case_out in self._case_contexts(family)
+            if self._case_id(case_inp, family) == selected.get("case_id")
+            and isinstance(case_out.get(result_key), Mapping)
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _brief_key_figures(self):
+        """Publish only retained governing Plastic and Elastic result figures."""
+
+        if not self.figures:
+            return
+
+        def has_items(value):
+            try:
+                return value is not None and len(value) > 0
+            except TypeError:
+                return False
+
+        figures = []
+        plastic = self._selected_brief_result_context("plastic", "plastic")
+        if plastic is not None:
+            case_inp, result = plastic
+            mx = result.get("mx")
+            my = result.get("my")
+            points = result.get("points")
+            has_envelope = (
+                has_items(mx)
+                and has_items(my)
+                and len(mx) == len(my)
+            )
+            if has_envelope:
+                assessment = presentation.plastic_action_assessment(result)
+                case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
+                angles = (
+                    [point["V"] for point in points]
+                    if has_items(points)
+                    and len(points) == len(mx)
+                    and all(
+                        isinstance(point, Mapping) and "V" in point
+                        for point in points
+                    )
+                    else None
+                )
+                figures.append((
+                    viz.interaction_figure(
+                        mx,
+                        my,
+                        applied=result.get("applied"),
+                        title=f"Governing Plastic result - {case_id}",
+                        angles=angles,
+                        util=assessment.get("util"),
+                        closed=result.get("closed", True),
+                    ),
+                    f"Governing Plastic result - {case_id}",
+                    130,
+                    100,
+                ))
+
+        elastic = self._selected_brief_result_context("elastic", "elastic")
+        if elastic is not None:
+            case_inp, result = elastic
+            corners = result.get("concrete_corners")
+            elements = result.get("elements")
+            stress_plane = result.get("stress_plane")
+            try:
+                ec_mpa = float(case_inp.get("conc_Ec") or 0.0) * 1000.0
+            except (TypeError, ValueError):
+                ec_mpa = 0.0
+            if has_items(corners) and has_items(stress_plane) and ec_mpa > 0.0:
+                case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
+                figures.append((
+                    viz.elastic_strain_figure(
+                        corners,
+                        elements,
+                        stress_plane,
+                        ec_mpa=ec_mpa,
+                        title=f"Governing Elastic result - {case_id}",
+                    ),
+                    f"Governing Elastic result - {case_id}",
+                    130,
+                    90,
+                ))
+
+        if not figures:
+            return
+        self._h1("Key governing figures", reserve=150)
+        for figure, caption, width, height in figures:
+            self._fig(
+                figure,
+                width,
+                height,
+                caption=caption,
+            )
 
     def _non_governing_status_register(self):
         """Publish every retained row excluded from the governing overview."""
