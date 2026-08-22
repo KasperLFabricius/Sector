@@ -5577,7 +5577,12 @@ class ReportBuilder:
                 f"margin {_fmt(governing.get('margin_mm'), 1)} mm."
             )
         pairs = result.get("pairs") or []
-        if pairs:
+        published_pairs = (
+            pairs
+            if self.profile.key == "Audit"
+            else ([governing] if governing else [])
+        )
+        if published_pairs:
             rows = [[
                 "Pair", "Elements", "Clear (mm)", "Required (mm)",
                 "Margin (mm)", "Status",
@@ -5593,7 +5598,7 @@ class ReportBuilder:
                     _fmt(pair.get("margin_mm"), 1),
                     pair.get("status", "-"),
                 ]
-                for pair in pairs
+                for pair in published_pairs
             ])
             self._table(
                 rows,
@@ -5682,42 +5687,57 @@ class ReportBuilder:
                             "tension to the squash load (concrete carries compression "
                             "only, so the tension end is reinforcement-controlled). "
                             "The marked point is the applied plastic action.")
-            self._h2("Numerical N-M boundary")
-            boundary_rows = presentation.nm_boundary_rows(nm)
-            rows = [[
-                "Point",
-                "N (M<sub>x</sub> curve)",
-                "M<sub>x</sub>",
-                "N (M<sub>y</sub> curve)",
-                "M<sub>y</sub>",
-            ]]
-            for row in boundary_rows:
-                def value(key):
-                    number = row[key]
-                    return "-" if number is None else _fmt(number, 3)
-
-                rows.append([
-                    str(row["Point"]),
-                    value("N, Mx boundary (kN)"),
-                    value("Mx (kNm)"),
-                    value("N, My boundary (kN)"),
-                    value("My (kNm)"),
-                ])
-            self._table(
-                rows,
-                [18 * mm, 38 * mm, 38 * mm, 38 * mm, 38 * mm],
-                font=7.2,
-                keep=False,
-            )
+            if self.profile.key == "Audit":
+                self._plastic_nm_boundary(nm)
+        if self.profile.key == "Audit":
+            self._plastic_sweep_population(pl)
+        if self._selected_family("plastic", self.inp) is not None:
+            self._plastic_worked(pl)
+        else:
             self._small(
-                "Point order is the exact plotted boundary order. N in kN; M in "
-                "kNm; N is tension-positive. Separate N columns are retained "
-                "because the two traces may use different numerical points."
+                "The complete plastic worked example is published only for the "
+                "governing utilisation (or capacity extremum when no utilisation "
+                "is assessed) across all plastic cases."
             )
-        # Per-angle results tables -- split into readable groups with the NA angle
-        # repeated as
-        # the row key. A single 12-14-column table forced values to wrap digit by
-        # digit in the issued PDF.
+
+    def _plastic_nm_boundary(self, nm):
+        self._h2("Numerical N-M boundary")
+        boundary_rows = presentation.nm_boundary_rows(nm)
+        rows = [[
+            "Point",
+            "N (M<sub>x</sub> curve)",
+            "M<sub>x</sub>",
+            "N (M<sub>y</sub> curve)",
+            "M<sub>y</sub>",
+        ]]
+        for row in boundary_rows:
+            def value(key):
+                number = row[key]
+                return "-" if number is None else _fmt(number, 3)
+
+            rows.append([
+                str(row["Point"]),
+                value("N, Mx boundary (kN)"),
+                value("Mx (kNm)"),
+                value("N, My boundary (kN)"),
+                value("My (kNm)"),
+            ])
+        self._table(
+            rows,
+            [18 * mm, 38 * mm, 38 * mm, 38 * mm, 38 * mm],
+            font=7.2,
+            keep=False,
+        )
+        self._small(
+            "Point order is the exact plotted boundary order. N in kN; M in "
+            "kNm; N is tension-positive. Separate N columns are retained "
+            "because the two traces may use different numerical points."
+        )
+
+    def _plastic_sweep_population(self, pl):
+        # Audit retains the complete per-angle population in exact solver order.
+        # Split it into readable groups with the NA angle repeated as the row key;
+        # a single wide table forces values to wrap digit by digit.
         self._h2("Capacity over the neutral-axis sweep")
         cable = bool(self.inp.get("tendons"))
         # Split the bar-strain column into the most tensile and the most compressed
@@ -5781,14 +5801,6 @@ class ReportBuilder:
                     "kappa in 1/m; F<sub>c</sub> in kN. L<sub>x</sub> and "
                     "L<sub>y</sub> are lever-arm components, not effective "
                     "depth d.")
-        if self._selected_family("plastic", self.inp) is not None:
-            self._plastic_worked(pl)
-        else:
-            self._small(
-                "The complete plastic worked example is published only for the "
-                "governing utilisation (or capacity extremum when no utilisation "
-                "is assessed) across all plastic cases."
-            )
 
     def _plastic_worked(self, pl):
         pts = pl["points"]
@@ -5855,6 +5867,11 @@ class ReportBuilder:
                 ["Capacity", "M<sub>x</sub>, M<sub>y</sub>",
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
+        if self.profile.key != "Audit":
+            self._small(
+                "L<sub>x</sub> and L<sub>y</sub> are lever-arm components, "
+                "not effective depth d."
+            )
         self._keep_from(start)
         plane_values = (
             gov.get("strain_offset"), gov.get("strain_gradient_x"),
@@ -5885,38 +5902,56 @@ class ReportBuilder:
 
         candidates = gov.get("curvature_candidates") or []
         selected = gov.get("curvature_selection") or {}
-        if candidates and selected:
-            self._h2("Ultimate-curvature candidates")
+        if candidates:
             mode_labels = {
                 "concrete_crushing": "Concrete crushing",
                 "bar_tension_rupture": "Bar tension rupture",
                 "bar_compression_rupture": "Bar compression rupture",
                 "tendon_tension_rupture": "Tendon tension rupture",
             }
-            candidate_rows = [[
-                "Candidate", "Element", "Strain limit", "Distance to NA",
-                "Curvature", "Selected",
-            ]]
-            for candidate in candidates:
-                candidate_rows.append([
-                    mode_labels.get(candidate["mode"], candidate["mode"]),
-                    candidate.get("element_id") or "extreme concrete fibre",
-                    _fmt(candidate["strain_limit"] * 1000.0, 6),
-                    _fmt(candidate["distance_from_na_m"] * _MM, 4),
-                    _fmt(candidate["curvature_per_m"], 8),
-                    "yes" if candidate.get("selected") else "",
-                ])
-            self._table(
-                candidate_rows,
-                [37 * mm, 31 * mm, 27 * mm, 28 * mm, 28 * mm, 17 * mm],
-                font=6.7,
-                keep=False,
-            )
             governing_candidate = next(
                 (candidate for candidate in candidates if candidate.get("selected")),
                 None,
             )
-            if governing_candidate is not None:
+            if self.profile.key == "Audit":
+                self._h2("Ultimate-curvature candidates")
+                candidate_rows = [[
+                    "Candidate", "Element", "Strain limit", "Distance to NA",
+                    "Curvature", "Selected",
+                ]]
+                for candidate in candidates:
+                    candidate_rows.append([
+                        mode_labels.get(candidate["mode"], candidate["mode"]),
+                        candidate.get("element_id") or "extreme concrete fibre",
+                        _fmt(candidate["strain_limit"] * 1000.0, 6),
+                        _fmt(candidate["distance_from_na_m"] * _MM, 4),
+                        _fmt(candidate["curvature_per_m"], 8),
+                        "yes" if candidate.get("selected") else "",
+                    ])
+                self._table(
+                    candidate_rows,
+                    [37 * mm, 31 * mm, 27 * mm, 28 * mm, 28 * mm, 17 * mm],
+                    font=6.7,
+                    keep=False,
+                )
+            if selected and governing_candidate is not None:
+                if self.profile.key != "Audit":
+                    self._h2("Governing ultimate curvature")
+                    selected_element = governing_candidate.get("element_id")
+                    self._small(
+                        "<b>Selected candidate:</b> "
+                        + _html_escape(mode_labels.get(
+                            governing_candidate["mode"],
+                            governing_candidate["mode"],
+                        ))
+                        + "; "
+                        + (
+                            "element " + _html_escape(str(selected_element))
+                            if selected_element
+                            else "extreme concrete fibre"
+                        )
+                        + "."
+                    )
                 self._formula(
                     "kappa<sub>i</sub> = eps<sub>lim,i</sub> / d<sub>i</sub>",
                     equation_key="plastic.worked.curvature-candidate",
@@ -5934,7 +5969,10 @@ class ReportBuilder:
                     "kappa<sub>u</sub> = min(kappa<sub>c</sub>, "
                     "kappa<sub>s,i</sub>, kappa<sub>p,j</sub>)",
                     equation_key="plastic.worked.curvature-selection",
-                    ref="Sector governing-curvature minimum; exact candidate operands above.",
+                    ref=(
+                        "Sector governing-curvature minimum; the retained selected "
+                        "candidate identity is stated with the result."
+                    ),
                     subst=_curvature_selection_substitution(candidates, selected),
                     result=(
                         f"kappa<sub>u</sub> = "
@@ -9794,11 +9832,21 @@ class ReportBuilder:
         )
 
         spectra = fatigue_presentation.items(payload, "spectra")
+        reinforcement_example = payload.get("governing_reinforcement_example")
+        concrete_example = payload.get("governing_concrete_example")
         retained_screen_rows = [
             (str(fatigue_presentation.value(spectrum, "spectrum_name", "-")), row)
             for spectrum in spectra
             for row in fatigue_presentation.reinforcement_rows(spectrum)
         ]
+        if self.profile.key != "Audit":
+            retained_screen_rows = [
+                (spectrum_name, row)
+                for spectrum_name, row in retained_screen_rows
+                if isinstance(reinforcement_example, Mapping)
+                and spectrum_name == reinforcement_example.get("spectrum_name")
+                and row["element_id"] == reinforcement_example.get("element_id")
+            ]
         if checks.get("reinforcement") and retained_screen_rows:
             self._h2("Simplified reinforcement stress-range screens")
             rows = [[
@@ -9850,8 +9898,6 @@ class ReportBuilder:
         input_records = fatigue_inputs.spectrum_records(
             self._base_inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
         )
-        reinforcement_example = payload.get("governing_reinforcement_example")
-        concrete_example = payload.get("governing_concrete_example")
         selected_spectrum_names = {
             str(selection.get("spectrum_name"))
             for selection in (reinforcement_example, concrete_example)
@@ -9983,6 +10029,15 @@ class ReportBuilder:
                 spectrum
             )
             if reinforcement_rows and publish_reinforcement:
+                governing_id = reinforcement_example.get("element_id")
+                published_reinforcement_rows = (
+                    reinforcement_rows
+                    if audit_detail
+                    else [
+                        row for row in reinforcement_rows
+                        if row["element_id"] == governing_id
+                    ]
+                )
                 self._h2("Reinforcement fatigue")
                 rows = [[
                     "Element", "Type", "Detail", "phi", "Shortcut",
@@ -10009,7 +10064,7 @@ class ReportBuilder:
                         _pct(row["utilisation"]),
                         row["status"],
                     ]
-                    for row in reinforcement_rows
+                    for row in published_reinforcement_rows
                 ])
                 self._table(
                     rows,
@@ -10019,7 +10074,6 @@ class ReportBuilder:
                     keep=False,
                     repeat_cols=3,
                 )
-                governing_id = reinforcement_example.get("element_id")
                 result = fatigue_presentation.result_by_element(
                     spectrum, governing_id
                 )
@@ -10127,15 +10181,16 @@ class ReportBuilder:
                         150,
                         82,
                     )
-                    bin_rows = fatigue_presentation.reinforcement_bin_rows(
+                    all_bin_rows = fatigue_presentation.reinforcement_bin_rows(
                         result
                     )
+                    published_bin_rows = all_bin_rows
                     if not audit_detail:
                         selected_bin_name = str(
                             reinforcement_example.get("bin_name") or ""
                         )
-                        bin_rows = [
-                            row for row in bin_rows
+                        published_bin_rows = [
+                            row for row in all_bin_rows
                             if row["bin"] == selected_bin_name
                         ]
                     rows = [[
@@ -10158,7 +10213,7 @@ class ReportBuilder:
                                 f"{_html_escape(row['bond_method'])}"
                             ),
                         ]
-                        for row in bin_rows
+                        for row in published_bin_rows
                     ])
                     self._table(
                         rows,
@@ -10191,7 +10246,7 @@ class ReportBuilder:
                             _fmt(row["yield_limit_mpa"], 3),
                             _pct(row["yield_utilisation"]),
                         ]
-                        for row in bin_rows
+                        for row in published_bin_rows
                     ])
                     self._table(
                         rows,
@@ -10202,13 +10257,22 @@ class ReportBuilder:
                     )
                     self._fatigue_reinforcement_formulas(
                         result,
-                        bin_rows,
+                        all_bin_rows,
                         reinforcement_example,
                         references.get("reinforcement"),
                     )
 
             concrete_rows = fatigue_presentation.concrete_rows(spectrum)
             if concrete_rows and publish_concrete:
+                governing_fibre = concrete_example.get("fibre_index")
+                published_concrete_rows = (
+                    concrete_rows
+                    if audit_detail
+                    else [
+                        row for row in concrete_rows
+                        if row["fibre_index"] == governing_fibre
+                    ]
+                )
                 equivalent_method = (
                     str(fatigue_presentation.value(
                         spectrum, "concrete_method", ""
@@ -10239,7 +10303,7 @@ class ReportBuilder:
                         _pct(row["utilisation"]),
                         row["status"],
                     ]
-                    for row in concrete_rows
+                    for row in published_concrete_rows
                 ])
                 self._table(
                     rows,
@@ -10253,7 +10317,6 @@ class ReportBuilder:
                     "Coordinates in mm; f<sub>cd,fat</sub> in MPa. The selected "
                     "criterion and stress are evaluated at the same fixed fibre."
                 )
-                governing_fibre = concrete_example.get("fibre_index")
                 result = fatigue_presentation.result_by_fibre(
                     spectrum, governing_fibre
                 )
@@ -10357,13 +10420,14 @@ class ReportBuilder:
                          16 * mm, 16 * mm, 16 * mm, 18 * mm, 18 * mm],
                         font=5.3,
                     )
-                bin_rows = fatigue_presentation.concrete_bin_rows(result)
+                all_bin_rows = fatigue_presentation.concrete_bin_rows(result)
+                published_bin_rows = all_bin_rows
                 if not audit_detail:
                     selected_bin_name = str(
                         concrete_example.get("bin_name") or ""
                     )
-                    bin_rows = [
-                        row for row in bin_rows
+                    published_bin_rows = [
+                        row for row in all_bin_rows
                         if row["bin"] == selected_bin_name
                     ]
                 rows = [[
@@ -10384,7 +10448,7 @@ class ReportBuilder:
                         _fmt(row["e_cd_min"], 4),
                         _fmt(row["e_cd_max"], 4),
                     ]
-                    for row in bin_rows
+                    for row in published_bin_rows
                 ])
                 self._table(
                     rows,
@@ -10433,7 +10497,7 @@ class ReportBuilder:
                         ),
                         _pct(row["stress_utilisation"]),
                     ]
-                    for row in bin_rows
+                    for row in published_bin_rows
                 ])
                 self._table(
                     rows,
@@ -10444,7 +10508,7 @@ class ReportBuilder:
                 self._fatigue_concrete_formulas(
                     spectrum,
                     result,
-                    bin_rows,
+                    all_bin_rows,
                     concrete_example,
                     references.get("concrete"),
                 )

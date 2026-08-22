@@ -21,7 +21,7 @@ ReportProfileKey: TypeAlias = Literal["Brief", "Standard", "Audit"]
 InputScope: TypeAlias = Literal["effective", "used", "canonical"]
 NonGoverningScope: TypeAlias = Literal["governing-only", "complete"]
 EquationScope: TypeAlias = Literal["interpretive", "used", "used-and-theory"]
-SubstitutionScope: TypeAlias = Literal["none", "material", "every-retained"]
+SubstitutionScope: TypeAlias = Literal["none", "governing", "every-retained"]
 ProvenanceScope: TypeAlias = Literal["revision", "key", "complete"]
 GlossaryScope: TypeAlias = Literal["short", "used", "complete"]
 
@@ -74,17 +74,17 @@ STANDARD_PROFILE: Final = ReportProfilePolicy(
     label="Standard",
     description=(
         "Default ordinary-design-review report with complete used inputs, "
-        "result tables, live methods, material calculation steps, and key "
-        "provenance."
+        "result tables and one governing worked calculation per active check "
+        "family, with key source information."
     ),
     omitted_detail=(
-        "Unused canonical inputs, exhaustive retained branch evidence, hashes, "
-        "inventories, and full theory context are omitted."
+        "Unused canonical inputs, exhaustive candidates, traces and branches, "
+        "internal keys, hashes, inventories and complete provenance are omitted."
     ),
     input_scope="used",
     non_governing_scope="complete",
     equation_scope="used",
-    substitution_scope="material",
+    substitution_scope="governing",
     provenance_scope="key",
     glossary_scope="used",
     include_qa_appendix=False,
@@ -97,9 +97,10 @@ AUDIT_PROFILE: Final = ReportProfilePolicy(
     key="Audit",
     label="Audit",
     description=(
-        "Expanded evidence report with canonical inputs, every retained live "
-        "step and branch, complete provenance, hashes, and inventories. Audit "
-        "does not mean approved, compliant or certified."
+        "Expanded evidence report with canonical inputs, complete candidates, "
+        "branches, substitutions and provenance, plus internal identifiers, "
+        "hashes, inventories and theory context. Audit does not mean approved, "
+        "compliant or certified."
     ),
     omitted_detail=(
         "No retained live calculation or provenance detail is intentionally "

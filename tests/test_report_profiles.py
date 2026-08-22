@@ -74,7 +74,7 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
         standard.substitution_scope,
         standard.provenance_scope,
         standard.glossary_scope,
-    ) == ("used", "complete", "used", "material", "key", "used")
+    ) == ("used", "complete", "used", "governing", "key", "used")
     assert not standard.include_qa_appendix
     assert standard.hard_page_limit is None
     assert standard.target_page_limit == 30
