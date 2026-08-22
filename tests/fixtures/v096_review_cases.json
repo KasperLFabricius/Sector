@@ -1,0 +1,141 @@
+{
+  "schema": "sector-v096-programme-v1",
+  "programme_base": {
+    "commit": "df397b2372e2e49b7a2165b0573ea0913e8c94dd",
+    "tree": "65eb685d0415cfe7852106838bbf51cc216449ab",
+    "product_version": "0.95",
+    "project_schema": 26,
+    "release_tag": "v0.95",
+    "release_tag_commit": "7ab0062de37e08ebcd42330fcefcf62dd717002c",
+    "current_main_qa_run": 32584442230
+  },
+  "pr_graph": {
+    "contract": "v096-pr-graph-v1",
+    "development_prs": [
+      "PR-01",
+      "PR-02",
+      "PR-03",
+      "PR-04",
+      "PR-05",
+      "PR-06",
+      "PR-07",
+      "PR-08",
+      "PR-09"
+    ],
+    "nodes": [
+      "PR-01",
+      "PR-02",
+      "PR-03",
+      "PR-04",
+      "PR-05",
+      "PR-06",
+      "PR-07",
+      "PR-08",
+      "PR-09",
+      "G1",
+      "PR-10",
+      "G2"
+    ],
+    "dependencies": {
+      "PR-01": [],
+      "PR-02": ["PR-01"],
+      "PR-03": ["PR-02"],
+      "PR-04": ["PR-03"],
+      "PR-05": ["PR-04"],
+      "PR-06": ["PR-05"],
+      "PR-07": ["PR-06"],
+      "PR-08": ["PR-07"],
+      "PR-09": ["PR-08"],
+      "G1": [
+        "PR-01",
+        "PR-02",
+        "PR-03",
+        "PR-04",
+        "PR-05",
+        "PR-06",
+        "PR-07",
+        "PR-08",
+        "PR-09"
+      ],
+      "PR-10": ["G1"],
+      "G2": ["PR-10"]
+    }
+  },
+  "lifecycle_policy": {
+    "development_version": "0.95",
+    "target_version": "0.96",
+    "development_prs": [
+      "PR-01",
+      "PR-02",
+      "PR-03",
+      "PR-04",
+      "PR-05",
+      "PR-06",
+      "PR-07",
+      "PR-08",
+      "PR-09"
+    ],
+    "development_full_ci_allowed": false,
+    "development_subject_contains": "[skip ci]",
+    "pre_bump_full_ci_owner": "G1",
+    "version_bump_owner": "PR-10",
+    "post_bump_full_ci_owner": "G2",
+    "release_version": "0.96",
+    "exact_head_review_required": true,
+    "zero_unresolved_findings_required": true
+  },
+  "profile_contract": {
+    "brief": {
+      "complete_effective_inputs_for_reported_active_results": true,
+      "inactive_or_unused_inputs_may_be_omitted": true,
+      "worked_result_chain": false,
+      "derivations": false,
+      "allowed_figure_families": ["governing plastic", "governing elastic"],
+      "page_count_target": null
+    },
+    "standard": {
+      "governing_worked_calculations_per_active_family": 1,
+      "complete_used_inputs": true,
+      "complete_candidate_branches": false
+    },
+    "audit": {
+      "complete_candidate_branches": true,
+      "complete_substitutions": true,
+      "complete_provenance": true
+    }
+  },
+  "gamma_v_contract": {
+    "standard": "DS/EN 1992-1-1:2023",
+    "definition_reference": "4.3.3 and Table 4.3 (NDP)",
+    "calculation_reference": "8.2.2",
+    "default": 1.4,
+    "domain": "positive finite non-Boolean",
+    "active_shear_model": "2023",
+    "inactive_routes": ["2005 EN", "2005 DK NA", "torsion", "combined"],
+    "backward_load_default": 1.4
+  },
+  "findings": [
+    {"id": "F096-001", "topic": "Results Overview contradictory aggregate states", "owning_pr": "PR-02"},
+    {"id": "F096-002", "topic": "Results Overview scrolling and verbose source column", "owning_pr": "PR-02"},
+    {"id": "F096-003", "topic": "Brief wording incorrectly promises a worked result chain", "owning_pr": "PR-03"},
+    {"id": "F096-004", "topic": "Brief figure selection does not retain only key governing plots", "owning_pr": "PR-03"},
+    {"id": "F096-005", "topic": "Standard and Audit have insufficient depth separation", "owning_pr": "PR-04"},
+    {"id": "F096-006", "topic": "Manual Section A workflows and error routing are unreliable", "owning_pr": "PR-05"},
+    {"id": "F096-007", "topic": "End-user manual exposes internal and former-version administration", "owning_pr": "PR-05"},
+    {"id": "F096-008", "topic": "DS/EN 1992-1-1:2023 gamma_V is fixed at 1.40", "owning_pr": "PR-06"},
+    {"id": "F096-009", "topic": "User-facing terminology drifts toward approval and authority", "owning_pr": "PR-07"},
+    {"id": "F096-010", "topic": "Standard references are incomplete or inconsistent", "owning_pr": "PR-07"},
+    {"id": "F096-011", "topic": "Manual and report spell out per mille", "owning_pr": "PR-07"},
+    {"id": "F096-012", "topic": "Report navigation, page breaks and boilerplate reduce readability", "owning_pr": "PR-08"},
+    {"id": "F096-013", "topic": "HTML manual lacks robust navigation, figure alternatives and accessible math", "owning_pr": "PR-09"},
+    {"id": "F096-014", "topic": "PDF language and hidden marker text layers are incomplete", "owning_pr": "PR-09"}
+  ],
+  "scope_exclusions": [
+    "new design basis or standard family",
+    "global compliance verdict",
+    "certification, sign-off or engineering approval workflow",
+    "new solver mechanics other than selecting gamma_V in the existing 2023 shear equation",
+    "arbitrary report page-count targets",
+    "former-version narrative in the end-user manual"
+  ]
+}
