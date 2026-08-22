@@ -40,7 +40,7 @@ from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
 import publication_theme
 from app import manual_information_architecture as manual_ia
-from app import project_io, report_profiles
+from app import report_profiles
 from app import table_field_definitions as table_fields
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
@@ -525,8 +525,7 @@ def manual_blocks() -> list:
          "is not a compliance-management, certification, sign-off, authority-"
          "approval or code-completeness system. The engineer controls methods, "
          "action sets and coefficients. Selected standards supply equations, "
-         "references, defaults and warnings. The governing repository contract is "
-         "`docs/product_identity.md`.")
+         "references, defaults and warnings.")
     md("The section and material-law diagrams update as you type; the result "
        "views recompute when you press *Calculate*.")
     call("limit", "Sector analyses **one plane cross-section**. It assumes plane "
@@ -609,22 +608,22 @@ def manual_blocks() -> list:
        "state and the troubleshooting entry to use when the expected state is not "
        "reached.")
     table(
-        ["Workflow / outcome", "Prerequisite and action", "Expected state", "If blocked"],
+        ["Workflow / outcome", "Before and do", "Expected state / if blocked"],
         [
             [
                 (
                     f"[{workflow.label}](#{manual_ia.destination(workflow.destination_key).anchor}) - "
                     f"{workflow.outcome}"
                 ),
-                workflow.action
-                or (
-                    f"{workflow.prerequisite}. Open "
-                    f"[{manual_ia.destination(workflow.destination_key).label}]"
-                    f"(#{manual_ia.destination(workflow.destination_key).anchor}), complete "
-                    "the shown inputs and calculate or review as applicable."
+                (
+                    f"**Before:** {workflow.prerequisite}. "
+                    f"**Do:** {workflow.action}"
                 ),
-                workflow.expected_state,
-                manual_ia.warning_reference(workflow.warning_key).correction,
+                (
+                    f"**Expected:** {workflow.expected_state}. "
+                    "**If blocked:** "
+                    f"{manual_ia.warning_reference(workflow.warning_key).correction}"
+                ),
             ]
             for workflow in manual_ia.WORKFLOWS
         ],
@@ -719,10 +718,9 @@ def manual_blocks() -> list:
     h1("Project")
     h2("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
-       "load cases and provenance. Every downloaded project save uses the current "
-       "schema. Loading a project restores its inputs and clears earlier results; "
-       "press *Calculate* to create current results. Current projects use schema "
-       f"version {project_io.VERSION}.")
+       "load cases and provenance. Loading a project restores its inputs and clears "
+       "earlier results. Review the restored inputs, then press *Calculate* before "
+       "using or reporting results.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
        "runs on the next interaction and is restored on the next launch. Keep the "
        "issued project file with the calculation record; autosave is recovery, not "
@@ -1279,27 +1277,12 @@ def manual_blocks() -> list:
        "engineering values, rounding policy, statuses, warnings and sources are "
        "identical, and figures remain a separate choice.")
     table(
-        ["Profile", "Purpose", "Declared omitted detail", "Page policy"],
+        ["Profile", "Purpose", "Declared omitted detail"],
         [
             [
                 policy.label,
                 policy.description,
                 policy.omitted_detail,
-                (
-                    f"Hard limit {policy.hard_page_limit} pages"
-                    if policy.hard_page_limit is not None
-                    else (
-                        f"Target {policy.target_page_limit} pages; an excess needs "
-                        "a recorded content reason and visual approval"
-                        if policy.target_page_limit is not None
-                        else (
-                            "No page-count target; information depth and readability "
-                            "control"
-                            if policy.label == "Brief"
-                            else "No hard cap; sparse pages are reviewed"
-                        )
-                    )
-                ),
             ]
             for policy in report_profiles.REPORT_PROFILES.values()
         ],

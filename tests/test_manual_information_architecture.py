@@ -82,8 +82,8 @@ def test_required_workflow_and_troubleshooting_inventories_are_complete():
         "review-results",
         "save-load",
         "report-profile",
-        "portable-build",
     )
+    assert all(item.action.strip() for item in ia.WORKFLOWS)
     assert all(ia.destination(item.destination_key) for item in ia.WORKFLOWS)
     assert all(
         ia.warning_reference(item.warning_key) for item in ia.WORKFLOWS
@@ -158,29 +158,76 @@ def test_crack_comparison_guidance_uses_independent_zero_value_contract():
         assert retired not in current_publication
 
 
-def test_portable_workflow_names_the_real_double_click_and_unsigned_boundary():
-    workflow = next(item for item in ia.WORKFLOWS if item.key == "portable-build")
-    warning = ia.warning_reference(workflow.warning_key)
-    assert workflow.action is not None
-    combined = (
-        f"{workflow.prerequisite} {workflow.expected_state} {workflow.action} "
-        f"{warning.symptom} {warning.cause} {warning.correction}"
-    )
-    for token in (
-        "official Sector source ZIP",
-        "SHA-256",
-        "64-bit CPython 3.13.0",
-        "BUILD_SECTOR_PORTABLE.bat",
-        "administrator",
-        "portable ZIP",
-        "Sector.exe alone",
-        "SmartScreen",
-        "README-PORTABLE.txt",
-    ):
-        assert token in combined
+def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
+    required_routes = {
+        "section-creation": ("Inputs > Section", "Calculate"),
+        "materials-reinforcement": (
+            "Inputs > Material parameters",
+            "Inputs > Section",
+            "Calculate",
+        ),
+        "action-tables": ("Inputs > Loads", "Calculate"),
+        "elastic-crack": (
+            "Inputs > Analysis settings",
+            "Inputs > Loads",
+            "Analysis > Elastic Results",
+        ),
+        "plastic-capacity": (
+            "Inputs > Analysis settings",
+            "Inputs > Loads",
+            "Analysis > Plastic Results",
+            "Analysis > N-M Interaction",
+        ),
+        "fatigue": (
+            "Inputs > Analysis settings",
+            "Inputs > Material parameters",
+            "Inputs > Section",
+            "Inputs > Loads",
+            "Analysis > Fatigue Results",
+        ),
+        "detailing": (
+            "Inputs > Analysis settings",
+            "Analysis > Detailing",
+        ),
+        "review-results": (
+            "Analysis > Results Overview",
+            "View",
+        ),
+        "save-load": ("Inputs > Project", "Calculate"),
+        "report-profile": ("Report", "generate", "download"),
+    }
+    assert set(required_routes) == {item.key for item in ia.WORKFLOWS}
+    for workflow in ia.WORKFLOWS:
+        assert all(
+            token in workflow.action
+            for token in required_routes[workflow.key]
+        )
 
     manual_text = "\n".join(str(block) for block in manual.manual_blocks())
-    assert workflow.action in manual_text
+    assert "calculate or review as applicable" not in manual_text
+    assert "portable-build" not in manual_text
+
+
+def test_results_overview_warning_routes_to_the_shared_review_entry():
+    workflow = next(
+        item for item in ia.WORKFLOWS if item.key == "review-results"
+    )
+    assert workflow.warning_key == "results-review"
+    warning = ia.warning_reference("results-review")
+    assert "Analysis > Results Overview" in warning.correction
+    assert "global compliance verdict" in warning.correction
+
+    source = (ROOT / "app" / "sector_app.py").read_text("utf-8")
+    assert '"results-review"' in source
+
+    assert "Inputs > Loads" in ia.warning_reference("loads-invalid").correction
+    assert "report" not in ia.warning_reference(
+        "results-stale"
+    ).correction.casefold()
+    report_stale = ia.warning_reference("report-stale").correction
+    assert "Report" in report_stale
+    assert "Generate report" in report_stale
+    assert "If calculation inputs changed" in report_stale
 
 
 def test_every_streamlit_warning_routes_through_the_manual_registry():

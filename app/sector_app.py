@@ -3682,7 +3682,7 @@ def _report_workspace(inp):
     if uncommitted_input:
         _manual_warning(
             publication_box,
-            "results-stale",
+            "report-stale",
             "An Inputs edit was interrupted before Sector could assemble its "
             "complete calculation payload. Open Inputs and allow it to finish "
             "once before generating or downloading a report.",
@@ -3757,7 +3757,7 @@ def _report_workspace(inp):
         else:
             _manual_warning(
                 publication_box,
-                "results-stale",
+                "report-stale",
                 "Report out of date: inputs or report metadata changed. "
                 "Generate it again before downloading.",
             )
@@ -9333,7 +9333,9 @@ def results_overview_view(inp, results, *, stale=False):
             f"{failure_count} governing result(s) fail or are invalid. {context}"
         )
     elif warning_count:
-        st.warning(
+        _manual_warning(
+            st,
+            "results-review",
             f"{warning_count} governing result(s) require review. {context}"
         )
     elif rows:

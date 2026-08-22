@@ -24,9 +24,7 @@ from sector import __version__  # noqa: E402
 from tools.manual_current_program_statements import (  # noqa: E402
     validate_current_manual_program_statements,
 )
-from tools.manual_current_schema_statements import (  # noqa: E402
-    validate_current_manual_schema_statements,
-)
+from tools.manual_end_user_scope import validate_end_user_manual_scope  # noqa: E402
 from tools.manual_generated_html import manual_generated_html_text  # noqa: E402
 from tools.manual_product_references import (  # noqa: E402
     validate_no_noncurrent_manual_product_references,
@@ -63,13 +61,13 @@ _MANUAL_CROPS = (
         "manual contents navigation",
         1,
         (0.09, 0.18, 0.92, 0.45),
-        "2bc633db1eed1c2ae60d1728eefaea767f7734b06ae4d6f223d7cdd28b7e5452",
+        "0c4d2a284c6e351336302ae92feeb79cec89b772db1d08bc5fee5786a540388e",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "effaf2610f335e36f89db76653fc22407c6cfc65b2a551865c935723b72dd911",
+        "911098965803cd81df7954ddd834e03b48525ac6c668778d719810cfc58ab79c",
     ),
 )
 
@@ -219,12 +217,9 @@ def _validate_current_manual_identity(
     *,
     reference_text: str,
 ) -> None:
-    """Apply every bounded current-only rule to visible manual text."""
+    """Apply the end-user-scope and current-only rules to visible text."""
 
-    validate_current_manual_schema_statements(
-        flat_text,
-        project_schema=project_io.VERSION,
-    )
+    validate_end_user_manual_scope(flat_text)
     validate_no_noncurrent_manual_schema_references(
         reference_text,
         project_schema=project_io.VERSION,
@@ -362,10 +357,10 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Shear and torsion reinforcement",
         "Anchorage is assumed",
         "Bulk assignments",
-        "one fully expanded governing row for each stable check family",
+        "one fully expanded governing row for each semantic check type",
         "PDF report",
-        "Worked numerical derivations are limited to the globally governing or "
-        "extremal calculation in each family",
+        "Standard adds one governing worked calculation for each active check "
+        "family",
         "Editable table",
         "Plastic/capacity and Elastic action fields",
         "accept either a dot or comma as the decimal separator",
