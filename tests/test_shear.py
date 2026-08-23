@@ -12,6 +12,7 @@ import math
 import pathlib
 import sys
 
+import numpy as np
 import pytest
 
 from sector import capacity, codes, detailing, shear
@@ -86,6 +87,62 @@ def test_vrd_c_2023_hand_calc():
     assert res["vrd_c"] == pytest.approx(85.4, abs=0.3)
 
 
+def test_vrd_c_2023_uses_the_selected_gamma_v_without_rounding():
+    common = dict(
+        fck=35.0,
+        code=codes.EC2_2023,
+        bw_mm=300.0,
+        d_mm=550.0,
+        asl_mm2=1473.0,
+        fyd_mpa=500.0 / 1.15,
+        ddg_mm=32.0,
+    )
+
+    default = shear.vrd_c_2023(**common, gamma_v=1.40)
+    selected = shear.vrd_c_2023(**common, gamma_v=1.25)
+
+    assert selected["gamma_v"] == pytest.approx(1.25)
+    assert selected["tau_basic"] == pytest.approx(
+        default["tau_basic"] * 1.40 / 1.25
+    )
+    assert selected["tau_min"] == pytest.approx(
+        default["tau_min"] * 1.40 / 1.25
+    )
+    assert selected["vrd_c"] == pytest.approx(
+        default["vrd_c"] * 1.40 / 1.25
+    )
+
+
+@pytest.mark.parametrize(
+    "gamma_v",
+    (
+        True,
+        False,
+        np.bool_(True),
+        0.0,
+        -1.0,
+        float("nan"),
+        float("inf"),
+        "1.40",
+    ),
+)
+def test_vrd_c_2023_rejects_malformed_gamma_v(gamma_v):
+    with pytest.raises(
+        ValueError,
+        match="gamma_v must be a positive finite real number",
+    ):
+        shear.vrd_c_2023(
+            35.0,
+            codes.EC2_2023,
+            bw_mm=300.0,
+            d_mm=550.0,
+            asl_mm2=1473.0,
+            fyd_mpa=500.0 / 1.15,
+            ddg_mm=32.0,
+            gamma_v=gamma_v,
+        )
+
+
 def test_vrd_c_2023_invalid_keeps_all_keys():
     # Codex P2: an invalid 2023 result (zero depth) must still carry every reporting
     # key (incl. tau_basic) so the report does not KeyError.
@@ -150,6 +207,23 @@ def test_vrd_c_dispatches_on_shear_model():
     res5 = shear.vrd_c(35.0, codes.EC2_2005_DKNA, 300.0, 550.0, 1473.0, 0.0, 0.18)
     assert "model" not in res5 or res5.get("model") != "2023"
     assert res5["vrd_c"] != pytest.approx(res["vrd_c"])   # different models
+
+
+def test_2005_dispatch_does_not_consume_the_2023_gamma_v_input():
+    common = dict(
+        fck=35.0,
+        code=codes.EC2_2005_DKNA,
+        bw_mm=300.0,
+        d_mm=550.0,
+        asl_mm2=1473.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.18,
+    )
+
+    low = shear.vrd_c(**common, gamma_v=0.50)
+    high = shear.vrd_c(**common, gamma_v=9.00)
+
+    assert low == high
 
 
 # -- the resistance formula (hand-calc anchor) ------------------------------
@@ -1187,6 +1261,8 @@ def test_app_shear_is_saved_and_restored():
     at.checkbox(key="shear_on").set_value(True).run()
     _set(
         at,
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_gamma_v", 1.25),
         ("number_input", "shear_Vx", 123.0),
         ("number_input", "shear_vx_bw", 240.0),
     )
@@ -1203,6 +1279,8 @@ def test_app_shear_is_saved_and_restored():
     at2.run()
     assert not at2.exception
     assert at2.session_state["shear_on"] is True
+    assert at2.session_state["shear_method"] == codes.EC2_2023.label
+    assert at2.session_state["shear_gamma_v"] == pytest.approx(1.25)
     assert first_case_value(at2, "shear_Vx") == pytest.approx(123.0)
     assert at2.session_state["shear_vx_bw"] == pytest.approx(240.0)
 
@@ -1328,3 +1406,109 @@ def test_app_shear_2023_applies_axial_factor():
     compression = at.session_state["results"]["shear"]["res"]
     assert compression["k_vp"] < 1.0
     assert compression["tau_basic"] > neutral["tau_basic"]
+
+
+def test_app_gamma_v_control_has_the_exact_2023_scope_and_references():
+    at = _fresh()
+    at.run()
+
+    gamma = at.number_input(key="shear_gamma_v")
+    assert gamma.value == pytest.approx(1.40)
+    assert gamma.disabled is True
+    for reference in (
+        "DS/EN 1992-1-1:2023",
+        "4.3.3",
+        "Table 4.3 (NDP)",
+        "8.2.2",
+    ):
+        assert reference in gamma.help
+
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+    )
+    assert at.number_input(key="shear_gamma_v").disabled is False
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_gamma_v", 1.25),
+        ("number_input", "shear_V", 100.0),
+    )
+    result = at.session_state["results"]["shear"]["res"]
+    assert result["gamma_v"] == pytest.approx(1.25)
+
+    _goto_page(at, "Inputs")
+    _set(
+        at,
+        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+    )
+    assert at.number_input(key="shear_gamma_v").disabled is True
+
+
+def test_app_gamma_v_change_marks_results_stale_and_recalculates():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_V", 100.0),
+    )
+    _calculate(at)
+    old_signature = at.session_state["result_sig"]
+    default = at.session_state["results"]["shear"]["res"]["vrd_c"]
+
+    _goto_page(at, "Inputs")
+    _set(at, ("number_input", "shear_gamma_v", 1.25))
+    assert at.session_state["_latest_inputs"]["signature"] != old_signature
+    assert at.session_state["result_sig"] == old_signature
+
+    _calculate(at)
+    selected = at.session_state["results"]["shear"]["res"]
+    assert selected["gamma_v"] == pytest.approx(1.25)
+    assert selected["vrd_c"] == pytest.approx(default * 1.40 / 1.25)
+
+
+def test_app_gamma_v_is_absent_from_the_2005_result_signature():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("number_input", "shear_V", 100.0),
+    )
+    _calculate(at)
+    old_signature = at.session_state["result_sig"]
+    old_resistance = at.session_state["results"]["shear"]["res"]["vrd_c"]
+
+    at.session_state["shear_gamma_v"] = 9.00
+    at.run()
+
+    assert at.session_state["_latest_inputs"]["signature"] == old_signature
+    assert at.session_state["result_sig"] == old_signature
+    assert at.session_state["results"]["shear"]["res"]["vrd_c"] == pytest.approx(
+        old_resistance
+    )
+
+
+def test_app_rejects_nonpositive_active_gamma_v_before_a_shear_result():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_gamma_v", 0.0),
+        ("number_input", "shear_V", 100.0),
+    )
+
+    _calculate(at)
+
+    assert not at.exception
+    assert any(
+        "shear_gamma_v must be a positive finite real number" in item.value
+        for item in at.error
+    )
+    assert "shear" not in at.session_state.filtered_state.get("results", {})

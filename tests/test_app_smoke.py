@@ -3021,7 +3021,8 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
             "sls_heightened_permitted_crack_width_mm": 0.0,
         },
     ))
-    payload["version"] = project_io.MIGRATABLE_VERSION
+    payload["version"] = project_io.LEGACY_MIGRATABLE_VERSION
+    payload["scalars"].pop("shear_gamma_v", None)
     for key in (
         "sls_long_term_permitted_crack_width_mm",
         "sls_short_term_permitted_crack_width_mm",
@@ -3059,7 +3060,7 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     ] == 25
     expected_migration = {
         "source_schema_version": 25,
-        "target_schema_version": 26,
+        "target_schema_version": 27,
         "warnings": [at.session_state["_project_migration_warnings"][0]],
         "migration_provenance": {
             "source_key": project_io.LEGACY_SHARED_CRACK_WIDTH_KEY,
@@ -3068,6 +3069,11 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
             "short_term_value_mm": 0.20,
             "heightened_value_mm": 0.0,
             "heightened_preserved": False,
+            "shear_gamma_v": {
+                "defaulted": True,
+                "value": 1.40,
+                "active_2023_shear": False,
+            },
         },
     }
     assert at.session_state["_loaded_project_migration"] == expected_migration

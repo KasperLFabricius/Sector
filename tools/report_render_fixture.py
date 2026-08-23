@@ -269,6 +269,7 @@ def _inputs() -> dict:
         "shear_on": True,
         "shear_links": True,
         "shear_method": codes.EC2_2005_DKNA.label,
+        "shear_gamma_v": 1.40,
         "shear_vx_link_legs": 2.0,
         "shear_vy_link_legs": 2.0,
         "shear_link_dia": 10.0,

@@ -134,6 +134,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # so widget labels use $...$ but table headers/cells use these). Written via chr()
 # so the source stays ASCII (BMP code points, no surrogate pairs).
 _EPS, _SIGMA, _RHO, _PHI = chr(0x3B5), chr(0x3C3), chr(0x3C1), chr(0x3C6)
+_GAMMA = chr(0x3B3)
 _KAPPA = chr(0x3BA)
 _THETA, _NU, _ALPHA, _DELTA = chr(0x3B8), chr(0x3BD), chr(0x3B1), chr(0x394)
 _TAU = chr(0x3C4)
@@ -4459,7 +4460,7 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
 _SHEAR_SIG_KEYS = (
     "shear_on", "shear_method", "shear_Vx", "shear_Vy",
     "shear_face_x", "shear_face_y", "shear_vx_bw", "shear_vy_bw",
-    "shear_dlower",
+    "shear_dlower", "shear_gamma_v",
     "shear_links", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
@@ -4474,7 +4475,8 @@ _SHEAR_SIG_KEYS = (
     "combined_on", "combined_method", "combined_mv_independent",
 )
 _CAPACITY_CONTEXT_SIG_KEYS = tuple(
-    key for key in _SHEAR_SIG_KEYS if key not in {"shear_V", "torsion_T"}
+    key for key in _SHEAR_SIG_KEYS
+    if key not in {"shear_V", "torsion_T", "shear_gamma_v"}
 ) + (
     "minimum_reinforcement_on", "clear_spacing_on",
     "transverse_detailing_on", "detailing_edition",
@@ -5452,6 +5454,23 @@ def build_inputs(host=st):
         disabled=not (shear_on and _shear_2023),
         help=r"Lower sieve size of the coarsest aggregate (2023 method only): "
              r"$d_{dg}=16+D_{\mathrm{lower}}\leq40$ mm for $f_{ck}\leq60$ MPa (8.2.1(4)).")
+    shear_gamma_v = _seeded_number(
+        sts,
+        r"Shear partial factor $\gamma_V$",
+        None,
+        None,
+        float(codes.EC2_2023.shear_gamma_v),
+        0.05,
+        "shear_gamma_v",
+        disabled=not (shear_on and _shear_2023),
+        help=(
+            "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP) define "
+            "the partial factor for shear resistance without shear "
+            "reinforcement; 1.40 is Sector's default, not a forced value. "
+            "The selected positive value is applied in 8.2.2. Confirm the "
+            "applicable project basis."
+        ),
+    )
     if combined_on:
         sts.caption(f"Shear method set by Combined: {combined_method}")
     bwx, bwy = sts.columns(2)
@@ -6384,7 +6403,16 @@ def build_inputs(host=st):
         + (_ELASTIC_RESULT_CONTRACT_TOKEN,)
     )
     capacity_context_sig = (
-        _get(_CAPACITY_CONTEXT_SIG_KEYS) + (_CAPACITY_RESULT_CONTRACT_TOKEN,)
+        _get(_CAPACITY_CONTEXT_SIG_KEYS)
+        + (
+            (
+                "2023 shear gamma_V",
+                shear_gamma_v,
+            )
+            if shear_on and _shear_2023
+            else ("2023 shear gamma_V inactive",)
+        )
+        + (_CAPACITY_RESULT_CONTRACT_TOKEN,)
     )
     plastic_case_context_sig = (
         plastic_bending_context_sig + capacity_context_sig
@@ -6563,6 +6591,7 @@ def build_inputs(host=st):
                 ),
                 shear_vx_bw=shear_vx_bw, shear_vy_bw=shear_vy_bw,
                 shear_dlower=shear_dlower,
+                shear_gamma_v=shear_gamma_v,
                 shear_links=shear_links,
                 shear_vx_link_legs=shear_vx_link_legs,
                 shear_vy_link_legs=shear_vy_link_legs,
@@ -11613,7 +11642,7 @@ def shear_view(inp, results):
                           "Action moment MEd", "Shear span acs",
                           "Axial factor kvp", "Modified depth kvp*d (8.27)",
                            "Aggregate ddg", f"{_TAU}Rd,c", f"{_TAU}Rd,c,min",
-                           "Flexural fyd", "gamma_v"],
+                           "Flexural fyd", f"{_GAMMA}V"],
               "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
                         f"{res['z']:.1f} mm (0.9 d)", f"{sh['asl']:.1f} mm2",
                         f"{res['rho_l']:.4f}", f"{sh['m_ed_2023']:.3f} kNm",
@@ -11627,8 +11656,9 @@ def shear_view(inp, results):
             r"$a_{cs}=\max(|M_{Ed}/V_{Ed}|,d)$; "
             r"$\tau_{Rd,c} = \max[\,(0.66/\gamma_V)"
             r"(100\,\rho_l f_{ck} d_{dg}/(k_{vp}d))^{1/3},"
-            r"\ \tau_{Rd,c,min}]$ (EN 1992-1-1:2023, 8.27); "
+            r"\ \tau_{Rd,c,min}]$ (DS/EN 1992-1-1:2023, 8.2.2); "
             r"$V_{Rd,c} = \tau_{Rd,c}\,b_w z$, $z = 0.9d$. "
+            r"The selected $\gamma_V$ is defined in 4.3.3 and Table 4.3 (NDP). "
             r"$d_{dg} = 16 + D_{lower}$ ($\leq 40$ mm). $A_{sl}$ is the tension "
             "reinforcement on the chosen face, assumed fully anchored beyond d. "
             "Prestressing tendons are assumed parallel to the member axis "
@@ -12894,7 +12924,7 @@ def _store_completed_analysis(
             ),
             "sector_version": APP_VERSION,
             "source_revision": calculation_revision,
-            # ``input_sha256`` preserves the schema-26 project correlation used
+            # ``input_sha256`` preserves the project correlation used
             # by existing files. Result reuse is governed by the explicit frozen
             # engineering identity, which excludes report metadata/preferences.
             "input_sha256": project_input_sha256,

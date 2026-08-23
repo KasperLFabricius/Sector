@@ -31,6 +31,27 @@ from typing import Optional, Sequence
 from . import geometry
 
 
+def _positive_gamma_v(value) -> float:
+    """Return one finite positive shear factor without Boolean coercion."""
+
+    value_type = type(value)
+    is_numpy_bool = (
+        value_type.__name__ in {"bool", "bool_"}
+        and value_type.__module__.split(".", 1)[0] == "numpy"
+    )
+    if isinstance(value, bool) or is_numpy_bool or isinstance(value, (str, bytes)):
+        raise ValueError("gamma_v must be a positive finite real number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "gamma_v must be a positive finite real number"
+        ) from exc
+    if not math.isfinite(number) or number <= 0.0:
+        raise ValueError("gamma_v must be a positive finite real number")
+    return number
+
+
 @dataclass(frozen=True, slots=True)
 class StrutAngleSelection:
     """Final analytic variable-strut-angle selection and its direct operands.
@@ -187,7 +208,8 @@ def min_web_width(outer: Sequence, holes: Optional[Sequence], axis: str) -> floa
 
 def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
                fyd_mpa: float, ddg_mm: float, *, n_ed_tension_kn: float = 0.0,
-               m_ed_knm: float = 0.0, v_ed_kn: float = 0.0) -> dict:
+               m_ed_knm: float = 0.0, v_ed_kn: float = 0.0,
+               gamma_v: Optional[float] = None) -> dict:
     """Shear resistance without shear reinforcement, EN 1992-1-1:2023 sec. 8.2.2.
 
     ``tau_Rd,c = (0.66/gamma_v)*(100*rho_l*fck*ddg/d_v)^(1/3) >= tau_Rd,c,min``
@@ -201,15 +223,17 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
     ``z = 0.9 d`` (8.18). ``fyd_mpa`` is the design yield of the flexural
     reinforcement; ``ddg_mm`` the aggregate size parameter (8.2.1(4)).
     """
+    gv = _positive_gamma_v(
+        code.shear_gamma_v if gamma_v is None else gamma_v
+    )
     if d_mm <= 0.0 or bw_mm <= 0.0 or fyd_mpa <= 0.0:
         return dict(vrd_c=0.0, tau_rdc=0.0, tau_basic=0.0, tau_min=0.0, rho_l=0.0,
                     z=0.9 * d_mm, ddg=ddg_mm, fyd=fyd_mpa, k_vp=1.0,
                     d_kvp=d_mm, a_cs=0.0, n_ed_tension=n_ed_tension_kn,
                     m_ed=m_ed_knm, v_ed=v_ed_kn, axial_applied=False,
-                    gamma_v=code.shear_gamma_v, model="2023", valid=False,
+                    gamma_v=gv, model="2023", valid=False,
                     fck=fck, bw=bw_mm, d=d_mm, asl=asl_mm2,
                     tau_governs="none")
-    gv = code.shear_gamma_v
     rho_l = asl_mm2 / (bw_mm * d_mm)
     z = 0.9 * d_mm
     v_abs = abs(v_ed_kn)
@@ -244,7 +268,8 @@ def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
           n_ed_comp_kn: float, ac_m2: float, *, fyd_mpa: float = 0.0,
           ddg_mm: float = 32.0, m_ed_knm: float = 0.0,
           v_ed_kn: float = 0.0, fcd_mpa: Optional[float] = None,
-          gamma_c: Optional[float] = None) -> dict:
+          gamma_c: Optional[float] = None,
+          gamma_v: Optional[float] = None) -> dict:
     """Shear resistance without shear reinforcement, VRd,c (kN).
 
     Dispatches on the code's ``shear_model``: the 2005 variable-strut VRd,c
@@ -258,7 +283,7 @@ def vrd_c(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
         return vrd_c_2023(
             fck, code, bw_mm, d_mm, asl_mm2, fyd_mpa, ddg_mm,
             n_ed_tension_kn=-n_ed_comp_kn, m_ed_knm=m_ed_knm,
-            v_ed_kn=v_ed_kn,
+            v_ed_kn=v_ed_kn, gamma_v=gamma_v,
         )
     gc = code.gamma_c if gamma_c is None else float(gamma_c)
     if d_mm <= 0.0 or bw_mm <= 0.0:

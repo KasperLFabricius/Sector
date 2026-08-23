@@ -234,6 +234,7 @@ def project_scalars() -> dict:
         "shear_vx_bw": 0.0,
         "shear_vy_bw": 0.0,
         "shear_dlower": 16.0,
+        "shear_gamma_v": 1.40,
         "shear_links": True,
         "shear_vx_link_legs": 2.0,
         "shear_vy_link_legs": 2.0,

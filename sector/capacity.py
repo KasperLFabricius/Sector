@@ -1081,6 +1081,14 @@ def _build_shear_face_context(
     fck = inp["concrete"].fck
     fyd_flex = design_yield(inp["steel"])
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
+    gamma_v = (
+        _positive_finite_real(
+            inp.get("shear_gamma_v", _MISSING),
+            "shear_gamma_v",
+        )
+        if model_2023
+        else None
+    )
     if axis == "x":
         m_ed_2023 = inp["Mx_pl"] + inp["P_pl"] * cy - mx_prestress
         m_prestress = mx_prestress
@@ -1093,6 +1101,7 @@ def _build_shear_face_context(
         m_ed_knm=m_ed_2023, v_ed_kn=v_ed,
         fcd_mpa=inp["concrete"].fcd,
         gamma_c=inp["concrete"].gamma_c,
+        gamma_v=gamma_v,
     )
     util = v_ed / result["vrd_c"] if result["vrd_c"] > 0.0 else math.inf
     payload = {

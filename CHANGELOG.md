@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added a user-controlled positive `gamma_V` input for the
+  DS/EN 1992-1-1:2023 concrete shear resistance without shear reinforcement.
+  The input defaults to 1.40 and is retained consistently in projects and
+  applicable report profiles.
+
+Project schema is version 27. Schemas 25 and 26 have bounded in-memory
+migrations; projects using the former fixed 2023 shear factor migrate to the
+explicit 1.40 input without changing the source file.
+
 ## 0.95 - 2026-08-21
 
 Sector 0.95 improves calculation currentness, serviceability controls, fatigue
