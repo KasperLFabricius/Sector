@@ -708,7 +708,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
         "combined_on": False,
         "combined_method": report_render_fixture.codes.EC2_2005_DKNA.label,
         "shear_dlower": 22.0,
-        "shear_gamma_v": 1.25,
+        "shear_gamma_v": 1.234,
         "transverse_detailing_on": True,
         "detailing_edition": report_render_fixture.detailing.EC2_2005_DKNA,
         "transverse_ductility_class": "C",
@@ -740,7 +740,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
     })
     no_links_2023 = _brief_text(inp, report_render_fixture._results(inp))
     assert "Shear aggregate Dlower 22.0 mm" in no_links_2023
-    assert "Shear partial factor γV 1.250" in no_links_2023
+    assert "Shear partial factor γV 1.234" in no_links_2023
 
     inp.update({
         "shear_on": False,

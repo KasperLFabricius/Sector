@@ -40,7 +40,7 @@ applicable project basis and selected value.
 | Streamlit | The control is visible and enabled only for active 2023 shear without links, defaults to 1.40, carries exact help references and invalidates stale results when changed. | AppTest/widget/state tests. |
 | Project persistence | The selected value round-trips. Schemas 25 and 26 migrate with 1.40; malformed and future schemas remain fail-closed. | Schema migration, round-trip and invalid-input tests. |
 | Brief report | When the 2023 no-links shear result is reported, the complete effective input table includes the actual `gamma_V`; link-reinforced shear does not present it as an effective input. | Brief profile input-inventory and rendered-text tests. |
-| Standard/Audit reports | Both profiles reproduce the same actual value used by the solver, with the exact definition and calculation references. | Cross-surface semantic and report tests. |
+| Standard/Audit reports | Both profiles reproduce the selected value with the same three-decimal publication precision used by the formula substitutions, with the exact definition and calculation references. | Cross-surface semantic and report tests. |
 | Manual | Current user guidance explains the selectable value, 1.40 default, activation boundary and exact references. | Source/text/render tests. |
 | Version | Sector remains 0.95. | Version guard. |
 
@@ -59,6 +59,8 @@ applicable project basis and selected value.
    an effective calculation input without adding a worked result chain.
 8. The UI, manual and reports distinguish the Table 4.3 definition/default
    reference from the 8.2.2 calculation reference.
+9. A valid non-widget-grid value such as `1.234` appears as `1.234` in Brief,
+   Standard and Audit, including each Standard/Audit formula substitution.
 
 ## Closing evidence
 

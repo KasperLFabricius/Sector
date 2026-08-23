@@ -840,6 +840,15 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
+_GAMMA_V_REPORT_DECIMALS = 3
+
+
+def _fmt_gamma_v(value):
+    """Use one precision for the selected factor on every report surface."""
+
+    return _fmt(value, _GAMMA_V_REPORT_DECIMALS)
+
+
 def _fmt_sig(v, sig=6):
     """Format small engineering values without rounding nonzero evidence to zero."""
     if v is None:
@@ -2974,7 +2983,7 @@ class ReportBuilder:
                     if not shear_links_active:
                         resistance_rows.append([
                             "Shear partial factor gamma<sub>V</sub>",
-                            _fmt(inp.get("shear_gamma_v"), 3),
+                            _fmt_gamma_v(inp.get("shear_gamma_v")),
                         ])
             if inp.get("torsion_on"):
                 resistance_rows.extend([
@@ -6228,7 +6237,7 @@ class ReportBuilder:
                  f"{_fmt(res['fyd'], 1)} MPa"],
                 ["Shear partial factor (4.3.3; Table 4.3 NDP)",
                  "gamma<sub>V</sub>",
-                 f"{_fmt(res['gamma_v'], 2)}"]]
+                 _fmt_gamma_v(res["gamma_v"])]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._h2("Resistance")
         if res.get("a_cs", 0.0) > 0.0:
@@ -6252,7 +6261,7 @@ class ReportBuilder:
             "f<sub>ck</sub> d<sub>dg</sub>/(k<sub>vp</sub>d))<sup>1/3</sup>",
             equation_key="shear.2023.tau-basic",
             ref="DS/EN 1992-1-1:2023 &#167;8.2.2, Formula (8.27)",
-            subst=f"(0.66/{_fmt(res['gamma_v'], 2)})(100 &#183; "
+            subst=f"(0.66/{_fmt_gamma_v(res['gamma_v'])})(100 &#183; "
                   f"{_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)} &#183; "
                   f"{_fmt(res['ddg'], 1)}/{_fmt(res.get('d_kvp'), 1)})"
                   "<sup>1/3</sup>",
@@ -6262,7 +6271,7 @@ class ReportBuilder:
             "&#8730;(f<sub>ck</sub>/f<sub>yd</sub> &#183; d<sub>dg</sub>/d)",
             equation_key="shear.2023.tau-minimum",
             ref="DS/EN 1992-1-1:2023 &#167;8.2.2, Formula (8.20)",
-            subst=f"(11/{_fmt(res['gamma_v'], 2)}) &#8730;({_fmt(fck, 0)}/"
+            subst=f"(11/{_fmt_gamma_v(res['gamma_v'])}) &#8730;({_fmt(fck, 0)}/"
                   f"{_fmt(res['fyd'], 1)} &#183; {_fmt(res['ddg'], 1)}/"
                   f"{_fmt(sh['d'], 1)})",
             result=f"tau<sub>min</sub> = {_fmt(res['tau_min'], 3)} MPa")

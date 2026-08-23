@@ -8,6 +8,7 @@ import inspect
 import io
 import math
 import pathlib
+import re
 import sys
 import textwrap
 from dataclasses import asdict
@@ -4872,10 +4873,10 @@ def test_report_shear_2023_reproduces_selected_gamma_v_and_references(profile):
     inp.update({
         "shear_on": True,
         "shear_method": codes.EC2_2023.label,
-        "shear_gamma_v": 1.25,
+        "shear_gamma_v": 1.234,
     })
     out = _out()
-    out["shear"] = _shear_out_2023(gamma_v=1.25)
+    out["shear"] = _shear_out_2023(gamma_v=1.234)
 
     txt = _pdf_text(
         sector_report.build_report(
@@ -4884,7 +4885,8 @@ def test_report_shear_2023_reproduces_selected_gamma_v_and_references(profile):
     )
 
     assert "Shear partial factor" in txt
-    assert "1.25" in txt
+    assert txt.count("1.234") >= 3
+    assert re.search(r"1\.23(?:\D|$)", txt) is None
     assert "4.3.3" in txt
     assert "Table 4.3 NDP" in " ".join(txt.split())
     assert "8.2.2" in txt
