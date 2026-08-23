@@ -2158,7 +2158,7 @@ def detailing_geometry_figure(
 def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                           centroid, asl_bar_ids, asl_cg_m, asl_mm2,
                           d_mm, z_mm, bw_mm, bw_source,
-                          signed_v_ed=None,
+                          signed_v_ed=None, d_note=None, z_note=None,
                           title="Shear geometry"):
     """Annotated section used to audit the geometry behind a shear check.
 
@@ -2194,6 +2194,12 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
     show_z = bool(
         z_value is not None and math.isfinite(z_value) and z_value > 0.0
     )
+    d_label = f"d = {d_mm:.0f} mm"
+    if d_note:
+        d_label += f"<br><span style='font-size:10px'>{d_note}</span>"
+    z_label = f"z = {z_value:.0f} mm" if show_z else None
+    if z_label and z_note:
+        z_label += f"<br><span style='font-size:10px'>{z_note}</span>"
 
     xs = [float(p[0]) * 1000.0 for p in outer]
     ys = [float(p[1]) * 1000.0 for p in outer]
@@ -2363,7 +2369,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                                arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
             fig.add_annotation(name="shear-d-label",
                                x=dim_x, y=(cg + comp) / 2.0,
-                               text=f"d = {d_mm:.0f} mm", showarrow=False,
+                               text=d_label, showarrow=False,
                                xanchor="right", xshift=-6,
                                bgcolor="rgba(255,255,255,0.94)",
                                bordercolor=SCHEMATIC_INK,
@@ -2374,7 +2380,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                               line=dict(color=ENVELOPE, width=1.2))
                 fig.add_annotation(name="shear-z-label",
                                    x=z_x, y=(cg + z_end) / 2.0,
-                                   text=f"z = {z_value:.0f} mm", showarrow=False,
+                                   text=z_label, showarrow=False,
                                    xanchor="left", xshift=6,
                                    bgcolor="rgba(255,255,255,0.94)",
                                    bordercolor=ENVELOPE,
@@ -2457,7 +2463,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                                arrowhead=2, arrowwidth=1, arrowcolor=SCHEMATIC_INK)
             fig.add_annotation(name="shear-d-label",
                                x=(cg + comp) / 2.0, y=dim_y,
-                               text=f"d = {d_mm:.0f} mm", showarrow=False,
+                               text=d_label, showarrow=False,
                                yanchor="top", yshift=-6,
                                bgcolor="rgba(255,255,255,0.94)",
                                bordercolor=SCHEMATIC_INK,
@@ -2468,7 +2474,7 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                               line=dict(color=ENVELOPE, width=1.2))
                 fig.add_annotation(name="shear-z-label",
                                    x=(cg + z_end) / 2.0, y=z_y,
-                                   text=f"z = {z_value:.0f} mm", showarrow=False,
+                                   text=z_label, showarrow=False,
                                    yanchor="bottom", yshift=6,
                                    bgcolor="rgba(255,255,255,0.94)",
                                    bordercolor=ENVELOPE,

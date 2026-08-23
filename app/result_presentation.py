@@ -8,6 +8,7 @@ engineering solvers.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import html
 import math
 from numbers import Real
 
@@ -594,6 +595,87 @@ def action_set_text(inp, family, *, include_source=True):
     if include_source and record["source"]:
         text += f" | Source: {record['source']}"
     return text
+
+
+def shear_geometry_basis(inp, shear_result):
+    """Describe the retained ``d``/``z`` values and their calculation roles."""
+
+    item = shear_result or {}
+    result = item.get("res") or {}
+    links = item.get("links") or {}
+    link_result = links.get("res") or {}
+    d_mm = _publication_metric(item.get("d"))
+    d_text = "-" if d_mm is None else f"{d_mm:.3f} mm"
+    d_note = "effective depth used in V<sub>Rd,c</sub>"
+
+    if links:
+        z_mm = _publication_metric(link_result.get("z"))
+        if not link_result.get("valid") or z_mm is None or z_mm <= 0.0:
+            reason = (
+                links.get("assessment_reason")
+                or link_result.get("reason")
+                or "the calculated face-aligned arm is unavailable"
+            )
+            return {
+                "z_mm": None,
+                "d_note": d_note,
+                "z_note": None,
+                "statement": (
+                    f"Effective depth d = {d_text} is used in V_Rd,c. "
+                    f"The links resistance is not assessed: {reason}."
+                ),
+            }
+        component = str(links.get("z_component") or (
+            "z_y" if item.get("axis") == "x" else "z_x"
+        ))
+        case_id = str(links.get("z_source_case") or "").strip()
+        if not case_id:
+            case_id = action_set(inp, "plastic")["id"] or "Plastic action set"
+        case_id_html = html.escape(case_id, quote=True)
+        face = viz.tension_face_label(
+            item.get("tension_low", True), item.get("axis")
+        )
+        angle = _publication_metric(links.get("z_source_angle_deg"))
+        state = f"{face} face-aligned state"
+        if angle is not None:
+            state = f"{face} {angle:.0f}{_DEGREE} state"
+        return {
+            "z_mm": z_mm,
+            "d_note": d_note,
+            "z_note": (
+                f"|{component}| from {case_id_html}, {state}<br>"
+                "used in V<sub>Rd,s</sub> and V<sub>Rd,max</sub>"
+            ),
+            "statement": (
+                f"Calculated arm z = {z_mm:.3f} mm = |{component}| from "
+                f"{case_id}, {state}; used in V_Rd,s and V_Rd,max. "
+                f"Effective depth d = {d_text} is used in V_Rd,c."
+            ),
+        }
+
+    z_mm = _publication_metric(result.get("z"))
+    if item.get("model_2023") and z_mm is not None and z_mm > 0.0:
+        return {
+            "z_mm": z_mm,
+            "d_note": "defines z = 0.9d",
+            "z_note": (
+                "0.9d per DS/EN 1992-1-1:2023 8.2.1(3)<br>"
+                "used in V<sub>Rd,c</sub>"
+            ),
+            "statement": (
+                f"Standard-defined arm z = {z_mm:.3f} mm = 0.9d per "
+                "DS/EN 1992-1-1:2023 8.2.1(3); used in V_Rd,c."
+            ),
+        }
+    return {
+        "z_mm": None,
+        "d_note": d_note,
+        "z_note": None,
+        "statement": (
+            f"Effective depth d = {d_text} is used in V_Rd,c; the selected "
+            "2005 no-links resistance has no z operand."
+        ),
+    }
 
 
 def required_action_set_errors(inp):

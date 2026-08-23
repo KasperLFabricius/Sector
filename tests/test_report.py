@@ -1983,12 +1983,30 @@ def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
 
     assert "Selected sweep point 2 of 2" in text
     assert "Compression-zone depth c 222.000 mm" in text
-    assert "Lever components Lx, Ly" in text
-    assert "lever-arm components, not effective depth d" in text
+    assert "Lever components zx, zy" in text
+    assert "lever-arm components, not effective depth d" not in text
     assert "Solved compression depth 222.000000 mm" in text
     assert "Compression-zone depth c 111.000 mm" not in text
     assert "Solved compression depth 111.000000 mm" not in text
     assert out == before
+
+
+def test_audit_report_reconciles_plastic_arm_source_and_face_specific_depths():
+    inp = _inp()
+    out = _out()
+    out["plastic"]["effective_depths"] = capacity.plastic_effective_depths(inp)
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile="Audit",
+    )).split())
+
+    assert "Source: PL-TEST" in text
+    assert "Internal lever arm z" in text
+    assert "Lever components zx, zy" in text
+    assert "Face-specific effective depth" in text
+    for face in ("bottom (-y)", "top (+y)", "left (-x)", "right (+x)"):
+        assert face in text
+    assert "Tension bars" in text
+    assert "Asl centroid" in text
 
 
 @pytest.mark.parametrize(
@@ -4678,6 +4696,7 @@ def test_report_includes_shear_section():
     assert "6.2.2" in txt                     # the clause reference
     assert "103.4" in txt                     # the VRd,c value
     assert "Utilisation" in txt
+    assert "selected 2005 no-links resistance has no z operand" in txt
 
 
 def test_report_audits_independent_governing_faces_and_angles():
@@ -4975,6 +4994,8 @@ def test_report_shear_2023_section():
     assert "8.30" in txt and "8.31" in txt          # action/axial modification
     assert "8.2.2" in txt                            # the 2023 section reference
     assert f"{sh['res']['vrd_c']:.3f}" in txt        # VRd,c
+    assert "Standard-defined arm z = 495.000 mm = 0.9d" in txt
+    assert "8.2.1(3)" in txt
     assert "d" in txt and "dg" in txt                # ddg appears
     assert "k" in txt and "vp" in txt                # k_vp appears
     assert chr(0x221A) in txt                        # radical, not "sqrt"
@@ -5862,6 +5883,10 @@ def _links_out():
             "delta_ftd": 375.0, "cot_limit_lo": 1.0, "cot_limit_hi": 2.5,
             "longitudinal_shear_force": 375.0,
             "z_source": "plastic internal lever arm",
+            "z_component": "z_y",
+            "z_source_angle_deg": 90.0,
+            "z_source_case": "PL-TEST",
+            "z_source_axial_kn": 0.0,
             "out_of_limits": False, "required": True}
 
 
@@ -5876,6 +5901,10 @@ def test_report_includes_shear_links_section():
     assert "540" in txt                            # VRd,s / VRd
     assert "stirrups" in txt                       # governing mechanism
     assert chr(0x3B8) in txt                       # theta glyph rendered
+    normalized = " ".join(txt.split())
+    assert "Calculated arm z = 495.000 mm = |z_y| from PL-TEST" in normalized
+    assert "bottom (-y) 90" in normalized
+    assert "used in V_Rd,s and V_Rd,max" in normalized
 
 
 def test_report_with_unavailable_calculated_link_arm_fails_closed():

@@ -1464,13 +1464,26 @@ def test_plastic_selected_state_lists_retained_compression_zone_depth():
     )
     assert "Compression-zone depth" in summary
     assert f"{expected:.3f} mm" in summary
-    assert "Internal lever arm $L$" in summary
-    assert "Lever-arm components $L_x$ / $L_y$" in summary
+    assert "Source state" in summary and "PL-01" in summary
+    assert f"NA angle = {point['V']:.0f}" in summary
+    assert "Internal lever arm $z$" in summary
+    assert "Lever-arm components $z_x$ / $z_y$" in summary
     assert "$D_x$" not in summary and "$D_y$" not in summary
-    assert any(
-        "not effective depths d" in item.value
-        for item in at.caption
+    assert not any(
+        "not effective depths d" in item.value for item in at.caption
     )
+    depth = next(
+        frame.value
+        for frame in at.dataframe
+        if "Tension-bar IDs" in frame.value.columns
+        and "Calculated arm component" in frame.value.columns
+    )
+    assert len(depth) == 4
+    assert set(depth["Bending axis"]) == {"x", "y"}
+    assert set(depth["Tension face"]) == {
+        "bottom (-y)", "top (+y)", "left (-x)", "right (+x)"
+    }
+    assert set(depth["Calculated arm component"]) == {"z_x", "z_y"}
 
     interaction = next(
         json.loads(chart.proto.spec)
@@ -1510,8 +1523,8 @@ def test_plastic_table_splits_steel_strain_when_active_in_compression():
     active = _plastic_table(pts, False, True)
     assert any(",t (%)" in c for c in active) and any(",c (%)" in c for c in active)
     assert f"NA angle ({chr(0x00B0)})" in active
-    assert "Internal lever L (mm)" in active
-    assert "Lx (mm)" in active and "Ly (mm)" in active
+    assert "Internal lever z (mm)" in active
+    assert "z_x (mm)" in active and "z_y (mm)" in active
     assert "dx (mm)" not in active and "dy (mm)" not in active
     assert not any("deg" in c for c in active)
     tension = _plastic_table(pts, False, False)
@@ -6078,6 +6091,12 @@ def test_results_overview_uses_one_static_content_height_table(monkeypatch):
             return None
 
         def error(self, *_args, **_kwargs):
+            return None
+
+        def success(self, *_args, **_kwargs):
+            return None
+
+        def caption(self, *_args, **_kwargs):
             return None
 
         def columns(self, count):

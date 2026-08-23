@@ -2439,6 +2439,41 @@ def test_build_shear_context_returns_payload_without_ui():
     assert payload["centroid"] == pytest.approx((0.15, 0.30))
 
 
+def test_plastic_effective_depths_publish_all_axes_faces_and_bar_populations():
+    inp = _member_input(
+        bars=[
+            (0.15, 0.04, 100.0),
+            (0.15, 0.53, 200.0),
+            (0.03, 0.30, 300.0),
+            (0.26, 0.30, 400.0),
+        ]
+    )
+
+    rows = capacity.plastic_effective_depths(inp)
+
+    assert [
+        (row["axis"], row["tension_low"], row["arm_component"])
+        for row in rows
+    ] == [
+        ("x", True, "z_y"),
+        ("x", False, "z_y"),
+        ("y", True, "z_x"),
+        ("y", False, "z_x"),
+    ]
+    assert [row["d_mm"] for row in rows] == pytest.approx(
+        [560.0, 530.0, 270.0, 260.0]
+    )
+    assert [row["asl_bar_ids"] for row in rows] == [
+        (1,), (2,), (3,), (4,),
+    ]
+    assert [row["asl_mm2"] for row in rows] == pytest.approx(
+        [100.0, 200.0, 300.0, 400.0]
+    )
+    assert [row["asl_cg_m"] for row in rows] == pytest.approx(
+        [0.04, 0.53, 0.03, 0.26]
+    )
+
+
 def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
     monkeypatch,
 ):
@@ -2451,6 +2486,8 @@ def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
         shear_method=codes.EC2_2023.label,
         shear_links=True,
         transverse_ductility_class="B",
+        P_pl=-400.0,
+        plastic_case={"id": "PL-01"},
     )
     _payload, links = capacity.build_shear_context(
         inp,
@@ -2459,6 +2496,10 @@ def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
     )
 
     assert links is not None and links["model_2023"]
+    assert links["z_component"] == "z_y"
+    assert links["z_source_angle_deg"] == pytest.approx(90.0)
+    assert links["z_source_case"] == "PL-01"
+    assert links["z_source_axial_kn"] == pytest.approx(-400.0)
     assert links["angle_limits"]["axial_tension_applied"]
     assert links["angle_limits"]["maximum"] == pytest.approx(
         max(2.5 - 0.1 * 400.0 / inp["shear_V"], 1.0)

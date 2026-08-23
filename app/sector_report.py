@@ -6018,8 +6018,8 @@ class ReportBuilder:
         eps_s_head = (["eps<sub>s,t</sub>", "eps<sub>s,c</sub>"]
                       if comp else ["eps<sub>s</sub>"])
         detail_head = (["NA angle", "eps<sub>c</sub>"] + eps_s_head
-                       + ["kappa", "F<sub>c</sub>", "lever L",
-                          "L<sub>x</sub>", "L<sub>y</sub>"])
+                       + ["kappa", "F<sub>c</sub>", "lever z",
+                          "z<sub>x</sub>", "z<sub>y</sub>"])
         if cable:
             detail_head.append("eps<sub>p</sub>")
         detail_rows = [detail_head]
@@ -6056,11 +6056,9 @@ class ReportBuilder:
             font=7.2,
             keep=False,
         )
-        self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever L, "
-                    "L<sub>x</sub> and L<sub>y</sub> in mm; strain in %; "
-                    "kappa in 1/m; F<sub>c</sub> in kN. L<sub>x</sub> and "
-                    "L<sub>y</sub> are lever-arm components, not effective "
-                    "depth d.")
+        self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever z, "
+                    "z<sub>x</sub> and z<sub>y</sub> in mm; strain in %; "
+                    "kappa in 1/m; F<sub>c</sub> in kN.")
 
     def _plastic_worked(self, pl):
         pts = pl["points"]
@@ -6093,7 +6091,14 @@ class ReportBuilder:
         start = len(self.flow)
         self._h2(heading)
         self._p(
-            f"Selected sweep point {worked_index + 1} of {len(pts)}: neutral-axis "
+            "Source: "
+            + _html_escape(
+                presentation.action_set_text(
+                    self.inp, "plastic", include_source=False
+                )
+            )
+            + f"; N<sub>Ed</sub> = {_fmt(self.inp.get('P_pl', 0.0), 3)} kN. "
+            + f"Selected sweep point {worked_index + 1} of {len(pts)}: neutral-axis "
             f"angle = {_fmt(gov['V'], 0)}&#176;. Internal axial forces use the "
             "plastic solver's compression-positive convention; the entered "
             "N<sub>Ed</sub> is tension-positive and is negated at the solver boundary."
@@ -6121,18 +6126,67 @@ class ReportBuilder:
                     "-" if compression_depth_mm is None
                     else f"{_fmt(compression_depth_mm, 3)} mm"
                 )],
-                ["Internal lever arm", "L", f"{_fmt(gov['lever']*_MM, 3)} mm"],
-                ["Lever components", "L<sub>x</sub>, L<sub>y</sub>",
+                ["Internal lever arm", "z", f"{_fmt(gov['lever']*_MM, 3)} mm"],
+                ["Lever components", "z<sub>x</sub>, z<sub>y</sub>",
                  f"{_fmt(gov['dx']*_MM, 3)}, {_fmt(gov['dy']*_MM, 3)} mm"],
                 ["Capacity", "M<sub>x</sub>, M<sub>y</sub>",
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
-        if self.profile.key != "Audit":
-            self._small(
-                "L<sub>x</sub> and L<sub>y</sub> are lever-arm components, "
-                "not effective depth d."
-            )
         self._keep_from(start)
+        if self.profile.key == "Audit":
+            self._h2("Face-specific effective depth")
+            effective_depths = pl.get("effective_depths") or ()
+            if not effective_depths:
+                self._small(
+                    "Face-specific effective-depth evidence is not retained in "
+                    "this completed result. Recalculate to publish it."
+                )
+                effective_depths = ()
+            depth_rows = [[
+                "Bending axis", "Tension face", "d", "Tension bars",
+                "A<sub>sl</sub>", "A<sub>sl</sub> centroid", "Arm component",
+            ]]
+            for item in effective_depths:
+                ids = ", ".join(str(value) for value in item["asl_bar_ids"])
+                cg = item["asl_cg_m"]
+                component = (
+                    "z<sub>y</sub>"
+                    if item["arm_component"] == "z_y"
+                    else "z<sub>x</sub>"
+                )
+                depth_rows.append([
+                    item["axis"],
+                    viz.tension_face_label(
+                        item["tension_low"], item["axis"]
+                    ),
+                    (
+                        f"{_fmt(item['d_mm'], 3)} mm"
+                        if item["d_mm"] > 0.0
+                        else "-"
+                    ),
+                    ids or "none",
+                    f"{_fmt(item['asl_mm2'], 3)} mm<super>2</super>",
+                    (
+                        f"{item['coordinate']} = {_fmt(cg * _MM, 3)} mm"
+                        if cg is not None
+                        else "-"
+                    ),
+                    component,
+                ])
+            if effective_depths:
+                self._table(
+                    depth_rows,
+                    [16 * mm, 30 * mm, 22 * mm, 24 * mm, 22 * mm,
+                     34 * mm, 22 * mm],
+                    font=7.2,
+                    keep=False,
+                )
+                self._small(
+                    "Each d is measured from the opposite extreme concrete fibre "
+                    "to the centroid of the listed mild bars. All four face-aligned "
+                    "values are published because the selected neutral-axis state "
+                    "need not align with a section face."
+                )
         plane_values = (
             gov.get("strain_offset"), gov.get("strain_gradient_x"),
             gov.get("strain_gradient_y"),
@@ -6463,7 +6517,8 @@ class ReportBuilder:
         rows = [["Quantity", "Symbol", "Value"],
                 ["Effective depth", "d", f"{_fmt(sh['d'], 1)} mm"],
                 ["Web width", "b<sub>w</sub>", f"{_fmt(sh['bw'], 1)} mm ({bw_src})"],
-                ["Lever arm", "z", f"{_fmt(res['z'], 1)} mm (0.9 d)"],
+                ["Standard-defined concrete-shear arm", "z",
+                 f"{_fmt(res['z'], 1)} mm (0.9 d; 8.2.1(3))"],
                 ["Tension reinforcement", "A<sub>sl</sub>",
                  f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
                 ["Reinforcement ratio", "rho<sub>l</sub>", f"{_fmt(res['rho_l'], 4)}"],
@@ -6841,13 +6896,8 @@ class ReportBuilder:
             )
             if combined_blocked:
                 self._small(combined_blocker)
-        links_payload = sh.get("links") or {}
-        link_res = links_payload.get("res") or {}
-        z_geometry = (
-            link_res.get("z")
-            if links_payload
-            else res.get("z", 0.9 * sh["d"])
-        )
+        geometry_basis = presentation.shear_geometry_basis(self.inp, sh)
+        z_geometry = geometry_basis["z_mm"]
         bw_src = "user input" if sh["bw_user"] else "auto minimum solid width"
         if self.figures:
             self._h2("Derived shear geometry")
@@ -6862,6 +6912,8 @@ class ReportBuilder:
                     d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
                     bw_source=bw_src,
                     signed_v_ed=sh.get("signed_v_ed", sh.get("v_ed")),
+                    d_note=geometry_basis["d_note"],
+                    z_note=geometry_basis["z_note"],
                     title=f"{action} geometry - {face} tension",
                 ),
                 145,
@@ -6871,6 +6923,7 @@ class ReportBuilder:
                 "Star markers are the bars included in A<sub>sl</sub>; the dotted "
                 "line is the gross-section centroid used as the selection boundary."
             )
+        self._small(_html_escape(geometry_basis["statement"]))
         if sh.get("model_2023"):
             self._shear_2023(sh, res)
             return
@@ -7000,8 +7053,9 @@ class ReportBuilder:
                 ["Link area / spacing", "A<sub>sw</sub>/s",
                  f"{_fmt(links['asw'], 1)} / {_fmt(links['s'], 0)} mm<sup>2</sup>/mm"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(lk['fywd'], 1)} MPa"],
-                ["Lever arm", "z",
-                 f"{_fmt(lk['z'], 1)} mm ({links.get('z_source', '0.9 d')})"],
+                ["Calculated links arm", "z",
+                 f"{_fmt(lk['z'], 1)} mm "
+                 f"({links.get('z_source') or 'calculated source not retained'})"],
                 ["Strut angle", "theta",
                  f"{_fmt(lk['theta_deg'], 1)}&#176; "
                  f"(cot theta = {_fmt(lk['cot'], 3)})"],
@@ -7866,15 +7920,15 @@ class ReportBuilder:
             subst=(f"{_fmt(governing['t_ed'], 3)} / "
                    f"{_fmt(governing['trd'], 3)}"),
             result=f"{util_txt}  ({verdict})")
-        self._small("The applied torque is split by stiffness, not capacity, so a "
-                    "sub-tube can be overstressed even while T<sub>Ed</sub> &#8804; sum "
-                    "T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}"
-                    + " kN&#183;m; the section "
-                    "passes only when every sub-tube passes. Total longitudinal steel "
-                    "&#8721;A<sub>sl</sub> = " + f"{_fmt(t['asl_req'], 0)}" +
-                    " mm<sup>2</sup> (sum over the sub-tubes), in addition to the "
-                    "bending steel; the combined V+T crushing pairs the shear with the "
-                    "web sub-tube.")
+        self._small("The section result is governed by the maximum "
+                    "T<sub>Ed,i</sub>/T<sub>Rd,i</sub>, so every sub-tube must pass. "
+                    "Applied torque is distributed by uncracked torsional stiffness; "
+                    "&#8721;T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}"
+                    + " kN&#183;m is the capacity sum, not the verdict denominator. "
+                    "Required longitudinal steel &#8721;A<sub>sl</sub> = "
+                    + f"{_fmt(t['asl_req'], 0)}" +
+                    " mm<sup>2</sup> is added to the bending steel. The combined V+T "
+                    "crushing check pairs shear with the web sub-tube.")
         self._fig(viz.subtube_figure(subs), 150, 90)
 
     def _selected_torsion_subcheck(self, key):

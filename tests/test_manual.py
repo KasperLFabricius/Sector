@@ -201,11 +201,30 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     assert "the section, the material-law diagrams" not in text
     assert "Open *Analysis*, review *Results Overview*" in text
     for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{s,min}",
-                 "D_{upper}", "A_{sw}/s", "L_x", "L_y",
+                 "D_{upper}", "A_{sw}/s", "z_x", "z_y",
                  "TOTAL", "LONG", "DIF", "RST1", "F_c"):
         assert term in text
     assert "$L$, $d_x$, $d_y$" not in text
     assert "No shear, torsion" not in text
+
+
+def test_manual_defines_the_calculated_arm_and_uses_it_in_the_links_example():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+
+    for expected in (
+        "exact face-aligned Plastic state",
+        "sign-split contributions from concrete, mild steel and tendons",
+        "$|z_y|$",
+        "$|z_x|$",
+        "calculated $z = 509.151$ mm",
+        "$V_{Rd,s} = 555.4$ kN",
+        "V_{Rd,max} = 667.5$ kN",
+        "links resistance is not assessed",
+    ):
+        assert expected in text
+    assert "slightly smaller" not in text
+    assert "falls back to $0.9d$" not in text
+    assert "taking $z = 0.9d = 495$ mm for illustration" not in text
 
 
 def test_manual_matches_the_merged_geometry_topology_contract():

@@ -671,6 +671,37 @@ def gross_area_centroid(outer, holes):
     return net_area, mx / net_area, my / net_area
 
 
+def plastic_effective_depths(inp):
+    """Return the four existing face-specific mild-steel effective depths.
+
+    Plastic states are not generally aligned with a section face.  The result
+    presentation therefore publishes the same x/y, low/high-face ``d`` values
+    already used by the shear routes instead of inventing a state-normal depth.
+    """
+
+    _, cx, cy = gross_area_centroid(inp["outer"], inp.get("holes") or [])
+    shear = _module("shear")
+    rows = []
+    for axis, centroid_coord in (("x", cy), ("y", cx)):
+        for tension_low in (True, False):
+            area, cg, bar_ids = shear.tension_reinforcement_selection(
+                inp.get("bars") or [], axis, tension_low, centroid_coord
+            )
+            rows.append({
+                "axis": axis,
+                "tension_low": tension_low,
+                "d_mm": shear.effective_depth(
+                    inp["outer"], axis, tension_low, cg
+                ),
+                "asl_mm2": area,
+                "asl_bar_ids": tuple(bar_ids),
+                "asl_cg_m": cg,
+                "coordinate": "y" if axis == "x" else "x",
+                "arm_component": "z_y" if axis == "x" else "z_x",
+            })
+    return tuple(rows)
+
+
 def design_yield(material):
     """Design yield ``f_yd = f_ytk / gamma_y`` from material parameters."""
     gamma_y = getattr(material, "gamma_y", 0.0)
@@ -1204,6 +1235,12 @@ def _build_shear_face_context(
         "asw_over_s": asw_over_s,
         "z_mm": z_mm,
         "z_src": z_source,
+        "z_component": "z_y" if axis == "x" else "z_x",
+        "z_source_angle_deg": _face_angle(axis, tension_low),
+        "z_source_case": str(
+            (inp.get("plastic_case") or {}).get("id") or ""
+        ).strip(),
+        "z_source_axial_kn": float(inp["P_pl"]),
         "code": code,
         "v_ed": v_ed,
         "vrd_c": result["vrd_c"],
