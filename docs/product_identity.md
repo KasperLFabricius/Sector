@@ -38,11 +38,13 @@ calculation: application/source version, actual inputs, selected
 method/equation, action identity and result freshness. Stale, corrupt or
 input-mismatched results remain rejected.
 
-Sector 0.95 is the current internal product identity and uses project schema
-26. Schema 25 has one bounded migration: its former single permitted crack
-width is copied to the independent long-term and short-term ordinary inputs,
-and is preserved separately as the Formula 7.100 NA operand only when that
-heightened calculation was enabled. Zero means no ordinary comparison and is
+Sector 0.96 is the current internal product identity and uses project schema
+27. Schemas 25 and 26 have bounded migrations. For schema 25, the former single
+permitted crack width is copied to the independent long-term and short-term
+ordinary inputs, and is preserved separately as the Formula 7.100 NA operand
+only when that heightened calculation was enabled. Schemas 25 and 26 receive
+the former fixed DS/EN 1992-1-1:2023 shear partial factor as the explicit
+`gamma_V = 1.40` input. Zero means no ordinary crack-width comparison and is
 never promoted to the heightened operand. Schema 24 and future schemas remain
 unsupported. Earlier compliance, cover-calculator or authority metadata is not
 carried forward. Its portable Windows ZIP is unsigned; no trusted-publisher

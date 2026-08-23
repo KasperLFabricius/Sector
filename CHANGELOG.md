@@ -2,14 +2,44 @@
 
 ## Unreleased
 
-- Added a user-controlled positive `gamma_V` input for the
-  DS/EN 1992-1-1:2023 concrete shear resistance without shear reinforcement.
-  The input defaults to 1.40 and is retained consistently in projects and
-  applicable report profiles.
+## 0.96 - 2026-08-23
+
+Sector 0.96 improves result review, report-profile purpose, manual usability,
+engineering-input references and publication accessibility while retaining
+Sector's bounded internal calculation-tool identity.
+
+- Made Results Overview one always-expanded table containing the most
+  unfavourable retained result for each stable semantic check type, without
+  creating a section-wide or project-wide verdict.
+- Defined Brief by information depth rather than page count. Brief retains the
+  complete effective geometry, materials, reinforcement/tendons, actions,
+  active settings and factors behind every reported active result, together
+  with governing results and concise warnings. It omits worked derivations,
+  candidate searches and non-governing registers; only governing plastic and
+  elastic result plots are eligible when figures are requested.
+- Made Standard the ordinary reproducible calculation report and Audit the
+  exhaustive retained-evidence report, while preserving identical inputs,
+  governing identities, values and statuses across profiles.
+- Rewrote manual Task workflows as explicit application routes and kept the
+  end-user manual current-only, without former-version or internal build and
+  distribution administration.
+- Added a positive finite user-controlled `gamma_V` for the implemented
+  DS/EN 1992-1-1:2023 concrete shear calculation without shear reinforcement.
+  The default remains 1.40; schemas 25 and 26 migrate deterministically to the
+  explicit value in schema 27.
+- Tightened edition-specific creep, detailing and material-law references,
+  replaced user-facing per-thousand wording with `‰`, and removed language that
+  could imply certification or a conclusion beyond the implemented comparison.
+- Added linked report contents and matching outlines, improved heading/table/
+  figure composition and removed redundant caption boilerplate.
+- Added an HTML skip link and main landmark, authored figure alternatives,
+  semantic mathematical markup, English PDF language metadata and clean PDF
+  text extraction without internal QA marker tokens.
 
 Project schema is version 27. Schemas 25 and 26 have bounded in-memory
-migrations; projects using the former fixed 2023 shear factor migrate to the
-explicit 1.40 input without changing the source file.
+migrations; schema 24 and future schemas remain unsupported. The Windows
+deliverable remains an unsigned portable ZIP and is not an installer or
+publisher certification.
 
 ## 0.95 - 2026-08-21
 

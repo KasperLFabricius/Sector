@@ -51,9 +51,9 @@ def calculated_example():
 def test_reference_download_is_current_schema_complete_and_identity_stable():
     text = reproducible_example.project_json()
     tables, scalars = project_io.parse_project(text)
-    assert reproducible_example.PROJECT_NAME == "Sector_v095_complete_reference.json"
+    assert reproducible_example.PROJECT_NAME == "Sector_v096_complete_reference.json"
     assert reproducible_example.CHECK_NAME == (
-        "Sector_v095_complete_reference_check.md"
+        "Sector_v096_complete_reference_check.md"
     )
     assert set(tables) == set(project_io.PROJECT_TABLE_KEYS)
     assert reproducible_example.input_sha256() == EXPECTED_INPUT_SHA256

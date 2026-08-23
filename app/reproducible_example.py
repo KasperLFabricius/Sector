@@ -16,8 +16,8 @@ from sector import codes, detailing
 from sector.design_standards import DesignBasisKey
 
 
-PROJECT_NAME = "Sector_v095_complete_reference.json"
-CHECK_NAME = "Sector_v095_complete_reference_check.md"
+PROJECT_NAME = "Sector_v096_complete_reference.json"
+CHECK_NAME = "Sector_v096_complete_reference_check.md"
 DK_PRESET = codes.EC2_2005_DKNA.label
 
 

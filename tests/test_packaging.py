@@ -72,8 +72,8 @@ def test_build_wrapper_resolves_python_and_delegates_once():
     assert '"--python"' in script
     assert '"--source-revision"' in script
     assert "first-page execution" in folded
-    assert 'Write-Host "Sector v0.95 portable Windows build"' in script
-    assert 'Write-Host "Sector v0.94 portable Windows build"' not in script
+    assert 'Write-Host "Sector v0.96 portable Windows build"' in script
+    assert 'Write-Host "Sector v0.95 portable Windows build"' not in script
     for removed in (
         "portable-distribution.json",
         "source-identity",
@@ -97,10 +97,10 @@ def test_user_documentation_describes_the_actual_small_output():
         assert "receipt" not in text.casefold()
         assert "authenticated" not in text.casefold()
         assert "certificate" not in text.casefold()
-    assert """Sector-v0.95-windows-portable/
-Sector-v0.95-windows-portable.zip
-Sector-v0.95-windows-portable.zip.sha256""" in readme
-    assert "Sector-v0.94-windows-portable" not in readme
+    assert """Sector-v0.96-windows-portable/
+Sector-v0.96-windows-portable.zip
+Sector-v0.96-windows-portable.zip.sha256""" in readme
+    assert "Sector-v0.95-windows-portable" not in readme
     assert portable.count("@SECTOR_VERSION@") == 1
 
 
