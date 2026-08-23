@@ -708,6 +708,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
         "combined_on": False,
         "combined_method": report_render_fixture.codes.EC2_2005_DKNA.label,
         "shear_dlower": 22.0,
+        "shear_gamma_v": 1.234,
         "transverse_detailing_on": True,
         "detailing_edition": report_render_fixture.detailing.EC2_2005_DKNA,
         "transverse_ductility_class": "C",
@@ -717,6 +718,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
     assert "Shear aggregate Dlower" not in text_2005
     assert "Link reinforcement ductility class" not in text_2005
     assert "2023 minimum-ratio ductility reduction" not in text_2005
+    assert "Shear partial factor gammaV" not in text_2005
 
     inp.update({
         "combined_on": True,
@@ -727,11 +729,20 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
     combined_2023 = _brief_text(inp, report_render_fixture._results(inp))
     assert f"Shear method {report_render_fixture.codes.EC2_2023.label}" in combined_2023
     assert "Shear aggregate Dlower 22.0 mm" in combined_2023
+    assert "Shear partial factor γV" not in combined_2023
     assert "Link reinforcement ductility class C" in combined_2023
     assert "2023 minimum-ratio ductility reduction" not in combined_2023
 
     inp.update({
         "combined_on": False,
+        "shear_method": report_render_fixture.codes.EC2_2023.label,
+        "shear_links": False,
+    })
+    no_links_2023 = _brief_text(inp, report_render_fixture._results(inp))
+    assert "Shear aggregate Dlower 22.0 mm" in no_links_2023
+    assert "Shear partial factor γV 1.234" in no_links_2023
+
+    inp.update({
         "shear_on": False,
         "transverse_detailing_on": True,
         "detailing_edition": report_render_fixture.detailing.EC2_2023,

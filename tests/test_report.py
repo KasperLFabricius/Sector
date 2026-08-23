@@ -8,6 +8,7 @@ import inspect
 import io
 import math
 import pathlib
+import re
 import sys
 import textwrap
 from dataclasses import asdict
@@ -94,6 +95,7 @@ def _inp():
         "P_el_s": 0.0, "Mx_el_s": 20.0, "My_el_s": 0.0,
         "nl": 15.0, "ns": 200.0 / 33.0, "el_phi": 1.475,
         "sls_fctm": 2.9, "sls_cw": True, "conc_Ec": 33.0,
+        "shear_gamma_v": 1.40,
         "torsion_gamma_ct": 1.70,
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
@@ -4829,13 +4831,14 @@ def test_report_biaxial_shear_separates_directions_without_aggregate_interaction
     assert "no aggregate shear verdict is issued" in txt
 
 
-def _shear_out_2023():
+def _shear_out_2023(gamma_v=1.40):
     from sector import codes as _codes, shear as _shear
 
     fyd = 500.0 / 1.15
     res = _shear.vrd_c_2023(
         35.0, _codes.EC2_2023, 300.0, 550.0, 1473.0, fyd, 32.0,
         n_ed_tension_kn=300.0, m_ed_knm=110.0, v_ed_kn=50.0,
+        gamma_v=gamma_v,
     )
     return {"res": res,
             "v_ed": 50.0, "util": 50.0 / res["vrd_c"], "axis": "x",
@@ -4862,6 +4865,31 @@ def test_report_shear_2023_section():
     assert not any(
         token in txt for token in ("sqrt", "Cfrac", "Big", "sincos")
     )
+
+
+@pytest.mark.parametrize("profile", ("Standard", "Audit"))
+def test_report_shear_2023_reproduces_selected_gamma_v_and_references(profile):
+    inp = _inp()
+    inp.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+        "shear_gamma_v": 1.234,
+    })
+    out = _out()
+    out["shear"] = _shear_out_2023(gamma_v=1.234)
+
+    txt = _pdf_text(
+        sector_report.build_report(
+            {}, inp, out, figures=False, profile=profile
+        )
+    )
+
+    assert "Shear partial factor" in txt
+    assert txt.count("1.234") >= 3
+    assert re.search(r"1\.23(?:\D|$)", txt) is None
+    assert "4.3.3" in txt
+    assert "Table 4.3 NDP" in " ".join(txt.split())
+    assert "8.2.2" in txt
 
 
 def test_report_shear_shows_prestress_precompression():

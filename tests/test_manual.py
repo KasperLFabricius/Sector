@@ -393,6 +393,10 @@ def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     assert "general / other cases" in text
     assert "at-least-three-month" in text
     assert "k_{vp}" in text and "a_{cs}" in text
+    assert "4.3.3 and Table 4.3 (NDP)" in text
+    assert "defaults the input to 1.40 but does not force that value" in text
+    assert "engineer selects the positive value" in text
+    assert "Clause 8.2.2 then uses the selected value" in text
     assert "parallel to the member axis" in text and "beta=1" in text
     assert "assumed fully anchored" in text
     assert "reduced $f_{yk}$ / $f_{ywk}$" in text

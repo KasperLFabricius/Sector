@@ -840,6 +840,15 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
+_GAMMA_V_REPORT_DECIMALS = 3
+
+
+def _fmt_gamma_v(value):
+    """Use one precision for the selected factor on every report surface."""
+
+    return _fmt(value, _GAMMA_V_REPORT_DECIMALS)
+
+
 def _fmt_sig(v, sig=6):
     """Format small engineering values without rounding nonzero evidence to zero."""
     if v is None:
@@ -2967,8 +2976,15 @@ class ReportBuilder:
                 if shear_2023:
                     resistance_rows.append([
                         "Shear aggregate D<sub>lower</sub>",
-                        self._brief_auto_dimension(inp.get("shear_dlower")),
+                        self._brief_auto_dimension(
+                            inp.get("shear_dlower")
+                        ),
                     ])
+                    if not shear_links_active:
+                        resistance_rows.append([
+                            "Shear partial factor gamma<sub>V</sub>",
+                            _fmt_gamma_v(inp.get("shear_gamma_v")),
+                        ])
             if inp.get("torsion_on"):
                 resistance_rows.extend([
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],
@@ -6219,15 +6235,16 @@ class ReportBuilder:
                 ["Aggregate size", "d<sub>dg</sub>", f"{_fmt(res['ddg'], 1)} mm"],
                 ["Flexural design yield", "f<sub>yd</sub>",
                  f"{_fmt(res['fyd'], 1)} MPa"],
-                ["Shear partial factor", "gamma<sub>v</sub>",
-                 f"{_fmt(res['gamma_v'], 2)}"]]
+                ["Shear partial factor (4.3.3; Table 4.3 NDP)",
+                 "gamma<sub>V</sub>",
+                 _fmt_gamma_v(res["gamma_v"])]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
         self._h2("Resistance")
         if res.get("a_cs", 0.0) > 0.0:
             self._formula(
                 "a<sub>cs</sub> = max(|M<sub>Ed</sub>/V<sub>Ed</sub>|, d)",
                 equation_key="shear.2023.effective-span",
-                ref="EN 1992-1-1:2023 Formula (8.30)",
+                ref="DS/EN 1992-1-1:2023 Formula (8.30)",
                 subst=f"max(|{_fmt(sh.get('m_ed_2023'), 3)}| / "
                       f"{_fmt(sh.get('v_ed'), 3)} &#183; 1000, {_fmt(sh['d'], 1)})",
                 result=f"a<sub>cs</sub> = {_fmt(res.get('a_cs'), 1)} mm")
@@ -6235,7 +6252,7 @@ class ReportBuilder:
                 "k<sub>vp</sub> = max(1 + N<sub>Ed</sub>/|V<sub>Ed</sub>| &#183; "
                 "d/(3a<sub>cs</sub>), 0.1)",
                 equation_key="shear.2023.axial-factor",
-                ref="EN 1992-1-1:2023 &#167;8.2.2(4), Formula (8.31)",
+                ref="DS/EN 1992-1-1:2023 &#167;8.2.2(4), Formula (8.31)",
                 subst=f"N<sub>Ed</sub> = {_fmt(res.get('n_ed_tension'), 3)} kN; "
                       f"k<sub>vp</sub> = {_fmt(res.get('k_vp'), 4)}",
                 result=f"k<sub>vp</sub>d = {_fmt(res.get('d_kvp'), 1)} mm")
@@ -6243,8 +6260,8 @@ class ReportBuilder:
             "tau<sub>Rd,c</sub> = (0.66/gamma<sub>v</sub>)(100 rho<sub>l</sub> "
             "f<sub>ck</sub> d<sub>dg</sub>/(k<sub>vp</sub>d))<sup>1/3</sup>",
             equation_key="shear.2023.tau-basic",
-            ref="EN 1992-1-1:2023 (8.27), stress",
-            subst=f"(0.66/{_fmt(res['gamma_v'], 2)})(100 &#183; "
+            ref="DS/EN 1992-1-1:2023 &#167;8.2.2, Formula (8.27)",
+            subst=f"(0.66/{_fmt_gamma_v(res['gamma_v'])})(100 &#183; "
                   f"{_fmt(res['rho_l'], 4)} &#183; {_fmt(fck, 0)} &#183; "
                   f"{_fmt(res['ddg'], 1)}/{_fmt(res.get('d_kvp'), 1)})"
                   "<sup>1/3</sup>",
@@ -6253,8 +6270,8 @@ class ReportBuilder:
             "tau<sub>Rd,c,min</sub> = (11/gamma<sub>v</sub>) "
             "&#8730;(f<sub>ck</sub>/f<sub>yd</sub> &#183; d<sub>dg</sub>/d)",
             equation_key="shear.2023.tau-minimum",
-            ref="EN 1992-1-1:2023 (8.20)",
-            subst=f"(11/{_fmt(res['gamma_v'], 2)}) &#8730;({_fmt(fck, 0)}/"
+            ref="DS/EN 1992-1-1:2023 &#167;8.2.2, Formula (8.20)",
+            subst=f"(11/{_fmt_gamma_v(res['gamma_v'])}) &#8730;({_fmt(fck, 0)}/"
                   f"{_fmt(res['fyd'], 1)} &#183; {_fmt(res['ddg'], 1)}/"
                   f"{_fmt(sh['d'], 1)})",
             result=f"tau<sub>min</sub> = {_fmt(res['tau_min'], 3)} MPa")
@@ -6274,6 +6291,11 @@ class ReportBuilder:
                       equation_key="shear.2023.utilisation",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
                       result=f"{util_txt}  ({verdict})")
+        self._small(
+            "The selected gamma<sub>V</sub> is defined in DS/EN "
+            "1992-1-1:2023, 4.3.3 and Table 4.3 (NDP), and applied in "
+            "8.2.2."
+        )
         self._small(
             "The 2023 tau<sub>Rd,c</sub> uses d<sub>dg</sub> = 16 + "
             "D<sub>lower</sub>, the flexural design yield and the Formula (8.31) "

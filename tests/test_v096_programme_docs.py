@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROGRAMME = ROOT / "docs" / "v096_pr_programme.md"
 DECISIONS = ROOT / "docs" / "v096_decision_register.md"
 ACCEPTANCE = ROOT / "docs" / "pr01_v096_programme_acceptance.md"
+PR06_ACCEPTANCE = ROOT / "docs" / "pr06_v096_gamma_v_acceptance.md"
 FIXTURE = ROOT / "tests" / "fixtures" / "v096_review_cases.json"
 PROJECT_IO = ROOT / "app" / "project_io.py"
 
@@ -37,10 +38,30 @@ def test_pr01_freezes_exact_current_main_without_bumping_product() -> None:
         "current_main_qa_run": 32584442230,
     }
     assert __version__ == "0.95"
-    assert re.search(r"^VERSION\s*=\s*26$", _text(PROJECT_IO), re.MULTILINE)
     acceptance = _text(ACCEPTANCE)
     assert "changes no runtime, solver, UI, report" in acceptance
     assert "Project schema retained by this PR: 26" in acceptance
+
+
+def test_pr06_owns_bounded_schema_27_transition_without_bumping_product() -> None:
+    project_io = _text(PROJECT_IO)
+    assert __version__ == "0.95"
+    assert re.search(r"^VERSION\s*=\s*27$", project_io, re.MULTILINE)
+    assert re.search(r"^MIGRATABLE_VERSION\s*=\s*26$", project_io, re.MULTILINE)
+    assert re.search(
+        r"^LEGACY_MIGRATABLE_VERSION\s*=\s*25$",
+        project_io,
+        re.MULTILINE,
+    )
+
+    acceptance = _text(PR06_ACCEPTANCE)
+    for phrase in (
+        "Project schema before this PR: 26",
+        "Product version retained by this PR: 0.95",
+        "Schemas 25 and 26",
+        "malformed and future schemas remain fail-closed",
+    ):
+        assert phrase in acceptance
 
 
 def test_pr_graph_is_exact_acyclic_and_owns_two_release_gates() -> None:

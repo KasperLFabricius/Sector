@@ -48,6 +48,7 @@ def _member_input(**overrides):
         "shear_tension": True,
         "shear_bw": 0.0,
         "shear_dlower": 16.0,
+        "shear_gamma_v": 1.40,
         "shear_V": 75.0,
         "shear_links": False,
         "strut_cot_min": 1.0,
@@ -2399,6 +2400,143 @@ def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd()
     result = links["build"](1.0, links["angle_limits"]["maximum"])
     assert result["valid"]
     assert result["fcd"] == pytest.approx(inp["concrete"].fcd)
+
+
+def test_2023_shear_context_uses_the_exact_selected_gamma_v():
+    default, _ = capacity.build_shear_context(
+        _member_input(
+            shear_method=codes.EC2_2023.label,
+            shear_gamma_v=1.40,
+        ),
+        0.0,
+        0.0,
+    )
+    selected, _ = capacity.build_shear_context(
+        _member_input(
+            shear_method=codes.EC2_2023.label,
+            shear_gamma_v=1.25,
+        ),
+        0.0,
+        0.0,
+    )
+
+    assert selected["res"]["gamma_v"] == pytest.approx(1.25)
+    assert selected["res"]["vrd_c"] == pytest.approx(
+        default["res"]["vrd_c"] * 1.40 / 1.25
+    )
+
+
+@pytest.mark.parametrize(
+    "gamma_v",
+    (
+        True,
+        False,
+        np.bool_(True),
+        0.0,
+        1e-309,
+        -1.0,
+        float("nan"),
+        float("inf"),
+        "1.40",
+    ),
+)
+def test_2023_shear_context_rejects_malformed_gamma_v(gamma_v):
+    with pytest.raises(
+        capacity.CapacityInputError,
+        match="shear_gamma_v must be a positive finite real number",
+    ):
+        capacity.build_shear_context(
+            _member_input(
+                shear_method=codes.EC2_2023.label,
+                shear_gamma_v=gamma_v,
+            ),
+            0.0,
+            0.0,
+        )
+
+
+def test_2023_shear_context_rejects_a_missing_gamma_v():
+    inp = _member_input(shear_method=codes.EC2_2023.label)
+    del inp["shear_gamma_v"]
+
+    with pytest.raises(
+        capacity.CapacityInputError,
+        match="shear_gamma_v must be a positive finite real number",
+    ):
+        capacity.build_shear_context(inp, 0.0, 0.0)
+
+
+def test_2023_shear_links_ignore_inactive_missing_or_malformed_gamma_v():
+    base = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_links=True,
+        section=None,
+    )
+    variants = []
+    missing = dict(base)
+    missing.pop("shear_gamma_v")
+    variants.append(missing)
+    for value in (0.0, -1.0, float("nan"), True, "1.40"):
+        variants.append(dict(base, shear_gamma_v=value))
+
+    for inp in variants:
+        payload, links = capacity.build_shear_context(inp, 0.0, 0.0)
+        assert links is not None
+        assert payload["res"]["gamma_v"] == pytest.approx(1.40)
+
+
+def test_gamma_v_is_isolated_from_2005_links_torsion_and_combined_routes():
+    low_2005, _ = capacity.build_shear_context(
+        _member_input(shear_gamma_v=0.50), 0.0, 0.0
+    )
+    high_2005, _ = capacity.build_shear_context(
+        _member_input(shear_gamma_v=9.00), 0.0, 0.0
+    )
+    assert low_2005["res"] == high_2005["res"]
+
+    low_input = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_links=True,
+        shear_gamma_v=1.20,
+        section=None,
+    )
+    high_input = dict(low_input, shear_gamma_v=1.80)
+    _low_payload, low_links = capacity.build_shear_context(
+        low_input, 0.0, 0.0
+    )
+    _high_payload, high_links = capacity.build_shear_context(
+        high_input, 0.0, 0.0
+    )
+    assert low_links is not None and high_links is not None
+    assert low_links["build"](1.0, 2.0) == high_links["build"](1.0, 2.0)
+
+    torsion_low = capacity.build_torsion_context(
+        _member_input(torsion_on=True, shear_gamma_v=0.50), 0.0
+    )
+    torsion_high = capacity.build_torsion_context(
+        _member_input(torsion_on=True, shear_gamma_v=9.00), 0.0
+    )
+    assert torsion_low == torsion_high
+
+    out_low = {
+        "plastic": {"util": 0.20},
+        "shear": {"res": {"valid": True}, "util": 0.30},
+        "torsion": {
+            "valid": True,
+            "util": 0.40,
+            "interaction": None,
+            "asl_req": 125.0,
+            "asw_over_s": 0.0,
+        },
+    }
+    out_high = copy.deepcopy(out_low)
+    capacity.finalize_combined(
+        _member_input(combined_on=True, shear_gamma_v=0.50), out_low
+    )
+    capacity.finalize_combined(
+        _member_input(combined_on=True, shear_gamma_v=9.00), out_high
+    )
+    assert out_low["combined"] == out_high["combined"]
 
 
 def test_directional_shear_contexts_map_components_moments_faces_and_settings():

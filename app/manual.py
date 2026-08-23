@@ -1030,9 +1030,14 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1:2005 + DK NA:2024", "As 2005 but the raised "
             "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"],
            ["DS/EN 1992-1-1:2023", "The strain-based $\\tau_{Rd,c}$ (8.2.2) with the "
-            "aggregate size $d_{dg}$ and $\\gamma_V = 1.40$ without links; the "
+            "aggregate size $d_{dg}$ and the user-selected $\\gamma_V$ without "
+            "links (default 1.40); the "
             "compression-field method (8.2.3) with links"]])
-    call("standard", "The **2023 method** uses "
+    call("standard", "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP), "
+          "define $\\gamma_V$ for shear resistance without shear reinforcement. "
+          "Sector defaults the input to 1.40 but does not force that value; the "
+          "engineer selects the positive value required by the applicable project "
+          "basis. Clause 8.2.2 then uses the selected value. The **2023 method** uses "
           "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
           "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
           "8.2.1(4)) and the flexural design yield $f_{yd}$. When axial force is "
@@ -2062,7 +2067,7 @@ def manual_blocks() -> list:
            ["Minimum reinforcement (2023)", "DS/EN 1992-1-1:2023 12.2(2), Formulae (12.1)-(12.2)"],
            ["Clear spacing (2005 / 2023)", "DS/EN 1992-1-1 8.2(2); DS/EN 1992-1-1:2023 11.2(2)"],
            ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
-           ["Shear, strain-based (2023)", "DS/EN 1992-1-1:2023 8.2.2 (tau_Rd,c, ddg)"],
+           ["Shear, strain-based (2023)", "DS/EN 1992-1-1:2023 4.3.3 and Table 4.3 (NDP) ($\\gamma_V$); 8.2.2 ($\\tau_{Rd,c}$, $d_{dg}$)"],
            ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
            ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"],
            ["Combined M-V-T", "DS/EN 1992-1-1 6.3.2(4) + DK NA 6.3.2(6)"]])

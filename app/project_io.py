@@ -2,11 +2,12 @@
 
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
-Released Sector 0.94 projects used schema 25. Sector 0.95 uses schema 26 to
+Released Sector 0.94 projects used schema 25. Sector 0.95 used schema 26 to
 separate long-term, short-term and heightened permitted crack-width inputs.
-Schema 25 has one bounded migration; schema 24 and future schemas remain
-unsupported. Retired component-mapped bridge inputs are deliberately absent
-from the schema.
+Schema 27 persists the user-selected DS/EN 1992-1-1:2023 shear partial factor.
+Schemas 25 and 26 have bounded in-memory migrations; schema 24 and future
+schemas remain unsupported. Retired component-mapped bridge inputs are
+deliberately absent from the schema.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from app.table_field_definitions import (
 from sector import __version__ as sector_version
 from sector import (
     capacity,
+    codes,
     design_standards,
     geometry,
     heightened_crack_control,
@@ -45,8 +47,13 @@ from sector.sls_identity import (
 )
 
 FORMAT = "sector-project"
-VERSION = 26
-MIGRATABLE_VERSION = 25
+VERSION = 27
+MIGRATABLE_VERSION = 26
+LEGACY_MIGRATABLE_VERSION = 25
+MIGRATABLE_VERSIONS = (
+    LEGACY_MIGRATABLE_VERSION,
+    MIGRATABLE_VERSION,
+)
 
 LEGACY_SHARED_CRACK_WIDTH_KEY = "sls_permitted_crack_width_mm"
 
@@ -160,7 +167,7 @@ SCALAR_KEYS = [
     # Independent Vx and Vy shear calculations.
     "shear_on", "shear_method", "shear_Vx", "shear_Vy",
     "shear_face_x", "shear_face_y", "shear_vx_bw", "shear_vy_bw",
-    "shear_dlower", "shear_links", "shear_vx_link_legs",
+    "shear_dlower", "shear_gamma_v", "shear_links", "shear_vx_link_legs",
     "shear_vy_link_legs", "shear_link_dia", "shear_link_s",
     "shear_fywk", "shear_vx_transverse_leg_spacing",
     "shear_vy_transverse_leg_spacing", "strut_cot_min",
@@ -211,6 +218,7 @@ _POSITIVE_FACTOR_KEYS = {
     "fatigue_gamma_s",
     "fatigue_gamma_ff",
     "torsion_gamma_ct",
+    "shear_gamma_v",
 }
 
 
@@ -434,7 +442,12 @@ def _assigned_catalog_ids(
     )
 
 
-def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
+def _canonical_scalars(
+    scalars: Mapping,
+    tables: Mapping,
+    *,
+    migrate_gamma_v: bool = False,
+) -> dict:
     payload = {
         key: _json_value(scalars[key])
         for key in SCALAR_KEYS
@@ -445,6 +458,23 @@ def _canonical_scalars(scalars: Mapping, tables: Mapping) -> dict:
             payload[key] = False
         elif type(payload[key]) is not bool:
             raise ValueError(f"{key} must be a Boolean")
+    effective_shear_method = (
+        payload.get("combined_method")
+        if payload.get("combined_on") is True
+        else payload.get("shear_method")
+    )
+    gamma_v_active = (
+        payload.get("shear_on") is True
+        and effective_shear_method == codes.EC2_2023.label
+        and payload.get("shear_links") is not True
+    )
+    if "shear_gamma_v" not in payload:
+        if gamma_v_active and not migrate_gamma_v:
+            raise ValueError(
+                "shear_gamma_v is required when the DS/EN "
+                "1992-1-1:2023 shear calculation is enabled"
+            )
+        payload["shear_gamma_v"] = float(codes.EC2_2023.shear_gamma_v)
     for key in _POSITIVE_FACTOR_KEYS.intersection(payload):
         payload[key] = _positive_real(payload[key], key)
     for key in (
@@ -882,11 +912,11 @@ def _decode(text: str) -> dict:
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError("not a Sector project file")
     version = data.get("version")
-    if version not in {MIGRATABLE_VERSION, VERSION}:
+    if version not in {*MIGRATABLE_VERSIONS, VERSION}:
         raise ValueError(
             f"unsupported Sector project schema {version!r}; "
-            f"only current schema {VERSION} and migration from schema "
-            f"{MIGRATABLE_VERSION} are supported"
+            f"only current schema {VERSION} and migrations from schemas "
+            f"{LEGACY_MIGRATABLE_VERSION} and {MIGRATABLE_VERSION} are supported"
         )
     if not isinstance(data.get("tables"), Mapping):
         raise ValueError("malformed tables section")
@@ -1067,7 +1097,7 @@ def parse_project_with_info(text: str):
     """Return current inputs plus source-schema migration information.
 
     ``parse_project`` remains the two-value compatibility API. Callers that need
-    to surface a schema-25 migration warning use this three-value wrapper.
+    to surface a migration warning use this three-value wrapper.
     """
 
     data = _decode(text)
@@ -1092,17 +1122,18 @@ def parse_project_with_info(text: str):
     migration_warnings: tuple[str, ...] = ()
     migration_provenance = {"source_key": None}
     heightened_contract_migrated = False
-    if source_version == MIGRATABLE_VERSION:
-        tables = {
-            key: _obj_to_table(data["tables"][key], key)
-            for key in PROJECT_TABLE_KEYS
-        }
+    tables = {
+        key: _obj_to_table(data["tables"][key], key)
+        for key in PROJECT_TABLE_KEYS
+    }
+    if source_version == LEGACY_MIGRATABLE_VERSION:
         allowed_schema25_scalars = (
             set(SCALAR_KEYS)
             - {
                 LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
                 SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
                 HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
+                "shear_gamma_v",
             }
             | {LEGACY_SHARED_CRACK_WIDTH_KEY}
             | LEGACY_HEIGHTENED_OPERAND_KEYS
@@ -1132,12 +1163,74 @@ def parse_project_with_info(text: str):
         migrated_scalars.pop(LEGACY_SHARED_CRACK_WIDTH_KEY, None)
         migrated_scalars.pop(REPORT_PROFILE_KEY, None)
         migrated_scalars.update(migrated_widths)
-        scalars = _canonical_scalars(migrated_scalars, tables)
-    else:
-        tables = {
-            key: _obj_to_table(data["tables"][key], key)
-            for key in PROJECT_TABLE_KEYS
+        gamma_v_active = (
+            migrated_scalars.get("shear_on") is True
+            and (
+                migrated_scalars.get("combined_method")
+                if migrated_scalars.get("combined_on") is True
+                else migrated_scalars.get("shear_method")
+            ) == codes.EC2_2023.label
+            and migrated_scalars.get("shear_links") is not True
+        )
+        if gamma_v_active:
+            migration_warnings = (
+                *migration_warnings,
+                "Schema 25 used the fixed DS/EN 1992-1-1:2023 shear "
+                "partial factor. Sector migrated the calculation to the "
+                "explicit gamma_V input at 1.40; review it before "
+                "recalculating.",
+            )
+        migration_provenance["shear_gamma_v"] = {
+            "defaulted": True,
+            "value": float(codes.EC2_2023.shear_gamma_v),
+            "active_2023_shear": gamma_v_active,
         }
+        scalars = _canonical_scalars(
+            migrated_scalars,
+            tables,
+            migrate_gamma_v=True,
+        )
+    elif source_version == MIGRATABLE_VERSION:
+        allowed_schema26_scalars = set(SCALAR_KEYS) - {"shear_gamma_v"}
+        unknown_scalars = (
+            set(raw_scalars)
+            - allowed_schema26_scalars
+            - {REPORT_PROFILE_KEY}
+        )
+        if unknown_scalars:
+            raise ValueError(
+                "unknown schema-26 inputs: "
+                + ", ".join(sorted(unknown_scalars))
+            )
+        migrated_scalars = dict(raw_scalars)
+        migrated_scalars.pop(REPORT_PROFILE_KEY, None)
+        gamma_v_active = (
+            migrated_scalars.get("shear_on") is True
+            and (
+                migrated_scalars.get("combined_method")
+                if migrated_scalars.get("combined_on") is True
+                else migrated_scalars.get("shear_method")
+            ) == codes.EC2_2023.label
+            and migrated_scalars.get("shear_links") is not True
+        )
+        if gamma_v_active:
+            migration_warnings = (
+                "Schema 26 used the fixed DS/EN 1992-1-1:2023 shear "
+                "partial factor. Sector migrated the calculation to the "
+                "explicit gamma_V input at 1.40; review it before "
+                "recalculating.",
+            )
+        migration_provenance["shear_gamma_v"] = {
+            "defaulted": True,
+            "value": float(codes.EC2_2023.shear_gamma_v),
+            "active_2023_shear": gamma_v_active,
+        }
+        scalars = _canonical_scalars(
+            migrated_scalars,
+            tables,
+            migrate_gamma_v=True,
+        )
+    else:
         unknown_scalars = (
             set(raw_scalars)
             - set(SCALAR_KEYS)
@@ -1166,7 +1259,7 @@ def parse_project_with_info(text: str):
 
 
 def parse_project(text: str):
-    """Return ``(tables, scalars)`` with schema-25 compatibility."""
+    """Return ``(tables, scalars)`` with bounded schema compatibility."""
 
     tables, scalars, _info = parse_project_with_info(text)
     return tables, scalars

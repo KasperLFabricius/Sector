@@ -217,8 +217,11 @@ def _schema25_payload(
 
     if tables is None or scalars is None:
         tables, scalars = _current_project()
-    payload = json.loads(project_io.dump_project(tables, scalars))
-    payload["version"] = project_io.MIGRATABLE_VERSION
+    current_scalars = dict(scalars)
+    current_scalars.setdefault("shear_gamma_v", 1.40)
+    payload = json.loads(project_io.dump_project(tables, current_scalars))
+    payload["version"] = project_io.LEGACY_MIGRATABLE_VERSION
+    payload["scalars"].pop("shear_gamma_v", None)
     for key in (
         "sls_long_term_permitted_crack_width_mm",
         "sls_short_term_permitted_crack_width_mm",
@@ -245,8 +248,9 @@ def _legacy_heightened_schema25_payload(tables=None) -> dict:
         _, scalars = _current_project()
     scalars.update(_heightened_inputs())
     payload = json.loads(project_io.dump_project(tables, scalars))
-    payload["version"] = project_io.MIGRATABLE_VERSION
+    payload["version"] = project_io.LEGACY_MIGRATABLE_VERSION
     persisted = payload["scalars"]
+    persisted.pop("shear_gamma_v", None)
     heightened_width = persisted.pop(
         "sls_heightened_permitted_crack_width_mm"
     )
@@ -270,6 +274,23 @@ def _legacy_heightened_schema25_payload(tables=None) -> dict:
     return payload
 
 
+def _schema26_payload(tables=None, scalars=None) -> dict:
+    """Build one integrity-valid schema-26 payload without gamma_V."""
+
+    if tables is None or scalars is None:
+        tables, scalars = _current_project()
+    current_scalars = dict(scalars)
+    current_scalars.setdefault("shear_gamma_v", 1.40)
+    payload = json.loads(project_io.dump_project(tables, current_scalars))
+    payload["version"] = project_io.MIGRATABLE_VERSION
+    payload["scalars"].pop("shear_gamma_v", None)
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    return payload
+
+
 def test_current_schema_save_load_resave_retains_exact_inputs():
     tables, scalars = _current_project()
     first = project_io.dump_project(
@@ -289,6 +310,7 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert loaded_scalars["conc_gamma_c"] == pytest.approx(0.5)
     assert loaded_scalars["mild_gamma_y"] == pytest.approx(2.0)
     assert loaded_scalars["torsion_gamma_ct"] == pytest.approx(2.0)
+    assert loaded_scalars["shear_gamma_v"] == pytest.approx(1.40)
     assert loaded_scalars["fatigue_edition"] == (
         design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
     )
@@ -303,6 +325,153 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert json.loads(first)["version"] == project_io.VERSION
     assert json.loads(second)["version"] == project_io.VERSION
+
+
+def test_current_schema_round_trip_retains_selected_gamma_v_exactly():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+        "shear_gamma_v": 1.25,
+    })
+
+    text = project_io.dump_project(tables, scalars)
+    _loaded_tables, loaded = project_io.parse_project(text)
+    payload = json.loads(text)
+
+    assert payload["version"] == 27
+    assert payload["scalars"]["shear_gamma_v"] == pytest.approx(1.25)
+    assert loaded["shear_gamma_v"] == pytest.approx(1.25)
+
+
+def test_schema_26_active_2023_shear_migrates_to_explicit_default_gamma_v():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+    })
+    source = json.dumps(_schema26_payload(tables, scalars))
+
+    _loaded_tables, loaded, info = project_io.parse_project_with_info(source)
+
+    assert loaded["shear_gamma_v"] == pytest.approx(1.40)
+    assert info["source_schema_version"] == 26
+    assert info["target_schema_version"] == 27
+    assert info["migrated"] is True
+    assert len(info["migration_warnings"]) == 1
+    assert "explicit gamma_V input at 1.40" in info["migration_warnings"][0]
+    assert info["migration_provenance"]["shear_gamma_v"] == {
+        "defaulted": True,
+        "value": 1.40,
+        "active_2023_shear": True,
+    }
+
+
+def test_schema_26_inactive_gamma_v_default_is_silent_and_deterministic():
+    source = json.dumps(_schema26_payload())
+
+    _loaded_tables, loaded, info = project_io.parse_project_with_info(source)
+
+    assert loaded["shear_gamma_v"] == pytest.approx(1.40)
+    assert info["migration_warnings"] == ()
+    assert info["migration_provenance"]["shear_gamma_v"] == {
+        "defaulted": True,
+        "value": 1.40,
+        "active_2023_shear": False,
+    }
+
+
+def test_schema_26_2023_shear_links_migrate_gamma_v_silently():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+        "shear_links": True,
+    })
+    source = json.dumps(_schema26_payload(tables, scalars))
+
+    _loaded_tables, loaded, info = project_io.parse_project_with_info(source)
+
+    assert loaded["shear_gamma_v"] == pytest.approx(1.40)
+    assert info["migration_warnings"] == ()
+    assert info["migration_provenance"]["shear_gamma_v"] == {
+        "defaulted": True,
+        "value": 1.40,
+        "active_2023_shear": False,
+    }
+
+
+def test_schema_25_active_2023_shear_migrates_both_bounded_contracts():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+    })
+    payload = _schema25_payload(tables, scalars, shared_width=0.0)
+
+    _loaded_tables, loaded, info = project_io.parse_project_with_info(
+        json.dumps(payload)
+    )
+
+    assert loaded["shear_gamma_v"] == pytest.approx(1.40)
+    assert len(info["migration_warnings"]) == 1
+    assert "Schema 25 used the fixed" in info["migration_warnings"][0]
+    assert info["migration_provenance"]["shear_gamma_v"][
+        "active_2023_shear"
+    ] is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        True,
+        False,
+        np.bool_(True),
+        0.0,
+        -1.0,
+        float("nan"),
+        float("inf"),
+        "1.40",
+    ),
+)
+def test_current_schema_rejects_malformed_gamma_v(value):
+    tables, scalars = _current_project()
+    scalars["shear_gamma_v"] = value
+
+    with pytest.raises(
+        ValueError,
+        match="shear_gamma_v must be a positive finite real number",
+    ):
+        project_io.dump_project(tables, scalars)
+
+
+def test_current_schema_active_2023_shear_requires_gamma_v():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+    })
+
+    with pytest.raises(
+        ValueError,
+        match="shear_gamma_v is required when the DS/EN",
+    ):
+        project_io.dump_project(tables, scalars)
+
+
+def test_current_schema_2023_shear_links_default_a_missing_gamma_v():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+        "shear_links": True,
+    })
+    scalars.pop("shear_gamma_v", None)
+
+    text = project_io.dump_project(tables, scalars)
+    _loaded_tables, loaded = project_io.parse_project(text)
+
+    assert loaded["shear_gamma_v"] == pytest.approx(1.40)
 
 
 def test_shared_link_authority_round_trips_and_missing_defaults_false():
@@ -414,7 +583,7 @@ def test_expanded_quick_section_settings_round_trip(shape, settings):
     assert project_io.project_provenance(text)["input_hash_valid"] is True
 
 
-def test_schema_26_serializes_exact_three_crack_width_inputs():
+def test_schema_27_serializes_exact_three_crack_width_inputs():
     tables, scalars = _current_project()
     scalars.update(
         sls_long_term_permitted_crack_width_mm=0.25,
@@ -425,7 +594,7 @@ def test_schema_26_serializes_exact_three_crack_width_inputs():
     payload = json.loads(project_io.dump_project(tables, scalars))
     elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
 
-    assert payload["version"] == 26
+    assert payload["version"] == 27
     assert tuple(elastic["columns"]) == load_cases.ELASTIC_COLUMNS
     assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in payload["scalars"]
     assert payload["scalars"][
@@ -439,7 +608,7 @@ def test_schema_26_serializes_exact_three_crack_width_inputs():
     ] == pytest.approx(0.20)
 
 
-def test_schema_26_signed_zero_crack_limits_use_the_canonical_zero_hash():
+def test_schema_27_signed_zero_crack_limits_use_the_canonical_zero_hash():
     tables, zero_scalars = _current_project()
     signed_scalars = copy.deepcopy(zero_scalars)
     for key in (
@@ -474,7 +643,7 @@ def test_schema_25_blank_or_zero_shared_width_migrates_to_three_zeroes(shared):
 
     assert info["migrated"] is True
     assert info["source_schema_version"] == 25
-    assert info["target_schema_version"] == 26
+    assert info["target_schema_version"] == 27
     assert info["migration_warnings"] == ()
     assert scalars["sls_long_term_permitted_crack_width_mm"] == 0.0
     assert scalars["sls_short_term_permitted_crack_width_mm"] == 0.0
@@ -506,6 +675,11 @@ def test_schema_25_positive_shared_width_splits_only_into_ordinary_when_disabled
         "short_term_value_mm": 0.30,
         "heightened_value_mm": 0.0,
         "heightened_preserved": False,
+        "shear_gamma_v": {
+            "defaulted": True,
+            "value": 1.40,
+            "active_2023_shear": False,
+        },
     }
 
 
@@ -542,7 +716,7 @@ def test_schema_25_enabled_heightened_requires_positive_shared_operand(shared):
         project_io.parse_project(json.dumps(payload))
 
 
-def test_schema_25_migration_does_not_mutate_source_and_resaves_only_schema_26_keys():
+def test_schema_25_migration_does_not_mutate_source_and_resaves_current_keys():
     tables, scalars = _current_project()
     scalars.update(_heightened_inputs())
     payload = _schema25_payload(
@@ -562,7 +736,7 @@ def test_schema_25_migration_does_not_mutate_source_and_resaves_only_schema_26_k
     resaved = json.loads(
         project_io.dump_project(migrated_tables, migrated_scalars)
     )
-    assert resaved["version"] == 26
+    assert resaved["version"] == 27
     assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in resaved["scalars"]
     assert {
         "sls_long_term_permitted_crack_width_mm",
@@ -602,7 +776,7 @@ def test_schema_25_rejects_malformed_shared_width(invalid):
         float("inf"),
     ),
 )
-def test_schema_26_rejects_malformed_width_inputs(key, invalid):
+def test_schema_27_rejects_malformed_width_inputs(key, invalid):
     tables, scalars = _current_project()
     scalars[key] = invalid
 
@@ -1075,7 +1249,7 @@ def test_retired_schemas_name_the_current_and_migratable_versions(version):
             ValueError,
             match=(
                 rf"unsupported Sector project schema {version}; only current "
-                r"schema 26 and migration from schema 25"
+                r"schema 27 and migrations from schemas 25 and 26"
             ),
         ):
             reader(text)
@@ -1087,14 +1261,14 @@ def test_noncurrent_non_v23_schema_names_current_and_migratable_versions():
     with pytest.raises(
         ValueError,
         match=(
-            r"unsupported Sector project schema 22; only current schema 26 "
-            r"and migration from schema 25"
+            r"unsupported Sector project schema 22; only current schema 27 "
+            r"and migrations from schemas 25 and 26"
         ),
     ):
         project_io.parse_project(text)
 
 
-def test_schema_26_serialization_contains_no_retired_bridge_inputs():
+def test_schema_27_serialization_contains_no_retired_bridge_inputs():
     tables, scalars = _current_project()
     tables.update({
         "bridge_brittle_base": {"retired": True},
@@ -1105,7 +1279,7 @@ def test_schema_26_serialization_contains_no_retired_bridge_inputs():
 
     data = json.loads(project_io.dump_project(tables, scalars))
 
-    assert data["version"] == 26
+    assert data["version"] == 27
     assert set(data["tables"]) == set(project_io.PROJECT_TABLE_KEYS)
     assert not {
         "bridge_brittle_base",
