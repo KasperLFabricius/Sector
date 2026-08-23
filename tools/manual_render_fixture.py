@@ -67,10 +67,9 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The exact PR09 base and candidate both render the current 71-page
-        # manual footer to this digest; the preceding baseline still described
-        # an older page-total raster even though its contents crop was current.
-        "af1ace09c0c0c264c4f08481165f694a6ccbbca5601478659464e17dee7cfa11",
+        # The release bump changes only the visible product version in this
+        # otherwise stable 71-page cover/footer crop.
+        "bd698efe6f6804ff9428958ba5d5e5848076dc4698b700b171fedbbad7fdf863",
     ),
 )
 

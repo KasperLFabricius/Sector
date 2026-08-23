@@ -110,7 +110,7 @@ if (-not (Test-Path -LiteralPath $driver -PathType Leaf)) {
     throw "The extracted Sector source is incomplete: tools/build_portable_windows.py is missing"
 }
 
-Write-Host "Sector v0.95 portable Windows build"
+Write-Host "Sector v0.96 portable Windows build"
 Write-Host "Source: $sourceRoot"
 Write-Host "Output: $OutputDirectory"
 Write-Warning "This internal package is unsigned; Windows may show a SmartScreen warning."

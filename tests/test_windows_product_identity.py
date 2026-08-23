@@ -10,7 +10,7 @@ SPEC = ROOT / "packaging" / "sector.spec"
 RESOURCE = ROOT / "packaging" / "windows_version_info.txt"
 
 EXPECTED = {
-    "__version__": "0.95",
+    "__version__": "0.96",
     "__product_name__": "Sector",
     "__description__": "Structural-analysis and design calculation tool",
     "__author__": "Kasper Lindskov Fabricius",
@@ -66,10 +66,10 @@ def test_windows_resource_is_exact_and_syntactically_valid():
     text = RESOURCE.read_text(encoding="utf-8")
     ast.parse(text, filename=str(RESOURCE))
     for token in (
-        "filevers=(0, 95, 0, 0)",
-        "prodvers=(0, 95, 0, 0)",
-        "StringStruct('FileVersion', '0.95.0.0')",
-        "StringStruct('ProductVersion', '0.95.0.0')",
+        "filevers=(0, 96, 0, 0)",
+        "prodvers=(0, 96, 0, 0)",
+        "StringStruct('FileVersion', '0.96.0.0')",
+        "StringStruct('ProductVersion', '0.96.0.0')",
         "StringStruct('ProductName', 'Sector')",
         "StringStruct('OriginalFilename', 'Sector.exe')",
     ):
