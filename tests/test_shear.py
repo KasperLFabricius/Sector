@@ -120,6 +120,7 @@ def test_vrd_c_2023_uses_the_selected_gamma_v_without_rounding():
         False,
         np.bool_(True),
         0.0,
+        1e-309,
         -1.0,
         float("nan"),
         float("inf"),
@@ -1528,14 +1529,17 @@ def test_app_gamma_v_is_inactive_for_2023_shear_links():
     assert at.session_state["result_sig"] == old_signature
 
 
-def test_app_rejects_nonpositive_active_gamma_v_before_a_shear_result():
+@pytest.mark.parametrize("unsafe_gamma_v", (0.0, 1e-309))
+def test_app_rejects_unsafe_active_gamma_v_before_a_shear_result(
+    unsafe_gamma_v,
+):
     at = _fresh()
     at.run()
     _set(
         at,
         ("checkbox", "shear_on", True),
         ("selectbox", "shear_method", codes.EC2_2023.label),
-        ("number_input", "shear_gamma_v", 0.0),
+        ("number_input", "shear_gamma_v", unsafe_gamma_v),
         ("number_input", "shear_V", 100.0),
     )
 

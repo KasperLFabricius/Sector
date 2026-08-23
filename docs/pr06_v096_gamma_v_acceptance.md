@@ -9,7 +9,8 @@
 - Selected standard route: DS/EN 1992-1-1:2023
 
 PR-06 replaces the fixed `gamma_V = 1.40` constant in the existing 2023
-concrete-shear-without-links calculation with a positive finite user input.
+concrete-shear-without-links calculation with a positive finite user input
+that also produces finite formula coefficients and resistance values.
 The default remains 1.40. The selected value is carried consistently through
 the Streamlit input, solver request/result, saved project and applicable report
 profiles.
@@ -34,8 +35,8 @@ applicable project basis and selected value.
 
 | Surface | Required result | Objective evidence |
 |---|---|---|
-| Solver | A custom positive finite non-Boolean value scales the existing 2023 resistance formula; the emitted result contains that exact value. | Direct formula and dispatch tests. |
-| Validation | Missing, Boolean, zero, negative and non-finite active values fail before a resistance or verdict is emitted. | Solver, capacity and Streamlit adversarial tests. |
+| Solver | A custom positive finite non-Boolean value that produces finite formula coefficients scales the existing 2023 resistance formula; the emitted result contains that exact value. | Direct formula and dispatch tests. |
+| Validation | Missing, Boolean, zero, negative, non-finite and numerically unsafe active values (including an underflow-scale positive value) fail before a resistance or verdict is emitted. | Solver, capacity and Streamlit adversarial tests. |
 | Route isolation | The input is inactive for 2005 EN, 2005 DK-NA, shear-link, torsion and combined routes. | Paired isolation tests with deliberately different values. |
 | Streamlit | The control is visible and enabled only for active 2023 shear without links, defaults to 1.40, carries exact help references and invalidates stale results when changed. | AppTest/widget/state tests. |
 | Project persistence | The selected value round-trips. Schemas 25 and 26 migrate with 1.40; malformed and future schemas remain fail-closed. | Schema migration, round-trip and invalid-input tests. |

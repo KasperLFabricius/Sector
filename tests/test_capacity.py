@@ -2433,6 +2433,7 @@ def test_2023_shear_context_uses_the_exact_selected_gamma_v():
         False,
         np.bool_(True),
         0.0,
+        1e-309,
         -1.0,
         float("nan"),
         float("inf"),

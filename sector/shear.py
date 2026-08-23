@@ -31,24 +31,32 @@ from typing import Optional, Sequence
 from . import geometry
 
 
-def _positive_gamma_v(value) -> float:
-    """Return one finite positive shear factor without Boolean coercion."""
+def validate_gamma_v(value, *, label="gamma_v") -> float:
+    """Return a positive factor that yields finite 2023 coefficients."""
 
+    message = (
+        f"{label} must be a positive finite real number that produces "
+        "finite 2023 shear coefficients"
+    )
     value_type = type(value)
     is_numpy_bool = (
         value_type.__name__ in {"bool", "bool_"}
         and value_type.__module__.split(".", 1)[0] == "numpy"
     )
     if isinstance(value, bool) or is_numpy_bool or isinstance(value, (str, bytes)):
-        raise ValueError("gamma_v must be a positive finite real number")
+        raise ValueError(message)
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError(
-            "gamma_v must be a positive finite real number"
-        ) from exc
+        raise ValueError(message) from exc
     if not math.isfinite(number) or number <= 0.0:
-        raise ValueError("gamma_v must be a positive finite real number")
+        raise ValueError(message)
+    try:
+        coefficients = (0.66 / number, 11.0 / number)
+    except OverflowError as exc:
+        raise ValueError(message) from exc
+    if not all(math.isfinite(coefficient) for coefficient in coefficients):
+        raise ValueError(message)
     return number
 
 
@@ -223,7 +231,7 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
     ``z = 0.9 d`` (8.18). ``fyd_mpa`` is the design yield of the flexural
     reinforcement; ``ddg_mm`` the aggregate size parameter (8.2.1(4)).
     """
-    gv = _positive_gamma_v(
+    gv = validate_gamma_v(
         code.shear_gamma_v if gamma_v is None else gamma_v
     )
     if d_mm <= 0.0 or bw_mm <= 0.0 or fyd_mpa <= 0.0:
@@ -254,7 +262,17 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
         100.0 * rho_l * fck * ddg_mm / d_kvp
     ) ** (1.0 / 3.0)
     tau_rdc = max(tau_basic, tau_min)                                        # MPa
-    return dict(vrd_c=tau_rdc * bw_mm * z / 1000.0,                          # kN
+    vrd_c_value = tau_rdc * bw_mm * z / 1000.0                               # kN
+    if not all(math.isfinite(value) for value in (
+        tau_min,
+        tau_basic,
+        tau_rdc,
+        vrd_c_value,
+    )):
+        raise ValueError(
+            "2023 shear calculation must produce finite resistance values"
+        )
+    return dict(vrd_c=vrd_c_value,
                  tau_rdc=tau_rdc, tau_basic=tau_basic, tau_min=tau_min, rho_l=rho_l,
                  z=z, ddg=ddg_mm, fyd=fyd_mpa, k_vp=k_vp, d_kvp=d_kvp,
                  a_cs=a_cs, n_ed_tension=n_ed_tension_kn, m_ed=m_ed_knm,
