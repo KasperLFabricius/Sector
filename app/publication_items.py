@@ -83,6 +83,7 @@ class ManualFigureSpec:
     section: str
     factory: str
     caption: str
+    alternative: str
 
 
 @dataclass(frozen=True)
@@ -97,43 +98,60 @@ class ManualTableSpec:
 class PublishedManualBlock:
     block: tuple
     item: PublicationItem | None
+    alternative: str | None = None
 
 
 # These identities bind captions to the authored object, not merely to an index.
 # A same-cardinality reorder therefore fails before any incorrect caption is shown.
 MANUAL_FIGURE_SPECS = (
     ManualFigureSpec("Part A - Get started", "Quick start", "fig_beam_section",
-                     "The rectangular worked example as Sector draws it: the concrete corners and bars are numbered. Use the *Display* controls beside your Section inputs to adjust label size and spacing."),
+                     "The rectangular worked example as Sector draws it: the concrete corners and bars are numbered. Use the *Display* controls beside your Section inputs to adjust label size and spacing.",
+                     "A rectangular concrete outline with four numbered corner nodes, three numbered reinforcement bars near the lower face and two near the upper face."),
     ManualFigureSpec("Part A - Get started", "The worked examples", "fig_beam_section",
-                     "Rectangular beam: 3 x 25 mm bottom, 2 x 16 mm top."),
+                     "Rectangular beam: 3 x 25 mm bottom, 2 x 16 mm top.",
+                     "A 300 by 600 mm concrete rectangle with three bottom bars and two top bars arranged symmetrically about the vertical centreline."),
     ManualFigureSpec("Part A - Get started", "The worked examples", "fig_circular_section",
-                     "Circular hollow section: a central void, a mild-bar ring and a tendon ring."),
+                     "Circular hollow section: a central void, a mild-bar ring and a tendon ring.",
+                     "An annular concrete section with concentric outer and void boundaries; mild reinforcement and prestressing tendons form two circular rings."),
     ManualFigureSpec("Part B - Features & options", "Materials", "fig_beam_concrete_law",
-                     "The concrete-law preview for the rectangular example (C40/50)."),
+                     "The concrete-law preview for the rectangular example (C40/50).",
+                     "A compression stress-strain curve that rises parabolically from zero to the design strength and then remains horizontal to the ultimate strain."),
     ManualFigureSpec("Part B - Features & options", "Materials", "fig_beam_steel_law",
-                     "The B550 mild-steel law for the rectangular example."),
+                     "The B550 mild-steel law for the rectangular example.",
+                     "A symmetric reinforcing-steel stress-strain curve with linear tension and compression branches to yield followed by the selected post-yield response."),
     ManualFigureSpec("Part B - Features & options", "Materials", "fig_circular_prestress_law",
-                     "The tendon law for the circular example."),
+                     "The tendon law for the circular example.",
+                     "A prestressing-steel stress-strain curve with an initial elastic branch and a nonlinear approach to design strength and ultimate strain."),
     ManualFigureSpec("Part B - Features & options", "Analysis & result settings", "fig_beam_envelope",
-                     "The rectangular example's biaxial envelope with the applied load; the sweep from 0 to 360 degrees closes the curve."),
+                     "The rectangular example's biaxial envelope with the applied load; the sweep from 0 to 360 degrees closes the curve.",
+                     "A closed Mx-My capacity boundary around the origin with one applied-load point; successive boundary vertices correspond to rotated neutral-axis solutions."),
     ManualFigureSpec("Part C - Theory & methodology", "Conventions and sign convention", "fig_sign_convention",
-                     "Axes and the positive senses of the axial force, the moments and the neutral-axis angle."),
+                     "Axes and the positive senses of the axial force, the moments and the neutral-axis angle.",
+                     "Section axes show positive x to the right and y upward, with arrows for positive axial force and moments and the neutral-axis angle measured from positive y."),
     ManualFigureSpec("Part C - Theory & methodology", "Material laws", "fig_beam_concrete_law",
-                     "The C40/50 parabola-rectangle law of the beam example."),
+                     "The C40/50 parabola-rectangle law of the beam example.",
+                     "Concrete compression stress increases on a curved branch to its design plateau, which continues until the marked crushing strain."),
     ManualFigureSpec("Part C - Theory & methodology", "Material laws", "fig_beam_steel_law",
-                     "The B550 mild-steel law of the beam example."),
+                     "The B550 mild-steel law of the beam example.",
+                     "Positive and negative B550 stress branches are linear to the yield points and then follow matching post-yield branches toward the strain limits."),
     ManualFigureSpec("Part C - Theory & methodology", "Material laws", "fig_circular_prestress_law",
-                     "The tendon law of the circular example."),
+                     "The tendon law of the circular example.",
+                     "The tendon curve starts with an elastic slope, bends toward the proof-strength region and terminates at the defined ultimate strain."),
     ManualFigureSpec("Part C - Theory & methodology", "Plastic capacity analysis", "fig_strain_plane",
-                     "The capacity strain plane (reported tension-positive convention): one straight line -- zero at the neutral axis, compression (negative) above it and tension (positive) below, the top fibre at the crushing strain. The internal solver formula above is compression-positive; the reported strains negate it."),
+                     "The capacity strain plane (reported tension-positive convention): one straight line -- zero at the neutral axis, compression (negative) above it and tension (positive) below, the top fibre at the crushing strain. The internal solver formula above is compression-positive; the reported strains negate it.",
+                     "A straight strain line crosses zero at the neutral axis; negative compression lies above it, positive tension below it, and the top fibre reaches ultimate concrete compression."),
     ManualFigureSpec("Part C - Theory & methodology", "Plastic capacity analysis", "fig_beam_envelope",
-                     "The beam envelope with its applied load; each vertex is one solved neutral-axis angle."),
+                     "The beam envelope with its applied load; each vertex is one solved neutral-axis angle.",
+                     "A closed biaxial moment-resistance curve is plotted with the design moment point, showing its position inside the boundary and the discrete angular sweep points."),
     ManualFigureSpec("Part C - Theory & methodology", "Cracked-section elastic analysis", "fig_beam_cracked",
-                     "The beam's cracked (Stage II) state under the service moment: the compression zone (shaded) above the neutral axis."),
+                     "The beam's cracked (Stage II) state under the service moment: the compression zone (shaded) above the neutral axis.",
+                     "A rectangular section has a shaded concrete compression zone above a horizontal neutral axis, with reinforcement points retained in the Stage II section."),
     ManualFigureSpec("Part C - Theory & methodology", "Grouped fatigue", "fig_fatigue_sn",
-                     "Two-slope characteristic and design S-N curves. Each labelled marker is one applied spectrum bin; logarithmic axes retain the wide cycle and stress ranges without visual distortion."),
+                     "Two-slope characteristic and design S-N curves. Each labelled marker is one applied spectrum bin; logarithmic axes retain the wide cycle and stress ranges without visual distortion.",
+                     "A log-log stress-range versus cycles plot shows characteristic and design S-N curves with a knee and labelled spectrum-bin points on the relevant branches."),
     ManualFigureSpec("Part C - Theory & methodology", "Grouped fatigue", "fig_fatigue_damage",
-                     "Per-bin and cumulative Miner damage for the same element. The cumulative line and $D=1.00$ limit make the governing contribution and remaining margin visible. The y-axis changes to a logarithmic scale for low-damage spectra so small contributions remain readable."),
+                     "Per-bin and cumulative Miner damage for the same element. The cumulative line and $D=1.00$ limit make the governing contribution and remaining margin visible. The y-axis changes to a logarithmic scale for low-damage spectra so small contributions remain readable.",
+                     "Damage bars identify each spectrum bin, a cumulative Miner-damage line rises across the bins, and a horizontal D equals 1 limit shows the remaining margin."),
 )
 
 
@@ -289,6 +307,7 @@ def publish_manual_blocks(
 
     for block in blocks:
         kind = block[0]
+        alternative = None
         if kind == "part":
             part = str(block[1])
             match = re.match(r"^Part ([A-Z])\b", part)
@@ -317,15 +336,21 @@ def publish_manual_blocks(
                 )
             if figure_index >= len(MANUAL_FIGURE_SPECS):
                 raise PublicationContractError("The manual contains an extra figure.")
+            if len(block) != 4 or not str(block[3]).strip():
+                raise PublicationContractError(
+                    "A manual figure requires a non-empty authored text alternative."
+                )
             actual = ManualFigureSpec(
                 part,
                 section,
                 getattr(block[1], "__name__", ""),
                 str(block[2]),
+                str(block[3]),
             )
             expected = MANUAL_FIGURE_SPECS[figure_index]
             _require_spec(actual, expected, kind="figure", index=figure_index)
             item = counter.issue("Figure", expected.caption)
+            alternative = expected.alternative
             figure_index += 1
         elif kind == "table":
             if counter is None or part is None or section is None:
@@ -351,7 +376,7 @@ def publish_manual_blocks(
                 )
             item = counter.issue("Table", expected.caption)
             table_index += 1
-        published.append(PublishedManualBlock(block, item))
+        published.append(PublishedManualBlock(block, item, alternative))
 
     if figure_index != len(MANUAL_FIGURE_SPECS):
         raise PublicationContractError(

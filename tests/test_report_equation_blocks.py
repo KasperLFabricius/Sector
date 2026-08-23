@@ -175,7 +175,7 @@ def test_every_contract_identity_passes_semantic_vector_and_raster_qa():
     page_texts = [page.extract_text() or "" for page in reader.pages]
 
     assert len(equations) == 144
-    assert sum(text.count("SECTOR-MATH[") for text in page_texts) == 416
+    assert sum(text.count("Mathematical expression:") for text in page_texts) == 416
     for equation in equations:
         math = _math_flowable(equation)
         identity_pages = [
@@ -183,17 +183,11 @@ def test_every_contract_identity_passes_semantic_vector_and_raster_qa():
             for page_number, text in enumerate(page_texts, start=1)
             if math.block.identity in text
         ]
-        source_end = (
-            "SECTOR-SOURCE-END["
-            f"{equation._sector_equation_anchor}]"
-        )
-        source_pages = [
-            page_number
-            for page_number, text in enumerate(page_texts, start=1)
-            if source_end in text
-        ]
-        assert identity_pages == source_pages
         assert len(identity_pages) == 1
+
+        page_text = page_texts[identity_pages[0] - 1]
+        assert "Source / method note:" in page_text
+        assert "Mathematical expression:" in page_text
 
         geometry = math.geometry
         assert geometry.width > 0.0 and geometry.height > 0.0
@@ -397,6 +391,6 @@ def test_long_unbroken_expression_and_maximum_symbol_inventory_fit_a4():
     pages = pypdf.PdfReader(io.BytesIO(pdf)).pages
     assert len(pages) == 1
     compact = re.sub(r"\s+", "", pages[0].extract_text() or "")
-    assert "SECTOR-MATH[symbolic-expression]" in compact
+    assert "Mathematicalexpression:" in compact
     assert compact.count("abcdefghij") >= 24
     assert "retainedlong-expressionquantity8[kN]" in compact

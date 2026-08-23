@@ -747,9 +747,8 @@ def test_pdf_is_searchable_vector_math_with_one_canonical_semantic_row() -> None
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     text = " ".join((reader.pages[0].extract_text() or "").split())
 
-    for role in ("symbolic", "substitution", "result"):
-        marker = f"SECTOR-MATH[{role}]"
-        assert text.count(marker) == 1
+    assert text.count("Mathematical expression:") == 3
+    assert "SECTOR-MATH" not in text
     assert "Equation (7.11)" in text
     assert "EN 1992-1-1 Formula (7.11)" in text
     assert "sqrt" in text
@@ -815,15 +814,13 @@ def test_equation_is_indivisible_at_a_page_foot_without_orphan_roles() -> None:
 
     assert len(pages) == 2
     assert "PRECEDING PAGE" in pages[0]
-    assert "SECTOR-MATH" not in pages[0]
+    assert "Mathematical expression:" not in pages[0]
     for expected in (
         "Equation (P-1)",
-        "SECTOR-MATH[symbolic]",
-        "SECTOR-MATH[substitution]",
-        "SECTOR-MATH[result]",
         "EN 1992-1-1 Formula (7.11)",
     ):
         assert expected in pages[1]
+    assert pages[1].count("Mathematical expression:") == 3
 
 
 def test_flowable_exposes_geometry_only_after_wrap_and_never_splits() -> None:

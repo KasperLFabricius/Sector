@@ -23,15 +23,13 @@ class GeneratedManualHTMLVocabulary:
     doctype: str
     html_language: str
     html_charset: str
-    nonvisual_class_token: str
-    n_star_code_start: str
     html_ascii_whitespace: str
     fragment_href_pattern: str
 
 
 CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
     current_head_style_sha256=(
-        "3925ff6f5ac21c001047c26a6bfd49dfe97c9d77fa9859992f05e0885a59f94a"
+        "d2795ea970117826f034557c358dce77107d7d8c5b6409cdd79e1dca6c8a155e"
     ),
     body_block_tags=frozenset(
         {
@@ -65,7 +63,9 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
             "ul",
         }
     ),
-    body_inline_tags=frozenset({"a", "code", "em", "span", "strong"}),
+    body_inline_tags=frozenset(
+        {"a", "code", "em", "strong", "sub", "sup"}
+    ),
     body_void_tags=frozenset({"br"}),
     head_void_tags=frozenset({"meta"}),
     table_children=(
@@ -75,7 +75,7 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
         ("tr", frozenset({"td", "th"})),
     ),
     attribute_names_by_tag=(
-        ("a", frozenset({"href"})),
+        ("a", frozenset({"class", "href"})),
         ("aside", frozenset({"class"})),
         ("body", frozenset()),
         ("br", frozenset()),
@@ -97,16 +97,17 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
         ("header", frozenset()),
         ("html", frozenset({"lang"})),
         ("li", frozenset({"class"})),
-        ("main", frozenset()),
+        ("main", frozenset({"id"})),
         ("meta", frozenset({"charset", "content", "name"})),
         ("nav", frozenset({"aria-label"})),
         ("ol", frozenset()),
         ("p", frozenset({"class"})),
         ("section", frozenset({"class", "id"})),
-        ("span", frozenset({"class"})),
         ("strong", frozenset()),
         ("style", frozenset()),
+        ("sub", frozenset()),
         ("summary", frozenset()),
+        ("sup", frozenset()),
         ("table", frozenset()),
         ("tbody", frozenset()),
         ("td", frozenset()),
@@ -117,6 +118,7 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
         ("ul", frozenset()),
     ),
     class_tokens_by_tag=(
+        ("a", frozenset({"skip-link"})),
         (
             "aside",
             frozenset({"callout", "concept", "limit", "standard", "theory", "tip"}),
@@ -139,7 +141,6 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
             ),
         ),
         ("section", frozenset({"equation"})),
-        ("span", frozenset({"sr-only"})),
     ),
     meta_names=frozenset(
         {
@@ -156,10 +157,6 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
     doctype="doctype html",
     html_language="en",
     html_charset="utf-8",
-    nonvisual_class_token="sr-only",
-    n_star_code_start=(
-        '<code class="math" aria-label="mathematical expression N^<em>">'
-    ),
     html_ascii_whitespace="\t\n\f\r ",
     fragment_href_pattern=r"#[A-Za-z0-9_-]+",
 )

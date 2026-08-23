@@ -67,7 +67,10 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        "effaf2610f335e36f89db76653fc22407c6cfc65b2a551865c935723b72dd911",
+        # The exact PR09 base and candidate both render the current 71-page
+        # manual footer to this digest; the preceding baseline still described
+        # an older page-total raster even though its contents crop was current.
+        "af1ace09c0c0c264c4f08481165f694a6ccbbca5601478659464e17dee7cfa11",
     ),
 )
 
@@ -200,7 +203,7 @@ def _unrendered_math_token(text: str) -> str | None:
     visible_text = "\n".join(
         line
         for line in text.splitlines()
-        if not line.lstrip().startswith("SECTOR-MATH[")
+        if not line.lstrip().startswith("Mathematical expression:")
     )
     for token in _UNRENDERED_MATH_TOKENS:
         if re.search(

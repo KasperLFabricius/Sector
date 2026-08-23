@@ -28,7 +28,7 @@ import publication_image_export
 from app import publication_equation_layout as equations
 
 FRAME_WIDTH = A4[0] - 4.4 * cm - 12.0
-SEMANTIC_MARKER = "SECTOR-MATH[manual-expression]"
+SEMANTIC_MARKER = "Mathematical expression:"
 
 
 def _published_blocks():

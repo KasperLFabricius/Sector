@@ -141,7 +141,7 @@ def test_audit_fixture_flags_sparse_non_opener_pages_for_visual_review():
     assert all(0.0 < coverage < 0.35 for _page, coverage in sparse)
     sparse_text = page_texts[sparse[0][0] - 1]
     assert "EQ-FATIGUE.CONCRETE.UTILISATION" in sparse_text
-    assert "SECTOR-MATH[" in sparse_text
+    assert "Mathematical expression:" in sparse_text
     assert "Source / method note:" in sparse_text
 
 
@@ -159,11 +159,9 @@ def test_equation_source_colocation_rejects_a_page_split():
             [
                 (
                     "Equation (1.1) | EQ-TEST.RELATION\n"
-                    "Source / method note: retained source begins\n"
                 ),
                 (
-                    "retained source continuation\n"
-                    "SECTOR-SOURCE-END[sector-equation-1-1-test__relation]\n"
+                    "Source / method note: retained source moved to another page\n"
                 ),
             ],
             expected_equation_count=1,

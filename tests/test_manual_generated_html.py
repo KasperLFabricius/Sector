@@ -102,7 +102,10 @@ def test_dormant_generated_h5_display_math_and_theory_paths_are_supported(monkey
     generated_html = _dormant_generator_html(monkeypatch)
 
     assert '<h5 id="' in generated_html
-    assert '<div class="display-math" role="math" aria-label="x+y">' in generated_html
+    assert (
+        '<div class="display-math" role="math" '
+        'aria-label="Mathematical expression: x+y">'
+    ) in generated_html
     assert '<aside class="callout theory">' in generated_html
     visible_text = manual_generated_html_text(generated_html)
     assert "Dormant heading" in visible_text.splitlines()
@@ -112,8 +115,8 @@ def test_dormant_generated_h5_display_math_and_theory_paths_are_supported(monkey
 
 def test_source_wraps_collapse_while_real_blocks_retain_lines():
     html = _document(
-        "<p><span>Version:</span>\n<span>0.94</span></p>"
-        "<details><summary>Prelude</summary><span>Inline</span> detail</details>"
+        "<p><em>Version:</em>\n<strong>0.94</strong></p>"
+        "<details><summary>Prelude</summary><em>Inline</em> detail</details>"
         "<p>Limitations &amp; troubleshooting</p>",
         title=f"Sector user\nmanual v{__version__}",
     )
@@ -164,15 +167,15 @@ def test_non_html_whitespace_is_preserved_in_visible_text(separator):
     ),
 )
 def test_each_generated_non_table_container_preserves_a_line_boundary(tag):
-    html = _document(f"<span>A</span><{tag}>B</{tag}><span>C</span>")
+    html = _document(f"A<{tag}>B</{tag}>C")
 
     assert manual_generated_html_text(html) == f"{CURRENT_TITLE}\nA\nB\nC"
 
 
 def test_generated_table_family_preserves_boundaries_in_canonical_ancestry():
     html = _document(
-        "<span>A</span><table><thead><tr><th>B</th></tr></thead>"
-        "<tbody><tr><td>C</td></tr></tbody></table><span>D</span>"
+        "A<table><thead><tr><th>B</th></tr></thead>"
+        "<tbody><tr><td>C</td></tr></tbody></table>D"
     )
 
     assert manual_generated_html_text(html) == f"{CURRENT_TITLE}\nA\nB\nC\nD"
@@ -250,9 +253,9 @@ def test_non_html_whitespace_or_text_in_each_table_container_fails_closed(
         manual_generated_html_text(_document(template.format(text)))
 
 
-@pytest.mark.parametrize("tag", ("a", "code", "em", "span", "strong"))
+@pytest.mark.parametrize("tag", ("a", "code", "em", "strong", "sub", "sup"))
 def test_each_generated_inline_tag_preserves_inline_flow(tag):
-    html = _document(f"<span>A</span><{tag}>B</{tag}><span>C</span>")
+    html = _document(f"A<{tag}>B</{tag}>C")
 
     assert manual_generated_html_text(html) == f"{CURRENT_TITLE}\nABC"
 
@@ -261,14 +264,15 @@ def test_generated_break_preserves_a_line_boundary():
     assert manual_generated_html_text(_document("A<br>B")) == (f"{CURRENT_TITLE}\nA\nB")
 
 
-def test_known_nonvisual_accessibility_duplicate_is_excluded_with_descendants():
+def test_legacy_hidden_accessibility_duplicate_is_outside_generated_envelope():
     html = _document('<p>A<span class="sr-only"><strong>Hidden</strong></span>B</p>')
 
-    assert manual_generated_html_text(html) == f"{CURRENT_TITLE}\nAB"
+    with pytest.raises(AssertionError, match="non-generator tag"):
+        manual_generated_html_text(html)
 
 
 @pytest.mark.parametrize("tag", ("html", "body", "p", "div"))
-def test_nonvisual_class_is_allowed_only_on_its_generated_span(tag):
+def test_legacy_nonvisual_class_is_rejected_on_every_owner(tag):
     if tag == "html":
         html = _document("Visible").replace(
             '<html lang="en">', '<html class="sr-only" lang="en">', 1
@@ -282,18 +286,22 @@ def test_nonvisual_class_is_allowed_only_on_its_generated_span(tag):
         manual_generated_html_text(html)
 
 
-def test_known_inline_markdown_attribute_artifact_retains_its_visible_text():
+def test_generated_inline_math_subscript_and_superscript_retain_visible_text():
     html = _document(
-        '<p><code class="math" '
-        'aria-label="mathematical expression N^<em>">N^</em></code></p>'
+        '<p><code class="math" aria-label="Mathematical expression: x i 2">'
+        "x<sub>i</sub><sup>2</sup></code></p>"
     )
 
-    assert manual_generated_html_text(html) == f"{CURRENT_TITLE}\nN^"
+    assert manual_generated_html_text(html) == f"{CURRENT_TITLE}\nxi2"
 
 
 @pytest.mark.parametrize(
     "body",
     (
+        (
+            '<p><code class="math" '
+            'aria-label="mathematical expression N^<em>">N^</em></code></p>'
+        ),
         "<p>A</em>B</p>",
         ('<p><code aria-label="mathematical expression N^<em>">N^</em></code></p>'),
         '<p><code class="math" aria-label="N^<em>">N^</em></code></p>',
@@ -352,7 +360,7 @@ def test_known_inline_markdown_attribute_artifact_retains_its_visible_text():
         ),
     ),
 )
-def test_only_the_exact_generated_inline_artifact_is_tolerated(body):
+def test_malformed_legacy_inline_math_artifacts_fail_closed(body):
     with pytest.raises(AssertionError):
         manual_generated_html_text(_document(body))
 
@@ -373,8 +381,11 @@ def test_non_generator_class_names_fail_closed():
     ),
 )
 def test_each_generated_class_token_is_supported_on_its_owner(owner_tag, token):
+    attributes = f'class="{token}"'
+    if owner_tag == "code" and token == "math":
+        attributes += ' aria-label="Mathematical expression: Visible"'
     manual_generated_html_text(
-        _document(f'<{owner_tag} class="{token}">Visible</{owner_tag}>')
+        _document(f'<{owner_tag} {attributes}>Visible</{owner_tag}>')
     )
 
 
@@ -419,8 +430,8 @@ def test_unicode_non_html_class_separators_fail_closed(separator):
     "mutated_style",
     (
         CURRENT_STYLE + "\n.document-control { display:none; }",
-        CURRENT_STYLE.replace(".sr-only", ".screen-reader-only", 1),
-        CURRENT_STYLE.replace("overflow:hidden", "overflow:visible", 1),
+        CURRENT_STYLE.replace(".skip-link", ".keyboard-skip-link", 1),
+        CURRENT_STYLE.replace("translateY(-180%)", "translateY(-100%)", 1),
     ),
 )
 def test_any_stylesheet_change_fails_closed(mutated_style):
@@ -692,9 +703,36 @@ def test_named_metadata_outside_the_exact_generated_shape_fails(metadata):
     "role", sorted(CURRENT_GENERATED_MANUAL_HTML_VOCABULARY.div_roles)
 )
 def test_each_generated_div_role_is_supported(role):
-    html = _document(f'<div role="{role}">Visible</div>')
+    label = (
+        "Mathematical expression: x"
+        if role == "math"
+        else "A governed diagram showing the visible test content."
+    )
+    html = _document(
+        f'<div role="{role}" aria-label="{label}">Visible</div>'
+    )
 
     assert manual_generated_html_text(html) == f"{CURRENT_TITLE}\nVisible"
+
+
+@pytest.mark.parametrize(
+    ("role", "label"),
+    (
+        ("img", ""),
+        ("img", "<bad>"),
+        ("math", ""),
+        ("math", "x"),
+        ("math", "Mathematical expression: "),
+        ("math", "Mathematical expression: <bad>"),
+    ),
+)
+def test_generated_accessible_div_roles_require_clean_complete_labels(role, label):
+    html = _document(
+        f'<div role="{role}" aria-label="{label}">Visible</div>'
+    )
+
+    with pytest.raises(AssertionError, match="accessible|mathematical"):
+        manual_generated_html_text(html)
 
 
 @pytest.mark.parametrize("role", ("image", "IMG", "Math", "", "presentation"))
@@ -783,8 +821,6 @@ def test_generated_manual_text_helper_has_only_the_issued_fixture_consumer():
         "_GENERATED_ATTRIBUTES": "dict(_VOCABULARY.attribute_names_by_tag)",
         "_GENERATED_CLASS_TOKENS": "dict(_VOCABULARY.class_tokens_by_tag)",
         "_GENERATED_META_NAMES": "_VOCABULARY.meta_names",
-        "_NONVISUAL_CLASS": "_VOCABULARY.nonvisual_class_token",
-        "_N_STAR_CODE_START": "_VOCABULARY.n_star_code_start",
         "_HTML_ASCII_WHITESPACE": "_VOCABULARY.html_ascii_whitespace",
         "_ASCII_CLASS_SPACE_RE": (
             're.compile(f"[{re.escape(_HTML_ASCII_WHITESPACE)}]+")'
@@ -820,8 +856,6 @@ def test_generated_manual_text_helper_has_only_the_issued_fixture_consumer():
         "attribute_names_by_tag": 1,
         "class_tokens_by_tag": 1,
         "meta_names": 1,
-        "nonvisual_class_token": 1,
-        "n_star_code_start": 1,
         "html_ascii_whitespace": 1,
         "fragment_href_pattern": 1,
         "html_language": 1,

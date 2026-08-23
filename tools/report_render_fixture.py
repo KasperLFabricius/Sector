@@ -1744,15 +1744,10 @@ def validate_equation_source_colocation(
             page_text,
         )
         sources = re.findall(r"(?m)^Source / method note:", page_text)
-        source_ends = re.findall(
-            r"SECTOR-SOURCE-END\[sector-equation-[^\]]+\]",
-            page_text,
-        )
-        if not (len(identities) == len(sources) == len(source_ends)):
+        if len(identities) != len(sources):
             raise AssertionError(
                 f"equation/source page split on page {page_number}: "
-                f"{len(identities)} identities, {len(sources)} source starts "
-                f"and {len(source_ends)} source ends"
+                f"{len(identities)} identities and {len(sources)} visible sources"
             )
         equation_count += len(identities)
     if equation_count != expected_equation_count:

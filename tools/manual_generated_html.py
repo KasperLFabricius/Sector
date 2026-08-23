@@ -26,8 +26,6 @@ _VISIBILITY_ATTRIBUTES = frozenset({"aria-hidden", "hidden", "style"})
 _GENERATED_ATTRIBUTES = dict(_VOCABULARY.attribute_names_by_tag)
 _GENERATED_CLASS_TOKENS = dict(_VOCABULARY.class_tokens_by_tag)
 _GENERATED_META_NAMES = _VOCABULARY.meta_names
-_NONVISUAL_CLASS = _VOCABULARY.nonvisual_class_token
-_N_STAR_CODE_START = _VOCABULARY.n_star_code_start
 _HTML_ASCII_WHITESPACE = _VOCABULARY.html_ascii_whitespace
 _ASCII_CLASS_SPACE_RE = re.compile(f"[{re.escape(_HTML_ASCII_WHITESPACE)}]+")
 _FRAGMENT_HREF_RE = re.compile(_VOCABULARY.fragment_href_pattern)
@@ -37,11 +35,10 @@ _STRUCTURE_ERROR = "issued manual HTML is outside its generated envelope"
 class _GeneratedManualHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.stack: list[tuple[str, bool, int]] = []
+        self.stack: list[str] = []
         self.fragments: list[str | None] = []
         self.style_fragments: list[str] = []
         self.table_section_states: list[int] = []
-        self.nonvisual_depth = 0
         self.doctype_seen = False
         self.html_seen = False
         self.head_seen = False
@@ -56,7 +53,7 @@ class _GeneratedManualHTMLParser(HTMLParser):
 
     @property
     def current_tag(self) -> str | None:
-        return self.stack[-1][0] if self.stack else None
+        return self.stack[-1] if self.stack else None
 
     @property
     def in_body(self) -> bool:
@@ -100,12 +97,40 @@ class _GeneratedManualHTMLParser(HTMLParser):
                 raise AssertionError(
                     "issued manual HTML has an active or non-generator link"
                 )
+        if tag == "code" and attributes.get("class") == "math":
+            label = attributes.get("aria-label") or ""
+            if (
+                not label.startswith("Mathematical expression: ")
+                or not label.removeprefix("Mathematical expression: ").strip()
+                or re.search(r"</?[A-Za-z][^>]*>", label)
+            ):
+                raise AssertionError(
+                    "issued manual HTML has an incomplete mathematical label"
+                )
         if (
             tag == "div"
             and "role" in attributes
             and attributes["role"] not in _VOCABULARY.div_roles
         ):
             raise AssertionError("issued manual HTML has non-generator attributes")
+        if tag == "div" and attributes.get("role") in {"img", "math"}:
+            label = attributes.get("aria-label") or ""
+            if not label.strip() or re.search(r"</?[A-Za-z][^>]*>", label):
+                raise AssertionError(
+                    "issued manual HTML has an incomplete accessible label"
+                )
+            if (
+                attributes["role"] == "math"
+                and (
+                    not label.startswith("Mathematical expression: ")
+                    or not label.removeprefix(
+                        "Mathematical expression: "
+                    ).strip()
+                )
+            ):
+                raise AssertionError(
+                    "issued manual HTML has an incomplete mathematical label"
+                )
         if (
             tag == "th"
             and "scope" in attributes
@@ -137,8 +162,6 @@ class _GeneratedManualHTMLParser(HTMLParser):
     ) -> None:
         if not self.doctype_seen or self.body_closed:
             raise AssertionError(_STRUCTURE_ERROR)
-        if self.stack and self.stack[-1][2]:
-            raise AssertionError(_STRUCTURE_ERROR)
         if tag not in _GENERATED_ATTRIBUTES:
             raise AssertionError("issued manual HTML contains a non-generator tag")
         attributes = self._attribute_map(tag, attrs)
@@ -148,11 +171,6 @@ class _GeneratedManualHTMLParser(HTMLParser):
             not classes or any(token not in generated_class_tokens for token in classes)
         ):
             raise AssertionError("issued manual HTML has non-generator class tokens")
-        if _NONVISUAL_CLASS in classes and tag != "span":
-            raise AssertionError(
-                "issued manual HTML has unsupported visibility controls"
-            )
-
         if tag == "html":
             if self.html_seen or self.stack:
                 raise AssertionError(_STRUCTURE_ERROR)
@@ -185,7 +203,7 @@ class _GeneratedManualHTMLParser(HTMLParser):
         elif tag in _BODY_TAGS:
             if not self.in_body:
                 raise AssertionError(_STRUCTURE_ERROR)
-            open_body_tags = {name for name, _, _ in self.stack[2:]}
+            open_body_tags = set(self.stack[2:])
             if tag in _BODY_BLOCK_TAGS and (
                 "p" in open_body_tags or open_body_tags.intersection(_BODY_INLINE_TAGS)
             ):
@@ -207,22 +225,15 @@ class _GeneratedManualHTMLParser(HTMLParser):
                 if not self.table_section_states or self.table_section_states[-1] != 1:
                     raise AssertionError(_STRUCTURE_ERROR)
                 self.table_section_states[-1] = 2
-        own_nonvisual = False
         if self.in_body:
-            own_nonvisual = _NONVISUAL_CLASS in classes
             if (
-                self.nonvisual_depth == 0
-                and not own_nonvisual
-                and (tag in _BODY_BLOCK_TAGS or tag == "br")
+                tag in _BODY_BLOCK_TAGS or tag == "br"
             ):
                 self._append_boundary()
 
         if tag in _VOID_TAGS:
             return
-        n_star_artifact_state = int(self.get_starttag_text() == _N_STAR_CODE_START)
-        self.stack.append((tag, own_nonvisual, n_star_artifact_state))
-        if own_nonvisual:
-            self.nonvisual_depth += 1
+        self.stack.append(tag)
 
     def handle_startendtag(
         self,
@@ -233,30 +244,16 @@ class _GeneratedManualHTMLParser(HTMLParser):
         raise AssertionError(_STRUCTURE_ERROR)
 
     def handle_endtag(self, tag: str) -> None:
-        if (
-            self.in_body
-            and tag == "em"
-            and self.current_tag == "code"
-            and self.stack[-1][2] == 2
-            and all(open_tag != tag for open_tag, _, _ in self.stack)
-        ):
-            open_tag, own_nonvisual, _pending = self.stack[-1]
-            self.stack[-1] = (open_tag, own_nonvisual, 3)
-            return
         if not self.stack or self.current_tag != tag:
-            raise AssertionError(_STRUCTURE_ERROR)
-        if self.stack[-1][2] and not (tag == "code" and self.stack[-1][2] == 3):
             raise AssertionError(_STRUCTURE_ERROR)
         if tag == "table":
             if not self.table_section_states or self.table_section_states[-1] != 2:
                 raise AssertionError(_STRUCTURE_ERROR)
             self.table_section_states.pop()
-        if self.in_body and self.nonvisual_depth == 0 and tag in _BODY_BLOCK_TAGS:
+        if self.in_body and tag in _BODY_BLOCK_TAGS:
             self._append_boundary()
 
-        _closed_tag, own_nonvisual, _artifact_pending = self.stack.pop()
-        if own_nonvisual:
-            self.nonvisual_depth -= 1
+        self.stack.pop()
 
         if tag == "title":
             self.title_closed = True
@@ -273,18 +270,12 @@ class _GeneratedManualHTMLParser(HTMLParser):
             raise AssertionError(_STRUCTURE_ERROR)
 
     def handle_data(self, data: str) -> None:
-        if self.current_tag == "code" and self.stack[-1][2]:
-            open_tag, own_nonvisual, artifact_state = self.stack[-1]
-            if artifact_state != 1 or data != "N^":
-                raise AssertionError(_STRUCTURE_ERROR)
-            self.stack[-1] = (open_tag, own_nonvisual, 2)
         if self.current_tag in _TABLE_CHILDREN and data.strip(_HTML_ASCII_WHITESPACE):
             raise AssertionError(_STRUCTURE_ERROR)
         if self.current_tag == "style":
             self.style_fragments.append(data)
         elif self.current_tag == "title" or self.in_body:
-            if self.nonvisual_depth == 0:
-                self.fragments.append(_ASCII_CLASS_SPACE_RE.sub(" ", data))
+            self.fragments.append(_ASCII_CLASS_SPACE_RE.sub(" ", data))
         elif data.strip(_HTML_ASCII_WHITESPACE):
             raise AssertionError(_STRUCTURE_ERROR)
 
@@ -300,7 +291,6 @@ class _GeneratedManualHTMLParser(HTMLParser):
         if (
             self.stack
             or self.table_section_states
-            or self.nonvisual_depth
             or not self.doctype_seen
             or not self.html_seen
             or not self.head_seen
