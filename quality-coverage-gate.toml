@@ -1,6 +1,25 @@
-schema_version = 1
+schema_version = 2
 waivers = []
 
 [coverage]
 targets = ["app", "sector"]
 minimum_percent = 90
+
+[branch_coverage]
+targets = [
+    "load_cases",
+    "app.modelled_direction",
+    "result_presentation",
+    "session_state_migrations",
+    "sector.design_standards",
+    "sector.heightened_crack_control",
+]
+tests = [
+    "tests/test_design_standards.py",
+    "tests/test_heightened_crack_control.py",
+    "tests/test_load_cases.py",
+    "tests/test_modelled_direction.py",
+    "tests/test_result_presentation.py",
+    "tests/test_session_state_migrations.py",
+]
+minimum_percent = 81

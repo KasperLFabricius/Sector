@@ -8,6 +8,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
+UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+MINIMUM_QA_RETENTION_DAYS = 7
+MINIMUM_PORTABLE_RETENTION_DAYS = 14
 
 
 def _workflow():
@@ -42,12 +45,25 @@ def test_portable_job_runs_build_bat_once_and_executes_the_page_gate():
 def test_portable_upload_is_only_the_zip_and_checksum():
     portable = _workflow()["jobs"]["portable"]
     upload = _step(portable, "Upload portable ZIP")
+    assert upload["uses"].split()[0] == UPLOAD_ACTION
     assert upload["with"]["name"].startswith("Sector-v0.96-windows-portable-")
     paths = upload["with"]["path"].splitlines()
     assert paths == [
         "${{ env.SECTOR_PORTABLE_OUTPUT }}/*.zip",
         "${{ env.SECTOR_PORTABLE_OUTPUT }}/*.zip.sha256",
     ]
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["retention-days"] >= MINIMUM_PORTABLE_RETENTION_DAYS
+
+
+def test_qa_evidence_is_always_uploaded_for_at_least_one_review_cycle():
+    test_job = _workflow()["jobs"]["test"]
+    upload = _step(test_job, "Upload QA diagnostics")
+    assert upload["if"] == "always()"
+    assert upload["uses"].split()[0] == UPLOAD_ACTION
+    assert upload["with"]["path"] == "qa-artifacts/"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["retention-days"] >= MINIMUM_QA_RETENTION_DAYS
 
 
 def test_removed_certification_topology_cannot_return_unnoticed():
