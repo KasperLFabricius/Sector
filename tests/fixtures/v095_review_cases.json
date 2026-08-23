@@ -777,24 +777,24 @@
         "first_upload": {
           "name": "project.sector.json",
           "revision": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-          "size": 2313,
-          "sha256": "1d5756a44516af2e48da331e8eeaad3c42f035d61e7255ce08f102f791e50ec8",
+          "size": 2339,
+          "sha256": "caa24ffc1db7b9745b5abe78ae8e20ae73bb51b3ccc7c5d734dc8ce941d513c7",
           "decode_and_parse": "success"
         },
         "changed_upload": {
           "name": "project.sector.json",
           "revision": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-          "size": 2313,
-          "sha256": "2f802898755cce6b09142ca1990df76ccd06921717533ab0594c0ab8e789e0b0",
+          "size": 2339,
+          "sha256": "26b35db900fb177c403dd7897bca08ba4946086907d78d57735654e03b1a4a2b",
           "decode_and_parse": "success"
         },
         "invalid_then_fixed_pair": {
           "name": "project.sector.json",
-          "size": 2313,
+          "size": 2339,
           "invalid_bytes_recipe": "replace byte 0 of first_upload with 0xff",
-          "invalid_sha256": "349563cf95adb95a0d2f96c19fa24c0c18207d926764fa25e83e00ab35474a89",
+          "invalid_sha256": "06e3a4b74dba9d2cb16211ff45e131fd036b24188b1e175c69e4874ec6681b9f",
           "invalid_decode": "failure",
-          "fixed_sha256": "1d5756a44516af2e48da331e8eeaad3c42f035d61e7255ce08f102f791e50ec8",
+          "fixed_sha256": "caa24ffc1db7b9745b5abe78ae8e20ae73bb51b3ccc7c5d734dc8ce941d513c7",
           "fixed_decode_and_parse": "success"
         },
         "observed_identity": ["name", "size"]

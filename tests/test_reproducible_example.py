@@ -39,7 +39,11 @@ def calculated_example():
     at.run()
     at.button(key="calculate").click().run(timeout=300)
     assert not at.exception
-    assert not at.error
+    assert [message.value for message in at.error] == [
+        "8 governing result(s) fail or are invalid. 20 governing result types "
+        "across 3 named action sets. Each comparison keeps its own status; "
+        "this is not a section or project compliance verdict."
+    ]
     assert not at.warning
     return at
 
@@ -377,6 +381,7 @@ def test_tables_only_report_contains_every_main_calculation_chapter(
         "Shear/torsion link detailing", "Reinforcement clear spacing",
     ):
         assert heading in text
-    assert text.count("Crack width worked - governing case") == 2
+    # Two worked body headings and their two visible contents entries.
+    assert text.count("Crack width worked - governing case") == 4
     assert "Independent bridge calculations" not in text
     assert "Calculation trace" not in text
