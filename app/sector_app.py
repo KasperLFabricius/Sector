@@ -138,6 +138,7 @@ _GAMMA = chr(0x3B3)
 _KAPPA = chr(0x3BA)
 _THETA, _NU, _ALPHA, _DELTA = chr(0x3B8), chr(0x3BD), chr(0x3B1), chr(0x394)
 _TAU = chr(0x3C4)
+_PERMILLE = chr(0x2030)
 _DEG = chr(0x00B0)
 
 # EC2 7.11 bond coefficient k1 by bar surface (cannot be inferred from geometry).
@@ -212,7 +213,7 @@ _PRESET_HELP = (
 # Default material edition (Danish practice: DS/EN with the DK National Annex).
 _DEFAULT_PRESET = "DS/EN 1992-1-1:2005 + DK NA:2024"
 
-# EN 1992-1-1:2023, 5.1.6(1): 0.85 is the general/other-case value. The value
+# DS/EN 1992-1-1:2023, 5.1.6(1): 0.85 is the general/other-case value. The value
 # 1.00 is not an equivalent preference; it is an explicit applicability choice
 # for the stated reference-age and delayed-design-loading conditions.
 _KTC_CHOICES = {
@@ -454,7 +455,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
             box, r"$k_{tc}$ applicability", list(by_value), _code.k_tc,
             "conc_k_tc", format_func=lambda value: by_value[value],
             disabled=locked,
-            help="EN 1992-1-1:2023 5.1.6(1): use 0.85 for the general/other "
+            help="DS/EN 1992-1-1:2023 5.1.6(1): use 0.85 for the general/other "
                  "cases. Select 1.00 only when the stated reference-age and delayed "
                  "design-loading conditions apply.",
         )
@@ -482,7 +483,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         alpha_cc = box.number_input(
             r"Effective $\eta_{cc} k_{tc}$", float(lo), float(hi), step=float(step),
             key="conc_alpha_cc", disabled=True, format="%.6f",
-            help="Derived EN 1992-1-1:2023 design-strength coefficient: "
+            help="Derived DS/EN 1992-1-1:2023 design-strength coefficient: "
                  r"$\eta_{cc}=\min[(40/f_{ck})^{1/3},1.0]$, multiplied by the "
                  r"selected $k_{tc}$.",
         )
@@ -499,7 +500,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     # Table 3.1 values for the current grade (constant up to C50/60).
     parabola = curve == 2
     strain_lock = locked or not parabola
-    # Auto values follow the selected edition: EN 1992-1-1:2023 keeps the ultimate
+    # Auto values follow the selected edition: DS/EN 1992-1-1:2023 keeps the ultimate
     # parabola strains constant for every class, so deriving the Table 3.1
     # strength-dependent values above C50/60 would silently overwrite the 2023 law
     # (the manual button and Auto-calc-all share these). Non-edition curve presets
@@ -511,12 +512,12 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     a_ecu2 = round(_ecu2_f * 1000.0, 2)
     a_n = round(_n_f, 3)
     auto_all = st.session_state.get("_auto_all", False)
-    if (box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} permille, n={a_n:.2f})",
+    if (box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} {_PERMILLE}, n={a_n:.2f})",
                    key="conc_strain_auto", width="stretch", disabled=strain_lock,
                    help=r"Set $\varepsilon_{c2}$, $\varepsilon_{cu2}$ and $n$ for "
                         "the current grade and edition "
                         "(EC2 Table 3.1, strength-dependent above C50/60; kept constant "
-                        r"for EN 1992-1-1:2023). Press again after changing $f_{ck}$ or preset.")
+                        r"for DS/EN 1992-1-1:2023). Press again after changing $f_{ck}$ or preset.")
             or (auto_all and not strain_lock)):
         st.session_state["conc_eps_c2"] = a_ec2
         st.session_state["conc_eps_cu2"] = a_ecu2
@@ -550,7 +551,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         if auto is not None else ""
     )
     box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.3f} MPa,  "
-                f"$\\varepsilon_{{cu2}}$ = {concrete.eps_cu2 * 1000.0:.3f} permille{note}")
+                f"$\\varepsilon_{{cu2}}$ = {concrete.eps_cu2 * 1000.0:.3f} {_PERMILLE}{note}")
 
     # Mean tensile strength fctm feeds the serviceability cracking check. It lives
     # with the concrete (not the loads); the Auto button refreshes it from the
@@ -774,9 +775,9 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     pre = _safe_build(box, mp.build_prestress, curve, vals)
     if curve in (1, 2, 3, 4, 5):
         box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "
-                    f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ permille applies")
+                    f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ {_PERMILLE} applies")
     else:
-        box.caption(f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ permille,  "
+        box.caption(f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ {_PERMILLE},  "
                     f"$f_{{pd}}={vals['fytk'] / vals['gamma_y']:.3f}$ MPa,  "
                     f"$E_p={vals['Es']:.0f}$ GPa")
     if not catalogue_mode:
@@ -5341,7 +5342,7 @@ def build_inputs(host=st):
         ["A", "B", "C"],
         "B",
         "transverse_ductility_class",
-        help="Physical ductility class of the link reinforcement. EN 1992-1-1:2023 "
+        help="Physical ductility class of the link reinforcement. DS/EN 1992-1-1:2023 "
              "uses it for the compression-field angle range and, when explicitly "
              "selected below, the favourable minimum-ratio reduction.",
     )
@@ -5354,7 +5355,7 @@ def build_inputs(host=st):
             transverse_detailing_on
             and detailing_edition == detailing.EC2_2023
         ),
-        help="Favourable optional provision in EN 1992-1-1:2023 12.2(4): "
+        help="Favourable optional provision in DS/EN 1992-1-1:2023 12.2(4): "
              "reduce the minimum ratio by 10 % for class B or 20 % for class C. "
              "Off keeps the unreduced value.",
     )
@@ -5440,7 +5441,7 @@ def build_inputs(host=st):
         codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
         help=r"Code edition for the shear rules: the 2005 family ($V_{Rd,c}$, 6.2.2(1)) "
-             r"or EN 1992-1-1:2023 (8.2.2 without links; 8.2.3 with links). See the "
+             r"or DS/EN 1992-1-1:2023 (8.2.2 without links; 8.2.3 with links). See the "
              "manual for the difference.")
     _eff_shear_method = combined_method if combined_on else shear_method
     _shear_2023 = (
@@ -5657,10 +5658,10 @@ def build_inputs(host=st):
         "shear_links",
         disabled=not (shear_on or torsion_on),
         help=(
-            "One current physical authority for the shared stirrup. Shear uses "
+            "One current physical selection for the shared stirrup. Shear uses "
             "the selected effective vertical legs. Torsion requires the same bar "
             "to form a closed, anchored loop and uses one leg in Asw/s. Positive "
-            "stored diameter or spacing never overrides an unticked authority."
+            "stored diameter or spacing never overrides a disabled selection."
         ),
     )
     _links = bool(shear_on and shear_links)
@@ -5675,7 +5676,7 @@ def build_inputs(host=st):
     sts.caption(
         "The compression-strut band remains available for torsion concrete-cap "
         "transparency. Stirrup geometry is active only when the shared-link "
-        "authority is on. Shear uses n legs; torsion uses one closed-loop leg."
+        "selection is enabled. Shear uses n legs; torsion uses one closed-loop leg."
     )
     strut_lo, strut_hi = sts.columns(2)
     strut_cot_min = _seeded_number(
@@ -9336,7 +9337,7 @@ def results_overview_view(inp, results, *, stale=False):
         "STALE",
         "REVIEW",
         "NOT ASSESSED",
-        "CALCULATED - ACCEPTANCE NOT ASSESSED",
+        "CALCULATED - NO LIMIT COMPARISON",
     }
     success_or_output_states = {
         "PASS",
@@ -9428,7 +9429,7 @@ def results_overview_view(inp, results, *, stale=False):
         "NOT APPLICABLE": "background-color: #EEF2F6; color: #374151",
         "CALCULATED": "background-color: #E8F0FE; color: #174EA6",
         "NOT REQUESTED": "background-color: #EEF2F6; color: #374151",
-        "CALCULATED - ACCEPTANCE NOT ASSESSED": (
+        "CALCULATED - NO LIMIT COMPARISON": (
             "background-color: #E8F0FE; color: #174EA6"
         ),
         "WITHIN USER-SPECIFIED LIMIT": (
@@ -9845,7 +9846,7 @@ def _elastic_state_hover(rows):
                 material += f" - {material_name}"
         out.append(
             f"{_SIGMA}<sub>total</sub> = {row['total_mpa']:.3f} MPa<br>"
-            f"{_EPS} = {row['strain_permille']:.4f} permille{material}"
+            f"{_EPS} = {row['strain_permille']:.4f} {_PERMILLE}{material}"
         )
     return out
 
@@ -9858,7 +9859,7 @@ def _elastic_corner_hover(rows):
     return [
         f"{row['ring']} point {row['ring_point_no']}<br>"
         f"{_SIGMA}<sub>c</sub> = {row['stress_mpa']:.3f} MPa<br>"
-        f"{_EPS}<sub>c</sub> = {row['strain_permille']:.4f} permille"
+        f"{_EPS}<sub>c</sub> = {row['strain_permille']:.4f} {_PERMILLE}"
         for row in rows
     ]
 
@@ -10041,7 +10042,7 @@ def plastic_view(inp, results):
                     "Ring point": [row["ring_point_no"] for row in concrete_rows],
                     "x (mm)": [round(row["x_mm"], 2) for row in concrete_rows],
                     "y (mm)": [round(row["y_mm"], 2) for row in concrete_rows],
-                    f"Strain ({_EPS}, permille)": [
+                    f"Strain ({_EPS}, {_PERMILLE})": [
                         round(row["strain_permille"], 5) for row in concrete_rows],
                     f"Design stress ({_SIGMA}c, MPa)": [
                         round(row["stress_mpa"], 3) for row in concrete_rows],
@@ -10066,7 +10067,7 @@ def plastic_view(inp, results):
                     "x (mm)": [round(row["x_mm"], 2) for row in element_rows],
                     "y (mm)": [round(row["y_mm"], 2) for row in element_rows],
                     "Area (mm2)": [round(row["area_mm2"], 2) for row in element_rows],
-                    f"Strain ({_EPS}, permille)": [
+                    f"Strain ({_EPS}, {_PERMILLE})": [
                         round(row["strain_permille"], 5) for row in element_rows],
                     f"Design stress ({_SIGMA}, MPa)": [
                         round(row["stress_mpa"], 3) for row in element_rows],
@@ -10308,7 +10309,7 @@ def elastic_view(inp, results, *, global_results=None):
                 "x (mm)": [round(r["x_mm"], 2) for r in element_rows],
                 "y (mm)": [round(r["y_mm"], 2) for r in element_rows],
                 "Area (mm2)": [round(r["area_mm2"], 2) for r in element_rows],
-                f"Strain ({_EPS}, permille)": [
+                f"Strain ({_EPS}, {_PERMILLE})": [
                     round(r["strain_permille"], 5) for r in element_rows],
                 "Total (MPa)": [round(r["total_mpa"], 3) for r in element_rows],
                 "Long (MPa)": [round(r["long_mpa"], 3) for r in element_rows],
@@ -10334,7 +10335,7 @@ def elastic_view(inp, results, *, global_results=None):
                     "Ring point": [r["ring_point_no"] for r in corner_rows],
                     "x (mm)": [round(r["x_mm"], 2) for r in corner_rows],
                     "y (mm)": [round(r["y_mm"], 2) for r in corner_rows],
-                    f"Strain ({_EPS}, permille)": [
+                    f"Strain ({_EPS}, {_PERMILLE})": [
                         round(r["strain_permille"], 5) for r in corner_rows],
                     f"Concrete stress ({_SIGMA}c, MPa)": [
                         round(r["stress_mpa"], 3) for r in corner_rows],
@@ -12117,7 +12118,7 @@ def torsion_view(inp, results):
         )
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
         st.caption(
-            "Informational cap angle only (not an accepted resistance angle): "
+            "Informational cap angle only (not a resistance angle): "
             f"theta = {t['theta_deg']:.1f} deg, cot theta = {t['cot']:.3f}. "
             "The Formula 6.28 longitudinal-reinforcement value is a calculated "
             "requirement at that displayed angle, not evidence of provided "

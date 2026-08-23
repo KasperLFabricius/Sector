@@ -88,12 +88,12 @@ MANUAL_EQUATION_LOCATIONS = (
     ),
     _location(
         6, "manual.detailing.minimum-2023-bending", "C5-2",
-        "Reinforcement detailing", "EN 1992-1-1:2023",
+        "Reinforcement detailing", "DS/EN 1992-1-1:2023",
         "a3e8a44022ab1eeac1eb1e85361b1735d337f4289aabfa4748a06a31eb7f8c9d",
     ),
     _location(
         7, "manual.detailing.minimum-2023-axial", "C5-3",
-        "Reinforcement detailing", "EN 1992-1-1:2023",
+        "Reinforcement detailing", "DS/EN 1992-1-1:2023",
         "f52a3042781e1a85e83ae53f1e0031d3e5828a191421ba1c00bb968e81587822",
     ),
     _location(
@@ -137,13 +137,13 @@ MANUAL_EQUATION_LOCATIONS = (
     _location(
         15, "manual.crack.2023.width", "C7-3",
         "Serviceability: cracking and crack width",
-        "EN 1992-1-1:2023 refined model",
+        "DS/EN 1992-1-1:2023 refined model",
         "4c15d71e9d8e368108149af68afc41acc767712cd71aa1ad7af0223bb5ae3d10",
     ),
     _location(
         16, "manual.crack.2023.spacing", "C7-4",
         "Serviceability: cracking and crack width",
-        "EN 1992-1-1:2023 refined model",
+        "DS/EN 1992-1-1:2023 refined model",
         "3232760c0b31c26275f004adf2bf978d25bf8452b182b6966e3bfeb455cae8ea",
     ),
     _location(

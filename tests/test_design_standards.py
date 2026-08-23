@@ -303,7 +303,7 @@ def test_input_guidance_registry_is_complete_basis_bound_and_exact():
     assert standards.input_guidance(
         standards.DesignBasisKey.PUBLISHED_2023,
         standards.InputGuidanceKey.FATIGUE_MIXED_BOND,
-    ).source == "EN 1992-1-1:2023 10.3(2)"
+    ).source == "DS/EN 1992-1-1:2023 10.3(2)"
     assert standards.input_guidance(
         standards.DesignBasisKey.PUBLISHED_2023,
         standards.InputGuidanceKey.ORDINARY_CRACK_TENDON_BOND,

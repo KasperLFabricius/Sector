@@ -201,7 +201,7 @@ def combined_interaction_authority(
     links_required = inp.get("shear_links", _MISSING)
     if type(links_required) is not bool:
         raise CapacityInputError(
-            "combined shear-links authority must be a concrete Boolean"
+            "combined shear-links selection must be a concrete Boolean"
         )
     if not links_required:
         return CombinedInteractionAuthority(
@@ -1204,7 +1204,7 @@ def _build_shear_face_context(
 
 
 def _shared_links_present(inp):
-    """Return the exact shared-link authority or reject malformed evidence."""
+    """Return the exact shared-link selection or reject malformed evidence."""
 
     authority = inp.get("shear_links", _MISSING)
     if type(authority) is not bool:

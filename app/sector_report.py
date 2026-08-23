@@ -58,7 +58,12 @@ from sector import detailing
 from sector import fatigue as fatigue_core
 from sector import __licensee__ as SECTOR_LICENSEE
 from sector.build_info import short_revision
-from sector.design_standards import DesignBasisKey, get_design_basis
+from sector.design_standards import (
+    DesignBasisKey,
+    InputGuidanceKey,
+    get_design_basis,
+    input_guidance,
+)
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -149,8 +154,59 @@ def _steel_standard_reference(preset):
     if code is None:
         return None
     if code.key == "EC2-2023":
-        return "EN 1992-1-1:2023 &#167;5.2.4"
-    return f"{code.label} &#167;3.2.7"
+        return (
+            "DS/EN 1992-1-1:2023, 5.2.4(1)-(3), Formula (5.11) "
+            "and Figure 5.2"
+        )
+    return f"{code.label}, 3.2.7"
+
+
+def _prestress_standard_reference(preset):
+    """Return the exact design-law source for a recognised tendon preset."""
+
+    code = ec2_codes.CODES.get(str(preset))
+    if code is None:
+        return None
+    if code.key == "EC2-2023":
+        return (
+            "DS/EN 1992-1-1:2023, 5.3.3(1)-(3), Formula (5.12) "
+            "and Figure 5.3"
+        )
+    return f"{code.label}, 3.3.6"
+
+
+def _concrete_ultimate_reference(preset):
+    """Return the selected concrete-law source without inferring a preset."""
+
+    code = ec2_codes.CODES.get(str(preset))
+    if code is None:
+        return None
+    if code.key == "EC2-2023":
+        return (
+            "DS/EN 1992-1-1:2023, 8.1.1(2)-(3) and 8.1.2(1), "
+            "Formula (8.4)"
+        )
+    return (
+        f"{code.label}, 3.1.7, Formula (3.17), and Table 3.1"
+    )
+
+
+_INPUT_REFERENCE_BASIS_BY_EDITION = {
+    ec2_codes.EC2_2005.label: DesignBasisKey.FIRST_GEN_BASE,
+    ec2_codes.EC2_2005_DKNA.label: DesignBasisKey.FIRST_GEN_DK_NA_2024,
+    ec2_codes.EC2_2023.label: DesignBasisKey.PUBLISHED_2023,
+}
+
+
+def _input_reference_source(edition, key, *, project_defined=False):
+    """Return one registry-owned input source for report publication."""
+
+    basis_key = _INPUT_REFERENCE_BASIS_BY_EDITION.get(edition)
+    if basis_key is None:
+        if project_defined:
+            return "Project-defined input; no Eurocode source inferred."
+        return "Selected edition has no registered input source."
+    return input_guidance(basis_key, key).source
 
 
 def _report_basis_summary(inp):
@@ -1321,7 +1377,7 @@ class ReportBuilder:
             status = str(row["status"]).upper()
             if status == "CALCULATED" or row["criterion"] == "Output only":
                 return "Calculated outputs"
-            return "Acceptance checks"
+            return "Checks and comparisons"
 
         def _overview_source_note(row):
             source = str(row.get("source") or "").strip()
@@ -1958,7 +2014,7 @@ class ReportBuilder:
         )
         if caption is None:
             first_header = rows[0][0].getPlainText().strip() if header else "Data"
-            caption = f"Published evidence for {subject}"
+            caption = f"Reported information for {subject}"
             if first_header.lower() not in subject.lower():
                 caption += f": {first_header}"
         table_item = self._publication_counter.issue("Table", str(caption))
@@ -2501,6 +2557,13 @@ class ReportBuilder:
         if concrete is not None:
             concrete_source = inp.get("concrete_preset") or inp.get("conc_preset")
             concrete_2023 = "2023" in str(concrete_source or "")
+            concrete_reference = _concrete_ultimate_reference(concrete_source)
+            concrete_source_text = str(concrete_source or "User-defined")
+            concrete_source_text += (
+                "; source: " + concrete_reference
+                if concrete_reference
+                else "; project-defined; no Eurocode source inferred"
+            )
             concrete_properties = [
                 f"f<sub>ck</sub> = {_fmt(concrete.fck, 3)} MPa",
                 f"gamma<sub>c</sub> = {_fmt(concrete.gamma_c, 3)}",
@@ -2526,7 +2589,7 @@ class ReportBuilder:
                 (
                     f"eps<sub>c2</sub> / eps<sub>cu2</sub> = "
                     f"{_fmt(concrete.eps_c2 * 1000, 3)} / "
-                    f"{_fmt(concrete.eps_cu2 * 1000, 3)} permille"
+                    f"{_fmt(concrete.eps_cu2 * 1000, 3)} &#8240;"
                 ),
             ])
             if concrete.curve == 2:
@@ -2534,7 +2597,7 @@ class ReportBuilder:
             rows.append([
                 "Concrete",
                 "Concrete rings",
-                _html_escape(str(concrete_source or "User-defined")),
+                _html_escape(concrete_source_text),
                 "; ".join(concrete_properties),
             ])
 
@@ -2587,6 +2650,12 @@ class ReportBuilder:
                 for key in ("name", "preset", "description")
             ]
             source_text = "; ".join(part for part in source_parts if part) or "User-defined"
+            source_reference = _steel_standard_reference(record.get("preset"))
+            source_text += (
+                "; source: " + source_reference
+                if source_reference
+                else "; project-defined; no Eurocode source inferred"
+            )
             properties = "Material definition unavailable"
             if law is not None:
                 curve = int(law.curve)
@@ -2610,7 +2679,7 @@ class ReportBuilder:
                     f"curve {curve}",
                     strengths,
                     f"E<sub>s</sub> = {_fmt(law.Es / 1000, 1)} GPa",
-                    f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} permille",
+                    f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} &#8240;",
                     factors,
                 ]
                 if curve == 3:
@@ -2619,7 +2688,7 @@ class ReportBuilder:
                         (
                             f"eps<sub>0t</sub> / eps<sub>0c</sub> = "
                             f"{_fmt(law.ey0t * 1000, 3)} / "
-                            f"{_fmt(law.ey0c * 1000, 3)} permille"
+                            f"{_fmt(law.ey0c * 1000, 3)} &#8240;"
                         ),
                     ])
                 law_parts.append(
@@ -2668,6 +2737,14 @@ class ReportBuilder:
                 for key in ("name", "preset", "description")
             ]
             source_text = "; ".join(part for part in source_parts if part) or "User-defined"
+            source_reference = _prestress_standard_reference(
+                record.get("preset")
+            )
+            source_text += (
+                "; source: " + source_reference
+                if source_reference
+                else "; project-defined; no Eurocode source inferred"
+            )
             properties = "Material definition unavailable"
             if law is not None:
                 if law.curve in (1, 2, 3, 4, 5):
@@ -2676,7 +2753,7 @@ class ReportBuilder:
                         f"{_fmt(law.Es / 1000, 1)} GPa; "
                         f"eps<sub>p,0</sub> / eps<sub>ut</sub> = "
                         f"{_fmt(law.IS * 1000, 3)} / "
-                        f"{_fmt(law.rupture_strain * 1000, 3)} permille; "
+                        f"{_fmt(law.rupture_strain * 1000, 3)} &#8240;; "
                         f"gamma<sub>y</sub> = {_fmt(law.gamma_y, 3)}"
                     )
                     if reinforcement_fatigue and record.get("fytk") is not None:
@@ -2694,8 +2771,8 @@ class ReportBuilder:
                         f"{_fmt(law.futk, 3)} MPa; E<sub>p</sub> = "
                         f"{_fmt(law.Es / 1000, 1)} GPa; "
                         f"eps<sub>p,0</sub> = "
-                        f"{_fmt(law.IS * 1000, 3)} permille",
-                        f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} permille",
+                        f"{_fmt(law.IS * 1000, 3)} &#8240;",
+                        f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} &#8240;",
                         f"gamma<sub>y</sub> / gamma<sub>u</sub> / "
                         f"gamma<sub>E</sub> = {_fmt(law.gamma_y, 3)} / "
                         f"{_fmt(law.gamma_u, 3)} / "
@@ -2706,7 +2783,7 @@ class ReportBuilder:
                             f"k = {_fmt(law.k, 3)}",
                             (
                                 f"eps<sub>0t</sub> = "
-                                f"{_fmt(law.ey0t * 1000, 3)} permille"
+                                f"{_fmt(law.ey0t * 1000, 3)} &#8240;"
                             ),
                         ])
                     properties = "; ".join(law_parts)
@@ -2812,9 +2889,20 @@ class ReportBuilder:
                 ["N-M interaction diagrams", self._brief_switch(inp.get("interaction"))],
             ])
         if elastic_results or inp.get("fatigue_on"):
+            concrete_preset = (
+                inp.get("concrete_preset") or inp.get("conc_preset")
+            )
             rows.extend([
                 ["Concrete elastic modulus E<sub>c</sub>", f"{_fmt(inp.get('conc_Ec'), 3)} GPa"],
                 ["Creep coefficient phi", _fmt(inp.get("el_phi"), 3)],
+                [
+                    "Creep coefficient source",
+                    _html_escape(_input_reference_source(
+                        concrete_preset,
+                        InputGuidanceKey.CREEP_COEFFICIENT,
+                        project_defined=True,
+                    )),
+                ],
             ])
         if elastic_results:
             rows.extend([
@@ -3049,6 +3137,31 @@ class ReportBuilder:
                 resistance_rows.append([
                     "Detailing edition",
                     _html_escape(str(inp.get("detailing_edition") or "-")),
+                ])
+            detailing_edition = inp.get("detailing_edition")
+            if minimum_active:
+                resistance_rows.append([
+                    "Minimum-reinforcement source",
+                    _html_escape(_input_reference_source(
+                        detailing_edition,
+                        InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+                    )),
+                ])
+            if transverse_active:
+                resistance_rows.append([
+                    "Link-detailing source",
+                    _html_escape(_input_reference_source(
+                        detailing_edition,
+                        InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+                    )),
+                ])
+            if clear_active:
+                resistance_rows.append([
+                    "Clear-spacing source",
+                    _html_escape(_input_reference_source(
+                        detailing_edition,
+                        InputGuidanceKey.DETAILING_CLEAR_SPACING,
+                    )),
                 ])
             if minimum_active or transverse_active:
                 resistance_rows.append([
@@ -3603,7 +3716,7 @@ class ReportBuilder:
                 ["Axial force N", "kN"],
                 ["Moments M<sub>x</sub>, M<sub>y</sub>", "kNm"],
                 ["Stresses", "MPa"],
-                ["Strains", "permille / percent as noted"],
+                ["Strains", "&#8240; / percent as noted"],
                 ["Curvature kappa", "1/m"],
                 ["Areas / second moments", "m<super>2</super> / m<super>4</super>"]]
         self._table(rows, [120 * mm, 45 * mm])
@@ -3843,8 +3956,8 @@ class ReportBuilder:
             )
         rows.extend([
                  ["Curve", "-", "parabola-rectangle" if c.curve == 2 else "cubic"],
-                 ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} permille"],
-                 ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} permille"],
+                 ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} &#8240;"],
+                 ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} &#8240;"],
                  ["Exponent", "n", _fmt(c.n, 3)],
         ])
         if fcd is not None:
@@ -3864,7 +3977,10 @@ class ReportBuilder:
                 "f<sub>ck</sub> / gamma<sub>c</sub>",
                 equation_key="materials.concrete.fcd",
                 equation_variant="2023",
-                ref="EN 1992-1-1:2023 &#167;5.1.6(1), Formulae (5.3) and (5.4)",
+                ref=(
+                    "DS/EN 1992-1-1:2023, 5.1.6(1), Formulae "
+                    "(5.3)-(5.4)"
+                ),
                 subst=f"= {_fmt(self.inp.get('concrete_eta_cc'),6)} &#183; "
                       f"{_fmt(self.inp.get('concrete_k_tc'),2)} &#183; "
                       f"{_fmt(c.fck, 3)} / {_fmt(c.gamma_c, 3)}",
@@ -3880,7 +3996,7 @@ class ReportBuilder:
             else:
                 applicability_note = (
                     "k<sub>tc</sub> = 0.85 is the general / other-case value stated "
-                    "in EN 1992-1-1:2023 5.1.6(1)."
+                    "in DS/EN 1992-1-1:2023, 5.1.6(1)."
                 )
         elif fcd is not None:
             self._formula(
@@ -3902,9 +4018,11 @@ class ReportBuilder:
                 "eps<sub>c2</sub>)<super>n</super>],  for eps<sub>c</sub> &lt;= eps<sub>c2</sub>; "
                 "then f<sub>cd</sub> up to eps<sub>cu2</sub>",
                 equation_key="materials.concrete.curve-2",
-                ref=("EN 1992-1-1:2023 &#167;8.1.2(1), Formula (8.4)"
-                     if is_2023 else
-                     "DS/EN 1992-1-1 &#167;3.1.7, Eq (3.17); strains from Table 3.1"))
+                ref=(
+                    _concrete_ultimate_reference(preset)
+                    or "Project-defined concrete law; no Eurocode source inferred."
+                ),
+            )
         if self.figures:
             self._fig(viz.concrete_curve_figure(c), 130, 80)
 
@@ -3981,7 +4099,7 @@ class ReportBuilder:
                     ["Compression yield", "f<sub>yck</sub>", f"{_fmt(st.fyck, 3)} MPa"],
                     ["Ultimate strength", "f<sub>utk</sub>", f"{_fmt(st.futk, 3)} MPa"],
                     ["Rupture strain", "eps<sub>ut</sub>",
-                     f"{_fmt(st.eut*1000, 3)} permille"],
+                     f"{_fmt(st.eut*1000, 3)} &#8240;"],
                     ["Elastic modulus", "E<sub>s</sub>", f"{_fmt(st.Es/1000,1)} GPa"],
                     ["Yield partial factor", "gamma<sub>y</sub>", _fmt(st.gamma_y, 3)],
                     ["Ultimate partial factor", "gamma<sub>u</sub>", _fmt(st.gamma_u, 3)],
@@ -4053,7 +4171,16 @@ class ReportBuilder:
                 self._small(_html_escape(item["description"]))
             rows = [["Parameter", "Symbol", "Value"],
                     ["Initial prestrain", "eps<sub>p</sub><super>(0)</super>",
-                     f"{_fmt(p.IS*1000, 3)} permille"]]
+                     f"{_fmt(p.IS*1000, 3)} &#8240;"],
+                    [
+                        "Design-law source",
+                        "-",
+                        _prestress_standard_reference(item.get("preset"))
+                        or (
+                            "Project-defined or built-in law; no Eurocode "
+                            "source inferred"
+                        ),
+                    ]]
             if p.curve in (1, 2, 3, 4, 5):
                 characteristic_at_rupture = (
                     prepared.get(str(material_id), {}).get(
@@ -4067,7 +4194,7 @@ class ReportBuilder:
                     ["Elastic-analysis modulus", "E<sub>p</sub>",
                      f"{_fmt(p.Es/1000, 1)} GPa"],
                     ["Fixed rupture strain", "eps<sub>ut</sub>",
-                     f"{_fmt(p.rupture_strain*1000, 3)} permille"],
+                     f"{_fmt(p.rupture_strain*1000, 3)} &#8240;"],
                     ["Design factor on fixed workline", "gamma<sub>y</sub>",
                      _fmt(p.gamma_y, 3)],
                 ])
@@ -4087,7 +4214,7 @@ class ReportBuilder:
                     ["Elastic modulus", "E<sub>p</sub>",
                      f"{_fmt(p.Es/1000, 1)} GPa"],
                     ["Rupture strain", "eps<sub>ut</sub>",
-                     f"{_fmt(p.rupture_strain*1000, 3)} permille"],
+                     f"{_fmt(p.rupture_strain*1000, 3)} &#8240;"],
                     ["Yield partial factor", "gamma<sub>y</sub>",
                      _fmt(p.gamma_y, 3)],
                     ["Ultimate partial factor", "gamma<sub>u</sub>",
@@ -4470,6 +4597,13 @@ class ReportBuilder:
             rows.extend([
                 ["Minimum reinforcement", "selected per capacity case"],
                 ["Detailing edition", str(inp.get("detailing_edition") or "-")],
+                [
+                    "Minimum-reinforcement source",
+                    _input_reference_source(
+                        inp.get("detailing_edition"),
+                        InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+                    ),
+                ],
                 ["Member type", str(inp.get("detailing_member_type") or "Beam")],
                 [
                     "Section cut direction",
@@ -4483,12 +4617,19 @@ class ReportBuilder:
                     f"{_fmt(inp.get('sls_fctm'), 3)} MPa",
                 ])
         if inp.get("transverse_detailing_on"):
-            rows.append(
+            rows.extend([
                 [
                     "Shear/torsion link detailing",
                     "selected per active capacity case",
-                ]
-            )
+                ],
+                [
+                    "Link-detailing source",
+                    _input_reference_source(
+                        inp.get("detailing_edition"),
+                        InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+                    ),
+                ],
+            ])
             if not inp.get("minimum_reinforcement_on"):
                 rows.extend([
                     [
@@ -4550,6 +4691,13 @@ class ReportBuilder:
         if inp.get("clear_spacing_on"):
             rows.extend([
                 ["Clear-spacing check", "section-wide"],
+                [
+                    "Clear-spacing source",
+                    _input_reference_source(
+                        inp.get("detailing_edition"),
+                        InputGuidanceKey.DETAILING_CLEAR_SPACING,
+                    ),
+                ],
                 ["Upper aggregate size D<sub>upper</sub>",
                  f"{_fmt(inp.get('detailing_d_upper'), 1)} mm"],
                 ["Tendons included in spacing",
@@ -4568,6 +4716,17 @@ class ReportBuilder:
                              f"{_fmt(elastic_shared.get('effective_concrete_modulus_mpa'), 1)} MPa"])
                 rows.append(["Creep coefficient &#966; (long-term)",
                              _fmt(elastic_shared.get("creep_coefficient"), 3)])
+                concrete_preset = (
+                    inp.get("concrete_preset") or inp.get("conc_preset")
+                )
+                rows.append([
+                    "Creep coefficient source",
+                    _input_reference_source(
+                        concrete_preset,
+                        InputGuidanceKey.CREEP_COEFFICIENT,
+                        project_defined=True,
+                    ),
+                ])
             for material in elastic_shared.get("materials") or []:
                 rows.append([
                     f"{material.get('material_id')} modular ratios "
@@ -4627,6 +4786,15 @@ class ReportBuilder:
                 ],
                 ["Fatigue gamma<sub>Ff</sub>",
                  _fmt(factors.get("gamma_ff"), 3)],
+                ["Creep coefficient phi", _fmt(inp.get("el_phi"), 3)],
+                [
+                    "Creep coefficient source",
+                    _input_reference_source(
+                        inp.get("concrete_preset") or inp.get("conc_preset"),
+                        InputGuidanceKey.CREEP_COEFFICIENT,
+                        project_defined=True,
+                    ),
+                ],
             ])
             if checks.get("reinforcement"):
                 fatigue_rows.append([
@@ -4696,6 +4864,15 @@ class ReportBuilder:
         ec = payload["concrete_modulus_mpa"]
         phi = payload["creep_coefficient"]
         self._h2("Elastic material transformation")
+        creep_source = _input_reference_source(
+            self.inp.get("concrete_preset") or self.inp.get("conc_preset"),
+            InputGuidanceKey.CREEP_COEFFICIENT,
+            project_defined=True,
+        )
+        self._small(
+            "<b>Creep coefficient source:</b> "
+            + _html_escape(creep_source)
+        )
         self._formula(
             "E<sub>c,eff</sub> = E<sub>c</sub> / (1 + phi)",
             equation_key="elastic.concrete.effective-modulus",
@@ -4842,7 +5019,7 @@ class ReportBuilder:
                 }
             ] or [str(self.inp.get("mild_preset", ""))]
             concrete_ref = (
-                "EN 1992-1-1:2023 &#167;8.1.1-8.1.2 and &#167;5.1.6"
+                "DS/EN 1992-1-1:2023 &#167;8.1.1-8.1.2 and &#167;5.1.6"
                 if material_2023 else
                 "DS/EN 1992-1-1 &#167;6.1 and &#167;3.1.7"
             )
@@ -4941,6 +5118,10 @@ class ReportBuilder:
             )
         if minimum_results:
             edition = str(self.inp.get("detailing_edition") or "")
+            minimum_source = _input_reference_source(
+                edition,
+                InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+            )
             direction_label = _modelled_direction_report_label(
                 minimum_results[0],
                 cut_direction=self.inp.get("detailing_cut_direction"),
@@ -4954,8 +5135,8 @@ class ReportBuilder:
                     "uses direct force equilibrium."
                 )
                 self._small(
-                    "Reference: EN 1992-1-1:2023, 12.2(2), Formulae (12.1) and "
-                    "(12.2). Prestressing tendons are not credited."
+                    "Reference: " + _html_escape(minimum_source)
+                    + ". Prestressing tendons are not credited."
                 )
             else:
                 self._p(
@@ -4965,11 +5146,15 @@ class ReportBuilder:
                     "f<sub>ctm</sub>/f<sub>yk</sub>, 0.0013) b<sub>t</sub>d."
                 )
                 self._small(
-                    "Reference: EN 1992-1-1, 9.2.1.1(1), Formula (9.1N). "
-                    "Prestressing tendons are not credited."
+                    "Reference: " + _html_escape(minimum_source)
+                    + ". Prestressing tendons are not credited."
                 )
         if transverse_results:
             edition = str(self.inp.get("detailing_edition") or "")
+            transverse_source = _input_reference_source(
+                edition,
+                InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+            )
             self._p(
                 "<b>Shear/torsion link detailing.</b> Vertical "
                 "shear links are checked for minimum ratio, longitudinal spacing "
@@ -4981,7 +5166,7 @@ class ReportBuilder:
                 "&#961;<sub>w,T</sub> = A<sub>leg</sub> / "
                 "(s t<sub>ef</sub>)",
                 equation_key="basis.detailing.transverse-ratios",
-                ref=_html_escape(edition),
+                ref=_html_escape(transverse_source),
             )
             self._small(
                 "The model contains vertical stirrups only and treats the torsion "
@@ -4995,13 +5180,16 @@ class ReportBuilder:
                 "web upper-bound screen can prove PASS, but cannot prove FAIL."
             )
         if self._base_out.get("clear_spacing") is not None:
-            clause = "11.2(2)" if self.inp.get("detailing_edition") == detailing.EC2_2023 else "8.2(2)"
+            spacing_source = _input_reference_source(
+                self.inp.get("detailing_edition"),
+                InputGuidanceKey.DETAILING_CLEAR_SPACING,
+            )
             self._p(
                 "<b>Clear spacing.</b> Pairwise edge-to-edge distance is compared "
                 "with max(phi, D<sub>upper</sub> + 5 mm, 20 mm)."
             )
             self._small(
-                f"Reference: {self.inp.get('detailing_edition', '-')} {clause}. "
+                "Reference: " + _html_escape(spacing_source) + ". "
                 "Lap and bundle verification remains outside this section-plane check."
             )
         if (not plastic_results and not elastic_results and not minimum_results
@@ -5145,7 +5333,7 @@ class ReportBuilder:
                     "R<sub>nom</sub> = &#8721;(A<sub>s,i</sub> f<sub>yk,i</sub>) "
                     "&#8805; R<sub>cr</sub> = A<sub>c</sub> f<sub>ctm</sub>",
                     equation_key="detailing.minimum.tension-2023",
-                    ref="EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
+                    ref="DS/EN 1992-1-1:2023 &#167;12.2(2)(b), Formula (12.2)",
                     subst=(
                         "R<sub>cr</sub> = "
                         f"{_fmt(worked_check.get('concrete_area_m2'), 6)} &#183; "
@@ -5196,7 +5384,7 @@ class ReportBuilder:
                     "lambda<sub>cr</sub> = (f<sub>ctm</sub> - "
                     "sigma<sub>N,v</sub>) / sigma<sub>M,v</sub>",
                     equation_key="detailing.minimum.cracking-factor-2023",
-                    ref="Sector vertex evaluation of EN 1992-1-1:2023 Formula (12.1)",
+                    ref="Sector vertex evaluation of DS/EN 1992-1-1:2023 Formula (12.1)",
                     subst=(
                         f"= ({_fmt(worked_check.get('cracking_fctm_mpa'), 6)} - "
                         f"{_fmt(worked_check.get('cracking_governing_axial_stress_mpa'), 6)}) / "
@@ -5228,7 +5416,7 @@ class ReportBuilder:
                     "M<sub>R,nom</sub>(N<sub>Ed</sub>) &#8805; "
                     "M<sub>cr</sub>(N<sub>Ed</sub>)",
                     equation_key="detailing.minimum.bending-2023",
-                    ref="EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
+                    ref="DS/EN 1992-1-1:2023 &#167;12.2(2)(a), Formula (12.1)",
                     subst=(
                         f"{_fmt(worked_check.get('mr_nom_knm'), 6)} kNm "
                         f"&#8805; {_fmt(worked_check.get('m_cr_knm'), 6)} kNm"
@@ -5823,7 +6011,7 @@ class ReportBuilder:
         worked_index = pl.get("worked_point_index")
         assessment = presentation.plastic_action_assessment(pl)
         retained_basis = str(
-            pl.get("worked_point_basis") or "accepted solver state"
+            pl.get("worked_point_basis") or "retained solver state"
         )
         if retained_basis == "utilisation direction" and not assessment.get(
             "assessed"
@@ -5896,12 +6084,12 @@ class ReportBuilder:
         reference_rows = state_rows["concrete"] or state_rows["elements"]
         if all(value is not None for value in plane_values) and reference_rows:
             reference = reference_rows[0]
-            self._h2("Accepted strain plane")
+            self._h2("Retained strain plane")
             self._formula(
                 "eps<sub>sec</sub>(x,y) = eps<sub>0</sub> + "
                 "g<sub>x</sub>x + g<sub>y</sub>y",
                 equation_key="plastic.worked.strain-plane",
-                ref="Sector plane-section kinematics at the retained accepted state.",
+                ref="Sector plane-section kinematics at the retained state.",
                 subst=(
                     f"= {_fmt(plane_values[0], 8)} + "
                     f"{_fmt(plane_values[1], 8)} &#183; "
@@ -5911,7 +6099,7 @@ class ReportBuilder:
                 ),
                 result=(
                     f"eps<sub>sec</sub> = "
-                    f"{_fmt(reference['section_strain_permille'], 6)} permille "
+                    f"{_fmt(reference['section_strain_permille'], 6)} &#8240; "
                     "(compression positive)"
                 ),
             )
@@ -5971,7 +6159,7 @@ class ReportBuilder:
                 self._formula(
                     "kappa<sub>i</sub> = eps<sub>lim,i</sub> / d<sub>i</sub>",
                     equation_key="plastic.worked.curvature-candidate",
-                    ref="Sector retained ultimate-strain candidate at the accepted depth.",
+                    ref="Sector retained ultimate-strain candidate at the solved depth.",
                     subst=(
                         f"= {_fmt(governing_candidate['strain_limit'], 9)} / "
                         f"{_fmt(governing_candidate['distance_from_na_m'], 9)} m"
@@ -6026,7 +6214,7 @@ class ReportBuilder:
             ], [
                 "Bisection iterations", str(gov["search_iterations"]),
             ], [
-                "Accepted compression depth",
+                "Solved compression depth",
                 f"{_fmt(compression_depth_mm, 6)} mm",
             ], [
                 "Requested / achieved internal N",
@@ -6037,19 +6225,19 @@ class ReportBuilder:
                 f"{_fmt(gov['axial_residual'], 9)} / "
                 f"{_fmt(gov['axial_tolerance'], 9)} kN",
             ], [
-                "Accepted state",
+                "Converged state",
                 "yes" if gov.get("axial_reachable") and gov.get("converged") else "no",
             ]]
             self._table(search_rows, [75 * mm, 85 * mm], keep=False)
             self._small(
-                "Only the initial bracket, accepted state and final residual are "
+                "Only the initial bracket, converged state and final residual are "
                 "shown; the internal bisection sequence and integration bands are "
                 "not published."
             )
         else:
             self._h2("Compression-depth solution unavailable")
             self._small(
-                "The completed payload does not contain the full accepted bracket, "
+                "The completed payload does not contain the full converged bracket, "
                 "depth and residual summary. Sector does not reconstruct those "
                 "solver values in the report."
             )
@@ -6061,7 +6249,7 @@ class ReportBuilder:
             "axial_achieved", "axial_requested", "axial_residual", "Mx", "My",
         )
         if all(gov.get(key) is not None for key in resultant_keys):
-            self._h2("Accepted section resultants")
+            self._h2("Section resultants at convergence")
             self._formula(
                 "N<sub>int</sub> = F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub>",
                 equation_key="plastic.worked.axial-equilibrium",
@@ -6089,7 +6277,7 @@ class ReportBuilder:
                 result=f"M<sub>y</sub> = {_fmt(gov['My'], 6)} kNm",
             )
         else:
-            self._h2("Accepted section resultants unavailable")
+            self._h2("Section resultants at convergence unavailable")
             self._small(
                 "The completed payload does not retain every concrete, mild-steel "
                 "and tendon resultant. Sector does not reconstruct material or "
@@ -6121,7 +6309,7 @@ class ReportBuilder:
                 repeat_cols=3,
             )
             self._small(
-                "Coordinates in mm; strain in permille; design stress in MPa. "
+                "Coordinates in mm; strain in &#8240;; design stress in MPa. "
                 "Strain and stress are tension-positive."
             )
         element_rows = state_rows["elements"]
@@ -6131,7 +6319,7 @@ class ReportBuilder:
             self._formula(
                 "F<sub>i</sub> = sigma<sub>i</sub>A<sub>i</sub>/1000",
                 equation_key="plastic.worked.element-force",
-                ref="Retained accepted material response and entered element area.",
+                ref="Retained material response and entered element area.",
                 subst=(
                     f"= {_fmt(worked_element['stress_mpa'], 6)} MPa &#183; "
                     f"{_fmt(worked_element['area_mm2'], 6)} mm<super>2</super> / 1000"
@@ -6166,7 +6354,7 @@ class ReportBuilder:
             )
             self._small(
                 "Coordinates in mm; area in mm<super>2</super>; strain in "
-                "permille; design stress in MPa; force in kN. Signs are "
+                "&#8240;; design stress in MPa; force in kN. Signs are "
                 "tension-positive; force = stress x entered area."
             )
         # Section state at the governing angle (neutral axis + compression zone).
@@ -6213,7 +6401,7 @@ class ReportBuilder:
             )
 
     def _shear_2023(self, sh, res):
-        """The EN 1992-1-1:2023 strain-based tau_Rd,c body (sec. 8.2.2)."""
+        """The DS/EN 1992-1-1:2023 strain-based tau_Rd,c body (sec. 8.2.2)."""
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
         fck = sh["fck"]
         rows = [["Quantity", "Symbol", "Value"],
@@ -6685,7 +6873,7 @@ class ReportBuilder:
         if not retained_angle_fields.issubset(lk):
             self._small(
                 "Worked shear calculation unavailable: the completed payload does "
-                "not retain the accepted strut-angle operands. Sector does not "
+                "not retain the selected strut-angle operands. Sector does not "
                 "reconstruct them in the report."
             )
             return
@@ -6748,7 +6936,7 @@ class ReportBuilder:
             labels = tuple(shared_angle.get("objective_labels") or ())
             governing = tuple(shared_angle.get("governing_objectives") or ())
             self._small(
-                "Accepted common member-angle selection: cot theta = "
+                "Selected common member angle: cot theta = "
                 f"{_fmt(shared_angle.get('cot'), 4)} within "
                 f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
                 f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
@@ -6756,13 +6944,13 @@ class ReportBuilder:
                 f"{int(shared_angle.get('samples', 0))}. "
                 "Governing retained objective(s): "
                 f"{_html_escape(', '.join(governing) or 'not identified')}. "
-                "The compact certificate covers "
+                "The compact calculation record covers "
                 f"{_html_escape(', '.join(labels) or 'the active checks')} and "
                 "does not contain an iteration history."
             )
         else:
             self._small(
-                "Accepted resistance-angle selection: unconstrained cot theta = "
+                "Selected resistance angle: unconstrained cot theta = "
                 f"{_fmt(lk['cot_unconstrained'], 4)}, entered band "
                 f"[{_fmt(lk['cot_min'], 3)}, {_fmt(lk['cot_max'], 3)}], "
                 f"selected cot theta = {_fmt(lk['cot'], 4)} "
@@ -6774,7 +6962,7 @@ class ReportBuilder:
             self._formula(
                 "tau<sub>Rd,sy</sub> = rho<sub>w</sub> f<sub>ywd</sub> cot theta",
                 equation_key="shear.links.tau-yield",
-                ref="EN 1992-1-1:2023 Formula (8.42)",
+                ref="DS/EN 1992-1-1:2023 Formula (8.42)",
                 subst=f"{_fmt(lk['rho_w'], 5)} &#183; {_fmt(lk['fywd'], 1)} "
                       f"&#183; {_fmt(lk['cot'], 3)}",
                 result=f"tau<sub>Rd,sy</sub> = {_fmt(lk['tau_rd_sy'], 3)} MPa")
@@ -6782,7 +6970,7 @@ class ReportBuilder:
                 "sigma<sub>cd</sub> = tau<sub>Ed</sub>"
                 "(cot theta + tan theta) &#8804; nu f<sub>cd</sub>",
                 equation_key="shear.links.sigma-field",
-                ref="EN 1992-1-1:2023 Formula (8.44)",
+                ref="DS/EN 1992-1-1:2023 Formula (8.44)",
                 subst=f"{_fmt(lk['tau_ed'], 3)} &#183; "
                       f"({_fmt(lk['cot'], 3)} + {_fmt(lk['tan'], 3)}) "
                       f"&#8804; {_fmt(lk['nu'], 3)} &#183; {_fmt(lk['fcd'], 2)}",
@@ -6885,7 +7073,7 @@ class ReportBuilder:
                     "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
                     "N<sub>Vd</sub>&#183;z + F<sub>td,T</sub>&#183;z/2"
                 )
-                chord_ref = "EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)"
+                chord_ref = "DS/EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)"
             else:
                 chord_formula = (
                     "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
@@ -7896,7 +8084,7 @@ class ReportBuilder:
             self._small(
                 "Displayed cap angle: theta = "
                 f"{_fmt(t.get('theta_deg'), 1)}&#176;, cot theta = "
-                f"{_fmt(t.get('cot'), 3)}. This is not an accepted resistance "
+                f"{_fmt(t.get('cot'), 3)}. This is not a resistance "
                 "angle while full resistance is not assessed."
             )
             return
@@ -7969,7 +8157,7 @@ class ReportBuilder:
         if any(not isinstance(value, dict) for value in retained.values()):
             self._h2("Worked torsion calculation unavailable")
             self._small(
-                "The completed payload does not retain every accepted torsion "
+                "The completed payload does not retain every selected torsion "
                 "formula operand and governing selection. Sector does not recreate "
                 "them in the report."
             )
@@ -8003,7 +8191,7 @@ class ReportBuilder:
         shared_angle = t.get("member_angle_selection") or {}
         if shared_angle:
             self._small(
-                "Accepted common member-angle selection: cot theta = "
+                "Selected common member angle: cot theta = "
                 f"{_fmt(shared_angle.get('cot'), 4)} within "
                 f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
                 f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
@@ -8014,7 +8202,7 @@ class ReportBuilder:
             )
         else:
             self._small(
-                "Accepted torsion-resistance angle: unconstrained cot theta = "
+                "Selected torsion-resistance angle: unconstrained cot theta = "
                 f"{_fmt(angle.get('cot_unconstrained'), 4)}, entered band "
                 f"[{_fmt(angle.get('cot_min'), 3)}, {_fmt(angle.get('cot_max'), 3)}], "
                 f"selected cot theta = {_fmt(angle.get('cot'), 4)} "
@@ -8149,7 +8337,7 @@ class ReportBuilder:
         )
         tolerance = equilibrium.get("relative_tolerance")
         self._small(
-            f"Accepted after {state.get('iterations', 0)} Newton iteration(s); "
+            f"Converged after {state.get('iterations', 0)} Newton iteration(s); "
             f"normalised residual = {_fmt(equilibrium['normalised_residual'], 9)}"
             + (f", tolerance = {_fmt(tolerance, 9)}." if tolerance is not None
                else ". Direct uncracked linear solution; no Newton tolerance applies.")
@@ -8174,7 +8362,7 @@ class ReportBuilder:
         if not states or not superposition:
             self._h2("Worked elastic calculation unavailable")
             self._small(
-                "The completed payload does not retain the accepted elastic states. "
+                "The completed payload does not retain the converged elastic states. "
                 "Sector does not repeat the solver in the report."
             )
             return
@@ -8187,7 +8375,7 @@ class ReportBuilder:
         )
 
         long_plane, long_eq, long_matrix = self._elastic_state_tables(
-            "Step 1 - accepted long-term state", states["long_term"]
+            "Step 1 - converged long-term state", states["long_term"]
         )
         self._formula(
             "sigma<sub>ref</sub>(x,y) = sigma<sub>0</sub> + g<sub>x</sub>x + "
@@ -8284,7 +8472,7 @@ class ReportBuilder:
         )
 
         instant_plane, instant_eq, instant_matrix = self._elastic_state_tables(
-            "Step 3 - accepted instantaneous combined state",
+            "Step 3 - converged instantaneous combined state",
             states["instantaneous_combined"],
         )
         combined_target = superposition["combined_target_before_neutralisation"]
@@ -8526,7 +8714,7 @@ class ReportBuilder:
                 repeat_cols=2,
             )
             self._small("Coordinates in mm; area in mm<super>2</super>; strain in "
-                        "permille; stresses in MPa.")
+                        "&#8240;; stresses in MPa.")
         corner_rows = el.get("concrete_corners") or []
         if corner_rows:
             self._h2("Concrete corner stress and strain")
@@ -8546,7 +8734,7 @@ class ReportBuilder:
                 font=7, keep=False,
                 repeat_cols=3,
             )
-            self._small("Coordinates in mm; strain in permille; stress in MPa "
+            self._small("Coordinates in mm; strain in &#8240;; stress in MPa "
                         "(compression negative). Cracked concrete carries "
                         "compression only; compatible tensile strains remain in "
                         "the plane while tensile stress is zero.")
@@ -8616,7 +8804,7 @@ class ReportBuilder:
                 ),
                 ref=(
                     "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
-                    "(EN 1992-1-1:2023 &#167;9.2.1)"
+                    "(DS/EN 1992-1-1:2023 &#167;9.2.1)"
                     if crack_2023 else
                     "Stage-I extreme tensile stress reaches f<sub>ct,eff</sub> "
                     "(DS/EN 1992-1-1 &#167;7.1)"
@@ -8778,7 +8966,7 @@ class ReportBuilder:
             self._small(
                 f"{_html_escape(duration_label)} calculation state: "
                 f"{_html_escape(status)}. The user criterion is 0.000 mm, so "
-                "the calculated width is stated without an acceptance comparison."
+                "the calculated width is stated without a limit comparison."
             )
             if reason:
                 self._small(_html_escape(reason))
@@ -8843,7 +9031,7 @@ class ReportBuilder:
         # and ac_eff (m^2) are metric.
         specs = [("Crack width w<sub>k</sub> (mm)", "wk", 3, 1.0),
                  ("Crack spacing s<sub>r,max</sub> (mm)", "sr_max", 1, 1.0),
-                 ("Mean strain eps<sub>sm</sub>-eps<sub>cm</sub> (permille)", "esm_ecm", 4, 1000.0),
+                 ("Mean strain eps<sub>sm</sub>-eps<sub>cm</sub> (&#8240;)", "esm_ecm", 4, 1000.0),
                  ("Steel stress sigma<sub>s</sub> (MPa)", "sigma_s", 1, 1.0),
                  ("Effective ratio rho<sub>p,eff</sub>", "rho_p_eff", 4, 1.0),
                  ("Effective height h<sub>c,ef</sub> (mm)", "hc_ef", 1, _MM),
@@ -8995,7 +9183,7 @@ class ReportBuilder:
             ref="DS/EN 1992-1-1 DK NA &#167;7.3.4(1), Eq (7.8)" if coarse else "Eq (7.8)",
             subst=("= &#189; &#183; " if coarse else "= ")
                   + f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
-                    f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
+                    f"{_fmt(cw.get('esm_ecm',0)*1000,4)} &#8240;",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
 
     @staticmethod
@@ -9152,7 +9340,7 @@ class ReportBuilder:
                 "3.5a<sub>y</sub>), Delta a<sub>y</sub>), h-x, h/2]",
                 equation_key="crack.effective-area.2023",
                 equation_variant="bending",
-                ref="EN 1992-1-1:2023 Figure 9.3",
+                ref="DS/EN 1992-1-1:2023 Figure 9.3",
                 subst=(
                     f"a<sub>y</sub>+5phi = {_fmt(area.get('candidate_ay_plus_5phi', 0) * _MM, 3)} mm; "
                     f"10phi = {_fmt(area.get('candidate_10phi', 0) * _MM, 3)} mm; "
@@ -9173,7 +9361,7 @@ class ReportBuilder:
                 "(h-c<sub>b</sub>-c<sub>t</sub>)",
                 equation_key="crack.effective-area.2023",
                 equation_variant="direct-tension",
-                ref="EN 1992-1-1:2023 Figure 9.3",
+                ref="DS/EN 1992-1-1:2023 Figure 9.3",
                 subst=(
                     f"= {_fmt(area.get('width'), 6)} &#183; {_fmt(area.get('height'), 6)} - "
                     f"{_fmt(area.get('inner_width'), 6)} &#183; {_fmt(area.get('inner_height'), 6)}"
@@ -9200,7 +9388,7 @@ class ReportBuilder:
                 "sum xi<sub>1,j</sub>A<sub>p,j</sub>) / A<sub>c,eff</sub>",
                 equation_key="crack.effective-reinforcement.ratio",
                 equation_variant="2023",
-                ref="EN 1992-1-1:2023 Formula (9.12)",
+                ref="DS/EN 1992-1-1:2023 Formula (9.12)",
                 subst=(
                     f"= ({_fmt(reinforcement.get('as_eff'), 8)} + "
                     f"{_fmt(reinforcement.get('ap_eff_weighted'), 8)}) / "
@@ -9257,7 +9445,7 @@ class ReportBuilder:
             self._formula(
                 symbolic,
                 equation_key="crack.2023.mean-strain",
-                ref="EN 1992-1-1:2023 Formula (9.11)",
+                ref="DS/EN 1992-1-1:2023 Formula (9.11)",
                 subst=subst,
                 result=result,
             )
@@ -9309,7 +9497,7 @@ class ReportBuilder:
         )
 
     def _crack_worked_2023(self, cw, candidate):
-        """The EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
+        """The DS/EN 1992-1-1:2023 refined crack-width worked example (9.2.3)."""
         spacing = candidate["spacing_operands"]
         mean = candidate["mean_strain_operands"]
         cap = spacing.get("cap_spacing")
@@ -9317,7 +9505,7 @@ class ReportBuilder:
             "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
             "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
             equation_key="crack.2023.spacing",
-            ref="EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
+            ref="DS/EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
             note=(
                 f"k<sub>fl</sub> method: {spacing.get('flexural_factor_method', '-')}; "
                 f"selected: {spacing.get('selected_candidate', '-')}"
@@ -9351,7 +9539,7 @@ class ReportBuilder:
             ref="Eq (9.8)",
             subst=f"= {_fmt(cw.get('kw',1.7), 3)} &#183; {_fmt(cw.get('k1_r',1),3)} &#183; "
                   f"{_fmt(cw.get('sr_max',0), 3)} mm &#183; "
-                  f"{_fmt(cw.get('esm_ecm',0)*1000,4)} permille",
+                  f"{_fmt(cw.get('esm_ecm',0)*1000,4)} &#8240;",
             result=f"w<sub>k</sub> = {_fmt(cw.get('wk',0),3)} mm")
 
     def _heightened_crack_control(self):
@@ -11152,7 +11340,7 @@ class ReportBuilder:
         if plastic_results:
             if "2023" in str(self.inp.get("concrete_preset", "")):
                 lines.append(
-                    "Selected concrete material - EN 1992-1-1:2023: &#167;5.1.6 "
+                    "Selected concrete material - DS/EN 1992-1-1:2023: &#167;5.1.6 "
                     "and Formulae (5.3)-(5.4) (f<sub>cd</sub>, eta<sub>cc</sub>, "
                     "k<sub>tc</sub>), and &#167;8.1.1-8.1.2 / Formula (8.4) "
                     "(bending and concrete compression law)."
@@ -11220,12 +11408,12 @@ class ReportBuilder:
                     if crack_2023 else
                     " and &#167;7.3.2-7.3.4 (crack width)"
                 )
-            edition = "EN 1992-1-1:2023" if crack_2023 else "DS/EN 1992-1-1"
+            edition = "DS/EN 1992-1-1:2023" if crack_2023 else "DS/EN 1992-1-1"
             lines.append(f"{edition} (Eurocode 2): {clauses}.")
             lines.append(
                 "Stresses and crack widths are numerical outputs for the named "
                 "user-defined actions. No exposure, durability, decompression or "
-                "action-combination acceptance criterion is applied."
+                "action-combination criterion is applied."
             )
             if any(
                 "DK NA" in str(result.get("crack_code", ""))
@@ -11239,7 +11427,7 @@ class ReportBuilder:
             sh = shear_results[0]
             if sh.get("model_2023"):
                 lines.append(
-                    "EN 1992-1-1:2023 &#167;8.2.1-8.2.2: Formulae (8.18), "
+                    "DS/EN 1992-1-1:2023 &#167;8.2.1-8.2.2: Formulae (8.18), "
                     "(8.20), (8.27), (8.30) and (8.31), including the axial-force "
                     "factor k<sub>vp</sub> and prestressing effects."
                 )

@@ -180,5 +180,5 @@ def test_report_page_with_only_dynamic_furniture_is_rejected():
         validate_report_page_semantics([furniture])
 
     validate_report_page_semantics([
-        furniture + "\nTable 1.1. Published evidence",
+        furniture + "\nTable 1.1. Reported information",
     ])

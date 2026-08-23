@@ -10,6 +10,8 @@ import plotly.io as pio
 
 from sector import geometry
 
+_PERMILLE = chr(0x2030)  # per-mille sign
+
 
 def pct(x, nd=1):
     """A utilisation fraction as a percentage string, ``inf`` when unbounded/undefined.
@@ -99,7 +101,7 @@ def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
         mode="lines",
         name="Concrete strain plane",
         line=dict(color="#334155", width=3),
-        hovertemplate="strain %{x:.4f} permille<br>depth %{y:.1f} mm<extra></extra>",
+        hovertemplate=f"strain %{{x:.4f}} {_PERMILLE}<br>depth %{{y:.1f}} mm<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
         x=corner_strain,
@@ -108,7 +110,7 @@ def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
         name="Concrete corners",
         marker=dict(color="#64748B", size=7, symbol="square-open"),
         text=[f"point {r['point_no']} ({r['ring']})" for r in rows],
-        hovertemplate="%{text}<br>strain %{x:.4f} permille"
+        hovertemplate=f"%{{text}}<br>strain %{{x:.4f}} {_PERMILLE}"
                       "<br>depth %{y:.1f} mm<extra></extra>",
     ))
 
@@ -132,7 +134,7 @@ def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
                         line=dict(color="#111827", width=0.8)),
             text=[r["element_id"] for r in typed],
             customdata=[[r["total_mpa"]] for r in typed],
-            hovertemplate="%{text}<br>strain %{x:.4f} permille"
+            hovertemplate=f"%{{text}}<br>strain %{{x:.4f}} {_PERMILLE}"
                           "<br>stress %{customdata[0]:.3f} MPa"
                           "<br>depth %{y:.1f} mm<extra></extra>",
         ))
@@ -140,7 +142,7 @@ def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
     fig.add_vline(x=0.0, line_dash="dash", line_color="#111827", line_width=1)
     fig.update_layout(
         title=title,
-        xaxis_title="Strain epsilon (permille, tension +)",
+        xaxis_title=f"Strain epsilon ({_PERMILLE}, tension +)",
         yaxis_title="Projected depth from compression face (mm)",
         yaxis=dict(autorange="reversed"),
         template="plotly_white",
@@ -225,7 +227,6 @@ _TEMPLATE = "plotly_white+sector"
 _EPS = chr(0x3B5)       # epsilon
 _SIGMA = chr(0x3C3)     # sigma
 _DELTA = chr(0x394)     # uppercase delta
-_PERMILLE = chr(0x2030)  # per-mille sign
 _FLOAT_MAX = float.fromhex("0x1.fffffffffffffp+1023")
 _FLOAT_MIN_POSITIVE = float.fromhex("0x0.0000000000001p-1022")
 _LOG_FLOAT_MAX = math.log(_FLOAT_MAX)
@@ -1304,7 +1305,7 @@ def fatigue_utilisation_map_figure(
         yref="paper",
         xanchor="right",
         yanchor="bottom",
-        text="acceptance limit = 1.00",
+        text="utilisation limit = 1.00",
         showarrow=False,
         bgcolor="rgba(255,255,255,0.82)",
         font=dict(size=10, color=SCHEMATIC_INK),

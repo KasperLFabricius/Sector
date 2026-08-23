@@ -22,6 +22,7 @@ from .materials import Concrete, MildSteel, Prestress
 
 _DEFAULT_FCK = 35.0
 _DEFAULT_FYK = 500.0
+_PERMILLE = chr(0x2030)
 # Strain fields are entered and stored in per-mille; ``build_*`` converts them to
 # the fractions the material laws use.
 _PERMILLE_FIELDS = ("eut", "ey0t", "ey0c", "IS")
@@ -80,8 +81,8 @@ CONCRETE_FIELD_META = {
     "fck": (r"$f_{ck}$ (MPa)", 1.0, 200.0, 1.0),
     "gamma_c": (r"$\gamma_c$", 0.1, 10.0, 0.01),
     "alpha_cc": (r"$\alpha_{cc}$", 0.01, 1.2, 0.01),
-    "eps_c2": (r"$\varepsilon_{c2}$ (permille)", 0.5, 5.0, 0.05),
-    "eps_cu2": (r"$\varepsilon_{cu2}$ (permille)", 0.5, 8.0, 0.05),
+    "eps_c2": (r"$\varepsilon_{c2}$ (" + _PERMILLE + ")", 0.5, 5.0, 0.05),
+    "eps_cu2": (r"$\varepsilon_{cu2}$ (" + _PERMILLE + ")", 0.5, 8.0, 0.05),
     "n": (r"$n$ (parabola exponent)", 1.0, 4.0, 0.05),
 }
 
@@ -95,9 +96,9 @@ CONCRETE_HELP = {
     "alpha_cc": "Coefficient for long-term and loading effects on the concrete "
                 r"design strength ($f_{cd}=\alpha_{cc}f_{ck}/\gamma_c$).",
     "eps_c2": "Compressive strain at peak stress (parabola apex). EC2 Table 3.1: "
-              "0.2 permille up to C50/60, larger above (use Auto).",
-    "eps_cu2": "Ultimate (crushing) compressive strain. EC2 Table 3.1: 0.35 "
-               "permille up to C50/60, smaller above (use Auto).",
+              "2.0 " + _PERMILLE + " up to C50/60, larger above (use Auto).",
+    "eps_cu2": "Ultimate (crushing) compressive strain. EC2 Table 3.1: 3.5 "
+               + _PERMILLE + " up to C50/60, smaller above (use Auto).",
     "n": "Exponent of the parabola-rectangle ascending branch. EC2 Table 3.1: "
          "2.0 up to C50/60, smaller above (use Auto).",
 }
@@ -122,7 +123,7 @@ def build_concrete(curve, fck, gamma_c, alpha_cc,
 def strength_dependent_alpha_cc(preset, fck, k_tc=None):
     """``alpha_cc`` for a preset whose design factor depends on ``fck``, else None.
 
-    EN 1992-1-1:2023 uses ``eta_cc = (40/fck)^(1/3) <= 1`` (times ``k_tc``), so its
+    DS/EN 1992-1-1:2023 uses ``eta_cc = (40/fck)^(1/3) <= 1`` (times ``k_tc``), so its
     effective coefficient must follow both the chosen strength and the explicit
     ``k_tc`` applicability choice rather than stay at the prefilled default.
     Constant-``alpha_cc`` editions return ``None``.
@@ -197,13 +198,13 @@ MILD_FIELD_META = {
     "futk": (r"$f_{utk}$ (MPa)", 0.0, 5000.0, 10.0),
     # min 0 keeps the step grid (min + k*step) on round values like 50 and 1000;
     # the eut >= yield clamp guards the lower end at build time.
-    "eut": (r"$\varepsilon_{ut}$ (permille)", 0.0, 2000.0, 0.5),
+    "eut": (r"$\varepsilon_{ut}$ (" + _PERMILLE + ")", 0.0, 2000.0, 0.5),
     "gamma_y": (r"$\gamma_y$", 0.1, 10.0, 0.01),
     "gamma_u": (r"$\gamma_u$", 0.1, 10.0, 0.01),
     "gamma_E": (r"$\gamma_E$", 0.1, 10.0, 0.01),
     "k": (r"$k$ ($f_1 / f_{ytk}$)", 0.0, 1.0, 0.01),
-    "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
-    "ey0c": (r"$\varepsilon_{0c}$ (permille)", 0.0, 1000.0, 0.1),
+    "ey0t": (r"$\varepsilon_{0t}$ (" + _PERMILLE + ")", 0.0, 1000.0, 0.1),
+    "ey0c": (r"$\varepsilon_{0c}$ (" + _PERMILLE + ")", 0.0, 1000.0, 0.1),
     "Es": (r"$E_s$ (GPa)", 1.0, 500.0, 1.0),
 }
 
@@ -214,8 +215,9 @@ MILD_HELP = {
     "futk": r"Characteristic ultimate tensile stress $f_{utk}$.",
     "eut": "Design rupture strain (applied symmetrically in tension and "
            r"compression). Per EC2 3.2.7 the design value is typically "
-           r"$0.9\varepsilon_{uk}$ (for example about 45 permille for class B steel, "
-           r"$\varepsilon_{uk}=50$ permille); enter the "
+           r"$0.9\varepsilon_{uk}$ (for example about 45 " + _PERMILLE
+           + r" for class B steel, $\varepsilon_{uk}=50$ " + _PERMILLE
+           + "); enter the "
            "design value.",
     "gamma_y": r"Final effective partial factor $\gamma_y$ on the yield stress. It "
                r"also applies to stirrup $f_{ywk}$. Include every applicable national increase or "
@@ -293,15 +295,15 @@ def _prestress_presets():
 PRESTRESS_PRESETS = _prestress_presets()
 
 PRESTRESS_FIELD_META = {
-    "IS": (r"Prestrain $\varepsilon_{p}^{(0)}$ (permille)", 0.0, 50.0, 0.1),
+    "IS": (r"Prestrain $\varepsilon_{p}^{(0)}$ (" + _PERMILLE + ")", 0.0, 50.0, 0.1),
     "fytk": (r"$f_{p0.1k}$ (MPa)", 0.0, 5000.0, 10.0),
     "futk": (r"$f_{pk}$ (MPa)", 0.0, 5000.0, 10.0),
-    "eut": (r"$\varepsilon_{ut}$ (permille)", 0.0, 2000.0, 0.5),
+    "eut": (r"$\varepsilon_{ut}$ (" + _PERMILLE + ")", 0.0, 2000.0, 0.5),
     "gamma_y": (r"$\gamma_y$", 0.1, 10.0, 0.01),
     "gamma_u": (r"$\gamma_u$", 0.1, 10.0, 0.01),
     "gamma_E": (r"$\gamma_E$", 0.1, 10.0, 0.01),
     "k": (r"$k$ ($f_1 / f_{p0.1k}$)", 0.0, 1.0, 0.01),
-    "ey0t": (r"$\varepsilon_{0t}$ (permille)", 0.0, 1000.0, 0.1),
+    "ey0t": (r"$\varepsilon_{0t}$ (" + _PERMILLE + ")", 0.0, 1000.0, 0.1),
     "Es": (r"$E_p$ (GPa)", 1.0, 500.0, 1.0),
 }
 

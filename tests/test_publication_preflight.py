@@ -54,7 +54,7 @@ def _publication_pdf(
     flow = [
         Paragraph(reference, styles["publication_ref"]),
         Paragraph(
-            f"{caption_anchor}<b>Table 1.10.</b> Published evidence",
+            f"{caption_anchor}<b>Table 1.10.</b> Reported information",
             styles["publication_caption"],
         ),
         Paragraph(

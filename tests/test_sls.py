@@ -73,7 +73,7 @@ def test_crack_outputs_select_largest_candidate_inside_each_duration():
     assert output["short_term"]["governing"] == "B-7"
     assert all(
         item["calculation_state"]
-        == "CALCULATED - ACCEPTANCE NOT ASSESSED"
+        == "CALCULATED - NO LIMIT COMPARISON"
         and item["criterion_mm"] == 0.0
         and item["ratio"] is None
         and item["comparison_equation"] is None
@@ -129,7 +129,7 @@ def test_zero_criterion_is_an_explicit_no_comparison_state():
     long_term = output["long_term"]
     assert long_term["criterion_mm"] == 0.0
     assert long_term["calculation_state"] == (
-        "CALCULATED - ACCEPTANCE NOT ASSESSED"
+        "CALCULATED - NO LIMIT COMPARISON"
     )
     assert long_term["ratio"] is None
     assert long_term["comparison_equation"] is None

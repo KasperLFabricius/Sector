@@ -427,7 +427,7 @@ def compression_field_limits_2023(
         "ductility_factor": ductility_factor,
         "axial_tension_applied": axial_tension_applied,
         "compression_extension_credited": False,
-        "clause": "EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)",
+        "clause": "DS/EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)",
     }
 
 

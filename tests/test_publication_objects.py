@@ -234,7 +234,7 @@ def test_report_table_reference_caption_and_fragments_share_one_identity():
     )
     assert table._cellvalues[0][0].getPlainText() == (
         "See Table 1.1."
-        "Table 1.1. Published evidence for Design values: Force (kN)"
+        "Table 1.1. Reported information for Design values: Force (kN)"
     )
     assert table.repeatRows == 4
     leading, trailing = table.split(80 * mm, 70 * mm)
