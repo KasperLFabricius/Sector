@@ -29,9 +29,9 @@ def test_manual_math_token_guard_does_not_match_ordinary_prose_substrings():
     assert _unrendered_math_token(r"V = \Big[C + k\Big]") == "Big"
 
 
-def test_manual_math_token_guard_ignores_canonical_semantic_rows_only():
+def test_manual_math_token_guard_ignores_accessible_semantic_rows_only():
     assert _unrendered_math_token(
-        "SECTOR-MATH[manual-expression] x = sqrt(y)\n"
+        "Mathematical expression: x = sqrt(y)\n"
         "x = \u221ay"
     ) is None
     assert _unrendered_math_token("Visible fallback: sqrt(y)") == "sqrt"

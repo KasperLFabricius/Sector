@@ -2769,10 +2769,7 @@ def layout_equation(
             if first_math_y is None:
                 first_math_y = y + baseline
             if index == 0:
-                semantic = (
-                    f"SECTOR-MATH[{plan.role}] "
-                    + plan.semantic
-                )
+                semantic = "Mathematical expression: " + plan.semantic
                 _require_glyphs(style.fonts.regular, semantic)
                 semantic_width = pdfmetrics.stringWidth(
                     semantic, style.fonts.regular, 1.0

@@ -5,8 +5,13 @@ from __future__ import annotations
 from functools import lru_cache
 from html.parser import HTMLParser
 import io
+from pathlib import Path
+import sys
 
 from pypdf import PdfReader
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "app"))
 
 from app import manual_information_architecture as manual_ia
 from manual_equation_publication import EQUATION_BLOCK, manual_publication_blocks
@@ -121,9 +126,10 @@ def test_tables_figures_and_equations_have_semantic_alternatives():
     assert parser.figure_alternatives == authored_figures
     assert parser.figcaptions >= authored_figures + authored_tables
     assert parser.equations == authored_equations
-    assert _html().count('<span class="sr-only">Mathematical expression:') == (
-        authored_equations
-    )
+    assert _html().count(
+        '<p class="equation-text"><code class="math" '
+        'aria-label="Mathematical expression:'
+    ) == authored_equations
 
 
 def test_html_and_pdf_share_registered_reading_path_destinations():

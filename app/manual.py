@@ -513,7 +513,7 @@ def manual_blocks() -> list:
     h2 = lambda t: blocks.append(("h2", t))
     md = lambda t: blocks.append(("md", t))
     call = lambda kind, t: blocks.append(("callout", kind, t))
-    fig = lambda fn, cap: blocks.append(("figure", fn, cap))
+    fig = lambda fn, cap, alt: blocks.append(("figure", fn, cap, alt))
     table = lambda hdr, rows: blocks.append(("table", hdr, rows))
 
     # =====================================================================
@@ -608,7 +608,9 @@ def manual_blocks() -> list:
        "6. **Export.** Generate the PDF report or download the project file.")
     fig(fig_beam_section, "The rectangular worked example as Sector draws it: the "
         "concrete corners and bars are numbered. Use the *Display* controls beside "
-        "your Section inputs to adjust label size and spacing.")
+        "your Section inputs to adjust label size and spacing.",
+        "A rectangular concrete outline with four numbered corner nodes, three "
+        "numbered reinforcement bars near the lower face and two near the upper face.")
 
     h1("Task workflows")
     md("Each row states the intended outcome, prerequisite, action path, expected "
@@ -645,14 +647,18 @@ def manual_blocks() -> list:
        "reinforcement: three 25 mm bars near the bottom face and two 16 mm bars "
        "near the top. It is the simplest section that still exercises the plastic "
        "capacity, the cracked-elastic stresses and a crack width.")
-    fig(fig_beam_section, "Rectangular beam: 3 x 25 mm bottom, 2 x 16 mm top.")
+    fig(fig_beam_section, "Rectangular beam: 3 x 25 mm bottom, 2 x 16 mm top.",
+        "A 300 by 600 mm concrete rectangle with three bottom bars and two top bars "
+        "arranged symmetrically about the vertical centreline.")
     h2("Circular hollow section (mild + prestress)")
     md("An 800 mm diameter circular section with a 400 mm central void, a ring of "
        "twelve 20 mm mild bars and a ring of eight prestressing tendons, in C40/50 "
        "concrete. It adds the void handling, the ring (biaxial) reinforcement "
        "layout and the prestress law on top of the beam.")
     fig(fig_circular_section, "Circular hollow section: a central void, a mild-bar "
-        "ring and a tendon ring.")
+        "ring and a tendon ring.",
+        "An annular concrete section with concentric outer and void boundaries; mild "
+        "reinforcement and prestressing tendons form two circular rings.")
     table(["Example", "Section", "Reinforcement", "Demonstrates"],
           [["Beam", "300 x 600 mm solid", "5 mild bars",
             "Plastic M-M, cracked elastic, crack width"],
@@ -834,7 +840,9 @@ def manual_blocks() -> list:
          "assumes the reference-age and at-least-three-month delayed design-loading "
          "conditions stated in 5.1.6(1); that assumption is repeated in the PDF.")
     fig(fig_beam_concrete_law, "The concrete-law preview for the rectangular "
-        "example (C40/50).")
+        "example (C40/50).",
+        "A compression stress-strain curve that rises parabolically from zero to the "
+        "design strength and then remains horizontal to the ultimate strain.")
     h2("Mild steel")
     md("Each mild-steel definition uses the general **Curve 3** law, with every "
        "parameter visible and live. The generic **Curve 1**, **Curve 2** and "
@@ -849,7 +857,9 @@ def manual_blocks() -> list:
        "compression in the **plastic** law: with it off the steel is "
        "tension-only there. The cracked-elastic analysis is linear and "
        "always treats the bars in both directions, regardless of this toggle.")
-    fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.")
+    fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.",
+        "A symmetric reinforcing-steel stress-strain curve with linear tension and "
+        "compression branches to yield followed by the selected post-yield response.")
     call("standard", "Edition-named concrete and steel presets carry their selected "
          "Eurocode source (including 3.1.7 / 3.2.7 for the 2005 family). Generic "
          "named curves and custom/imported laws are project-defined and uncited; "
@@ -863,7 +873,9 @@ def manual_blocks() -> list:
          "crack calculations use the material assigned to each element. Shared "
          "member checks for shear and torsion use the explicitly selected mild-"
          "steel reference material; its ID is shown with those settings and results.")
-    fig(fig_circular_prestress_law, "The tendon law for the circular example.")
+    fig(fig_circular_prestress_law, "The tendon law for the circular example.",
+        "A prestressing-steel stress-strain curve with an initial elastic branch and "
+        "a nonlinear approach to design strength and ultimate strain.")
 
     h1("Analysis & result settings")
     h2("Analysis mode")
@@ -877,7 +889,10 @@ def manual_blocks() -> list:
        "compares the applied moment to the envelope; turning it off reports the "
        "capacity only.")
     fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
-        "applied load; the sweep from 0 to 360 degrees closes the curve.")
+        "applied load; the sweep from 0 to 360 degrees closes the curve.",
+        "A closed Mx-My capacity boundary around the origin with one applied-load "
+        "point; successive boundary vertices correspond to rotated neutral-axis "
+        "solutions.")
     h2("Reinforcement detailing")
     md("Select **Beam** or **Slab**. **Section cut direction** fixes the canonical, "
        "member-relative modelled reinforcement direction. Sector checks only the "
@@ -1339,7 +1354,10 @@ def manual_blocks() -> list:
        "The neutral-axis line is oriented at $\\varphi_{NA}$ counter-clockwise "
        "from the positive $y$ axis.")
     fig(fig_sign_convention, "Axes and the positive senses of the axial force, the "
-        "moments and the neutral-axis angle.")
+        "moments and the neutral-axis angle.",
+        "Section axes show positive x to the right and y upward, with arrows for "
+        "positive axial force and moments and the neutral-axis angle measured from "
+        "positive y.")
     call("concept", "The reported axial force $N$, the stresses and the strains are "
          "all **tension-positive**. Internally the plastic solver works "
          "**compression-positive** (the compression zone has strain $> 0$); the sign "
@@ -1378,7 +1396,9 @@ def manual_blocks() -> list:
             "per mille", _PERMILLE
         ))
     fig(fig_beam_concrete_law, "The C40/50 parabola-rectangle law of the beam "
-        "example.")
+        "example.",
+        "Concrete compression stress increases on a curved branch to its design "
+        "plateau, which continues until the marked crushing strain.")
     h2("Mild steel")
     md(("The mild-steel editor uses one general Curve 3 law. It is linear to a "
        "first yield, can pass through a second yield defined by the plastic offsets, "
@@ -1400,7 +1420,9 @@ def manual_blocks() -> list:
        "does not change or promote the selected preset identity.").replace(
            "per mille", _PERMILLE
        ))
-    fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.")
+    fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.",
+        "Positive and negative B550 stress branches are linear to the yield points "
+        "and then follow matching post-yield branches toward the strain limits.")
     h2("Prestressing steel")
     md(("A tendon is evaluated at its **total** strain -- the locked-in initial "
        "strain $\\varepsilon_{p,IS}$ (from prestressing, after losses, given as an "
@@ -1411,7 +1433,9 @@ def manual_blocks() -> list:
        "\\qquad \\sigma_p = f(\\varepsilon_p),\\quad f_{pd}=f_{p0.1k}/\\gamma_s.$$\n\n"
        "**Worked (circular):** $\\varepsilon_{p,IS}=5.0$ per mille and "
        "$f_{pd}=1600/1.15=1391$ MPa.").replace("per mille", _PERMILLE))
-    fig(fig_circular_prestress_law, "The tendon law of the circular example.")
+    fig(fig_circular_prestress_law, "The tendon law of the circular example.",
+        "The tendon curve starts with an elastic slope, bends toward the proof-strength "
+        "region and terminates at the defined ultimate strain.")
     call("standard", "The beam and circular examples select the edition-named "
          "DS/EN 1992-1-1:2005 + DK NA:2024 Curve 3 design preset for mild steel. "
          "Edition-named concrete, mild-steel and tendon presets retain their own "
@@ -1428,7 +1452,10 @@ def manual_blocks() -> list:
         "convention): one straight line -- zero at the neutral axis, compression "
         "(negative) above it and tension (positive) below, the top fibre at the "
         "crushing strain. The internal solver formula above is compression-positive; "
-        "the reported strains negate it.")
+        "the reported strains negate it.",
+        "A straight strain line crosses zero at the neutral axis; negative compression "
+        "lies above it, positive tension below it, and the top fibre reaches ultimate "
+        "concrete compression.")
     h2("The governing curvature")
     md("The curvature is scaled until the **first** element reaches its assigned "
        "material limit, so "
@@ -1478,7 +1505,10 @@ def manual_blocks() -> list:
            "per mille", _PERMILLE
        ))
     fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
-        "one solved neutral-axis angle.")
+        "one solved neutral-axis angle.",
+        "A closed biaxial moment-resistance curve is plotted with the design moment "
+        "point, showing its position inside the boundary and the discrete angular "
+        "sweep points.")
 
     h1("Reinforcement detailing")
     md("Each detailing checkbox identifies the clauses used by the selected "
@@ -1582,7 +1612,10 @@ def manual_blocks() -> list:
        "the same way). None of these ratios is entered -- each is derived from the "
        "assigned material modulus, $E_c$ and the creep coefficient $\\varphi$.")
     fig(fig_beam_cracked, "The beam's cracked (Stage II) state under the service "
-        "moment: the compression zone (shaded) above the neutral axis.")
+        "moment: the compression zone (shaded) above the neutral axis.",
+        "A rectangular section has a shaded concrete compression zone above a "
+        "horizontal neutral axis, with reinforcement points retained in the Stage II "
+        "section.")
 
     h1("Serviceability: cracking and crack width")
     h2("The cracking threshold")
@@ -1775,12 +1808,18 @@ def manual_blocks() -> list:
        "damage applies. Yield/proof utilisation remains independent in both cases.")
     fig(fig_fatigue_sn, "Two-slope characteristic and design S-N curves. Each "
         "labelled marker is one applied spectrum bin; logarithmic axes retain the "
-        "wide cycle and stress ranges without visual distortion.")
+        "wide cycle and stress ranges without visual distortion.",
+        "A log-log stress-range versus cycles plot shows characteristic and design "
+        "S-N curves with a knee and labelled spectrum-bin points on the relevant "
+        "branches.")
     fig(fig_fatigue_damage, "Per-bin and cumulative Miner damage for the same "
         "element. The cumulative line and $D=1.00$ limit make the governing "
         "contribution and remaining margin visible. The y-axis changes to a "
         "logarithmic scale for low-damage spectra so small contributions remain "
-        "readable.")
+        "readable.",
+        "Damage bars identify each spectrum bin, a cumulative Miner-damage line rises "
+        "across the bins, and a horizontal D equals 1 limit shows the remaining "
+        "margin.")
 
     h2("Mixed mild reinforcement and bonded tendons")
     md("When both occur in one section, Sector applies the edition-specific bond "
@@ -3027,10 +3066,38 @@ def build_manual_pdf_bytes(figures=True):
 # ==========================================================================
 
 
+def _html_math_parts(expression: str) -> tuple[str, str]:
+    """Return safe rendered math and its clean plain-text accessible name."""
+
+    rendered = _latex_to_rl(str(expression)).replace(
+        "<super>", "<sup>"
+    ).replace("</super>", "</sup>")
+    plain = html.unescape(re.sub(r"<[^>]+>", "", rendered)).replace("\xa0", " ")
+    plain = re.sub(r"\s+", " ", plain).strip()
+    if not plain:
+        raise ValueError("A manual mathematical expression cannot be empty.")
+    return rendered, plain
+
+
+def _math_code_html(expression: str) -> str:
+    rendered, plain = _html_math_parts(expression)
+    label = html.escape(f"Mathematical expression: {plain}", quote=True)
+    return f'<code class="math" aria-label="{label}">{rendered}</code>'
+
+
 def _inline_md_to_html(text: str) -> str:
     """Render the manual's bounded inline Markdown subset as safe HTML."""
 
-    rendered = html.escape(str(text), quote=True)
+    math_fragments = []
+
+    def _stash_math(match):
+        index = len(math_fragments)
+        token = f"\ue000{index}\ue001"
+        math_fragments.append((token, _math_code_html(match.group(1))))
+        return token
+
+    source = re.sub(r"\$([^$\n]+)\$", _stash_math, str(text))
+    rendered = html.escape(source, quote=True)
     rendered = re.sub(
         r"\[([^\]]+)\]\(#([A-Za-z0-9_-]+)\)",
         r'<a href="#\2">\1</a>',
@@ -3042,21 +3109,12 @@ def _inline_md_to_html(text: str) -> str:
         rendered,
     )
 
-    def _math(match):
-        expression = match.group(1)
-        return (
-            '<code class="math" aria-label="mathematical expression '
-            + expression.replace('"', "&quot;")
-            + '">'
-            + expression
-            + "</code>"
-        )
-
-    rendered = re.sub(r"\$([^$]+)\$", _math, rendered)
     rendered = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", rendered)
     rendered = re.sub(
         r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", rendered
     )
+    for token, fragment in math_fragments:
+        rendered = rendered.replace(token, fragment)
     return rendered
 
 
@@ -3099,13 +3157,15 @@ def _markdown_block_html(text: str) -> str:
         if display:
             flush_paragraph()
             flush_list()
-            expression = html.escape(display.group(1).strip(), quote=True)
+            expression = display.group(1).strip()
+            _rendered_math, plain_math = _html_math_parts(expression)
             output.append(
                 '<div class="display-math" role="math" aria-label="'
-                + expression.replace('"', "&quot;")
-                + '"><code>'
-                + expression
-                + "</code>"
+                + html.escape(
+                    f"Mathematical expression: {plain_math}", quote=True
+                )
+                + '">'
+                + _math_code_html(expression)
                 + html.escape(display.group(2))
                 + "</div>"
             )
@@ -3173,13 +3233,11 @@ def _manual_equation_html(equation) -> str:
     """Publish one governed equation with selectable semantic alternatives."""
 
     number = equation.contract.number
-    expression = html.escape(
-        equation.equation.equation.expression, quote=True
-    )
+    expression = _math_code_html(equation.equation.equation.expression)
     results = "".join(
-        "<dt><code>"
-        + html.escape(term.markup)
-        + "</code></dt><dd>"
+        "<dt>"
+        + _math_code_html(term.markup)
+        + "</dt><dd>"
         + html.escape(term.meaning)
         + " ["
         + html.escape(term.unit)
@@ -3199,9 +3257,9 @@ def _manual_equation_html(equation) -> str:
             + "</p>"
         )
     symbols = "".join(
-        "<tr><th scope=\"row\"><code>"
-        + html.escape(term.markup)
-        + "</code></th><td>"
+        "<tr><th scope=\"row\">"
+        + _math_code_html(term.markup)
+        + "</th><td>"
         + html.escape(term.meaning)
         + "</td><td>"
         + html.escape(term.unit)
@@ -3212,11 +3270,9 @@ def _manual_equation_html(equation) -> str:
         f'<section class="equation" id="{_manual_equation_anchor(number)}">'
         f'<p class="equation-heading"><strong>Equation '
         f"{html.escape(number)}</strong></p>"
-        '<p class="equation-text"><span class="sr-only">Mathematical expression: '
+        '<p class="equation-text">'
         + expression
-        + ". </span><code>"
-        + expression
-        + "</code></p>"
+        + "</p>"
         + ("<dl class=\"equation-results\">" + results + "</dl>" if results else "")
         + uses
         + '<details><summary>Symbols and units</summary><table><thead><tr>'
@@ -3267,12 +3323,16 @@ def build_manual_html_bytes() -> bytes:
         elif kind == "figure":
             if item is None:
                 raise ValueError("A published manual figure has no identity.")
+            alternative = published.alternative
+            if not alternative or alternative.strip() == item.caption.strip():
+                raise ValueError(
+                    "A published manual figure requires a distinct text alternative."
+                )
             caption = _inline_md_to_html(item.caption)
             body.append(
                 f'<figure id="{item.anchor}"><div class="figure-alternative" '
-                f'role="img" aria-label="{html.escape(item.caption, quote=True)}">'
-                "Text alternative for the manual diagram: "
-                + caption
+                f'role="img" aria-label="{html.escape(alternative, quote=True)}">'
+                + _inline_md_to_html(alternative)
                 + "</div><figcaption><strong>"
                 + html.escape(item.label)
                 + ".</strong> "
@@ -3332,6 +3392,8 @@ body {{ margin:0 auto; padding:2rem; max-width:82ch; color:var(--ink); backgroun
 h1,h2,h3,h4,h5 {{ color:var(--blue); line-height:1.25; scroll-margin-top:1rem; }}
 h1 {{ font-size:2rem; }} h2 {{ border-top:2px solid var(--rule); padding-top:1rem; }}
 a {{ color:#0d4f8b; text-decoration-thickness:.1em; }}
+.skip-link {{ position:absolute; left:1rem; top:1rem; z-index:10; padding:.65rem .9rem; background:#fff; border:2px solid var(--blue); transform:translateY(-180%); }}
+.skip-link:focus {{ transform:translateY(0); }}
 .document-control,.source,figcaption {{ color:var(--muted); }}
 nav {{ border:1px solid var(--rule); background:var(--surface); padding:1rem 1.25rem; }}
 nav ol {{ padding-left:1.5rem; }} .toc-level-1 {{ margin-left:1rem; }} .toc-level-2 {{ margin-left:2rem; }}
@@ -3342,11 +3404,11 @@ th {{ background:var(--surface); }} .table-scroll {{ overflow-x:auto; }}
 .display-math,.equation-text {{ overflow-wrap:anywhere; padding:.5rem; background:#f7f8fa; }}
 .math,code {{ font-family:"Courier New", monospace; }}
 .figure-alternative {{ padding:1rem; border:2px dashed var(--rule); background:#f7f8fa; }}
-.sr-only {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
 @media print {{ body {{ max-width:none; padding:1cm; }} a {{ color:inherit; }} }}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#manual-main">Skip to main content</a>
 <header>
 <h1>Sector user manual</h1>
 <p class="document-control"><strong>Version:</strong> {html.escape(APP_VERSION)}<br>
@@ -3356,7 +3418,7 @@ Proprietary software; licensed to {html.escape(APP_LICENSEE)} for internal use.<
 <p>What Sector computes, the theory it applies, its features, and how to use it.</p>
 </header>
 <nav aria-label="Manual contents"><h2>Contents</h2><ol>{toc_html}</ol></nav>
-<main>{''.join(body)}</main>
+<main id="manual-main">{''.join(body)}</main>
 </body>
 </html>
 """

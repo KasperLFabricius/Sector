@@ -111,13 +111,11 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "doctype",
         "html_language",
         "html_charset",
-        "nonvisual_class_token",
-        "n_star_code_start",
         "html_ascii_whitespace",
         "fragment_href_pattern",
     )
     assert vocabulary.current_head_style_sha256 == (
-        "3925ff6f5ac21c001047c26a6bfd49dfe97c9d77fa9859992f05e0885a59f94a"
+        "d2795ea970117826f034557c358dce77107d7d8c5b6409cdd79e1dca6c8a155e"
     )
     assert vocabulary.body_block_tags == frozenset(
         {
@@ -152,7 +150,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         }
     )
     assert vocabulary.body_inline_tags == frozenset(
-        {"a", "code", "em", "span", "strong"}
+        {"a", "code", "em", "strong", "sub", "sup"}
     )
     assert vocabulary.body_void_tags == frozenset({"br"})
     assert vocabulary.head_void_tags == frozenset({"meta"})
@@ -166,7 +164,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
     assert attribute_tags == tuple(sorted(attribute_tags))
     assert len(attribute_tags) == len(set(attribute_tags))
     assert dict(vocabulary.attribute_names_by_tag) == {
-        "a": frozenset({"href"}),
+        "a": frozenset({"class", "href"}),
         "aside": frozenset({"class"}),
         "body": frozenset(),
         "br": frozenset(),
@@ -188,16 +186,17 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "header": frozenset(),
         "html": frozenset({"lang"}),
         "li": frozenset({"class"}),
-        "main": frozenset(),
+        "main": frozenset({"id"}),
         "meta": frozenset({"charset", "content", "name"}),
         "nav": frozenset({"aria-label"}),
         "ol": frozenset(),
         "p": frozenset({"class"}),
         "section": frozenset({"class", "id"}),
-        "span": frozenset({"class"}),
         "strong": frozenset(),
         "style": frozenset(),
+        "sub": frozenset(),
         "summary": frozenset(),
+        "sup": frozenset(),
         "table": frozenset(),
         "tbody": frozenset(),
         "td": frozenset(),
@@ -211,6 +210,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
     assert class_tags == tuple(sorted(class_tags))
     assert len(class_tags) == len(set(class_tags))
     assert dict(vocabulary.class_tokens_by_tag) == {
+        "a": frozenset({"skip-link"}),
         "aside": frozenset(
             {"callout", "concept", "limit", "standard", "theory", "tip"}
         ),
@@ -229,7 +229,6 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
             }
         ),
         "section": frozenset({"equation"}),
-        "span": frozenset({"sr-only"}),
     }
     assert vocabulary.meta_names == frozenset(
         {
@@ -246,10 +245,6 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
     assert vocabulary.doctype == "doctype html"
     assert vocabulary.html_language == "en"
     assert vocabulary.html_charset == "utf-8"
-    assert vocabulary.nonvisual_class_token == "sr-only"
-    assert vocabulary.n_star_code_start == (
-        '<code class="math" aria-label="mathematical expression N^<em>">'
-    )
     assert vocabulary.html_ascii_whitespace == "\t\n\f\r "
     assert vocabulary.fragment_href_pattern == r"#[A-Za-z0-9_-]+"
     assert get_type_hints(GeneratedManualHTMLVocabulary) == {
@@ -267,8 +262,6 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "doctype": str,
         "html_language": str,
         "html_charset": str,
-        "nonvisual_class_token": str,
-        "n_star_code_start": str,
         "html_ascii_whitespace": str,
         "fragment_href_pattern": str,
     }
@@ -303,7 +296,10 @@ def test_current_and_dormant_generator_paths_exactly_cover_vocabulary(monkeypatc
     assert "display-math" not in current.class_tokens.get("div", set())
     assert "theory" not in current.class_tokens.get("aside", set())
     assert "h5" not in current.tags
-    assert '<div class="display-math" role="math" aria-label="x+y">' in dormant_html
+    assert (
+        '<div class="display-math" role="math" '
+        'aria-label="Mathematical expression: x+y">'
+    ) in dormant_html
     assert '<aside class="callout theory">' in dormant_html
     assert '<h5 id="' in dormant_html
 
@@ -343,7 +339,9 @@ def test_current_and_dormant_generator_paths_exactly_cover_vocabulary(monkeypatc
     assert {
         values["scope"] for values in current.attributes["th"] if "scope" in values
     } == set(vocabulary.th_scopes)
-    assert vocabulary.n_star_code_start in CURRENT_HTML
+    assert '<code class="math" aria-label="Mathematical expression: N^*">' in (
+        CURRENT_HTML
+    )
     fragment_pattern = re.compile(vocabulary.fragment_href_pattern)
     generated_hrefs = {
         values["href"]
@@ -360,7 +358,9 @@ def test_current_and_dormant_generator_paths_exactly_cover_vocabulary(monkeypatc
 
 def test_dormant_display_math_branch_has_exact_generated_markup():
     assert manual._markdown_block_html("$$x+y$$") == (
-        '<div class="display-math" role="math" aria-label="x+y"><code>x+y</code></div>'
+        '<div class="display-math" role="math" '
+        'aria-label="Mathematical expression: x+y"><code class="math" '
+        'aria-label="Mathematical expression: x+y">x+y</code></div>'
     )
 
 
@@ -474,7 +474,7 @@ def test_generated_manual_html_vocabulary_is_data_only_with_one_bounded_consumer
         "frozen": True,
         "slots": True,
     }
-    assert [type(node) for node in class_node.body] == [ast.Expr] + [ast.AnnAssign] * 18
+    assert [type(node) for node in class_node.body] == [ast.Expr] + [ast.AnnAssign] * 16
     assert ast.get_docstring(class_node) is not None
     class_fields = [node for node in class_node.body if isinstance(node, ast.AnnAssign)]
     assert tuple(
@@ -490,7 +490,7 @@ def test_generated_manual_html_vocabulary_is_data_only_with_one_bounded_consumer
     assert isinstance(assignment.value.func, ast.Name)
     assert assignment.value.func.id == "GeneratedManualHTMLVocabulary"
     assert assignment.value.args == []
-    assert len(assignment.value.keywords) == 18
+    assert len(assignment.value.keywords) == 16
     assert all(keyword.arg is not None for keyword in assignment.value.keywords)
     assert tuple(keyword.arg for keyword in assignment.value.keywords) == tuple(
         field.name for field in fields(GeneratedManualHTMLVocabulary)
@@ -519,10 +519,10 @@ def test_generated_manual_html_vocabulary_is_data_only_with_one_bounded_consumer
     assert Counter(
         call.func.id for call in calls if isinstance(call.func, ast.Name)
     ) == {
-        "dataclass": 1,
-        "GeneratedManualHTMLVocabulary": 1,
-        "frozenset": 60,
-    }
+            "dataclass": 1,
+            "GeneratedManualHTMLVocabulary": 1,
+            "frozenset": 61,
+        }
     assert functions == []
     assert callsites == ["tools/manual_generated_html.py"]
     for excluded in (

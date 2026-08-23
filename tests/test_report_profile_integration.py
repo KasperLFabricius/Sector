@@ -1164,7 +1164,7 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
                     assert any(
                         y < heading_y - 4
                         and (
-                            value.startswith("SECTOR-MATH[")
+                            value.startswith("Mathematical expression:")
                             or value.startswith("Table ")
                         )
                         for value, _size, y in fragments

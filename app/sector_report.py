@@ -1853,10 +1853,8 @@ class ReportBuilder:
                 "uses",
             ))
         source_markup = _greek(f"<b>Source / method note:</b> {source}")
-        source_end_marker = f"SECTOR-SOURCE-END[{anchor}]"
         source_row = _equation_paragraph(
-            source_markup
-            + f'<font color="#FFFFFF" size="0.1">{source_end_marker}</font>',
+            source_markup,
             self.s["ref"],
             "source",
         )
@@ -2472,7 +2470,7 @@ class ReportBuilder:
         doc = _ReportDocTemplate(self.buffer, pagesize=A4,
                                  leftMargin=20 * mm, rightMargin=20 * mm,
                                  topMargin=25 * mm, bottomMargin=20 * mm,
-                                 title=title)
+                                 title=title, lang="en")
         # ReportLab suppresses canvas.save() on indexing passes and writes once
         # after every TableOfContents is satisfied. The shared BytesIO therefore
         # receives one final PDF container, not one container per pass.

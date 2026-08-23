@@ -94,7 +94,11 @@ def _tables(builder):
 
 
 def test_manual_inventory_has_exact_objects_labels_and_destinations():
-    items = [entry.item for entry in _entries() if entry.item is not None]
+    entries = _entries()
+    items = [entry.item for entry in entries if entry.item is not None]
+    figure_alternatives = [
+        entry.alternative for entry in entries if entry.block[0] == "figure"
+    ]
 
     assert tuple(item.label for item in items) == EXPECTED_LABELS
     assert len(MANUAL_FIGURE_SPECS) == 16
@@ -102,6 +106,25 @@ def test_manual_inventory_has_exact_objects_labels_and_destinations():
     assert len({item.label for item in items}) == len(items)
     assert len({item.anchor for item in items}) == len(items)
     assert all(item.caption.strip() for item in items)
+    assert figure_alternatives == [
+        spec.alternative for spec in MANUAL_FIGURE_SPECS
+    ]
+    assert all(
+        spec.alternative.strip().casefold() != spec.caption.strip().casefold()
+        for spec in MANUAL_FIGURE_SPECS
+    )
+
+
+def test_manual_figure_alternative_change_fails_before_publication():
+    blocks = _blocks()
+    position = next(
+        index for index, block in enumerate(blocks) if block[0] == "figure"
+    )
+    original = blocks[position]
+    blocks[position] = (*original[:3], "Generic repeated figure caption.")
+
+    with pytest.raises(PublicationContractError, match="identity or order"):
+        _entries(blocks)
 
 
 @pytest.mark.parametrize("kind", ["figure", "table"])

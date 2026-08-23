@@ -368,7 +368,7 @@ def test_unknown_reference_is_atomic_and_valid_prior_links_render():
     reader = pypdf.PdfReader(io.BytesIO(_pdf(builder.flow)))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     assert "Uses: Equation (1.1), Equation (1.2)" in text
-    assert text.count("SECTOR-MATH[symbolic-expression]") == 3
+    assert text.count("Mathematical expression:") == 3
     annotations = [
         reference.get_object()
         for page in reader.pages
