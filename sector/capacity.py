@@ -765,11 +765,19 @@ def prestress_axial(inp):
 
 
 def shear_lever_arm(inp, axis, tension_low, d_mm):
-    """Return the plastic internal shear lever arm in mm, or the ``0.9 d`` fallback."""
-    depth = _nonnegative_finite_real(d_mm, "effective depth d")
-    fallback = (0.9 * depth, "0.9 d (fallback)")
+    """Return the exact face-aligned Plastic shear arm or why it is unavailable.
+
+    Reinforced-shear checks use the component of the calculated
+    tension-compression resultant arm for their selected axis and face.  A
+    nominal ``0.9 d`` value is not substituted when that state is unavailable;
+    callers must retain the links check as not assessed instead.
+    """
+    _nonnegative_finite_real(d_mm, "effective depth d")
     if inp["section"] is None:
-        return fallback
+        return None, (
+            "calculated plastic lever arm unavailable: section model is not "
+            "available"
+        )
     angle = _face_angle(axis, tension_low)
     _require_valid_input_geometry(inp)
     prestress = inp["prestress"] if inp["tendons"] else None
@@ -783,7 +791,10 @@ def shear_lever_arm(inp, axis, tension_low, d_mm):
         _solver_member(point, "converged", "plastic point"),
         "plastic-point converged",
     ):
-        return fallback
+        return None, (
+            "calculated plastic lever arm unavailable: the exact face-aligned "
+            "Plastic solve did not converge"
+        )
     lever = abs(_finite_solver_result(
         _solver_member(
             point,
@@ -793,7 +804,10 @@ def shear_lever_arm(inp, axis, tension_low, d_mm):
         "plastic internal lever arm",
     ))
     if lever <= 1e-6:
-        return fallback
+        return None, (
+            "calculated plastic lever arm unavailable: the face-aligned "
+            "tension-compression resultant arm is zero or degenerate"
+        )
     return lever * 1000.0, "plastic internal lever arm"
 
 
@@ -1456,19 +1470,38 @@ def finalize_combined(inp, out):
     torsion_out = out.get("torsion")
     r_m = plastic.get("util") if plastic else None
     have_m = r_m is not None
-    have_v = shear_out is not None and shear_out["res"]["valid"]
+    links = shear_out.get("links") if shear_out is not None else None
+    concrete_shear_valid = bool(
+        shear_out is not None and shear_out["res"]["valid"]
+    )
+    links_selected = inp.get("shear_links") is True or links is not None
+    links_valid = bool(
+        links is not None and (links.get("res") or {}).get("valid")
+    )
+    have_v = concrete_shear_valid and (
+        not links_selected or links_valid
+    )
     have_t = torsion_out is not None and torsion_out["valid"]
     if not (have_m and have_v and have_t):
-        out["combined"] = {
+        shear_reason = None
+        if links_selected and not links_valid:
+            shear_reason = (
+                (links or {}).get("assessment_reason")
+                or ((links or {}).get("res") or {}).get("reason")
+                or "reinforced-shear prerequisite was not assessed"
+            )
+        payload = {
             "valid": False,
             "have_m": have_m,
             "have_v": have_v,
             "have_t": have_t,
             "method": inp["combined_method"],
         }
+        if shear_reason is not None:
+            payload["reason"] = shear_reason
+        out["combined"] = payload
         return
 
-    links = shear_out.get("links")
     r_v = links["util"] if links is not None else shear_out["util"]
     r_t = torsion_out["util"]
     independent_mv = bool(inp["combined_mv_independent"])

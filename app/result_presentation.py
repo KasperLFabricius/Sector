@@ -1439,18 +1439,29 @@ def result_summary_rows(inp, results, *, stale=False):
                     overview_parent="shear",
                 ))
             else:
+                link_result = links.get("res") or {}
+                calculation_state = link_result.get("calculation_state")
                 rows.append(_summary_row(
                     f"Shear{suffix} with links",
                     "plastic",
-                    _util_summary_status(
-                        links.get("util"),
-                        valid=bool((links.get("res") or {}).get("valid")),
+                    (
+                        str(calculation_state)
+                        if calculation_state
+                        else _util_summary_status(
+                            links.get("util"),
+                            valid=bool(link_result.get("valid")),
+                        )
                     ),
                     _percent(links.get("util")),
                     "<= 100 %",
                     links.get("util"),
                     "Shear",
-                    str((links.get("res") or {}).get("governs") or ""),
+                    str(
+                        links.get("assessment_reason")
+                        or link_result.get("reason")
+                        or link_result.get("governs")
+                        or ""
+                    ),
                     inp,
                     overview_key="shear:with_links",
                     overview_parent="shear",
@@ -1652,6 +1663,8 @@ def result_summary_rows(inp, results, *, stale=False):
             combined_note = str(combined.get("method") or "")
         elif missing:
             combined_note = "Missing prerequisite: " + ", ".join(missing)
+            if combined.get("reason"):
+                combined_note += "; " + str(combined["reason"])
         else:
             combined_note = str(
                 combined.get("reason") or "Combined calculation is invalid"

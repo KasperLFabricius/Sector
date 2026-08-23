@@ -6556,6 +6556,21 @@ class ReportBuilder:
         directions = aggregate.get("directions") or {}
         selected = self._selected_family("shear", self.inp)
         critical = selected is not None
+
+        def link_failure_reason(item):
+            links = item.get("links") or {}
+            result = links.get("res") or {}
+            if (
+                links
+                and not result.get("valid")
+            ):
+                return (
+                    links.get("assessment_reason")
+                    or result.get("reason")
+                    or "invalid reinforced-shear input"
+                )
+            return None
+
         if not directions:
             self._case_heading("Shear resistance", "plastic")
             links = aggregate.get("links") or {}
@@ -6591,6 +6606,13 @@ class ReportBuilder:
                     "Warning: the retained compression-strut bounds are outside "
                     "the selected method's default range. The actual entered "
                     "bounds remain in the completed result."
+                )
+            if (reason := link_failure_reason(aggregate)) is not None:
+                self._small(
+                    "NOT ASSESSED: "
+                    + _html_escape(str(reason))
+                    + ". No link lever arm, resistance, utilisation or PASS/FAIL "
+                      "verdict is published for this result."
                 )
             if not critical:
                 self._small(
@@ -6668,6 +6690,19 @@ class ReportBuilder:
                 "outside the selected method's default range. The actual entered "
                 "bounds remain in the completed results."
             )
+        for component in ("vx", "vy"):
+            item = directions.get(component)
+            if item is None:
+                continue
+            reason = link_failure_reason(item)
+            if reason is not None:
+                label = "Vx,Ed" if component == "vx" else "Vy,Ed"
+                self._small(
+                    f"{label} NOT ASSESSED: "
+                    + _html_escape(str(reason))
+                    + ". No link lever arm, resistance, utilisation or PASS/FAIL "
+                      "verdict is published for this result."
+                )
         if not critical:
             self._small(
                 "The complete shear worked example is published only for the "
@@ -6808,7 +6843,11 @@ class ReportBuilder:
                 self._small(combined_blocker)
         links_payload = sh.get("links") or {}
         link_res = links_payload.get("res") or {}
-        z_geometry = float(link_res.get("z", res.get("z", 0.9 * sh["d"])))
+        z_geometry = (
+            link_res.get("z")
+            if links_payload
+            else res.get("z", 0.9 * sh["d"])
+        )
         bw_src = "user input" if sh["bw_user"] else "auto minimum solid width"
         if self.figures:
             self._h2("Derived shear geometry")
@@ -6919,8 +6958,17 @@ class ReportBuilder:
                 f"V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
                 f"(EN 1992-1-1 sec. {clause}). For this V<sub>Ed</sub>, links are {req}.")
         if not lk["valid"]:
-            self._small("Warning: the link resistance is zero -- check the leg count, "
-                        "diameter and spacing (A<sub>sw</sub>/s must be &gt; 0).")
+            reason = (
+                links.get("assessment_reason")
+                or lk.get("reason")
+                or "invalid reinforced-shear input"
+            )
+            self._small(
+                "NOT ASSESSED: "
+                + _html_escape(str(reason))
+                + ". No link lever arm, resistance, utilisation or PASS/FAIL "
+                  "verdict is published for this result."
+            )
             return
         retained_angle_fields = {
             "cot", "tan", "theta_deg", "cot_min", "cot_max",
@@ -7359,7 +7407,15 @@ class ReportBuilder:
             if not c.get("have_t", True):
                 missing.append("torsion")
             detail = ", ".join(missing) or "one or more component checks"
-            self._small(f"Directional combined check not evaluated: {detail} missing or invalid.")
+            reason = (
+                " " + _html_escape(str(c["reason"])) + "."
+                if c.get("reason")
+                else ""
+            )
+            self._small(
+                f"Directional combined check not evaluated: {detail} missing "
+                f"or invalid.{reason}"
+            )
             return
         if c.get("governing_face"):
             component = component or c.get("component") or "vy"
@@ -7666,7 +7722,8 @@ class ReportBuilder:
                     else "(NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
                 )
             ))
-        self._small(f"z = {_fmt(och['z'], 3)} m ({och.get('z_src') or '0.9 d'}). "
+        self._small(f"z = {_fmt(och['z'], 3)} m "
+                    f"({och.get('z_src') or 'calculated source not retained'}). "
                     "Each chord's capacity is conditional on the OTHER axis' "
                     "bending moment only; the longitudinal steel the two chords "
                     "share also carries both their shear/torsion tensions, an "

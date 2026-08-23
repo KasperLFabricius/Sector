@@ -994,6 +994,38 @@ def test_shear_screening_does_not_fail_when_selected_links_pass():
     assert governing["Shear with links"] is True
 
 
+def test_unavailable_calculated_link_arm_is_not_assessed_without_a_verdict():
+    shear = {
+        "res": {"valid": True, "vrd_c": 100.0},
+        "util": 1.20,
+        "method": "DK NA",
+        "links": {
+            "res": {
+                "valid": False,
+                "calculation_state": "NOT ASSESSED",
+                "reason": "exact calculated plastic lever arm z is unavailable",
+            },
+            "util": None,
+            "assessment_reason": (
+                "calculated plastic lever arm unavailable: the exact face-aligned "
+                "Plastic solve did not converge"
+            ),
+        },
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", shear_on=True, shear_links=True),
+        {"plastic": _plastic(), "shear": shear},
+    )
+    link_row = next(row for row in rows if row["check"] == "Shear with links")
+
+    assert link_row["status"] == "NOT ASSESSED"
+    assert link_row["result"] == "-"
+    assert link_row["util"] is None
+    assert "did not converge" in link_row["note"]
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+
+
 def test_shear_without_links_retains_concrete_screening_verdict():
     shear = {
         "res": {"valid": True, "vrd_c": 100.0},

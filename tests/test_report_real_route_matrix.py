@@ -269,6 +269,7 @@ def _shear_links_2023() -> dict:
         0.18,
         1.0,
         2.5,
+        z_mm=495.0,
         fcd_mpa=20.0,
         gamma_s=1.15,
         v_ed_kn=50.0,

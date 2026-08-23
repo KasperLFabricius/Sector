@@ -2187,6 +2187,13 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
         else f"{action_symbol} = {signed_action:.3g} kN"
     )
     positive_action = signed_action is None or signed_action >= 0.0
+    try:
+        z_value = float(z_mm)
+    except (TypeError, ValueError, OverflowError):
+        z_value = None
+    show_z = bool(
+        z_value is not None and math.isfinite(z_value) and z_value > 0.0
+    )
 
     xs = [float(p[0]) * 1000.0 for p in outer]
     ys = [float(p[1]) * 1000.0 for p in outer]
@@ -2361,17 +2368,18 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                                bgcolor="rgba(255,255,255,0.94)",
                                bordercolor=SCHEMATIC_INK,
                                borderwidth=1, borderpad=2)
-            z_end = cg + direction * min(float(z_mm), float(d_mm))
-            fig.add_shape(type="line", x0=z_x, x1=z_x, y0=cg, y1=z_end,
-                          line=dict(color=ENVELOPE, width=1.2))
-            fig.add_annotation(name="shear-z-label",
-                               x=z_x, y=(cg + z_end) / 2.0,
-                               text=f"z = {z_mm:.0f} mm", showarrow=False,
-                               xanchor="left", xshift=6,
-                               bgcolor="rgba(255,255,255,0.94)",
-                               bordercolor=ENVELOPE,
-                               borderwidth=1, borderpad=2,
-                               font=dict(color=ENVELOPE))
+            if show_z:
+                z_end = cg + direction * min(z_value, float(d_mm))
+                fig.add_shape(type="line", x0=z_x, x1=z_x, y0=cg, y1=z_end,
+                              line=dict(color=ENVELOPE, width=1.2))
+                fig.add_annotation(name="shear-z-label",
+                                   x=z_x, y=(cg + z_end) / 2.0,
+                                   text=f"z = {z_value:.0f} mm", showarrow=False,
+                                   xanchor="left", xshift=6,
+                                   bgcolor="rgba(255,255,255,0.94)",
+                                   bordercolor=ENVELOPE,
+                                   borderwidth=1, borderpad=2,
+                                   font=dict(color=ENVELOPE))
     else:
         fig.add_shape(type="line", x0=cx, x1=cx, y0=ymin, y1=ymax,
                       line=dict(color=SCHEMATIC_INK, width=1, dash="dot"))
@@ -2454,17 +2462,18 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                                bgcolor="rgba(255,255,255,0.94)",
                                bordercolor=SCHEMATIC_INK,
                                borderwidth=1, borderpad=2)
-            z_end = cg + direction * min(float(z_mm), float(d_mm))
-            fig.add_shape(type="line", x0=cg, x1=z_end, y0=z_y, y1=z_y,
-                          line=dict(color=ENVELOPE, width=1.2))
-            fig.add_annotation(name="shear-z-label",
-                               x=(cg + z_end) / 2.0, y=z_y,
-                               text=f"z = {z_mm:.0f} mm", showarrow=False,
-                               yanchor="bottom", yshift=6,
-                               bgcolor="rgba(255,255,255,0.94)",
-                               bordercolor=ENVELOPE,
-                               borderwidth=1, borderpad=2,
-                               font=dict(color=ENVELOPE))
+            if show_z:
+                z_end = cg + direction * min(z_value, float(d_mm))
+                fig.add_shape(type="line", x0=cg, x1=z_end, y0=z_y, y1=z_y,
+                              line=dict(color=ENVELOPE, width=1.2))
+                fig.add_annotation(name="shear-z-label",
+                                   x=(cg + z_end) / 2.0, y=z_y,
+                                   text=f"z = {z_value:.0f} mm", showarrow=False,
+                                   yanchor="bottom", yshift=6,
+                                   bgcolor="rgba(255,255,255,0.94)",
+                                   bordercolor=ENVELOPE,
+                                   borderwidth=1, borderpad=2,
+                                   font=dict(color=ENVELOPE))
 
     if not selected:
         ids = "none"

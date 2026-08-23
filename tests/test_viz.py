@@ -889,6 +889,36 @@ def test_shear_geometry_figure_exposes_derived_geometry_and_selected_bars():
     assert face.showarrow and face.ay < face.y
 
 
+@pytest.mark.parametrize("axis", ("x", "y"))
+def test_shear_geometry_omits_an_unavailable_lever_arm(axis):
+    fig = viz.shear_geometry_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [(-0.1, -0.25, 300.0), (0.1, -0.25, 300.0)],
+        axis=axis,
+        tension_low=True,
+        centroid=(0.0, 0.0),
+        asl_bar_ids=[1, 2],
+        asl_cg_m=-0.25 if axis == "x" else -0.1,
+        asl_mm2=600.0,
+        d_mm=550.0,
+        z_mm=None,
+        bw_mm=400.0,
+        bw_source="auto",
+    )
+
+    annotations = {
+        annotation.name: annotation
+        for annotation in fig.layout.annotations
+        if annotation.name
+    }
+    assert "shear-d-label" in annotations
+    assert "shear-z-label" not in annotations
+    assert "z =" not in " ".join(
+        str(annotation.text or "") for annotation in fig.layout.annotations
+    )
+
+
 def test_horizontal_shear_geometry_uses_left_tension_face():
     fig = viz.shear_geometry_figure(
         [(0.0, 0.0), (0.6, 0.0), (0.6, 0.3), (0.0, 0.3)], [],
