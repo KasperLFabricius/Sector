@@ -24,14 +24,14 @@ class _ContainsEverything(str):
 
 
 _REPORT_LITERAL = (
-    "Report metadata and publication controls are grouped separately from the "
+    "Report details and publication controls are grouped separately from the "
     "Project input stage."
 )
 _RESULT_LITERAL = (
     "Report labels identify the physical quantity represented by each result field."
 )
 _REPLACED_REPORT_LITERAL = (
-    "Report metadata and publication controls are no longer mixed with the "
+    "Report details and publication controls are no longer mixed with the "
     "Project input stage."
 )
 _REPLACED_RESULT_LITERAL = "Legacy result-field names remain for compatibility"

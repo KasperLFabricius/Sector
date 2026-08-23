@@ -525,8 +525,8 @@ def test_plastic_assessment_text_is_compact_and_solver_neutral():
     assert legacy["util"] is None
     assert legacy["margin"] is None
     assert presentation.plastic_assessment_text(legacy) == (
-        "NOT ASSESSED - Plastic bending | Retained result predates the current "
-        "M-M origin-containment contract; recalculate"
+        "NOT ASSESSED - Plastic bending | The saved result cannot confirm that "
+        "the M-M envelope contains the origin; recalculate"
     )
 
 
@@ -802,7 +802,9 @@ def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
     assert by_check["Combined concrete compression strut"]["status"] == "NOT ASSESSED"
     assert by_check["Combined closed stirrup"]["status"] == "NOT ASSESSED"
     assert by_check["Combined longitudinal reinforcement"]["status"] == "NOT ASSESSED"
-    assert "fallback" in by_check["Combined longitudinal reinforcement"]["note"].lower()
+    assert "pure-axis substitute" in (
+        by_check["Combined longitudinal reinforcement"]["note"].lower()
+    )
 
 
 def test_combined_summary_marks_missing_prerequisites_not_assessed():
@@ -923,7 +925,7 @@ def test_combined_components_withhold_verdict_for_non_governing_fallback():
     longitudinal = components[2]
     assert longitudinal["util"] == pytest.approx(0.85)
     assert longitudinal["status"] == "NOT ASSESSED"
-    assert "pure-axis fallback" in longitudinal["note"]
+    assert "pure-axis substitute" in longitudinal["note"]
     assert "x-axis negative face" in longitudinal["note"]
 
 
@@ -1284,7 +1286,8 @@ def test_legacy_plastic_invalidates_retained_combined_summary_and_selection():
     assert combined_rows[0]["status"] == "NOT ASSESSED"
     assert combined_rows[0]["result"] == "-"
     assert combined_rows[0]["util"] is None
-    assert "predates" in combined_rows[0]["note"].casefold()
+    assert "m-m envelope contains the origin" in combined_rows[0]["note"].casefold()
+    assert "recalculate" in combined_rows[0]["note"].casefold()
     assert "recalculate" in combined_rows[0]["note"].casefold()
     selection = presentation.worked_example_selection({}, results)
     assert "combined" not in selection["families"]

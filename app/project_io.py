@@ -978,14 +978,14 @@ def _migrated_schema25_crack_widths(
     heightened_enabled = raw_scalars.get("sls_heightened_on") is True
     if heightened_enabled and shared <= 0.0:
         raise ValueError(
-            f"{LEGACY_SHARED_CRACK_WIDTH_KEY} must be positive when schema-25 "
-            "heightened crack control is enabled"
+            "The older project file's permitted crack width must be positive "
+            "when heightened crack control is enabled"
         )
     heightened = shared if heightened_enabled else 0.0
     warnings = (
         (
-            "Schema 25 used one permitted crack width for both ordinary "
-            "durations. Sector copied the positive value to the independent "
+            "This project file used one permitted crack width for both ordinary "
+            "durations. The value was copied to the independent "
             "long-term and short-term inputs; review both before recalculating."
         ),
     ) if shared > 0.0 else ()
@@ -1042,16 +1042,16 @@ def _migrated_heightened_operands(
             )
         except ValueError as exc:
             raise ValueError(
-                "the retired heightened configuration cannot be migrated because "
-                "it does not identify one reference case; leave exactly one "
-                "Elastic case crack-enabled, then load and explicitly review it"
+                "the older heightened crack-control inputs do not identify one "
+                "reference case; leave exactly one Elastic case crack-enabled, "
+                "then load and review it"
             ) from exc
         migrated["sls_heightened_reference_case"] = reference
     warning = (
-        "The retired single-system heightened inputs were migrated to the dual "
-        "fine/coarse workflow. The former effective tension area was copied to "
-        "both systems; diameter, reinforcement modulus and provided area now "
-        "come from retained ordinary crack evidence. Review both effective "
+        "This older project file used one heightened crack-control system. Its "
+        "effective tension area was copied to both the fine and coarse systems; "
+        "diameter, reinforcement modulus and provided area now come from the "
+        "selected ordinary crack-width case. Review both effective "
         "tension areas before recalculating."
     )
     return migrated, (warning,), True
@@ -1176,8 +1176,8 @@ def parse_project_with_info(text: str):
         if gamma_v_active:
             migration_warnings = (
                 *migration_warnings,
-                "Schema 25 used the fixed DS/EN 1992-1-1:2023 shear "
-                "partial factor. Sector migrated the calculation to the "
+                "This project file used the fixed DS/EN 1992-1-1:2023 shear "
+                "partial factor. The calculation now has an "
                 "explicit gamma_V input at 1.40; review it before "
                 "recalculating.",
             )
@@ -1216,8 +1216,8 @@ def parse_project_with_info(text: str):
         )
         if gamma_v_active:
             migration_warnings = (
-                "Schema 26 used the fixed DS/EN 1992-1-1:2023 shear "
-                "partial factor. Sector migrated the calculation to the "
+                "This project file used the fixed DS/EN 1992-1-1:2023 shear "
+                "partial factor. The calculation now has an "
                 "explicit gamma_V input at 1.40; review it before "
                 "recalculating.",
             )

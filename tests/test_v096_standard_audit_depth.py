@@ -67,7 +67,7 @@ def _selected_plastic_builder(profile: str):
     return builder
 
 
-def test_profile_policy_names_governing_standard_and_exhaustive_audit_depth():
+def test_profile_policy_explains_standard_and_audit_depth_to_engineers():
     standard = sector_report.report_profiles.STANDARD_PROFILE
     audit = sector_report.report_profiles.AUDIT_PROFILE
 
@@ -75,9 +75,18 @@ def test_profile_policy_names_governing_standard_and_exhaustive_audit_depth():
     assert "one governing worked calculation per active check family" in (
         standard.description
     )
-    assert "exhaustive" in standard.omitted_detail
-    for expected in ("candidates", "branches", "substitutions", "provenance"):
+    assert "intermediate results" in standard.omitted_detail
+    assert "complete method theory" in standard.omitted_detail
+    for expected in (
+        "all calculation inputs",
+        "non-governing results",
+        "intermediate values",
+        "substitutions",
+        "references",
+        "method theory",
+    ):
         assert expected in audit.description
+    assert "All available calculation evidence is included" in audit.omitted_detail
 
 
 def test_standard_omits_plastic_populations_but_keeps_selected_calculation():
@@ -200,8 +209,8 @@ def test_curvature_selection_source_is_profile_neutral():
 
     assert references == [
         (
-            "Sector governing-curvature minimum; the retained selected "
-            "candidate identity is stated with the result."
+            "Sector governing-curvature minimum; the governing material "
+            "candidate is stated with the result."
         )
     ] * 2
 
@@ -367,7 +376,7 @@ def test_existing_audit_only_solver_and_crack_candidate_ledgers_remain_separate(
 
     for heading in (
         "Candidate summary for governing crack example",
-        "Elastic solver states",
+        "Elastic states used in the fatigue calculation",
     ):
         assert heading not in texts["Standard"]
         assert heading in texts["Audit"]

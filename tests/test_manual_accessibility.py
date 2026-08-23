@@ -90,9 +90,9 @@ def test_html_manual_is_self_contained_javascript_free_and_identified():
     assert parser.external_resources == []
     assert "Sector user manual v" in text
     assert 'name="sector-version"' in text
-    assert 'name="sector-source-revision"' in text
+    assert 'name="sector-source-revision"' not in text
     assert 'name="author"' in text
-    assert "Source revision:" in text
+    assert "Source revision:" not in text
 
 
 def test_every_internal_link_resolves_to_one_unique_destination():
@@ -172,8 +172,8 @@ def test_pdf_declares_document_control_language_and_detailed_navigation():
 
     first_page = " ".join((reader.pages[0].extract_text() or "").split())
     assert f"Version {manual.APP_VERSION}" in first_page
-    assert f"Source revision: {manual.source_revision()}" in first_page
+    assert "Source revision:" not in first_page
     for page in reader.pages:
         text = " ".join((page.extract_text() or "").split())
         assert f"Sector v{manual.APP_VERSION} - user manual" in text
-        assert "Rev:" in text
+        assert "Rev:" not in text

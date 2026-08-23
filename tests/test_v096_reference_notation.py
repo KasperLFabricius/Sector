@@ -118,7 +118,8 @@ def test_neutral_calculation_language_preserves_product_identity() -> None:
         "published evidence",
     ):
         assert removed_phrase not in manual_text.casefold()
-    assert "is not a compliance-management, certification, sign-off" in manual_text
+    assert "Sector is a **transparent structural calculation tool**" in manual_text
+    assert "The engineer selects the project methods" in manual_text
     assert sls.CRACK_CALCULATED_UNASSESSED == (
         "CALCULATED - NO LIMIT COMPARISON"
     )

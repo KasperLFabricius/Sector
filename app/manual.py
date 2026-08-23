@@ -45,7 +45,6 @@ from app import table_field_definitions as table_fields
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
-from sector.build_info import source_revision
 from sector import design_standards, material_presets, templates
 from sector.codes import fctm
 from sector.fatigue import steel_fatigue_life
@@ -528,11 +527,11 @@ def manual_blocks() -> list:
        "and the material laws. It returns plastic capacity, cracked-section elastic "
        "response, grouped fatigue checks, independent resistance checks and a "
        "report.")
-    call("concept", "Sector is a **transparent structural calculation tool**. It "
-         "is not a compliance-management, certification, sign-off, authority-"
-         "approval or code-completeness system. The engineer controls methods, "
-         "action sets and coefficients. Selected standards supply equations, "
-         "references, defaults and warnings.")
+    call("concept", "Sector is a **transparent structural calculation tool**. "
+         "It publishes calculation inputs, methods, intermediate values and "
+         "result-specific statuses. The engineer selects the project methods, "
+         "action sets and coefficients; standards provide the calculation "
+         "equations, references, defaults and warnings.")
     md("The section and material-law diagrams update as you type; the result "
        "views recompute when you press *Calculate*.")
     call("limit", "Sector analyses **one plane cross-section**. It assumes plane "
@@ -542,7 +541,7 @@ def manual_blocks() -> list:
     call("standard", "DS/EN 1992-1-1:2023 is a selectable calculation method in "
          "Sector. Individual material and check methods remain independently "
          "selectable and are recorded with their numerical outputs. The 2023 shear methods with and without links "
-         "and the refined crack model are implemented. Torsion and combined M-V-T "
+         "and the refined crack model are available. Torsion and combined M-V-T "
          "remain on the 2005 family and are identified as such.")
 
     h2("What Sector computes - at a glance")
@@ -562,12 +561,12 @@ def manual_blocks() -> list:
        "checks per selected capacity case and a section-wide clear-spacing check.\n"
        "- **Multi-case review and reporting.** Named Plastic/capacity, Elastic and "
        "fatigue rows are summarised together, remain selectable individually, and "
-       "are included in a QA PDF with formulas and code references. A project file "
+       "are included in a calculation PDF with formulas and code references. A project file "
        "saves the whole input set.")
 
     h1("Start here")
     md("Choose the shortest reading path for the task. Every destination below is "
-       "the same stable destination in the PDF outline and the accessible HTML "
+       "the same named destination in the PDF outline and the accessible HTML "
        "manual.")
     table(
         ["Reading path", "Use it when", "Destination"],
@@ -584,7 +583,7 @@ def manual_blocks() -> list:
             ],
             [
                 "Method reference",
-                "You need an implemented equation, assumption, branch or limitation.",
+                "You need an equation, assumption, calculation alternative or limitation.",
                 "[Open Method reference](#manual-method-reference)",
             ],
         ],
@@ -701,14 +700,14 @@ def manual_blocks() -> list:
        "material panel places the selected stress-strain law beside its parameters. "
        "These previews update live. The **Analysis** workspace contains calculated "
        "results selected with the **View** dropdown. The **Report** workspace, "
-       "immediately to its right, owns document metadata, profile selection, "
+       "immediately to its right, owns document details, profile selection, "
        "generation and PDF download.")
     table(["View", "Shows"],
-          [["Results Overview", "One most-unfavourable retained result per semantic check type, with the governing action or direction preserved"],
+          [["Results Overview", "Most unfavourable result for each engineering check, with the governing action or direction"],
            ["Plastic Results", "Selected case: M-M envelope and utilisation"],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
-           ["Fatigue Results", "All spectra; selected spectrum, element, fibre and bin evidence"],
+           ["Fatigue Results", "All spectra; selected spectrum, element, fibre and bin results"],
            ["Detailing", "Selected case: modelled-direction minimum reinforcement and link detailing; section-wide spacing"],
            ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
@@ -716,11 +715,10 @@ def manual_blocks() -> list:
     h2("Report workspace")
     md("Enter project number, project name, section, revision, author and comments "
        "in this workspace, then select **Brief**, **Standard** or **Audit**. "
-       "Generating reuses retained Analysis results only when their complete input "
-       "signature matches the current inputs; otherwise Sector recalculates for the "
-       "report and records that source. A metadata or input edit marks an existing "
+       "Generating reuses Analysis results when they match the current inputs; "
+       "otherwise Sector recalculates them for the report. A project-detail or input edit marks an existing "
        "PDF out of date and blocks its download until it is regenerated.")
-    call("tip", "Report metadata and publication controls are grouped separately "
+    call("tip", "Report details and publication controls are grouped separately "
          "from the Project input stage. Save/load and autosave remain under "
          "**Inputs > Project**; publication remains under **Report**.")
     call("tip", "*Auto-calc all derived values* (in Material parameters) "
@@ -731,7 +729,7 @@ def manual_blocks() -> list:
     h1("Project")
     h2("Project files and autosave")
     md("A downloaded project file stores the section, materials, settings, named "
-       "load cases and provenance. Loading a project restores its inputs and clears "
+       "load cases and saving information. Loading a project restores its inputs and clears "
        "earlier results. Review the restored inputs, then press *Calculate* before "
        "using or reporting results.")
     md("Local autosave is enabled by default at a five-minute interval. A due save "
@@ -747,7 +745,8 @@ def manual_blocks() -> list:
     md("Four editable tables hold the concrete corners, the voids, the bars "
        "and the tendons. Coordinates and diameters are in millimetres; areas are "
        "in square millimetres. Each reinforcement element has a fixed ID used by "
-       "the figures, results and report. Deleting another row does not renumber it.")
+       "the figures, results and report. IDs remain unchanged when other rows are "
+       "deleted.")
     table(["Size basis", "Entered", "Calculated"],
           [["Area", "Area", "Equivalent circular diameter"],
            ["Diameter", "Diameter", "Area of one circular element"],
@@ -791,13 +790,13 @@ def manual_blocks() -> list:
        "and the builder blocks Apply if a dimension, layer or ring would create "
        "invalid geometry or put a generated point outside concrete.")
     h2("Validity checks")
-    md("Geometry is validated before any solver runs. Every outer or hole ring "
+    md("Geometry is validated before calculation. Every outer or hole ring "
        "must contain finite numeric coordinates, at least three distinct points "
        "and an area above the resolved tolerance. A ring is rejected for a "
        "repeated or tolerance-coincident vertex, a non-adjacent crossing, touch or "
        "overlap, or an adjacent edge that reverses along the same line. Forward "
        "collinear points and one exact final point equal to the first are allowed. "
-       "Clockwise and counter-clockwise winding are both valid; Sector retains the "
+       "Clockwise and counter-clockwise winding are both valid; Sector preserves the "
        "entered order and uses oriented copies only for integration.")
     md("Every hole must be strictly inside the outer ring. It cannot touch or cross "
        "the outer boundary, touch/cross/overlap another hole, or contain another "
@@ -806,24 +805,24 @@ def manual_blocks() -> list:
        "causal defect is reported with its ring, point or edge location.")
     call("concept", "The length tolerance is the greatest of **1e-12 m**, "
          "**1e-9 times the section span** and **8 ULP of the coordinate magnitude**. "
-         "Coordinates are classified but never snapped or rewritten. A geometry "
-         "validation failure is distinct from a valid section whose numerical "
-         "solver later fails to converge.")
+         "Validation preserves the entered coordinates exactly. A geometry "
+         "validation failure is distinct from a valid section whose calculation "
+         "later fails to converge.")
     call("limit", "A void must leave the concrete in one connected piece. A slot "
          "that splits the section in two is rejected rather than analysed, because "
          "the plane-section assumption no longer holds across a break.")
 
     h1("Materials")
     md("Concrete has one definition. Mild steel and prestress use catalogues: each "
-       "definition has a stable ID, name and optional description. Add, duplicate "
+       "definition has a unique ID, name and optional description. Add, duplicate "
        "or delete definitions in the material panel, then assign the ID to each bar "
        "or tendon in the Section table. An assigned definition cannot be deleted. "
        "A preset supplies starting values for the selected definition; every value "
        "can then be adjusted.")
     call("limit", "Enter the **final effective** material partial factors in the "
-         "material panels, including every applicable national increase or reduction "
-         "for construction, control and consequence category. Sector does not ask for "
-         "those categories and applies no hidden category multiplier.")
+         "material panels. Include every applicable national increase or reduction "
+         "for construction, control and consequence category; Sector applies the "
+         "entered factors directly.")
     h2("Concrete")
     md("The concrete stress-strain law is chosen by the *Preset*: **Curve 2 "
        "(parabola-rectangle)**, the EC2 design law used throughout this manual, or "
@@ -848,9 +847,9 @@ def manual_blocks() -> list:
        "parameter visible and live. The generic **Curve 1**, **Curve 2** and "
        "**Curve 3** selections are user-defined/project-defined starting-value "
        "presets and are explicitly uncited. An edition-named selection is labelled "
-       "a **Curve 3 Eurocode design preset** and retains that edition's source. "
-       "The preset never locks the law: edited numerical values are the actual "
-       "calculation inputs. The selected definition's plot is shown beside its "
+       "a **Curve 3 Eurocode design preset** and keeps that edition's source. "
+       "The preset supplies traceable starting values; edited numerical values are "
+       "the actual calculation inputs. The selected definition's plot is shown beside its "
        "inputs. These include yield and ultimate strengths, ultimate strain, the "
        "partial factors, yield offsets, first-yield ratio and modulus $E_s$. The "
        "**Active in compression** toggle decides whether the bars carry "
@@ -862,8 +861,7 @@ def manual_blocks() -> list:
         "compression branches to yield followed by the selected post-yield response.")
     call("standard", "Edition-named concrete and steel presets carry their selected "
          "Eurocode source (including 3.1.7 / 3.2.7 for the 2005 family). Generic "
-         "named curves and custom/imported laws are project-defined and uncited; "
-         "numerical similarity never assigns them a standard identity.")
+         "named curves and custom/imported laws remain project-defined and uncited.")
     h2("Prestressing steel")
     md("Each prestress definition adds the tendon law and, crucially, the initial strain "
        "$\\varepsilon_{p,IS}$ locked into the tendons. The inputs mirror the mild "
@@ -879,9 +877,9 @@ def manual_blocks() -> list:
 
     h1("Analysis & result settings")
     h2("Analysis mode")
-    md("*Analysis* selects the calculation method: **Plastic** (nonlinear M-M "
-       "capacity), **Elastic** (cracked-section stresses), or **Both**. These names "
-       "do not prescribe a limit state; classify each action set for the project.")
+    md("*Analysis* selects **Plastic** (nonlinear M-M capacity), **Elastic** "
+       "(cracked-section stresses), or **Both**. Record the project limit-state "
+       "classification in each action-set name, source or note.")
     h2("The plastic sweep")
     md("The envelope is traced by rotating the neutral axis from $V_{min}$ to "
        "$V_{max}$ in steps of $V_{inc}$ (degrees). Each angle gives one point on "
@@ -894,19 +892,17 @@ def manual_blocks() -> list:
         "point; successive boundary vertices correspond to rotated neutral-axis "
         "solutions.")
     h2("Reinforcement detailing")
-    md("Select **Beam** or **Slab**. **Section cut direction** fixes the canonical, "
-       "member-relative modelled reinforcement direction. Sector checks only the "
-       "bars represented by that cut; it does not request an unmodelled orthogonal "
-       "layer.")
-    table(["Section cut", "Canonical modelled reinforcement direction"],
+    md("Select **Beam** or **Slab**. **Section cut direction** fixes the "
+       "member-relative reinforcement direction represented by the section model. "
+       "Detailing checks use the bars in that modelled cut.")
+    table(["Section cut", "Modelled reinforcement direction"],
           [["Transverse cut", "Longitudinal"],
            ["Longitudinal cut", "Transverse"]])
     md("In words, a transverse cut models the Longitudinal reinforcement, while "
        "a longitudinal cut models the Transverse reinforcement.")
     md("The optional **Project direction alias** records local terminology, for "
-       "example *span direction*. Sector publishes it in parentheses after the "
-       "canonical direction; an alias never replaces the canonical Longitudinal "
-       "or Transverse meaning and does not change a calculation.")
+       "example *span direction*. It is published after the standard Longitudinal "
+       "or Transverse label and changes presentation only.")
     md("Enable **Check minimum reinforcement in modelled direction** and select the check on each "
        "required Plastic/capacity row. The selected detailing edition and the "
        "global $f_{ctm}$ apply to those rows. A secondary-direction slab minimum is "
@@ -934,9 +930,8 @@ def manual_blocks() -> list:
           [["Beam", "$s_l \\leq 0.75d$; $s_t \\leq \\min(0.75d,600\\,\\text{mm})$"],
            ["Slab", "$s_l \\leq 0.75d$; $s_t \\leq 1.5d$"]])
     md("$s_t$ is measured in the section plane between adjacent parallel link "
-       "legs: along $y$ for $V_x$ and along $x$ for $V_y$. It is not the "
-       "longitudinal spacing $s_l$, and it does not require shortening a closed "
-       "stirrup.")
+       "legs: along $y$ for $V_x$ and along $x$ for $V_y$. The longitudinal "
+       "spacing is $s_l$; the closed-stirrup height remains unchanged.")
     call("standard", "EN 1992-1-1:2005 9.2.3(4)'s 350 mm value applies to "
          "longitudinal torsion bars around the link perimeter, not to spacing "
          "between closed links.")
@@ -963,16 +958,15 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
     call(
         "standard",
-        f"Sector {APP_VERSION} reports the DK NA fine and coarse crack systems "
+        "Sector reports the DK NA fine and coarse crack systems "
         "side by side, each for the long-term and short-term load (four crack "
         "widths) for each crack-width-enabled Elastic row. Analysis settings "
         "provide independent long-term and short-term user limits. Zero means "
         "that duration is "
         "calculated without a limit comparison; when a positive value is "
-        "entered, Sector reports only a bounded duration-matched comparison and "
-        "does not infer exposure, durability, load-combination classification, "
-        "prestress category or owner requirements. Part C derives every model in "
-        "full with the critical worked crack width.",
+        "entered, Sector reports the duration-matched comparison. Select the limits "
+        "and action classifications required by the project basis. Part C derives "
+        "every model in full with the critical worked crack width.",
     )
     md("For the first-generation Danish basis only, **DK heightened crack-control "
        "minimum** is a separate section-level opt-in. The user must declare its "
@@ -980,13 +974,14 @@ def manual_blocks() -> list:
        "reinforcement surface, effective tensile strength and separate fine/coarse "
        "effective tension areas. "
        "Sector calculates both systems together. It derives bar diameter, reinforcement "
-       "modulus and provided area from one retained ordinary crack-enabled Elastic "
-       "case: the sole such case is automatic, otherwise the user selects it explicitly.")
+       "modulus and provided area from one ordinary crack-width Elastic case: the "
+       "sole eligible case is selected automatically; otherwise the user selects it "
+       "explicitly.")
     h2("Grouped fatigue")
     md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
-       "**Reinforcement** and/or **Concrete**. Enter the complete project factors "
-       "$\\gamma_{Ff}$, $\\gamma_s$ and $\\gamma_{c,fat}$. Sector applies no "
-       "control-, construction- or consequence-class multiplier.")
+       "**Reinforcement** and/or **Concrete**. Enter the final project factors "
+       "$\\gamma_{Ff}$, $\\gamma_s$ and $\\gamma_{c,fat}$, including applicable "
+       "control-, construction- and consequence-class effects.")
     md("For concrete, select **Explicit Palmgren-Miner spectrum** or "
        "**Damage-equivalent stress amplitude**. The explicit method uses every "
        "entered cycle count. For the equivalent method, each row's long/total "
@@ -999,7 +994,7 @@ def manual_blocks() -> list:
            ["$\\beta_{cc}(t_0)$, $t_0$", "Concrete strength at the start of cyclic loading"],
            ["$k_1$, $C$", "2005 concrete-strength coefficient; C applies only to the explicit concrete-life method"]])
     md("The **Fatigue details** material tab holds named resistance definitions. "
-       "Assign one stable detail ID to every checked bar or tendon. Standard presets "
+       "Assign one detail ID to every checked bar or tendon. Standard presets "
        "lock $N^*$, the two S-N slopes, the characteristic reference range and its "
        "source; Custom / imported makes them editable. Diameter-dependent and "
        "bent-bar reductions are applied where the selected preset requires them. "
@@ -1007,7 +1002,7 @@ def manual_blocks() -> list:
        "also needs the bond ratio $\\xi$ and equivalent tendon diameter.")
     md("The **Spectrum basis** records the selected grouped-spectrum method and "
        "optional action-set notes. Every action and cycle count is used as entered; "
-       "Sector does not infer traffic completeness or an owner-specific route.")
+       "the project spectrum defines traffic coverage and route assumptions.")
     table(["Fatigue edition", "Implemented resistance basis"],
           [["DS/EN 1992-1-1:2005",
             "Steel 6.8.4 and Tables 6.3N/6.4N; concrete 6.72 equivalent method or corrected DS/EN 1992-2 6.106 Miner method"],
@@ -1015,9 +1010,9 @@ def manual_blocks() -> list:
             "Same calculation models, with the complete Danish project factors entered explicitly"],
            ["DS/EN 1992-1-1:2023",
             "Reinforcement Annex E.5 and Tables E.1/E.2; concrete E.2 equivalent method or E.7-E.8 Miner method"]])
-    call("limit", "Each named spectrum is assessed independently. Sector does not "
-         "combine spectra or derive traffic cycles, dynamic allowance or lane/track "
-         "concurrence. Fatigue from shear and torsion is not included.")
+    call("limit", "Each named spectrum is assessed independently. Enter traffic "
+         "cycles, dynamic allowance and lane/track concurrence in the project "
+         "spectrum. The implemented fatigue scope covers normal force and bending.")
     h2("Shear (Vx,Ed and Vy,Ed)")
     md("With **Check shear capacity** on, Sector computes the design shear "
        "resistance $V_{Rd,c}$ of a member **not** requiring shear reinforcement "
@@ -1034,18 +1029,17 @@ def manual_blocks() -> list:
        "If that moment is zero, both faces are checked and the governing result is "
        "reported separately for shear, V+T and combined checks, including the "
        "governing face and strut angle where applicable. The row can override either "
-       "face. The sign of shear does not select "
-       "the tension face. Web-width overrides and effective link-leg counts are "
+       "face. The associated bending moment selects the tension face independently "
+       "of the shear sign. Web-width overrides and effective link-leg counts are "
        "directional; method, aggregate and stirrup properties are shared.")
     call("limit", "When both shear components are nonzero, Sector reports two "
-         "independent directional checks. It does **not** calculate a generic "
-         "cross-direction interaction or issue an aggregate Vx+Vy verdict. With "
-         "torsion, each validated V+T direction is calculated separately; a generic "
-         "three-component Vx+Vy+T interaction is **NOT CALCULATED**.")
-    md("Where torsion is active, the report also retains the directional Equation "
+         "independent directional checks. With torsion, each V+T direction is "
+         "calculated separately. Simultaneous Vx+Vy or Vx+Vy+T interaction requires "
+         "a separate member check.")
+    md("Where torsion is active, the report also shows the directional Equation "
        "6.31 minimum-reinforcement screen for Vx+T and Vy+T. This screen states "
-       "whether minimum reinforcement suffices; it is not an overall resistance "
-       "verdict.")
+       "whether minimum reinforcement suffices; the resistance checks remain "
+       "separate.")
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],
@@ -1057,9 +1051,8 @@ def manual_blocks() -> list:
             "compression-field method (8.2.3) with links"]])
     call("standard", "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP), "
           "define $\\gamma_V$ for shear resistance without shear reinforcement. "
-          "Sector defaults the input to 1.40 but does not force that value; the "
-          "engineer selects the positive value required by the applicable project "
-          "basis. Clause 8.2.2 then uses the selected value. The **2023 method** uses "
+          "The input starts at 1.40; select the positive value required by the "
+          "project basis. Clause 8.2.2 uses that value. The **2023 method** uses "
           "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
           "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
           "8.2.1(4)) and the flexural design yield $f_{yd}$. When axial force is "
@@ -1071,9 +1064,9 @@ def manual_blocks() -> list:
           "tendon inclination. Members **with** links use the compression-field "
           "method in 8.2.3; torsion and the combined lock stay on the 2005 family.")
     call("limit", "$A_{sl}$ is the tension-face bars, **assumed fully anchored** "
-          "($\\geq l_{bd} + d$). Sector does not check anchorage; where reinforcement "
-          "is not fully anchored, the user must enter an appropriately reduced "
-          "$f_{yk}$ / $f_{ywk}$ before relying on the result.")
+          "($\\geq l_{bd} + d$). Confirm anchorage in the member design and enter "
+          "an appropriately reduced $f_{yk}$ / $f_{ywk}$ where the force cannot "
+          "be developed.")
     md("With **Shared links / closed torsion stirrups present** on, the shear "
        "resistance becomes "
        "$V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3 or 8.2.3) instead of "
@@ -1096,35 +1089,31 @@ def manual_blocks() -> list:
          "$\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)\\leq\\nu f_{cd}$ "
          "(8.44), with $\\nu=0.5$. The upper angle limit is 2.5 for class B/C, "
          "reduced by 20% for class A and reduced further by axial tension per "
-         "8.2.3(4). Sector does not credit the favourable compression extension "
-         "towards 3.0 because the required $x<0.25d$ member condition is not "
-         "established by an isolated section.")
+         "8.2.3(4). The section check caps the upper limit at 2.5 because the "
+         "$x<0.25d$ member condition for extension towards 3.0 requires a member "
+         "assessment.")
     h2("Torsion (TRd, thin-walled tube)")
-    md("With **Check torsion capacity** on, Sector idealises the section as a "
-       "thin-walled closed tube (6.3) and reports the closed-stirrup resistance "
-       "$T_{Rd,s}$, the strut-crushing $T_{Rd,max}$, the cracking $T_{Rd,c}$, the "
-       "utilisation $T_{Ed}/T_{Rd}$ and the required longitudinal steel "
-       "$\\sum A_{sl}$. The signed $T_{Ed}$ is entered per Plastic/capacity row; "
-       "zero means not evaluated for that row. Torsion has an optional single-tube "
-       "wall-thickness override $t_{ef}$ (0 = auto). Subdivision requires 0: Sector "
-       "then derives $t_{ef}$ automatically and independently for every sub-tube. "
-       "The compression-strut range is entered once "
-       "under **Links / stirrups** and is shared with shear. "
-       "The tube $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ are derived from the outline. "
-       "The concrete tensile factor $\\gamma_{ct}$ is a direct positive-finite "
-       "input in $f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}$ (EN default 1.50; DK/NA "
-       "default 1.70); a custom value is used and reported unchanged. "
-       "The **stirrup is one current shared physical input**: shear uses the "
-       "selected number of effective vertical legs, while torsion requires a "
-       "closed, anchored loop and uses one leg of that loop for $A_{sw}/s$. "
-       "Positive stored diameter or spacing does not imply that links are "
-       "present. Without the shared-link selection, Sector reports "
-       "$T_{Rd,max}$ only as a concrete-strut cap and $T_{Rd,c}$ as cracking "
-       "transparency; it does not publish $T_{Rd}$, utilisation, a governing "
-       "resistance or PASS/FAIL. The calculated $\\sum A_{sl}$ remains an "
-       "informational requirement at the displayed cap angle, not proof of "
-       "provided torsion reinforcement. With current links, the longitudinal "
-       "steel uses the section's mild-reinforcement design yield.")
+    md("Enable **Check torsion capacity** to use the section 6.3 thin-walled "
+       "closed-tube model. With current closed links, Sector reports "
+       "$T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd,c}$, $T_{Ed}/T_{Rd}$ and the required "
+       "longitudinal steel $\\sum A_{sl}$.")
+    md("**Actions and tube geometry.** Enter signed $T_{Ed}$ in each "
+       "Plastic/capacity row; zero skips torsion for that row. Sector derives "
+       "$A$, $u$, $t_{ef}$, $A_k$ and $u_k$ from the outline. A positive "
+       "$t_{ef}$ overrides a single tube; subdivided tubes require zero and "
+       "derive each thickness separately.")
+    md("**Material and strut inputs.** Enter one compression-strut range under "
+       "**Links / stirrups** for both shear and torsion. The direct positive "
+       "$\\gamma_{ct}$ gives $f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}$; starting values "
+       "are 1.50 for EN and 1.70 for DK/NA, and the report records the selected "
+       "value.")
+    md("**Shared stirrup.** Shear uses the entered effective legs. Torsion uses "
+       "one leg of the same closed, anchored loop for $A_{sw}/s$. The enabled "
+       "shared-link selection establishes link presence.")
+    call("concept", "When current closed links are absent, the result states "
+         "$T_{Rd,max}$ as the concrete-strut cap, $T_{Rd,c}$ as cracking "
+         "resistance and $\\sum A_{sl}$ as reinforcement demand. Full $T_{Rd}$, "
+         "utilisation and status require current links.")
     call("standard", "$T_{Rd,max}$ uses the code torsion strut factor: recommended "
          "$\\nu = 0.6(1 - f_{ck}/250)$, or the DK NA:2024 pure-torsion "
          "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). The favourable "
@@ -1132,16 +1121,14 @@ def manual_blocks() -> list:
          "links are present. When the shared links are current, the combined "
          "concrete-crushing check "
          "$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\leq 1$ (6.29) is added.")
-    call("limit", "A re-entrant T, L, I or flanged outline is a compound section. "
-         "Sector detects it and withholds the single-tube resistance and verdict until "
-         "**Subdivide into sub-tubes** is enabled and positioned component rectangles "
-         "are defined by global centre x/y and b/h (6.3.1(3)). Sector checks that their "
-         "non-overlapping union equals the concrete net area, stays inside the outline "
-         "and does not enter a void; until that geometric partition is valid, torsion "
-         "and dependent interaction are not evaluated. Multi-cell sections likewise "
-         "require subdivision. Strut bounds outside the selected method's default "
-         "range remain actual calculation inputs; Sector reports the resulting "
-         "demand/resistance verdict with a warning.")
+    call("limit", "A T, L, I or flanged outline requires **Subdivide into "
+         "sub-tubes** under 6.3.1(3). Enter each positioned rectangle by centre "
+         "x/y and b/h; together they must cover the concrete net area without "
+         "overlap, boundary crossing or entry into a void. Multi-cell sections "
+         "require a separate applicable tube model.")
+    call("concept", "Entered strut bounds remain calculation inputs. Values "
+         "outside the selected method's standard range are reported with an "
+         "applicability warning.")
     h2("Combined M-V-T interaction")
     md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
        "shear ($V$) and torsion ($T$) checks together under **one shared code "
@@ -1201,44 +1188,44 @@ def manual_blocks() -> list:
        "Plastic/capacity and Elastic action fields, and grouped-fatigue numeric "
        "fields, accept either a dot or comma as the decimal separator; ambiguous "
        "grouped or mixed separators are rejected. Blank ordinary action cells are "
-       "normalised to canonical zero. Optional-null fields remain absent rather "
-       "than becoming zero, while required identity and cycle fields must be "
-       "entered. Sector retains the entered numeric precision internally; display "
+       "treated as zero. Optional fields left blank remain absent rather "
+       "than becoming zero, while required name, ID and cycle fields must be "
+       "entered. Calculations use the entered numeric precision; display "
        "rounding does not change the calculation value.")
     md("The Elastic long-term and short-term components are solved together. The "
        "single global creep coefficient $\\varphi$ applies to all Elastic rows. "
        "Concrete, reinforcement and tendon stresses are outputs for every row. "
-       "Crack width includes both the sustained and total long-plus-short response "
-       "for each selected row. No stress, crack-width, exposure, durability, "
-       "decompression or required-combination criterion is applied.")
+       "Crack width includes the sustained and total long-plus-short response for "
+       "each selected row and uses the duration-specific user criteria entered in "
+       "Analysis settings.")
     md("The creep-coefficient input help follows the selected concrete preset. "
        "The first-generation source is 3.1.4 and Annex B.1. The Danish preset "
        "also identifies DK NA:2024 3.1.4(1)-(2), including the conditional "
        "$\\varphi=3$ simplification. The 2023 source is 5.1.5, Table 5.2 and "
        "Annex B.5; project adoption is required and no Danish National Annex is "
-       "applied. A named curve without an edition is project-defined and receives "
-       "no inferred Eurocode source. Sector never changes the entered coefficient "
-       "or decides whether a cited simplification applies.")
+       "applied. A named curve without an edition is project-defined and uncited. "
+       "The entered coefficient remains the calculation value; the engineer "
+       "confirms applicability of any cited simplification.")
     md("A fatigue bin uses the long-term fields for the sustained/basic state and "
-       "the short-term fields for the cyclic increment. Sector solves both states "
-       "with the Elastic solver; their stress difference is the range. Reuse one "
+       "the short-term fields for the cyclic increment. The Elastic analysis "
+       "calculates both states; their stress difference is the range. Reuse one "
        "**Spectrum** label for all bins that belong to the same Miner sum. Spectrum "
        "labels that differ only by letter case are rejected.")
-    call("tip", "Use stable case names from the project combination register. They "
+    call("tip", "Use case names from the project combination register. They "
          "appear unchanged in the result selector, summary and PDF.")
 
     h1("Reading the results")
     h2("Results overview")
-    md("The overview shows one fully expanded governing row for each semantic check "
+    md("The overview shows one fully expanded governing row for each engineering check "
        "type, with its selected action set, direction or scope, result, criterion "
-       "and status. An executed result takes precedence over an inactive state; "
+       "and status. A calculated result takes precedence over an inactive state; "
        "equal states use the largest valid utilisation and exact ties keep the "
-       "first retained case. Direction-specific rows of the same check type compete "
-       "and the selected direction remains in the check label. **Not run**, **Not "
+       "first listed case. For checks with separate directions, the most "
+       "unfavourable direction governs and remains in the check label. **Not run**, **Not "
        "calculated**, **Not applicable** and **Not requested** are listed separately "
        "as scope and calculation state, not as conclusions. Headline counts describe "
-       "the visible rows; they do not combine them into a project result.")
-    md("In analysis figures, hover text reports the retained capacity or material "
+       "the visible rows; each row keeps its own status.")
+    md("In analysis figures, hover text reports the plotted capacity or material "
        "response represented by the selected point. Section-result markers show "
        "stress and strain; coordinates and reinforcement area remain in section "
        "input previews and the complete result tables.")
@@ -1250,21 +1237,21 @@ def manual_blocks() -> list:
        "intercepts at each. The full per-angle table sits below.")
     h2("N-M Interaction results")
     md("Select the same named Plastic/capacity case to review axial force against "
-       "the moment-resistance boundaries. This view uses the retained capacity "
-       "sweep; it does not start a second solver or create a separate comparison "
-       "decision.")
+       "the moment-resistance boundaries. The view is another presentation of the "
+       "calculated capacity sweep and its selected applied action.")
     h2("Elastic results")
     md("Select an Elastic case at the top of the view. The cracked-section "
        "stresses are reported per bar for the long-term, "
        "short-term and total states, with the peak concrete compression and the "
        "neutral-axis position. The cracking threshold and section properties are "
-       "always reported. The per-action request remains authoritative. "
+       "always reported. Crack width is calculated only for actions where it is requested. "
        "Independent long-term and short-term crack-width limits are applied "
        "only for a crack-width-enabled case and only to their matching durations. "
        "A 0 mm limit leaves the "
        "calculated width without comparison; a positive limit produces "
        "**WITHIN USER-SPECIFIED LIMIT** or **EXCEEDS USER-SPECIFIED LIMIT** and "
-       "its source. This is not a code-compliance conclusion.")
+       "its source. The status compares the calculated width with that entered "
+       "project criterion.")
     h2("Fatigue results")
     md("The **Fatigue Results** view first lists every spectrum and its governing "
        "utilisation. Select a spectrum to see the section utilisation map, then "
@@ -1272,14 +1259,14 @@ def manual_blocks() -> list:
        "Element and fibre selectors expose the governing and all non-governing "
        "results. Reinforcement rows state whether the simplified stress-range "
        "screen passes, requires the detailed check, or is not applicable. The "
-       "tables retain stresses, ranges, S-N life, per-bin damage, "
-       "yield/proof checks, concrete stress ratios, solver convergence, resistance "
+       "tables show stresses, ranges, S-N life, per-bin damage, "
+       "yield/proof checks, concrete stress ratios, calculation convergence, resistance "
        "sources and the bounded concrete-search result.")
     h2("Detailing results")
     md("The **Detailing** view gives a concise status for modelled-direction minimum "
        "reinforcement, shear/torsion link detailing and "
        "clear spacing. The section figure highlights the bars included in the "
-       "selected case and dimensions the governing spacing pair. Tables retain "
+       "selected case and dimensions the governing spacing pair. Tables show "
        "provided and required values, utilisation or margin and element IDs.")
     h2("Shear results")
     md("The **Shear** view reports the applied $V_{Ed}$, the resistance "
@@ -1296,15 +1283,15 @@ def manual_blocks() -> list:
        "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
        "$V$-$T$ envelope diagram, and three explicit physical component results: "
        "concrete compression strut, shared closed stirrup and governing longitudinal "
-       "reinforcement. The detailed blocks retain each contribution and the selected "
+       "reinforcement. The detailed blocks show each contribution and the selected "
        "member strut angle.")
     h2("PDF report")
     md("Choose **Brief**, **Standard** or **Audit** in the Report workspace. Standard "
-       "is the default. The profile changes presentation depth only: retained "
+       "is the default. The profile changes presentation depth only: "
        "engineering values, rounding policy, statuses, warnings and sources are "
        "identical, and figures remain a separate choice.")
     table(
-        ["Profile", "Purpose", "Declared omitted detail"],
+        ["Profile", "Purpose", "Not included"],
         [
             [
                 policy.label,
@@ -1317,12 +1304,12 @@ def manual_blocks() -> list:
     md("Brief publishes the complete effective geometry, assigned-material, "
        "reinforcement, tendon, action and active-setting inputs for every result it "
        "reports, followed by governing results and concise limitations. It omits "
-       "non-governing result registers, substituted equations, derivations, candidate "
-       "searches and the worked result chain. When figures are requested, Brief keeps "
+       "non-governing results and worked derivations. When figures are requested, Brief keeps "
        "only the selected governing Plastic and Elastic result plots when available. "
        "Standard adds one governing worked calculation for each active check family; "
-       "Audit adds complete retained candidates, traces, branches, substitutions and "
-       "provenance. **Audit does not mean approved, compliant or certified**.")
+       "Audit adds all available intermediate results, substitutions, source "
+       "references and method theory. Calculation values and statuses are identical "
+       "in all three profiles.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -1332,7 +1319,7 @@ def manual_blocks() -> list:
     h1("Method reference")
     md("Methods are grouped by engineering task. Each destination states the "
        "implemented scope, edition, assumptions, equations, selected branches and "
-       "explicit non-goals.")
+       "section-level boundaries.")
     table(
         ["Engineering task", "Method destination"],
         [
@@ -1359,7 +1346,7 @@ def manual_blocks() -> list:
         "positive axial force and moments and the neutral-axis angle measured from "
         "positive y.")
     call("concept", "The reported axial force $N$, the stresses and the strains are "
-         "all **tension-positive**. Internally the plastic solver works "
+         "all **tension-positive**. The plastic calculation uses a "
          "**compression-positive** (the compression zone has strain $> 0$); the sign "
          "is converted at the boundary, so you only enter and read tension-positive "
          "values. The concrete strain limits $\\varepsilon_{c2}$ / $\\varepsilon_{cu2}$ "
@@ -1415,9 +1402,9 @@ def manual_blocks() -> list:
        "(550/1.20)/200000\\approx2.29$ per mille.\n\n"
        "The generic **Curve 2 (elastic-perfectly-plastic)** selection is a "
        "user-defined/project-defined and uncited preset. It also uses the general "
-       "Curve 3 kernel with $k=1$, zero offsets and a flat branch; its stored "
-       "starting value is $\\gamma_E=1$. Changing any field changes the law but "
-       "does not change or promote the selected preset identity.").replace(
+       "Curve 3 law with $k=1$, zero offsets and a flat branch; its "
+       "starting value is $\\gamma_E=1$. Edited values remain associated with the "
+       "selected preset label.").replace(
            "per mille", _PERMILLE
        ))
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.",
@@ -1438,7 +1425,7 @@ def manual_blocks() -> list:
         "region and terminates at the defined ultimate strain.")
     call("standard", "The beam and circular examples select the edition-named "
          "DS/EN 1992-1-1:2005 + DK NA:2024 Curve 3 design preset for mild steel. "
-         "Edition-named concrete, mild-steel and tendon presets retain their own "
+         "Edition-named concrete, mild-steel and tendon presets keep their own "
          "sources; generic named curves remain project-defined / uncited.")
 
     h1("Plastic capacity analysis")
@@ -1451,7 +1438,7 @@ def manual_blocks() -> list:
     fig(fig_strain_plane, "The capacity strain plane (reported tension-positive "
         "convention): one straight line -- zero at the neutral axis, compression "
         "(negative) above it and tension (positive) below, the top fibre at the "
-        "crushing strain. The internal solver formula above is compression-positive; "
+        "crushing strain. The calculation formula above is compression-positive; "
         "the reported strains negate it.",
         "A straight strain line crosses zero at the neutral axis; negative compression "
         "lies above it, positive tension below it, and the top fibre reaches ultimate "
@@ -1476,7 +1463,7 @@ def manual_blocks() -> list:
     call("concept", "$s_{p,j}$ is tendon $j$'s projection on the local strain "
          "gradient. If all tendons share the same limit and initial strain, "
          "$s_{p,min}=\\min_j s_{p,j}$ is a useful shorthand for the most tensile "
-         "location. The solver still inventories every $j$; no undefined global "
+         "location. The calculation still evaluates every tendon; no undefined global "
          "cable coordinate replaces the element-specific candidates.")
     call("tip", "The reported mild-steel strain is split into its two governing "
          "extremes: the most **tensile** bar strain $\\varepsilon_{s,t}$ and, when "
@@ -1487,8 +1474,7 @@ def manual_blocks() -> list:
     h2("Force resultants and equilibrium")
     md("The concrete compression force is the integral of $\\sigma_c$ over the "
        "compression zone. The parabola is split into its rising region and the "
-       "plateau and integrated over the polygon by Green's theorem (a compiled "
-       "kernel, with a pure-Python fallback). Each bar and tendon adds "
+       "plateau and integrated over the polygon by Green's theorem. Each bar and tendon adds "
        "$\\sigma(\\varepsilon)\\,A$. The compression depth $c$ is solved so the "
        "axial force balances, $\\sum F = N$; the first moments of the resultants "
        "about the origin are the capacity moments $M_x$, $M_y$.")
@@ -1512,11 +1498,9 @@ def manual_blocks() -> list:
 
     h1("Reinforcement detailing")
     md("Each detailing checkbox identifies the clauses used by the selected "
-       "Detailing edition. The help adds no separate calculation state: selecting "
-       "an edition continues to choose the edition-specific rules described below, "
-       "while the help itself does not change checkbox state or entered geometry. "
-       "The 2023 edition is a published reference that requires project adoption, "
-       "and no Danish National Annex is applied.")
+       "Detailing edition. Selecting an edition applies the rules described below. "
+       "Use the 2023 edition only where it is adopted by the project; the current "
+       "2023 option has no Danish National Annex.")
     h2("EN 1992-1-1:2005 and DK NA:2024")
     md("Sector transfers the moments to the gross-concrete centroid and derives "
        "the uncracked gross-concrete strain plane for the complete $M_x$-$M_y$ "
@@ -1581,27 +1565,27 @@ def manual_blocks() -> list:
          "bundle equivalence, congestion and construction access are not verified.")
     call("standard", "DS/EN 1992-1-1:2023 8.2.1(2) requires minimum shear "
          "reinforcement for statically determinate linear members with "
-         "$d>500$ mm. The section model does not declare the global structural "
-         "system, so that condition is reported as not assessed when relevant.")
+         "$d>500$ mm. Because this condition depends on the member system, the "
+         "section result flags it for project review.")
     call("standard", "BN1-59-5 and the Danish Road Directorate bridge basis add "
          "project- and existing-structure applicability requirements, including "
-         "special treatment of inadequately anchored historic links. Sector does "
-         "not apply hidden owner-specific coefficients.")
+         "special treatment of inadequately anchored historic links. Record and "
+         "apply owner-specific requirements in the project basis.")
 
     h1("Cracked-section elastic analysis")
-    md("The Elastic solver takes the section as already cracked: concrete "
+    md("The Elastic analysis takes the section as already cracked: concrete "
        "carries compression only (zero stress where $\\varepsilon\\ge 0$) and the "
        "steel is linear in both directions. The analysis works with a reference "
        "concrete modulus and an element-specific modular ratio $n_i=E_i/E_c$: each "
        "bar or tendon contributes a "
-       "transformed area $n\\,A$. (The solver can also subtract the concrete a "
+       "transformed area $n\\,A$. (The method can also subtract the concrete a "
        "compression-zone bar displaces, using $(n-1)\\,A$ there; Sector leaves that "
        "refinement off, so the reported stresses and section properties use "
-       "$n\\,A$ throughout.) The Elastic solver stores an $E_c=1$ reference-stress "
+       "$n\\,A$ throughout.) The calculation uses an $E_c=1$ reference-stress "
        "plane $(\\sigma_0,g_x,g_y)$, not a physical strain/curvature plane. The "
        "physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$. Report "
        "labels identify the physical quantity represented by each result field. "
-       "Newton iteration solves the "
+       "Newton iteration determines the "
        "reference-stress plane so the transformed-section resultants equal "
        "$(N,M_x,M_y)$, updating the compression zone until it settles.")
     md("Creep enters through the modular ratio: the long-term state uses "
@@ -1614,7 +1598,7 @@ def manual_blocks() -> list:
     fig(fig_beam_cracked, "The beam's cracked (Stage II) state under the service "
         "moment: the compression zone (shaded) above the neutral axis.",
         "A rectangular section has a shaded concrete compression zone above a "
-        "horizontal neutral axis, with reinforcement points retained in the Stage II "
+        "horizontal neutral axis, with reinforcement points included in the Stage II "
         "section.")
 
     h1("Serviceability: cracking and crack width")
@@ -1643,7 +1627,7 @@ def manual_blocks() -> list:
          "superposition (long at $n_l$ + short at $n_s$) as the reported stresses.")
     call("standard", "The selected cracking method evaluates the user-entered "
          "sustained and peak actions. Sector reports the resulting crack widths "
-         "without assigning either action a criterion role.")
+         "for both actions; the entered duration limits determine any comparisons.")
     h2("Crack width - EN 1992-1-1:2005")
     md("$$w_k = s_{r,max}\\,(\\varepsilon_{sm}-\\varepsilon_{cm}),\\qquad "
        "\\varepsilon_{sm}-\\varepsilon_{cm} = \\max\\!\\left(\\frac{\\sigma_s - "
@@ -1676,7 +1660,7 @@ def manual_blocks() -> list:
        "high and $w_k=0.077$ mm.")
     call("tip", "The single *DS/EN 1992-1-1 + DK NA* option reports the fine and the "
          "coarse system side by side, each for the long-term and the short-term "
-         "load -- four crack widths -- so you can read both without re-running.")
+         "load -- four crack widths in one calculation.")
     h2("DK NA heightened crack-control minimum")
     md("This is a separate, user-selected DS/EN 1992-1-1 DK NA:2024 "
        "Formula 7.100 NA calculation, not another ordinary crack-width result. "
@@ -1689,10 +1673,10 @@ def manual_blocks() -> list:
        "input and calculates the fine and coarse systems together, each with its own user-supplied "
        "$A_{c,eff}$. Bar diameter uses the ordinary crack override when positive, "
        "otherwise the largest contributing mild bar; $E_{sk}$ is the conservative "
-       "minimum among contributing mild materials and $A_{s,prov}$ is their retained "
-       "area sum. The report preserves the reference case, ordinary branch, element "
-       "and material provenance and publishes both comparisons plus the governing "
-       "system. Missing or indeterminate retained evidence blocks the calculation. "
+       "minimum among contributing mild materials and $A_{s,prov}$ is their total "
+       "area. The report identifies the reference case, ordinary crack-width method, element "
+       "and material sources and publishes both comparisons plus the governing "
+       "system. Missing or indeterminate source values block the calculation. "
        "Applicability, restraint, watertightness and the permitted "
        "$w_k$ remain user declarations. The option is unavailable for the 2023 "
        "basis.")
@@ -1723,23 +1707,24 @@ def manual_blocks() -> list:
          "each for the long-term and short-term load. Ordinary methods show one "
          "globally governing worked crack width in Standard and Audit; DK/NA shows "
          "one global fine-system and one global coarse-system worked example there. "
-         "Brief retains the complete effective inputs and the semantic governing "
+         "Brief includes the complete effective inputs and the governing "
          "crack-width rows, but no worked example or non-governing case register. "
          "If user criteria are present, Standard and Audit show one comparison for "
-         "the largest calculated ordinary width -- never the largest ratio -- plus "
+         "the largest calculated ordinary width, selected by width rather than "
+         "ratio, plus "
          "at most one section-level Formula 7.100 NA worked example when that "
          "separate DK option is enabled.")
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")
     md("Each spectrum bin contains a sustained/basic action $S_l$, a cyclic "
-       "increment $S_s$ and a cycle count $n_i$. Sector uses the cracked Elastic "
-       "solver twice and applies the action factor to the increment:\n\n"
+       "increment $S_s$ and a cycle count $n_i$. The cracked Elastic analysis is "
+       "run twice and the action factor is applied to the increment:\n\n"
        "$$\\Delta\\sigma_{Ed,i}=\\left|\\sigma(S_l+\\gamma_{Ff}S_s)"
        "-\\sigma(S_l)\\right|.$$\n\n"
        "Long-term actions use $n_l$ and the increment uses $n_s$. Prestress and "
        "element-specific elastic moduli follow the assigned material definitions. "
-       "The unfactored total state is retained beside the design state for QA.")
+       "The unfactored total state is reported beside the design state for review.")
     call("concept", "$\\gamma_{Ff}$ is applied once, at action level. The resulting "
          "design stress range enters the S-N or concrete-life check; it is not "
          "applied again to the resistance curve.")
@@ -1747,7 +1732,7 @@ def manual_blocks() -> list:
     h2("Simplified reinforcement stress-range screen")
     md("Sector first evaluates the supported Eurocode shortcut for each assigned "
        "named reinforcement or prestressing detail. The shortcut is used only "
-       "when every retained spectrum bin converged and has a tensile endpoint. "
+       "when every spectrum bin has converged and has a tensile endpoint. "
        "A stress range exactly equal to the stated limit passes. A lower range "
        "passes; a higher range does not fail the member, but makes the detailed "
        "S-N/Miner check necessary. Custom, imported or otherwise unsupported "
@@ -1774,19 +1759,19 @@ def manual_blocks() -> list:
     )
     md("For a 2023 bent-bar preset, the selected mandrel-to-diameter reduction "
        "also reduces the tabulated straight-bar limit. The 2023 shortcut is "
-       "limited to a retained total of $10^8$ cycles. The 2005-family screen "
+       "limited to a total of $10^8$ cycles. The 2005-family screen "
        "uses the characteristic fatigue range; the 2023 screen uses the design "
        "range including the action-level $\\gamma_{Ff}$ factor. Sector always "
-       "retains the detailed S-N/Miner result for transparency, and the "
+       "reports the detailed S-N/Miner result, and the "
        "yield/proof-stress check remains independent of the shortcut.")
     md("References: DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, "
        "6.8.6(1)-(2), with DS/EN 1992-1-1 DK NA:2024; and "
-       "DS/EN 1992-1-1:2023, 10.4(1) for the selectable published-2023 route.")
+       "DS/EN 1992-1-1:2023, 10.4(1) for the selectable 2023 method.")
     call(
         "concept",
         "A passing simplified screen means that a more detailed stress-range "
-        "assessment is not required for that element. It does not suppress the "
-        "reported detailed calculation or the independent strength checks.",
+        "assessment is not required for that element. The report still includes "
+        "the detailed calculation and independent strength checks for transparency.",
     )
 
     h2("Reinforcement S-N and Miner check")
@@ -1807,7 +1792,7 @@ def manual_blocks() -> list:
        "replaces Miner damage for the governing range criterion; otherwise Miner "
        "damage applies. Yield/proof utilisation remains independent in both cases.")
     fig(fig_fatigue_sn, "Two-slope characteristic and design S-N curves. Each "
-        "labelled marker is one applied spectrum bin; logarithmic axes retain the "
+        "labelled marker is one applied spectrum bin; logarithmic axes show the "
         "wide cycle and stress ranges without visual distortion.",
         "A log-log stress-range versus cycles plot shows characteristic and design "
         "S-N curves with a knee and labelled spectrum-bin points on the relevant "
@@ -1844,16 +1829,15 @@ def manual_blocks() -> list:
        "$E_{max}=\\sigma_{max}/f_{cd,fat}$ and "
        "$R=\\sigma_{min}/\\sigma_{max}$. The implemented life relation is\n\n"
        "$$\\log_{10}N_R=C\\frac{1-E_{max}}{\\sqrt{1-R}}.$$\n\n"
-       "Miner damage is summed at that same fibre; maxima from different locations "
-       "are never combined into a fictitious history. Direct stress utilisation "
+       "Miner damage is summed at that same fibre; results from different locations "
+       "remain separate. Direct stress utilisation "
        "$E_{max}\\leq1.0$ is checked in parallel.")
     md("Alternatively, the damage-equivalent method checks each user-supplied "
        "equivalent action pair using\n\n"
        "$$E_{max}+0.43\\sqrt{1-\\frac{E_{min}}{E_{max}}}\\leq1.$$\n\n"
        "This is Formula (6.72) for the 2005 family and Formula (E.2) for 2023. "
-       "The pair represents $10^6$ cycles; Sector does not derive it from the "
-       "entered spectrum. When several equivalent rows are supplied, the largest "
-       "criterion governs.")
+       "Each pair represents $10^6$ cycles and is used as entered. When several "
+       "equivalent rows are supplied, the largest criterion governs.")
     md("Sector checks the section vertices and runs an adaptive branch-and-bound "
        "search over the concrete area. The result includes the largest evaluated "
        "criterion, a conservative upper bound, the absolute and relative gap, sample "
@@ -1875,10 +1859,9 @@ def manual_blocks() -> list:
             "10.4 shortcut; Annex E.5 and Tables E.1/E.2 detailed check",
             "E.2 equivalent or E.7-E.8 Miner",
             "10.3(2) equivalent tendon area"]])
-    call("limit", "Each spectrum forms its own Miner sum and result. Sector does "
-         "not combine spectra. The fatigue implementation covers normal force and "
-         "biaxial bending through the Elastic solver; shear- and torsion-induced "
-         "fatigue are outside the present scope.")
+    call("limit", "Each spectrum forms an independent Miner sum and result. "
+         "The Elastic fatigue model covers normal force and biaxial bending; "
+         "shear- and torsion-induced fatigue require a separate assessment.")
 
     h1("Shear resistance without shear reinforcement")
     md("The design shear resistance of a member not requiring shear reinforcement "
@@ -1912,11 +1895,11 @@ def manual_blocks() -> list:
        "takes $N_{Ed}$ positive in tension, so axial tension raises $k_{vp}$ and "
        "reduces the basic shear-stress resistance; compression has the opposite "
        "effect. The minimum stress from Formula (8.20) and the lever arm "
-       "$z=0.9d$ retain the nominal $d$.")
+       "$z=0.9d$ use the nominal $d$.")
     call("limit", "$A_{sl}$ is the longitudinal tension reinforcement, **assumed "
           "fully anchored** ($\\geq l_{bd} + d$) beyond the section. This anchorage "
-          "cannot be checked at section level. If it is not fully anchored, enter "
-          "an appropriately reduced $f_{yk}$ / $f_{ywk}$; bonded tendons are not "
+          "requires member-level confirmation. Enter an appropriately reduced "
+          "$f_{yk}$ / $f_{ywk}$ where the force cannot be developed; bonded tendons are not "
           "counted toward $\\rho_l$ automatically.")
     md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, "
        "$A_{sl} = 1473$ mm$^2$, $d = 550$ mm, $b_w = 300$ mm, $N = 0$): "
@@ -1967,8 +1950,8 @@ def manual_blocks() -> list:
     call("standard", "For 2023 class B/C links, the directly verifiable range is "
          "$1\\leq\\cot\\theta\\leq2.5$; axial tension reduces the upper limit to "
          "$\\max(2.5-0.1N_{Ed}/|V_{Ed}|,1)$ and class A reduces it by 20%. "
-         "The favourable compression extension to 3.0 is not credited because "
-         "Sector does not establish the required compression-chord depth.")
+         "The section check uses 2.5 as its upper bound; extension to 3.0 "
+         "requires separate confirmation of the compression-chord depth.")
     md("**Worked** (same section, C35, DK NA:2024, 2-leg $\\phi$10 links at "
        "$s = 150$ mm, $f_{ywk} = 500$; calculated $z = 509.151$ mm): "
        "$f_{ywd} = 417$ MPa, $\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The "
@@ -2213,20 +2196,18 @@ def manual_blocks() -> list:
        "- **Ultimate is strain-controlled.** The section fails when the first "
        "material reaches its strain limit (concrete crushing or steel/tendon "
        "rupture); no material is driven past its limit.\n"
-       "- **Section and resistance scope.** Sector includes section bending, "
+       "- **Section calculations.** Sector includes section bending, "
        "elastic/crack response, grouped normal-force/bending fatigue, shear, "
-       "torsion and combined M-V-T checks where the selected method is supported. "
-       "It does not model member buckling, second-order response, deflection, "
-       "connections or global load paths.\n"
-       "- **Fatigue spectrum ownership.** Named spectra are independent. The user "
-       "owns the cycle spectrum and all action assumptions; Sector uses the entered "
-       "values without inferring traffic completeness. Shear and torsion fatigue "
-       "are not included.\n"
-       "- **Detailing scope.** The modelled-direction check does not credit tendons and "
-       "does not verify the DK NA high-web side-face rule. The clear-spacing check "
-       "uses the entered section-plane geometry; anchorage, lap length, bundle "
-       "equivalence, cover and congestion remain separate reviews. Beam torsion-link "
-       "detailing provisions are not applied to slabs.")
+       "torsion and combined M-V-T checks where the selected method is supported.\n"
+       "- **Member-level review.** Buckling, second-order response, deflection, "
+       "connections and global load paths remain member or system calculations.\n"
+       "- **Fatigue spectrum basis.** Named spectra are independent and use the "
+       "entered cycle/action assumptions. The fatigue calculation covers "
+       "normal force and bending.\n"
+       "- **Detailing scope.** The modelled-direction minimum check uses ordinary "
+       "reinforcement. DK NA high-web side-face reinforcement, anchorage, lap "
+       "length, bundle equivalence, cover and congestion remain separate reviews. "
+       "Beam torsion-link provisions apply to beam models.")
     call("limit", "The ordinary crack-width models are one-directional: the effective "
          "tension area and the crack spacing are defined for a single bending "
          "direction, so the crack width is reported for the governing bar along the "
@@ -2814,11 +2795,9 @@ def build_manual_pdf(buffer, figures=True):
         return paragraph
 
     page_w = 16.5 * cm
-    revision = source_revision()
     flow = [
         Paragraph("Sector user manual", styles["MTitle"]),
         Paragraph(f"Version {APP_VERSION}", styles["MSmall"]),
-        Paragraph(f"Source revision: {revision}", styles["MSmall"]),
         Paragraph(f"Author: {APP_AUTHOR}", styles["MSmall"]),
         Paragraph(f"Proprietary software; licensed to {APP_LICENSEE} for internal use.",
                   styles["MSmall"]),
@@ -3048,7 +3027,7 @@ def build_manual_pdf(buffer, figures=True):
         *a,
         footer=footer,
         header="Sector user manual",
-        revision=revision,
+        revision=None,
         **k,
     ))
 
@@ -3294,7 +3273,6 @@ def build_manual_html_bytes() -> bytes:
         publish_manual_blocks(manual_publication_blocks(manual_blocks()))
     )
     heading_records, toc = _manual_html_heading_records(published_blocks)
-    revision = source_revision()
     body = []
     for index, published in enumerate(published_blocks):
         block = published.block
@@ -3382,7 +3360,6 @@ def build_manual_html_bytes() -> bytes:
 <meta name="description" content="Sector cross-section analysis user manual, input reference, methods and limitations">
 <meta name="keywords" content="Sector, structural engineering, cross-section, reinforced concrete, user manual">
 <meta name="sector-version" content="{html.escape(APP_VERSION, quote=True)}">
-<meta name="sector-source-revision" content="{html.escape(revision, quote=True)}">
 <title>Sector user manual v{html.escape(APP_VERSION)}</title>
 <style>
 :root {{ color-scheme: light; --ink:#2c2c2a; --muted:#5a5a5a; --blue:#1f3b66; --surface:#eef2f7; --rule:#9fb3c8; }}
@@ -3411,7 +3388,6 @@ th {{ background:var(--surface); }} .table-scroll {{ overflow-x:auto; }}
 <header>
 <h1>Sector user manual</h1>
 <p class="document-control"><strong>Version:</strong> {html.escape(APP_VERSION)}<br>
-<strong>Source revision:</strong> {html.escape(revision)}<br>
 <strong>Author:</strong> {html.escape(APP_AUTHOR)}<br>
 Proprietary software; licensed to {html.escape(APP_LICENSEE)} for internal use.</p>
 <p>What Sector computes, the theory it applies, its features, and how to use it.</p>

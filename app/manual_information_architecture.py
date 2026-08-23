@@ -224,11 +224,11 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
     ),
     WarningReference(
         "report-stale",
-        "A report cannot be downloaded because its input or metadata changed.",
-        "The retained PDF no longer matches the current calculation inputs or "
-        "Report metadata.",
+        "A report cannot be downloaded because its inputs or project details changed.",
+        "The existing PDF no longer matches the current calculation inputs or "
+        "Report details.",
         "If calculation inputs changed, finish the Inputs edit, open Analysis > "
-        "Results Overview and press Calculate. If only metadata changed, keep the "
+        "Results Overview and press Calculate. If only report details changed, keep the "
         "current results. Then open Report and select Generate report before "
         "downloading.",
     ),
@@ -236,7 +236,7 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "results-review",
         "Results Overview shows one or more governing results requiring review.",
         "At least one requested calculation failed, is invalid, is not assessed, "
-        "or retains a calculation warning.",
+        "or has a calculation warning.",
         "Open Analysis > Results Overview, follow the row's View entry to the named "
         "detail view, and read its criterion and warning before changing the cited "
         "Inputs stage. The overview is not a global compliance verdict.",
@@ -269,7 +269,7 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
     WarningReference(
         "report-generation",
         "PDF or HTML manual/report generation is unavailable.",
-        "Required retained results or a publication dependency failed closed.",
+        "Required calculation results or a report component are unavailable.",
         "Read the displayed reason. When stale or missing results are cited, open "
         "Analysis > Results Overview and press Calculate; otherwise correct the named "
         "Report input or publication dependency and retry.",
@@ -304,13 +304,13 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
     ),
     Workflow(
         "elastic-crack", "Calculate elastic response and crack width",
-        "Retained stresses, cracking state and optional crack width", "elastic-results",
+        "Calculated stresses, cracking state and optional crack width", "elastic-results",
         "Valid section, materials and Elastic row", "Calculated or bounded not-assessed state",
         "crack-criterion-missing",
         "Select Elastic and the crack-width method and limits under Inputs > "
         "Analysis settings. Define the Elastic row under Inputs > Loads, enable "
         "Calculate crack width when required, then open Analysis > Elastic Results, "
-        "press Calculate, and review the retained result.",
+        "press Calculate, and review the result.",
     ),
     Workflow(
         "plastic-capacity", "Calculate plastic capacity",
@@ -319,7 +319,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "results-stale",
         "Select Plastic under Inputs > Analysis settings. Define the Plastic/capacity "
         "row under Inputs > Loads, then open Analysis > Plastic Results or Analysis > "
-        "N-M Interaction, press Calculate, and review the retained result.",
+        "N-M Interaction, press Calculate, and review the result.",
     ),
     Workflow(
         "fatigue", "Calculate grouped fatigue", "Spectrum and governing element results",
@@ -328,7 +328,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "Enable Fatigue under Inputs > Analysis settings. Define fatigue details "
         "under Inputs > Material parameters, assign them under Inputs > Section, "
         "enter grouped spectra under Inputs > Loads, then open Analysis > Fatigue "
-        "Results, press Calculate, and review the retained result.",
+        "Results, press Calculate, and review the result.",
     ),
     Workflow(
         "detailing", "Review detailing", "Minimum reinforcement, links and spacing results",
@@ -359,9 +359,9 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
     ),
     Workflow(
         "report-profile", "Choose a report profile", "Brief, Standard or Audit publication",
-        "report-workspace", "Current inputs and project metadata",
+        "report-workspace", "Current inputs and project details",
         "Profile changes presentation depth only", "report-generation",
-        "With current results, open Report, enter the project metadata, choose Brief, "
+        "With current results, open Report, enter the project details, choose Brief, "
         "Standard or Audit, then generate and download the PDF.",
     ),
 )

@@ -91,7 +91,7 @@ def _selected_crack_result(elastic: Mapping) -> tuple[str, Mapping]:
     output = elastic.get("crack_output")
     if not isinstance(output, Mapping):
         raise ValueError(
-            "The heightened reference case has no retained ordinary crack output"
+            "The heightened reference case has no ordinary crack-width result"
         )
     candidates = []
     for tie_order, duration in enumerate(("long_term", "short_term")):
@@ -132,8 +132,8 @@ def _selected_crack_result(elastic: Mapping) -> tuple[str, Mapping]:
     crack = elastic.get(result_key)
     if not isinstance(crack, Mapping):
         raise ValueError(
-            "The heightened reference case is missing the retained ordinary "
-            f"crack evidence for {branch}"
+            "The heightened reference case is missing calculated ordinary "
+            f"crack-width details for {branch}"
         )
     return branch, crack
 
@@ -152,12 +152,12 @@ def derive_heightened_reinforcement(
 
     reference_case_id = str(case_entry.get("name") or "").strip()
     if not reference_case_id:
-        raise ValueError("The heightened reference case has no stable name")
+        raise ValueError("The heightened reference case has no case name")
     case_results = case_entry.get("results")
     elastic = case_results.get("elastic") if isinstance(case_results, Mapping) else None
     if not isinstance(elastic, Mapping):
         raise ValueError(
-            "The heightened reference case has no retained Elastic result"
+            "The heightened reference case has no Elastic result"
         )
     branch, crack = _selected_crack_result(elastic)
     effective_reinforcement = crack.get("effective_reinforcement")
@@ -165,8 +165,7 @@ def derive_heightened_reinforcement(
         effective_reinforcement, (str, bytes)
     ):
         raise ValueError(
-            "The heightened reference case has no retained effective-"
-            "reinforcement evidence"
+            "The heightened reference case has no effective-reinforcement result"
         )
     mild_contributions = [
         retained
@@ -184,7 +183,7 @@ def derive_heightened_reinforcement(
     elements = elastic.get("elements")
     if not isinstance(elements, Sequence) or isinstance(elements, (str, bytes)):
         raise ValueError(
-            "The heightened reference case has no retained Elastic element evidence"
+            "The heightened reference case has no Elastic element results"
         )
     element_rows: dict[str, Mapping] = {}
     for row in elements:

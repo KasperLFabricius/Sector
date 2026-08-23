@@ -368,10 +368,8 @@ def test_concrete_parameters_follow_the_selected_edition():
         DesignBasisKey.FIRST_GEN_DK_NA_2024,
         Capability.REINFORCEMENT_FATIGUE,
     )
-    assert "User-supplied factors govern" in binding.disclosure
-    assert "no hidden DK-specific fatigue equation or factor" in (
-        binding.disclosure
-    )
+    assert "first-generation fatigue equations" in binding.disclosure
+    assert "user-supplied factors" in binding.disclosure
 
 
 @pytest.mark.parametrize(

@@ -53,15 +53,13 @@ _UNRENDERED_MATH_TOKENS = (
     "quadf",
     "kN.m",
 )
-# The source revision printed above the contents changes with every commit and
-# is already checked semantically and in PDF metadata.  Keep the stable visual
-# fingerprint below that line so updating this digest cannot change its pixels.
+# Keep the visual fingerprints on stable cover and navigation regions.
 _MANUAL_CROPS = (
     RasterCrop(
         "manual contents navigation",
         1,
         (0.09, 0.18, 0.92, 0.45),
-        "0c4d2a284c6e351336302ae92feeb79cec89b772db1d08bc5fee5786a540388e",
+        "0d13dd844f7f38462edf70d1da98c8af523ea00391c3781511c6e44620f29729",
     ),
     RasterCrop(
         "manual cover footer",
@@ -178,7 +176,6 @@ def validate_html_content(html: bytes) -> str:
             )
     for expected in (
         "Sector user manual",
-        "Source revision:",
         "Start here",
         "Quick calculation",
         "Input reference",
@@ -340,8 +337,10 @@ def validate_pdf_content(pdf: bytes) -> str:
         page_text = page.extract_text() or ""
         if f"Sector v{__version__} - user manual" not in page_text:
             raise AssertionError(f"page {number} is missing the manual footer")
-        if "Rev:" not in page_text:
-            raise AssertionError(f"page {number} is missing the manual revision")
+        if "Rev:" in page_text:
+            raise AssertionError(
+                f"page {number} exposes a development revision in the manual"
+            )
 
     for expected in (
         "Sector user manual",
@@ -359,16 +358,16 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Shear and torsion reinforcement",
         "Anchorage is assumed",
         "Bulk assignments",
-        "one fully expanded governing row for each semantic check type",
+        "one fully expanded governing row for each engineering check type",
         "PDF report",
         "Standard adds one governing worked calculation for each active check "
         "family",
         "Editable table",
         "Plastic/capacity and Elastic action fields",
         "accept either a dot or comma as the decimal separator",
-        "Blank ordinary action cells are normalised to canonical zero",
-        "Optional-null fields remain absent rather than becoming zero",
-        "retains the entered numeric precision internally",
+        "Blank ordinary action cells are treated as zero",
+        "Optional fields left blank remain absent rather than becoming zero",
+        "Calculations use the entered numeric precision",
         "published project-adoption basis",
         "no Danish National Annex",
         "confinement enhancement is not included or assessed",

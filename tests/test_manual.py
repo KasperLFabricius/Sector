@@ -108,7 +108,7 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
             "Review the restored inputs"
         ),
         (
-            "Report metadata and publication controls are grouped separately from "
+            "Report details and publication controls are grouped separately from "
             "the Project input stage."
         ),
         (
@@ -126,7 +126,7 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
         "Every downloaded project save uses the current schema",
         "in-development Sector v0.93 line",
         "Released Sector 0.92 projects used schema version 23",
-        "Report metadata and publication controls are no longer mixed",
+        "Report details and publication controls are no longer mixed",
         "Legacy result-field names remain for compatibility",
     ):
         assert replaced not in text
@@ -237,8 +237,8 @@ def test_manual_matches_the_merged_geometry_topology_contract():
         "Clockwise and counter-clockwise winding",
         "strictly inside the outer ring",
         "8 ULP of the coordinate magnitude",
-        "never snapped or rewritten",
-        "valid section whose numerical solver later fails to converge",
+        "Validation preserves the entered coordinates exactly",
+        "valid section whose calculation later fails to converge",
     ):
         assert expected in text
 
@@ -254,7 +254,7 @@ def test_manual_pins_the_tendon_projection_sign_and_per_element_extreme():
         "s_{p,j}",
         "\\varepsilon_{p,IS,j}",
         "s_{p,min}=\\min_j s_{p,j}",
-        "inventories every $j$",
+        "calculation still evaluates every tendon",
     ):
         assert expected in text
     assert "s_{cab,min}" not in text
@@ -265,7 +265,7 @@ def test_manual_distinguishes_user_curve2_from_eurocode_curve3_identity():
     assert "Curve 3 Eurocode design preset" in text
     assert "Curve 2 (elastic-perfectly-plastic)" in text
     assert "user-defined/project-defined and uncited preset" in text
-    assert "numerical similarity never assigns them a standard identity" in text
+    assert "Edited values remain associated with the selected preset label" in text
 
     for example in (manual.example_beam(), manual.example_circular()):
         assert example["mild_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
@@ -376,12 +376,9 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     assert "shared closed stirrup" in text                # note (b)
     assert "one compression-strut range" in text
     assert "three physical component checks" in text
-    assert "one current shared physical input" in text
-    assert "Positive stored diameter or spacing does not imply" in text
-    assert "Without the shared-link selection" in text
-    assert "does not publish $T_{Rd}$, utilisation" in text
-    assert "informational requirement" in text
-    assert "not proof of provided torsion reinforcement" in text
+    assert "shared-link selection establishes link presence" in text
+    assert "Full $T_{Rd}$, utilisation and status require current links" in text
+    assert "one leg of the same closed, anchored loop" in text
     assert "applied only when current closed links are present" in text
     assert "bands not overlap" not in text
     assert "reverts to each" not in text
@@ -395,15 +392,15 @@ def test_manual_documents_direct_torsion_tensile_factor_and_benchmark():
     )
 
     assert "f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}" in text
-    assert "EN default 1.50; DK/NA default 1.70" in text
+    assert "starting values are 1.50 for EN and 1.70 for DK/NA" in text
     assert "T_{Rd,c} = 26.435" in text
 
 
 def test_manual_documents_automatic_subtube_wall_thickness_boundary():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
-    assert "Subdivision requires 0" in text
-    assert "automatically and independently for every sub-tube" in text
+    assert "subdivided tubes require zero" in text
+    assert "derive each thickness separately" in text
     assert "positive global $t_{ef}$ override" in text
     assert "0 selects automatic $A/u$ for each sub-tube" in text
 
@@ -414,9 +411,9 @@ def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     assert "at-least-three-month" in text
     assert "k_{vp}" in text and "a_{cs}" in text
     assert "4.3.3 and Table 4.3 (NDP)" in text
-    assert "defaults the input to 1.40 but does not force that value" in text
-    assert "engineer selects the positive value" in text
-    assert "Clause 8.2.2 then uses the selected value" in text
+    assert "The input starts at 1.40" in text
+    assert "select the positive value required by the project basis" in text
+    assert "Clause 8.2.2 uses that value" in text
     assert "parallel to the member axis" in text and "beta=1" in text
     assert "assumed fully anchored" in text
     assert "reduced $f_{yk}$ / $f_{ywk}$" in text
@@ -425,7 +422,8 @@ def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
 
 def test_manual_describes_solvers_without_assigning_limit_states():
     text = "\n".join(str(block) for block in manual.manual_blocks())
-    assert "do not prescribe a limit state" in text
+    assert "Record the project limit-state classification" in text
+    assert "in each action-set name, source or note" in text
     for stale in (
         "Plastic (ultimate)",
         "plastic (ULS)",
@@ -449,11 +447,11 @@ def test_manual_documents_native_case_tables_results_and_report():
         "Select an Elastic case",
         "complete effective geometry",
         "governing results and concise limitations",
-        "omits non-governing result registers",
+        "omits non-governing results and worked derivations",
         "selected governing Plastic and Elastic result plots",
         "Brief",
         "Standard",
-        "Audit does not mean approved, compliant or certified",
+        "Values and statuses match the other report profiles",
     ):
         assert expected in text
     assert "Default report + QA appendix" not in text
@@ -461,9 +459,9 @@ def test_manual_documents_native_case_tables_results_and_report():
 
 def test_manual_documents_current_governing_results_overview():
     text = "\n".join(str(block) for block in manual.manual_blocks())
-    assert "one fully expanded governing row for each semantic check type" in text
-    assert "An executed result takes precedence over an inactive state" in text
-    assert "Direction-specific rows of the same check type compete" in text
+    assert "one fully expanded governing row for each engineering check type" in text
+    assert "A calculated result takes precedence over an inactive state" in text
+    assert "the most unfavourable direction governs" in text
     assert "listed separately as scope and calculation state" in text
     assert "one row per evaluated check and case" not in text
     assert "All named cases" not in text
@@ -471,7 +469,7 @@ def test_manual_documents_current_governing_results_overview():
 
 def test_manual_documents_current_analysis_hover_semantics():
     text = "\n".join(str(block) for block in manual.manual_blocks())
-    assert "hover text reports the retained capacity or material response" in text
+    assert "hover text reports the plotted capacity or material response" in text
     assert "Section-result markers show stress and strain" in text
     assert "coordinates and reinforcement area remain in section input previews" in text
 
@@ -517,10 +515,10 @@ def test_manual_documents_decimal_blank_and_precision_contracts():
     for expected in (
         "Plastic/capacity and Elastic action fields, and grouped-fatigue numeric",
         "accept either a dot or comma as the decimal separator",
-        "Blank ordinary action cells are normalised to canonical zero",
-        "Optional-null fields remain absent rather than becoming zero",
-        "required identity and cycle fields must be entered",
-        "retains the entered numeric precision internally",
+        "Blank ordinary action cells are treated as zero",
+        "Optional fields left blank remain absent rather than becoming zero",
+        "required name, ID and cycle fields must be entered",
+        "Calculations use the entered numeric precision",
         "display rounding does not change the calculation value",
     ):
         assert expected in text
@@ -532,7 +530,7 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "Fatigue Results",
         "Fatigue details",
         "Spectrum basis",
-        "control-, construction- or consequence-class multiplier",
+        "Sector applies the entered factors directly",
         "gamma_{Ff}",
         r"\\Delta\\sigma_{Ed,i}",
         "N_{R,i}",
@@ -544,14 +542,14 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "19 MPa design range",
         "DS/EN 1992-1-1:2023, 10.4(1)",
         "exactly equal to the stated limit passes",
-        "detailed S-N/Miner result for transparency",
+        "always reports the detailed S-N/Miner result",
         "yield/proof-stress check remains independent",
         "same fibre",
         "conservative upper bound",
         "DS/EN 1992-1-1:2023",
         "DS/EN 1992-2:2005/AC:2008",
         "each spectrum is independent",
-        "Shear and torsion fatigue are not included",
+        "fatigue calculation covers normal force and bending",
     ):
         assert expected in text
     assert "termination reason" not in text
@@ -569,7 +567,7 @@ def test_manual_uses_exact_elastic_state_and_crack_example_terminology():
         "globally governing worked crack width in Standard and Audit",
         "one global fine-system",
         "one global coarse-system worked example",
-        "Brief retains the complete effective inputs",
+        "Brief includes the complete effective inputs",
         "no worked example or non-governing case register",
     ):
         assert expected in text
@@ -584,7 +582,7 @@ def test_manual_documents_optional_crack_criterion_and_dk_heightened_boundary():
     )
 
     assert "independent long-term and short-term user limits" in text
-    assert "does not infer exposure, durability, load-combination" in text
+    assert "Select the limits and action classifications required by the project basis" in text
     assert "separate Formula 7.100 NA permitted width" in text
     assert "separate Formula 7.100 NA permitted-width input" in text
     assert "A 0 mm limit leaves only that duration's calculated width" in text
@@ -596,7 +594,7 @@ def test_manual_documents_optional_crack_criterion_and_dk_heightened_boundary():
     assert "DK NA heightened crack-control minimum" in text
     assert r"m_s=\sqrt{2}" in text
     assert "option is unavailable for the 2023 basis" in text
-    assert "largest calculated ordinary width -- never the largest ratio" in text
+    assert "largest calculated ordinary width, selected by width rather than ratio" in text
 
 
 def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
@@ -621,10 +619,10 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
         "creep-coefficient input help follows the selected concrete preset",
         "DK NA:2024 3.1.4(1)-(2)",
         "5.1.5, Table 5.2 and Annex B.5",
-        "no inferred Eurocode source",
+        "project-defined and uncited",
         "Reinforcement detailing",
         "Each detailing checkbox identifies the clauses",
-        "published reference that requires project adoption",
+        "Use the 2023 edition only where it is adopted by the project",
         "9.2.1.1(1)",
         "Formula (9.1N)",
         "uncracked gross-concrete strain plane",
@@ -644,10 +642,10 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
         "Longitudinal cut",
         "a transverse cut models the Longitudinal reinforcement",
         "a longitudinal cut models the Transverse reinforcement",
-        "Canonical modelled reinforcement direction",
+        "Modelled reinforcement direction",
         "Project direction alias",
-        "alias never replaces the canonical",
-        "does not change a calculation",
+        "published after the standard Longitudinal",
+        "changes presentation only",
         "20% criterion",
         "minimum links",
         "gross web breadth",

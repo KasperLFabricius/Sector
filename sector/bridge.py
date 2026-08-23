@@ -19,6 +19,5 @@ RETIRED_PROJECT_KEYS: Final[tuple[str, ...]] = (
     "bridge_minimum_crack_base",
 )
 DECOMMISSION_REASON: Final[str] = (
-    "The retired calculations required user-defined semantic bridge component "
-    "mapping; schema 24 contains no such workflow."
+    "Bridge component mapping is outside the current calculation scope."
 )

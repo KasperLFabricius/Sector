@@ -58,7 +58,6 @@ from sector import codes as ec2_codes
 from sector import detailing
 from sector import fatigue as fatigue_core
 from sector import __licensee__ as SECTOR_LICENSEE
-from sector.build_info import short_revision
 from sector.design_standards import (
     DesignBasisKey,
     InputGuidanceKey,
@@ -643,18 +642,19 @@ class _NumberedCanvas(canvas.Canvas):
         if self._header:
             self.setFont(_FONT, 7.5)
             self.setFillColor(_GREY)
-            revision = self._fit(
-                f"Rev: {self._revision or '-'}",
-                30 * mm,
-                _FONT,
-                7.5,
-            )
             self.drawString(
                 20 * mm,
                 286 * mm,
                 self._fit(self._header, 136 * mm, _FONT, 7.5),
             )
-            self.drawRightString(190 * mm, 286 * mm, revision)
+            if self._revision is not None:
+                revision = self._fit(
+                    f"Rev: {self._revision or '-'}",
+                    30 * mm,
+                    _FONT,
+                    7.5,
+                )
+                self.drawRightString(190 * mm, 286 * mm, revision)
             self.setStrokeColor(_LINE)
             self.line(20 * mm, 282 * mm, 190 * mm, 282 * mm)
         self.setFont(_FONT, 8)
@@ -1345,7 +1345,10 @@ class ReportBuilder:
     def _case_heading(self, title, family):
         start = len(self.flow)
         case_id = presentation.action_set(self.inp, family)["id"] or "ID NOT SET"
-        self._h1(f"{title} - {_html_escape(case_id)}")
+        self._h1(
+            f"{title} - {_html_escape(case_id)}",
+            reserve=180,
+        )
         self._case_line(family, title)
         self._keep_from(start + 1)
 
@@ -1406,9 +1409,9 @@ class ReportBuilder:
         information_rows = presentation.governing_information_rows(selected)
         self._h2("Results overview")
         self._small(
-            "Each stable semantic check type retains its governing result row. "
-            "Demand-versus-resistance checks keep their individual verdicts. "
-            "Output-only quantities and the project as a whole have no verdict."
+            "The table shows the governing result for each check type. Each "
+            "comparison has its own status; quantities without a limit are "
+            "labelled CALCULATED."
         )
         # Keep the explanatory lead-in with the table's first page.  This still
         # lets genuinely oversized project overviews use the native row splitter.
@@ -1565,11 +1568,11 @@ class ReportBuilder:
         self.flow.append(table)
         if self.profile.key == "Brief":
             governing_note = (
-                "The table retains one governing row per semantic check type."
+                "The table shows one governing row per engineering check type."
             )
         else:
             governing_note = (
-                "The table retains one governing row for each semantic check type."
+                "The table shows one governing row for each engineering check type."
             )
         self._small(governing_note)
         if information_rows:
@@ -1740,17 +1743,13 @@ class ReportBuilder:
             "number": number,
         }
 
-        public = f"EQ-{equation_key.upper()}"
-        if self.profile.key == "Audit":
-            identity = (
-                f"Equation ({number}) | {public}"
-                if number is not None else public
-            )
-        else:
-            # Internal contract keys remain sealed on the equation flowable and
-            # registry. Ordinary readers receive the user-facing publication
-            # number only; the Audit profile exposes the internal key inventory.
-            identity = f"Equation ({number})" if number is not None else "Method relation"
+        # The internal key remains attached to the flowable and registry for
+        # validation and cross-references. Published reports identify equations
+        # only by their report number; an engineer does not need the software's
+        # internal key to review or reproduce the calculation.
+        identity = (
+            f"Equation ({number})" if number is not None else "Method relation"
+        )
         symbolic_plain_text = Paragraph(
             f"<b>Symbolic expression:</b> {_equation_math(expr)}",
             self.s["formula"],
@@ -1842,7 +1841,7 @@ class ReportBuilder:
             for target in targets:
                 label = (
                     f"Equation ({target['number']})"
-                    if target["number"] else f"EQ-{target['key'].upper()}"
+                    if target["number"] else "Prior method relation"
                 )
                 links.append(
                     f'<link href="#{target["anchor"]}">{label}</link>'
@@ -2422,8 +2421,7 @@ class ReportBuilder:
         """Write the already assembled presentation flow without recalculation."""
 
         self._tick(0.92, "Writing PDF...")
-        revision_id = short_revision(self.meta.get("source_revision"))
-        footer = f"Sector {self.version}  -  {revision_id}  -  {SECTOR_LICENSEE}".strip()
+        footer = f"Sector {self.version}  -  {SECTOR_LICENSEE}".strip()
         project = str(self.meta.get("proj_no", "")).strip() or "-"
         section = str(self.meta.get("section", "")).strip() or "-"
         revision = str(self.meta.get("rev", "")).strip()
@@ -2488,14 +2486,14 @@ class ReportBuilder:
 
     # -- sections ----------------------------------------------------------
     def _brief_input_summary(self):
-        """Publish a compact, auditable inventory of every active report input."""
+        """Publish a compact summary of every active report input."""
 
         self._h1("Analysis input summary")
         self._small(
-            "This compact inventory records the geometry, assigned materials, "
+            "This input summary records the geometry, assigned materials, "
             "actions and active analysis settings used for the reported results. "
-            "Generate Standard or Audit for calculation derivations and expanded "
-            "provenance."
+            "Generate Standard or Audit for calculation derivations, intermediate "
+            "values and references."
         )
         self._brief_geometry_summary()
         self._brief_material_summary()
@@ -3490,7 +3488,7 @@ class ReportBuilder:
                     warnings.append((label, str(message)))
         if not warnings:
             return
-        self._h2("Warnings retained with the calculation", reserve=90)
+        self._h2("Calculation warnings", reserve=90)
         self._table(
             [["Source", "Warning"], *[
                 [_html_escape(label), _html_escape(message)]
@@ -3506,17 +3504,14 @@ class ReportBuilder:
 
         self._h1("Governing results and limitations", reserve=110)
         self._p(
-            "The Results overview publishes the most unfavourable retained result "
-            "for each semantic check type, including its governing action or "
-            "direction, value, criterion and status. Brief contains no worked "
-            "derivation or result chain and does not reproduce non-governing "
-            "load-case or fatigue-spectrum results."
+            "Brief pairs the complete effective calculation inputs with the most "
+            "unfavourable available result for each check type: governing action or "
+            "direction, value, criterion and status. Worked derivations, result "
+            "chains and non-governing results begin in Standard."
         )
         self._small(
-            "The preceding Analysis input summary retains the complete effective "
-            "inputs for every active result reported here. Generate Standard for "
-            "governing calculation steps or Audit for complete retained branches, "
-            "substitutions and provenance."
+            "Use Standard for governing calculation steps and Audit for complete "
+            "intermediate results, substitutions and source references."
         )
 
     def _selected_brief_result_context(self, result_key, family):
@@ -3666,14 +3661,9 @@ class ReportBuilder:
                 ["Prepared by", _html_escape(m.get("author", ""))],
                 ["Date", _html_escape(date)],
                 ["Tool version", self.version or "-"],
-                ["Source revision", short_revision(m.get("source_revision"))],
                 [
                     "Calculation state",
                     _html_escape(m.get("calculation_state", "Not supplied")),
-                ],
-                [
-                    "Input SHA-256",
-                    _html_escape(m.get("input_sha256", "Not supplied")),
                 ],
                 ["Selected basis / methods", _report_basis_summary(self.inp)],
                 [
@@ -3930,7 +3920,7 @@ class ReportBuilder:
         self._formula(
             "x<sub>c</sub> = S<sub>x</sub> / A<sub>c</sub>",
             equation_key="geometry.concrete.centroid-x",
-            ref="Centroid definition for the retained signed polygon moments.",
+            ref="Centroid definition using the signed polygon moments.",
             subst=(f"= {_fmt(net['first_x_m3'], 6)} / "
                    f"{_fmt(net['area_m2'], 6)}"),
             result=f"= {_fmt(net['centroid_x_m'], 6)} m",
@@ -3939,7 +3929,7 @@ class ReportBuilder:
         self._formula(
             "y<sub>c</sub> = S<sub>y</sub> / A<sub>c</sub>",
             equation_key="geometry.concrete.centroid-y",
-            ref="Centroid definition for the retained signed polygon moments.",
+            ref="Centroid definition using the signed polygon moments.",
             subst=(f"= {_fmt(net['first_y_m3'], 6)} / "
                    f"{_fmt(net['area_m2'], 6)}"),
             result=f"= {_fmt(net['centroid_y_m'], 6)} m",
@@ -3949,7 +3939,7 @@ class ReportBuilder:
             "I<sub>x,c</sub> = S<sub>yy</sub> - A<sub>c</sub> "
             "y<sub>c</sub><super>2</super>",
             equation_key="geometry.concrete.centroidal-ix",
-            ref="Parallel-axis transfer of the retained origin moment.",
+            ref="Parallel-axis transfer of the calculated origin moment.",
             subst=(f"= {_fmt(net['second_yy_m4'], 6)} - "
                    f"{_fmt(net['area_m2'], 6)} &#183; "
                    f"{_fmt(net['centroid_y_m'], 6)}<super>2</super>"),
@@ -3961,7 +3951,7 @@ class ReportBuilder:
             "I<sub>y,c</sub> = S<sub>xx</sub> - A<sub>c</sub> "
             "x<sub>c</sub><super>2</super>",
             equation_key="geometry.concrete.centroidal-iy",
-            ref="Parallel-axis transfer of the retained origin moment.",
+            ref="Parallel-axis transfer of the calculated origin moment.",
             subst=(f"= {_fmt(net['second_xx_m4'], 6)} - "
                    f"{_fmt(net['area_m2'], 6)} &#183; "
                    f"{_fmt(net['centroid_x_m'], 6)}<super>2</super>"),
@@ -3973,7 +3963,7 @@ class ReportBuilder:
             "I<sub>xy,c</sub> = S<sub>xy</sub> - A<sub>c</sub> "
             "x<sub>c</sub> y<sub>c</sub>",
             equation_key="geometry.concrete.centroidal-ixy",
-            ref="Parallel-axis transfer of the retained origin product moment.",
+            ref="Parallel-axis transfer of the calculated origin product moment.",
             subst=(f"= {_fmt(net['product_xy_m4'], 6)} - "
                    f"{_fmt(net['area_m2'], 6)} &#183; "
                    f"{_fmt(net['centroid_x_m'], 6)} &#183; "
@@ -4114,9 +4104,8 @@ class ReportBuilder:
             ])
         self._table(summary, [18 * mm, 42 * mm, 66 * mm, 40 * mm],
                     font=7.0, keep=False, repeat_cols=3)
-        self._small("Partial factors are the final effective user inputs; Sector "
-                    "applies no hidden control-, construction- or consequence-"
-                    "category multiplier.")
+        self._small("The printed partial factors are the final project inputs and "
+                    "are used directly in the calculation.")
         prepared = {
             str(item.get("material_id")): item
             for item in (
@@ -4142,7 +4131,7 @@ class ReportBuilder:
                 if retained is not None else None
             )
             rows = [["Parameter", "Symbol", "Value"],
-                    ["Preset identity", "-", _html_escape(
+                    ["Selected preset", "-", _html_escape(
                         material_catalog.mild_preset_classification(
                             item.get("preset", "")
                         )
@@ -4406,7 +4395,7 @@ class ReportBuilder:
         out = self._base_out
         self._small(
             "Load-table input accepts a dot or comma as the decimal separator; "
-            "blank action cells canonicalize to zero; calculations retain the "
+            "blank action cells are treated as zero; calculations use the "
             "parsed numeric precision."
         )
         if "plastic_cases" in inp or "elastic_cases" in inp:
@@ -5117,7 +5106,7 @@ class ReportBuilder:
             references = fatigue.get("calculation_references") or {}
             self._p(
                 "<b>Grouped fatigue.</b> Each named spectrum is checked "
-                "independently with the cracked Elastic solver. For each bin, "
+                "independently with the cracked Elastic analysis. For each bin, "
                 "the long action is the sustained state and the short action is "
                 "the cyclic increment."
             )
@@ -5137,8 +5126,8 @@ class ReportBuilder:
                     "first compared with its simplified stress-range limit. A "
                     "passing shortcut makes the detailed range check unnecessary; "
                     "otherwise the assigned two-slope S-N curve gives "
-                    "N<sub>R,i</sub> for each design stress range. Sector retains "
-                    "the detailed result in both cases. The same bin also checks "
+                    "N<sub>R,i</sub> for each design stress range. Both the "
+                    "shortcut and detailed results are reported. The same bin also checks "
                     "yield or proof stress independently."
                 )
                 self._formula(
@@ -5232,8 +5221,9 @@ class ReportBuilder:
             self._small(
                 "Transverse leg spacing is measured in the section plane between "
                 "adjacent parallel legs: along y for V<sub>x</sub> and along x for "
-                "V<sub>y</sub>. It is not the longitudinal stirrup spacing. A gross-"
-                "web upper-bound screen can prove PASS, but cannot prove FAIL."
+                "V<sub>y</sub>. A zero input uses gross web breadth as an upper-"
+                "bound PASS screen; enter actual spacing when that bound exceeds "
+                "the limit."
             )
         if self._base_out.get("clear_spacing") is not None:
             spacing_source = _input_reference_source(
@@ -5246,7 +5236,7 @@ class ReportBuilder:
             )
             self._small(
                 "Reference: " + _html_escape(spacing_source) + ". "
-                "Lap and bundle verification remains outside this section-plane check."
+                "Review laps and bundles separately in member detailing."
             )
         if (not plastic_results and not elastic_results and not minimum_results
                 and not transverse_results
@@ -5457,7 +5447,7 @@ class ReportBuilder:
                     self._formula(
                         "Delta N = N<sub>int</sub> - N<sub>target</sub>",
                         equation_key="detailing.minimum.nominal-equilibrium-2023",
-                        ref="Final retained nominal-section axial equilibrium.",
+            ref="Final nominal-section axial equilibrium.",
                         subst=(
                             f"= {_fmt(selected_solution.get('achieved_axial_kn'), 8)} - "
                             f"{_fmt(selected_solution.get('requested_axial_kn'), 8)} kN"
@@ -5990,7 +5980,7 @@ class ReportBuilder:
         )
         self._small(
             "Point order is the exact plotted boundary order. N in kN; M in "
-            "kNm; N is tension-positive. Separate N columns are retained "
+            "kNm; N is tension-positive. Separate N columns are shown "
             "because the two traces may use different numerical points."
         )
 
@@ -6072,16 +6062,16 @@ class ReportBuilder:
         ):
             self._h2("Worked plastic calculation unavailable")
             self._small(
-                "The retained utilisation-based worked point is not authoritative: "
+                "The selected worked point is unavailable: "
                 + _html_escape(assessment.get("detail") or "recalculate")
-                + "."
+                + ". Recalculate before issuing the report."
             )
             return
         if not isinstance(worked_index, int) or not 0 <= worked_index < len(pts):
             self._h2("Worked plastic calculation unavailable")
             self._small(
-                "The completed payload does not retain the selected worked-point "
-                "identity. Sector does not select or recalculate one in the report."
+                "The selected governing capacity point is unavailable. "
+                "Recalculate before issuing the report."
             )
             return
         gov = pts[worked_index]
@@ -6099,9 +6089,10 @@ class ReportBuilder:
             )
             + f"; N<sub>Ed</sub> = {_fmt(self.inp.get('P_pl', 0.0), 3)} kN. "
             + f"Selected sweep point {worked_index + 1} of {len(pts)}: neutral-axis "
-            f"angle = {_fmt(gov['V'], 0)}&#176;. Internal axial forces use the "
-            "plastic solver's compression-positive convention; the entered "
-            "N<sub>Ed</sub> is tension-positive and is negated at the solver boundary."
+            f"angle = {_fmt(gov['V'], 0)}&#176;. Plastic equilibrium uses "
+            "compression-positive internal axial forces; the entered "
+            "N<sub>Ed</sub> is tension-positive and its sign is converted for "
+            "the equilibrium calculation."
         )
         comp = any(
             row.get("element_type") == "Bar" and row.get("state") == "Compression"
@@ -6138,8 +6129,8 @@ class ReportBuilder:
             effective_depths = pl.get("effective_depths") or ()
             if not effective_depths:
                 self._small(
-                    "Face-specific effective-depth evidence is not retained in "
-                    "this completed result. Recalculate to publish it."
+                    "This result does not include face-specific effective depth. "
+                    "Recalculate to show it."
                 )
                 effective_depths = ()
             depth_rows = [[
@@ -6183,9 +6174,9 @@ class ReportBuilder:
                 )
                 self._small(
                     "Each d is measured from the opposite extreme concrete fibre "
-                    "to the centroid of the listed mild bars. All four face-aligned "
-                    "values are published because the selected neutral-axis state "
-                    "need not align with a section face."
+                    "to the centroid of the listed mild bars. Four face-aligned "
+                    "values cover either bending direction, including off-axis "
+                    "states."
                 )
         plane_values = (
             gov.get("strain_offset"), gov.get("strain_gradient_x"),
@@ -6194,12 +6185,12 @@ class ReportBuilder:
         reference_rows = state_rows["concrete"] or state_rows["elements"]
         if all(value is not None for value in plane_values) and reference_rows:
             reference = reference_rows[0]
-            self._h2("Retained strain plane")
+            self._h2("Converged strain plane")
             self._formula(
                 "eps<sub>sec</sub>(x,y) = eps<sub>0</sub> + "
                 "g<sub>x</sub>x + g<sub>y</sub>y",
                 equation_key="plastic.worked.strain-plane",
-                ref="Sector plane-section kinematics at the retained state.",
+                ref="Sector plane-section kinematics at the selected capacity point.",
                 subst=(
                     f"= {_fmt(plane_values[0], 8)} + "
                     f"{_fmt(plane_values[1], 8)} &#183; "
@@ -6269,7 +6260,7 @@ class ReportBuilder:
                 self._formula(
                     "kappa<sub>i</sub> = eps<sub>lim,i</sub> / d<sub>i</sub>",
                     equation_key="plastic.worked.curvature-candidate",
-                    ref="Sector retained ultimate-strain candidate at the solved depth.",
+                    ref="Material strain-limit candidate at the solved depth.",
                     subst=(
                         f"= {_fmt(governing_candidate['strain_limit'], 9)} / "
                         f"{_fmt(governing_candidate['distance_from_na_m'], 9)} m"
@@ -6284,8 +6275,8 @@ class ReportBuilder:
                     "kappa<sub>s,i</sub>, kappa<sub>p,j</sub>)",
                     equation_key="plastic.worked.curvature-selection",
                     ref=(
-                        "Sector governing-curvature minimum; the retained selected "
-                        "candidate identity is stated with the result."
+                        "Sector governing-curvature minimum; the governing material "
+                        "candidate is stated with the result."
                     ),
                     subst=_curvature_selection_substitution(candidates, selected),
                     result=(
@@ -6347,9 +6338,8 @@ class ReportBuilder:
         else:
             self._h2("Compression-depth solution unavailable")
             self._small(
-                "The completed payload does not contain the full converged bracket, "
-                "depth and residual summary. Sector does not reconstruct those "
-                "solver values in the report."
+                "The converged bracket, depth and residual summary are "
+                "unavailable. Recalculate before issuing the report."
             )
 
         resultant_keys = (
@@ -6389,9 +6379,8 @@ class ReportBuilder:
         else:
             self._h2("Section resultants at convergence unavailable")
             self._small(
-                "The completed payload does not retain every concrete, mild-steel "
-                "and tendon resultant. Sector does not reconstruct material or "
-                "section response in the report."
+                "One or more concrete, mild-steel or tendon resultants are "
+                "unavailable. Recalculate before issuing the report."
             )
 
         concrete_rows = state_rows["concrete"]
@@ -6429,7 +6418,7 @@ class ReportBuilder:
             self._formula(
                 "F<sub>i</sub> = sigma<sub>i</sub>A<sub>i</sub>/1000",
                 equation_key="plastic.worked.element-force",
-                ref="Retained material response and entered element area.",
+                ref="Calculated material response and entered element area.",
                 subst=(
                     f"= {_fmt(worked_element['stress_mpa'], 6)} MPa &#183; "
                     f"{_fmt(worked_element['area_mm2'], 6)} mm<super>2</super> / 1000"
@@ -6658,7 +6647,7 @@ class ReportBuilder:
             )
             if links.get("out_of_limits") or aggregate.get("out_of_limits"):
                 self._small(
-                    "Warning: the retained compression-strut bounds are outside "
+                    "Warning: the selected compression-strut bounds are outside "
                     "the selected method's default range. The actual entered "
                     "bounds remain in the completed result."
                 )
@@ -6672,13 +6661,13 @@ class ReportBuilder:
             if not critical:
                 self._small(
                     "The complete shear worked example is published only for the "
-                    "governing retained utilisation across all plastic cases."
+                    "governing utilisation across all plastic cases."
                 )
                 return
             self._small(
                 "All calculated shear cases remain in the results overview. The "
                 "complete shear worked example is published only for the governing "
-                "retained utilisation across all plastic cases."
+                "utilisation across all plastic cases."
             )
             self._h2(f"Governing worked example: {action}")
             self._shear_direction(
@@ -6761,20 +6750,20 @@ class ReportBuilder:
         if not critical:
             self._small(
                 "The complete shear worked example is published only for the "
-                "governing retained utilisation across all plastic cases."
+                "governing utilisation across all plastic cases."
             )
             return
         self._small(
             "All calculated shear cases and directions remain in the results "
             "overview. The complete shear worked example is published only for "
-            "the governing retained utilisation across all plastic cases."
+            "the governing utilisation across all plastic cases."
         )
         component = selected.get("component")
         if not isinstance(component, str) or component not in directions:
             self._h2("Worked shear calculation unavailable")
             self._small(
-                "The completed payload does not retain the selected directional "
-                "result required by the governing worked-example contract."
+                "The selected governing shear direction is unavailable. "
+                "Recalculate before issuing the report."
             )
             return
         label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
@@ -7029,9 +7018,8 @@ class ReportBuilder:
         }
         if not retained_angle_fields.issubset(lk):
             self._small(
-                "Worked shear calculation unavailable: the completed payload does "
-                "not retain the selected strut-angle operands. Sector does not "
-                "reconstruct them in the report."
+                "Worked shear calculation unavailable: the selected strut-angle "
+                "terms are missing. Recalculate before issuing the report."
             )
             return
         if links["out_of_limits"]:
@@ -7044,7 +7032,7 @@ class ReportBuilder:
                         f"fall outside the selected method's default range "
                         f"[{_fmt(links['cot_limit_lo'], 1)}, "
                         f"{_fmt(links['cot_limit_hi'], 1)}] ({limit_ref}). "
-                        "The actual values are retained in the links and dependent "
+                        "The entered values are used in the links and dependent "
                         "interaction calculations.")
         rows = [["Quantity", "Symbol", "Value"],
                 ["Links", "n x phi / s",
@@ -7055,7 +7043,7 @@ class ReportBuilder:
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(lk['fywd'], 1)} MPa"],
                 ["Calculated links arm", "z",
                  f"{_fmt(lk['z'], 1)} mm "
-                 f"({links.get('z_source') or 'calculated source not retained'})"],
+                 f"({links.get('z_source') or 'calculation basis unavailable'})"],
                 ["Strut angle", "theta",
                  f"{_fmt(lk['theta_deg'], 1)}&#176; "
                  f"(cot theta = {_fmt(lk['cot'], 3)})"],
@@ -7097,14 +7085,11 @@ class ReportBuilder:
                 "Selected common member angle: cot theta = "
                 f"{_fmt(shared_angle.get('cot'), 4)} within "
                 f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
-                f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
-                f"{int(shared_angle.get('selected_index', 0)) + 1} of "
-                f"{int(shared_angle.get('samples', 0))}. "
-                "Governing retained objective(s): "
+                f"{_fmt(shared_angle.get('cot_max'), 3)}]. "
+                "Governing check(s): "
                 f"{_html_escape(', '.join(governing) or 'not identified')}. "
-                "The compact calculation record covers "
-                f"{_html_escape(', '.join(labels) or 'the active checks')} and "
-                "does not contain an iteration history."
+                "Checks considered: "
+                f"{_html_escape(', '.join(labels) or 'the active checks')}."
             )
         else:
             self._small(
@@ -7254,9 +7239,9 @@ class ReportBuilder:
                 )
             elif fell_back:
                 verdict_suffix = (
-                    "  (NOT ASSESSED - DISPLAYED CAPACITY IS PURE-AXIS FALLBACK)"
+                    "  (NOT ASSESSED - PURE-AXIS SUBSTITUTE SHOWN)"
                     if not ch.get("conditional", True)
-                    else "  (NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+                    else "  (NOT ASSESSED - ANOTHER FACE USES A SUBSTITUTE)"
                 )
             else:
                 verdict_suffix = f"  ({vv})"
@@ -7286,7 +7271,7 @@ class ReportBuilder:
                 )
                 note += (
                     f" The required {fallback_axis}-axis {fallback_face} face "
-                    "uses a pure-axis fallback because its conditional capacity "
+                    "uses a pure-axis substitute because its conditional capacity "
                     "solve did not converge. The complete chord check can be "
                     "optimistic; rely on the combined "
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>)."
@@ -7355,19 +7340,19 @@ class ReportBuilder:
             )
             if aggregate.get("outside_default_range"):
                 self._small(
-                    "Warning: the retained shared compression-strut bounds are "
+                    "Warning: the selected shared compression-strut bounds are "
                     "outside the selected method's default range."
                 )
             if not critical:
                 self._small(
                     "The complete combined M-V-T worked example is published only "
-                    "for the governing retained utilisation across all plastic cases."
+                    "for the governing utilisation across all plastic cases."
                 )
                 return
             self._small(
                 "All calculated combined-action cases remain in the results "
                 "overview. The complete combined M-V-T worked example is published "
-                "only for the governing retained utilisation across all plastic "
+                "only for the governing utilisation across all plastic "
                 "cases."
             )
             self._h2("Governing combined worked example")
@@ -7378,10 +7363,10 @@ class ReportBuilder:
             "Combined bending + directional shear + torsion", "plastic"
         )
         self._small(
-            "V<sub>x,Ed</sub> + T<sub>Ed</sub> and "
-            "V<sub>y,Ed</sub> + T<sub>Ed</sub> are calculated independently. "
-            "Generic simultaneous V<sub>x</sub> + V<sub>y</sub> + T interaction "
-            "is not calculated and no aggregate verdict is issued."
+            "V<sub>x,Ed</sub> + T<sub>Ed</sub> and V<sub>y,Ed</sub> + "
+            "T<sub>Ed</sub> are assessed separately. A simultaneous "
+            "V<sub>x</sub> + V<sub>y</sub> + T check is not included and requires "
+            "a separate member check."
         )
         rows = [["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
                  "r<sub>T</sub>", "DK NA sum", "Governing face",
@@ -7414,27 +7399,27 @@ class ReportBuilder:
             for item in directions.values()
         ):
             self._small(
-                "Warning: one or more retained shared compression-strut bands are "
+                "Warning: one or more selected shared compression-strut bands are "
                 "outside the selected method's default range."
             )
         if not critical:
             self._small(
                 "The complete combined M-V-T worked example is published only for "
-                "the governing retained utilisation across all plastic cases."
+                "the governing utilisation across all plastic cases."
             )
             return
         self._small(
             "All calculated combined-action cases and directions remain in the "
             "results overview. The complete combined M-V-T worked example is "
-            "published only for the governing retained utilisation across all "
+            "published only for the governing utilisation across all "
             "plastic cases."
         )
         component = selected.get("component")
         if not isinstance(component, str) or component not in directions:
             self._h2("Worked combined calculation unavailable")
             self._small(
-                "The completed payload does not retain the selected directional "
-                "result required by the governing worked-example contract."
+                "The selected governing interaction direction is unavailable. "
+                "Recalculate before issuing the report."
             )
             return
         block_start = len(self.flow)
@@ -7499,13 +7484,13 @@ class ReportBuilder:
         if c.get("outside_default_range"):
             self._small("Warning: the shared compression-strut bounds fall outside "
                         "the selected method's default range. The actual values are "
-                        "retained in the combined calculations.")
+                        "used in the combined calculations.")
         selection = c.get("dkna_selection")
         if not isinstance(selection, dict):
             self._h2("Worked combined calculation unavailable")
             self._small(
-                "The completed payload does not retain the DK NA inclusion branch "
-                "and component sums. Sector does not reconstruct them in the report."
+                "The required DK NA component sums are unavailable. Recalculate "
+                "before issuing the report."
             )
             return
         verdict = _demand_resistance_verdict(c["dkna_ok"])
@@ -7529,7 +7514,7 @@ class ReportBuilder:
             expr,
             equation_key="combined.dk-na.sum",
             subst=subst,
-            note=(f"{note} Retained inclusion rule: "
+            note=(f"{note} Applied inclusion rule: "
                   f"{_html_escape(selection['inclusion_rule'])}; governing chord: "
                   f"{_html_escape(selection['governing_chord'])}."),
             result=(
@@ -7614,14 +7599,6 @@ class ReportBuilder:
             self._keep_measured_calculation_from(stirrup_start)
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
-            if (
-                self.profile.key == "Audit"
-                and (cr is not None or tr is not None)
-            ):
-                # Keep the complete governing chord derivation together. Without
-                # this semantic break, its final utilisation equation is commonly
-                # orphaned by the preceding strut/stirrup blocks.
-                self._page_break()
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             vv = _demand_resistance_verdict(lg["ok"])
             coverage = lg.get("off_not_evaluated")
@@ -7666,9 +7643,9 @@ class ReportBuilder:
                 )
             elif fell_back:
                 verdict_suffix = (
-                    "  (NOT ASSESSED - DISPLAYED CAPACITY IS PURE-AXIS FALLBACK)"
+                    "  (NOT ASSESSED - PURE-AXIS SUBSTITUTE SHOWN)"
                     if not lg.get("conditional", True)
-                    else "  (NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+                    else "  (NOT ASSESSED - ANOTHER FACE USES A SUBSTITUTE)"
                 )
             else:
                 verdict_suffix = f"  ({vv})"
@@ -7686,7 +7663,7 @@ class ReportBuilder:
                 )
                 self._p(
                     f"The required {fallback_axis}-axis {fallback_face} face "
-                    "uses a pure-axis fallback because its conditional capacity "
+                    "uses a pure-axis substitute because its conditional capacity "
                     "solve did not converge. The complete chord check can be "
                     "optimistic; rely on the "
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
@@ -7777,13 +7754,13 @@ class ReportBuilder:
                 )
             ))
         self._small(f"z = {_fmt(och['z'], 3)} m "
-                    f"({och.get('z_src') or 'calculated source not retained'}). "
+                    f"({och.get('z_src') or 'calculation basis unavailable'}). "
                     "Each chord's capacity is conditional on the OTHER axis' "
                     "bending moment only; the longitudinal steel the two chords "
                     "share also carries both their shear/torsion tensions, an "
                     "interaction the DK NA "
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check captures and which "
-                    "stays the authoritative combined verification.")
+                    "governs the combined check.")
 
     def _subtube_section(self, t):
         """Torsion of a subdivided compound section (EN 1992-1-1 6.3.1(3)-(4))."""
@@ -7797,9 +7774,8 @@ class ReportBuilder:
         ):
             self._h2("Worked sub-tube calculation unavailable")
             self._small(
-                "The completed payload does not retain the stiffness-proportional "
-                "torque shares for every sub-tube. Sector does not recreate that "
-                "distribution in the report."
+                "One or more stiffness-proportional sub-tube torque shares are "
+                "unavailable. Recalculate before issuing the report."
             )
             return
         self._p("Compound section: modelled as component rectangles, each an equivalent "
@@ -7836,8 +7812,8 @@ class ReportBuilder:
         if not isinstance(g, int) or not 0 <= g < len(subs):
             self._h2("Governing sub-tube calculation unavailable")
             self._small(
-                "The completed payload does not retain the governing sub-tube "
-                "identity. Sector does not select one in the report."
+                "The governing sub-tube is unavailable. Recalculate before "
+                "issuing the report."
             )
             return
         governing = subs[g]
@@ -7860,8 +7836,8 @@ class ReportBuilder:
         ):
             self._h2("Governing sub-tube calculation unavailable")
             self._small(
-                "The completed payload does not retain the governing sub-tube's "
-                "resistance operands. Sector does not recreate them in the report."
+                "Terms from the governing sub-tube resistance are unavailable. "
+                "Recalculate before issuing the report."
             )
             return
         self._formula(
@@ -7968,9 +7944,8 @@ class ReportBuilder:
             or any(key not in interaction or interaction[key] is None for key in required)
         ):
             self._small(
-                "<b>Worked calculation unavailable.</b> The retained governing "
-                "Formula 6.29 payload is incomplete; the report does not "
-                "reconstruct its operands."
+                "<b>Worked calculation unavailable.</b> Required Formula 6.29 "
+                "terms are missing. Recalculate before issuing the report."
             )
             return
         direction = (
@@ -7980,7 +7955,7 @@ class ReportBuilder:
         )
         self._small(
             "All calculated V+T screens remain in the results overview. This is "
-            "the single largest retained Formula 6.29 utilisation across "
+            "the single largest calculated Formula 6.29 utilisation across "
             f"all plastic cases and directions{direction}."
         )
         self._crushing_interaction({"interaction": interaction})
@@ -8002,9 +7977,8 @@ class ReportBuilder:
             or any(key not in minimum or minimum[key] is None for key in required)
         ):
             self._small(
-                "<b>Worked calculation unavailable.</b> The retained governing "
-                "Formula 6.31 payload is incomplete; the report does not "
-                "reconstruct its operands."
+                "<b>Worked calculation unavailable.</b> Required Formula 6.31 "
+                "terms are missing. Recalculate before issuing the report."
             )
             return
         direction = (
@@ -8014,7 +7988,7 @@ class ReportBuilder:
         )
         self._small(
             "All calculated Formula 6.31 screens remain in the results overview. "
-            "This is the single largest retained screen value across all "
+            "This is the single largest calculated screen value across all "
             f"plastic cases and directions{direction}."
         )
         self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
@@ -8106,29 +8080,28 @@ class ReportBuilder:
         )
         self._case_heading("Torsion (thin-walled tube)", "plastic")
         if full_resistance_available:
-            self._p("Torsion resistance from the thin-walled closed-tube "
-                    "idealisation (EN 1992-1-1 sec. 6.3), method <b>"
-                    + str(t["method"]) + "</b>. The tube is derived from the "
-                    "outline; the current closed stirrups and concrete struts "
-                    "give the resistance at the member strut angle "
-                    + ("(one angle shared with the shear check, 6.3.2(2), "
-                       "selected to minimise the governing utilisation)."
-                       if t.get("theta_mode") == "utilisation"
-                       else "(auto-optimised for the torsion resistance)."))
+            self._p(
+                "Full torsion resistance is assessed with the EN 1992-1-1 "
+                "section 6.3 closed-tube model, method <b>"
+                + str(t["method"])
+                + "</b>. "
+                + (
+                    "The member strut angle is shared with shear under 6.3.2(2)."
+                    if t.get("theta_mode") == "utilisation"
+                    else "The strut angle maximises torsion resistance."
+                )
+            )
         elif tube_valid and not full_resistance_assessed:
             self._p(
-                "Full torsion resistance is <b>NOT ASSESSED</b> under the "
-                "thin-walled closed-tube model, method <b>"
+                "<b>NOT ASSESSED:</b> full torsion resistance under method <b>"
                 + str(t["method"])
-                + "</b>. Current shared links / closed torsion stirrups are "
-                "required before the transverse and concrete components can "
-                "form one full resistance."
+                + "</b> requires current shared links / closed stirrups. Concrete "
+                "resistance and reinforcement demand remain as context."
             )
         else:
             self._p(
-                "Full torsion resistance is <b>NOT ASSESSED</b> because the "
-                "thin-walled tube or retained tube evidence is invalid. "
-                "No resistance or verdict is published from this state."
+                "<b>NOT ASSESSED:</b> the thin-walled tube geometry is invalid. "
+                "Review the reason below."
             )
         status = (
             "NOT ASSESSED"
@@ -8161,9 +8134,9 @@ class ReportBuilder:
         directional = t.get("directional_interactions") or {}
         if directional and full_resistance_available:
             self._small(
-                "Generic V<sub>x,Ed</sub> + V<sub>y,Ed</sub> + T<sub>Ed</sub> "
-                "interaction is <b>NOT CALCULATED</b>. Standalone torsion is reported "
-                "below; Vx+T and Vy+T are calculated independently."
+                "Standalone torsion, Vx+T and Vy+T are reported separately. A "
+                "simultaneous Vx+Vy+T check is not included and requires a "
+                "separate member check."
             )
             rows = [["Screen", "T<sub>Ed</sub>/T<sub>Rd</sub>",
                      "6.29 V+T", "Governing face", "cot theta", "Status"]]
@@ -8233,10 +8206,9 @@ class ReportBuilder:
             )
             self._small(
                 "Reason: " + _html_escape(reason.replace("_", " ")) + ". "
-                "T<sub>Rd,max</sub> is retained only as the concrete-strut cap "
-                "and T<sub>Rd,c</sub> as cracking transparency. Neither is "
-                "promoted to T<sub>Rd</sub>; no utilisation, governing "
-                "resistance or PASS/FAIL verdict is issued."
+                "T<sub>Rd,max</sub> is the concrete-strut cap and "
+                "T<sub>Rd,c</sub> the cracking resistance. Full T<sub>Rd</sub>, "
+                "utilisation and status require current closed links."
             )
             self._table(
                 [
@@ -8271,11 +8243,11 @@ class ReportBuilder:
                 detail = (t.get("subdivision_reason")
                           or str(t["reason"]).split(":", 1)[-1].strip())
                 self._small(
-                    "Torsion not evaluated: the positioned sub-rectangles do not "
-                    f"form the concrete section ({detail}). Adjust each centre x/y "
-                    "and b/h so their non-overlapping union equals the concrete net "
-                    "area and does not enter a void. Torsion and dependent "
-                    "interaction are not calculated."
+                    "Torsion not assessed: the sub-tubes do not partition the "
+                    f"concrete section ({detail}). Adjust centres and dimensions "
+                    "to cover the net area without gaps, overlaps or boundary "
+                    "crossings. Torsion resistance and dependent interaction "
+                    "checks are not calculated."
                 )
             else:
                 self._small("Warning: the tube could not be formed (a degenerate or "
@@ -8285,18 +8257,18 @@ class ReportBuilder:
             self._small("Warning: the strut bounds cot theta in "
                         f"[{_fmt(t['cot_min'], 2)}, {_fmt(t['cot_max'], 2)}] fall "
                         "outside the selected method's default range 1..2.5 "
-                        "(6.7N / 6.7a NA). The actual values are retained in the "
+                        "(6.7N / 6.7a NA). The entered values are used in the "
                         "torsion and dependent interaction calculations.")
         if not critical:
             self._small(
                 "The complete torsion worked example is published only for the "
-                "governing retained utilisation across all plastic cases."
+                "governing utilisation across all plastic cases."
             )
             return
         self._small(
             "All calculated torsion cases remain in the results overview. The "
             "complete torsion worked example is published only for the governing "
-            "retained utilisation across all plastic cases."
+            "utilisation across all plastic cases."
         )
         self._small(
             "Torsional cracking uses the actual direct input "
@@ -8324,9 +8296,8 @@ class ReportBuilder:
         if any(not isinstance(value, dict) for value in retained.values()):
             self._h2("Worked torsion calculation unavailable")
             self._small(
-                "The completed payload does not retain every selected torsion "
-                "formula operand and governing selection. Sector does not recreate "
-                "them in the report."
+                "One or more selected torsion terms are unavailable. Recalculate "
+                "before issuing the report."
             )
             return
         angle = retained["angle_selection"]
@@ -8361,10 +8332,7 @@ class ReportBuilder:
                 "Selected common member angle: cot theta = "
                 f"{_fmt(shared_angle.get('cot'), 4)} within "
                 f"[{_fmt(shared_angle.get('cot_min'), 3)}, "
-                f"{_fmt(shared_angle.get('cot_max'), 3)}], selected point "
-                f"{int(shared_angle.get('selected_index', 0)) + 1} of "
-                f"{int(shared_angle.get('samples', 0))}; governing retained "
-                "objective(s): "
+                f"{_fmt(shared_angle.get('cot_max'), 3)}]; governing check(s): "
                 f"{_html_escape(', '.join(shared_angle.get('governing_objectives') or ()) or 'not identified')}."
             )
         else:
@@ -8484,7 +8452,7 @@ class ReportBuilder:
         self._small(
             "Final transformed equilibrium matrix J. For the N row the columns "
             "have units m2, m3, m3; for the Mx/My rows they have units m3, m4, "
-            "m4. The raw plane uses kN/m2 and kN/m3, giving N in kN and moments "
+            "m4. The reference-stress plane uses kN/m2 and kN/m3, giving N in kN and moments "
             "in kNm."
         )
         self._table(
@@ -8508,8 +8476,8 @@ class ReportBuilder:
             f"normalised residual = {_fmt(equilibrium['normalised_residual'], 9)}"
             + (f", tolerance = {_fmt(tolerance, 9)}." if tolerance is not None
                else ". Direct uncracked linear solution; no Newton tolerance applies.")
-            + " The normalisation exactly preserves the solver's fixed numeric "
-              "[kN, kNm, kNm] maximum convention; it is not a physical-unit norm."
+            + " The normalised residual uses the maximum of the numerical "
+              "[kN, kNm, kNm] components; it is not a physical-unit norm."
         )
         return plane, equilibrium, matrix
 
@@ -8529,16 +8497,16 @@ class ReportBuilder:
         if not states or not superposition:
             self._h2("Worked elastic calculation unavailable")
             self._small(
-                "The completed payload does not retain the converged elastic states. "
-                "Sector does not repeat the solver in the report."
+                "The converged elastic states are unavailable. Recalculate before "
+                "issuing the report."
             )
             return
 
         self._p(
-            "The elastic solver uses a raw reference-stress plane with E<sub>c</sub> "
-            "normalised to 1. Physical concrete strain is the retained reference "
-            "stress divided by the entered E<sub>c</sub>; eps0/kx/ky are therefore "
-            "not published as physical strain or curvature."
+            "The elastic analysis uses an E<sub>c</sub> = 1 reference-stress plane. "
+            "Physical concrete strain equals the reference stress divided by "
+            "the entered E<sub>c</sub>; the table therefore reports stress-plane "
+            "coefficients rather than physical strain or curvature."
         )
 
         long_plane, long_eq, long_matrix = self._elastic_state_tables(
@@ -8552,12 +8520,12 @@ class ReportBuilder:
             subst=(f"= {_fmt(long_plane['sigma0_kpa'], 9)} + "
                    f"{_fmt(long_plane['gradient_x_kpa_per_m'], 9)}x + "
                    f"{_fmt(long_plane['gradient_y_kpa_per_m'], 9)}y"),
-            result="Retained long-term reference-stress plane (x and y in m).",
+            result="Long-term reference-stress plane (x and y in m).",
         )
         self._formula(
             "N<sub>int</sub> = J<sub>N</sub> q",
             equation_key="elastic.long.equilibrium-n",
-            ref="Final retained transformed equilibrium row.",
+            ref="Final transformed-section equilibrium row.",
             subst="= " + self._matrix_substitution(long_matrix[0], long_plane),
             result=(f"N<sub>int</sub> = {_fmt(long_eq['internal']['n'], 9)} kN; "
                     f"target = {_fmt(long_eq['target']['n'], 9)} kN; "
@@ -8566,7 +8534,7 @@ class ReportBuilder:
         self._formula(
             "M<sub>x,int</sub> = J<sub>Mx</sub> q",
             equation_key="elastic.long.equilibrium-mx",
-            ref="Final retained transformed equilibrium row.",
+            ref="Final transformed-section equilibrium row.",
             subst="= " + self._matrix_substitution(long_matrix[1], long_plane),
             result=(f"M<sub>x,int</sub> = {_fmt(long_eq['internal']['mx'], 9)} kNm; "
                     f"target = {_fmt(long_eq['target']['mx'], 9)} kNm; "
@@ -8575,7 +8543,7 @@ class ReportBuilder:
         self._formula(
             "M<sub>y,int</sub> = J<sub>My</sub> q",
             equation_key="elastic.long.equilibrium-my",
-            ref="Final retained transformed equilibrium row.",
+            ref="Final transformed-section equilibrium row.",
             subst="= " + self._matrix_substitution(long_matrix[2], long_plane),
             result=(f"M<sub>y,int</sub> = {_fmt(long_eq['internal']['my'], 9)} kNm; "
                     f"target = {_fmt(long_eq['target']['my'], 9)} kNm; "
@@ -8674,12 +8642,12 @@ class ReportBuilder:
             subst=(f"= {_fmt(instant_plane['sigma0_kpa'], 9)} + "
                    f"{_fmt(instant_plane['gradient_x_kpa_per_m'], 9)}x + "
                    f"{_fmt(instant_plane['gradient_y_kpa_per_m'], 9)}y"),
-            result="Retained instantaneous combined reference-stress plane (x and y in m).",
+            result="Instantaneous combined reference-stress plane (x and y in m).",
         )
         self._formula(
             "N<sub>int</sub> = J<sub>N</sub> q",
             equation_key="elastic.instantaneous.equilibrium-n",
-            ref="Final retained transformed equilibrium row.",
+            ref="Final transformed-section equilibrium row.",
             subst="= " + self._matrix_substitution(instant_matrix[0], instant_plane),
             result=(f"N<sub>int</sub> = {_fmt(instant_eq['internal']['n'], 9)} kN; "
                     f"target = {_fmt(instant_eq['target']['n'], 9)} kN; "
@@ -8688,7 +8656,7 @@ class ReportBuilder:
         self._formula(
             "M<sub>x,int</sub> = J<sub>Mx</sub> q",
             equation_key="elastic.instantaneous.equilibrium-mx",
-            ref="Final retained transformed equilibrium row.",
+            ref="Final transformed-section equilibrium row.",
             subst="= " + self._matrix_substitution(instant_matrix[1], instant_plane),
             result=(f"M<sub>x,int</sub> = {_fmt(instant_eq['internal']['mx'], 9)} kNm; "
                     f"target = {_fmt(instant_eq['target']['mx'], 9)} kNm; "
@@ -8697,7 +8665,7 @@ class ReportBuilder:
         self._formula(
             "M<sub>y,int</sub> = J<sub>My</sub> q",
             equation_key="elastic.instantaneous.equilibrium-my",
-            ref="Final retained transformed equilibrium row.",
+            ref="Final transformed-section equilibrium row.",
             subst="= " + self._matrix_substitution(instant_matrix[2], instant_plane),
             result=(f"M<sub>y,int</sub> = {_fmt(instant_eq['internal']['my'], 9)} kNm; "
                     f"target = {_fmt(instant_eq['target']['my'], 9)} kNm; "
@@ -8706,7 +8674,7 @@ class ReportBuilder:
 
         if elements:
             element = elements[0]
-            self._h2("Step 4 - combine the retained element stresses")
+            self._h2("Step 4 - combine the element stress components")
             self._formula(
                 "sigma<sub>total,i</sub> = sigma<sub>s2,i</sub> + "
                 "sigma<sub>RST1,i</sub> + sigma<sub>p0,i</sub>",
@@ -8771,7 +8739,7 @@ class ReportBuilder:
         else:
             self._small(
                 "The complete elastic worked example is published only for the "
-                "governing retained stress extremum across all elastic cases."
+                "governing stress extremum across all elastic cases."
             )
         checks = el.get("stress_outputs") or {}
         if checks:
@@ -8997,23 +8965,24 @@ class ReportBuilder:
             )
             if prestressed:
                 self._small(
-                    "Locked-in prestress remains fixed. If any prestress-only "
-                    "concrete fibre is above fct,eff, Sector assigns lambda_cr = 0 "
-                    "directly and does not apply the equality. Otherwise it scales "
-                    "only the external N/M actions and takes the minimum equality "
-                    "solution over fibres with a strictly positive external tensile "
-                    "increment; if there is no such fibre, the factor is infinite. "
-                    + (
-                        "Calculated output: sigma_ct,I = "
-                        f"{_fmt(el.get('sigma_ct'), 3)} MPa; lambda_cr = "
-                        f"{_fmt(lam,3)}; section is "
-                        f"{verdict} (strictly below 1: cracked; 1 or above: "
-                        "uncracked)."
-                        if valid else
-                        "Calculated output: sigma_ct,I = "
-                        f"{_fmt(el.get('sigma_ct'), 3)} MPa; lambda_cr = "
-                        f"{_fmt(lam,3)}; INVALID; "
-                        "no verified cracking classification."
+                    "Locked-in prestress remains fixed. A prestress-only fibre "
+                    "above f<sub>ct,eff</sub> gives lambda<sub>cr</sub> = 0. "
+                    "Otherwise only external N/M scales; the lowest positive "
+                    "fibre solution governs, or infinity where no fibre gains "
+                    "tension."
+                )
+                self._small(
+                    (
+                        "Calculated output: sigma<sub>ct,I</sub> = "
+                        f"{_fmt(el.get('sigma_ct'), 3)} MPa; "
+                        f"lambda<sub>cr</sub> = {_fmt(lam,3)}; section is "
+                        f"{verdict} (below 1: cracked; 1 or above: uncracked)."
+                    )
+                    if valid else
+                    (
+                        "Calculated output: sigma<sub>ct,I</sub> = "
+                        f"{_fmt(el.get('sigma_ct'), 3)} MPa; "
+                        f"lambda<sub>cr</sub> = {_fmt(lam,3)}; INVALID."
                     )
                 )
             self._small(
@@ -9044,8 +9013,8 @@ class ReportBuilder:
                 )
             ):
                 self._small(
-                    "No calculated crack-width value is available; the report "
-                    "does not infer a physical reason."
+                    "The crack-width calculation returned no value. Review the "
+                    "calculation state and inputs."
                 )
             return
         cl, cs = el.get("crack"), el.get("crack_short")
@@ -9080,8 +9049,8 @@ class ReportBuilder:
                 if isinstance(item, Mapping)
             ):
                 self._small(
-                    "No calculated crack-width value is available; the report "
-                    "does not infer a physical reason."
+                    "The crack-width calculation returned no value. Review the "
+                    "calculation state and inputs."
                 )
             return
         self._crack_table(cl, cs, clc, csc)
@@ -9103,9 +9072,9 @@ class ReportBuilder:
                 selected_worked.append(selected)
             else:
                 self._small(
-                    "<b>Worked calculation unavailable.</b> The retained "
-                    "worked-example selection references a missing or unsupported "
-                    "crack branch; no alternative branch is selected in the report."
+                    "<b>Worked calculation unavailable.</b> The selected crack-width "
+                    "method is missing or unsupported. Recalculate before issuing "
+                    "the report."
                 )
         self._crack_candidates(selected_cases)
         for crack, label in selected_worked:
@@ -9161,10 +9130,10 @@ class ReportBuilder:
         ]
         if missing:
             self._small(
-                "<b>Worked comparison unavailable.</b> The retained critical "
+                "<b>Worked comparison unavailable.</b> The critical "
                 "ordinary crack-width comparison is incomplete (missing: "
                 + ", ".join(missing)
-                + "). The report does not reconstruct it."
+                + "). Recalculate to restore it."
             )
             return
         self._h2(
@@ -9240,11 +9209,10 @@ class ReportBuilder:
         missing = self._crack_worked_missing_operands(cw)
         if missing:
             self._small(
-                "<b>Worked calculation unavailable.</b> The selected retained "
-                "crack branch is incomplete (missing: "
+                "<b>Worked calculation unavailable.</b> The selected crack-width "
+                "calculation is incomplete (missing: "
                 + _html_escape(", ".join(missing))
-                + "). Sector does not substitute defaults or reconstruct "
-                "engineering operands in the report."
+                + "). Recalculate before issuing the report."
             )
             return
         self._small(f"Governing element (largest w<sub>k</sub>): "
@@ -9537,9 +9505,9 @@ class ReportBuilder:
             )
         else:
             self._small(
-                "<b>Effective-area calculation unavailable.</b> No retained "
-                "effective-area operands were supplied; the report does not "
-                "reconstruct the section geometry."
+                "<b>Effective-area calculation unavailable.</b> Required "
+                "effective-area terms are missing. Recalculate before issuing "
+                "the report."
             )
 
         if cw.get("edition") == "2023":
@@ -9547,7 +9515,7 @@ class ReportBuilder:
             if not reinforcement:
                 self._small(
                     "<b>Effective reinforcement ratio unavailable.</b> The "
-                    "retained Formula (9.12) operands are missing."
+                    "required Formula (9.12) terms are missing."
                 )
                 return
             self._formula(
@@ -9789,10 +9757,10 @@ class ReportBuilder:
         self._h1("DK heightened crack-control minimum - fine and coarse")
         if missing:
             self._small(
-                "<b>Worked calculation unavailable.</b> The retained Formula "
+                "<b>Worked calculation unavailable.</b> The Formula "
                 "7.100 NA result is incomplete (missing: "
                 + ", ".join(missing)
-                + "). The report does not reconstruct it."
+                + "). Recalculate to restore it."
             )
             return
 
@@ -9807,14 +9775,14 @@ class ReportBuilder:
             + ". <b>Scope:</b> " + _html_escape(str(result["disclosure"]))
         )
         self._small(
-            "The user declared applicability, permitted width, reinforcement "
-            "surface, effective tensile strength and the two effective tension "
-            "areas. Sector derives the shared reinforcement operands from the "
-            "retained ordinary crack result and does not infer restraint, "
-            "watertightness, exposure class or owner requirements."
+            "Project inputs define applicability, permitted width, reinforcement "
+            "surface, tensile strength and both effective tension areas. The "
+            "selected ordinary crack-width result supplies the shared reinforcement terms; "
+            "record restraint, watertightness, exposure and owner criteria in the "
+            "project basis."
         )
         rows = [
-            ["Retained input", "Value"],
+            ["Input", "Value"],
             [
                 "Reference Elastic case / ordinary branch",
                 _html_escape(
@@ -9887,7 +9855,7 @@ class ReportBuilder:
             [18 * mm, 10 * mm, 25 * mm, 23 * mm, 25 * mm, 25 * mm, 34 * mm],
             font=7.0,
         )
-        self._h2("Auto-derived reinforcement provenance")
+        self._h2("Reinforcement source details")
         self._table(
             [
                 ["Element", "Material", "Area (mm2)", "phi (mm)", "Es (MPa)"],
@@ -9988,9 +9956,8 @@ class ReportBuilder:
             references=("crack.heightened.required-area",),
             ref="Auto-derived provided reinforcement area comparison",
             note=(
-                "Bounded comparison with the retained ordinary-crack mild-bar "
-                "area; this "
-                "is not a global project-compliance verdict."
+                "Comparison with the ordinary crack-width mild-bar area; this "
+                "covers only the selected section reinforcement."
             ),
             subst=(
                 "; ".join(
@@ -10057,22 +10024,17 @@ class ReportBuilder:
                 self._small("<b>Input error:</b> " + _html_escape(str(error)))
             return
 
-        self._h2("Basis and provenance")
+        self._h2("Basis and references")
         basis = payload.get("basis") or {}
         factors = payload.get("partial_factors") or {}
         concrete_parameters = payload.get("concrete_parameters") or {}
         basis_rows = [
             ["Item", "Value"],
-            ["Design-basis key",
-             _html_escape(str(payload.get("basis_key") or "-"))],
             ["Design basis", _html_escape(str(
                 payload.get("basis_label") or payload.get("edition") or "-"
             ))],
-            ["Basis disclosure", _html_escape(str(
+            ["Method scope", _html_escape(str(
                 payload.get("basis_disclosure") or "-"
-            ))],
-            ["Solver edition", _html_escape(str(
-                payload.get("solver_edition") or "-"
             ))],
             ["Method", _html_escape(str(basis.get("method") or "-"))],
             ["Method reference",
@@ -10202,10 +10164,9 @@ class ReportBuilder:
             keep=False,
         )
         self._small(
-            "Miner sums are accumulated within each spectrum; different "
-            "spectrum names are not combined. Governing utilisation is the "
-            "maximum of the applicable simplified-screen or Miner range "
-            "criterion, yield/proof stress and concrete criteria."
+            "Each spectrum has its own Miner sum. Governing utilisation is the "
+            "maximum applicable simplified screen, Miner range, yield/proof "
+            "stress or concrete result."
         )
 
         spectra = fatigue_presentation.items(payload, "spectra")
@@ -10292,12 +10253,12 @@ class ReportBuilder:
         if checks.get("reinforcement") and not reinforcement_example:
             self._small(
                 "<b>Worked example unavailable:</b> no converged governing "
-                "reinforcement fatigue result was retained."
+                "reinforcement fatigue result is available."
             )
         if checks.get("concrete") and not concrete_example:
             self._small(
                 "<b>Worked example unavailable:</b> no converged governing "
-                "concrete fatigue result was retained."
+                "concrete fatigue result is available."
             )
         for spectrum in spectra:
             spectrum_name = str(
@@ -10384,7 +10345,7 @@ class ReportBuilder:
 
             state_rows = fatigue_presentation.spectrum_bin_rows(spectrum)
             if state_rows and audit_detail:
-                self._h2("Elastic solver states")
+                self._h2("Elastic states used in the fatigue calculation")
                 rows = [[
                     "Bin", "Description", "Cycles", "Status",
                     "Cyclic action", "gamma<sub>Ff</sub>", "Bond method",
@@ -10608,8 +10569,8 @@ class ReportBuilder:
                     )
                     self._small(
                         "All stresses are in MPa. Fatigue total includes the bond "
-                        "transformation; design elastic &#916;sigma is the raw "
-                        "action-factored solver range before the bond correction; "
+                        "transformation; design elastic &#916;sigma is the "
+                        "action-factored Elastic stress range before the bond correction; "
                         "design values include action-level "
                         "gamma<sub>Ff</sub>."
                     )
@@ -10706,8 +10667,8 @@ class ReportBuilder:
                 )
                 if result is None:
                     self._small(
-                        "<b>Worked example unavailable:</b> the retained global "
-                        "concrete-fibre identity is absent from this spectrum."
+                        "<b>Worked example unavailable:</b> the selected concrete "
+                        "fibre is absent from this spectrum."
                     )
                     continue
                 self._h2(
@@ -10938,7 +10899,8 @@ class ReportBuilder:
         ):
             self._small(
                 "<b>Worked example unavailable:</b> the governing reinforcement "
-                "bin does not retain every required numerical operand."
+                "bin lacks one or more required numerical terms. Recalculate to "
+                "restore it."
             )
             return
         yield_check = selected_bin.get("governing_yield_check")
@@ -10988,7 +10950,8 @@ class ReportBuilder:
         ):
             self._small(
                 "<b>Worked example unavailable:</b> the governing reinforcement "
-                "result does not retain the complete criterion or source chain."
+                "result lacks part of its criterion or reference. Recalculate to "
+                "restore it."
             )
             return
         source = _html_escape(str(reference))
@@ -11079,8 +11042,8 @@ class ReportBuilder:
             )
         else:
             self._small(
-                "<b>Worked example unavailable:</b> the governing S-N branch "
-                "does not retain its reference ratio."
+                "<b>Worked example unavailable:</b> the governing S-N result lacks "
+                "its reference ratio. Recalculate to restore it."
             )
             return
         self._formula(
@@ -11165,7 +11128,7 @@ class ReportBuilder:
         if strength is None or selected_bin is None:
             self._small(
                 "<b>Worked example unavailable:</b> the governing concrete "
-                "strength or bin identity is absent."
+                "strength or bin name is missing."
             )
             return
         if reference is None:
@@ -11312,7 +11275,8 @@ class ReportBuilder:
         if any(selected_bin.get(key) is None for key in required):
             self._small(
                 "<b>Worked example unavailable:</b> the governing concrete bin "
-                "does not retain every normalized-stress operand."
+                "lacks one or more normalised-stress terms. Recalculate to "
+                "restore it."
             )
             return
         fcd_fat = fatigue_presentation.evidence_number(
@@ -11422,7 +11386,7 @@ class ReportBuilder:
             else:
                 self._small(
                     "<b>Worked example unavailable:</b> the governing concrete "
-                    "life branch is not recognised."
+                    "fatigue method is not recognised."
                 )
                 return
             self._formula(
@@ -11561,10 +11525,6 @@ class ReportBuilder:
                         "constitutive laws; no normative curve source is assigned. "
                         "Use the material description as project evidence."
                     )
-            lines.append(
-                "The capacity solver is covered by independent hand-calculation "
-                "regression cases."
-            )
         if elastic_results:
             elastic = elastic_results[0]
             crack_2023 = (
@@ -11586,8 +11546,8 @@ class ReportBuilder:
             lines.append(f"{edition} (Eurocode 2): {clauses}.")
             lines.append(
                 "Stresses and crack widths are numerical outputs for the named "
-                "user-defined actions. No exposure, durability, decompression or "
-                "action-combination criterion is applied."
+                "user-defined actions. Apply any project exposure, durability, "
+                "decompression or action-combination criteria separately."
             )
             if any(
                 "DK NA" in str(result.get("crack_code", ""))
@@ -11641,8 +11601,8 @@ class ReportBuilder:
             references = fatigue.get("calculation_references") or {}
             lines.append(
                 "Grouped fatigue spectra are assessed independently with the "
-                "cracked Elastic solver. gamma<sub>Ff</sub> is applied to the "
-                "cyclic actions before solving; gamma<sub>s</sub> is applied to "
+                "cracked Elastic analysis. gamma<sub>Ff</sub> is applied to the "
+                "cyclic actions before the stress calculation; gamma<sub>s</sub> is applied to "
                 "the reinforcement S-N resistance."
             )
             for label, reference in references.items():
@@ -11658,7 +11618,8 @@ class ReportBuilder:
                     + "."
                 )
             lines.append(
-                "Torsion and shear fatigue are not assessed in this version."
+                "The grouped fatigue calculation covers normal force and bending; "
+                "shear and torsion fatigue remain separate checks."
             )
         elif fatigue_errors:
             lines.append(
@@ -11668,8 +11629,8 @@ class ReportBuilder:
             )
         lines.append(
             "The printed gamma<sub>c</sub>, gamma<sub>s</sub> and reinforcement "
-            "factors are the final user-entered partial factors. Sector applies no "
-            "hidden construction-, control- or consequence-category multiplier."
+            "factors are the final project inputs and are used directly in the "
+            "calculation."
         )
         lines.append(
             "All results follow from the documented inputs and cited formulas; "

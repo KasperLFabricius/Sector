@@ -225,16 +225,14 @@ def test_equation_flowable_seals_public_identity_number_and_source():
     assert isinstance(anchor, sector_report._EquationAnchor)
     assert anchor.wrap(480.0, 700.0) == (0.0, 0.0)
     assert isinstance(math, publication_equations.EquationFlowable)
-    assert math.block.identity == (
-        "Equation (1.1) | EQ-RESISTANCE.DIRECTION-X.RESULT"
-    )
+    assert math.block.identity == "Equation (1.1)"
     assert tuple(line.role for line in math.block.lines) == (
         "symbolic-expression",
         "numerical-substitution",
         "result",
     )
     assert equation.getPlainText() == (
-        "Equation (1.1) | EQ-RESISTANCE.DIRECTION-X.RESULT "
+        "Equation (1.1) "
         "Symbolic expression: R = a + b "
         "Numerical substitution: 4 + 6 "
         f"Result {EM_DASH} R [kN]: R = 10 kN "
@@ -408,7 +406,7 @@ def test_equation_anchor_encoding_preserves_dot_and_hyphen_identity():
     assert f'href="#{second._sector_equation_anchor}"' in link_markup
 
 
-def test_grouping_preserves_equation_and_existing_direct_child_audit_text():
+def test_grouping_preserves_equation_without_publishing_internal_identifier():
     builder = _builder(profile="Audit")
     builder._h1("Combined")
     start = len(builder.flow)
@@ -431,7 +429,8 @@ def test_grouping_preserves_equation_and_existing_direct_child_audit_text():
         if hasattr(child, "getPlainText")
     )
     assert f"{SUM}(SEd / SRd) {LE} 1" in direct_text
-    assert "EQ-COMBINED.DIRECTIONAL.SUM" in direct_text
+    assert "Equation (1.1)" in direct_text
+    assert "EQ-" not in direct_text
 
 
 def test_equation_keep_measurement_adds_only_unapplied_visible_leading_space():
@@ -493,7 +492,10 @@ def test_oversized_outer_group_releases_without_splitting_equation_text():
         for page in pypdf.PdfReader(io.BytesIO(_pdf(builder.flow))).pages
     ]
     equation_pages = [
-        text for text in pages if "EQ-GROUPED.LONG.RESISTANCE" in text
+        text
+        for text in pages
+        if "first contribution + second contribution + third contribution"
+        in text
     ]
     assert len(equation_pages) == 1
     equation_page = equation_pages[0]
@@ -502,6 +504,7 @@ def test_oversized_outer_group_releases_without_splitting_equation_text():
     )
     assert "R = 12.5 kN" in equation_page
     assert "Source / method note: Project-defined / uncited." in equation_page
+    assert "EQ-" not in equation_page
 
 
 def test_same_semantic_key_is_reusable_in_a_new_titled_subsection():

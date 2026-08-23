@@ -61,9 +61,9 @@ def test_end_user_scope_rejects_former_version_narrative(former_version_text):
         validate_end_user_manual_scope(former_version_text)
 
 
-def test_end_user_scope_allows_current_operation_and_traceable_identity():
+def test_end_user_scope_allows_current_operation_and_product_version():
     validate_end_user_manual_scope(
-        "Sector user manual. Version: 0.95. Source revision: abc123. "
+        f"Sector user manual. Version: {manual.APP_VERSION}. "
         "Loading restores inputs and clears earlier results. The previous "
         "calculation is not reused; press Calculate before using results."
     )
@@ -84,7 +84,7 @@ def test_manual_profile_table_contains_user_information_only():
     assert profile_table[1] == [
         "Profile",
         "Purpose",
-        "Declared omitted detail",
+        "Not included",
     ]
     assert all(len(row) == 3 for row in profile_table[2])
 

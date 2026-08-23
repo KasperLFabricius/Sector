@@ -44,7 +44,7 @@ from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, design_standards  # noqa: E402
-from sector.build_info import short_revision, source_revision  # noqa: E402
+from sector.build_info import source_revision  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector.sls_identity import (  # noqa: E402
     HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
@@ -207,7 +207,7 @@ st.caption("Reinforced-concrete cross-section analysis - elastic stresses and pl
 _PRESET_HELP = (
     "Prefills a named stress-strain law (a named curve shape or a Eurocode "
     "edition). Direct inputs remain editable; edition-derived coefficients are "
-    "shown read-only so the named method and numerical law cannot diverge."
+    "read-only to keep the selected edition and numerical law aligned."
 )
 
 # Default material edition (Danish practice: DS/EN with the DK National Annex).
@@ -667,7 +667,7 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
         format_func=mat_catalog.mild_preset_display_label,
     )
     box.caption(
-        "Preset identity: "
+        "Preset source: "
         f"{mat_catalog.mild_preset_classification(preset)}. "
         f"{mat_catalog.mild_preset_kernel_note(preset)}. "
         "Every material field remains a direct calculation input."
@@ -909,7 +909,7 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
     selected = _seeded_selectbox(
         box, "Material", ids, ids[0], select_key,
         format_func=lambda value: labels.get(value, value),
-        help="Stable material ID and editable name. Assign the ID in the section table.",
+        help="Material ID and editable name. Assign the ID in the section table.",
     )
     counts = mat_catalog.assigned_counts(assigned_ids)
     protected = {str(value).strip() for value in protected_ids if str(value).strip()}
@@ -1156,7 +1156,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         ids[0],
         selected_key,
         format_func=lambda value: labels.get(value, value),
-        help="Stable detail ID assigned in the section table.",
+        help="Fatigue detail ID assigned in the section table.",
     )
     counts = fatigue_inputs.assigned_counts(assigned_ids)
     box.caption(f"Assigned elements: {counts.get(selected, 0)}")
@@ -1581,7 +1581,7 @@ def _table_field_guide(box, table_key):
     }:
         guide.caption(
             "Load-action and fatigue numeric fields accept a dot or comma. "
-            "Blank action cells are zero; a malformed nonblank value is retained "
+            "Blank action cells are zero; a malformed nonblank value is kept "
             "and must be corrected."
         )
     else:
@@ -2138,7 +2138,7 @@ def _load_case_editors(box):
     box.info(f"Modelled reinforcement direction: {direction_label}")
     box.markdown("**Plastic and capacity cases**")
     box.caption(
-        "One row per named case. Section forces retain their signs. Zero Vx,Ed, "
+        "One row per named case. Section forces keep their signs. Zero Vx,Ed, "
         "Vy,Ed or TEd skips that component. Select minimum reinforcement only "
         "for cases with the design situation required by the chosen detailing "
         "method. Paste rectangular ranges directly."
@@ -2148,11 +2148,10 @@ def _load_case_editors(box):
     box.markdown("**Elastic cases**")
     box.caption(
         "Long and short action parts share the global creep coefficient below. "
-        "Stresses are always reported. Crack width is an optional calculation "
-        "for each user-defined action. Independent long-term and short-term user "
-        "limits apply only to their matching ordinary branches; the heightened "
-        "Formula 7.100 NA operand is separate. No combination completeness is "
-        "inferred."
+        "Each action reports stresses and can calculate crack width. Independent "
+        "long- and short-term limits apply to their matching branches; Formula "
+        "7.100 NA uses a separate limit. Define combination completeness in the "
+        "project basis."
     )
     _table_field_guide(box, load_cases.ELASTIC_TABLE_KEY)
     elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
@@ -2282,7 +2281,7 @@ def _fatigue_basis_panel(box, *, disabled):
     method = fatigue_inputs.METHOD_GROUPED
     box.caption(
         f"{method}. Every action and cycle count in the table is used exactly "
-        "as entered; Sector does not infer traffic completeness."
+        "as entered; the project spectrum defines traffic coverage."
     )
     notes = _seeded_text_area(
         box,
@@ -3201,13 +3200,16 @@ def _apply_pending_project() -> None:
         st.session_state["_project_msg"] = ("success", "Restored autosaved session.")
     else:
         version = provenance.get("sector_version")
-        revision = short_revision(provenance.get("source_revision"))
         verified = provenance.get("input_hash_valid")
         if version:
-            integrity = "verified" if verified else "does not match"
-            detail = f"Sector {version}, source {revision}, input hash {integrity}"
+            integrity = (
+                "saved inputs verified"
+                if verified
+                else "saved input record does not match"
+            )
+            detail = f"Sector {version}; {integrity}"
         else:
-            detail = "current project provenance unavailable"
+            detail = "saving version unavailable"
         message = (
             f"Project loaded ({detail}). Recalculate to create current results."
         )
@@ -3249,19 +3251,19 @@ def _save_load_panel() -> None:
                              "JSON file.")
     if project_error:
         box.error(f"Project download blocked: {project_error}.")
-    box.caption(f"Saved with Sector {APP_VERSION}, source "
-                f"{short_revision()}; results are recalculated on load.")
+    box.caption(
+        f"Saved with Sector {APP_VERSION}; results are recalculated on load."
+    )
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
         if loaded.get("sector_version"):
             integrity = (
-                "hash verified"
+                "file integrity verified"
                 if loaded.get("input_hash_valid") is True
-                else "HASH MISMATCH"
+                else "saved input record does not match"
             )
             box.caption(
-                f"Loaded: Sector {loaded['sector_version']} | source "
-                f"{short_revision(loaded.get('source_revision'))} | {integrity}"
+                f"Loaded: Sector {loaded['sector_version']} | {integrity}"
             )
             calculation = loaded.get("calculation") or {}
             if calculation:
@@ -3276,7 +3278,7 @@ def _save_load_panel() -> None:
                     f" | {match}"
                 )
         else:
-            box.caption("Loaded: current project | provenance unavailable")
+            box.caption("Loaded project: saving version unavailable")
     loaded_migration = st.session_state.get("_loaded_project_migration")
     if loaded_migration:
         migration = loaded_migration.get("migration_provenance") or {}
@@ -3284,10 +3286,9 @@ def _save_load_panel() -> None:
         if shared is not None:
             detail = f"shared width {float(shared):g} mm split by duration"
         else:
-            detail = "migration details retained"
+            detail = "project-file conversion details available"
         box.caption(
-            f"Migrated schema {loaded_migration['source_schema_version']} to "
-            f"{loaded_migration['target_schema_version']} | {detail}"
+            f"Project file updated | {detail}"
         )
     _autosave_panel(box)
     up = box.file_uploader("Load project", type=["json"], key="project_upload",
@@ -3663,12 +3664,11 @@ def _report_workspace(inp):
 
     st.subheader("Report")
     st.caption(
-        "Document metadata and publication controls are kept here. Generate uses "
-        "the current input payload and reuses Analysis results only when their "
-        "input, result and Sector source identities remain coherent."
+        "Add document details and choose the report depth. Generate uses the "
+        "current inputs and the matching Analysis results."
     )
     metadata_box = st.container(border=True)
-    metadata_box.markdown("**Document metadata**")
+    metadata_box.markdown("**Document details**")
     _seeded_text(metadata_box, _REPORT_FIELDS[0][1], "", "rep_proj_no")
     _seeded_text(metadata_box, _REPORT_FIELDS[1][1], "", "rep_proj_name")
     _seeded_text(metadata_box, _REPORT_FIELDS[2][1], "", "rep_section")
@@ -3685,9 +3685,8 @@ def _report_workspace(inp):
         _manual_warning(
             publication_box,
             "report-stale",
-            "An Inputs edit was interrupted before Sector could assemble its "
-            "complete calculation payload. Open Inputs and allow it to finish "
-            "once before generating or downloading a report.",
+            "Input preparation was interrupted. Open Inputs and allow it to "
+            "finish once before generating or downloading a report.",
         )
     profile_error = st.session_state.get(_REPORT_PROFILE_ERROR_KEY)
     if profile_error:
@@ -3705,7 +3704,7 @@ def _report_workspace(inp):
         width="stretch",
         help=(
             "Brief is a rapid-review summary, Standard is the default design-"
-            "review report, and Audit adds complete retained evidence. The "
+            "review report, and Audit adds complete calculation details. The "
             "profile changes presentation depth only; figures remain separate."
         ),
     )
@@ -3720,7 +3719,7 @@ def _report_workspace(inp):
     )
     if inp is None:
         publication_box.info(
-            "Open Inputs once to initialise the section and report payload."
+            "Open Inputs once to prepare the section and report data."
         )
 
     global _REPORT_PROG
@@ -3760,7 +3759,7 @@ def _report_workspace(inp):
             _manual_warning(
                 publication_box,
                 "report-stale",
-                "Report out of date: inputs or report metadata changed. "
+                "Report out of date: inputs or report details changed. "
                 "Generate it again before downloading.",
             )
 
@@ -4597,8 +4596,8 @@ def build_inputs(host=st):
         format_func=lambda value: design_standards.get_design_basis(value).label,
         disabled=not fatigue_on,
         help=(
-            "Selects a capability-backed Eurocode fatigue route. The stable "
-            "basis key controls dispatch; labels alone never select a solver."
+            "Selects the implemented Eurocode fatigue basis and records it with "
+            "each result."
         ),
     )
     fatigue_standard_basis = design_standards.get_design_basis(fatigue_edition)
@@ -4657,8 +4656,7 @@ def build_inputs(host=st):
     if retained_concrete_method == _FATIGUE_CONCRETE_PROJECT_MINER:
         fatigue_concrete_method_help = (
             "User-defined Miner uses the entered cycles and coefficient C in "
-            "a project-defined concrete S-N relation. This method is uncited; "
-            "no Eurocode source is inferred."
+            "a project-defined concrete S-N relation recorded with the input."
         )
     else:
         fatigue_concrete_method_help = (
@@ -4679,8 +4677,8 @@ def build_inputs(host=st):
         help=fatigue_concrete_method_help,
     )
     fat.caption(
-        "Enter complete partial factors. Sector applies no control-, "
-        "construction- or consequence-class multiplier."
+        "Enter final effective partial factors, including applicable control, "
+        "construction and consequence-category effects."
     )
     ff1, ff2, ff3 = fat.columns(3)
     fatigue_gamma_ff = _seeded_number(
@@ -4752,8 +4750,8 @@ def build_inputs(host=st):
         1.0,
         "fatigue_t0_days",
         disabled=not (fatigue_on and fatigue_check_concrete),
-        help=r"Age at first cyclic loading. This documents the basis for "
-             r"$\beta_{cc}(t_0)$; Sector does not derive that factor.",
+        help=r"Documents the age at first cyclic loading used with "
+             r"$\beta_{cc}(t_0)$; enter the factor separately.",
     )
     fatigue_concrete_k1 = _seeded_number(
         fc1,
@@ -4777,8 +4775,8 @@ def build_inputs(host=st):
     if fatigue_concrete_method == _FATIGUE_CONCRETE_PROJECT_MINER:
         fatigue_concrete_c_help = (
             r"Coefficient in the project-defined $\log_{10}N_R$ concrete "
-            "fatigue-life relation. This value is uncited; no Eurocode source "
-            "is inferred."
+            "fatigue-life relation. Record the selected value and source with "
+            "the project inputs."
         )
     else:
         fatigue_concrete_c_help = (
@@ -4881,10 +4879,9 @@ def build_inputs(host=st):
              "N-M Interaction view. Adds a short extra sweep to Calculate.")
 
     scw.caption(
-        "Concrete and reinforcement stresses are always reported for every "
-        "Elastic action. Ordinary crack width is enabled per action in the Loads "
-        "table. Long-term and short-term widths have independent user limits; "
-        "zero states a width without comparing it."
+        "Every Elastic action reports concrete and reinforcement stresses. Enable "
+        "crack width per action and set independent duration limits; zero reports "
+        "the width without comparison."
     )
     cw_long, cw_short = scw.columns(2)
     sls_long_term_permitted_crack_width_mm = _seeded_number(
@@ -4897,10 +4894,9 @@ def build_inputs(host=st):
         LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
         disabled=not elastic_on,
         help=(
-            "User-specified limit applied only to the retained long-term branch "
-            "(existing sustained action and kt = 0.4). Enter zero to state the "
-            "calculated width without a comparison. Sector does not infer a "
-            "project limit or load-combination classification."
+            "Applies only to the long-term calculation (sustained action, "
+            "kt = 0.4). Zero reports the width without comparison. Use the limit "
+            "and action classification required by the project basis."
         ),
     )
     sls_short_term_permitted_crack_width_mm = _seeded_number(
@@ -4913,10 +4909,9 @@ def build_inputs(host=st):
         SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
         disabled=not elastic_on,
         help=(
-            "User-specified limit applied only to the retained short-term branch "
-            "(existing instantaneous total action and kt = 0.6). Enter zero to "
-            "state the calculated width without a comparison. Sector does not "
-            "infer a project limit or load-combination classification."
+            "Applies only to the short-term calculation (instantaneous total "
+            "action, kt = 0.6). Zero reports the width without comparison. Use "
+            "the limit and action classification required by the project basis."
         ),
     )
     crack_basis_options = tuple(
@@ -4934,8 +4929,8 @@ def build_inputs(host=st):
         format_func=lambda value: design_standards.get_design_basis(value).label,
         disabled=not elastic_on,
         help=(
-            "Selects a capability-backed ordinary crack-width route. The stable "
-            "basis key controls dispatch; labels never select a solver."
+            "Selects the implemented ordinary crack-width basis and records it "
+            "with each result."
         ),
     )
     sls_basis = design_standards.get_design_basis(sls_code)
@@ -4992,8 +4987,8 @@ def build_inputs(host=st):
     else:
         tendon_bond_help = (
             "This input is not used by the selected first-generation ordinary "
-            "crack-width route; it is retained for a later switch to the 2023 "
-            "basis."
+            "crack-width method. Its value is saved for use if the calculation "
+            "basis is changed to 2023."
         )
     sls_tendon_xi = _seeded_number(
         scw,
@@ -5019,9 +5014,9 @@ def build_inputs(host=st):
         ).tooltip
     else:
         sls_member_help = (
-            "This input is not used by the selected ordinary crack-width route; "
-            "it is retained for a later switch to the Danish first-generation "
-            "basis. No Eurocode source is inferred for the inactive value."
+            "This input is not used by the selected ordinary crack-width method; "
+            "its value is saved for use if the Danish first-generation basis is "
+            "selected."
         )
     sls_member = _seeded_selectbox(
         scw,
@@ -5047,9 +5042,9 @@ def build_inputs(host=st):
         )
         scw.markdown("**Optional DK NA heightened crack control**")
         scw.caption(
-            "Separate section-level Formula 7.100 NA calculation. Sector does "
-            "not infer whether it applies. Both fine and coarse systems are "
-            "calculated from one retained ordinary crack reference case."
+            "Formula 7.100 NA is a separate section-level calculation. Fine and "
+            "coarse systems use one selected ordinary crack-width reference case; "
+            "confirm its project applicability."
         )
         sls_heightened_on = _seeded_toggle(
             scw,
@@ -5072,10 +5067,9 @@ def build_inputs(host=st):
             HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
             disabled=not (elastic_on and sls_heightened_on),
             help=(
-                "Dedicated user-specified Formula 7.100 NA operand. It is "
-                "independent of both ordinary duration limits and must be "
-                "positive when heightened control is enabled. Sector does not "
-                "infer whether the heightened calculation applies."
+                "Dedicated Formula 7.100 NA operand, independent of both ordinary "
+                "duration limits. Enter a positive value and confirm the "
+                "heightened calculation applies."
             ),
         )
         crack_reference_names = list(
@@ -5123,8 +5117,8 @@ def build_inputs(host=st):
                 disabled=not (elastic_on and sls_heightened_on),
                 on_change=_mark_heightened_reference_explicit,
                 help=(
-                    "Select the ordinary crack result whose retained contributing "
-                    "mild bars provide diameter, modulus and area provenance."
+                    "Select the ordinary crack result whose contributing mild bars "
+                    "provide the diameter, modulus and area."
                 ),
             )
             if sls_heightened_reference_case:
@@ -5202,7 +5196,7 @@ def build_inputs(host=st):
         scw.caption(
             "After calculation, bar diameter follows the ordinary override or "
             "largest contributing mild bar; reinforcement modulus is the minimum "
-            "among contributing mild materials; provided area is their retained sum."
+            "among contributing mild materials; provided area is their total area."
         )
     else:
         # Do not mount unsupported controls. Retain any prior DK operands so a
@@ -5240,8 +5234,8 @@ def build_inputs(host=st):
         list(detailing.MEMBER_TYPES),
         detailing.MEMBER_BEAM,
         "detailing_member_type",
-        help="Selects the member-specific detailing clauses. It does not change "
-             "the section analysis or material factors.",
+        help="Selects member-specific detailing clauses; section analysis and "
+             "material factors remain unchanged.",
     )
     if detailing_member_type == detailing.MEMBER_SLAB:
         detailing_cut_direction = _seeded_selectbox(
@@ -5269,8 +5263,8 @@ def build_inputs(host=st):
         modelled_direction.ALIAS_KEY,
         max_chars=modelled_direction.MAX_ALIAS_CHARS,
         help=(
-            "Optional project wording shown after Sector's canonical longitudinal "
-            "or transverse direction. It changes presentation only, not the model."
+            "Optional project wording shown after the standard longitudinal or "
+            "transverse direction; presentation only."
         ),
     )
     direction_label = modelled_direction.resolved_markdown_label(
@@ -5472,9 +5466,8 @@ def build_inputs(host=st):
         help=(
             "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP) define "
             "the partial factor for shear resistance without shear "
-            "reinforcement; 1.40 is Sector's default, not a forced value. "
-            "The selected positive value is applied in 8.2.2. Confirm the "
-            "applicable project basis."
+            "reinforcement. 1.40 is the initial value; the selected positive "
+            "value is applied in 8.2.2. Confirm the project basis."
         ),
     )
     effective_shear_gamma_v = (
@@ -5496,18 +5489,16 @@ def build_inputs(host=st):
         help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
     )
     sts.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
-    sts.caption("Torsion resistance from the thin-walled tube idealisation "
-                 r"(EN 1992-1-1 sec. 6.3): closed stirrups $T_{Rd,s}$, strut crushing "
-                 r"$T_{Rd,max}$, cracking $T_{Rd,c}$, and the required longitudinal steel. "
-                 r"The tube ($A$, $u$, $t_{ef}$, $A_k$, $u_k$) is derived from the outline. "
-                 "Full resistance is assessed only when the shared closed links below "
-                 "are current; otherwise concrete values are transparency only.")
+    sts.caption(
+        "EN 1992-1-1 section 6.3 thin-walled-tube resistance. Full capacity "
+        "requires current closed links; otherwise concrete resistance and "
+        "reinforcement demand are reported as context."
+    )
     torsion_on = _seeded_checkbox(
         sts, "Check torsion capacity", False, "torsion_on",
-        help=r"With current closed links, compute $T_{Rd}=\min(T_{Rd,s},T_{Rd,max})$ "
-             r"and $T_{Ed}/T_{Rd}$, plus the combined shear-torsion crushing check "
-             "(6.29). Without them, retain only explicitly labelled concrete and "
-             "reinforcement-demand transparency.")
+        help=r"With current closed links, calculates $T_{Rd}$, utilisation and "
+             "the combined shear-torsion crushing check. Without links, reports "
+             "concrete resistance and reinforcement demand only.")
     torsion_method = _seeded_selectbox(
         sts, "Torsion method", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label,
@@ -5530,17 +5521,17 @@ def build_inputs(host=st):
     torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
     sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
-    sts.caption("Torsion uses one leg of the shared closed, anchored stirrup defined "
-                 "below; the required longitudinal steel uses the mild-reinforcement "
-                 "design yield. Stored geometry is never treated as link presence.")
+    sts.caption(
+        "The selected closed stirrup supplies one leg to torsion; longitudinal "
+        "demand uses the selected reinforcing material. Only the enabled shared-"
+        "link selection establishes link presence."
+    )
     torsion_tef = _seeded_number(
         sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
-        help="Effective wall thickness of the tube. 0 derives it as A/u (capped at "
-             "the nearest real wall for a single-cell hollow section). A positive "
-             "single-tube override may not exceed that measured wall thickness. "
-             "Subdivided tubes always derive each component thickness automatically; "
-             "set this field to 0 before enabling subdivision.")
+        help="Zero derives A/u, capped at the nearest real wall for a single-cell "
+             "hollow section. A positive single-tube override cannot exceed that "
+             "wall; subdivided tubes require zero and derive each thickness.")
     torsion_gamma_ct = _seeded_number(
         sts,
         r"Concrete tensile factor $\gamma_{ct}$",
@@ -5556,7 +5547,7 @@ def build_inputs(host=st):
             r"Direct positive-finite input used in "
             r"$f_{ctd}=f_{ctk,0.05}/\gamma_{ct}$ and $T_{Rd,c}$. "
             f"The selected method starts at {torsion_gamma_default:.2f}; "
-            "custom values are retained, not clamped or replaced."
+            "a custom value is used as entered."
         ),
     )
     torsion_gamma_ct_error = None
@@ -5593,18 +5584,15 @@ def build_inputs(host=st):
         disabled=not (
             _tors and st.session_state.get("shear_links") is True
         ),
-        help="DK NA Figur 5.100 NA: when every tube wall has closed stirrups round "
-             "the periphery and uniformly distributed longitudinal steel on both "
-             "faces, the torsion strut factor may be raised from nu_t to the "
-             "pure-shear nu_v. Current shared links must be present. Only affects "
-             "the DK NA edition.")
+        help="DK NA Figure 5.100 NA: for closed peripheral stirrups and uniformly "
+             "distributed longitudinal steel on both wall faces, use the pure-"
+             "shear nu_v. Requires current shared links and the DK NA edition.")
     torsion_subdivide = _seeded_checkbox(
         sts, "Subdivide into sub-tubes (T / compound section)", False,
         "torsion_subdivide", disabled=not _tors,
-        help="EN 1992-1-1 6.3.1(3): define component rectangles for a T, L, I "
-             "or flanged section. Each rectangle becomes a thin-walled tube; the "
-             "first is the web and pairs with shear. Sector validates the complete "
-             "positioned partition before calculating resistance.")
+        help="EN 1992-1-1 6.3.1(3): define positioned component rectangles for a "
+             "T, L, I or flanged section. Rectangle 1 is the web paired with shear; "
+             "the partition is validated before resistance is calculated.")
     torsion_subrects = []
     if torsion_subdivide and _tors:
         n_sub = int(_seeded_number(
@@ -5638,10 +5626,11 @@ def build_inputs(host=st):
                 f"torsion_sub_h{i}", disabled=not _tors,
                 help=f"Global y-direction height of {role}.")
             torsion_subrects.append((x_i, y_i, b_i, h_i))
-        sts.caption("Define a complete, non-overlapping partition of the concrete "
-                    "net area. Sector checks the outline and void boundaries before "
-                    "calculating resistance; rectangle 1 is the web used with shear "
-                    "in the combined checks (6.3.1(3)).")
+        sts.caption(
+            "Define a complete, non-overlapping partition of the concrete net "
+            "area. Rectangle 1 is the web used with shear in the combined checks "
+            "(6.3.1(3))."
+        )
     # One current authority and one stored geometry serve both physical roles. Shear
     # uses the selected number of vertical legs; torsion uses one leg of the same
     # closed, anchored loop. Stored positive geometry never implies presence.
@@ -5653,10 +5642,9 @@ def build_inputs(host=st):
         "shear_links",
         disabled=not (shear_on or torsion_on),
         help=(
-            "One current physical selection for the shared stirrup. Shear uses "
-            "the selected effective vertical legs. Torsion requires the same bar "
-            "to form a closed, anchored loop and uses one leg in Asw/s. Positive "
-            "stored diameter or spacing never overrides a disabled selection."
+            "Selects the current physical stirrup. Shear uses the entered effective "
+            "legs; torsion requires the same bar as a closed, anchored loop and "
+            "uses one leg in Asw/s."
         ),
     )
     _links = bool(shear_on and shear_links)
@@ -5665,13 +5653,13 @@ def build_inputs(host=st):
     _strut_model = bool(_links or torsion_on)
     if torsion_nu_v and not _torsion_links:
         sts.caption(
-            "The retained nu_t = nu_v detailing request is not applied while "
-            "current shared links / closed torsion stirrups are absent."
+            "The nu_t = nu_v detailing option is inactive while current shared "
+            "links / closed torsion stirrups are absent."
         )
     sts.caption(
-        "The compression-strut band remains available for torsion concrete-cap "
-        "transparency. Stirrup geometry is active only when the shared-link "
-        "selection is enabled. Shear uses n legs; torsion uses one closed-loop leg."
+        "The compression-strut band also supports torsion concrete resistance. "
+        "Stirrup geometry applies only with shared links enabled: shear uses n "
+        "legs and torsion one closed-loop leg."
     )
     strut_lo, strut_hi = sts.columns(2)
     strut_cot_min = _seeded_number(
@@ -5726,7 +5714,7 @@ def build_inputs(host=st):
                 "Warning: the shared strut bounds fall outside the selected "
                 "method's default range "
                 f"{code_cot_min:g}..{code_cot_max:g}. The values are allowed, but "
-                "the actual values are retained in every calculation."
+                "the entered values are used in every calculation."
             )
     if "_capacity_steel_pending_material_id" in st.session_state:
         st.session_state["capacity_steel_material_id"] = st.session_state.pop(
@@ -5766,10 +5754,9 @@ def build_inputs(host=st):
         10.0,
         "shear_vx_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
-        help=r"Largest centre-to-centre distance $s_{t,x}$, measured along $y$, "
-             r"between adjacent link legs parallel to $V_x$. 0 uses the gross "
-             "web breadth only as an upper-bound screen: it can prove PASS, but "
-             "an actual spacing is required if that bound exceeds the limit.",
+        help=r"Largest centre-to-centre distance $s_{t,x}$ along $y$ between link "
+             r"legs parallel to $V_x$. Zero uses gross web breadth as an upper-"
+             "bound screen; enter actual spacing if the screen exceeds the limit.",
     )
     shear_vy_transverse_leg_spacing = _seeded_number(
         spacing_y,
@@ -5780,15 +5767,13 @@ def build_inputs(host=st):
         10.0,
         "shear_vy_transverse_leg_spacing",
         disabled=not (_links and transverse_detailing_on),
-        help=r"Largest centre-to-centre distance $s_{t,y}$, measured along $x$, "
-             r"between adjacent link legs parallel to $V_y$. 0 uses the gross "
-             "web breadth only as an upper-bound screen: it can prove PASS, but "
-             "an actual spacing is required if that bound exceeds the limit.",
+        help=r"Largest centre-to-centre distance $s_{t,y}$ along $x$ between link "
+             r"legs parallel to $V_y$. Zero uses gross web breadth as an upper-"
+             "bound screen; enter actual spacing if the screen exceeds the limit.",
     )
     sts.caption(
-        r"$s_t$ is the in-section distance between parallel link legs, not the "
-        r"longitudinal stirrup spacing $s$. For $V_x$ it is measured along $y$; "
-        r"for $V_y$ it is measured along $x$."
+        r"$s_t$ is the in-section distance between parallel link legs: along $y$ "
+        r"for $V_x$ and along $x$ for $V_y$. Longitudinal stirrup spacing is $s$."
     )
     shear_link_dia = _seeded_number(
         sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
@@ -5800,11 +5785,9 @@ def build_inputs(host=st):
     shear_fywk = _seeded_number(
         sts, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
         disabled=not _shared_links,
-        help="Characteristic yield strength of the stirrup steel; the design value "
-             r"is $f_{ywk}$ divided by the final effective $\gamma_s$ of the selected "
-             "reference material. If the stirrup is not fully anchored, reduce "
-             r"$f_{ywk}$ here; Sector assumes anchorage and applies no hidden category "
-             "multiplier.")
+        help="Characteristic stirrup yield; the design value is divided by the "
+             r"selected material's final effective $\gamma_s$. Enter an appropriately "
+             r"reduced $f_{ywk}$ where full anchorage is unavailable.")
     if transverse_detailing_on and not _shared_links:
         _manual_warning(
             sts,
@@ -6133,10 +6116,11 @@ def build_inputs(host=st):
         and not fatigue_on
     )
     if lock_mats:
-        mat_tab.caption("Elastic-only mode: the stress-strain laws do not affect the "
-                        r"elastic results and are locked. Only $f_{ck}$ (feeds $f_{ctm}$) and the "
-                        "steel modulus Es (crack width) stay editable; switch to "
-                        "Plastic or Both to edit the full laws.")
+        mat_tab.caption(
+            "Elastic-only mode locks the stress-strain laws. "
+            r"$f_{ck}$ remains editable for $f_{ctm}$, and steel modulus Es for "
+            "crack width. Select Plastic or Both to edit the full laws."
+        )
     elif mode == "Elastic" and capacity_checks_on:
         mat_tab.caption(
             "An independent capacity or fatigue check is active, so its material "
@@ -7844,7 +7828,7 @@ def _heightened_crack_control_validation_errors(inp):
         )
     except ValueError:
         errors.append(
-            "Heightened crack control requires the registered first-generation "
+            "Heightened crack control is available only with the first-generation "
             "DK NA:2024 design basis"
         )
     if inp.get("sls_heightened_reinforcement_surface") not in {
@@ -7893,7 +7877,7 @@ def _heightened_crack_control_payload(inp, analysis_result):
     )
     if not isinstance(reference, dict):
         raise ValueError(
-            "The selected heightened reference case has no current retained result"
+            "The selected heightened reference case has no current calculated result"
         )
     derived = heightened_adapter.derive_heightened_reinforcement(
         reference,
@@ -9371,29 +9355,29 @@ def results_overview_view(inp, results, *, stale=False):
     )
     if failure_count:
         st.error(
-            "A retained governing comparison fails or is invalid. Review the "
+            "A governing comparison fails or is invalid. Review the "
             "highlighted rows below."
         )
     elif warning_count:
         _manual_warning(
             st,
             "results-review",
-            "Some retained governing results require review. Review the "
+            "Some governing results require review. Review the "
             "highlighted rows below."
         )
     elif rows:
         st.success(
-            "Retained governing results are current; every comparison with a "
+            "The governing results are current; every comparison with a "
             "stated criterion is within it."
         )
     else:
         st.info(
-            "No applicable calculated result is retained. Scope and calculation "
+            "No applicable calculated result is available. Scope and calculation "
             "states are listed below; no pass conclusion is implied."
         )
     st.caption(
-        "Each row reports its own calculation status. Sector does not issue a "
-        "section or project compliance verdict."
+        "Interpret each row independently; an aggregate section status is not "
+        "calculated."
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -9614,7 +9598,7 @@ def detailing_view(inp, results, *, global_results=None):
         )
 
     if minimum is not None:
-        st.markdown("**Minimum-reinforcement evidence**")
+        st.markdown("**Minimum-reinforcement details**")
         checks = minimum.get("checks") or []
         if checks and presentation.minimum_area_check(minimum, checks[0]):
             rows = [{
@@ -9692,7 +9676,7 @@ def detailing_view(inp, results, *, global_results=None):
                     st.markdown(f"- {note}")
 
     if spacing is not None:
-        st.markdown("**Clear-spacing evidence**")
+        st.markdown("**Clear-spacing details**")
         pair_rows = [{
             "Pair": f"{pair.get('first_id', '?')} - {pair.get('second_id', '?')}",
             "Clear [mm]": pair.get("clear_mm"),
@@ -9719,7 +9703,7 @@ def detailing_view(inp, results, *, global_results=None):
                     st.markdown(f"- {note}")
 
     if transverse is not None:
-        st.markdown("**Shear/torsion link evidence**")
+        st.markdown("**Shear/torsion link details**")
         check_labels = {
             "minimum_ratio": "Minimum ratio",
             "longitudinal_spacing": "Longitudinal spacing",
@@ -9984,7 +9968,7 @@ def plastic_view(inp, results):
                                geometry_hover=False),
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
-                   "compression (-). Bar circles and tendon diamonds retain the "
+                   "compression (-). Bar circles and tendon diamonds identify the "
                    "element type. Hover an element for its ID, design stress and "
                    "strain; complete values are tabulated beside the figure.")
     with cR:
@@ -10036,14 +10020,14 @@ def plastic_view(inp, results):
     st.markdown("#### Face-specific effective depth")
     if not effective_depths:
         st.caption(
-            "Face-specific effective-depth evidence is not retained in this result. "
-            "Recalculate to publish it."
+            "This result does not include face-specific effective depth. "
+            "Recalculate to show it."
         )
     else:
         st.caption(
             "Each d is measured from the opposite extreme concrete fibre to the "
-            "centroid of the listed mild bars. All four face-aligned values are shown "
-            "because the selected neutral-axis state need not align with a section face."
+            "centroid of the listed mild bars. Four face-aligned values show the "
+            "available depth for either bending direction, including off-axis states."
         )
         st.dataframe(
             {
@@ -10086,7 +10070,7 @@ def plastic_view(inp, results):
         )
 
     state_rows = retained_state
-    with st.expander("Selected neutral-axis state - QA evidence", expanded=False):
+    with st.expander("Selected neutral-axis state - calculation details", expanded=False):
         st.caption(
             f"Point-by-point design stress and compatible strain at NA angle = "
             f"{pt['V']:.0f}{_DEG}. Signs are tension positive; reinforcement force "
@@ -10186,11 +10170,11 @@ def interaction_view(inp, results):
             dy["N"], dy["M"], axis="y",
             applied=dy.get("applied") if show_applied else None,
             title="N-My interaction"), width="stretch")
-    st.caption("Capacity boundary about each axis, from pure tension to the squash "
-               "load. The marked point is the applied plastic action ($N$, $M$); "
-               "inside the curve is safe. Concrete carries compression only, so the "
-               "tension end is reinforcement-controlled. Hover any point for its "
-               "$N$ and $M$.")
+    st.caption(
+        "Each curve traces capacity from pure tension to squash load. The marked "
+        "point is the applied plastic action; points inside the boundary are within "
+        "capacity. Hover for $N$ and $M$."
+    )
     with st.expander("Numerical N-M boundary (all points)", expanded=False):
         rows = presentation.nm_boundary_rows(d)
         display_rows = [
@@ -10218,7 +10202,7 @@ def interaction_view(inp, results):
             height=min(35 * (len(display_rows) + 1) + 3, 560),
         )
         st.caption("The point order is the exact plotted boundary order. Separate "
-                   "axial-force columns are retained because the Mx and My traces "
+                   "axial-force columns are shown because the Mx and My traces "
                    "may use different numerical points.")
 
 
@@ -10247,7 +10231,7 @@ def elastic_view(inp, results, *, global_results=None):
         return
     e = results["elastic"]
     if not e.get("converged", True):
-        st.error("INVALID - Elastic result | Solver did not converge; values are "
+        st.error("INVALID - Elastic result | The analysis did not converge; values are "
                  "diagnostic only.")
 
     st.markdown("### Elastic stress outputs")
@@ -10344,7 +10328,7 @@ def elastic_view(inp, results, *, global_results=None):
             width="stretch")
         st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
                    "compression (-). Bar circles and tendon diamonds identify the "
-                   "element type. Hover for retained material, stress and strain; "
+                   "element type. Hover for material, stress and strain; "
                    "geometry remains in the complete table below.")
     with strain_col:
         st.plotly_chart(
@@ -10387,7 +10371,7 @@ def elastic_view(inp, results, *, global_results=None):
 
     corner_rows = e.get("concrete_corners", [])
     if corner_rows:
-        with st.expander("Concrete corner stress/strain evidence", expanded=False):
+        with st.expander("Concrete corner stress/strain details", expanded=False):
             st.dataframe(
                 {
                     "Point": [r["point_no"] for r in corner_rows],
@@ -10489,7 +10473,7 @@ def _heightened_crack_control_panel(result):
     st.markdown("#### DK NA heightened crack control")
     st.caption(
         f"{result.get('formula_identity', 'Formula 7.100 NA')} | Reference case "
-        f"{result.get('reference_case_id', '-')}, retained ordinary branch "
+        f"{result.get('reference_case_id', '-')}, ordinary crack-width method "
         f"{result.get('ordinary_crack_branch', '-')}."
     )
     required = result.get("governing_required_reinforcement_area_mm2")
@@ -10546,13 +10530,12 @@ def _heightened_crack_control_panel(result):
         "conservative modulus "
         f"{result.get('reinforcement_modulus_mpa', 0.0):.1f} MPa "
         "(governing materials: "
-        f"{', '.join(result.get('modulus_governing_material_ids') or ['-'])}). "
-        "This bounded area comparison is not a global compliance verdict."
+        f"{', '.join(result.get('modulus_governing_material_ids') or ['-'])})."
     )
     contributions = result.get("contributions") or []
     if contributions:
         with st.expander(
-            "Auto-derived reinforcement provenance", expanded=False
+            "Reinforcement source details", expanded=False
         ):
             st.dataframe(
                 [
@@ -10629,8 +10612,8 @@ def _crack_width_panel(e):
     if no_results:
         if not retained_reasons:
             st.info(
-                "No calculated crack-width value is available; Sector does not "
-                "infer a physical reason."
+                "No crack-width value was returned for this action. Review the "
+                "inputs and calculation state."
             )
         return
     quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
@@ -10897,7 +10880,7 @@ def _fatigue_reinforcement_panel(payload, spectrum):
         "Reinforcement element",
         options,
         key=key,
-        help="Select an element for its S-N curve and bin evidence.",
+        help="Select an element for its S-N curve and bin results.",
     )
     result = fatigue_presentation.result_by_element(spectrum, selected)
     properties = fatigue_presentation.reinforcement_property(payload, selected)
@@ -10927,7 +10910,7 @@ def _fatigue_reinforcement_panel(payload, spectrum):
         st.caption("Reference: " + screen["source"])
     st.caption(
         "A passing simplified screen makes the detailed stress-range check "
-        "unnecessary for this element, but Sector still retains and displays "
+        "unnecessary for this element, but Sector still reports "
         "the S-N/Miner calculation. Yield or proof stress remains independent."
     )
 
@@ -11020,7 +11003,7 @@ def _fatigue_reinforcement_panel(payload, spectrum):
         for row in bin_rows
     ], height=560)
     st.caption(
-        "Elastic total and elastic stress range are the direct solver response. "
+        "Elastic total and elastic stress range come directly from the Elastic analysis. "
         "Fatigue values include the reported bond transformation; design values "
         r"also include the action-level $\gamma_{Ff}$ factor."
     )
@@ -11085,7 +11068,7 @@ def _fatigue_concrete_panel(spectrum):
             ),
             f"C{index}",
         ),
-        help="Select a fixed fibre for its same-point concrete fatigue evidence.",
+        help="Select a fixed fibre for its same-point concrete fatigue results.",
     )
     result = fatigue_presentation.result_by_fibre(spectrum, selected)
     if result is None:
@@ -11209,7 +11192,7 @@ def _fatigue_spectrum_panel(inp, spectrum):
         }
         for record in records
     ], height=520)
-    st.markdown("**Retained elastic solver-state register**")
+    st.markdown("**Elastic calculation details**")
     _fatigue_result_table([
         {
             "Bin": row["bin"],
@@ -11234,8 +11217,7 @@ def _fatigue_result_basis_panel(payload):
             "Design basis",
             payload.get("basis_label") or payload.get("edition") or "-",
         ),
-        ("Design basis key", payload.get("basis_key") or "-"),
-        ("Basis disclosure", payload.get("basis_disclosure") or "-"),
+        ("Method scope", payload.get("basis_disclosure") or "-"),
         (
             "Checks",
             ", ".join(
@@ -11274,13 +11256,15 @@ def _fatigue_result_basis_panel(payload):
         ], height=180)
     capability_bindings = payload.get("capability_bindings") or {}
     if capability_bindings:
-        st.markdown("**Capability bindings**")
+        st.markdown("**Calculation methods and scope**")
         _fatigue_result_table([
             {
                 "Check": key.capitalize(),
-                "Capability": binding.get("capability") or "-",
-                "Source": binding.get("source") or "-",
-                "Disclosure": binding.get("disclosure") or "-",
+                "Method": str(
+                    binding.get("capability") or "-"
+                ).replace("_", " ").capitalize(),
+                "Reference": binding.get("source") or "-",
+                "Scope": binding.get("disclosure") or "-",
             }
             for key, binding in capability_bindings.items()
         ], height=240)
@@ -11370,9 +11354,8 @@ def fatigue_view(inp, results, *, stale=False):
         for row in summary_rows
     ], height=360)
     st.caption(
-        "Each named spectrum is assessed independently; Miner sums are not "
-        "combined across spectrum names. Governing utilisation is the maximum "
-        "of the applicable Miner, yield/proof and concrete criteria."
+        "Each spectrum is assessed independently. The governing utilisation is "
+        "the maximum applicable Miner, yield/proof or concrete result."
     )
 
     options = [row["spectrum"] for row in summary_rows]
@@ -11727,16 +11710,11 @@ def shear_view(inp, results):
             hide_index=True, width="stretch")
         st.caption(
             r"$k_{vp} = \max[1 + N_{Ed}/|V_{Ed}|\ d/(3a_{cs}),\,0.1]$, "
-            r"$a_{cs}=\max(|M_{Ed}/V_{Ed}|,d)$; "
-            r"$\tau_{Rd,c} = \max[\,(0.66/\gamma_V)"
-            r"(100\,\rho_l f_{ck} d_{dg}/(k_{vp}d))^{1/3},"
-            r"\ \tau_{Rd,c,min}]$ (DS/EN 1992-1-1:2023, 8.2.2); "
-            r"$V_{Rd,c} = \tau_{Rd,c}\,b_w z$, $z = 0.9d$. "
-            r"The selected $\gamma_V$ is defined in 4.3.3 and Table 4.3 (NDP). "
-            r"$d_{dg} = 16 + D_{lower}$ ($\leq 40$ mm). $A_{sl}$ is the tension "
-            "reinforcement on the chosen face, assumed fully anchored beyond d. "
-            "Prestressing tendons are assumed parallel to the member axis "
-            r"($\cos\beta=1$).")
+            r"$a_{cs}=\max(|M_{Ed}/V_{Ed}|,d)$ (8.30-8.31). Formula 8.27 uses "
+            r"the selected $\gamma_V$, $d_{dg}=16+D_{lower}\leq40$ mm and "
+            "fully anchored tension-face $A_{sl}$. Tendons are parallel to the "
+            r"member axis ($\cos\beta=1$)."
+        )
     else:
         st.dataframe(
             {"Quantity": ["Effective depth d", "Web width bw", "Tension reinf. Asl",
@@ -11776,8 +11754,8 @@ def shear_view(inp, results):
                 "The reinforced-shear check is NOT ASSESSED: " + reason + ".",
             )
             st.caption(
-                "No link lever arm, resistance, utilisation or PASS/FAIL verdict "
-                "is published for this result."
+                "Review the reason above; link lever arm, resistance, utilisation "
+                "and status are withheld."
             )
             return
         if links["out_of_limits"]:
@@ -11793,7 +11771,7 @@ def shear_view(inp, results):
                 f"the selected method's default range "
                 f"[{links['cot_limit_lo']:.1f}, "
                 f"{links['cot_limit_hi']:.1f}] ({limit_ref}). The actual values "
-                "are retained in the reported calculations.",
+                "are used in the reported calculations.",
             )
         req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if links["required"]
                    else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
@@ -11936,10 +11914,10 @@ def shear_view(inp, results):
                     _pct(ch["util"]),
                     help=(
                         "NOT ASSESSED: the displayed capacity is a pure-axis "
-                        "fallback; see the warning below."
+                        "substitute; see the warning below."
                         if not ch.get("conditional", True)
                         else "NOT ASSESSED: another required chord face uses a "
-                             "pure-axis fallback; see the warning below."
+                             "pure-axis substitute; see the warning below."
                     ),
                 )
             else:
@@ -11958,17 +11936,21 @@ def shear_view(inp, results):
                 else r"\Delta F_{td}\,z"
             )
             st.caption(
-                f"Tension chord = {face_desc}. "
-                rf"$M_{{Ed,total}} = M_{{Ed}} + {shear_term} + F_{{td,T}}\,z/2 = "
+                f"Governing chord: {face_desc}. "
+                rf"$M_{{Ed,total}}$ includes {shear_term} and half the perimeter "
+                r"torsion share: "
                 f"{ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
-                f"{ch['m_total']:.1f}$ kNm vs $M_{{Rd}} = {ch['m_rd']:.1f}$ kNm "
+                f"{ch['m_total']:.1f} kNm versus $M_{{Rd}} = "
+                f"{ch['m_rd']:.1f}$ kNm "
                 + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
                                       ch.get("conditional", True))
-                + f"; $z = {ch['z']:.3f}$ m." + obj_note)
+                + f"; $z = {ch['z']:.3f}$ m." + obj_note
+            )
             if ch.get("capped"):
-                st.caption("The shear shift is capped so bending + shear does not "
-                           "exceed MRd (6.2.3(7)); the strut-angle objective uses "
-                           "this same capped demand.")
+                st.caption(
+                    "Shear shift is capped at section MRd under 6.2.3(7); the "
+                    "strut-angle objective uses the same capped demand."
+                )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = (
@@ -11979,10 +11961,9 @@ def shear_view(inp, results):
                     st,
                     "calculation-warning",
                     f"The required {fallback_axis}-axis {fallback_face} face uses "
-                    "a pure-axis fallback because its conditional capacity solve "
-                    "did not converge. The complete longitudinal chord check can "
-                    "therefore be optimistic -- "
-                    "rely on the combined " + chr(0x03A3) + "(SEd/SRd) check.")
+                    "a pure-axis substitute after its conditional solve failed. "
+                    "The chord result may be optimistic; use the combined "
+                    + chr(0x03A3) + "(SEd/SRd) result.")
             if coverage == "subdivided":
                 st.caption("Compound (subdivided) section: the torsion "
                            "longitudinal steel is per sub-tube, so the off-axis "
@@ -11992,12 +11973,9 @@ def shear_view(inp, results):
                 _manual_warning(
                     st,
                     "calculation-warning",
-                    "One or more chord faces that carry the torsion share could "
-                    "not be evaluated (a conditional capacity solve did not "
-                    "converge or a face has no tension steel), so they are NOT "
-                    "checked here and the governing chord shown may not be the "
-                    "critical face; rely on the " + chr(0x03A3) + "(SEd/SRd) check "
-                    "for the interaction.")
+                    "At least one torsion-carrying chord face could not be solved "
+                    "or has no tension steel. The displayed chord may not govern; "
+                    "use the " + chr(0x03A3) + "(SEd/SRd) interaction result.")
             elif not fell_back and ch.get("biaxial") and not ch.get("has_torsion"):
                 st.caption("The off-axis chord carries only its bending tension "
                            "(no torsion is acting), which the biaxial bending "
@@ -12048,17 +12026,16 @@ def _render_chord_off(och, *, assessment_complete=True):
         )
     st.caption(
         f"Governing chord: {face_lbl} face about the {och['axis']}-axis. "
-        r"Its bending demand plus perimeter torsion share is $M_{Ed,total} = M_{Ed} + "
-        r"F_{td,T}\,z/2 = "
+        r"$M_{Ed,total}$ includes bending and half the perimeter torsion share: "
         f"{och['m_ed']:.1f} + {och['mt']:.1f} = {och['m_total']:.1f}$ kNm vs "
         f"$M_{{Rd}} = {och['m_rd']:.1f}$ kNm "
         + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True)
         + f"; $z = {och['z']:.3f}$ m "
         + f"({och.get('z_src') or 'calculated source not retained'}).")
     st.caption("The shear shift acts in the shear plane, while this orthogonal chord "
-               "receives the torsion share. The shared longitudinal steel carries "
-               "both chord demands, so the DK NA " + chr(0x03A3)
-               + "(SEd/SRd) result governs the combined verification.")
+               "receives the torsion share. The shared steel carries both demands; "
+               "the DK NA " + chr(0x03A3)
+               + "(SEd/SRd) result governs.")
 
 
 def torsion_view(inp, results):
@@ -12176,28 +12153,25 @@ def torsion_view(inp, results):
             "calculation-warning",
             "Full torsion resistance is NOT ASSESSED. "
             + detail
-            + " TRd,max below is only the concrete-strut cap and TRd,c is "
-            "cracking transparency; neither is promoted to TRd and no "
-            "utilisation or PASS/FAIL verdict is issued.",
+            + " Select current closed links for TRd and utilisation; the values "
+            "below show concrete resistance and reinforcement demand only.",
         )
         m1, m2, m3 = st.columns(3)
         m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
         m2.metric(
             r"Concrete cap $T_{Rd,max}$",
             f"{t['trd_max']:.3f} kNm",
-            help="Transparency only; not a standalone full torsion resistance.",
+            help="Concrete-strut cap; full TRd requires current closed links.",
         )
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
         st.caption(
-            "Informational cap angle only (not a resistance angle): "
-            f"theta = {t['theta_deg']:.1f} deg, cot theta = {t['cot']:.3f}. "
-            "The Formula 6.28 longitudinal-reinforcement value is a calculated "
-            "requirement at that displayed angle, not evidence of provided "
-            "torsion reinforcement or capacity."
+            f"Displayed cap angle: theta = {t['theta_deg']:.1f} deg, "
+            f"cot theta = {t['cot']:.3f}. It supports the concrete cap and "
+            "Formula 6.28 reinforcement demand; full resistance requires links."
         )
         if t.get("subdivided"):
             subs = t.get("subtubes") or []
-            st.markdown("**Validated sub-tube transparency (no full resistance)**")
+            st.markdown("**Validated sub-tube context**")
             st.dataframe(
                 {
                     "Sub-tube": [
@@ -12219,8 +12193,8 @@ def torsion_view(inp, results):
                 width="stretch",
             )
             st.caption(
-                "No sum of full capacities, governing sub-tube or utilisation "
-                "is published while current closed links are absent."
+                "Geometry and demand remain visible; full capacity sum, governing "
+                "sub-tube and utilisation require current closed links."
             )
             st.plotly_chart(viz.subtube_figure(subs), width="stretch")
         else:
@@ -12260,21 +12234,17 @@ def torsion_view(inp, results):
             _manual_warning(
                 st,
                 "calculation-warning",
-                "Torsion is not available for a multi-cell section (two or more "
-                "voids): the thin-walled single-tube idealisation does not model "
-                "the internal webs, so its TRd would be unconservative "
-                "(EN 1992-1-1 6.3.2(1) requires sub-dividing into separate tubes). "
-                "Use a solid or single-cell outline.",
+                "Torsion is not assessed for a multi-cell section: one tube omits "
+                "the internal webs and would overstate resistance. EN 1992-1-1 "
+                "6.3.2(1) requires separate tubes; use a solid or single-cell outline.",
             )
         elif t.get("reason") == "compound outline requires subdivision":
             _manual_warning(
                 st,
                 "calculation-warning",
-                "Torsion is not evaluated for this re-entrant/compound (for "
-                "example T, L or I) outline as one tube. EN 1992-1-1 6.3.1(3) "
-                "requires component sub-sections: enable 'Subdivide into "
-                "sub-tubes' and enter rectangles that partition the section "
-                "before a resistance or verdict is issued.",
+                "Torsion is not assessed for this re-entrant or compound outline "
+                "as one tube. Under EN 1992-1-1 6.3.1(3), enable subdivision and "
+                "enter rectangles that partition the section.",
             )
         elif str(t.get("reason") or "").startswith("invalid sub-tube partition:"):
             detail = (t.get("subdivision_reason")
@@ -12282,11 +12252,9 @@ def torsion_view(inp, results):
             _manual_warning(
                 st,
                 "geometry-invalid",
-                "Torsion is not evaluated because the positioned sub-rectangles "
-                f"do not form the concrete section: {detail}. Adjust each centre "
-                "x/y and b/h so the rectangles cover the net concrete area without "
-                "gaps, overlaps, extensions outside the outline or intrusion into "
-                "a void. No torsion or dependent interaction verdict is issued."
+                f"Torsion is not assessed because the sub-tubes do not partition "
+                f"the concrete section: {detail}. Adjust centres and dimensions "
+                "to cover the net area without gaps, overlaps or boundary crossings."
             )
         else:
             _manual_warning(
@@ -12304,7 +12272,7 @@ def torsion_view(inp, results):
             f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "
             f"{t['cot_max']:.2f}]) fall outside the selected method's default "
             f"range [{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
-            "(6.7N / 6.7a NA). The actual values are retained in the reported "
+            "(6.7N / 6.7a NA). The actual values are used in the reported "
             "torsion and interaction calculations.",
         )
     util = t["util"]
@@ -12314,8 +12282,8 @@ def torsion_view(inp, results):
         m1, m2, m3 = st.columns(3)
         m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
         m2.metric(r"$\sum T_{Rd,i}$", f"{t['trd']:.3f} kNm",
-                  help="theoretical sum of the sub-tube capacities (6.3.1(3)); the "
-                       "pass/fail check is the governing sub-tube, not this sum")
+                  help="Capacity sum for reference under 6.3.1(3); maximum "
+                       "sub-tube utilisation controls.")
         _verdict_metric(
             m3, r"Governing utilisation $\max(T_{Ed,i}/T_{Rd,i})$", util_txt, ok,
         )
@@ -12328,7 +12296,7 @@ def torsion_view(inp, results):
         _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok)
 
     st.caption(
-        "Torsional cracking provenance: "
+        "Torsional cracking inputs: "
         f"$f_{{ctd}} = f_{{ctk,0.05}}/\\gamma_{{ct}} = "
         f"{t['fctk_005']:.3f}/{t['gamma_ct']:.3f} = "
         f"{t['fctd']:.3f}$ MPa. The actual direct gamma_ct input is used."
@@ -12407,12 +12375,11 @@ def torsion_view(inp, results):
                        f"{t['asl_req']:.0f} mm2"]},
             hide_index=True, width="stretch")
         st.caption(
-            r"$T_{Rd,s} = (A_{sw}/s)\,2 A_k f_{ywd}\cot\theta$ follows the "
-            r"torsional wall shear flow (6.27) and transverse equilibrium (6.8); "
-            r"$T_{Rd,max} = 2\,\nu\,\alpha_{cw} f_{cd} A_k t_{ef}\sin\theta\cos\theta$ "
-            r"(6.30); $T_{Rd,c} = 2 A_k t_{ef} f_{ctd}$. The required longitudinal "
-            r"steel $\sum A_{sl} = T_{Ed}\,u_k\cot\theta / (2 A_k f_{yd})$ (6.28) is "
-            "in ADDITION to the bending reinforcement on the tension side.")
+            r"$T_{Rd,s}$, $T_{Rd,max}$ and required $\sum A_{sl}$ follow "
+            "EN 1992-1-1 6.27, 6.30 and 6.28; $T_{Rd,c}$ uses $f_{ctd}$. "
+            "Required longitudinal torsion steel is additional to bending "
+            "reinforcement on the tension side."
+        )
         st.plotly_chart(viz.tube_figure(inp["outer"], inp.get("holes"), tube["tef"],
                                         ak_m2=tube["Ak"]), width="stretch")
     if t.get("n_prestress"):
@@ -12479,14 +12446,12 @@ def torsion_view(inp, results):
         )
         st.caption(
             r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$ (6.29), "
-            "evaluated at a common strut angle "
+            "uses one shared strut angle "
             f"$\\cot\\theta={inter['cot']:.2f}$ "
-            f"($\\theta={inter['theta_deg']:.1f}^\\circ$) -- both "
-            f"$T_{{Rd,max}}$ and $V_{{Rd,max}}$ peak near $45^\\circ$, so this is the "
-            "least-conservative "
-            "shared angle. The displayed $T_{Rd,max}$ and $V_{Rd,max}$ are evaluated "
-            "at that common angle, so they "
-            "differ from the stand-alone values above.")
+            f"($\\theta={inter['theta_deg']:.1f}^\\circ$). Displayed "
+            "$T_{Rd,max}$ and $V_{Rd,max}$ correspond to that angle, not their "
+            "stand-alone optima."
+        )
 
 
 def _pct(value):
@@ -12629,7 +12594,7 @@ def combined_view(inp, results):
             st,
             "method-applicability",
             "The selected compression-strut bounds fall outside the selected "
-            "method's default range. The actual values are retained in every "
+            "method's default range. The actual values are used in every "
             "combined calculation.",
         )
     m1, m2, m3 = st.columns(3)
@@ -12723,15 +12688,17 @@ def combined_view(inp, results):
             viz.util_ok(tr["u_stirrup"]),
         )
         if tr["shear_credited"]:
-            st.caption(f"The concrete alone carries the shear (VEd = {tr['v_ed']:.1f} "
-                       f"kN <= VRd,c = {tr['vrd_c']:.1f} kN, 6.2.1), so the shear "
-                       "takes NO stirrup -- the whole closed stirrup serves torsion.")
+            st.caption(
+                f"Concrete carries the shear (VEd = {tr['v_ed']:.1f} kN <= "
+                f"VRd,c = {tr['vrd_c']:.1f} kN, 6.2.1). Stirrup allocation to "
+                "shear is zero, so the closed stirrup serves torsion."
+            )
         else:
             st.caption("VEd > VRd,c, so the stirrup carries both: shear and torsion "
                        "demands add on the shared closed stirrup.")
         st.caption(
             f"At the member strut angle $\\cot\\theta={tr['cot']:.2f}$ "
-            f"($\\theta={tr['theta_deg']:.1f}^\\circ$) -- the ONE angle shared "
+            f"($\\theta={tr['theta_deg']:.1f}^\\circ$), one angle is shared "
             "by every shear and torsion check (6.3.2(2)), selected to minimise "
             "the governing utilisation."
         )
@@ -12773,10 +12740,10 @@ def combined_view(inp, results):
                 _pct(lg["util"]),
                 help=(
                     "NOT ASSESSED: the displayed capacity is a pure-axis "
-                    "fallback; see the warning below."
+                    "substitute; see the warning below."
                     if not lg.get("conditional", True)
                     else "NOT ASSESSED: another required chord face uses a "
-                         "pure-axis fallback; see the warning below."
+                         "pure-axis substitute; see the warning below."
                 ),
             )
         else:
@@ -12787,24 +12754,21 @@ def combined_view(inp, results):
                 ok_l,
             )
         st.caption(
-            f"Tension chord = {face_desc} about the "
-            f"{ax_lbl}-axis; $M_{{Ed}}$ and $M_{{Rd}}$ are taken on that face. "
-            r"$M_{Ed,total} = M_{Ed} + \Delta F_{td}\,z + F_{td,T}\,z/2 = "
+            f"Governing chord: {face_desc} about the {ax_lbl}-axis. "
+            r"$M_{Ed,total}$ includes bending, shear shift and half the perimeter "
+            "torsion share: "
             f"{lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f}$ "
-            f"kNm, vs $M_{{Rd}} = {lg['m_rd']:.1f}$ kNm "
+            f"kNm versus $M_{{Rd}} = {lg['m_rd']:.1f}$ kNm "
             + viz.chord_mrd_label(ax_lbl, lg.get("m_off", 0.0),
                                   lg.get("conditional", True))
-            + r". Shear shift $\Delta F_{td} = 0.5 V_{Ed}\cot\theta = "
-            f"{lg['ftd_v']:.1f}$ kN (6.18); torsion "
-            r"$F_{td,T} = T_{Ed}\,u_k\cot\theta / (2 A_k) = "
-            f"{lg['ftd_t']:.1f}$ kN, distributed round the perimeter so half acts on "
-            f"this chord (6.28); $z = {lg['z']:.3f}$ m."
-            + " " + viz.chord_angle_note(lg.get("theta_mode")))
+            + f"; $z = {lg['z']:.3f}$ m. "
+            + viz.chord_angle_note(lg.get("theta_mode"))
+        )
         if lg["capped"]:
-            st.caption("The shear shift is capped so bending + shear does not exceed "
-                       "MRd (6.2.3(7): the added tension need not exceed the "
-                       "peak-moment tension; a section tool has no beam peak, so MRd "
-                       "is used as that cap).")
+            st.caption(
+                "Shear shift is capped at section MRd under 6.2.3(7), used here "
+                "because a cross-section calculation has no member peak moment."
+            )
         if fell_back:
             fallback_axis = fallback.get("axis", "?")
             fallback_face = (
@@ -12815,11 +12779,9 @@ def combined_view(inp, results):
                 st,
                 "calculation-warning",
                 f"The required {fallback_axis}-axis {fallback_face} face uses a "
-                "pure-axis fallback because its conditional capacity solve did "
-                "not converge. The complete longitudinal chord check can therefore "
-                "be optimistic. Rely "
-                "on the " + chr(0x03A3) + "(SEd/SRd) check above, which uses the "
-                "full biaxial bending utilisation.")
+                "pure-axis substitute after its conditional solve failed. The "
+                "chord result may be optimistic; use the "
+                + chr(0x03A3) + "(SEd/SRd) result above.")
         if coverage == "subdivided":
             st.caption("Compound (subdivided) section: the torsion longitudinal "
                        "steel is per sub-tube, so the off-axis chord's torsion "
@@ -12829,30 +12791,28 @@ def combined_view(inp, results):
             _manual_warning(
                 st,
                 "calculation-warning",
-                "One or more chord faces that carry the torsion share could not be "
-                "evaluated (a conditional capacity solve did not converge or a face "
-                "has no tension steel), so they are NOT checked here and the "
-                "governing chord shown may not be the critical face; the "
-                + chr(0x03A3) + "(SEd/SRd) sum above remains the combined "
-                "verification.")
+                "At least one torsion-carrying chord face could not be solved or "
+                "has no tension steel. The displayed chord may not govern; use "
+                "the " + chr(0x03A3) + "(SEd/SRd) interaction result above.")
         elif not fell_back and biaxial and not lg.get("has_torsion"):
             st.caption("The off-axis chord carries only its bending tension (no "
                        "torsion is acting), which the biaxial bending utilisation "
                        "in the " + chr(0x03A3) + "(SEd/SRd) sum already covers.")
         elif not fell_back:
-            st.caption("The DK NA " + chr(0x03A3) + "(SEd/SRd) sum above uses the "
-                       "full biaxial bending utilisation and remains the primary "
-                       "combined check.")
+            st.caption("The DK NA " + chr(0x03A3) + "(SEd/SRd) result above uses "
+                       "full biaxial bending utilisation and governs the combined "
+                       "assessment.")
         _render_chord_off(
             c.get("chord_off"),
             assessment_complete=not bool(coverage) and not fell_back,
         )
     else:
-        st.caption(f"Torsion needs {chr(0x03A3)}Asl = {c['asl_torsion']:.0f} mm2 "
-                   "distributed round the tube perimeter (6.28); the shear adds "
-                   f"{_DELTA}Ftd = {c['delta_ftd']:.1f} kN on the tension chord (6.18). "
-                   "Both are in ADDITION to the bending reinforcement. Enable shear "
-                   "links for the full longitudinal-steel utilisation check.")
+        st.caption(
+            f"Additional longitudinal demand: torsion {chr(0x03A3)}Asl = "
+            f"{c['asl_torsion']:.0f} mm2 around the perimeter (6.28), and shear "
+            f"{_DELTA}Ftd = {c['delta_ftd']:.1f} kN on the tension chord (6.18). "
+            "Enable links for the full utilisation check."
+        )
 
 
 _VIEW_ALIASES = {
@@ -13185,8 +13145,8 @@ def _analysis_workspace(inp):
         # without creating internally inconsistent evidence. Keep it hidden until
         # a current calculation records the missing snapshot.
         st.error(
-            "The stale calculation has no matching input snapshot. Press "
-            "Calculate before viewing its input-dependent results."
+            "The displayed calculation cannot be matched to its inputs. Press "
+            "Calculate before viewing the results."
         )
         app_run_probe.close_fragment_run(st.session_state)
         return

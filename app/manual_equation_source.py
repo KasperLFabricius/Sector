@@ -61,18 +61,18 @@ MANUAL_EQUATION_SOURCES = (
     _source(
         2, "manual.material.steel-law", "C3-2", SOURCE_PROJECT,
         "Project-defined / uncited general Curve 3 mild-steel law; "
-        "edition-named presets retain selected material provenance separately.",
+        "edition-named presets show their material references separately.",
     ),
     _source(
         3, "manual.material.prestress-law", "C3-3", SOURCE_MIXED,
         "Project-defined / uncited plane-section total-strain composition with "
-        f"selected prestressing-law provenance from {DOC_BASE} 3.3.6 or "
+        f"the selected prestressing-law reference from {DOC_BASE} 3.3.6 or "
         f"{DOC_CURRENT} 5.3.3 when the corresponding edition preset is selected.",
     ),
     _source(
         4, "manual.plastic.governing-curvature", "C4-1", SOURCE_PROJECT,
         "Project-defined / uncited first-material-limit capacity search; selected "
-        "material limits retain their own sources.",
+        "material limits keep their stated references.",
     ),
     _source(
         5, "manual.detailing.minimum-2005", "C5-1", SOURCE_STANDARD,
@@ -99,9 +99,9 @@ MANUAL_EQUATION_SOURCES = (
     _source(
         10, "manual.detailing.links.spacing", "C5-6", SOURCE_STANDARD,
         f"{DOC_BASE} 9.2.2(6),(8), Formulas (9.6N) and (9.8N), plus "
-        f"9.3.2(2),(4)-(5) for the retained slab branch; {DOC_CURRENT} "
+        f"9.3.2(2),(4)-(5) for the slab provisions; {DOC_CURRENT} "
         "Table 12.1 items 5 and 7, plus Table 12.2 items 8 and 10 and "
-        "12.4.2 for the retained slab branch.",
+        "12.4.2 for the slab provisions.",
     ),
     _source(
         11, "manual.detailing.torsion.minimum-ratio", "C5-7", SOURCE_STANDARD,
@@ -131,10 +131,10 @@ MANUAL_EQUATION_SOURCES = (
     ),
     _source(
         17, "manual.fatigue.stress-range", "C8-1", SOURCE_MIXED,
-        "Project-defined / uncited retained Elastic stress reconstruction with "
+        "Project-defined / uncited Elastic stress calculation with "
         f"a selected fatigue action factor; {DOC_BASE} 2.4.2.3 and 6.8.4(1), "
-        f"or {DOC_CURRENT} 10.2 and Annex E, defines how that factor enters the "
-        "retained edition's fatigue action route.",
+        f"or {DOC_CURRENT} 10.2 and Annex E, defines how that factor applies "
+        "for the selected edition.",
     ),
     _source(
         18, "manual.fatigue.reinforcement.design-range", "C8-2",

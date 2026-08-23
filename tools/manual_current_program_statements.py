@@ -1,7 +1,7 @@
 """Dormant current-program statements for the issued user manual."""
 
 CURRENT_REPORT_METADATA_WORDING = (
-    "Report metadata and publication controls are grouped separately from the "
+    "Report details and publication controls are grouped separately from the "
     "Project input stage."
 )
 CURRENT_RESULT_LABEL_WORDING = (
@@ -9,7 +9,7 @@ CURRENT_RESULT_LABEL_WORDING = (
 )
 
 REPLACED_REPORT_METADATA_WORDING = (
-    "Report metadata and publication controls are no longer mixed with the "
+    "Report details and publication controls are no longer mixed with the "
     "Project input stage."
 )
 REPLACED_RESULT_FIELD_WORDING = "Legacy result-field names remain for compatibility"

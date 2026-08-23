@@ -936,7 +936,7 @@ def test_plastic_view_fails_closed_for_a_legacy_pre_contract_result():
     assert not at.exception
     assert any(
         "NOT ASSESSED - Plastic bending" in item.value
-        and "predates" in item.value
+        and "cannot confirm that the M-M envelope contains the origin" in item.value
         for item in at.warning
     )
     assert not any("PASS - Plastic bending" in item.value for item in at.success)
@@ -2008,10 +2008,13 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         "= 1 - 6.85 / 6.85",
         "Long-term 0.000 0.000 0.000 Short-term 0.000 0.000 0.000",
         "Locked-in prestress remains fixed",
-        "assigns lambda_cr = 0 directly and does not apply the equality",
-        "strictly positive external tensile increment",
-        "Calculated output: sigma_ct,I = 3.739 MPa; lambda_cr = 0.000",
-        "strictly below 1: cracked; 1 or above: uncracked",
+        "A prestress-only fibre above",
+        "only external N/M scales",
+        "lowest positive fibre solution governs",
+        "Calculated output:",
+        "3.739 MPa",
+        "0.000; section is cracked",
+        "below 1: cracked; 1 or above: uncracked",
     ):
         assert expected in report_text
 
@@ -3013,7 +3016,7 @@ def test_save_load_round_trip_through_the_app():
     assert plastic.loc[0, "description"] == "Source: Register C7"
     assert at.session_state["_loaded_project_provenance"]["input_hash_valid"] is True
     _goto_input_tab(at, "Project")
-    assert any("hash verified" in caption.value for caption in at.caption)
+    assert any("file integrity verified" in caption.value for caption in at.caption)
 
 
 def test_schema_25_shared_crack_width_migrates_with_visible_warning():
@@ -3064,7 +3067,7 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
         "sls_heightened_permitted_crack_width_mm"
     ] == 0.0
     assert any(
-        "copied the positive value" in warning.value
+        "copied to the independent long-term and short-term inputs" in warning.value
         and "long-term and short-term" in warning.value
         for warning in at.warning
     )
@@ -3596,30 +3599,26 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     basis_items = set(basis_table["Item"])
     assert {
         "Design basis",
-        "Design basis key",
-        "Basis disclosure",
+        "Method scope",
         "gamma_Ff",
     }.issubset(basis_items)
     basis_values = dict(zip(basis_table["Item"], basis_table["Value"]))
     assert basis_values["Design basis"] == expected_basis.label
-    assert basis_values["Design basis key"] == expected_basis.key.value
-    assert basis_values["Basis disclosure"] == expected_basis.disclosure
+    assert basis_values["Method scope"] == expected_basis.disclosure
     assert basis_table["Value"].map(type).eq(str).all()
     capability_table = next(
         frame.value
         for frame in at.dataframe
         if {
             "Check",
-            "Capability",
-            "Source",
-            "Disclosure",
+            "Method",
+            "Reference",
+            "Scope",
         }.issubset(frame.value.columns)
     )
-    assert capability_table.iloc[0]["Capability"] == "reinforcement_fatigue"
-    assert "User-supplied factors govern" in capability_table.iloc[0]["Disclosure"]
-    assert "no hidden DK-specific fatigue equation or factor" in (
-        capability_table.iloc[0]["Disclosure"]
-    )
+    assert capability_table.iloc[0]["Method"] == "Reinforcement fatigue"
+    assert "first-generation fatigue equations" in capability_table.iloc[0]["Scope"]
+    assert "user-supplied factors" in capability_table.iloc[0]["Scope"]
 
     # Stale results must retain the actions and geometry that produced them. If the
     # live spectrum is edited before recalculation, the result drill-down must not
@@ -3656,7 +3655,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     del at.session_state["result_input_snapshot"]
     at.run()
     assert any(
-        "has no matching input snapshot" in error.value
+        "cannot be matched to its inputs" in error.value
         for error in at.error
     )
     assert not any(
@@ -4621,7 +4620,7 @@ def test_interrupted_input_edit_blocks_report_until_payload_is_committed():
     assert at.button(key="gen_report").disabled is True
     assert at.session_state["report_buffer"] == old_report
     assert any(
-        "Inputs edit was interrupted" in warning.value
+        "Input preparation was interrupted" in warning.value
         for warning in at.warning
     )
     assert not any(
@@ -4956,7 +4955,7 @@ def test_mild_preset_selector_exposes_concrete_identity_without_rewriting_value(
         "Curve 2 (elastic-perfectly-plastic)"
     )
     captions = "\n".join(str(item.value) for item in at.caption)
-    assert "Preset identity: User-defined / project-defined Curve 2 preset" in captions
+    assert "Preset source: User-defined / project-defined Curve 2 preset" in captions
     assert "Every material field remains a direct calculation input" in captions
 
 
@@ -5442,7 +5441,7 @@ def test_crack_input_tooltips_follow_the_exact_selected_basis():
     assert "not used by the selected first-generation" in (
         at.number_input(key="sls_tendon_xi").help
     )
-    assert "No Eurocode source is inferred" in (
+    assert "DK NA fine-system selection" in (
         at.selectbox(key="sls_member").help
     )
 
@@ -5560,8 +5559,7 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
     custom_c_help = at.number_input(key="fatigue_concrete_c").help
     for help_text in (custom_method_help, custom_c_help):
         assert "project-defined" in help_text.casefold()
-        assert "uncited" in help_text.casefold()
-        assert "no Eurocode source is inferred" in help_text
+        assert "record" in help_text.casefold()
         assert "DS/EN 1992" not in help_text
         assert "Formulae (E.7)-(E.8)" not in help_text
     assert at.number_input(key="fatigue_concrete_c").disabled is False
@@ -5571,7 +5569,7 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
         at.selectbox(key="fatigue_concrete_method").help,
         at.number_input(key="fatigue_concrete_c").help,
     ):
-        assert "no Eurocode source is inferred" in help_text
+        assert "record" in help_text.casefold()
         assert "DS/EN 1992" not in help_text
         assert "Formula 6.106" not in help_text
 
@@ -5848,8 +5846,8 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     at.run()
     _goto_input_tab(at, "Loads")
     assert any(
-        "Independent long-term and short-term user limits apply only to their "
-        "matching ordinary branches"
+        "Each action reports stresses and can calculate crack width" in item.value
+        and "long- and short-term limits apply to their matching branches"
         in item.value
         for item in at.caption
     )
@@ -7341,7 +7339,7 @@ def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
     _calculate(at)
     assert "results" not in at.session_state
     assert any(
-        "Heightened crack control requires the registered first-generation "
+        "Heightened crack control is available only with the first-generation "
         "DK NA:2024 design basis" in item.value
         for item in at.error
     )
@@ -7380,7 +7378,7 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
     _calculate(at)
 
     errors = [item.value for item in at.error]
-    assert any("has no matching input snapshot" in message for message in errors)
+    assert any("cannot be matched to its inputs" in message for message in errors)
     assert "Effective tensile strength must be a positive finite number" in errors
     assert "Fine-system effective tension area must be a positive finite number" in errors
     assert "Coarse-system effective tension area must be a positive finite number" in errors

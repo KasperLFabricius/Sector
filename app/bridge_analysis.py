@@ -19,5 +19,5 @@ RETIRED_ADAPTER_API: Final[tuple[str, ...]] = (
     "bridge_minimum_crack_base",
 )
 DECOMMISSION_REASON: Final[str] = (
-    "Sector no longer accepts or dispatches semantic bridge component tables."
+    "Bridge component tables are outside the current calculation scope."
 )

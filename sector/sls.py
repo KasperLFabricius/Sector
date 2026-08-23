@@ -257,7 +257,7 @@ def assess_crack_output(
         result.update(
             calculation_state=CRACK_NOT_ASSESSED,
             reason=(
-                "The calculated crack width must be retained in millimetres "
+                "The calculated crack width must be expressed in millimetres "
                 "before comparison with the user-specified criterion."
             ),
         )

@@ -961,7 +961,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "Fatigue total" in text
     assert "Bond factor / method" in text
     assert "bond transformation" in text
-    assert "raw action-factored solver range" in text
+    assert "action-factored Elastic stress range" in text
     assert "action-level" in text
     assert "Annex E.5" in text and "Formulae (E.7)-(E.8)" in text
     assert "published reference; project adoption required" in text
@@ -974,7 +974,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "Governing util." in text
     assert "governing utilisation" in text
     assert "Status / range" in text
-    assert "Torsion and shear fatigue are not assessed" in text
+    assert "shear and torsion fatigue remain separate checks" in text
     compact = text.replace(" ", "")
     delta_sigma = chr(0x394) + chr(0x3C3)
     sigma = chr(0x3C3)
@@ -1356,12 +1356,13 @@ def test_report_discloses_first_generation_formula_6106_bounded_scope():
     assert basis.label in text
     assert basis.disclosure in text
     assert "DS/EN 1992-2:2005/AC:2008 Formula 6.106" in text
-    assert "Bridge-source calculation using a user-supplied" in text
+    assert "Fatigue calculation using a user-supplied section-action spectrum" in text
     assert "section-action spectrum" in text
-    assert "traffic models, dynamic effects, lane/track concurrence" in text
-    assert "complete bridge-fatigue compliance are not assessed" in text
-    assert "User-supplied factors govern" in text
-    assert "no hidden DK-specific fatigue equation or factor" in text
+    scope = text.lower()
+    assert "traffic models, dynamic effects, lane/track concurrence" in scope
+    assert "owner-specific checks are outside this section calculation" in scope
+    assert "first-generation fatigue equations" in text
+    assert "user-supplied factors" in text
 
 
 def test_report_marks_project_defined_concrete_miner_as_uncited():
@@ -1942,14 +1943,14 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
 
     for heading in (
         "Worked plastic calculation (utilisation direction)",
-        "Retained strain plane",
+        "Converged strain plane",
         "Governing ultimate curvature",
         "Compression-depth solution",
         "Section resultants at convergence",
         "Step 1 - converged long-term state",
         "Step 2 - neutralise the long-term concrete stress",
         "Step 3 - converged instantaneous combined state",
-        "Step 4 - combine the retained element stresses",
+        "Step 4 - combine the element stress components",
     ):
         assert heading in text
     assert "3.5e-3" in text
@@ -1962,7 +1963,7 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
     assert "internal bisection sequence and integration bands are not published" in (
         text.casefold()
     )
-    assert "raw reference-stress plane" in text
+    assert "converged reference-stress plane" in text
     assert "not a physical-unit norm" in text
 
 
@@ -2082,11 +2083,11 @@ def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
     )).split())
 
     assert "Compression-depth solution unavailable" in text
-    assert "does not reconstruct those solver values" in text
+    assert "converged bracket, depth and residual summary are unavailable" in text
     assert "Section resultants at convergence unavailable" in text
-    assert "does not reconstruct material or section response" in text
+    assert "concrete, mild-steel or tendon resultants are unavailable" in text
     assert "Worked elastic calculation unavailable" in text
-    assert "does not repeat the solver in the report" in text
+    assert "converged elastic states are unavailable" in text
 
 
 def test_transverse_textbook_report_fails_closed_without_retained_operands():
@@ -2104,9 +2105,9 @@ def test_transverse_textbook_report_fails_closed_without_retained_operands():
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
-    assert "does not retain the selected strut-angle operands" in text
-    assert "does not retain every selected torsion formula operand" in text
-    assert "does not retain the DK NA inclusion branch" in text
+    assert "selected strut-angle terms are missing" in text
+    assert "selected torsion terms are unavailable" in text
+    assert "required DK NA component sums are unavailable" in text
     assert "EQ-SHEAR.LINKS.VRDS" not in text
     assert "EQ-TORSION.RESISTANCE.GOVERNING" not in text
     assert "EQ-COMBINED.DK-NA.SUM" not in text
@@ -2693,7 +2694,9 @@ def test_report_footer_identifies_the_organisational_licensee():
         version="0.91",
         figures=False,
     ))
-    assert "Sector 0.91 - abcdef123456 - Sweco Danmark A/S" in " ".join(txt.split())
+    flat = " ".join(txt.split())
+    assert "Sector 0.91 - Sweco Danmark A/S" in flat
+    assert "abcdef123456" not in flat
 
 
 def test_report_front_matter_identifies_action_sets_and_result_statuses():
@@ -2708,7 +2711,7 @@ def test_report_front_matter_identifies_action_sets_and_result_statuses():
     assert "PL-TEST" in txt and "EL-TEST" in txt
     assert "Combination register C1" in txt
     assert "Combination register C2" in txt
-    assert "abcdef123456" in txt
+    assert "abcdef123456" not in txt
     assert "Concrete stress" in txt and "Crack width" in txt
 
 
@@ -2801,12 +2804,13 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "Elastic section response and stresses - EL-02" in flat
     assert "Cracking threshold - EL-02" not in flat
     assert "Crack width was not requested for this run." not in flat
-    assert "EQ-CRACKING.THRESHOLD" in flat
-    assert "the project as a whole have no verdict" in flat
+    assert "EQ-" not in flat
+    assert "Each comparison has its own status" in flat
     assert "125.0 %" in flat
     assert "456.000 MPa" in flat
     assert flat.count("Selected sweep point") == 1
-    assert flat.count("The elastic solver uses a raw reference-stress plane") == 1
+    assert flat.count("The elastic analysis uses an") == 1
+    assert flat.count("reference-stress plane") >= 1
 
 
 def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
@@ -3354,7 +3358,7 @@ def test_legacy_qa_appendix_flag_maps_to_standard_and_audit_profiles():
     assert "Report profile Standard" in " ".join(default_text.split())
     assert "QA appendix - references and notes" not in default_text
     assert "Report profile Audit" in " ".join(qa_text.split())
-    assert "Audit does not mean approved, compliant or certified" in " ".join(
+    assert "Values and statuses match the other report profiles" in " ".join(
         qa_text.split()
     )
     assert "QA appendix - references and notes" in qa_text
@@ -4068,7 +4072,7 @@ def test_tables_only_load_tables_publish_input_policy_without_raw_tex():
     flat = " ".join(text.split())
     policy = (
         "Load-table input accepts a dot or comma as the decimal separator; "
-        "blank action cells canonicalize to zero; calculations retain the "
+        "blank action cells are treated as zero; calculations use the "
         "parsed numeric precision."
     )
     assert flat.count(policy) == 1
@@ -4196,13 +4200,13 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     legacy = _out()
     legacy["plastic"].pop("util_valid")
     txt = _pdf_text(sector_report.build_report({}, _inp(), legacy, figures=False))
-    assert "Retained result predates the current M-M origin-containment" in txt
+    assert "saved result cannot confirm that the M-M envelope contains" in txt
     assert "Utilisation (applied direction)" not in txt
 
     absent = _out()
     absent["plastic"].update(util=None, util_valid=True, util_gov=None)
     txt = _pdf_text(sector_report.build_report({}, _inp(), absent, figures=False))
-    assert "Closed envelope has no retained utilisation assessment" in txt
+    assert "closed envelope has no available utilisation result" in txt
     assert "open arc" not in txt.casefold()
 
 
@@ -4259,7 +4263,7 @@ def test_legacy_multi_case_utilisation_cannot_select_or_publish_worked_point():
     txt = " ".join(_pdf_text(_build_report_from_completed_payload(
         {}, inp, out, figures=False,
     )).split())
-    assert "Retained result predates the current M-M origin-containment" in txt
+    assert "saved result cannot confirm that the M-M envelope contains" in txt
     assert "Worked plastic calculation unavailable" in txt
     assert "Worked plastic calculation (utilisation direction)" not in txt
 
@@ -4276,7 +4280,11 @@ def test_legacy_plastic_cannot_publish_retained_combined_verdict():
     )).split())
 
     assert "Combined bending + shear + torsion" in txt
-    assert "Retained combined result predates" in txt
+    assert (
+        "saved bending result cannot confirm that the M-M envelope contains "
+        "the origin" in txt
+    )
+    assert "Recalculate before assessing M-V-T interaction" in txt
     assert "recalculate" in txt.casefold()
     assert "Governing combined worked example" not in txt
     assert "130.0 %" not in txt
@@ -4575,7 +4583,7 @@ def test_report_prints_actual_custom_half_and_double_partial_factors():
     assert "250.000 MPa" in text
     assert "0.500" in text
     assert "2.000" in text
-    assert "final effective user inputs" in text
+    assert "final project inputs and are used directly" in text
 
 
 def test_report_ec2_2023_k_tc_one_states_the_full_assumption():
@@ -4806,7 +4814,11 @@ def test_report_legacy_blocker_sanitizes_both_face_combined_cells_only():
         for item in builder.flow
         if hasattr(item, "getPlainText")
     )
-    assert "Retained combined result predates" in rendered_text
+    assert (
+        "saved bending result cannot confirm that the M-M envelope contains "
+        "the origin" in rendered_text
+    )
+    assert "Recalculate before assessing M-V-T interaction" in rendered_text
     assert out == before
 
 
@@ -4874,7 +4886,7 @@ def test_brief_governing_depth_does_not_publish_worked_selection_register():
     )
     assert tables == []
     assert "Governing results and limitations" in rendered_text
-    assert "contains no worked derivation or result chain" in rendered_text
+    assert "Worked derivations, result chains and non-governing results begin" in rendered_text
     assert "Selected governing worked examples" not in rendered_text
     assert "PL-LEGACY" not in rendered_text
     assert "PL-CURRENT" not in rendered_text
@@ -5205,12 +5217,13 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
         assert "STALE DIRECTIONAL PASS" not in text
         if profile == "Brief":
             continue
-        assert "Full torsion resistance is NOT ASSESSED" in text
+        assert "full torsion resistance" in text
+        assert "requires current shared links / closed stirrups" in text
         assert "Concrete cap only" in text
         assert "Cracking transparency" in text
         assert "Informational requirement" in text
         assert "not a resistance angle" in text
-        assert "no utilisation, governing resistance or PASS/FAIL verdict" in text
+        assert "utilisation and status require current closed links" in text
         assert "Torsion resistance from the thin-walled closed-tube" not in text
         assert "T Rd = min" not in text
 
@@ -5333,10 +5346,12 @@ def test_report_invalid_subtube_partition_withholds_verdict():
     t["subdivision_reason"] = "sub-rectangle 1 extends outside"
     out["torsion"] = t
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "Torsion not evaluated" in txt
-    assert "positioned sub-rectangles" in txt
-    assert "Torsion and dependent" in txt
-    assert "interaction are not calculated" in txt
+    flat = " ".join(txt.split())
+    assert "Torsion not assessed" in flat
+    assert "sub-tubes do not partition the concrete section" in flat
+    assert "gaps, overlaps or boundary crossings" in flat
+    assert "Torsion resistance and dependent interaction" in flat
+    assert "checks are not calculated" in flat
 
 
 def test_report_torsion_shows_combined_interaction():
@@ -5610,9 +5625,10 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
         sector_report.build_report({}, _inp(), out, figures=False)
     ).split())
 
-    assert "calculated independently" in txt
-    assert "Generic simultaneous Vx + Vy + T interaction is not calculated" in txt
-    assert "no aggregate verdict is issued" in txt
+    assert "are assessed separately" in txt
+    assert "simultaneous" in txt
+    assert "check is not included" in txt
+    assert "requires a separate member check" in txt
     assert "Governing face" in txt
     assert "left (-x)" in txt and "top (+y)" in txt
     assert "1.250" in txt and "1.750" in txt
@@ -5668,7 +5684,7 @@ def test_report_combined_out_of_range_retains_values_and_verdicts():
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "selected method's default range" in txt
-    assert "actual values are retained" in " ".join(txt.lower().split())
+    assert "actual values are used" in " ".join(txt.lower().split())
     assert "NO CODE VERDICT" not in txt
 
 
@@ -5700,7 +5716,7 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "required x-axis negative face" in txt
-    assert "pure-axis fallback" in txt
+    assert "pure-axis substitute" in txt
 
 
 def test_report_withholds_verdict_for_preserved_non_governing_fallback():
@@ -5733,10 +5749,10 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback():
         {}, _inp(), out, figures=False
     )).split())
 
-    assert "pure-axis fallback" in txt
+    assert "pure-axis substitute" in txt
     assert (
         "utilisation = 42 % "
-        "(NOT ASSESSED - ANOTHER REQUIRED FACE USES FALLBACK)"
+        "(NOT ASSESSED - ANOTHER FACE USES A SUBSTITUTE)"
         in txt
     )
     assert (
@@ -5762,7 +5778,7 @@ def test_report_combined_longitudinal_conditional_mrd():
                                                         figures=False)).split())
     assert "conditional on the coexisting My = 90.0 kNm" in txt
     assert "Biaxial bending" not in txt
-    assert "pure-axis fallback" not in txt
+    assert "pure-axis substitute" not in txt
 
 
 def test_report_off_axis_skip_disclosed_uniaxially():
@@ -6001,7 +6017,7 @@ def test_report_shear_links_out_of_limits_note():
     out["shear"] = sh
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "outside the selected method's default range" in txt
-    assert "actual values are retained" in txt.lower()
+    assert "entered values are used" in txt.lower()
     assert "NO CODE VERDICT" not in txt
 
 
@@ -6012,7 +6028,7 @@ def test_report_torsion_out_of_limits_retains_values_and_verdict():
     out["torsion"] = t
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "outside the selected method's default range" in txt
-    assert "actual values are retained" in txt.lower()
+    assert "entered values are used" in txt.lower()
     assert "NO CODE VERDICT" not in txt
 
 

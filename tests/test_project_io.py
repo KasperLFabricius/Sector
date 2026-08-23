@@ -415,7 +415,7 @@ def test_schema_25_active_2023_shear_migrates_both_bounded_contracts():
 
     assert loaded["shear_gamma_v"] == pytest.approx(1.40)
     assert len(info["migration_warnings"]) == 1
-    assert "Schema 25 used the fixed" in info["migration_warnings"][0]
+    assert "project file used the fixed" in info["migration_warnings"][0]
     assert info["migration_provenance"]["shear_gamma_v"][
         "active_2023_shear"
     ] is True
@@ -712,7 +712,7 @@ def test_schema_25_enabled_heightened_requires_positive_shared_operand(shared):
     scalars.update(_heightened_inputs())
     payload = _schema25_payload(tables, scalars, shared_width=shared)
 
-    with pytest.raises(ValueError, match="must be positive when schema-25"):
+    with pytest.raises(ValueError, match="permitted crack width must be positive"):
         project_io.parse_project(json.dumps(payload))
 
 
@@ -1446,8 +1446,8 @@ def test_legacy_schema25_heightened_operands_migrate_to_dual_contract():
 
     assert info["migrated"] is True
     assert len(info["migration_warnings"]) == 2
-    assert "copied the positive value" in info["migration_warnings"][0]
-    assert "copied to both systems" in info["migration_warnings"][1]
+    assert "copied to the independent long-term and short-term inputs" in info["migration_warnings"][0]
+    assert "copied to both the fine and coarse systems" in info["migration_warnings"][1]
     assert loaded["sls_heightened_reference_case"] == "One Elastic action"
     assert loaded[
         "sls_heightened_fine_effective_tension_area_mm2"
@@ -1473,7 +1473,7 @@ def test_legacy_heightened_migration_refuses_ambiguous_reference_case():
     )
     payload = _legacy_heightened_schema25_payload(tables)
 
-    with pytest.raises(ValueError, match="does not identify one reference case"):
+    with pytest.raises(ValueError, match="do not identify one reference case"):
         project_io.parse_project_with_info(json.dumps(payload))
 
 

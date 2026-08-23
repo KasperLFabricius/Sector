@@ -140,9 +140,8 @@ def combined_bending_assessment_blocker(results):
         and plastic_result_predates_origin_contract(plastic)
     ):
         return (
-            "Retained combined result predates the current M-M "
-            "origin-containment contract; recalculate before assessing M-V-T "
-            "interaction."
+            "The saved bending result cannot confirm that the M-M envelope "
+            "contains the origin. Recalculate before assessing M-V-T interaction."
         )
     return None
 
@@ -465,12 +464,12 @@ def plastic_action_assessment(pl):
     elif plastic_result_predates_origin_contract(pl):
         status = "NOT ASSESSED"
         detail = (
-            "Retained result predates the current M-M origin-containment "
-            "contract; recalculate"
+            "The saved result cannot confirm that the M-M envelope contains "
+            "the origin; recalculate"
         )
     elif util is None:
         status = "NOT ASSESSED"
-        detail = "Closed envelope has no retained utilisation assessment"
+        detail = "The closed envelope has no available utilisation result"
     elif not math.isfinite(util):
         status = "FAIL"
         detail = "No finite capacity intersection"
@@ -984,7 +983,7 @@ def combined_physical_components(combined):
         face = "negative" if fallback.get("tension_low", True) else "positive"
         long_note = (
             f"Required {fallback.get('axis', '?')}-axis {face} face uses "
-            "a pure-axis fallback; no demand-versus-resistance verdict"
+            "a pure-axis substitute; no demand-versus-resistance verdict"
         )
     else:
         long_status = _util_summary_status(
@@ -1179,8 +1178,8 @@ def result_summary_rows(inp, results, *, stale=False):
                 "elastic",
                 "INVALID" if not converged else "NOT RUN",
                 view="Elastic Results",
-                note=("Solver did not converge" if not converged
-                      else "No stress output returned"),
+                note=("Elastic analysis did not converge" if not converged
+                      else "No elastic stress result is available"),
                 inp=inp,
                 overview_key="elastic_stresses",
                 overview_parent="elastic_stresses",
@@ -1212,7 +1211,7 @@ def result_summary_rows(inp, results, *, stale=False):
         if not converged:
             cracking_status = "INVALID"
             cracking_result = "-"
-            cracking_note = "Solver did not converge"
+            cracking_note = "Elastic analysis did not converge"
         elif lambda_cr is None:
             cracking_status = "NOT CALCULATED"
             cracking_result = "-"
@@ -1242,7 +1241,7 @@ def result_summary_rows(inp, results, *, stale=False):
             rows.append(_summary_row(
                 "Crack width", "elastic", "NOT ASSESSED",
                 view="Elastic Results",
-                note="No authoritative crack-width output was retained",
+                note="No calculated crack-width result is available",
                 inp=inp,
                 overview_key="crack_width",
                 overview_parent="crack_width",

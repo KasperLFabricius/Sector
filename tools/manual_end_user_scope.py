@@ -21,6 +21,7 @@ FORBIDDEN_ADMIN_PHRASES = (
     "SmartScreen",
     "SHA-256",
     "checksum",
+    "source revision",
     "canonical receipt",
     "portable Windows build",
     "verified unsigned portable release",
