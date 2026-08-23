@@ -61,10 +61,6 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
         "short",
     )
     assert not brief.include_qa_appendix
-    assert brief.hard_page_limit is None
-    assert brief.target_page_limit is None
-    assert not brief.target_exception_requires_reason
-    assert not brief.target_exception_requires_visual_approval
     assert brief.sparse_page_body_coverage_threshold is None
 
     assert (
@@ -76,10 +72,8 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
         standard.glossary_scope,
     ) == ("used", "complete", "used", "governing", "key", "used")
     assert not standard.include_qa_appendix
-    assert standard.hard_page_limit is None
-    assert standard.target_page_limit == 30
-    assert standard.target_exception_requires_reason
-    assert standard.target_exception_requires_visual_approval
+    assert not any("page_limit" in field.name for field in fields(standard))
+    assert not any("page_target" in field.name for field in fields(standard))
 
     assert (
         audit.input_scope,
@@ -97,8 +91,6 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
         "complete",
     )
     assert audit.include_qa_appendix
-    assert audit.hard_page_limit is None
-    assert audit.target_page_limit is None
     assert audit.sparse_page_body_coverage_threshold == pytest.approx(0.35)
 
 

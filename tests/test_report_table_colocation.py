@@ -39,7 +39,7 @@ def _all_flowables(items):
             yield from _all_flowables(item._content)
 
 
-def test_generic_table_owns_reference_destination_and_first_caption():
+def test_generic_table_owns_destination_and_first_caption_without_self_reference():
     builder = _builder()
     builder._h1("Actions")
     builder._h2("Design values")
@@ -54,20 +54,20 @@ def test_generic_table_owns_reference_destination_and_first_caption():
         item for item in builder.flow
         if isinstance(item, sector_report._PaginatedReportTable)
     )
-    assert not any(
-        isinstance(item, Paragraph)
-        and item.getPlainText().startswith("See Table")
-        for item in builder.flow
+    assert "See Table" not in " ".join(
+        item.getPlainText()
+        for item in _all_flowables(builder.flow)
+        if hasattr(item, "getPlainText")
     )
     first, continuation = table.split(80 * mm, 70 * mm)
     first_caption = first._cellvalues[0][0].getPlainText()
     continued_caption = continuation._cellvalues[0][0].getPlainText()
-    assert first_caption.startswith("See Table 1.1.Table 1.1.")
-    assert "See Table 1.1." not in continued_caption
+    assert first_caption.startswith("Table 1.1.")
+    assert "See Table" not in first_caption + continued_caption
     assert continued_caption.startswith("Table 1.1 (continued).")
 
 
-def test_results_overview_owns_its_reference(monkeypatch):
+def test_results_overview_owns_its_caption_without_self_reference(monkeypatch):
     row = {
         "check": "Plastic bending",
         "case": "PL-1",
@@ -93,17 +93,13 @@ def test_results_overview_owns_its_reference(monkeypatch):
         if getattr(item, "_sector_results_overview", False)
     )
     assert table._cellvalues[0][0].getPlainText().startswith(
-        "See Table 0.1.Table 0.1."
+        "Table 0.1."
     )
     assert table.keepWithNext == 1
-    assert not any(
-        isinstance(item, Paragraph)
-        and item.getPlainText().startswith("See Table")
-        for item in builder.flow
-    )
+    assert "See Table" not in table._cellvalues[0][0].getPlainText()
 
 
-def test_multi_panel_table_publishes_reference_only_on_first_panel():
+def test_multi_panel_table_publishes_one_destination_and_compact_captions():
     builder = _builder()
     headers = ["Spectrum", "Bin"] + [f"Result {index}" for index in range(7)]
     row = ["SPECTRUM-A", "BIN-123456789"] + ["1234567890.12345"] * 7
@@ -121,10 +117,10 @@ def test_multi_panel_table_publishes_reference_only_on_first_panel():
     ]
     assert len(tables) > 1
     assert tables[0]._cellvalues[0][0].getPlainText().startswith(
-        "See Table 0.1.Table 0.1."
+        "Table 0.1."
     )
     assert all(
-        "See Table 0.1." not in table._cellvalues[0][0].getPlainText()
+        "See Table" not in table._cellvalues[0][0].getPlainText()
         and "Table 0.1 (continued)." in table._cellvalues[0][0].getPlainText()
         for table in tables[1:]
     )
@@ -153,7 +149,7 @@ def test_case_action_table_contains_no_location_changing_guard():
         if isinstance(item, sector_report._PaginatedReportTable)
     )
     assert table._cellvalues[0][0].getPlainText().startswith(
-        "See Table 1.1.Table 1.1."
+        "Table 1.1."
     )
 
 

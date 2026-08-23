@@ -25,7 +25,7 @@ from tools.publication_preflight import crop_sha256  # noqa: E402
 
 _TYPOGRAPHY_CROP = (0.08, 0.05, 0.92, 0.62)
 _TYPOGRAPHY_CROP_SHA256 = (
-    "571811ba004687f2c735e181840b69bd6df2643dbb73b6a4723355d4beca3b81"
+    "4f6a3a7635e4546e58041ca8bc464ff85a452cadb38b7aca2c8d000ffa1e9a6a"
 )
 
 

@@ -1081,7 +1081,7 @@ def test_report_profiles_publish_retained_invalid_fatigue_screen(profile):
 def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
     inp, out = _fatigue_report_fixture()
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_body_text(sector_report.build_report(
         {}, inp, out, figures=False
     )).split())
 
@@ -1220,8 +1220,9 @@ def test_reinforcement_fatigue_lead_and_first_equation_share_bounded_group():
         for item in group._content
         if isinstance(item, sector_report.Paragraph)
     ]
-    assert paragraphs[0] == (
-        "Textbook calculation - governing reinforcement fatigue"
+    assert re.fullmatch(
+        r"\d+\.\d+ Textbook calculation - governing reinforcement fatigue",
+        paragraphs[0],
     )
     assert any(
         "globally governing reinforcement element and bin" in text
@@ -1621,6 +1622,40 @@ def test_report_outline_decodes_literal_engineering_token_case_id():
 
     assert any(title.endswith("sigma") for title in titles)
     assert not any("&#115;igma" in title for title in titles)
+
+
+def test_report_contents_escape_decoded_hostile_case_heading():
+    import pypdf
+
+    inp = _inp()
+    url = "https://attacker.invalid/case"
+    case_id = f'PL <link href="{url}">open review</link> & literal'
+    inp["plastic_case"]["id"] = case_id
+
+    reader = pypdf.PdfReader(io.BytesIO(
+        sector_report.build_report({}, inp, _out(), figures=False)
+    ))
+    text = " ".join(
+        " ".join((page.extract_text() or "").split()) for page in reader.pages
+    )
+    outline_titles = []
+    pending = list(reader.outline)
+    while pending:
+        item = pending.pop(0)
+        if isinstance(item, list):
+            pending[0:0] = item
+        else:
+            outline_titles.append(str(getattr(item, "title", item)))
+    uri_actions = []
+    for page in reader.pages:
+        for reference in page.get("/Annots", ()):
+            action = reference.get_object().get("/A")
+            if action is not None and action.get_object().get("/URI") is not None:
+                uri_actions.append(str(action.get_object()["/URI"]))
+
+    assert case_id in text
+    assert any(title.endswith(case_id) for title in outline_titles)
+    assert uri_actions == []
 
 
 def test_report_preserves_negative_infinite_concrete_log_life():
@@ -2725,14 +2760,22 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
         ],
     }
 
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    pdf = sector_report.build_report({}, inp, out, figures=False)
+    txt = _pdf_body_text(pdf)
+    outline_titles = _pdf_outline_titles(pdf)
     flat = " ".join(txt.split())
     assert "Results overview" in flat
     assert "Results overview - FAIL" not in flat
     assert all(case in flat for case in ("PL-01", "PL-02", "EL-01", "EL-02"))
     assert "Governing combination" in flat and "Frequent response" in flat
-    assert flat.count(". Plastic section capacity") == 1
-    assert flat.count(". Elastic section response and stresses") == 1
+    assert sum(
+        "Plastic section capacity" in title
+        for title in outline_titles
+    ) == 1
+    assert sum(
+        "Elastic section response and stresses" in title
+        for title in outline_titles
+    ) == 1
     assert "Plastic section capacity - PL-01" not in flat
     assert "Elastic section response and stresses - EL-01" not in flat
     assert "Cracking threshold and governing crack width - EL-01" in flat
@@ -4284,6 +4327,43 @@ def _pdf_text(pdf):
     import pypdf
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     return "\n".join(page.extract_text() for page in reader.pages)
+
+
+def _outline_items(items):
+    for item in items:
+        if isinstance(item, list):
+            yield from _outline_items(item)
+        else:
+            yield item
+
+
+def _pdf_outline_titles(pdf):
+    import io
+    import pypdf
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    return tuple(
+        str(getattr(item, "title", ""))
+        for item in _outline_items(reader.outline)
+    )
+
+
+def _pdf_body_text(pdf):
+    """Return report content from the linked Results summary onward."""
+    import io
+    import pypdf
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+
+    results = next(
+        item
+        for item in _outline_items(reader.outline)
+        if str(getattr(item, "title", "")).endswith("Results summary")
+    )
+    first_page = reader.get_destination_page_number(results)
+    return "\n".join(
+        (page.extract_text() or "") for page in reader.pages[first_page:]
+    )
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))

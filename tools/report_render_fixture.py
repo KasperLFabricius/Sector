@@ -1713,11 +1713,11 @@ def validate_worked_example_text(text: str) -> None:
     flat_text = " ".join(text.split())
     for expected in (
         _EXPECTED_PLASTIC_WORKED_HEADING,
-        "Accepted strain plane",
+        "Retained strain plane",
         "Ultimate-curvature candidates",
-        "Step 1 - accepted long-term state",
+        "Step 1 - converged long-term state",
         "Step 2 - neutralise the long-term concrete stress",
-        "Step 3 - accepted instantaneous combined state",
+        "Step 3 - converged instantaneous combined state",
         "Crack width worked - governing case",
         "Formula (7.11) selected",
         "User-specified crack-width comparison - critical long-term case",
@@ -1830,10 +1830,13 @@ def validate_pdf_content(
 
     governing_page = next(
         (page.extract_text() or "" for page in reader.pages
-         if _EXPECTED_PLASTIC_WORKED_HEADING in (page.extract_text() or "")),
+         if (
+             _EXPECTED_PLASTIC_WORKED_HEADING in (page.extract_text() or "")
+             and "NA intercepts" in (page.extract_text() or "")
+         )),
         "",
     )
-    if "NA intercepts" not in governing_page:
+    if not governing_page:
         raise AssertionError("the governing-case heading is separated from its table")
 
     existing_material_page = next(
@@ -1854,8 +1857,12 @@ def validate_pdf_content(
 
         def collect_settings_h2(text, _cm, _tm, _font, font_size):
             nonlocal has_settings_h2
+            value = " ".join(text.split())
             if (
-                " ".join(text.split()) == "Analysis settings"
+                (
+                    value == "Analysis settings"
+                    or re.fullmatch(r"\d+\.\d+ Analysis settings", value)
+                )
                 and math.isclose(float(font_size), 11.5, abs_tol=1.0e-6)
             ):
                 has_settings_h2 = True
@@ -1905,7 +1912,7 @@ def validate_pdf_content(
         "Vy,Ed = 0",
         "Plastic section capacity - PL-QA-2",
         _EXPECTED_PLASTIC_WORKED_HEADING,
-        "Accepted strain plane",
+        "Retained strain plane",
         "Ultimate-curvature candidates",
         "Longitudinal minimum reinforcement - PL-QA-1",
         "Shear/torsion link detailing - PL-QA-1",
@@ -1913,9 +1920,9 @@ def validate_pdf_content(
         "Reinforcement clear spacing",
         "R1 - R2",
         "Elastic section response and stresses - EL-QA-2",
-        "Step 1 - accepted long-term state",
+        "Step 1 - converged long-term state",
         "Step 2 - neutralise the long-term concrete stress",
-        "Step 3 - accepted instantaneous combined state",
+        "Step 3 - converged instantaneous combined state",
         "Cracking threshold and governing crack width - EL-QA-1",
         "Crack width worked - governing case",
         "Formula (7.11) selected",
@@ -1970,7 +1977,10 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
     intro = (
         "Demand-versus-resistance checks keep their individual verdicts"
     )
-    note = "The table retains one governing row for each stable check family."
+    notes = (
+        "The table retains one governing row per semantic check type.",
+        "The table retains one governing row for each semantic check type.",
+    )
     normalized_pages = [" ".join(page_text.split()) for page_text in page_texts]
     overview_indexes = [
         index
@@ -1993,7 +2003,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
     note_indexes = [
         index
         for index, page_text in enumerate(normalized_pages)
-        if note in page_text
+        if any(note in page_text for note in notes)
     ]
     if note_indexes != [final_index]:
         raise AssertionError(
@@ -2004,9 +2014,9 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         " ".join(page_texts[index].split()) for index in overview_indexes
     )
     for expected in (
-        "Acceptance checks",
+        "Checks and comparisons",
         "Calculated outputs",
-        "Scope and not-run states",
+        "Scope and calculation state",
         "Plastic bending",
         "DK heightened crack-control minimum",
         "Fatigue",
