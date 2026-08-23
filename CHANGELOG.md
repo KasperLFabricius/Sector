@@ -28,8 +28,9 @@ Sector's bounded internal calculation-tool identity.
   The default remains 1.40; schemas 25 and 26 migrate deterministically to the
   explicit value in schema 27.
 - Tightened edition-specific creep, detailing and material-law references,
-  replaced user-facing per-thousand wording with `‰`, and removed language that
-  could imply certification or a conclusion beyond the implemented comparison.
+  replaced user-facing per-thousand wording with the per-mille symbol, and
+  removed language that could imply certification or a conclusion beyond the
+  implemented comparison.
 - Added linked report contents and matching outlines, improved heading/table/
   figure composition and removed redundant caption boilerplate.
 - Added an HTML skip link and main landmark, authored figure alternatives,
