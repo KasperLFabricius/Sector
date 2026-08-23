@@ -87,16 +87,16 @@ _EXPECTED_PLASTIC_WORKED_HEADING = (
 )
 _REPORT_CROPS = (
     RasterCrop(
-        "report overview",
+        "report contents",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "e039c6ecfaf0303feaaf513ea7f4fa69f8a99ef1fc31e91ae4caeeb117ba584b",
+        "8316f5bc9afb2c7cba26d6c2555d05969f9f44a9c092857bf37f95c9f80f7575",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "849ab220b04690095e489ed9b3f44f2145b2a72ed7023415b009eea22694a89e",
+        "67af0e27a25c0c6ea99c26f6ffbd0e34630ac27a7224592af60da4a25e84b34c",
     ),
 )
 
