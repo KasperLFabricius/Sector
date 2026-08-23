@@ -5878,6 +5878,39 @@ def test_report_includes_shear_links_section():
     assert chr(0x3B8) in txt                       # theta glyph rendered
 
 
+def test_report_with_unavailable_calculated_link_arm_fails_closed():
+    out = _out()
+    sh = _shear_out()
+    links = _links_out()
+    links.update(
+        util=None,
+        longitudinal_shear_force=None,
+        assessment_reason=(
+            "calculated plastic lever arm unavailable: the exact face-aligned "
+            "Plastic solve did not converge"
+        ),
+    )
+    links["res"] = {
+        "valid": False,
+        "calculation_state": "NOT ASSESSED",
+        "reason": "exact calculated plastic lever arm z is unavailable",
+        "z": None,
+        "vrd_s": None,
+        "vrd_max": None,
+        "vrd": None,
+    }
+    sh["links"] = links
+    out["shear"] = sh
+    inp = _inp()
+    inp.update(shear_on=True, shear_links=True)
+
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    normalized = " ".join(txt.split())
+
+    assert "NOT ASSESSED" in txt
+    assert "face-aligned Plastic solve did not converge" in normalized
+
+
 def test_report_includes_2023_shear_links_stress_checks():
     from sector import codes as _codes, shear as _shear
 
@@ -5895,6 +5928,7 @@ def test_report_includes_2023_shear_links_stress_checks():
         0.18,
         1.0,
         2.5,
+        z_mm=495.0,
         fcd_mpa=20.0,
         gamma_s=1.15,
         v_ed_kn=50.0,

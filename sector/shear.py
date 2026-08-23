@@ -431,6 +431,18 @@ def compression_field_limits_2023(
     }
 
 
+def _explicit_links_lever_arm(z_mm: Optional[float]) -> Optional[float]:
+    """Return a positive finite calculated arm; never invent ``0.9 d``."""
+
+    if z_mm is None or isinstance(z_mm, bool):
+        return None
+    try:
+        value = float(z_mm)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if math.isfinite(value) and value > 0.0 else None
+
+
 def vrd_links_2023(
     fck: float,
     code,
@@ -457,25 +469,27 @@ def vrd_links_2023(
     """
     # The simplified 2023 value nu = 0.5 is independent of fck, but retain fck as
     # entered so a worked calculation can show the complete given-data set.
-    z = z_mm if (z_mm and z_mm > 0.0) else 0.9 * d_mm
+    z = _explicit_links_lever_arm(z_mm)
     gs = code.gamma_s if gamma_s is None else float(gamma_s)
     # Callers must supply the final user-defined design strength. Reconstructing it
     # from a preset here could silently ignore edited partial factors.
     fcd = 0.0 if fcd_mpa is None else float(fcd_mpa)
     if (
-        d_mm <= 0.0
+        z is None
+        or d_mm <= 0.0
         or bw_mm <= 0.0
         or asw_over_s <= 0.0
-        or z <= 0.0
         or fcd <= 0.0
         or gs <= 0.0
     ):
+        arm_unavailable = z is None
+        unavailable_value = None if arm_unavailable else 0.0
         invalid = dict(
-            vrd_s=0.0,
-            vrd_max=0.0,
-            vrd=0.0,
-            cot=0.0,
-            theta_deg=0.0,
+            vrd_s=unavailable_value,
+            vrd_max=unavailable_value,
+            vrd=unavailable_value,
+            cot=unavailable_value,
+            theta_deg=unavailable_value,
             z=z,
             fywd=0.0,
             nu=0.5,
@@ -494,6 +508,12 @@ def vrd_links_2023(
             governs="none",
             model="2023",
             valid=False,
+            calculation_state=("NOT ASSESSED" if arm_unavailable else "INVALID"),
+            reason=(
+                "exact calculated plastic lever arm z is unavailable"
+                if arm_unavailable
+                else "invalid reinforced-shear input"
+            ),
         )
         invalid.update(
             fck=fck,
@@ -586,16 +606,28 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
             gamma_s=gamma_s,
             v_ed_kn=v_ed_kn,
         )
-    z = z_mm if (z_mm and z_mm > 0.0) else 0.9 * d_mm
+    z = _explicit_links_lever_arm(z_mm)
     gs = code.gamma_s if gamma_s is None else float(gamma_s)
-    if d_mm <= 0.0 or bw_mm <= 0.0 or asw_over_s <= 0.0 or z <= 0.0:
-        return dict(vrd_s=0.0, vrd_max=0.0, vrd=0.0, cot=0.0, theta_deg=0.0, z=z,
+    if z is None or d_mm <= 0.0 or bw_mm <= 0.0 or asw_over_s <= 0.0:
+        arm_unavailable = z is None
+        unavailable_value = None if arm_unavailable else 0.0
+        return dict(vrd_s=unavailable_value, vrd_max=unavailable_value,
+                    vrd=unavailable_value, cot=unavailable_value,
+                    theta_deg=unavailable_value, z=z,
                     fywd=0.0, nu1=0.0, alpha_cw=0.0, sigma_cp=0.0, fcd=0.0,
                     gamma_s=gs, asw_over_s=asw_over_s, governs="none",
                     valid=False, fck=fck, bw=bw_mm, d=d_mm, fywk=fywk,
                     cot_min=cot_min, cot_max=cot_max, tan=0.0, sin_cos=0.0,
                     cot_unconstrained=0.0, angle_selection="none",
-                    angle_a=0.0, angle_b=0.0, model="2005")
+                    angle_a=0.0, angle_b=0.0, model="2005",
+                    calculation_state=(
+                        "NOT ASSESSED" if arm_unavailable else "INVALID"
+                    ),
+                    reason=(
+                        "exact calculated plastic lever arm z is unavailable"
+                        if arm_unavailable
+                        else "invalid reinforced-shear input"
+                    ))
     fcd = (code.concrete_factor(fck) * fck / code.gamma_c
            if fcd_mpa is None else float(fcd_mpa))                       # MPa
     fywd = fywk / gs                                                     # MPa

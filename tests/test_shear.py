@@ -11,6 +11,7 @@ import copy
 import math
 import pathlib
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -332,6 +333,7 @@ def test_vrd_links_2023_hand_calc_and_derived_stresses():
         0.18,
         1.0,
         2.5,
+        z_mm=495.0,
         fcd_mpa=20.0,
         gamma_s=1.15,
         v_ed_kn=300.0,
@@ -365,6 +367,7 @@ def test_vrd_links_2023_requires_final_fcd():
         0.18,
         1.0,
         2.5,
+        z_mm=495.0,
     )
     assert not result["valid"]
     assert result["fcd"] == 0.0
@@ -387,14 +390,15 @@ def test_shear_alpha_cw_ranges():
 
 
 def test_vrd_links_hand_calc_dk_na_stirrups_govern():
-    # 300 x 600 (d=550, z=0.9d=495), C35, DK NA, 2-leg 10 mm links at 150 mm,
+    # 300 x 600 (d=550, explicit calculated z=495), C35, DK NA,
+    # 2-leg 10 mm links at 150 mm,
     # fywk=500. The crossover cot is above 2.5, so cot clamps to 2.5 and the stirrups
     # govern: VRd,s ~ 540 kN < VRd,max ~ 649 kN.
     code = codes.EC2_2005_DKNA
     asw = 2 * math.pi / 4 * 10.0 ** 2                            # 2 legs, 10 mm
     res = shear.vrd_links(35.0, code, bw_mm=300.0, d_mm=550.0, asw_over_s=asw / 150.0,
                           fywk=500.0, n_ed_comp_kn=0.0, ac_m2=0.18,
-                          cot_min=1.0, cot_max=2.5)
+                          cot_min=1.0, cot_max=2.5, z_mm=495.0)
     assert res["valid"]
     assert res["z"] == pytest.approx(495.0)
     assert res["nu1"] == pytest.approx(0.525)
@@ -413,7 +417,7 @@ def test_vrd_links_uses_final_material_factors_not_method_preset():
     res = shear.vrd_links(
         35.0, codes.EC2_2005_DKNA, 300.0, 550.0, asw_over_s=3.0,
         fywk=500.0, n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=1.0,
-        cot_max=2.5, fcd_mpa=fcd, gamma_s=gamma_s,
+        cot_max=2.5, z_mm=495.0, fcd_mpa=fcd, gamma_s=gamma_s,
     )
     assert res["gamma_s"] == pytest.approx(gamma_s)
     assert res["fywd"] == pytest.approx(500.0 / gamma_s)
@@ -425,7 +429,8 @@ def test_vrd_links_interior_optimum_balances_stirrups_and_crushing():
     # is maximised at that intermediate angle.
     code = codes.EC2_2005_DKNA
     res = shear.vrd_links(35.0, code, 300.0, 550.0, asw_over_s=3.0, fywk=500.0,
-                          n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=1.0, cot_max=2.5)
+                          n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=1.0, cot_max=2.5,
+                          z_mm=495.0)
     assert 1.0 < res["cot"] < 2.5
     assert res["vrd_s"] == pytest.approx(res["vrd_max"], rel=1e-3)
     assert res["vrd"] == pytest.approx(res["vrd_s"], rel=1e-3)
@@ -435,8 +440,14 @@ def test_vrd_links_interior_optimum_balances_stirrups_and_crushing():
 def test_vrd_links_axial_compression_raises_vrd_max():
     # A compression axial force raises alpha_cw (6.11N) and hence VRd,max.
     code = codes.EC2_2005
-    base = shear.vrd_links(35.0, code, 300.0, 550.0, 3.0, 500.0, 0.0, 0.18, 1.0, 2.5)
-    comp = shear.vrd_links(35.0, code, 300.0, 550.0, 3.0, 500.0, 800.0, 0.18, 1.0, 2.5)
+    base = shear.vrd_links(
+        35.0, code, 300.0, 550.0, 3.0, 500.0, 0.0, 0.18, 1.0, 2.5,
+        z_mm=495.0,
+    )
+    comp = shear.vrd_links(
+        35.0, code, 300.0, 550.0, 3.0, 500.0, 800.0, 0.18, 1.0, 2.5,
+        z_mm=495.0,
+    )
     assert comp["alpha_cw"] > 1.0
     assert comp["vrd_max"] > base["vrd_max"]
 
@@ -444,8 +455,55 @@ def test_vrd_links_axial_compression_raises_vrd_max():
 def test_vrd_links_invalid_without_stirrups():
     res = shear.vrd_links(35.0, codes.EC2_2005_DKNA, 300.0, 550.0, asw_over_s=0.0,
                           fywk=500.0, n_ed_comp_kn=0.0, ac_m2=0.18,
-                          cot_min=1.0, cot_max=2.5)
+                          cot_min=1.0, cot_max=2.5, z_mm=495.0)
     assert not res["valid"] and res["vrd"] == 0.0
+
+
+@pytest.mark.parametrize("code", (codes.EC2_2005_DKNA, codes.EC2_2023))
+def test_vrd_links_without_an_explicit_calculated_arm_fails_closed(code):
+    result = shear.vrd_links(
+        35.0,
+        code,
+        300.0,
+        550.0,
+        1.0,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=100.0,
+    )
+
+    assert result["valid"] is False
+    assert result["calculation_state"] == "NOT ASSESSED"
+    assert "lever arm" in result["reason"]
+    assert result["z"] is None
+    assert result["vrd_s"] is None
+    assert result["vrd_max"] is None
+    assert result["vrd"] is None
+
+
+def test_direct_2023_links_kernel_without_an_arm_fails_closed():
+    result = shear.vrd_links_2023(
+        35.0,
+        codes.EC2_2023,
+        300.0,
+        550.0,
+        1.0,
+        500.0,
+        1.0,
+        2.5,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=100.0,
+    )
+
+    assert result["valid"] is False
+    assert result["calculation_state"] == "NOT ASSESSED"
+    assert result["vrd"] is None
 
 
 def test_optimum_cot_theta_clamps_to_bounds():
@@ -507,6 +565,7 @@ def test_shear_results_retain_caps_and_final_angle_operands():
         ac_m2=0.18,
         cot_min=1.0,
         cot_max=2.5,
+        z_mm=495.0,
     )
     assert links["tan"] == pytest.approx(1.0 / links["cot"])
     assert links["sin_cos"] == pytest.approx(
@@ -525,9 +584,13 @@ def test_vrd_links_widened_lower_bound_does_not_reduce_vrd():
     # the widened 0.5 floor), and forcing cot = 0.5 gives a strictly smaller VRd.
     code = codes.EC2_2005_DKNA
     wide = shear.vrd_links(35.0, code, 300.0, 550.0, asw_over_s=8.0, fywk=500.0,
-                           n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=0.5, cot_max=2.5)
+                           n_ed_comp_kn=0.0, ac_m2=0.18, cot_min=0.5, cot_max=2.5,
+                           z_mm=495.0)
     assert wide["cot"] == pytest.approx(1.0)
-    forced = shear.vrd_links(35.0, code, 300.0, 550.0, 8.0, 500.0, 0.0, 0.18, 0.5, 0.5)
+    forced = shear.vrd_links(
+        35.0, code, 300.0, 550.0, 8.0, 500.0, 0.0, 0.18, 0.5, 0.5,
+        z_mm=495.0,
+    )
     assert forced["cot"] == pytest.approx(0.5)
     assert forced["vrd"] < wide["vrd"]
 
@@ -1107,11 +1170,51 @@ def test_app_shear_links_use_the_plastic_lever_arm():
     assert 0.6 * d < z < d                    # a real flexural lever arm below d
 
 
-def test_shear_lever_arm_falls_back_without_a_section():
+def test_app_links_with_a_degenerate_plastic_arm_are_not_assessed(monkeypatch):
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: SimpleNamespace(
+            converged=True,
+            dx=0.0,
+            dy=0.0,
+        ),
+    )
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+    )
+
+    assert not at.exception
+    links = at.session_state["results"]["shear"]["links"]
+    result = links["res"]
+    assert result["valid"] is False
+    assert result["calculation_state"] == "NOT ASSESSED"
+    assert result["z"] is None
+    assert result["vrd_s"] is None
+    assert result["vrd_max"] is None
+    assert result["vrd"] is None
+    assert links["util"] is None
+    assert links["longitudinal_shear_force"] is None
+    assert links["chord"] is None
+
+    _select_view(at, "Shear")
+    assert not at.exception
+    warnings = " ".join(item.value for item in at.warning)
+    assert "NOT ASSESSED" in warnings
+    assert "zero or degenerate" in warnings
+
+
+def test_shear_lever_arm_fails_closed_without_a_section():
     from sector.capacity import shear_lever_arm
     z, src = shear_lever_arm({"section": None}, "x", True, 550.0)
-    assert z == pytest.approx(0.9 * 550.0)
-    assert "fallback" in src
+    assert z is None
+    assert "section model" in src
 
 
 def test_app_shear_links_warn_outside_default_bounds_and_retain_verdict():

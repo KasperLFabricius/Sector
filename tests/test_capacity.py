@@ -1700,7 +1700,7 @@ def _plastic_point(**overrides):
     return SimpleNamespace(**values)
 
 
-def test_shear_lever_arm_preserves_finite_and_expected_fallback_states(
+def test_shear_lever_arm_preserves_finite_and_fails_closed_on_nonconvergence(
     monkeypatch,
 ):
     inp = _member_input()
@@ -1722,17 +1722,51 @@ def test_shear_lever_arm_preserves_finite_and_expected_fallback_states(
             dy=math.nan,
         ),
     )
-    assert capacity.shear_lever_arm(inp, "x", True, 550.0) == (
-        pytest.approx(495.0),
-        "0.9 d (fallback)",
+    lever, reason = capacity.shear_lever_arm(inp, "x", True, 550.0)
+    assert lever is None
+    assert "did not converge" in reason
+
+
+@pytest.mark.parametrize(("axis", "expected_mm"), (("x", 420.0), ("y", 310.0)))
+@pytest.mark.parametrize("tension_low", (True, False))
+@pytest.mark.parametrize("axial_kn", (-600.0, 250.0))
+def test_shear_lever_arm_uses_the_exact_face_state_independent_of_sweep(
+    monkeypatch,
+    axis,
+    expected_mm,
+    tension_low,
+    axial_kn,
+):
+    called_angles = []
+
+    def exact_face(*args, **kwargs):
+        called_angles.append(args[4])
+        return _plastic_point(dx=-0.310, dy=0.420)
+
+    monkeypatch.setattr(capacity, "plastic_capacity_at_angle", exact_face)
+    inp = _member_input(P_pl=axial_kn)
+    inp.update(pl_angle_start=15.0, pl_angle_end=75.0, pl_angle_step=30.0)
+
+    lever, source = capacity.shear_lever_arm(
+        inp, axis, tension_low, 550.0
     )
+
+    assert lever == pytest.approx(expected_mm)
+    assert source == "plastic internal lever arm"
+    expected_angle = (
+        90.0 if axis == "x" and tension_low
+        else 270.0 if axis == "x"
+        else 0.0 if tension_low
+        else 180.0
+    )
+    assert called_angles == [expected_angle]
 
 
 @pytest.mark.parametrize(
     "depth",
     [True, -1.0, math.nan, math.inf, -math.inf, "550", 10 ** 4000],
 )
-def test_shear_lever_arm_rejects_malformed_fallback_depth(depth):
+def test_shear_lever_arm_rejects_malformed_effective_depth(depth):
     with pytest.raises(capacity.CapacityInputError, match="non-negative finite"):
         capacity.shear_lever_arm(
             _member_input(section=None),
@@ -1742,13 +1776,39 @@ def test_shear_lever_arm_rejects_malformed_fallback_depth(depth):
         )
 
 
-def test_shear_lever_arm_retains_zero_fallback_depth():
-    assert capacity.shear_lever_arm(
+def test_shear_lever_arm_with_no_section_never_invents_an_arm():
+    lever, reason = capacity.shear_lever_arm(
         _member_input(section=None),
         "x",
         True,
         0.0,
-    ) == (0.0, "0.9 d (fallback)")
+    )
+    assert lever is None
+    assert "section model" in reason
+
+
+@pytest.mark.parametrize(("axis", "component"), (("x", "dy"), ("y", "dx")))
+@pytest.mark.parametrize("tension_low", (True, False))
+def test_shear_lever_arm_fails_closed_on_a_degenerate_face_component(
+    monkeypatch,
+    axis,
+    component,
+    tension_low,
+):
+    point = _plastic_point()
+    setattr(point, component, 0.0)
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: point,
+    )
+
+    lever, reason = capacity.shear_lever_arm(
+        _member_input(), axis, tension_low, 550.0
+    )
+
+    assert lever is None
+    assert "zero or degenerate" in reason
 
 
 def test_shear_lever_arm_propagates_unexpected_solver_fault(monkeypatch):
@@ -2379,11 +2439,17 @@ def test_build_shear_context_returns_payload_without_ui():
     assert payload["centroid"] == pytest.approx((0.15, 0.30))
 
 
-def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd():
+def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(dy=0.495),
+    )
     inp = _member_input(
         shear_method=codes.EC2_2023.label,
         shear_links=True,
-        section=None,
         transverse_ductility_class="B",
     )
     _payload, links = capacity.build_shear_context(
@@ -2767,6 +2833,37 @@ def test_finalize_combined_discloses_missing_component():
         "have_t": False,
         "method": inp["combined_method"],
     }
+
+
+def test_finalize_combined_fails_closed_when_selected_links_are_not_assessed():
+    inp = _member_input(combined_on=True, shear_links=True)
+    out = {
+        "plastic": {"util": 0.20},
+        "shear": {
+            "res": {"valid": True},
+            "util": 0.30,
+            "links": {
+                "res": {
+                    "valid": False,
+                    "calculation_state": "NOT ASSESSED",
+                    "reason": "exact calculated plastic lever arm z is unavailable",
+                },
+                "util": None,
+                "assessment_reason": (
+                    "calculated plastic lever arm unavailable: the exact "
+                    "face-aligned Plastic solve did not converge"
+                ),
+            },
+        },
+        "torsion": {"valid": True, "util": 0.40},
+    }
+
+    capacity.finalize_combined(inp, out)
+
+    assert out["combined"]["valid"] is False
+    assert out["combined"]["have_v"] is False
+    assert "did not converge" in out["combined"]["reason"]
+    assert "dkna_sum" not in out["combined"]
 
 
 def test_finalize_combined_preserves_every_longitudinal_candidate():

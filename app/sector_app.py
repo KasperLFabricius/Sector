@@ -8097,8 +8097,12 @@ def _run_uniaxial_capacity_checks(inp, out):
         # otherwise tie the scan and pin the angle at the band edge.
         lk_probe = (link_ctx["build"](link_ctx["cot_min"], link_ctx["cot_min"])
                     if link_ctx is not None else None)
-        links_valid = bool(lk_probe is not None and lk_probe["valid"]
-                           and lk_probe["vrd_s"] > 0.0 and lk_probe["vrd_max"] > 0.0)
+        links_valid = bool(
+            lk_probe is not None
+            and lk_probe["valid"]
+            and (lk_probe.get("vrd_s") or 0.0) > 0.0
+            and (lk_probe.get("vrd_max") or 0.0) > 0.0
+        )
         tors_valid = bool(
             tors_ctx is not None
             and tors_ctx["closed_links_present"]
@@ -8158,7 +8162,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                                                           f_tlow, s_centroid)
                     d_f = shear.effective_depth(inp["outer"], l_axis, f_tlow, s_cg)
                     z_f_mm, z_f_src = _shear_lever_arm(inp, l_axis, f_tlow, d_f)
-                    if z_f_mm <= 0.0:
+                    if z_f_mm is None or z_f_mm <= 0.0:
                         continue
                 chord_faces.append(
                     dict(m_ed=m_ed_f, m_rd=m_rd_f, z_m=z_f_mm / 1000.0,
@@ -8189,13 +8193,13 @@ def _run_uniaxial_capacity_checks(inp, out):
                                                      m_off=m_signed)
                     if not o_cond:
                         continue
-                    # Lever arm about the off axis: the plastic internal lever arm at
-                    # the off-face angle (0.9 d fallback), like the shear z.
+                    # Lever arm about the off axis: the exact face-aligned Plastic
+                    # internal lever arm, like the reinforced-shear z.
                     _, o_cg = shear.tension_reinforcement(inp["bars"], o_axis,
                                                           o_tlow, o_centroid)
                     d_o = shear.effective_depth(inp["outer"], o_axis, o_tlow, o_cg)
                     z_o_mm, z_o_src = _shear_lever_arm(inp, o_axis, o_tlow, d_o)
-                    if z_o_mm <= 0.0:
+                    if z_o_mm is None or z_o_mm <= 0.0:
                         continue
                     chord_off_faces.append(
                         dict(m_ed=m_ed_o, m_rd=m_rd_o, z_m=z_o_mm / 1000.0,
@@ -8459,16 +8463,20 @@ def _run_uniaxial_capacity_checks(inp, out):
                 lk = link_ctx["build"](cot_star, cot_star)
             else:
                 lk = link_ctx["build"](link_ctx["cot_min"], link_ctx["cot_max"])
-            util_l = (v_ed / lk["vrd"]) if lk["vrd"] > 0.0 else math.inf
+            util_l = (
+                v_ed / lk["vrd"]
+                if lk.get("valid") and (lk.get("vrd") or 0.0) > 0.0
+                else None
+            )
             # Extra longitudinal force from shear: 2005 delta_Ftd = 0.5 VEd cot
             # theta; 2023 NVd = |VEd| cot theta (8.50).
             longitudinal_shear_force = (
                 (1.0 if link_ctx.get("model_2023") else 0.5)
                 * v_ed * lk["cot"]
-                if lk["valid"] else 0.0
+                if lk["valid"] else None
             )
             delta_ftd = (
-                None if link_ctx.get("model_2023")
+                None if link_ctx.get("model_2023") or not lk["valid"]
                 else longitudinal_shear_force
             )
             angle_limits = link_ctx["angle_limits"]
@@ -8582,6 +8590,11 @@ def _run_uniaxial_capacity_checks(inp, out):
                            angle_limits=angle_limits,
                            model_2023=link_ctx.get("model_2023", False),
                            z_source=link_ctx["z_src"],
+                           assessment_reason=(
+                               link_ctx["z_src"]
+                               if link_ctx.get("z_mm") is None
+                               else lk.get("reason")
+                           ),
                            out_of_limits=links_out_of_limits,
                            required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
                            chord_off=ochk,
@@ -11623,7 +11636,11 @@ def shear_view(inp, results):
 
     links_payload = sh.get("links") or {}
     link_res = links_payload.get("res") or {}
-    z_geometry = float(link_res.get("z", res.get("z", 0.9 * sh["d"])))
+    z_geometry = (
+        link_res.get("z")
+        if links_payload
+        else res.get("z", 0.9 * sh["d"])
+    )
     bw_source = "user input" if sh["bw_user"] else "auto minimum solid width"
     st.plotly_chart(
         viz.shear_geometry_figure(
@@ -11702,12 +11719,21 @@ def shear_view(inp, results):
         st.divider()
         st.markdown("**Shear reinforcement (links)**")
         if not lk["valid"]:
+            reason = (
+                links.get("assessment_reason")
+                or lk.get("reason")
+                or "invalid reinforced-shear input"
+            )
             _manual_warning(
                 st,
                 "calculation-warning",
-                "The link resistance could not be computed -- check the leg "
-                "count, diameter and spacing (Asw/s must be > 0).",
+                "The reinforced-shear check is NOT ASSESSED: " + reason + ".",
             )
+            st.caption(
+                "No link lever arm, resistance, utilisation or PASS/FAIL verdict "
+                "is published for this result."
+            )
+            return
         if links["out_of_limits"]:
             limit_ref = (
                 (links.get("angle_limits") or {}).get("clause")
@@ -11982,7 +12008,8 @@ def _render_chord_off(och, *, assessment_complete=True):
         f"{och['m_ed']:.1f} + {och['mt']:.1f} = {och['m_total']:.1f}$ kNm vs "
         f"$M_{{Rd}} = {och['m_rd']:.1f}$ kNm "
         + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True)
-        + f"; $z = {och['z']:.3f}$ m ({och.get('z_src') or '0.9 d'}).")
+        + f"; $z = {och['z']:.3f}$ m "
+        + f"({och.get('z_src') or 'calculated source not retained'}).")
     st.caption("Each chord's capacity is conditional on the OTHER axis' bending "
                "moment only; the longitudinal steel the two chords share also "
                "carries both their shear/torsion tensions, an interaction the DK "
@@ -12531,7 +12558,13 @@ def combined_view(inp, results):
             st,
             "calculation-warning",
             "The combined check needs all three actions. Missing: "
-            + "; ".join(missing) + ".",
+            + "; ".join(missing)
+            + "."
+            + (
+                " Reason: " + str(c["reason"]) + "."
+                if c.get("reason")
+                else ""
+            ),
         )
         return
     st.caption(f"Selected calculation method: {c['method']}.")
