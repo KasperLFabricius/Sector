@@ -403,6 +403,61 @@ def _inp(**updates):
 
 
 @pytest.mark.parametrize(
+    ("axis", "tension_low", "component", "angle", "face"),
+    (
+        ("x", True, "z_y", 90.0, "bottom (-y)"),
+        ("x", False, "z_y", 270.0, "top (+y)"),
+        ("y", True, "z_x", 0.0, "left (-x)"),
+        ("y", False, "z_x", 180.0, "right (+x)"),
+    ),
+)
+def test_shear_geometry_basis_reconciles_calculated_links_arm_to_source_state(
+    axis, tension_low, component, angle, face
+):
+    shear = {
+        "axis": axis,
+        "tension_low": tension_low,
+        "d": 550.0,
+        "res": {"valid": True, "vrd_c": 100.0},
+        "links": {
+            "res": {"valid": True, "z": 517.787},
+            "z_component": component,
+            "z_source_angle_deg": angle,
+            "z_source_case": "PL-01",
+        },
+    }
+
+    basis = presentation.shear_geometry_basis(_inp(), shear)
+
+    assert basis["z_mm"] == pytest.approx(517.787)
+    assert f"|{component}| from PL-01" in basis["statement"]
+    assert f"{face} {angle:.0f}" in basis["statement"]
+    assert "used in V_Rd,s and V_Rd,max" in basis["statement"]
+    assert "used in V_Rd,c" in basis["statement"]
+
+
+def test_shear_geometry_basis_distinguishes_both_no_links_routes():
+    base = {
+        "axis": "x",
+        "tension_low": True,
+        "d": 550.0,
+        "res": {"valid": True, "vrd_c": 100.0},
+    }
+
+    route_2005 = presentation.shear_geometry_basis(_inp(), base)
+    route_2023 = presentation.shear_geometry_basis(
+        _inp(),
+        {**base, "model_2023": True, "res": {**base["res"], "z": 495.0}},
+    )
+
+    assert route_2005["z_mm"] is None
+    assert "2005 no-links resistance has no z operand" in route_2005["statement"]
+    assert route_2023["z_mm"] == pytest.approx(495.0)
+    assert "0.9d per DS/EN 1992-1-1:2023 8.2.1(3)" in route_2023["statement"]
+    assert "used in V_Rd,c" in route_2023["statement"]
+
+
+@pytest.mark.parametrize(
     ("updates", "status", "assessed"),
     [
         ({}, "PASS", True),

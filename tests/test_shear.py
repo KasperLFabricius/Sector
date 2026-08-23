@@ -8,6 +8,7 @@ with Asl = 1473 mm2 (d = 550 mm, bw = 300 mm, N = 0): VRd,c ~ 103.4 kN.
 from __future__ import annotations
 
 import copy
+import json
 import math
 import pathlib
 import sys
@@ -870,6 +871,7 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
         ("number_input", "pl_My", 50.0),
         ("number_input", "shear_Vx", 1.0),
         ("number_input", "shear_Vy", 1.0),
+        ("checkbox", "shear_links", True),
     )
 
     assert not at.exception
@@ -881,6 +883,12 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
     assert "interaction_status" not in sh
     assert sh["directions"]["vx"]["axis"] == "y"
     assert sh["directions"]["vy"]["axis"] == "x"
+    assert sh["directions"]["vx"]["links"]["z_component"] == "z_x"
+    assert sh["directions"]["vy"]["links"]["z_component"] == "z_y"
+    assert {
+        sh["directions"][component]["links"]["z_source_case"]
+        for component in ("vx", "vy")
+    } == {"PL-01"}
 
 
 def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
@@ -1097,6 +1105,23 @@ def test_app_shear_view_renders_and_shows_utilisation():
     labels = [m.label for m in at.metric]
     assert any("Utilisation" in lbl for lbl in labels)
     assert any("VRd,c" in lbl or "Resistance" in lbl for lbl in labels)
+    captions = " ".join(item.value for item in at.caption)
+    assert "2005 no-links resistance has no z operand" in captions
+    shear_figure = next(
+        json.loads(chart.proto.spec)
+        for chart in at.get("plotly_chart")
+        if any(
+            annotation.get("name") == "shear-d-label"
+            for annotation in json.loads(chart.proto.spec)
+            .get("layout", {}).get("annotations", [])
+        )
+    )
+    annotation_names = {
+        annotation.get("name")
+        for annotation in shear_figure["layout"]["annotations"]
+    }
+    assert "shear-d-label" in annotation_names
+    assert "shear-z-label" not in annotation_names
 
 
 def test_app_shear_axial_input_enabled_in_elastic_mode():
@@ -1166,8 +1191,15 @@ def test_app_shear_links_use_the_plastic_lever_arm():
     sh = at.session_state["results"]["shear"]
     lk = sh["links"]
     assert lk["z_source"] == "plastic internal lever arm"
+    assert lk["z_component"] == "z_y"
+    assert lk["z_source_angle_deg"] == pytest.approx(270.0)
+    assert lk["z_source_case"] == "PL-01"
     z, d = lk["res"]["z"], sh["d"]
     assert 0.6 * d < z < d                    # a real flexural lever arm below d
+    _select_view(at, "Shear")
+    captions = " ".join(item.value for item in at.caption)
+    assert "= |z_y| from PL-01, top (+y) 270" in captions
+    assert "used in V_Rd,s and V_Rd,max" in captions
 
 
 def test_app_links_with_a_degenerate_plastic_arm_are_not_assessed(monkeypatch):
@@ -1289,6 +1321,9 @@ def test_app_shear_2023_method_uses_tau_rdc():
     assert sh["res"]["tau_rdc"] > 0.0 and sh["res"]["vrd_c"] > 0.0
     _select_view(at, "Shear")
     assert not at.exception
+    captions = " ".join(item.value for item in at.caption)
+    assert "Standard-defined arm z" in captions
+    assert "0.9d per DS/EN 1992-1-1:2023 8.2.1(3)" in captions
 
 
 def test_app_shear_2023_fyd_from_yield_parameters():

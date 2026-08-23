@@ -5601,14 +5601,10 @@ def build_inputs(host=st):
     torsion_subdivide = _seeded_checkbox(
         sts, "Subdivide into sub-tubes (T / compound section)", False,
         "torsion_subdivide", disabled=not _tors,
-        help="EN 1992-1-1 6.3.1(3): model a T / L / I / flanged section as component "
-             r"rectangles, each an equivalent thin-walled tube. $T_{Rd}$ is the sum of "
-             r"the sub-tube capacities and $T_{Ed}$ is split by uncracked torsional "
-             r"stiffness $C=\beta hb^3$ (6.3.1(4)). The first rectangle is the web; it "
-             "carries the shear in the combined V+T checks. Off = the single tube from "
-             "the outline. A resistance is issued only after the positioned rectangles "
-             "are proven to partition the concrete without gaps, overlaps or void "
-             "intrusion.")
+        help="EN 1992-1-1 6.3.1(3): define component rectangles for a T, L, I "
+             "or flanged section. Each rectangle becomes a thin-walled tube; the "
+             "first is the web and pairs with shear. Sector validates the complete "
+             "positioned partition before calculating resistance.")
     torsion_subrects = []
     if torsion_subdivide and _tors:
         n_sub = int(_seeded_number(
@@ -5642,11 +5638,10 @@ def build_inputs(host=st):
                 f"torsion_sub_h{i}", disabled=not _tors,
                 help=f"Global y-direction height of {role}.")
             torsion_subrects.append((x_i, y_i, b_i, h_i))
-        sts.caption("The positioned rectangles must cover the concrete net area "
-                    "without gaps, overlaps, extensions outside the outline or "
-                    "intrusion into a void. Sector validates that partition before "
-                    "issuing a torsion result. The first rectangle is the web and "
-                    "pairs with shear in the combined checks (6.3.1(3)).")
+        sts.caption("Define a complete, non-overlapping partition of the concrete "
+                    "net area. Sector checks the outline and void boundaries before "
+                    "calculating resistance; rectangle 1 is the web used with shear "
+                    "in the combined checks (6.3.1(3)).")
     # One current authority and one stored geometry serve both physical roles. Shear
     # uses the selected number of vertical legs; torsion uses one leg of the same
     # closed, anchored loop. Stored positive geometry never implies presence.
@@ -7332,6 +7327,7 @@ def _run_single_analysis(
             # plastic family. It performs unit/sign conversion and identity
             # decoration only; no material law or capacity calculation is repeated.
             points=[_plastic_point_result(point, inp) for point in pts],
+            effective_depths=capacity.plastic_effective_depths(inp),
         )
         worked_index = (
             util_gov
@@ -8590,6 +8586,10 @@ def _run_uniaxial_capacity_checks(inp, out):
                            angle_limits=angle_limits,
                            model_2023=link_ctx.get("model_2023", False),
                            z_source=link_ctx["z_src"],
+                           z_component=link_ctx["z_component"],
+                           z_source_angle_deg=link_ctx["z_source_angle_deg"],
+                           z_source_case=link_ctx["z_source_case"],
+                           z_source_axial_kn=link_ctx["z_source_axial_kn"],
                            assessment_reason=(
                                link_ctx["z_src"]
                                if link_ctx.get("z_mm") is None
@@ -9369,35 +9369,32 @@ def results_overview_view(inp, results, *, stale=False):
         )
         for row in rows
     )
-    named_action_sets = {
-        str(row.get("case") or "").strip()
-        for row in all_rows
-        if str(row.get("case") or "").strip() not in {"", "-"}
-    }
-
-    context = (
-        f"{len(rows)} governing result types across "
-        f"{len(named_action_sets)} named action sets. "
-        "Each comparison keeps its own status; this is not a section or "
-        "project compliance verdict."
-    )
     if failure_count:
         st.error(
-            f"{failure_count} governing result(s) fail or are invalid. {context}"
+            "A retained governing comparison fails or is invalid. Review the "
+            "highlighted rows below."
         )
     elif warning_count:
         _manual_warning(
             st,
             "results-review",
-            f"{warning_count} governing result(s) require review. {context}"
+            "Some retained governing results require review. Review the "
+            "highlighted rows below."
         )
     elif rows:
-        st.info("No failing or warning governing result is retained. " + context)
+        st.success(
+            "Retained governing results are current; every comparison with a "
+            "stated criterion is within it."
+        )
     else:
         st.info(
             "No applicable calculated result is retained. Scope and calculation "
             "states are listed below; no pass conclusion is implied."
         )
+    st.caption(
+        "Each row reports its own calculation status. Sector does not issue a "
+        "section or project compliance verdict."
+    )
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Governing result types", len(rows))
@@ -9807,9 +9804,9 @@ def _plastic_table(pts, cable, steel_comp=False):
         **eps_s_cols,
         f"{_KAPPA} (1/m)": [round(pt["kappa"], 4) for pt in pts],
         "Fc (kN)": [round(pt["comp_force"], 3) for pt in pts],
-        "Internal lever L (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
-        "Lx (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
-        "Ly (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
+        "Internal lever z (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
+        "z_x (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
+        "z_y (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
     }
     if cable:
         cols[f"{_EPS}cable (%)"] = [round(pt["eps_cable"], 3) for pt in pts]
@@ -10007,12 +10004,15 @@ def plastic_view(inp, results):
             else f"{compression_depth_mm:.3f} mm"
         )
         lines = [
+            f"- **Source state**: {presentation.action_set_text(inp, 'plastic', include_source=False)}; "
+            f"$N_{{Ed}} = {inp['P_pl']:.3f}$ kN; "
+            f"NA angle = {pt['V']:.0f}{_DEG} (sweep point {sel + 1})",
             f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
             f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
             f"- **Compression force**: {pt['comp_force']:.3f} kN",
             f"- **Compression-zone depth $c$**: {compression_depth_text}",
-            f"- **Internal lever arm $L$**: {pt['lever'] * _MM:.3f} mm",
-            f"- **Lever-arm components $L_x$ / $L_y$**: "
+            f"- **Internal lever arm $z$**: {pt['lever'] * _MM:.3f} mm",
+            f"- **Lever-arm components $z_x$ / $z_y$**: "
             f"{pt['dx'] * _MM:.3f} / {pt['dy'] * _MM:.3f} mm",
             f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",
         ]
@@ -10028,15 +10028,62 @@ def plastic_view(inp, results):
         lines.append(f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
                      f"y {_fmt(pt['na_y'] * _MM)} mm")
         st.markdown("\n".join(lines))
-        st.caption(
-            "Lx and Ly are the Cartesian components of the internal "
-            "compression-to-tension resultant separation. They are not "
-            "effective depths d; when one component is zero, the magnitude L "
-            "equals the absolute value of the other component."
-        )
         st.caption("Strains are tension-positive (compression negative), agreeing "
                    "with N and the stresses -- so a crushing concrete strain reads "
                    "negative.")
+
+    effective_depths = p.get("effective_depths") or ()
+    st.markdown("#### Face-specific effective depth")
+    if not effective_depths:
+        st.caption(
+            "Face-specific effective-depth evidence is not retained in this result. "
+            "Recalculate to publish it."
+        )
+    else:
+        st.caption(
+            "Each d is measured from the opposite extreme concrete fibre to the "
+            "centroid of the listed mild bars. All four face-aligned values are shown "
+            "because the selected neutral-axis state need not align with a section face."
+        )
+        st.dataframe(
+            {
+                "Bending axis": [row["axis"] for row in effective_depths],
+                "Tension face": [
+                    viz.tension_face_label(row["tension_low"], row["axis"])
+                    for row in effective_depths
+                ],
+                "d (mm)": [
+                    round(row["d_mm"], 3) if row["d_mm"] > 0.0 else None
+                    for row in effective_depths
+                ],
+                "Tension-bar IDs": [
+                    ", ".join(str(value) for value in row["asl_bar_ids"])
+                    or "none"
+                    for row in effective_depths
+                ],
+                "Asl (mm2)": [
+                    round(row["asl_mm2"], 3) for row in effective_depths
+                ],
+                "Asl centroid": [
+                    (
+                        f"{row['coordinate']} = "
+                        f"{row['asl_cg_m'] * _MM:.3f} mm"
+                        if row["asl_cg_m"] is not None
+                        else "-"
+                    )
+                    for row in effective_depths
+                ],
+                "Calculated arm component": [
+                    row["arm_component"] for row in effective_depths
+                ],
+            },
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "d (mm)": st.column_config.NumberColumn(format="%.3f"),
+                "Asl (mm2)": st.column_config.NumberColumn(format="%.3f"),
+            },
+        )
 
     state_rows = retained_state
     with st.expander("Selected neutral-axis state - QA evidence", expanded=False):
@@ -11634,13 +11681,8 @@ def shear_view(inp, results):
         st.markdown("**Independent governing selections**")
         st.dataframe(governing_rows, hide_index=True, width="stretch")
 
-    links_payload = sh.get("links") or {}
-    link_res = links_payload.get("res") or {}
-    z_geometry = (
-        link_res.get("z")
-        if links_payload
-        else res.get("z", 0.9 * sh["d"])
-    )
+    geometry_basis = presentation.shear_geometry_basis(inp, sh)
+    z_geometry = geometry_basis["z_mm"]
     bw_source = "user input" if sh["bw_user"] else "auto minimum solid width"
     st.plotly_chart(
         viz.shear_geometry_figure(
@@ -11651,10 +11693,13 @@ def shear_view(inp, results):
             d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
             bw_source=bw_source,
             signed_v_ed=signed_v_ed,
+            d_note=geometry_basis["d_note"],
+            z_note=geometry_basis["z_note"],
             title=f"{action_label} geometry - {face_lbl} tension",
         ),
         width="stretch",
     )
+    st.caption(geometry_basis["statement"])
 
     bw_note = ("user input" if sh["bw_user"]
                else f"auto = min solid width {sh['bw_auto']:.1f} mm")
@@ -11665,7 +11710,8 @@ def shear_view(inp, results):
             if res.get("a_cs", 0.0) > 0.0 else "not applicable (VEd = 0)"
         )
         st.dataframe(
-            {"Quantity": ["Effective depth d", "Web width bw", "Lever arm z",
+            {"Quantity": ["Effective depth d", "Web width bw",
+                           "Standard-defined concrete-shear arm z",
                            "Tension reinf. Asl", f"Reinf. ratio {_RHO}l",
                           "Action moment MEd", "Shear span acs",
                           "Axial factor kvp", "Modified depth kvp*d (8.27)",
@@ -12001,20 +12047,18 @@ def _render_chord_off(och, *, assessment_complete=True):
             ),
         )
     st.caption(
-        f"Tension chord = the {face_lbl} face about the {och['axis']}-axis "
-        "(the axis the shear does not act on). No shear shift acts on this chord; "
-        r"the torsion adds its perimeter share: $M_{Ed,total} = M_{Ed} + "
+        f"Governing chord: {face_lbl} face about the {och['axis']}-axis. "
+        r"Its bending demand plus perimeter torsion share is $M_{Ed,total} = M_{Ed} + "
         r"F_{td,T}\,z/2 = "
         f"{och['m_ed']:.1f} + {och['mt']:.1f} = {och['m_total']:.1f}$ kNm vs "
         f"$M_{{Rd}} = {och['m_rd']:.1f}$ kNm "
         + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True)
         + f"; $z = {och['z']:.3f}$ m "
         + f"({och.get('z_src') or 'calculated source not retained'}).")
-    st.caption("Each chord's capacity is conditional on the OTHER axis' bending "
-               "moment only; the longitudinal steel the two chords share also "
-               "carries both their shear/torsion tensions, an interaction the DK "
-               "NA " + chr(0x03A3) + "(SEd/SRd) check captures and which stays the "
-               "authoritative combined verification.")
+    st.caption("The shear shift acts in the shear plane, while this orthogonal chord "
+               "receives the torsion share. The shared longitudinal steel carries "
+               "both chord demands, so the DK NA " + chr(0x03A3)
+               + "(SEd/SRd) result governs the combined verification.")
 
 
 def torsion_view(inp, results):
@@ -12325,13 +12369,13 @@ def torsion_view(inp, results):
             hide_index=True, width="stretch")
         g = t.get("governing_sub")
         gov_lbl = (("web" if g == 0 else f"part {g + 1}") if g is not None else "-")
-        st.caption(f"Governing sub-tube: {gov_lbl} (worst TEd_i/TRd_i = {util_txt}). "
-                   "Because TEd is split by stiffness, not capacity, the section passes "
-                   "only when EVERY sub-tube passes (max util), not when TEd <= "
-                   f"{chr(0x03A3)}TRd,i. Total longitudinal steel {chr(0x03A3)}Asl = "
-                   f"{t['asl_req']:.0f} mm2 (sum over the sub-tubes), in ADDITION to the "
-                   "bending steel. The displayed assembled geometry is the validated "
-                   "sub-rectangle partition used by the calculation.")
+        st.caption(f"Governing sub-tube: {gov_lbl}; max(TEd,i/TRd,i) = {util_txt} "
+                   "controls the section result, so every sub-tube must pass.")
+        st.caption("Applied torque is distributed by uncracked torsional stiffness. "
+                   f"Required longitudinal steel {chr(0x03A3)}Asl = "
+                   f"{t['asl_req']:.0f} mm2 is the sum for all sub-tubes and is added "
+                   "to the bending steel. The figure shows the validated partition "
+                   "used by the calculation.")
         st.plotly_chart(viz.subtube_figure(subs), width="stretch")
     else:
         theta_note = ("the ONE member strut angle (6.3.2(2)), shared with the shear "

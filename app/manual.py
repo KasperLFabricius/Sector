@@ -1945,13 +1945,13 @@ def manual_blocks() -> list:
        "and the equivalent $V_{Rd,s}$ / $V_{Rd,max}$ resistances. The longitudinal "
        "addition is $N_{Vd}=|V_{Ed}|\\cot\\theta$ (8.50), applied without the "
        "support/load-specific relief in (8.53).")
-    call("concept", "Rather than the code's $z \\approx 0.9d$ approximation, Sector "
-         "uses the **internal lever arm the plastic engine already computes** -- the "
-         "separation of the concrete compression resultant and the steel tension "
-         "resultant for bending about the shear axis, at the Plastic action-set "
-         "axial force. It "
-         "falls back to $0.9d$ only when that lever arm is degenerate (no tension "
-         "steel, or a fully compressed / non-converged state).")
+    call("concept", "For reinforced-shear checks, Sector calculates the internal "
+         "lever arm $z$ at the exact face-aligned Plastic state and action-set axial "
+         "force. The compression and tension resultants each include the sign-split "
+         "contributions from concrete, mild steel and tendons. Their separation is "
+         "$z$, with Cartesian components $z_x$ and $z_y$; x-axis bending uses "
+         "$|z_y|$ and y-axis bending uses $|z_x|$. If the required Plastic state is "
+         "unavailable, the links resistance is not assessed.")
     md("$V_{Rd,s}$ rises with $\\cot\\theta$ (a flatter strut engages more links) "
        "while $V_{Rd,max}$ falls with it, so $V_{Rd} = \\min$ is largest where the "
        "two are equal, at $\\cot^2\\theta = b/a - 1$ with $a = (A_{sw}/s)\\,f_{ywd}$ "
@@ -1970,12 +1970,11 @@ def manual_blocks() -> list:
          "The favourable compression extension to 3.0 is not credited because "
          "Sector does not establish the required compression-chord depth.")
     md("**Worked** (same section, C35, DK NA:2024, 2-leg $\\phi$10 links at "
-       "$s = 150$ mm, $f_{ywk} = 500$; taking $z = 0.9d = 495$ mm for illustration): "
+       "$s = 150$ mm, $f_{ywk} = 500$; calculated $z = 509.151$ mm): "
        "$f_{ywd} = 417$ MPa, $\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The "
        "crossing $\\cot\\theta = 2.78$ exceeds the limit, so $\\cot\\theta = 2.5$ "
-       "and the links govern: $V_{Rd,s} = 540$ kN $< V_{Rd,max} = 649$ kN, giving "
-       "$V_{Rd} = 540$ kN. In the app the section's own (slightly smaller) plastic "
-       "lever arm is used in place of $0.9d$.")
+       "and the links govern: $V_{Rd,s} = 555.4$ kN $< V_{Rd,max} = 667.5$ kN, "
+       "giving $V_{Rd} = 555.4$ kN.")
 
     h1("Torsion (thin-walled tube)")
     md("A section resisting torsion is idealised as a thin-walled closed tube "
@@ -2265,7 +2264,7 @@ def manual_blocks() -> list:
            ["$D_{upper}$", "Upper aggregate size used in the clear-spacing rule; mm"],
            ["$A_{sw}/s$", "Shear-link area per spacing; mm2/mm"],
            ["$F_c$", "Concrete compression resultant; kN"],
-           ["$L$, $L_x$, $L_y$", "Internal lever arm and its components; mm"],
+           ["$z$, $z_x$, $z_y$", "Internal resultant lever arm and its Cartesian components; mm"],
            ["TOTAL", "Elastic stress from long- and short-term actions; MPa"],
            ["LONG", "Elastic stress from the long-term action alone; MPa"],
            ["DIF", "TOTAL minus LONG; MPa"],

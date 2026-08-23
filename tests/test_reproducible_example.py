@@ -40,10 +40,16 @@ def calculated_example():
     at.button(key="calculate").click().run(timeout=300)
     assert not at.exception
     assert [message.value for message in at.error] == [
-        "8 governing result(s) fail or are invalid. 20 governing result types "
-        "across 3 named action sets. Each comparison keeps its own status; "
-        "this is not a section or project compliance verdict."
+        "A retained governing comparison fails or is invalid. Review the "
+        "highlighted rows below."
     ]
+    assert any(
+        message.value == (
+            "Each row reports its own calculation status. Sector does not issue "
+            "a section or project compliance verdict."
+        )
+        for message in at.caption
+    )
     assert not at.warning
     return at
 

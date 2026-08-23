@@ -919,6 +919,38 @@ def test_shear_geometry_omits_an_unavailable_lever_arm(axis):
     )
 
 
+def test_shear_geometry_labels_the_calculation_role_and_arm_provenance():
+    fig = viz.shear_geometry_figure(
+        [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        [],
+        [(-0.1, -0.25, 300.0), (0.1, -0.25, 300.0)],
+        axis="x",
+        tension_low=False,
+        centroid=(0.0, 0.0),
+        asl_bar_ids=[1, 2],
+        asl_cg_m=-0.25,
+        asl_mm2=600.0,
+        d_mm=550.0,
+        z_mm=517.787,
+        bw_mm=400.0,
+        bw_source="auto",
+        d_note="effective depth used in V<sub>Rd,c</sub>",
+        z_note=(
+            "|z_y| from PL-01, top (+y) 270 degree state<br>"
+            "used in V<sub>Rd,s</sub> and V<sub>Rd,max</sub>"
+        ),
+    )
+
+    annotations = {
+        annotation.name: str(annotation.text or "")
+        for annotation in fig.layout.annotations
+        if annotation.name
+    }
+    assert "used in V<sub>Rd,c</sub>" in annotations["shear-d-label"]
+    assert "|z_y| from PL-01" in annotations["shear-z-label"]
+    assert "used in V<sub>Rd,s</sub>" in annotations["shear-z-label"]
+
+
 def test_horizontal_shear_geometry_uses_left_tension_face():
     fig = viz.shear_geometry_figure(
         [(0.0, 0.0), (0.6, 0.0), (0.6, 0.3), (0.0, 0.3)], [],
