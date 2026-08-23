@@ -11,15 +11,18 @@ import yaml
 from tools.verify_coverage_gate import (
     BASELINE_ENV,
     BASELINE_EXPRESSION,
+    BRANCH_COVERAGE_STEP_NAME,
     CHECKOUT_ACTION,
     CHECKOUT_STEP_NAME,
     COVERAGE_STEP_NAME,
     VALIDATOR_STEP_NAME,
     CoverageGateContractError,
+    expected_branch_coverage_command,
     expected_coverage_command,
     expected_validator_command,
     load_git_baseline,
     validate_contract,
+    validate_results,
     validate_workflow,
 )
 
@@ -58,6 +61,7 @@ def test_exact_contract_and_workflow_are_aligned():
     validate_contract(data, ROOT)
     validate_workflow(data, WORKFLOW.read_text(encoding="utf-8"))
     command = expected_coverage_command(data)
+    branch_command = expected_branch_coverage_command(data)
 
     assert expected_validator_command().endswith(
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
@@ -67,20 +71,34 @@ def test_exact_contract_and_workflow_are_aligned():
     assert "--basetemp $coreTemp" in command
     assert command.count("-n 0") == 3
     assert command.count("--cov-append") == 3
+    assert "--cov-branch" not in command
     assert "--cov=app" in command
     assert "--cov=sector" in command
     assert "coverage report --show-missing --skip-covered --fail-under=90" in command
+    assert "--dist load" in branch_command
+    assert branch_command.count("--cov-branch") == 1
+    assert "--results qa-artifacts/branch-coverage.json" in branch_command
+    assert len(data["branch_coverage"]["targets"]) == 6
+    assert len(data["branch_coverage"]["tests"]) == 6
+    assert data["coverage"]["minimum_percent"] == 90
+    assert data["branch_coverage"]["minimum_percent"] == 81
     assert data["waivers"] == []
 
 
 def test_raised_accepted_floor_and_targets_cannot_shrink():
     baseline = deepcopy(_contract())
     baseline["coverage"]["minimum_percent"] = 93
+    baseline["branch_coverage"]["minimum_percent"] = 84
     baseline["coverage"]["targets"].append("docs")
 
     candidate = deepcopy(baseline)
     candidate["coverage"]["minimum_percent"] = 92
-    with pytest.raises(CoverageGateContractError, match="previously accepted"):
+    with pytest.raises(CoverageGateContractError, match="line minimum.*previously"):
+        validate_contract(candidate, ROOT, baseline=baseline)
+
+    candidate = deepcopy(baseline)
+    candidate["branch_coverage"]["minimum_percent"] = 83
+    with pytest.raises(CoverageGateContractError, match="branch minimum.*previously"):
         validate_contract(candidate, ROOT, baseline=baseline)
 
     candidate = deepcopy(baseline)
@@ -88,17 +106,96 @@ def test_raised_accepted_floor_and_targets_cannot_shrink():
     with pytest.raises(CoverageGateContractError, match="accepted coverage target"):
         validate_contract(candidate, ROOT, baseline=baseline)
 
+    candidate = deepcopy(baseline)
+    candidate["branch_coverage"]["targets"].pop()
+    with pytest.raises(CoverageGateContractError, match="branch target ratchet"):
+        validate_contract(candidate, ROOT, baseline=baseline)
 
-@pytest.mark.parametrize("minimum", [49, 89, True, 50.5, 101])
-def test_invalid_initial_floor_is_rejected(minimum):
+    candidate = deepcopy(baseline)
+    candidate["branch_coverage"]["tests"].pop()
+    with pytest.raises(CoverageGateContractError, match="branch test ratchet"):
+        validate_contract(candidate, ROOT, baseline=baseline)
+
+
+@pytest.mark.parametrize(
+    ("field", "minimum"),
+    [
+        ("line", 49),
+        ("line", 89),
+        ("line", True),
+        ("line", 50.5),
+        ("line", 101),
+        ("branch", 49),
+        ("branch", 80),
+        ("branch", True),
+        ("branch", 50.5),
+        ("branch", 101),
+    ],
+)
+def test_invalid_initial_floor_is_rejected(field, minimum):
     data = deepcopy(_contract())
-    data["coverage"]["minimum_percent"] = minimum
+    section = "coverage" if field == "line" else "branch_coverage"
+    data[section]["minimum_percent"] = minimum
 
-    with pytest.raises(CoverageGateContractError, match="coverage minimum"):
+    with pytest.raises(CoverageGateContractError, match="coverage .* minimum"):
         validate_contract(data, ROOT)
 
 
-def test_duplicate_missing_and_escaping_targets_are_rejected(tmp_path):
+def _results(*, branches: int, branch_total: int):
+    files = {}
+    for module in _contract()["branch_coverage"]["targets"]:
+        relative = f"{module.replace('.', '/')}.py"
+        if not (ROOT / relative).is_file():
+            relative = f"app/{relative}"
+        files[relative] = {}
+    return {
+        "files": files,
+        "totals": {
+            "covered_branches": branches,
+            "num_branches": branch_total,
+        }
+    }
+
+
+def test_measured_decision_branch_floor_is_enforced():
+    measured = validate_results(
+        _contract(),
+        _results(branches=810, branch_total=1000),
+        ROOT,
+    )
+    assert measured == pytest.approx(81.0)
+
+    with pytest.raises(CoverageGateContractError, match="branch coverage 80.90%"):
+        validate_results(
+            _contract(),
+            _results(branches=809, branch_total=1000),
+            ROOT,
+        )
+
+
+def test_every_declared_branch_target_must_appear_in_results():
+    results = _results(branches=1000, branch_total=1000)
+    results["files"].pop(next(iter(results["files"])))
+    with pytest.raises(CoverageGateContractError, match="target results are missing"):
+        validate_results(_contract(), results, ROOT)
+
+
+@pytest.mark.parametrize(
+    "results",
+    [
+        _results(branches=0, branch_total=0),
+        _results(branches=2, branch_total=1),
+        {"files": {}, "totals": {"covered_branches": "all"}},
+        {"files": {}},
+        {},
+    ],
+)
+def test_missing_or_invalid_measurement_cannot_pass(results):
+    with pytest.raises(CoverageGateContractError, match="coverage|branch"):
+        validate_results(_contract(), results, ROOT)
+
+
+def test_duplicate_missing_and_escaping_targets_are_rejected():
     data = deepcopy(_contract())
     data["coverage"]["targets"].append("app")
     with pytest.raises(CoverageGateContractError, match="duplicates"):
@@ -109,14 +206,22 @@ def test_duplicate_missing_and_escaping_targets_are_rejected(tmp_path):
     with pytest.raises(CoverageGateContractError, match="initial coverage target"):
         validate_contract(data, ROOT)
 
-    repository_root = tmp_path / "repository"
-    repository_root.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
+    data = deepcopy(_contract())
+    data["branch_coverage"]["targets"].append(
+        data["branch_coverage"]["targets"][0]
+    )
+    with pytest.raises(CoverageGateContractError, match="duplicates"):
+        validate_contract(data, ROOT)
+
+    data = deepcopy(_contract())
+    data["branch_coverage"]["targets"][0] = "not/a/module"
+    with pytest.raises(CoverageGateContractError, match="invalid module"):
+        validate_contract(data, ROOT)
+
     data = deepcopy(_contract())
     data["coverage"]["targets"][0] = "../outside"
     with pytest.raises(CoverageGateContractError, match="escapes the repository"):
-        validate_contract(data, repository_root)
+        validate_contract(data, ROOT)
 
 
 @pytest.mark.parametrize("field", ["owner", "reason", "exit_condition"])
@@ -137,8 +242,8 @@ def test_unknown_contract_keys_and_waiver_drift_are_rejected():
         validate_contract(data, ROOT)
 
     data = deepcopy(_contract())
-    data["coverage"].pop("minimum_percent")
-    with pytest.raises(CoverageGateContractError, match="coverage contract"):
+    data["branch_coverage"].pop("minimum_percent")
+    with pytest.raises(CoverageGateContractError, match="branch coverage contract"):
         validate_contract(data, ROOT)
 
     data = deepcopy(_contract())
@@ -155,7 +260,12 @@ def test_unknown_contract_keys_and_waiver_drift_are_rejected():
 
 def test_satisfied_calibration_waiver_can_expire_against_accepted_baseline():
     baseline = deepcopy(_contract())
-    baseline["coverage"]["minimum_percent"] = 50
+    baseline["schema_version"] = 1
+    baseline["coverage"] = {
+        "targets": ["app", "sector"],
+        "minimum_percent": 50,
+    }
+    baseline.pop("branch_coverage")
     baseline["waivers"] = [deepcopy(CALIBRATION_WAIVER)]
     candidate = deepcopy(_contract())
 
@@ -203,13 +313,16 @@ def test_git_baseline_is_loaded_from_the_accepted_object(tmp_path):
     baseline = load_git_baseline("HEAD", candidate_contract, repository)
     assert baseline is not None
     assert baseline["coverage"]["minimum_percent"] == 91
-    with pytest.raises(CoverageGateContractError, match="previously accepted"):
+    with pytest.raises(CoverageGateContractError, match="line minimum.*previously"):
         validate_contract(_contract(), ROOT, baseline=baseline)
     with pytest.raises(CoverageGateContractError, match="git baseline inspection"):
         load_git_baseline("missing-accepted-ref", candidate_contract, repository)
 
 
-@pytest.mark.parametrize("step_name", [VALIDATOR_STEP_NAME, COVERAGE_STEP_NAME])
+@pytest.mark.parametrize(
+    "step_name",
+    [VALIDATOR_STEP_NAME, COVERAGE_STEP_NAME, BRANCH_COVERAGE_STEP_NAME],
+)
 @pytest.mark.parametrize(
     ("field", "value"),
     [("if", "false"), ("continue-on-error", True), ("working-directory", "docs")],
@@ -278,4 +391,11 @@ def test_filtered_trigger_or_command_drift_is_rejected():
         "run"
     ].replace("--fail-under=90", "--fail-under=89")
     with pytest.raises(CoverageGateContractError, match="coverage test command"):
+        validate_workflow(_contract(), _workflow_text(workflow))
+
+    workflow = _workflow()
+    _step(workflow, BRANCH_COVERAGE_STEP_NAME)["run"] = _step(
+        workflow, BRANCH_COVERAGE_STEP_NAME
+    )["run"].replace("--cov-branch", "", 1)
+    with pytest.raises(CoverageGateContractError, match="branch coverage command"):
         validate_workflow(_contract(), _workflow_text(workflow))

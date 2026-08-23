@@ -161,6 +161,46 @@ jobs:
             throw "QA phases failed: $($phaseFailures -join ', ')"
           }
 
+      - name: Run decision-branch coverage gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $branchTemp = Join-Path $env:RUNNER_TEMP (
+            "sector-branch-pytest-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+          )
+          if (Test-Path -LiteralPath $branchTemp) {
+            throw "Branch-coverage pytest basetemp must be previously nonexistent: $branchTemp"
+          }
+          New-Item -ItemType Directory -Path $branchTemp | Out-Null
+
+          python -m pytest `
+            tests/test_design_standards.py `
+            tests/test_heightened_crack_control.py `
+            tests/test_load_cases.py `
+            tests/test_modelled_direction.py `
+            tests/test_result_presentation.py `
+            tests/test_session_state_migrations.py `
+            -n 4 `
+            --dist load `
+            --basetemp $branchTemp `
+            --cov=load_cases `
+            --cov=app.modelled_direction `
+            --cov=result_presentation `
+            --cov=session_state_migrations `
+            --cov=sector.design_standards `
+            --cov=sector.heightened_crack_control `
+            --cov-branch `
+            --cov-report=json:qa-artifacts/branch-coverage.json `
+            --junitxml=qa-artifacts/test-results-branches.xml
+          if ($LASTEXITCODE -ne 0) {
+            throw "Decision-branch test matrix failed ($LASTEXITCODE)"
+          }
+
+          python tools/verify_coverage_gate.py quality-coverage-gate.toml --results qa-artifacts/branch-coverage.json
+          if ($LASTEXITCODE -ne 0) {
+            throw "Decision-branch coverage floor failed ($LASTEXITCODE)"
+          }
+
       - name: Render report fixture with real figures
         if: always()
         run: python tools/report_render_fixture.py --output qa-artifacts/report
