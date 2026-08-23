@@ -83,13 +83,24 @@ def validate_pdf_pages(reader: pypdf.PdfReader, *, min_pages=1) -> None:
 
 
 def validate_caption_colocation(page_texts: list[str]) -> tuple[str, ...]:
-    """Require one exact same-page caption for every publication reference."""
+    """Validate linked references, or unique standalone report captions."""
     references = {}
+    captions = {}
     for number, page_text in enumerate(page_texts, start=1):
         for match in _PUBLICATION_REFERENCE.finditer(page_text):
             references.setdefault(match.group(1), []).append(number)
+        for match in _PUBLICATION_CAPTION.finditer(page_text):
+            captions.setdefault(match.group(1), []).append(number)
+
     if not references:
-        raise AssertionError("the PDF contains no Figure/Table references")
+        if not captions:
+            raise AssertionError("the PDF contains no Figure/Table captions")
+        for label, pages in captions.items():
+            if len(pages) != 1:
+                raise AssertionError(
+                    f"{label} has {len(pages)} exact captions; expected one"
+                )
+        return tuple(sorted(captions))
 
     for label, pages in references.items():
         if len(pages) != 1:

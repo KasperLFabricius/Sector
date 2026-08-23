@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 
 import pytest
 from pypdf import PdfReader
@@ -1152,7 +1153,11 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
             for heading in headings:
                 matches = [
                     y for value, size, y in fragments
-                    if value == heading and size == 11.5
+                    if (
+                        value == heading
+                        or re.fullmatch(rf"\d+\.\d+ {re.escape(heading)}", value)
+                    )
+                    and size == 11.5
                 ]
                 for heading_y in matches:
                     seen.add(heading)
@@ -1160,7 +1165,7 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
                         y < heading_y - 4
                         and (
                             value.startswith("SECTOR-MATH[")
-                            or value.startswith("See Table")
+                            or value.startswith("Table ")
                         )
                         for value, _size, y in fragments
                     ), (profile, heading)

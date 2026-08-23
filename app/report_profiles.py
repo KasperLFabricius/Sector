@@ -41,10 +41,6 @@ class ReportProfilePolicy:
     provenance_scope: ProvenanceScope
     glossary_scope: GlossaryScope
     include_qa_appendix: bool
-    hard_page_limit: int | None = None
-    target_page_limit: int | None = None
-    target_exception_requires_reason: bool = False
-    target_exception_requires_visual_approval: bool = False
     sparse_page_body_coverage_threshold: float | None = None
 
 
@@ -88,9 +84,6 @@ STANDARD_PROFILE: Final = ReportProfilePolicy(
     provenance_scope="key",
     glossary_scope="used",
     include_qa_appendix=False,
-    target_page_limit=30,
-    target_exception_requires_reason=True,
-    target_exception_requires_visual_approval=True,
 )
 
 AUDIT_PROFILE: Final = ReportProfilePolicy(

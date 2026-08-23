@@ -109,6 +109,22 @@ def test_exact_report_and_manual_label_boundaries_are_colocated():
         ])
 
 
+def test_standalone_report_captions_are_unique_without_redundant_self_refs():
+    assert validate_caption_colocation([
+        "Table 1.10. Report table",
+        "Figure A3-10. Governing response",
+        "Table 1.10 (continued). Additional rows",
+    ]) == ("Figure A3-10", "Table 1.10")
+
+    with pytest.raises(AssertionError, match="2 exact captions"):
+        validate_caption_colocation([
+            "Table 2.1. First",
+            "Table 2.1. Duplicate",
+        ])
+    with pytest.raises(AssertionError, match="no Figure/Table captions"):
+        validate_caption_colocation(["No publication objects"])
+
+
 def test_each_publication_reference_is_bound_to_its_own_link_rectangle():
     reader, texts = preflight_pdf(_publication_pdf(), min_pages=1)
     positioned = validate_publication_links(reader, texts)

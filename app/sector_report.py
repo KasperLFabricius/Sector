@@ -37,6 +37,7 @@ from reportlab.pdfgen import canvas
 from reportlab.platypus import (CondPageBreak, Flowable, Image, KeepTogether,
                                 NotAtTopPageBreak, Paragraph, SimpleDocTemplate,
                                 Spacer, Table, TableStyle)
+from reportlab.platypus.tableofcontents import TableOfContents
 
 import case_analysis
 import fatigue_inputs
@@ -667,18 +668,29 @@ class _NumberedCanvas(canvas.Canvas):
 
 
 class _ReportDocTemplate(SimpleDocTemplate):
-    """Registers the numbered report sections as PDF outline entries."""
+    """Register report destinations for the outline and visible contents."""
 
     def afterFlowable(self, flowable):
         key = getattr(flowable, "_sector_bookmark", None)
         if key:
+            level = int(getattr(flowable, "_sector_outline_level", 0))
+            title = getattr(flowable, "_sector_outline", key)
             self.canv.bookmarkPage(key)
             self.canv.addOutlineEntry(
-                getattr(flowable, "_sector_outline", key),
+                title,
                 key,
-                level=0,
+                level=level,
                 closed=False,
             )
+            if getattr(flowable, "_sector_toc_entry", False):
+                # Outline titles are plain PDF strings, while TableOfContents
+                # reparses its title as Paragraph markup. Keep the decoded plain
+                # title for bookmarks and escape the separate visible-contents
+                # payload so a user identifier can never become active markup.
+                self.notify(
+                    "TOCEntry",
+                    (level, _html_escape(str(title)), self.page, key),
+                )
 
 
 def _styles():
@@ -721,6 +733,14 @@ def _styles():
     )
     out["publication_caption"] = themed(
         "pc", ss["Normal"], "publication_caption"
+    )
+    out["toc_h1"] = ParagraphStyle(
+        "toc-h1", parent=out["body"], fontSize=9.5, leading=12,
+        leftIndent=0, firstLineIndent=0, spaceBefore=2, spaceAfter=2,
+    )
+    out["toc_h2"] = ParagraphStyle(
+        "toc-h2", parent=out["small"], fontSize=8.2, leading=10,
+        leftIndent=14, firstLineIndent=0, spaceBefore=1, spaceAfter=1,
     )
     out["formula_symbol"] = ParagraphStyle(
         "fs", parent=ss["Normal"], fontSize=8.1, leading=11,
@@ -1192,6 +1212,9 @@ class ReportBuilder:
         # Reuse the Paragraph's decoded plain text so escaped user identifiers
         # appear in bookmarks exactly as they do on the page.
         heading._sector_outline = heading.getPlainText()
+        heading._sector_outline_level = 0
+        heading._sector_toc_entry = True
+        heading.keepWithNext = 1
         if reserve:
             self.flow.append(CondPageBreak(reserve))
         self.flow.append(heading)
@@ -1202,6 +1225,11 @@ class ReportBuilder:
         self._publication_subsection_title = Paragraph(
             _greek(str(text)), self.s["small"]
         ).getPlainText().strip()
+        heading_text = (
+            f"{self._chapter}.{self._subsection} {text}"
+            if self.profile.key == "Audit" and self._chapter
+            else text
+        )
         # ``keepWithNext`` can be defeated when the following object is a
         # nested indivisible equation/table wrapper. Reserve enough space before
         # placing the heading for at least one substantive following row.
@@ -1209,8 +1237,23 @@ class ReportBuilder:
         # equation/table block.  A smaller guard still allowed a heading plus
         # its tiny identity row to fit while the actual calculation moved to
         # the next page.
-        self.flow.append(CondPageBreak(reserve))
-        self.flow.append(Paragraph(_greek(text), self.s["h2"]))
+        previous = self.flow[-1] if self.flow else None
+        follows_chapter_heading = (
+            isinstance(previous, Paragraph)
+            and getattr(previous, "_sector_outline_level", None) == 0
+        )
+        if reserve and not follows_chapter_heading:
+            self.flow.append(CondPageBreak(reserve))
+        heading = Paragraph(_greek(heading_text), self.s["h2"])
+        heading.keepWithNext = 1
+        if self._chapter:
+            heading._sector_bookmark = (
+                f"sector-section-{self._chapter}-{self._subsection}"
+            )
+            heading._sector_outline = heading.getPlainText()
+            heading._sector_outline_level = 1
+            heading._sector_toc_entry = self.profile.key == "Audit"
+        self.flow.append(heading)
 
     def _p(self, text):
         self.flow.append(Paragraph(_greek(text), self.s["body"]))
@@ -1427,9 +1470,6 @@ class ReportBuilder:
             "Table", "Results overview across calculated checks"
         )
         caption_markup = (
-            f'<font color="{publication_theme.PALETTE.publication_reference}">'
-            f'See <link href="#{table_item.anchor}">'
-            f'{table_item.label}</link>.</font><br/>'
             f'<a name="{table_item.anchor}"/><b>{table_item.label}.</b> '
             f"{_greek(_html_escape(table_item.caption))}"
         )
@@ -1473,6 +1513,7 @@ class ReportBuilder:
         for data_index, _group_label in group_rows:
             table_index = header_row + data_index
             style.extend([
+                ("NOSPLIT", (0, table_index), (-1, table_index + 1)),
                 ("SPAN", (0, table_index), (-1, table_index)),
                 ("BACKGROUND", (0, table_index), (-1, table_index),
                  colors.HexColor("#F1F4F8")),
@@ -2014,14 +2055,14 @@ class ReportBuilder:
         )
         if caption is None:
             first_header = rows[0][0].getPlainText().strip() if header else "Data"
-            caption = f"Reported information for {subject}"
+            caption = subject
             if first_header.lower() not in subject.lower():
                 caption += f": {first_header}"
         table_item = self._publication_counter.issue("Table", str(caption))
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
-        # The first caption row owns the reference as well as the destination, so
-        # no page-position guard can separate ``See Table ...`` from its object.
+        # The first caption row owns the destination, so it cannot be separated
+        # from its object by a separate self-reference paragraph.
         # Any table can outgrow one page when it contains user-pasted geometry or
         # reinforcement. Repeat the labelled header regardless of whether the normal
         # short-table path first tries to keep the table together.
@@ -2048,12 +2089,6 @@ class ReportBuilder:
                 else ""
             )
             continued = panel_number > 1
-            reference_markup = (
-                f'<font color="{publication_theme.PALETTE.publication_reference}">See '
-                f'<link href="#{table_item.anchor}">{table_item.label}</link>.'
-                f"</font><br/>"
-                if not continued else ""
-            )
             visible_label = (
                 f"{table_item.label} (continued)"
                 if continued
@@ -2061,7 +2096,7 @@ class ReportBuilder:
             )
             anchor = f'<a name="{table_item.anchor}"/>' if not continued else ""
             caption_markup = (
-                f"{reference_markup}{anchor}<b>{visible_label}.</b> "
+                f"{anchor}<b>{visible_label}.</b> "
                 f"{_greek(_html_escape(table_item.caption))}"
                 f"{_greek(_html_escape(panel_note))}"
             )
@@ -2182,10 +2217,6 @@ class ReportBuilder:
                 or "Engineering figure"
             )
         figure_item = self._publication_counter.issue("Figure", str(caption))
-        reference = Paragraph(
-            f'See <link href="#{figure_item.anchor}">{figure_item.label}</link>.',
-            self.s["publication_ref"],
-        )
         caption_flowable = Paragraph(
             f'<a name="{figure_item.anchor}"/><b>{figure_item.label}.</b> '
             f"{_greek(_html_escape(figure_item.caption))}",
@@ -2193,7 +2224,6 @@ class ReportBuilder:
         )
         figure_table = Table(
             [
-                [reference],
                 [Image(io.BytesIO(png), width=w_mm * mm, height=h_mm * mm)],
                 [caption_flowable],
             ],
@@ -2213,6 +2243,30 @@ class ReportBuilder:
         self.flow.append(figure_table)
         self._gap(4)
 
+    def _contents(self):
+        """Add profile-appropriate linked contents without a page-count target."""
+
+        contents = TableOfContents(
+            levelStyles=[self.s["toc_h1"], self.s["toc_h2"]],
+            dotsMinLevel=0,
+            rightColumnWidth=12 * mm,
+        )
+        contents._sector_visible_contents = True
+        self.flow.extend([
+            Paragraph("Contents", self.s["h1"]),
+            Paragraph(
+                (
+                    "Select a section or page number to open it. Audit also "
+                    "lists calculation subsections."
+                    if self.profile.key == "Audit"
+                    else "Select a section or page number to open it."
+                ),
+                self.s["small"],
+            ),
+            contents,
+        ])
+        self._page_break()
+
     # -- build -------------------------------------------------------------
     def build(self):
         # Reuse the one process-wide kaleido server (started on the first report and
@@ -2222,6 +2276,8 @@ class ReportBuilder:
             ensure_image_server()
         self._tick(0.05, "Cover and conventions...")
         self._cover()
+        self._contents()
+        self._results_dashboard()
         if self.profile.key == "Brief":
             self._brief_input_summary()
             self._brief_governing_register()
@@ -2234,8 +2290,6 @@ class ReportBuilder:
         self._tick(0.2, "Section and materials...")
         self._inputs()
         if self._base_out.get("clear_spacing") is not None:
-            if self.profile.key == "Audit":
-                self.flow.append(NotAtTopPageBreak())
             self.inp, self.out = self._base_inp, self._base_out
             self._clear_spacing()
         jobs = []
@@ -2342,12 +2396,10 @@ class ReportBuilder:
                 ))
 
         try:
-            for index, (case_inp, case_out, label, method, new_page) in enumerate(jobs):
+            for index, (case_inp, case_out, label, method, _new_page) in enumerate(jobs):
                 self.inp, self.out = case_inp, case_out
                 fraction = 0.42 + 0.5 * (index / max(len(jobs), 1))
                 self._tick(fraction, label)
-                if new_page and self.profile.key == "Audit":
-                    self.flow.append(NotAtTopPageBreak())
                 getattr(self, method)()
         finally:
             self.inp, self.out = self._base_inp, self._base_out
@@ -2359,13 +2411,9 @@ class ReportBuilder:
                 self._base_out.get("heightened_crack_control"), Mapping
             )
         ):
-            if self.profile.key == "Audit":
-                self.flow.append(NotAtTopPageBreak())
             self._heightened_crack_control()
         if self._base_out.get("fatigue") is not None:
             self._tick(0.88, "Grouped fatigue...")
-            if self.profile.key == "Audit":
-                self.flow.append(NotAtTopPageBreak())
             self._fatigue()
         if self.qa_appendix:
             self._appendix()
@@ -2425,14 +2473,19 @@ class ReportBuilder:
                                  leftMargin=20 * mm, rightMargin=20 * mm,
                                  topMargin=25 * mm, bottomMargin=20 * mm,
                                  title=title)
-        doc.build(self.flow,
-                  canvasmaker=lambda *a, **k: _NumberedCanvas(
-                      *a,
-                      footer=footer,
-                      header=header,
-                      revision=revision,
-                      **k,
-                  ))
+        # ReportLab suppresses canvas.save() on indexing passes and writes once
+        # after every TableOfContents is satisfied. The shared BytesIO therefore
+        # receives one final PDF container, not one container per pass.
+        doc.multiBuild(
+            self.flow,
+            canvasmaker=lambda *a, **k: _NumberedCanvas(
+                *a,
+                footer=footer,
+                header=header,
+                revision=revision,
+                **k,
+            ),
+        )
         self._tick(1.0, "Done")
 
     # -- sections ----------------------------------------------------------
@@ -3695,10 +3748,16 @@ class ReportBuilder:
             )
         ran = ", ".join(labels) or "none"
         self._small(f"Analysis mode: {mode}. Result sections included: {ran}.")
+        self.flow.append(NotAtTopPageBreak())
+
+    def _results_dashboard(self):
+        """Publish the report-wide result dashboard before detailed sections."""
+
+        self._h1("Results summary", reserve=130)
         self._results_overview()
         if self.profile.non_governing_scope == "complete":
             self._non_governing_status_register()
-        self.flow.append(NotAtTopPageBreak())
+        self._page_break()
 
     def _conventions(self):
         self._h1("Conventions and units")
@@ -4853,7 +4912,6 @@ class ReportBuilder:
             self._elastic_shared_calculation_block(elastic_shared)
             self._keep_from(start)
         if fatigue_rows:
-            self.flow.append(NotAtTopPageBreak())
             self._h2("Grouped fatigue settings")
             self._table(fatigue_rows, [110 * mm, 55 * mm], keep=False)
 
@@ -10050,13 +10108,22 @@ class ReportBuilder:
             for row in fatigue_presentation.reinforcement_rows(spectrum)
         ]
         if self.profile.key != "Audit":
-            retained_screen_rows = [
-                (spectrum_name, row)
-                for spectrum_name, row in retained_screen_rows
-                if isinstance(reinforcement_example, Mapping)
-                and spectrum_name == reinforcement_example.get("spectrum_name")
-                and row["element_id"] == reinforcement_example.get("element_id")
-            ]
+            if isinstance(reinforcement_example, Mapping):
+                retained_screen_rows = [
+                    (spectrum_name, row)
+                    for spectrum_name, row in retained_screen_rows
+                    if spectrum_name == reinforcement_example.get("spectrum_name")
+                    and row["element_id"] == reinforcement_example.get("element_id")
+                ]
+            else:
+                # A missing converged governing example must not erase retained
+                # diagnostics. Publish every invalid screen without promoting one
+                # of them to a governing result or manufacturing a verdict.
+                retained_screen_rows = [
+                    (spectrum_name, row)
+                    for spectrum_name, row in retained_screen_rows
+                    if row["screen_status"] == "INVALID"
+                ]
         if checks.get("reinforcement") and retained_screen_rows:
             self._h2("Simplified reinforcement stress-range screens")
             rows = [[
@@ -10139,8 +10206,6 @@ class ReportBuilder:
             )
             # Only spectra containing a globally governing family example become
             # detailed report units. Every other spectrum remains in the summary.
-            if self.profile.key == "Audit":
-                self.flow.append(NotAtTopPageBreak())
             spectrum_status = fatigue_presentation.result_status(spectrum)
             self._h2("Spectrum - " + _html_escape(spectrum_name))
             self._status_block(

@@ -215,7 +215,7 @@ def test_streamlit_manual_uses_matching_reference_heading_and_caption(monkeypatc
     assert any("Worked-example section" in text for text in fake.captions)
 
 
-def test_report_table_reference_caption_and_fragments_share_one_identity():
+def test_report_table_caption_and_fragments_share_one_identity_without_self_reference():
     builder = sector_report.ReportBuilder(
         io.BytesIO(), {}, {}, {}, figures=False, profile="Audit"
     )
@@ -229,18 +229,17 @@ def test_report_table_reference_caption_and_fragments_share_one_identity():
         if isinstance(value, sector_report._PaginatedReportTable)
     )
 
-    assert "See Table 1.1." in " ".join(
+    assert "See Table" not in " ".join(
         _flow_text(value) for value in builder.flow
     )
     assert table._cellvalues[0][0].getPlainText() == (
-        "See Table 1.1."
-        "Table 1.1. Reported information for Design values: Force (kN)"
+        "Table 1.1. Design values: Force (kN)"
     )
     assert table.repeatRows == 4
     leading, trailing = table.split(80 * mm, 70 * mm)
-    assert "See Table 1.1." in leading._cellvalues[0][0].getPlainText()
+    assert "See Table" not in leading._cellvalues[0][0].getPlainText()
     assert "(continued)" not in leading._cellvalues[0][0].getPlainText()
-    assert "See Table 1.1." not in trailing._cellvalues[0][0].getPlainText()
+    assert "See Table" not in trailing._cellvalues[0][0].getPlainText()
     assert "Table 1.1 (continued)." in trailing._cellvalues[0][0].getPlainText()
     for fragment in (leading, trailing):
         assert [
@@ -286,7 +285,7 @@ def test_manual_long_table_repeats_caption_and_header_when_forced_to_split(
         ] == expected_header
 
 
-def test_report_figure_reference_image_and_caption_are_indivisible(monkeypatch):
+def test_report_figure_image_and_caption_are_indivisible_without_self_reference(monkeypatch):
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
         "/x8AAusB9Wl2nGQAAAAASUVORK5CYII="
@@ -306,5 +305,5 @@ def test_report_figure_reference_image_and_caption_are_indivisible(monkeypatch):
     assert published.splitByRow == 0
     assert published.splitInRow == 0
     text = _flow_text(published)
-    assert "See Figure 1.1." in text
+    assert "See Figure" not in text
     assert "Figure 1.1. Capacity envelope" in text
