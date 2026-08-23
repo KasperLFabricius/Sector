@@ -358,7 +358,7 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     assert "three physical component checks" in text
     assert "one current shared physical input" in text
     assert "Positive stored diameter or spacing does not imply" in text
-    assert "Without the shared-link authority" in text
+    assert "Without the shared-link selection" in text
     assert "does not publish $T_{Rd}$, utilisation" in text
     assert "informational requirement" in text
     assert "not proof of provided torsion reinforcement" in text

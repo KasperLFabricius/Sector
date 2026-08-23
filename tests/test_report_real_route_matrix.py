@@ -289,7 +289,7 @@ def _shear_links_2023() -> dict:
         "cot_limit_lo": 1.0,
         "cot_limit_hi": 2.5,
         "angle_limits": {
-            "clause": "EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
+            "clause": "DS/EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
         },
         "model_2023": True,
         "z_source": "0.9 d",

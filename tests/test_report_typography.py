@@ -25,7 +25,7 @@ from tools.publication_preflight import crop_sha256  # noqa: E402
 
 _TYPOGRAPHY_CROP = (0.08, 0.05, 0.92, 0.62)
 _TYPOGRAPHY_CROP_SHA256 = (
-    "b209ec09d3eeb223d21de8e1befdfb3beb57bbcf7ade76ab5185349e988597e8"
+    "571811ba004687f2c735e181840b69bd6df2643dbb73b6a4723355d4beca3b81"
 )
 
 
@@ -65,12 +65,12 @@ def _fixture() -> tuple[bytes, Table, dict[str, float]]:
             [
                 "Initial prestrain",
                 "eps<sub>p</sub><super>(0)</super>",
-                "7.000 permille",
+                "7.000 &#8240;",
             ],
             ["Proof strength", "f<sub>p0.1k</sub>", "1640.000 MPa"],
             ["Ultimate strength", "f<sub>pk</sub>", "1860.000 MPa"],
             ["Elastic modulus", "E<sub>p</sub>", "195.0 GPa"],
-            ["Rupture strain", "eps<sub>ut</sub>", "35.000 permille"],
+            ["Rupture strain", "eps<sub>ut</sub>", "35.000 &#8240;"],
         ],
         [60 * mm, 35 * mm, 50 * mm],
         keep=False,

@@ -208,7 +208,7 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
     ),
     WarningReference(
         "crack-criterion-missing",
-        "Crack width is calculated but acceptance is not assessed.",
+        "Crack width is calculated without a limit comparison.",
         "The matching long-term or short-term permitted width in Analysis "
         "settings is 0 mm.",
         "Open Inputs > Analysis settings. Enter a positive value for that duration "

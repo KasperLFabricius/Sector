@@ -93,7 +93,7 @@ def test_brief_retains_relevant_input_rows_without_standard_derivations():
         "stress model = fixed; bend reduction = no",
     ):
         assert expected in text
-    assert "Accepted strain plane" not in text
+    assert "Retained strain plane" not in text
     assert "Textbook calculation" not in text
 
 
@@ -729,7 +729,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
     combined_2023 = _brief_text(inp, report_render_fixture._results(inp))
     assert f"Shear method {report_render_fixture.codes.EC2_2023.label}" in combined_2023
     assert "Shear aggregate Dlower 22.0 mm" in combined_2023
-    assert "Shear partial factor γV" not in combined_2023
+    assert "Shear partial factor " + chr(0x3B3) + "V" not in combined_2023
     assert "Link reinforcement ductility class C" in combined_2023
     assert "2023 minimum-ratio ductility reduction" not in combined_2023
 
@@ -740,7 +740,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
     })
     no_links_2023 = _brief_text(inp, report_render_fixture._results(inp))
     assert "Shear aggregate Dlower 22.0 mm" in no_links_2023
-    assert "Shear partial factor γV 1.234" in no_links_2023
+    assert "Shear partial factor " + chr(0x3B3) + "V 1.234" in no_links_2023
 
     inp.update({
         "shear_on": False,
@@ -1123,9 +1123,9 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
         "Concrete",
         "Resistance",
         "Resistances",
-        "Accepted strain plane",
+        "Retained strain plane",
         "Physical resistance components",
-        "Accepted section resultants",
+        "Section resultants at convergence",
         "Governing reinforcement and tendon response",
         "Governing cracking threshold",
         "Step 2 - neutralise the long-term concrete stress",

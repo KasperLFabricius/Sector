@@ -9,6 +9,7 @@ PROGRAMME = ROOT / "docs" / "v096_pr_programme.md"
 DECISIONS = ROOT / "docs" / "v096_decision_register.md"
 ACCEPTANCE = ROOT / "docs" / "pr01_v096_programme_acceptance.md"
 PR06_ACCEPTANCE = ROOT / "docs" / "pr06_v096_gamma_v_acceptance.md"
+PR07_ACCEPTANCE = ROOT / "docs" / "pr07_v096_reference_notation_acceptance.md"
 FIXTURE = ROOT / "tests" / "fixtures" / "v096_review_cases.json"
 PROJECT_IO = ROOT / "app" / "project_io.py"
 
@@ -60,6 +61,22 @@ def test_pr06_owns_bounded_schema_27_transition_without_bumping_product() -> Non
         "Product version retained by this PR: 0.95",
         "Schemas 25 and 26",
         "malformed and future schemas remain fail-closed",
+    ):
+        assert phrase in acceptance
+
+
+def test_pr07_freezes_references_neutral_language_and_strain_notation() -> None:
+    acceptance = " ".join(_text(PR07_ACCEPTANCE).split())
+    for phrase in (
+        "Base: `1cc32c438542f57cf7fb25d47848f8abeeaf46bb`",
+        "Base tree: `3541bf5647fd1ba69b0b1e814c3bdf45f67cb674`",
+        "Product version remains `0.95`; project schema remains `27`",
+        "single source for the creep coefficient and the three detailing controls",
+        "DS/EN 1992-1-1:2023, 5.2.4(1)-(3), Formula (5.11)",
+        "DS/EN 1992-1-1:2023, 5.3.3(1)-(3), Formula (5.12)",
+        "A zero crack-width limit is described as no limit comparison",
+        "ASCII-safe Unicode identity `U+2030`",
+        "stored defaults and material-law fractions are unchanged",
     ):
         assert phrase in acceptance
 

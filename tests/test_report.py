@@ -1907,13 +1907,13 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
 
     for heading in (
         "Worked plastic calculation (utilisation direction)",
-        "Accepted strain plane",
+        "Retained strain plane",
         "Governing ultimate curvature",
         "Compression-depth solution",
-        "Accepted section resultants",
-        "Step 1 - accepted long-term state",
+        "Section resultants at convergence",
+        "Step 1 - converged long-term state",
         "Step 2 - neutralise the long-term concrete stress",
-        "Step 3 - accepted instantaneous combined state",
+        "Step 3 - converged instantaneous combined state",
         "Step 4 - combine the retained element stresses",
     ):
         assert heading in text
@@ -1950,9 +1950,9 @@ def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
     assert "Compression-zone depth c 222.000 mm" in text
     assert "Lever components Lx, Ly" in text
     assert "lever-arm components, not effective depth d" in text
-    assert "Accepted compression depth 222.000000 mm" in text
+    assert "Solved compression depth 222.000000 mm" in text
     assert "Compression-zone depth c 111.000 mm" not in text
-    assert "Accepted compression depth 111.000000 mm" not in text
+    assert "Solved compression depth 111.000000 mm" not in text
     assert out == before
 
 
@@ -1975,7 +1975,7 @@ def test_report_keeps_malformed_compression_depth_unavailable(retained):
 
     assert "Compression-zone depth c -" in text
     assert "Compression-depth solution unavailable" in text
-    assert "Accepted compression depth" not in text
+    assert "Solved compression depth" not in text
     assert out == before
 
 
@@ -2030,7 +2030,7 @@ def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
 
     assert "Compression-depth solution unavailable" in text
     assert "does not reconstruct those solver values" in text
-    assert "Accepted section resultants unavailable" in text
+    assert "Section resultants at convergence unavailable" in text
     assert "does not reconstruct material or section response" in text
     assert "Worked elastic calculation unavailable" in text
     assert "does not repeat the solver in the report" in text
@@ -2051,8 +2051,8 @@ def test_transverse_textbook_report_fails_closed_without_retained_operands():
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
-    assert "does not retain the accepted strut-angle operands" in text
-    assert "does not retain every accepted torsion formula operand" in text
+    assert "does not retain the selected strut-angle operands" in text
+    assert "does not retain every selected torsion formula operand" in text
     assert "does not retain the DK NA inclusion branch" in text
     assert "EQ-SHEAR.LINKS.VRDS" not in text
     assert "EQ-TORSION.RESISTANCE.GOVERNING" not in text
@@ -4286,6 +4286,42 @@ def _pdf_text(pdf):
     return "\n".join(page.extract_text() for page in reader.pages)
 
 
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_publish_exact_2023_input_and_material_sources(profile):
+    import sector.material_presets as mp
+
+    edition = codes.EC2_2023.label
+    inp = _inp()
+    inp.update({
+        "concrete_preset": edition,
+        "mild_preset": edition,
+        "prestress_preset": edition,
+        "prestress": mp.build_prestress(**mp.PRESTRESS_PRESETS[edition]),
+        "tendons": [(0.0, 0.10, 200.0)],
+        "detailing_edition": detailing.EC2_2023,
+        "minimum_reinforcement_on": True,
+        "transverse_detailing_on": True,
+        "clear_spacing_on": True,
+    })
+    text = _pdf_text(sector_report.build_report(
+        {}, inp, _out(), figures=False, profile=profile
+    ))
+    normalised = " ".join(text.split())
+    for source in (
+        "DS/EN 1992-1-1:2023, 5.1.5, Table 5.2 and Annex B.5",
+        "DS/EN 1992-1-1:2023, 12.2(2), Formulae (12.1)-(12.2), and Table 12.2",
+        "DS/EN 1992-1-1:2023, 8.2.1(2), 12.2(4), Tables 12.1 and 12.2, 12.3.3 and 12.4.2",
+        "DS/EN 1992-1-1:2023, 11.2(2)",
+        "DS/EN 1992-1-1:2023, 8.1.1(2)-(3) and 8.1.2(1), Formula (8.4)",
+        "DS/EN 1992-1-1:2023, 5.2.4(1)-(3), Formula (5.11) and Figure 5.2",
+        "DS/EN 1992-1-1:2023, 5.3.3(1)-(3), Formula (5.12) and Figure 5.3",
+    ):
+        assert source in normalised
+    assert chr(0x2030) in text
+    assert "per mille" not in text.casefold()
+    assert "permille" not in text.casefold()
+
+
 def test_report_omits_unused_material_sections():
     # Bars only -> mild steel is reported, prestress is omitted.
     inp = _inp()
@@ -5072,7 +5108,7 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
         assert "Concrete cap only" in text
         assert "Cracking transparency" in text
         assert "Informational requirement" in text
-        assert "not an accepted resistance angle" in text
+        assert "not a resistance angle" in text
         assert "no utilisation, governing resistance or PASS/FAIL verdict" in text
         assert "Torsion resistance from the thin-walled closed-tube" not in text
         assert "T Rd = min" not in text
@@ -5799,7 +5835,7 @@ def test_report_includes_2023_shear_links_stress_checks():
         "cot_limit_lo": 1.0,
         "cot_limit_hi": 2.5,
         "angle_limits": {
-            "clause": "EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
+            "clause": "DS/EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
         },
         "model_2023": True,
         "z_source": "0.9 d",

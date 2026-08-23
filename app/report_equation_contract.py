@@ -540,7 +540,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("plastic.worked.axial-equilibrium", None): _result(
         "N<sub>int</sub>", "kN",
-        ("N<sub>int</sub>", "accepted internal axial resultant", "kN"),
+        ("N<sub>int</sub>", "converged internal axial resultant", "kN"),
         ("F<sub>c</sub>", "concrete axial resultant", "kN"),
         ("F<sub>s</sub>", "mild-reinforcement axial resultant", "kN"),
         ("F<sub>p</sub>", "prestressing-steel axial resultant", "kN"),
@@ -548,14 +548,14 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("plastic.worked.moment-x", None): _result(
         "M<sub>x</sub>", "kNm",
-        ("M<sub>x</sub>", "accepted section moment about x", "kNm"),
+        ("M<sub>x</sub>", "converged section moment about x", "kNm"),
         ("M<sub>c,x</sub>", "concrete moment contribution about x", "kNm"),
         ("M<sub>s,x</sub>", "mild-reinforcement moment contribution about x", "kNm"),
         ("M<sub>p,x</sub>", "prestressing-steel moment contribution about x", "kNm"),
     ),
     ("plastic.worked.moment-y", None): _result(
         "M<sub>y</sub>", "kNm",
-        ("M<sub>y</sub>", "accepted section moment about y", "kNm"),
+        ("M<sub>y</sub>", "converged section moment about y", "kNm"),
         ("M<sub>c,y</sub>", "concrete moment contribution about y", "kNm"),
         ("M<sub>s,y</sub>", "mild-reinforcement moment contribution about y", "kNm"),
         ("M<sub>p,y</sub>", "prestressing-steel moment contribution about y", "kNm"),
@@ -586,7 +586,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("elastic.long.equilibrium-n", None): _result(
         "N<sub>int</sub>", "kN",
-        ("N<sub>int</sub>", "accepted long-term internal axial resultant", "kN"),
+        ("N<sub>int</sub>", "converged long-term internal axial resultant", "kN"),
         ("J", "retained final transformed equilibrium row", "mixed section units"),
         ("q", "retained raw reference-stress plane", "mixed stress units"),
         ("target", "solver target resultant", "kN"),
@@ -594,7 +594,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("elastic.long.equilibrium-mx", None): _result(
         "M<sub>x,int</sub>", "kNm",
-        ("M<sub>x,int</sub>", "accepted long-term internal moment about x", "kNm"),
+        ("M<sub>x,int</sub>", "converged long-term internal moment about x", "kNm"),
         ("J", "retained final transformed equilibrium row", "mixed section units"),
         ("q", "retained raw reference-stress plane", "mixed stress units"),
         ("target", "solver target resultant", "kNm"),
@@ -602,7 +602,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("elastic.long.equilibrium-my", None): _result(
         "M<sub>y,int</sub>", "kNm",
-        ("M<sub>y,int</sub>", "accepted long-term internal moment about y", "kNm"),
+        ("M<sub>y,int</sub>", "converged long-term internal moment about y", "kNm"),
         ("J", "retained final transformed equilibrium row", "mixed section units"),
         ("q", "retained raw reference-stress plane", "mixed stress units"),
         ("target", "solver target resultant", "kNm"),
@@ -610,7 +610,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("elastic.instantaneous.equilibrium-n", None): _result(
         "N<sub>int</sub>", "kN",
-        ("N<sub>int</sub>", "accepted instantaneous internal axial resultant", "kN"),
+        ("N<sub>int</sub>", "converged instantaneous internal axial resultant", "kN"),
         ("J", "retained final transformed equilibrium row", "mixed section units"),
         ("q", "retained raw reference-stress plane", "mixed stress units"),
         ("target", "solver target resultant", "kN"),
@@ -618,7 +618,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("elastic.instantaneous.equilibrium-mx", None): _result(
         "M<sub>x,int</sub>", "kNm",
-        ("M<sub>x,int</sub>", "accepted instantaneous internal moment about x", "kNm"),
+        ("M<sub>x,int</sub>", "converged instantaneous internal moment about x", "kNm"),
         ("J", "retained final transformed equilibrium row", "mixed section units"),
         ("q", "retained raw reference-stress plane", "mixed stress units"),
         ("target", "solver target resultant", "kNm"),
@@ -626,7 +626,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("elastic.instantaneous.equilibrium-my", None): _result(
         "M<sub>y,int</sub>", "kNm",
-        ("M<sub>y,int</sub>", "accepted instantaneous internal moment about y", "kNm"),
+        ("M<sub>y,int</sub>", "converged instantaneous internal moment about y", "kNm"),
         ("J", "retained final transformed equilibrium row", "mixed section units"),
         ("q", "retained raw reference-stress plane", "mixed stress units"),
         ("target", "solver target resultant", "kNm"),

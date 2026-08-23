@@ -1575,7 +1575,7 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
         },
     ])
     assert "212.346 MPa" in elastic[0]
-    assert "1.0617 permille" in elastic[0]
+    assert "1.0617 " + chr(0x2030) in elastic[0]
     assert (
         "material = M&lt;br&gt;1 &amp; - B500 &lt;i&gt;trial&lt;/i&gt;"
         in elastic[0]
@@ -1595,7 +1595,7 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
     ])
     assert "Outer point 2" in corner[0]
     assert "-18.250 MPa" in corner[0]
-    assert "-0.6083 permille" in corner[0]
+    assert "-0.6083 " + chr(0x2030) in corner[0]
     assert _elastic_corner_hover([]) is None
 
 
@@ -1629,7 +1629,7 @@ def test_plastic_and_elastic_result_views_route_response_only_section_hover():
         value for value in elastic_hover if value.startswith("Corner ")
     )
     for value in (elastic_bar, elastic_tendon, elastic_corner):
-        assert "MPa" in value and "permille" in value
+        assert "MPa" in value and chr(0x2030) in value
         assert "x =" not in value and "y =" not in value
         assert "area =" not in value
     for value in (elastic_bar, elastic_tendon):
@@ -5586,7 +5586,7 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
         detail_widget("_source").help
     )
     for suffix in ("_bond_ratio_xi", "_bond_equivalent_diameter_mm"):
-        assert "EN 1992-1-1:2023 10.3(2)" in detail_widget(suffix).help
+        assert "DS/EN 1992-1-1:2023 10.3(2)" in detail_widget(suffix).help
 
     custom_catalog = fatigue_inputs.default_catalog()
     custom_catalog["items"][0]["preset"] = fatigue_inputs.CUSTOM_PRESET
@@ -6926,7 +6926,7 @@ def test_crack_output_and_candidate_table_are_retained_without_verdict():
     for duration, output in e["crack_output"].items():
         assert output["duration"] == duration
         assert output["calculation_state"] == (
-            "CALCULATED - ACCEPTANCE NOT ASSESSED"
+            "CALCULATED - NO LIMIT COMPARISON"
         )
         assert output["value"] > 0.0
         expected_label = (

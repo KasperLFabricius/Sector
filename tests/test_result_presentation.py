@@ -223,7 +223,7 @@ def test_unassessed_global_crack_width_suppresses_noncritical_comparison():
                         "long_term": {
                             "duration": "long_term",
                             "calculation_state": (
-                                "CALCULATED - ACCEPTANCE NOT ASSESSED"
+                                "CALCULATED - NO LIMIT COMPARISON"
                             ),
                             "value": 0.40,
                             "criterion_mm": None,
@@ -268,7 +268,7 @@ def test_unassessed_global_crack_width_suppresses_noncritical_comparison():
         ("NOT REQUESTED", None, "User criterion not specified"),
         ("NOT ASSESSED", 0.20, "User-specified limit 0.200 mm"),
         (
-            "CALCULATED - ACCEPTANCE NOT ASSESSED",
+            "CALCULATED - NO LIMIT COMPARISON",
             0.0,
             "No comparison requested",
         ),
@@ -1326,7 +1326,7 @@ def test_governing_overview_freezes_complete_status_precedence():
         "STALE",
         "REVIEW",
         "NOT ASSESSED",
-        "CALCULATED - ACCEPTANCE NOT ASSESSED",
+        "CALCULATED - NO LIMIT COMPARISON",
         "PASS",
         "WITHIN USER-SPECIFIED LIMIT",
         "PROVIDED AREA AT LEAST CALCULATED REQUIREMENT",

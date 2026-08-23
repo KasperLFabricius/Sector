@@ -162,7 +162,7 @@ def test_results_overview_retains_type_and_dense_padding(monkeypatch):
     header = table._cellvalues[table._sector_header_row][0]
     assert header.style.fontSize == pytest.approx(8.5)
     assert header.style.leading == pytest.approx(10.1)
-    assert table._sector_overview_groups == ("Acceptance checks",)
+    assert table._sector_overview_groups == ("Checks and comparisons",)
     assert sum(table._colWidths) == pytest.approx(170 * mm)
     for cell_style in table._cellStyles[0]:
         assert cell_style.leftPadding == pytest.approx(2)
@@ -222,20 +222,20 @@ def test_results_overview_separates_scope_state_from_result_groups(monkeypatch):
         if getattr(item, "_sector_results_overview", False)
     )
     assert table._sector_overview_groups == (
-        "Acceptance checks",
+        "Checks and comparisons",
         "Calculated outputs",
-        "Acceptance checks",
+        "Checks and comparisons",
     )
     values = [
         row[0].getPlainText()
         for row in table._cellvalues[table._sector_data_start:]
     ]
     assert values == [
-        "Acceptance checks",
+        "Checks and comparisons",
         "Plastic bending",
         "Calculated outputs",
         "Centroid",
-        "Acceptance checks",
+        "Checks and comparisons",
         "Shear",
     ]
     plain_text = " | ".join(

@@ -85,7 +85,7 @@ def test_elastic_strain_profile_distinguishes_bars_and_tendons():
     assert "Concrete strain plane" in names
     assert "Bars" in names and "Tendons" in names
     assert fig.layout.yaxis.autorange == "reversed"
-    assert "permille" in fig.layout.xaxis.title.text
+    assert _PERMILLE in fig.layout.xaxis.title.text
 
 
 def test_tension_only_curve_has_no_spurious_vertical_at_origin():

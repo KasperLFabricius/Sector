@@ -1757,7 +1757,7 @@ def _apply_reinforcement_bond_correction(
         )
         for bin_input in bins
     )
-    method = "EN 1992-1-1:2023 10.3(2) equivalent tendon area"
+    method = "DS/EN 1992-1-1:2023 10.3(2) equivalent tendon area"
     corrected = []
     for state, equivalent in zip(solved, equivalent_states):
         long = np.asarray(state.bar_stress_long_mpa, dtype=float)

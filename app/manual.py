@@ -46,7 +46,7 @@ from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
 from sector.build_info import source_revision
-from sector import material_presets, templates
+from sector import design_standards, material_presets, templates
 from sector.codes import fctm
 from sector.fatigue import steel_fatigue_life
 from sector.materials import Concrete, Prestress
@@ -58,6 +58,13 @@ import viz
 
 # Display scale for the section drawings: the geometry is in metres, drawn in mm.
 _MM = 1000.0
+_PERMILLE = chr(0x2030)
+
+
+def _manual_input_source(basis_key, guidance_key) -> str:
+    """Return the registry-owned source published in the reference table."""
+
+    return design_standards.input_guidance(basis_key, guidance_key).source
 
 
 # ==========================================================================
@@ -532,7 +539,7 @@ def manual_blocks() -> list:
          "sections remain plane (a linear strain field) and perfect bond between "
          "concrete and steel. Shear and torsion are section-level checks; buckling, "
          "second-order response and other member-level effects are outside scope.")
-    call("standard", "EN 1992-1-1:2023 is a selectable calculation method in "
+    call("standard", "DS/EN 1992-1-1:2023 is a selectable calculation method in "
          "Sector. Individual material and check methods remain independently "
          "selectable and are recorded with their numerical outputs. The 2023 shear methods with and without links "
          "and the refined crack model are implemented. Torsion and combined M-V-T "
@@ -783,7 +790,7 @@ def manual_blocks() -> list:
        "and an area above the resolved tolerance. A ring is rejected for a "
        "repeated or tolerance-coincident vertex, a non-adjacent crossing, touch or "
        "overlap, or an adjacent edge that reverses along the same line. Forward "
-       "collinear points and one exact final point equal to the first are accepted. "
+       "collinear points and one exact final point equal to the first are allowed. "
        "Clockwise and counter-clockwise winding are both valid; Sector retains the "
        "entered order and uses oriented copies only for integration.")
     md("Every hole must be strictly inside the outer ring. It cannot touch or cross "
@@ -821,7 +828,7 @@ def manual_blocks() -> list:
        "$\\varepsilon_{cu2}$ with the exponent $n$, the elastic modulus $E_c$ and "
        "the mean tensile strength $f_{ctm}$. The strain limits, $E_c$ and $f_{ctm}$ "
        "have *Auto* buttons that derive them from $f_{ck}$ and the edition.")
-    call("standard", "For EN 1992-1-1:2023, Sector derives the read-only effective "
+    call("standard", "For DS/EN 1992-1-1:2023, Sector derives the read-only effective "
          "coefficient $\\eta_{cc}k_{tc}$ and exposes $k_{tc}$ separately. The "
          "default is **0.85** (general / other cases). Selecting **1.00** explicitly "
          "assumes the reference-age and at-least-three-month delayed design-loading "
@@ -921,7 +928,7 @@ def manual_blocks() -> list:
     table(["Edition", "Minimum-reinforcement method"],
           [["EN 1992-1-1:2005 / DK NA:2024",
             "$A_{s,prov} \\geq A_{s,min}$ in the resultant bending-tension zone (9.1N)"],
-           ["EN 1992-1-1:2023",
+           ["DS/EN 1992-1-1:2023",
             "Nominal section resistance at characteristic bar yield compared with the cracking action (12.1/12.2)"]])
     call("limit", "Prestressing tendons are not credited in the minimum-"
          "reinforcement check. The DK NA side-face reinforcement rule for high "
@@ -938,7 +945,7 @@ def manual_blocks() -> list:
     table(["Crack-width code", "What it changes"],
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
            ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
-           ["EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
+           ["DS/EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
     call(
         "standard",
         f"Sector {APP_VERSION} reports the DK NA fine and coarse crack systems "
@@ -946,7 +953,7 @@ def manual_blocks() -> list:
         "widths) for each crack-width-enabled Elastic row. Analysis settings "
         "provide independent long-term and short-term user limits. Zero means "
         "that duration is "
-        "calculated without an acceptance comparison; when a positive value is "
+        "calculated without a limit comparison; when a positive value is "
         "entered, Sector reports only a bounded duration-matched comparison and "
         "does not infer exposure, durability, load-combination classification, "
         "prestress category or owner requirements. Part C derives every model in "
@@ -985,7 +992,7 @@ def manual_blocks() -> list:
        "also needs the bond ratio $\\xi$ and equivalent tendon diameter.")
     md("The **Spectrum basis** records the selected grouped-spectrum method and "
        "optional action-set notes. Every action and cycle count is used as entered; "
-       "Sector does not infer traffic completeness or an authority route.")
+       "Sector does not infer traffic completeness or an owner-specific route.")
     table(["Fatigue edition", "Implemented resistance basis"],
           [["DS/EN 1992-1-1:2005",
             "Steel 6.8.4 and Tables 6.3N/6.4N; concrete 6.72 equivalent method or corrected DS/EN 1992-2 6.106 Miner method"],
@@ -1067,9 +1074,9 @@ def manual_blocks() -> list:
          "steel) allow $1 \\leq \\cot\\theta \\leq 2.5$; the DK NA takes the strut "
          "factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 NA) rather "
          "than the recommended $\\nu = 0.6(1 - f_{ck}/250)$. Bounds outside the "
-         "code range are accepted for exploration, but Sector withholds the code "
+         "code range are allowed for exploration, but Sector withholds the code "
          "verdict for the links and every dependent interaction check.")
-    call("standard", "For EN 1992-1-1:2023, "
+    call("standard", "For DS/EN 1992-1-1:2023, "
          "$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta$ (8.42) and "
          "$\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)\\leq\\nu f_{cd}$ "
          "(8.44), with $\\nu=0.5$. The upper angle limit is 2.5 for class B/C, "
@@ -1096,7 +1103,7 @@ def manual_blocks() -> list:
        "selected number of effective vertical legs, while torsion requires a "
        "closed, anchored loop and uses one leg of that loop for $A_{sw}/s$. "
        "Positive stored diameter or spacing does not imply that links are "
-       "present. Without the shared-link authority, Sector reports "
+       "present. Without the shared-link selection, Sector reports "
        "$T_{Rd,max}$ only as a concrete-strut cap and $T_{Rd,c}$ as cracking "
        "transparency; it does not publish $T_{Rd}$, utilisation, a governing "
        "resistance or PASS/FAIL. The calculated $\\sum A_{sl}$ remains an "
@@ -1188,7 +1195,7 @@ def manual_blocks() -> list:
        "Concrete, reinforcement and tendon stresses are outputs for every row. "
        "Crack width includes both the sustained and total long-plus-short response "
        "for each selected row. No stress, crack-width, exposure, durability, "
-       "decompression or required-combination acceptance is applied.")
+       "decompression or required-combination criterion is applied.")
     md("The creep-coefficient input help follows the selected concrete preset. "
        "The first-generation source is 3.1.4 and Annex B.1. The Danish preset "
        "also identifies DK NA:2024 3.1.4(1)-(2), including the conditional "
@@ -1229,7 +1236,7 @@ def manual_blocks() -> list:
     h2("N-M Interaction results")
     md("Select the same named Plastic/capacity case to review axial force against "
        "the moment-resistance boundaries. This view uses the retained capacity "
-       "sweep; it does not start a second solver or create a separate acceptance "
+       "sweep; it does not start a second solver or create a separate comparison "
        "decision.")
     h2("Elastic results")
     md("Select an Elastic case at the top of the view. The cracked-section "
@@ -1342,14 +1349,14 @@ def manual_blocks() -> list:
 
     h1("Material laws")
     h2("Concrete (parabola-rectangle)")
-    md("The design concrete law (Curve 2) rises as a power curve to the peak and "
+    md(("The design concrete law (Curve 2) rises as a power curve to the peak and "
        "then holds it to the ultimate strain:\n\n"
        "$$\\sigma_c = f_{cd}\\left[1-\\left(1-\\tfrac{\\varepsilon_c}"
        "{\\varepsilon_{c2}}\\right)^{n}\\right] \\quad (0\\le\\varepsilon_c\\le"
        "\\varepsilon_{c2}), \\qquad \\sigma_c = f_{cd}\\quad(\\varepsilon_{c2}\\le"
        "\\varepsilon_c\\le\\varepsilon_{cu2}),$$\n\n"
        "with $f_{cd} = \\alpha_{cc}\\,f_{ck}/\\gamma_c$ for the 2005 family and "
-       "$f_{cd}=\\eta_{cc}k_{tc}f_{ck}/\\gamma_c$ for EN 1992-1-1:2023, and zero "
+       "$f_{cd}=\\eta_{cc}k_{tc}f_{ck}/\\gamma_c$ for DS/EN 1992-1-1:2023, and zero "
        "stress beyond "
        "$\\varepsilon_{cu2}$ (crushed).\n\n"
        "For $f_{ck}\\le 50$ MPa the strain limits are $\\varepsilon_{c2}=2.0$ per "
@@ -1359,17 +1366,21 @@ def manual_blocks() -> list:
        "$\\varepsilon_{cu2}=(2.6+35((90-f_{ck})/100)^4)/1000$ and "
        "$n=1.4+23.4((90-f_{ck})/100)^4$. These strength-dependent strains apply to "
        "the 2005 and DK NA editions.\n\n"
-       "The EN 1992-1-1:2023 edition instead keeps them **constant** "
+       "The DS/EN 1992-1-1:2023 edition instead keeps them **constant** "
        "($\\varepsilon_{c2}=2.0$, $\\varepsilon_{cu2}=3.5$ per mille, $n=2$) for "
        "every grade. Its $\\eta_{cc}=\\min[(40/f_{ck})^{1/3},1.0]$ and the "
        "general-case $k_{tc}=0.85$ are applied separately; $k_{tc}=1.00$ is an "
-       "explicit applicability choice under 5.1.6(1).")
-    md("**Worked (beam, C40/50):** $f_{cd}=1.0\\times 40/1.45 = 27.6$ MPa, with "
-       "$\\varepsilon_{c2}=2.0$ and $\\varepsilon_{cu2}=3.5$ per mille.")
+       "explicit applicability choice under 5.1.6(1).").replace(
+           "per mille", _PERMILLE
+       ))
+    md(("**Worked (beam, C40/50):** $f_{cd}=1.0\\times 40/1.45 = 27.6$ MPa, with "
+        "$\\varepsilon_{c2}=2.0$ and $\\varepsilon_{cu2}=3.5$ per mille.").replace(
+            "per mille", _PERMILLE
+        ))
     fig(fig_beam_concrete_law, "The C40/50 parabola-rectangle law of the beam "
         "example.")
     h2("Mild steel")
-    md("The mild-steel editor uses one general Curve 3 law. It is linear to a "
+    md(("The mild-steel editor uses one general Curve 3 law. It is linear to a "
        "first yield, can pass through a second yield defined by the plastic offsets, "
        "and then reaches the entered ultimate point. Setting $k=1$ and both offsets "
        "to zero collapses the two yields into one; setting the factored ultimate "
@@ -1386,10 +1397,12 @@ def manual_blocks() -> list:
        "user-defined/project-defined and uncited preset. It also uses the general "
        "Curve 3 kernel with $k=1$, zero offsets and a flat branch; its stored "
        "starting value is $\\gamma_E=1$. Changing any field changes the law but "
-       "does not change or promote the selected preset identity.")
+       "does not change or promote the selected preset identity.").replace(
+           "per mille", _PERMILLE
+       ))
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.")
     h2("Prestressing steel")
-    md("A tendon is evaluated at its **total** strain -- the locked-in initial "
+    md(("A tendon is evaluated at its **total** strain -- the locked-in initial "
        "strain $\\varepsilon_{p,IS}$ (from prestressing, after losses, given as an "
        "input) plus its tension-positive section strain. For tendon $j$ at depth "
        "$s_{p,j}$ this is:\n\n"
@@ -1397,7 +1410,7 @@ def manual_blocks() -> list:
        "-\\kappa(s_{p,j}-s_{na}), "
        "\\qquad \\sigma_p = f(\\varepsilon_p),\\quad f_{pd}=f_{p0.1k}/\\gamma_s.$$\n\n"
        "**Worked (circular):** $\\varepsilon_{p,IS}=5.0$ per mille and "
-       "$f_{pd}=1600/1.15=1391$ MPa.")
+       "$f_{pd}=1600/1.15=1391$ MPa.").replace("per mille", _PERMILLE))
     fig(fig_circular_prestress_law, "The tendon law of the circular example.")
     call("standard", "The beam and circular examples select the edition-named "
          "DS/EN 1992-1-1:2005 + DK NA:2024 Curve 3 design preset for mild steel. "
@@ -1453,7 +1466,7 @@ def manual_blocks() -> list:
        "axial force balances, $\\sum F = N$; the first moments of the resultants "
        "about the origin are the capacity moments $M_x$, $M_y$.")
     h2("The interaction envelope")
-    md("Rotating the neutral-axis angle $\\varphi_{NA}$ and solving at each gives "
+    md(("Rotating the neutral-axis angle $\\varphi_{NA}$ and solving at each gives "
        "one point on "
        "the $M_x$-$M_y$ envelope; sweeping $0$ to $360$ degrees closes the biaxial "
        "diagram. **Worked (beam, $N=0$, $\\varphi_{NA}=90^\\circ$):** the concrete "
@@ -1461,7 +1474,9 @@ def manual_blocks() -> list:
        "crushing strain ($3.5$ per mille) while the most tensile bars are well past "
        "yield ($19.5$ per mille, against the $2.29$ per mille yield), so this "
        "tension-controlled point gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
-       "kNm is then a utilisation of $300/346 = 0.87$.")
+       "kNm is then a utilisation of $300/346 = 0.87$.").replace(
+           "per mille", _PERMILLE
+       ))
     fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
         "one solved neutral-axis angle.")
 
@@ -1484,7 +1499,7 @@ def manual_blocks() -> list:
        "the lowest $f_{yk}$ is used. Reference: 9.2.1.1(1), Formula (9.1N).")
     call("limit", "The DK NA:2024 side-face reinforcement requirement for high "
          "beam webs is separate from Formula (9.1N) and is not included.")
-    h2("EN 1992-1-1:2023")
+    h2("DS/EN 1992-1-1:2023")
     md("For bending with axial force, Sector derives the uncracked cracking action "
        "in the applied moment direction and checks:\n\n"
        "$$M_{R,nom}(N_{Ed})\\ge M_{cr}(N_{Ed}).$$\n\n"
@@ -1510,7 +1525,7 @@ def manual_blocks() -> list:
        "$$\\rho_w=\\frac{A_{sw}}{s\\,b_w}\\ge\\rho_{w,min},\\qquad"
        "\\rho_{w,min}=c\\frac{\\sqrt{f_{ck}}}{f_{ywk}}.$$\n\n"
        "$c=0.063$ for DS/EN 1992-1-1:2005 DK NA:2024 and $c=0.08$ "
-       "for EN 1992-1-1:2005 and EN 1992-1-1:2023. In the 2023 method, "
+       "for EN 1992-1-1:2005 and DS/EN 1992-1-1:2023. In the 2023 method, "
        "the optional class-B or class-C reduction is applied only when selected "
        "explicitly. References: 2005 9.2.2(5), Formulae (9.4)-(9.5); "
        "2023 12.2(4), Formula (12.4).")
@@ -1534,7 +1549,7 @@ def manual_blocks() -> list:
          "Anchorage is assumed; reduce $f_{ywk}$ when full anchorage is not "
          "available. Cover, bends, mandrel diameter, anchorage length, lap length, "
          "bundle equivalence, congestion and construction access are not verified.")
-    call("standard", "EN 1992-1-1:2023 8.2.1(2) requires minimum shear "
+    call("standard", "DS/EN 1992-1-1:2023 8.2.1(2) requires minimum shear "
          "reinforcement for statically determinate linear members with "
          "$d>500$ mm. The section model does not declare the global structural "
          "system, so that condition is reported as not assessed when relevant.")
@@ -1595,7 +1610,7 @@ def manual_blocks() -> list:
          "superposition (long at $n_l$ + short at $n_s$) as the reported stresses.")
     call("standard", "The selected cracking method evaluates the user-entered "
          "sustained and peak actions. Sector reports the resulting crack widths "
-         "without assigning either action an acceptance role.")
+         "without assigning either action a criterion role.")
     h2("Crack width - EN 1992-1-1:2005")
     md("$$w_k = s_{r,max}\\,(\\varepsilon_{sm}-\\varepsilon_{cm}),\\qquad "
        "\\varepsilon_{sm}-\\varepsilon_{cm} = \\max\\!\\left(\\frac{\\sigma_s - "
@@ -1609,9 +1624,11 @@ def manual_blocks() -> list:
        "$\\rho_{p,eff}=A_{s,eff}/A_{c,eff}$ uses the effective height "
        "$h_{c,ef}=\\min(2.5(h-d),(h-x)/3,h/2)$. Recommended coefficients: $k_1=0.8$ "
        "(ribbed) or $1.6$ (plain), $k_2=0.5$, $k_3=3.4$, $k_4=0.425$.")
-    md("**Worked (beam, $M_x=150$ kNm):** $\\sigma_s=204$ MPa, "
-       "$\\rho_{p,eff}=0.0393$, $\\varepsilon_{sm}-\\varepsilon_{cm}=0.797$ per "
-       "mille, $s_{r,max}=236$ mm, hence $w_k=0.188$ mm.")
+    md(("**Worked (beam, $M_x=150$ kNm):** $\\sigma_s=204$ MPa, "
+        "$\\rho_{p,eff}=0.0393$, $\\varepsilon_{sm}-\\varepsilon_{cm}=0.797$ per "
+        "mille, $s_{r,max}=236$ mm, hence $w_k=0.188$ mm.").replace(
+            "per mille", _PERMILLE
+        ))
     h2("DK NA fine crack system")
     md("The DK National Annex makes the cover term cover-dependent, "
        "$k_3=3.4\\,(25/c)^{2/3}$, which lowers $s_{r,max}$ for covers above 25 mm, "
@@ -1646,7 +1663,7 @@ def manual_blocks() -> list:
        "Applicability, restraint, watertightness and the permitted "
        "$w_k$ remain user declarations. The option is unavailable for the 2023 "
        "basis.")
-    h2("EN 1992-1-1:2023 refined model")
+    h2("DS/EN 1992-1-1:2023 refined model")
     md("The 2023 edition uses a refined model (9.2.3):\n\n"
        "$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-"
        "\\varepsilon_{cm}),\\qquad k_w=1.7,\\qquad \\frac{k_1}{r}=\\frac{h-x}"
@@ -1666,9 +1683,9 @@ def manual_blocks() -> list:
           [["EN 1992-1-1:2005", "236", "0.125", "0.188"],
            ["DS/EN + DK NA (fine)", "206", "0.125", "0.164"],
            ["DS/EN + DK NA (coarse)", "184", "0.100", "0.077"],
-           ["EN 1992-1-1:2023", "134", "0.175", "0.186"]])
+           ["DS/EN 1992-1-1:2023", "134", "0.175", "0.186"]])
     call("standard", "The *Crack-width code* offers three options -- EN 1992-1-1:"
-         "2005, DS/EN 1992-1-1 + DK NA and EN 1992-1-1:2023. The DK NA option "
+         "2005, DS/EN 1992-1-1 + DK NA and DS/EN 1992-1-1:2023. The DK NA option "
          "reports the fine and the coarse system together (all four columns above), "
          "each for the long-term and short-term load. Ordinary methods show one "
          "globally governing worked crack width in Standard and Audit; DK/NA shows "
@@ -1802,7 +1819,8 @@ def manual_blocks() -> list:
        "search over the concrete area. The result includes the largest evaluated "
        "criterion, a conservative upper bound, the absolute and relative gap, sample "
        "and box counts, and convergence. The upper bound governs "
-       "acceptance, so an unresolved potentially critical region cannot pass.")
+       "the calculation conclusion, so an unresolved potentially critical region "
+       "cannot pass.")
 
     h2("Edition and scope summary")
     table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
@@ -1848,7 +1866,7 @@ def manual_blocks() -> list:
        "convention, exactly as the axial-force flip elsewhere. Automatic face "
        "selection follows the associated moment; at zero moment both faces are "
        "evaluated.")
-    md("For EN 1992-1-1:2023, the action-dependent factor is\n\n"
+    md("For DS/EN 1992-1-1:2023, the action-dependent factor is\n\n"
        "$$a_{cs}=\\max\\!\\left(\\left|M_{Ed}/V_{Ed}\\right|,d\\right),\\qquad "
        "k_{vp}=\\max\\!\\left(1+\\frac{N_{Ed}}{|V_{Ed}|}\\frac{d}{3a_{cs}},0.1\\right),$$\n\n"
        "and $d$ in Formula (8.27) is replaced by $k_{vp}d$. The 2023 convention "
@@ -1880,7 +1898,7 @@ def manual_blocks() -> list:
        "axial compression per 6.11N). The shear also adds a longitudinal tension "
        "$\\Delta F_{td} = 0.5\\,V_{Ed}\\,\\cot\\theta$ (6.18) that the bottom steel "
        "must carry on top of the bending force.")
-    md("For EN 1992-1-1:2023,\n\n"
+    md("For DS/EN 1992-1-1:2023,\n\n"
        "$$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta \\quad(8.42),\\qquad "
        "\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)"
        "\\leq\\nu f_{cd}\\quad(8.44),$$\n\n"
@@ -2052,20 +2070,89 @@ def manual_blocks() -> list:
          "Sector applies no Danish National Annex to this basis. The 2023 "
          "confinement enhancement is not included or assessed.")
     table(["Topic", "Reference"],
-          [["Concrete stress-strain law", "DS/EN 1992-1-1 3.1.7 and Table 3.1"],
-           ["Ultimate strains", "DS/EN 1992-1-1 Table 3.1"],
-           ["Reinforcement law", "DS/EN 1992-1-1 3.2.7"],
-           ["Prestressing steel law", "DS/EN 1992-1-1 3.3.6"],
+          [["Concrete law (first generation)",
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.7, "
+            "Formula (3.17), and Table 3.1"],
+           ["Concrete law (2023)",
+            "DS/EN 1992-1-1:2023, 5.1.6(1), Formulae (5.3)-(5.4), "
+            "8.1.1(2)-(3), 8.1.2(1), and Formula (8.4)"],
+           ["Reinforcement law (first generation)",
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.2.7"],
+           ["Reinforcement law (2023)",
+            "DS/EN 1992-1-1:2023, 5.2.4(1)-(3), Formula (5.11), "
+            "and Figure 5.2"],
+           ["Prestressing steel law (first generation)",
+            "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.3.6"],
+           ["Prestressing steel law (2023)",
+            "DS/EN 1992-1-1:2023, 5.3.3(1)-(3), Formula (5.12), "
+            "and Figure 5.3"],
+           ["Creep coefficient (first generation)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_BASE,
+                design_standards.InputGuidanceKey.CREEP_COEFFICIENT,
+            )],
+           ["Creep coefficient (DK NA:2024)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+                design_standards.InputGuidanceKey.CREEP_COEFFICIENT,
+            )],
+           ["Creep coefficient (2023)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.PUBLISHED_2023,
+                design_standards.InputGuidanceKey.CREEP_COEFFICIENT,
+            )],
            ["Cracking and crack width (2005)", "DS/EN 1992-1-1 7.3"],
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
-           ["Crack width (2023)", "EN 1992-1-1:2023 9.2.3"],
+           ["Crack width (2023)", "DS/EN 1992-1-1:2023 9.2.3"],
            ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
            ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72); DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
            ["Reinforcement fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1/E.2"],
            ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 E.4.3 / Formula (E.2); E.5.3 / Formulae (E.7)-(E.8)"],
-           ["Minimum reinforcement (2005 / DK NA)", "DS/EN 1992-1-1 9.2.1.1(1), Formula (9.1N); DK NA:2024"],
-           ["Minimum reinforcement (2023)", "DS/EN 1992-1-1:2023 12.2(2), Formulae (12.1)-(12.2)"],
-           ["Clear spacing (2005 / 2023)", "DS/EN 1992-1-1 8.2(2); DS/EN 1992-1-1:2023 11.2(2)"],
+           ["Minimum reinforcement (first generation)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_BASE,
+                design_standards.InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+            )],
+           ["Minimum reinforcement (DK NA:2024)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+                design_standards.InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+            )],
+           ["Minimum reinforcement (2023)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.PUBLISHED_2023,
+                design_standards.InputGuidanceKey.DETAILING_MINIMUM_REINFORCEMENT,
+            )],
+           ["Shear/torsion link detailing (first generation)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_BASE,
+                design_standards.InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+            )],
+           ["Shear/torsion link detailing (DK NA:2024)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+                design_standards.InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+            )],
+           ["Shear/torsion link detailing (2023)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.PUBLISHED_2023,
+                design_standards.InputGuidanceKey.DETAILING_TRANSVERSE_LINKS,
+            )],
+           ["Clear spacing (first generation)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_BASE,
+                design_standards.InputGuidanceKey.DETAILING_CLEAR_SPACING,
+            )],
+           ["Clear spacing (DK NA:2024)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024,
+                design_standards.InputGuidanceKey.DETAILING_CLEAR_SPACING,
+            )],
+           ["Clear spacing (2023)",
+            _manual_input_source(
+                design_standards.DesignBasisKey.PUBLISHED_2023,
+                design_standards.InputGuidanceKey.DETAILING_CLEAR_SPACING,
+            )],
            ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
            ["Shear, strain-based (2023)", "DS/EN 1992-1-1:2023 4.3.3 and Table 4.3 (NDP) ($\\gamma_V$); 8.2.2 ($\\tau_{Rd,c}$, $d_{dg}$)"],
            ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
