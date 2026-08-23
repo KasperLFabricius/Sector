@@ -103,7 +103,7 @@ def test_accessible_html_fixture_is_self_contained_and_semantic():
         "Standard adds one governing worked calculation for each active check "
         "family"
     ) in text
-    assert "Audit does not mean approved, compliant or certified" in text
+    assert "Values and statuses match the other report profiles" in text
 
 
 @pytest.mark.real_image_export

@@ -90,9 +90,9 @@ CONCRETE_FIELD_META = {
 CONCRETE_HELP = {
     "fck": r"Characteristic compressive cylinder strength $f_{ck}$.",
     "gamma_c": r"Final effective partial factor $\gamma_c$ on the concrete strength "
-               "(design = characteristic / partial factor). Include every applicable national "
-               "increase or reduction; Sector applies no hidden construction-, "
-               "control- or consequence-category multiplier.",
+               "(design = characteristic / partial factor). Enter the final project "
+               "value, including every applicable national increase or reduction; "
+               "Sector uses this value directly.",
     "alpha_cc": "Coefficient for long-term and loading effects on the concrete "
                 r"design strength ($f_{cd}=\alpha_{cc}f_{ck}/\gamma_c$).",
     "eps_c2": "Compressive strain at peak stress (parabola apex). EC2 Table 3.1: "
@@ -220,11 +220,12 @@ MILD_HELP = {
            + "); enter the "
            "design value.",
     "gamma_y": r"Final effective partial factor $\gamma_y$ on the yield stress. It "
-               r"also applies to stirrup $f_{ywk}$. Include every applicable national increase or "
-               "reduction; Sector applies no hidden category multiplier.",
-    "gamma_u": r"Final effective partial factor $\gamma_u$ on the ultimate stress. Include every "
-               "applicable increase or reduction; Sector applies no hidden category "
-               "multiplier.",
+               r"also applies to stirrup $f_{ywk}$. Enter the final project value, "
+               "including every applicable national increase or reduction; Sector "
+               "uses this value directly.",
+    "gamma_u": r"Final effective partial factor $\gamma_u$ on the ultimate stress. "
+               "Enter the final project value, including every applicable increase "
+               "or reduction; Sector uses this value directly.",
     "gamma_E": r"Final effective partial factor $\gamma_E$ on the elastic modulus.",
     "k": r"Ratio of the first to the second yield stress ($f_1/f_{ytk}$). Use $k=1$ "
          "for a single yield point (bilinear or elastic-perfectly-plastic).",
@@ -314,11 +315,9 @@ PRESTRESS_HELP = {
     "futk": r"Characteristic ultimate stress $f_{pk}$.",
     "eut": "Strain at rupture.",
     "gamma_y": r"Final effective partial factor $\gamma_y$ on the proof stress. Include every "
-               "applicable increase or reduction; Sector applies no hidden category "
-               "multiplier.",
+               "applicable increase or reduction; Sector uses this value directly.",
     "gamma_u": r"Final effective partial factor $\gamma_u$ on the ultimate stress. Include every "
-               "applicable increase or reduction; Sector applies no hidden category "
-               "multiplier.",
+               "applicable increase or reduction; Sector uses this value directly.",
     "gamma_E": r"Final effective partial factor $\gamma_E$ on the elastic modulus.",
     "k": r"Ratio of the first to the proof stress ($f_1/f_{p0.1k}$). Use $k=1$ for a "
          "bilinear curve.",

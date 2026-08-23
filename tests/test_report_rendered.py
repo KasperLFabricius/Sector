@@ -116,14 +116,14 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
         if "Characteristic strength" in page_text
     ]
     assert len(concrete_pages) == 1
-    assert "EQ-MATERIALS.CONCRETE.FCD" in concrete_pages[0]
+    assert "EQ-" not in concrete_pages[0]
     assert "= 20 MPa" in concrete_pages[0]
     assert validate_results_overview_pagination(page_texts)
 
     validate_equation_source_colocation(page_texts)
 
 
-def test_audit_fixture_flags_sparse_non_opener_pages_for_visual_review():
+def test_audit_fixture_has_no_sparse_non_opener_pages():
     pdf = build_fixture_pdf(figures=False, profile="Audit")
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     page_texts = [page.extract_text() or "" for page in reader.pages]
@@ -137,12 +137,8 @@ def test_audit_fixture_flags_sparse_non_opener_pages_for_visual_review():
         page_texts,
         opener_pages=opener_pages,
     )
-    assert len(sparse) == 1
-    assert all(0.0 < coverage < 0.35 for _page, coverage in sparse)
-    sparse_text = page_texts[sparse[0][0] - 1]
-    assert "EQ-FATIGUE.CONCRETE.UTILISATION" in sparse_text
-    assert "Mathematical expression:" in sparse_text
-    assert "Source / method note:" in sparse_text
+    assert sparse == ()
+    assert all("EQ-" not in text for text in page_texts)
 
 
 def test_worked_example_text_rejects_any_unavailable_placeholder():
@@ -158,7 +154,7 @@ def test_equation_source_colocation_rejects_a_page_split():
         validate_equation_source_colocation(
             [
                 (
-                    "Equation (1.1) | EQ-TEST.RELATION\n"
+                    "Equation (1.1)\n"
                 ),
                 (
                     "Source / method note: retained source moved to another page\n"

@@ -242,8 +242,8 @@ def _with_ordinary_crack_assessment(
                 "governing": None,
                 "unit": "mm",
                 "reason": (
-                    f"No {duration.replace('_', '-')} crack-width output was "
-                    "returned by the calculation."
+                    f"The calculation produced no {duration.replace('_', '-')} "
+                    "crack-width result."
                 ),
             }
         assessed[duration] = sls_core.assess_crack_output(

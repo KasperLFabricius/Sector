@@ -200,21 +200,20 @@ _FIRST_GEN_DAMAGE_SOURCE = (
     "DS/EN 1992-2:2005/AC:2008 Formula 6.106 - user-supplied spectrum"
 )
 _FIRST_GEN_DAMAGE_DISCLOSURE = (
-    "Bridge-source calculation using a user-supplied section-action spectrum; "
-    "traffic models, dynamic effects, lane/track concurrence, owner "
-    "requirements and complete bridge-fatigue compliance are not assessed."
+    "Fatigue calculation using a user-supplied section-action spectrum. Traffic "
+    "models, dynamic effects, lane/track concurrence and owner-specific checks "
+    "are outside this section calculation."
 )
 _BASE_BINDING_DISCLOSURE = (
     "Eurocode recommended values are used; no Danish national choice is "
     "applied."
 )
 _DK_BINDING_DISCLOSURE = (
-    "The implemented fatigue equations are unchanged. User-supplied factors "
-    "govern; this selection records the stated Danish project basis and "
-    "applies no hidden DK-specific fatigue equation or factor."
+    "Uses the first-generation fatigue equations with the user-supplied "
+    "factors and the stated Danish project basis."
 )
 _PUBLISHED_2023_BINDING_DISCLOSURE = (
-    "Annex E implementation; no Danish National Annex is applied."
+    "DS/EN 1992-1-1:2023, Annex E; no Danish National Annex is applied."
 )
 _FIRST_GEN_CRACK_SOURCE = (
     "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 7.3.2 and 7.3.4, "
@@ -234,13 +233,12 @@ _DK_HEIGHTENED_CRACK_SOURCE = (
     "7.3.2(1)P, Formula 7.100 NA"
 )
 _DK_ORDINARY_CRACK_DISCLOSURE = (
-    "The implemented Danish ordinary crack-width route reports the fine and "
-    "coarse crack systems. Selection records the stated Danish project basis."
+    "The Danish ordinary crack-width method reports the fine and coarse crack "
+    "systems. The stated Danish project basis is shown with the results."
 )
 _DK_HEIGHTENED_CRACK_DISCLOSURE = (
     "Separate user-selected first-generation Danish calculation. The user "
-    "supplies the permitted crack width and decides applicability; Sector "
-    "does not infer that the supplementary provision applies."
+    "supplies the permitted crack width; applicability follows the project basis."
 )
 
 _FIRST_GEN_MIXED_BOND_SOURCE = "EN 1992-1-1:2005 6.8.2(2)"
@@ -839,9 +837,8 @@ STANDARD_CONTEXTS: tuple[StandardContext, ...] = (
         citation="DS/EN 1992-2:2005/AC:2008",
         role=ContextRole.SOURCE_ONLY,
         disclosure=(
-            "Formula 6.106 is a source for the registered first-generation "
-            "concrete-fatigue damage-sum calculation only; it is not a "
-            "selectable bridge basis."
+            "Formula 6.106 supports the first-generation concrete-fatigue "
+            "damage-sum method only; it does not define a selectable bridge basis."
         ),
     ),
     StandardContext(
@@ -849,8 +846,8 @@ STANDARD_CONTEXTS: tuple[StandardContext, ...] = (
         citation="DS/EN 1992-2 DK NA:2015",
         role=ContextRole.CONTEXT_ONLY,
         disclosure=(
-            "Project context only; no solver binding or selectable basis is "
-            "registered."
+            "Project context only; Sector does not provide a selectable "
+            "calculation method for this source."
         ),
     ),
     StandardContext(
@@ -858,8 +855,8 @@ STANDARD_CONTEXTS: tuple[StandardContext, ...] = (
         citation="DS/EN 1992-1-1:2023, normative Annex K",
         role=ContextRole.CONTEXT_ONLY,
         disclosure=(
-            "Bridge scope in the standard only; no solver binding or Sector "
-            "implementation claim is registered."
+            "Reference scope only; Sector does not implement a selectable "
+            "calculation method from this source."
         ),
     ),
 )

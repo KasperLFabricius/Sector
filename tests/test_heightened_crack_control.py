@@ -86,7 +86,7 @@ def test_fine_ribbed_benchmark_retains_every_operand_and_identity():
         "7.3.2(1)P, Formula 7.100 NA"
     )
     assert "user-selected" in result.disclosure
-    assert "does not infer" in result.disclosure
+    assert "applicability follows the project basis" in result.disclosure
     assert result.formula_identity == "Formula 7.100 NA"
 
 

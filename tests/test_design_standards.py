@@ -163,10 +163,10 @@ def test_first_generation_damage_sum_keeps_its_source_only_scope():
             "DS/EN 1992-2:2005/AC:2008 Formula 6.106 - user-supplied "
             "spectrum"
         )
+        assert "user-supplied section-action spectrum" in binding.disclosure
         assert (
-            "traffic models, dynamic effects, lane/track concurrence, owner "
-            "requirements and complete bridge-fatigue compliance are not "
-            "assessed"
+            "Traffic models, dynamic effects, lane/track concurrence and "
+            "owner-specific checks are outside this section calculation"
         ) in binding.disclosure
         assert "DK NA:2015" not in binding.source
         assert "DK NA:2015" not in binding.disclosure
@@ -242,7 +242,7 @@ def test_heightened_crack_binding_is_first_generation_dk_only_and_bounded():
         "7.3.2(1)P, Formula 7.100 NA"
     )
     assert "user-selected" in binding.disclosure
-    assert "does not infer" in binding.disclosure
+    assert "applicability follows the project basis" in binding.disclosure
 
     for unsupported in (
         standards.DesignBasisKey.FIRST_GEN_BASE,

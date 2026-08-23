@@ -221,7 +221,7 @@ def test_crack_comparison_requires_user_source_and_millimetre_output():
     assert without_source["calculation_state"] == "NOT ASSESSED"
     assert "nonblank criterion source" in without_source["reason"]
     assert wrong_unit["calculation_state"] == "NOT ASSESSED"
-    assert "retained in millimetres" in wrong_unit["reason"]
+    assert "expressed in millimetres" in wrong_unit["reason"]
 
 
 def test_crack_criterion_source_rejects_unknown_duration():

@@ -66,7 +66,7 @@ def mild_preset_kernel_note(preset: str) -> str:
     if selected in mp.MILD_PRESETS:
         return ("General Curve 3 law; the named project-defined preset supplies "
                 "starting values")
-    return "Stored material-law inputs; no standard identity inferred"
+    return "Custom or imported material law; project-defined"
 
 
 def _kind(kind: str) -> str:

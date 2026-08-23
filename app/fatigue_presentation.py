@@ -263,7 +263,7 @@ def simplified_reinforcement_screen(result):
             "governing_bin": "-",
             "total_cycles": None,
             "source": "",
-            "reason": "No simplified fatigue-screen evidence was retained",
+        "reason": "No simplified fatigue-screen result is available",
         }
     passed = value(screen, "passed")
     return {

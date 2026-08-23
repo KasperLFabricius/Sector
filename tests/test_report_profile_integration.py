@@ -59,7 +59,7 @@ def test_brief_frozen_fixture_is_a_compact_auditable_engineering_report():
         "Shear, torsion and detailing settings",
         "Grouped fatigue settings",
         "Governing results and limitations",
-        "Brief contains no worked derivation or result chain",
+        "Worked derivations, result chains and non-governing results begin in Standard",
     ):
         assert expected in text
 
@@ -94,7 +94,7 @@ def test_brief_retains_relevant_input_rows_without_standard_derivations():
         "stress model = fixed; bend reduction = no",
     ):
         assert expected in text
-    assert "Retained strain plane" not in text
+    assert "Converged strain plane" not in text
     assert "Textbook calculation" not in text
 
 
@@ -1071,7 +1071,7 @@ def test_brief_omits_non_governing_fatigue_spectra_but_deeper_profiles_retain_th
 def test_every_profile_begins_with_the_same_freshness_and_basis_dashboard():
     expected = (
         "Calculation state CURRENT - frozen QA fixture",
-        f"Input SHA-256 {'f' * 64}",
+        "Tool version",
         "Selected basis / methods",
         "Report profile",
         "DK heightened crack-control applicability is user-selected",
@@ -1083,16 +1083,16 @@ def test_every_profile_begins_with_the_same_freshness_and_basis_dashboard():
             assert value in cover
 
 
-def test_internal_equation_keys_are_audit_only_and_standard_is_default_depth():
+def test_internal_equation_keys_are_not_published_and_standard_is_default_depth():
     brief = _profile_text("Brief")
     standard = _profile_text("Standard")
     audit = _profile_text("Audit")
     assert "EQ-" not in brief
     assert "EQ-" not in standard
-    assert "EQ-MATERIALS.CONCRETE.FCD" in audit
+    assert "EQ-" not in audit
     assert "Report profile Standard" in standard
     assert "Report profile Audit" in audit
-    assert "Audit does not mean approved, compliant or certified" in audit
+    assert "Values and statuses match the other report profiles" in audit
 
 
 def test_profile_depth_is_monotonic_without_changing_figures_policy():
@@ -1124,7 +1124,7 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
         "Concrete",
         "Resistance",
         "Resistances",
-        "Retained strain plane",
+        "Converged strain plane",
         "Physical resistance components",
         "Section resultants at convergence",
         "Governing reinforcement and tendon response",

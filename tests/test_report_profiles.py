@@ -94,13 +94,13 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
     assert audit.sparse_page_body_coverage_threshold == pytest.approx(0.35)
 
 
-def test_profiles_describe_omissions_and_audit_disclaims_certification():
+def test_profiles_describe_omissions_and_audit_depth_for_engineers():
     assert all(profile.description for profile in profiles.REPORT_PROFILES.values())
     assert all(profile.omitted_detail for profile in profiles.REPORT_PROFILES.values())
-    assert "does not mean approved, compliant or certified" in (
-        profiles.AUDIT_PROFILE.description
-    )
-    assert "complete effective inputs" in profiles.BRIEF_PROFILE.description
+    assert "all calculation inputs" in profiles.AUDIT_PROFILE.description
+    assert "intermediate values" in profiles.AUDIT_PROFILE.description
+    assert "Values and statuses match" in profiles.AUDIT_PROFILE.description
+    assert "all inputs relevant" in profiles.BRIEF_PROFILE.description
     assert "worked result chain" not in profiles.BRIEF_PROFILE.description
 
 

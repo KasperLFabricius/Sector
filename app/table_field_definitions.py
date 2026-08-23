@@ -294,7 +294,7 @@ def validation_rule(definition: FieldDefinition) -> str:
     if definition.key == "cycles":
         return "Required finite number greater than zero."
     if definition.key in {"name", "spectrum"}:
-        return "Required stable identity; uniqueness is enforced in its table scope."
+        return "Required name; it must be unique within this table."
     if definition.key == "description":
         return "Optional project text."
     if definition.key == "material_id":
@@ -305,7 +305,7 @@ def validation_rule(definition: FieldDefinition) -> str:
         return "Boolean request; off means crack width is not requested."
     if definition.unit != "-" or definition.math_symbol != "-":
         return "Finite unambiguous decimal; the field-specific sign rule applies."
-    return "Value must satisfy the table-owned type and identity contract."
+    return "Value must meet the input requirements stated in this table."
 
 
 def method_dependency(table_key: str, definition: FieldDefinition) -> str:
@@ -370,16 +370,16 @@ def _reinforcement_fields(kind: str) -> tuple[FieldDefinition, ...]:
     noun = "bar" if is_bar else "tendon"
     return (
         _field(
-            "ID", f"{noun.capitalize()} ID", f"Stable identifier for this {noun}.",
-            "i", "-", "Stable row identity used by calculations and reports.",
+            "ID", f"{noun.capitalize()} ID", f"Identification for this {noun}.",
+            "i", "-", "ID shown in calculations and reports.",
             "Identifiers carry no physical sign.", BlankPolicy.DEFAULT,
             "Sector generated",
-            f"next {prefix} number above the highest retained suffix",
+            f"next unused {prefix} number",
         ),
         *_XY_FIELDS,
         _field(
             "size mode", "Size input", "Choose whether area or diameter controls the size.",
-            "-", "-", "Selects the authoritative size input for the element.",
+            "-", "-", "Specifies whether area or diameter defines the element size.",
             "Not applicable.", BlankPolicy.DEFAULT, "User selection", "Area",
         ),
         _field(
@@ -431,7 +431,7 @@ def _action(
 _CASE_ID_FIELDS = (
     _field(
         "name", "Name", "Required case name, unique across all action tables.",
-        "-", "-", "Stable user-facing action-case identity.",
+        "-", "-", "Action-case name shown in calculations and reports.",
         "Names carry no physical sign.", BlankPolicy.REQUIRED,
     ),
     _field(
@@ -502,12 +502,12 @@ _ELASTIC_FIELDS = (
 _FATIGUE_FIELDS = (
     _field(
         "spectrum", "Spectrum", "Required spectrum name; equal names accumulate damage.",
-        "-", "-", "Identity of the independently accumulated fatigue spectrum.",
+        "-", "-", "Name of the independently accumulated fatigue spectrum.",
         "Names carry no physical sign.", BlankPolicy.REQUIRED,
     ),
     _field(
         "name", "Bin name", "Required bin name, unique across all action tables.",
-        "-", "-", "Stable user-facing identity of the spectrum bin.",
+        "-", "-", "Spectrum-bin name shown in calculations and reports.",
         "Names carry no physical sign.", BlankPolicy.REQUIRED,
     ),
     _field(

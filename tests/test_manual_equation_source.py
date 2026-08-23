@@ -28,19 +28,19 @@ EXPECTED_ROWS = (
     (
         "C3-2", "project",
         "Project-defined / uncited general Curve 3 mild-steel law; "
-        "edition-named presets retain selected material provenance separately.",
+        "edition-named presets show their material references separately.",
     ),
     (
         "C3-3", "mixed",
         "Project-defined / uncited plane-section total-strain composition with "
-        "selected prestressing-law provenance from DS/EN 1992-1-1:2004 + "
+        "the selected prestressing-law reference from DS/EN 1992-1-1:2004 + "
         "A1:2014 + AC:2010 3.3.6 or DS/EN 1992-1-1:2023 5.3.3 when the "
         "corresponding edition preset is selected.",
     ),
     (
         "C4-1", "project",
         "Project-defined / uncited first-material-limit capacity search; selected "
-        "material limits retain their own sources.",
+        "material limits keep their stated references.",
     ),
     (
         "C5-1", "standard",
@@ -70,9 +70,9 @@ EXPECTED_ROWS = (
     (
         "C5-6", "standard",
         "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.2(6),(8), Formulas "
-        "(9.6N) and (9.8N), plus 9.3.2(2),(4)-(5) for the retained slab branch; "
+        "(9.6N) and (9.8N), plus 9.3.2(2),(4)-(5) for the slab provisions; "
         "DS/EN 1992-1-1:2023 Table 12.1 items 5 and 7, plus Table 12.2 items "
-        "8 and 10 and 12.4.2 for the retained slab branch.",
+        "8 and 10 and 12.4.2 for the slab provisions.",
     ),
     (
         "C5-7", "standard",
@@ -105,11 +105,10 @@ EXPECTED_ROWS = (
     ),
     (
         "C8-1", "mixed",
-        "Project-defined / uncited retained Elastic stress reconstruction with "
+        "Project-defined / uncited Elastic stress calculation with "
         "a selected fatigue action factor; DS/EN 1992-1-1:2004 + A1:2014 + "
         "AC:2010 2.4.2.3 and 6.8.4(1), or DS/EN 1992-1-1:2023 10.2 and "
-        "Annex E, defines how that factor enters the retained edition's fatigue "
-        "action route.",
+        "Annex E, defines how that factor applies for the selected edition.",
     ),
     (
         "C8-2", "mixed",
@@ -199,7 +198,7 @@ EXPECTED_ROWS = (
 )
 
 EXPECTED_SOURCE_SEAL = (
-    "7c9b6474e1faa26d8259cb0c7094632706b17bcaca10d1f3e5fa7ee522eb7019"
+    "aeab11addf8fc0d983b5275b5fba943f5963805c58ade050cde5bd0586ceca1d"
 )
 
 

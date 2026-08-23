@@ -85,7 +85,7 @@ def test_heightened_permitted_width_routes_to_dedicated_setting():
             "mode",
         ),
         (
-            "Heightened crack control requires the registered first-generation "
+            "Heightened crack control is available only with the first-generation "
             "DK NA:2024 design basis",
             input_issues.ANALYSIS_SETTINGS,
             "sls_code",

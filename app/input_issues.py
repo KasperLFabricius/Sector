@@ -126,7 +126,7 @@ _HEIGHTENED_TARGETS = (
         ),
     ),
     (
-        "Heightened crack control requires the registered",
+        "Heightened crack control is available only with",
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_code",

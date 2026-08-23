@@ -90,7 +90,7 @@ def test_reinforcement_id_blank_rule_matches_monotonic_allocator(
     identity = fields.field_definition(table_key, reinforcement_table.ELEMENT_ID)
 
     assert identity.default == (
-        f"next {prefix} number above the highest retained suffix"
+        f"next unused {prefix} number"
     )
     assert "lowest unused" not in fields.input_rule(identity).casefold()
 

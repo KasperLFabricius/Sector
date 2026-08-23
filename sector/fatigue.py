@@ -1888,7 +1888,7 @@ def assess_simplified_reinforcement_fatigue(
             governing_bin=None,
             total_cycles=total_cycles,
             source=rule.source,
-            reason="Retained cycle evidence is not finite",
+            reason="The calculated cycle total is not finite",
         )
     if any(not item.converged for item in retained):
         return SimplifiedReinforcementFatigueScreen(
@@ -1903,7 +1903,7 @@ def assess_simplified_reinforcement_fatigue(
             governing_bin=None,
             total_cycles=total_cycles,
             source=rule.source,
-            reason="One or more retained fatigue bins did not converge",
+            reason="One or more fatigue bins did not converge",
         )
 
     raw_ranges = (
@@ -1948,7 +1948,7 @@ def assess_simplified_reinforcement_fatigue(
             governing_bin=None,
             total_cycles=total_cycles,
             source=rule.source,
-            reason="Retained stress-range evidence is malformed",
+            reason="The calculated stress-range data are invalid",
         )
     expected_ranges = tuple(
         abs(total_stress - long_stress)
@@ -1975,7 +1975,7 @@ def assess_simplified_reinforcement_fatigue(
             governing_bin=None,
             total_cycles=total_cycles,
             source=rule.source,
-            reason="Retained stress-range evidence is internally inconsistent",
+            reason="The calculated stress ranges do not match the endpoint stresses",
         )
 
     governing_index = max(range(len(retained)), key=ranges.__getitem__)
@@ -1995,7 +1995,7 @@ def assess_simplified_reinforcement_fatigue(
             total_cycles=total_cycles,
             source=rule.source,
             reason=(
-                "Retained spectrum cycles exceed the simplified limit of "
+                "Total spectrum cycles exceed the simplified limit of "
                 f"{float(rule.max_cycles):.6g}"
             ),
         )
@@ -2015,7 +2015,7 @@ def assess_simplified_reinforcement_fatigue(
             governing_bin=governing_bin,
             total_cycles=total_cycles,
             source=rule.source,
-            reason="At least one retained fatigue bin has no tensile endpoint",
+            reason="At least one fatigue bin has no tensile endpoint",
         )
 
     threshold = float(rule.threshold_mpa)

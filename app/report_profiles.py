@@ -48,13 +48,12 @@ BRIEF_PROFILE: Final = ReportProfilePolicy(
     key="Brief",
     label="Brief",
     description=(
-        "Rapid-review report with the complete effective inputs for every "
-        "reported active result, governing results and concise limitations."
+        "Concise report with all inputs relevant to each reported result, "
+        "governing results and concise limitations."
     ),
     omitted_detail=(
-        "Non-governing results, worked derivations, candidate and branch "
-        "inventories, full method theory, hashes and exhaustive provenance "
-        "are omitted."
+        "Worked derivations and non-governing results are omitted; use Standard "
+        "or Audit when those details are required."
     ),
     input_scope="effective",
     non_governing_scope="governing-only",
@@ -69,13 +68,12 @@ STANDARD_PROFILE: Final = ReportProfilePolicy(
     key="Standard",
     label="Standard",
     description=(
-        "Default ordinary-design-review report with complete used inputs, "
-        "result tables and one governing worked calculation per active check "
-        "family, with key source information."
+        "Default calculation report with all used inputs, complete result tables "
+        "and one governing worked calculation per active check family, with key "
+        "references."
     ),
     omitted_detail=(
-        "Unused canonical inputs, exhaustive candidates, traces and branches, "
-        "internal keys, hashes, inventories and complete provenance are omitted."
+        "Audit-only intermediate results and complete method theory are omitted."
     ),
     input_scope="used",
     non_governing_scope="complete",
@@ -90,14 +88,12 @@ AUDIT_PROFILE: Final = ReportProfilePolicy(
     key="Audit",
     label="Audit",
     description=(
-        "Expanded evidence report with canonical inputs, complete candidates, "
-        "branches, substitutions and provenance, plus internal identifiers, "
-        "hashes, inventories and theory context. Audit does not mean approved, "
-        "compliant or certified."
+        "Expanded calculation report for detailed review with all calculation inputs, "
+        "non-governing results, intermediate values, substitutions, references "
+        "and method theory. Values and statuses match the other report profiles."
     ),
     omitted_detail=(
-        "No retained live calculation or provenance detail is intentionally "
-        "omitted."
+        "All available calculation evidence is included."
     ),
     input_scope="canonical",
     non_governing_scope="complete",

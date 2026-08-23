@@ -90,13 +90,13 @@ _REPORT_CROPS = (
         "report contents",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "8316f5bc9afb2c7cba26d6c2555d05969f9f44a9c092857bf37f95c9f80f7575",
+        "545c834d6ed7521f5fdd466f8a1c553601cb262abc1a5bf770a0c2d1ead6181c",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "67af0e27a25c0c6ea99c26f6ffbd0e34630ac27a7224592af60da4a25e84b34c",
+        "7ae6d57e3da73fe8887ffbf3291f77287a98f23713cba406ea622993e7cbf7e5",
     ),
 )
 
@@ -1713,7 +1713,7 @@ def validate_worked_example_text(text: str) -> None:
     flat_text = " ".join(text.split())
     for expected in (
         _EXPECTED_PLASTIC_WORKED_HEADING,
-        "Retained strain plane",
+        "Converged strain plane",
         "Ultimate-curvature candidates",
         "Step 1 - converged long-term state",
         "Step 2 - neutralise the long-term concrete stress",
@@ -1739,8 +1739,7 @@ def validate_equation_source_colocation(
     equation_count = 0
     for page_number, page_text in enumerate(page_texts, start=1):
         identities = re.findall(
-            r"(?m)^(?:Equation \([^\n]+\) \| )?"
-            r"EQ-[A-Z0-9][A-Z0-9.\-]+\s*$",
+            r"(?m)^(?:Equation \([0-9]+\.[0-9]+\)|Method relation)\s*$",
             page_text,
         )
         sources = re.findall(r"(?m)^Source / method note:", page_text)
@@ -1907,7 +1906,7 @@ def validate_pdf_content(
         "Vy,Ed = 0",
         "Plastic section capacity - PL-QA-2",
         _EXPECTED_PLASTIC_WORKED_HEADING,
-        "Retained strain plane",
+        "Converged strain plane",
         "Ultimate-curvature candidates",
         "Longitudinal minimum reinforcement - PL-QA-1",
         "Shear/torsion link detailing - PL-QA-1",
@@ -1934,7 +1933,7 @@ def validate_pdf_content(
         "Bounded governing-fibre search",
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
-        "Torsion and shear fatigue are not assessed",
+        "shear and torsion fatigue remain separate checks",
         "Physical resistance components",
         "Concrete compression strut",
         "Closed stirrup",
@@ -1970,11 +1969,11 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
     """Require one readable overview across its bounded native continuations."""
     caption = "Results overview across calculated checks"
     intro = (
-        "Demand-versus-resistance checks keep their individual verdicts"
+        "The table shows the governing result for each check type."
     )
     notes = (
-        "The table retains one governing row per semantic check type.",
-        "The table retains one governing row for each semantic check type.",
+        "The table shows one governing row per engineering check type.",
+        "The table shows one governing row for each engineering check type.",
     )
     normalized_pages = [" ".join(page_text.split()) for page_text in page_texts]
     overview_indexes = [
