@@ -1430,6 +1430,11 @@ def test_app_gamma_v_control_has_the_exact_2023_scope_and_references():
     )
     assert at.number_input(key="shear_gamma_v").disabled is False
 
+    _set(at, ("checkbox", "shear_links", True))
+    assert at.number_input(key="shear_gamma_v").disabled is True
+    _set(at, ("checkbox", "shear_links", False))
+    assert at.number_input(key="shear_gamma_v").disabled is False
+
     _set_and_click(
         at,
         "calculate",
@@ -1491,6 +1496,36 @@ def test_app_gamma_v_is_absent_from_the_2005_result_signature():
     assert at.session_state["results"]["shear"]["res"]["vrd_c"] == pytest.approx(
         old_resistance
     )
+
+
+def test_app_gamma_v_is_inactive_for_2023_shear_links():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_gamma_v", 0.0),
+        ("number_input", "shear_V", 100.0),
+        ("checkbox", "shear_links", True),
+    )
+
+    assert at.number_input(key="shear_gamma_v").disabled is True
+    _calculate(at)
+
+    assert not at.exception
+    assert not any("shear_gamma_v" in item.value for item in at.error)
+    result = at.session_state["results"]["shear"]
+    assert result["res"]["gamma_v"] == pytest.approx(1.40)
+    assert result["links"] is not None
+    old_signature = at.session_state["result_sig"]
+
+    _goto_page(at, "Inputs")
+    at.session_state["shear_gamma_v"] = 9.00
+    at.run()
+
+    assert at.session_state["_latest_inputs"]["signature"] == old_signature
+    assert at.session_state["result_sig"] == old_signature
 
 
 def test_app_rejects_nonpositive_active_gamma_v_before_a_shear_result():

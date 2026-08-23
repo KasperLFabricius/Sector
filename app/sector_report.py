@@ -2965,18 +2965,17 @@ class ReportBuilder:
                     ["V<sub>y</sub> web width", self._brief_auto_dimension(inp.get("shear_vy_bw"))],
                 ])
                 if shear_2023:
-                    resistance_rows.extend([
-                        [
-                            "Shear aggregate D<sub>lower</sub>",
-                            self._brief_auto_dimension(
-                                inp.get("shear_dlower")
-                            ),
-                        ],
-                        [
+                    resistance_rows.append([
+                        "Shear aggregate D<sub>lower</sub>",
+                        self._brief_auto_dimension(
+                            inp.get("shear_dlower")
+                        ),
+                    ])
+                    if not shear_links_active:
+                        resistance_rows.append([
                             "Shear partial factor gamma<sub>V</sub>",
                             _fmt(inp.get("shear_gamma_v"), 3),
-                        ],
-                    ])
+                        ])
             if inp.get("torsion_on"):
                 resistance_rows.extend([
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],

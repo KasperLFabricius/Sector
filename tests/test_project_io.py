@@ -381,6 +381,26 @@ def test_schema_26_inactive_gamma_v_default_is_silent_and_deterministic():
     }
 
 
+def test_schema_26_2023_shear_links_migrate_gamma_v_silently():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+        "shear_links": True,
+    })
+    source = json.dumps(_schema26_payload(tables, scalars))
+
+    _loaded_tables, loaded, info = project_io.parse_project_with_info(source)
+
+    assert loaded["shear_gamma_v"] == pytest.approx(1.40)
+    assert info["migration_warnings"] == ()
+    assert info["migration_provenance"]["shear_gamma_v"] == {
+        "defaulted": True,
+        "value": 1.40,
+        "active_2023_shear": False,
+    }
+
+
 def test_schema_25_active_2023_shear_migrates_both_bounded_contracts():
     tables, scalars = _current_project()
     scalars.update({
@@ -437,6 +457,21 @@ def test_current_schema_active_2023_shear_requires_gamma_v():
         match="shear_gamma_v is required when the DS/EN",
     ):
         project_io.dump_project(tables, scalars)
+
+
+def test_current_schema_2023_shear_links_default_a_missing_gamma_v():
+    tables, scalars = _current_project()
+    scalars.update({
+        "shear_on": True,
+        "shear_method": codes.EC2_2023.label,
+        "shear_links": True,
+    })
+    scalars.pop("shear_gamma_v", None)
+
+    text = project_io.dump_project(tables, scalars)
+    _loaded_tables, loaded = project_io.parse_project(text)
+
+    assert loaded["shear_gamma_v"] == pytest.approx(1.40)
 
 
 def test_shared_link_authority_round_trips_and_missing_defaults_false():

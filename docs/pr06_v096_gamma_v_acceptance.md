@@ -37,9 +37,9 @@ applicable project basis and selected value.
 | Solver | A custom positive finite non-Boolean value scales the existing 2023 resistance formula; the emitted result contains that exact value. | Direct formula and dispatch tests. |
 | Validation | Missing, Boolean, zero, negative and non-finite active values fail before a resistance or verdict is emitted. | Solver, capacity and Streamlit adversarial tests. |
 | Route isolation | The input is inactive for 2005 EN, 2005 DK-NA, shear-link, torsion and combined routes. | Paired isolation tests with deliberately different values. |
-| Streamlit | The control is visible and enabled only for active 2023 shear, defaults to 1.40, carries exact help references and invalidates stale results when changed. | AppTest/widget/state tests. |
+| Streamlit | The control is visible and enabled only for active 2023 shear without links, defaults to 1.40, carries exact help references and invalidates stale results when changed. | AppTest/widget/state tests. |
 | Project persistence | The selected value round-trips. Schemas 25 and 26 migrate with 1.40; malformed and future schemas remain fail-closed. | Schema migration, round-trip and invalid-input tests. |
-| Brief report | When the 2023 shear result is reported, the complete effective input table includes the actual `gamma_V`. | Brief profile input-inventory and rendered-text tests. |
+| Brief report | When the 2023 no-links shear result is reported, the complete effective input table includes the actual `gamma_V`; link-reinforced shear does not present it as an effective input. | Brief profile input-inventory and rendered-text tests. |
 | Standard/Audit reports | Both profiles reproduce the same actual value used by the solver, with the exact definition and calculation references. | Cross-surface semantic and report tests. |
 | Manual | Current user guidance explains the selectable value, 1.40 default, activation boundary and exact references. | Source/text/render tests. |
 | Version | Sector remains 0.95. | Version guard. |

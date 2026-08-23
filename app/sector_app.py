@@ -5454,6 +5454,11 @@ def build_inputs(host=st):
         disabled=not (shear_on and _shear_2023),
         help=r"Lower sieve size of the coarsest aggregate (2023 method only): "
              r"$d_{dg}=16+D_{\mathrm{lower}}\leq40$ mm for $f_{ck}\leq60$ MPa (8.2.1(4)).")
+    shear_gamma_v_active = bool(
+        shear_on
+        and _shear_2023
+        and st.session_state.get("shear_links") is not True
+    )
     shear_gamma_v = _seeded_number(
         sts,
         r"Shear partial factor $\gamma_V$",
@@ -5462,7 +5467,7 @@ def build_inputs(host=st):
         float(codes.EC2_2023.shear_gamma_v),
         0.05,
         "shear_gamma_v",
-        disabled=not (shear_on and _shear_2023),
+        disabled=not shear_gamma_v_active,
         help=(
             "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP) define "
             "the partial factor for shear resistance without shear "
@@ -5470,6 +5475,11 @@ def build_inputs(host=st):
             "The selected positive value is applied in 8.2.2. Confirm the "
             "applicable project basis."
         ),
+    )
+    effective_shear_gamma_v = (
+        shear_gamma_v
+        if shear_gamma_v_active
+        else float(codes.EC2_2023.shear_gamma_v)
     )
     if combined_on:
         sts.caption(f"Shear method set by Combined: {combined_method}")
@@ -6409,7 +6419,7 @@ def build_inputs(host=st):
                 "2023 shear gamma_V",
                 shear_gamma_v,
             )
-            if shear_on and _shear_2023
+            if shear_gamma_v_active
             else ("2023 shear gamma_V inactive",)
         )
         + (_CAPACITY_RESULT_CONTRACT_TOKEN,)
@@ -6591,7 +6601,7 @@ def build_inputs(host=st):
                 ),
                 shear_vx_bw=shear_vx_bw, shear_vy_bw=shear_vy_bw,
                 shear_dlower=shear_dlower,
-                shear_gamma_v=shear_gamma_v,
+                shear_gamma_v=effective_shear_gamma_v,
                 shear_links=shear_links,
                 shear_vx_link_legs=shear_vx_link_legs,
                 shear_vy_link_legs=shear_vy_link_legs,

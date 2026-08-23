@@ -2465,6 +2465,25 @@ def test_2023_shear_context_rejects_a_missing_gamma_v():
         capacity.build_shear_context(inp, 0.0, 0.0)
 
 
+def test_2023_shear_links_ignore_inactive_missing_or_malformed_gamma_v():
+    base = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_links=True,
+        section=None,
+    )
+    variants = []
+    missing = dict(base)
+    missing.pop("shear_gamma_v")
+    variants.append(missing)
+    for value in (0.0, -1.0, float("nan"), True, "1.40"):
+        variants.append(dict(base, shear_gamma_v=value))
+
+    for inp in variants:
+        payload, links = capacity.build_shear_context(inp, 0.0, 0.0)
+        assert links is not None
+        assert payload["res"]["gamma_v"] == pytest.approx(1.40)
+
+
 def test_gamma_v_is_isolated_from_2005_links_torsion_and_combined_routes():
     low_2005, _ = capacity.build_shear_context(
         _member_input(shear_gamma_v=0.50), 0.0, 0.0

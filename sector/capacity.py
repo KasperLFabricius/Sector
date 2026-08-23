@@ -1081,12 +1081,13 @@ def _build_shear_face_context(
     fck = inp["concrete"].fck
     fyd_flex = design_yield(inp["steel"])
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
+    shared_links_present = _shared_links_present(inp)
     gamma_v = (
         _positive_finite_real(
             inp.get("shear_gamma_v", _MISSING),
             "shear_gamma_v",
         )
-        if model_2023
+        if model_2023 and not shared_links_present
         else None
     )
     if axis == "x":
@@ -1132,7 +1133,7 @@ def _build_shear_face_context(
         "ddg": ddg,
         "fyd_flex": fyd_flex,
     }
-    if not _shared_links_present(inp):
+    if not shared_links_present:
         return payload, None
 
     cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
