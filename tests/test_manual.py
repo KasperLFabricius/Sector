@@ -14,6 +14,7 @@ import re
 import sys
 
 import pytest
+import pypdf
 from streamlit.testing.v1 import AppTest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -732,15 +733,36 @@ def test_display_equation_tolerates_trailing_punctuation():
     assert "$" not in flow[0].text and flow[0].text.endswith(".")
 
 
+def _assert_no_raw_dollar_delimiters(pdf: bytes) -> None:
+    """Fail with page identities when an issued PDF exposes a raw math marker."""
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    pages = [
+        number
+        for number, page in enumerate(reader.pages, start=1)
+        if "$" in (page.extract_text() or "")
+    ]
+    assert not pages, f"raw dollar delimiter found on PDF page(s) {pages}"
+
+
 def test_manual_pdf_has_no_stray_dollar_delimiters():
-    # No display equation should leak $ into the PDF (i.e. none fell through the
-    # display-math detection to inline rendering).
-    pytest.importorskip("fitz")
-    import fitz
-    pdf = manual.build_manual_pdf_bytes(figures=False)
-    doc = fitz.open(stream=pdf, filetype="pdf")
-    text = "\n".join(doc[i].get_text() for i in range(doc.page_count))
-    assert "$" not in text
+    # pypdf is a locked QA dependency. Import failure is therefore a collection
+    # failure, never a skip, and the exact issued-manual bytes are inspected.
+    _assert_no_raw_dollar_delimiters(
+        manual.build_manual_pdf_bytes(figures=False)
+    )
+
+
+def test_manual_pdf_raw_dollar_guard_rejects_an_injected_delimiter():
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    document = canvas.Canvas(buffer)
+    document.drawString(72, 720, "negative control: raw $ delimiter")
+    document.save()
+
+    with pytest.raises(AssertionError, match="raw dollar delimiter.*page.*1"):
+        _assert_no_raw_dollar_delimiters(buffer.getvalue())
 
 
 def test_manual_figure_export_uses_shared_coordinator(monkeypatch):

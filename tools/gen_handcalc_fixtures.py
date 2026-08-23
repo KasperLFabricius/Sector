@@ -1,280 +1,640 @@
-"""Generate tests/handcalc_fixtures.py from the handcalc .pcr output PDFs.
+"""Ingest external hand-calculation PDFs without importing Sector calculations.
 
-Reads each example PDF, reconstructs every section it contains (some PDFs hold
-several analyses), samples a few expected result rows, runs the solver, and
-writes the cleanly-matching cases as pure-ASCII Python literals so the committed
-regression test needs no PDFs.
+The first pipeline stage inventories every PDF, retains its SHA-256, records
+every block parse/selection outcome, and emits deterministic external
+expectations. It deliberately performs no Sector solve and cannot select a case
+because Sector agrees with it. Run ``tools/compare_handcalc_fixtures.py``
+afterwards to create the separate production-comparison record.
 
-Usage:
-    python tools/gen_handcalc_fixtures.py [PDF_DIR]
+Usage::
 
-PDF_DIR defaults to $HANDCALC_DIR or the project's local examples folder. Requires
-``pypdf`` (a dev dependency). Only prints ASCII status lines; raw PDF text is
-never echoed.
+    python tools/gen_handcalc_fixtures.py PDF_DIR
+
+``PDF_DIR`` may instead be supplied through ``HANDCALC_DIR``. There is no
+machine-specific default. Raw PDF text is never printed or committed.
 """
-import glob
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
 import os
-import pathlib
+from pathlib import Path
 import re
-import sys
+from typing import Any
 
-# Make the project importable when run as a script from a fresh checkout
-# (python tools/gen_handcalc_fixtures.py puts tools/ -- not the repo root -- on
-# sys.path), so no PYTHONPATH or install step is needed.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from pypdf import PdfReader
 
-from pypdf import PdfReader  # noqa: E402
 
-from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
-from sector.plastic import plastic_capacity_at_angle  # noqa: E402
-from sector.section import Section  # noqa: E402
-
-DEFAULT_DIR = (
-    r"C:\Users\DK1J4Z\OneDrive - Sweco AB\Documents\Claude"
-    r"\Secant\handcalc & handcalc\handcalc output examples"
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_FIXTURE_PATH = ROOT / "tests" / "handcalc_fixtures.py"
+DEFAULT_MANIFEST_PATH = (
+    ROOT / "tests" / "fixtures" / "handcalc_source_manifest.json"
 )
 
+# The source files were renamed after the original fixtures were issued. These
+# basename-only aliases retain the established case identities without storing
+# a user-specific path or consulting a Sector result.
+SOURCE_ID_OVERRIDES = {
+    "Bro 337-0-010.00 - Pcross.pdf": "Bro_337_0_010.00__",
+    "Pcross output example.pdf": "handcalc_example",
+}
 
-def ascii_text(path):
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ascii_text(path: Path) -> str:
     reader = PdfReader(path)
-    text = "\n".join((p.extract_text() or "") for p in reader.pages)
-    return "".join(ch if ord(ch) < 128 else " " for ch in text)
+    text = "\n".join((page.extract_text() or "") for page in reader.pages)
+    return "".join(
+        character if ord(character) < 128 else " " for character in text
+    )
 
 
-def nums(line):
-    return [float(x.replace("D", "E"))
-            for x in re.findall(r"[-+]?\d*\.?\d+(?:[DE][-+]?\d+)?", line)]
+def nums(line: str) -> list[float]:
+    return [
+        float(value.replace("D", "E"))
+        for value in re.findall(
+            r"[-+]?\d*\.?\d+(?:[DE][-+]?\d+)?", line
+        )
+    ]
 
 
-def parse_block(lines):
-    """Parse one section block (header + table) into section + materials."""
+def clean_name(path: Path) -> str:
+    if path.name in SOURCE_ID_OVERRIDES:
+        return SOURCE_ID_OVERRIDES[path.name]
+    name = "".join(
+        character if ord(character) < 128 else "_"
+        for character in path.name
+    )
+    return (
+        name.replace(".pcr.pdf", "")
+        .replace(".pdf", "")
+        .replace(" ", "_")
+        .replace("-", "_")
+    )
+
+
+def result_rows(lines: list[str], has_cable: bool):
+    current_axial = None
+    pending = False
+    for line in lines:
+        if "LOAD CASE" in line:
+            pending = True
+            continue
+        if (
+            pending
+            and re.search(r"\d", line)
+            and "V.MIN" not in line
+            and "P " not in line[:3]
+        ):
+            values = nums(line)
+            if values:
+                current_axial, pending = values[0], False
+            continue
+        if current_axial is not None and re.search(r"\dD[-+]\d", line):
+            values = nums(line)
+            if len(values) >= 11:
+                yield current_axial, has_cable, values
+
+
+def strain_cols(
+    has_steel: bool,
+    has_cable: bool,
+    values: list[float],
+) -> tuple[float, float, float | None, float]:
+    """Return concrete, steel, cable and curvature source columns."""
+
+    concrete, index = values[7], 8
+    steel = values[index] if has_steel else 0.0
+    if has_steel:
+        index += 1
+    cable = values[index] if has_cable else None
+    if has_cable:
+        index += 1
+    return concrete, steel, cable, values[index]
+
+
+def selected_row_indices(count: int) -> tuple[int, ...]:
+    """Return a deterministic, production-independent angular sample."""
+
+    if count <= 4:
+        return tuple(range(count))
+    step = count // 4 + 1
+    return tuple(range(0, count, step))
+
+
+def _find(blob: str, pattern: str, default: str | None = None) -> str | None:
+    match = re.search(pattern, blob, re.DOTALL)
+    return match.group(1) if match else default
+
+
+def parse_block(lines: list[str]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Parse one external section block into plain data and an outcome record."""
+
     blob = "\n".join(lines)
+    outcome: dict[str, Any] = {
+        "status": "rejected",
+        "reason": None,
+        "warnings": [],
+        "available_result_rows": 0,
+        "selected_row_indices": [],
+    }
     if "MILD STEEL" not in blob and "PRESTRESSED STEEL:" not in blob:
-        return None
+        outcome["reason"] = "reinforcement_material_definition_not_found"
+        return None, outcome
 
-    def find(pat, default=None):
-        m = re.search(pat, blob, re.DOTALL)
-        return m.group(1) if m else default
+    declared_corners = int(
+        _find(blob, r"CONCRETE:\s+(\d+)\s+CORNERS", "0") or "0"
+    )
+    concrete = {
+        "fck": float(
+            _find(blob, r"COMPRESSION STRENGTH\s+([\d.]+)", "30") or "30"
+        ),
+        "gamma_c": float(
+            _find(blob, r"SAFETY FACTOR FOR CONCRETE\s+([\d.]+)", "1.5")
+            or "1.5"
+        ),
+        "curve": int(
+            _find(blob, r"CONCRETE:.*?\(type\s+(\d+)\)", "1") or "1"
+        ),
+    }
 
-    ncorner = int(find(r"CONCRETE:\s+(\d+)\s+CORNERS", "0"))
-    concrete = Concrete(fck=float(find(r"COMPRESSION STRENGTH\s+([\d.]+)", "30")),
-                        gamma_c=float(find(r"SAFETY FACTOR FOR CONCRETE\s+([\d.]+)", "1.5")),
-                        curve=int(find(r"CONCRETE:.*?\(type\s+(\d+)\)", "1")))
-
-    fytk = float(find(r"MILD STEEL.*?YIELD STRESS, TENSION\s+([\d.]+)", "500"))
-    gy = float(find(r"SAFETY FACTOR FOR MILD STEEL\s+([\d.]+)", "1"))
-    steel = MildSteel(
-        fytk=fytk,
-        fyck=float(find(r"MILD STEEL.*?YIELD STRESS, COMPRESSION\s+([\d.]+)", str(fytk))),
-        eut=float(find(r"MILD STEEL.*?RUPTURE ELONGATION, TENSION\s+([\d.]+)", "5")) / 100.0,
-        futk=float(find(r"MILD STEEL.*?RUPTURE STRESS, TENSION\s+([\d.]+)", str(fytk))),
-        gamma_y=gy,
-        gamma_u=float(find(r"RUPTURE TENSILE STRESS FOR MILD STEEL\s+([\d.]+)", str(gy))),
-        gamma_E=float(find(r"E-MODULUS FOR MILD STEEL\s+([\d.]+)", str(gy))),
-        curve=int(find(r"MILD STEEL\s+\d+\s+BARS\s+\(type\s+(\d+)\)", "1")))
+    fytk = float(
+        _find(
+            blob,
+            r"MILD STEEL.*?YIELD STRESS, TENSION\s+([\d.]+)",
+            "500",
+        )
+        or "500"
+    )
+    gamma_y = float(
+        _find(blob, r"SAFETY FACTOR FOR MILD STEEL\s+([\d.]+)", "1")
+        or "1"
+    )
+    mild = {
+        "fytk": fytk,
+        "fyck": float(
+            _find(
+                blob,
+                r"MILD STEEL.*?YIELD STRESS, COMPRESSION\s+([\d.]+)",
+                str(fytk),
+            )
+            or str(fytk)
+        ),
+        "eut": round(
+            float(
+                _find(
+                    blob,
+                    r"MILD STEEL.*?RUPTURE ELONGATION, TENSION\s+([\d.]+)",
+                    "5",
+                )
+                or "5"
+            )
+            / 100.0,
+            4,
+        ),
+        "futk": float(
+            _find(
+                blob,
+                r"MILD STEEL.*?RUPTURE STRESS, TENSION\s+([\d.]+)",
+                str(fytk),
+            )
+            or str(fytk)
+        ),
+        "gamma_y": gamma_y,
+        "gamma_u": float(
+            _find(
+                blob,
+                r"RUPTURE TENSILE STRESS FOR MILD STEEL\s+([\d.]+)",
+                str(gamma_y),
+            )
+            or str(gamma_y)
+        ),
+        "gamma_E": float(
+            _find(
+                blob,
+                r"E-MODULUS FOR MILD STEEL\s+([\d.]+)",
+                str(gamma_y),
+            )
+            or str(gamma_y)
+        ),
+        "curve": int(
+            _find(
+                blob,
+                r"MILD STEEL\s+\d+\s+BARS\s+\(type\s+(\d+)\)",
+                "1",
+            )
+            or "1"
+        ),
+    }
 
     prestress = None
     if "PRESTRESSED STEEL:" in blob:
-        ptype = int(find(r"PRESTRESSED STEEL:.*?\(type\s+(\d+)\)", "1"))
-        pkw = dict(curve=ptype,
-                   IS=float(find(r"INITIAL STRAIN\s+([\d.]+)", "0")) / 100.0,
-                   gamma_y=float(find(r"SAFETY FACTOR FOR PRESTRESSED STEEL\s+([\d.]+)", "1")))
-        if ptype in (6, 7):
-            pkw.update(
-                fytk=float(find(r"PRESTRESSED STEEL:.*?YIELD STRESS, TENSION\s+([\d.]+)", "1600")),
-                futk=float(find(r"PRESTRESSED STEEL:.*?RUPTURE STRESS, TENSION\s+([\d.]+)", "1800")),
-                eut=float(find(r"PRESTRESSED STEEL:.*?RUPTURE ELONGATION, TENSION\s+([\d.]+)", "3.5")) / 100.0,
-                gamma_u=float(find(r"RUPTURE TENSILE STRESS FOR PRESTRESSED STEEL\s+([\d.]+)", "1.1")),
-                gamma_E=float(find(r"E-MODULUS FOR PRESTRESSED STEEL\s+([\d.]+)", "1")))
-        prestress = Prestress(**pkw)
+        curve = int(
+            _find(
+                blob,
+                r"PRESTRESSED STEEL:.*?\(type\s+(\d+)\)",
+                "1",
+            )
+            or "1"
+        )
+        prestress = {
+            "curve": curve,
+            "IS": round(
+                float(
+                    _find(blob, r"INITIAL STRAIN\s+([\d.]+)", "0") or "0"
+                )
+                / 100.0,
+                5,
+            ),
+            "gamma_y": float(
+                _find(
+                    blob,
+                    r"SAFETY FACTOR FOR PRESTRESSED STEEL\s+([\d.]+)",
+                    "1",
+                )
+                or "1"
+            ),
+            "gamma_u": 1.0,
+            "gamma_E": 1.0,
+            "fytk": 0.0,
+            "futk": 0.0,
+            "eut": 0.035,
+        }
+        if curve in (6, 7):
+            prestress.update(
+                {
+                    "fytk": float(
+                        _find(
+                            blob,
+                            r"PRESTRESSED STEEL:.*?YIELD STRESS, TENSION\s+([\d.]+)",
+                            "1600",
+                        )
+                        or "1600"
+                    ),
+                    "futk": float(
+                        _find(
+                            blob,
+                            r"PRESTRESSED STEEL:.*?RUPTURE STRESS, TENSION\s+([\d.]+)",
+                            "1800",
+                        )
+                        or "1800"
+                    ),
+                    "eut": round(
+                        float(
+                            _find(
+                                blob,
+                                r"PRESTRESSED STEEL:.*?RUPTURE ELONGATION, TENSION\s+([\d.]+)",
+                                "3.5",
+                            )
+                            or "3.5"
+                        )
+                        / 100.0,
+                        4,
+                    ),
+                    "gamma_u": float(
+                        _find(
+                            blob,
+                            r"RUPTURE TENSILE STRESS FOR PRESTRESSED STEEL\s+([\d.]+)",
+                            "1.1",
+                        )
+                        or "1.1"
+                    ),
+                    "gamma_E": float(
+                        _find(
+                            blob,
+                            r"E-MODULUS FOR PRESTRESSED STEEL\s+([\d.]+)",
+                            "1",
+                        )
+                        or "1"
+                    ),
+                }
+            )
 
-    nbar = int(find(r"MILD STEEL\s+(\d+)\s+BARS", "0"))
-    ncable = int(find(r"PRESTRESSED STEEL:\s+(\d+)\s+CABLES", "0"))
-    corners, bars, tendons, in_tab = [], [], [], False
-    for ln in lines:
-        if "ABSCISSA" in ln and "ORDINATE" in ln:
-            in_tab = True
+    declared_bars = int(
+        _find(blob, r"MILD STEEL\s+(\d+)\s+BARS", "0") or "0"
+    )
+    declared_tendons = int(
+        _find(blob, r"PRESTRESSED STEEL:\s+(\d+)\s+CABLES", "0") or "0"
+    )
+    corners: list[tuple[float, float]] = []
+    bars: list[tuple[float, float, float]] = []
+    tendons: list[tuple[float, float, float]] = []
+    in_table = False
+    for line in lines:
+        if "ABSCISSA" in line and "ORDINATE" in line:
+            in_table = True
             continue
-        if not in_tab:
+        if not in_table:
             continue
-        if "LOAD CASE" in ln:
+        if "LOAD CASE" in line:
             break
-        vals = nums(ln)
-        if not vals:
+        values = nums(line)
+        if not values:
             continue
-        rest = vals[1:]
-        if "MILD STEEL" in ln or "PRESTRESSED STEEL" in ln:
-            if len(rest) >= 5:
-                if len(corners) < ncorner:
-                    corners.append((rest[0], rest[1]))
-                bx, by, ba = rest[2], rest[3], rest[4]
-            elif len(rest) >= 3:
-                bx, by, ba = rest[0], rest[1], rest[2]
+        remaining = values[1:]
+        if "MILD STEEL" in line or "PRESTRESSED STEEL" in line:
+            if len(remaining) >= 5:
+                if len(corners) < declared_corners:
+                    corners.append((remaining[0], remaining[1]))
+                bar_x, bar_y, area = remaining[2], remaining[3], remaining[4]
+            elif len(remaining) >= 3:
+                bar_x, bar_y, area = remaining[0], remaining[1], remaining[2]
             else:
                 continue
-            if "PRESTRESSED STEEL" in ln:
-                if len(tendons) < ncable:
-                    tendons.append((bx, by, ba))
-            elif len(bars) < nbar:
-                bars.append((bx, by, ba))
-        elif len(rest) >= 2 and len(corners) < ncorner:
-            corners.append((rest[0], rest[1]))
+            if "PRESTRESSED STEEL" in line:
+                if len(tendons) < declared_tendons:
+                    tendons.append((bar_x, bar_y, area))
+            elif len(bars) < declared_bars:
+                bars.append((bar_x, bar_y, area))
+        elif len(remaining) >= 2 and len(corners) < declared_corners:
+            corners.append((remaining[0], remaining[1]))
 
+    outcome["declared_counts"] = {
+        "corners": declared_corners,
+        "bars": declared_bars,
+        "tendons": declared_tendons,
+    }
+    outcome["parsed_counts"] = {
+        "corners": len(corners),
+        "bars": len(bars),
+        "tendons": len(tendons),
+    }
     if len(corners) < 3:
-        return None
-    section = Section.from_polygon(corners=corners, bars_xy_area_mm2=bars,
-                                   tendons_xy_area_mm2=tendons)
-    return section, concrete, steel, prestress, lines
+        outcome["reason"] = "fewer_than_three_concrete_points"
+        return None, outcome
+    for label, declared, parsed in (
+        ("corners", declared_corners, len(corners)),
+        ("bars", declared_bars, len(bars)),
+        ("tendons", declared_tendons, len(tendons)),
+    ):
+        if declared != parsed:
+            outcome["warnings"].append(
+                f"declared_{label}_{declared}_parsed_{parsed}"
+            )
 
-
-def parse(path):
-    """Return one parsed block per section in the PDF (split on each header)."""
-    lines = ascii_text(path).splitlines()
-    starts = [i for i, l in enumerate(lines)
-              if re.search(r"CONCRETE:\s+\d+\s+CORNERS", l)]
-    blocks = []
-    for k, s in enumerate(starts):
-        end = starts[k + 1] if k + 1 < len(starts) else len(lines)
-        parsed = parse_block(lines[s:end])
-        if parsed:
-            blocks.append(parsed)
-    return blocks
-
-
-def result_rows(lines, has_cable):
-    cur_P, pending = None, False
-    for ln in lines:
-        if "LOAD CASE" in ln:
-            pending = True
-            continue
-        if pending and re.search(r"\d", ln) and "V.MIN" not in ln and "P " not in ln[:3]:
-            v = nums(ln)
-            if v:
-                cur_P, pending = v[0], False
-            continue
-        if cur_P is not None and re.search(r"\dD[-+]\d", ln):
-            v = nums(ln)
-            if len(v) >= 11:
-                yield cur_P, has_cable, v
-
-
-def strain_cols(has_steel, has_cable, v):
-    """Strain/curvature columns: CONCRETE [STEEL] [CABLES] CURVATURE.
-
-    The STEEL column is present only when the section has mild bars, the CABLES
-    column only when it has tendons, so the curvature index shifts accordingly.
-    """
-    conc, i = v[7], 8
-    steel = v[i] if has_steel else 0.0
-    if has_steel:
-        i += 1
-    cable = v[i] if has_cable else None
-    if has_cable:
-        i += 1
-    return conc, steel, cable, v[i]
-
-
-def fixture_dicts(section, concrete, steel, prestress):
-    """Rounded geometry + material dicts exactly as the fixture will store them."""
-    corners = [(round(x, 4), round(y, 4)) for x, y in section.concrete[0].tolist()]
-    bars = [(round(b.x, 4), round(b.y, 4), round(b.area * 1e6, 2)) for b in section.bars]
-    tend = [(round(b.x, 4), round(b.y, 4), round(b.area * 1e6, 2)) for b in section.tendons]
-    cd = dict(fck=concrete.fck, gamma_c=concrete.gamma_c, curve=concrete.curve)
-    sd = dict(fytk=steel.fytk, fyck=steel.fyck, eut=round(steel.eut, 4), futk=steel.futk,
-              gamma_y=steel.gamma_y, gamma_u=steel.gamma_u, gamma_E=steel.gamma_E,
-              curve=steel.curve)
-    pd = None if prestress is None else dict(
-        curve=prestress.curve, IS=round(prestress.IS, 5), gamma_y=prestress.gamma_y,
-        gamma_u=prestress.gamma_u, gamma_E=prestress.gamma_E, fytk=prestress.fytk,
-        futk=prestress.futk, eut=round(prestress.eut, 4))
-    return corners, bars, tend, cd, sd, pd
-
-
-def case_matches(section, concrete, steel, prestress, lines):
-    """Build the rounded fixture, rebuild everything from it, and return the
-    fixture dict iff every sampled row matches the committed test (else None).
-
-    Validating against the round-tripped objects and the rounded expected values
-    guarantees the gate here agrees exactly with the committed test.
-    """
-    has_steel = len(section.bars) > 0
-    has_cable = prestress is not None
-    rows = list(result_rows(lines, has_cable))
-    if len(rows) > 4:
-        rows = rows[:: len(rows) // 4 + 1]
+    rows = list(result_rows(lines, prestress is not None))
+    indices = selected_row_indices(len(rows))
+    outcome["available_result_rows"] = len(rows)
+    outcome["selected_row_indices"] = list(indices)
     if not rows:
-        return None
-    corners, bars, tend, cd, sd, pd = fixture_dicts(section, concrete, steel, prestress)
-    rsec = Section.from_polygon(corners=corners, bars_xy_area_mm2=bars,
-                                tendons_xy_area_mm2=tend)
-    rconc, rmild = Concrete(**cd), MildSteel(**sd)
-    rpre = None if pd is None else Prestress(**pd)
-    exp = []
-    for cur_P, _, v in rows:
-        Mx, My, V = v[2], v[3], v[4]
-        try:
-            r = plastic_capacity_at_angle(rsec, rconc, rmild, cur_P, V,
-                                          prestress=rpre, n_bands=50)
-        except Exception:
-            return None
-        c, s, cab, curv = strain_cols(has_steel, has_cable, v)
-        row = (round(cur_P, 2), round(V, 1), round(Mx, 1), round(My, 1),
-               round(c, 2), round(s, 2),
-               None if cab is None else round(cab, 2), round(curv, 6))
-        _, _, Mxr, Myr, cr, sr, cabr, curvr = row
-        scale = max(abs(Mxr), abs(Myr), 1.0)
-        ok = (r.converged
-              and abs(r.Mx - Mxr) <= 0.03 * scale + 1.0
-              and abs(r.My - Myr) <= 0.03 * scale + 1.0
-              and abs(r.eps_concrete - cr) <= 0.03
-              and abs(r.eps_steel - sr) <= 0.08
-              and (cabr is None or abs(r.eps_cable - cabr) <= 0.08)
-              and abs(r.curvature - curvr) <= 0.05 * abs(curvr) + 1e-4)
-        if not ok:
-            return None
-        exp.append(row)
-    return dict(corners=corners, bars=bars, tendons=tend,
-                concrete=cd, mild=sd, prestress=pd, rows=exp)
+        outcome["reason"] = "no_result_rows"
+        return None, outcome
+
+    expected_rows = []
+    for index in indices:
+        current_axial, _has_cable, values = rows[index]
+        concrete_strain, steel_strain, cable_strain, curvature = strain_cols(
+            bool(bars), prestress is not None, values
+        )
+        expected_rows.append(
+            (
+                round(current_axial, 2),
+                round(values[4], 1),
+                round(values[2], 1),
+                round(values[3], 1),
+                round(concrete_strain, 2),
+                round(steel_strain, 2),
+                None if cable_strain is None else round(cable_strain, 2),
+                round(curvature, 6),
+            )
+        )
+
+    fixture = {
+        "corners": [(round(x, 4), round(y, 4)) for x, y in corners],
+        "bars": [
+            (round(x, 4), round(y, 4), round(area, 2))
+            for x, y, area in bars
+        ],
+        "tendons": [
+            (round(x, 4), round(y, 4), round(area, 2))
+            for x, y, area in tendons
+        ],
+        "concrete": concrete,
+        "mild": mild,
+        "prestress": prestress,
+        "rows": expected_rows,
+    }
+    outcome["status"] = "selected"
+    return fixture, outcome
 
 
-def clean_name(path):
-    name = "".join(c if ord(c) < 128 else "_" for c in os.path.basename(path))
-    return (name.replace(".pcr.pdf", "").replace(".pdf", "")
-            .replace(" ", "_").replace("-", "_"))
+def parse_source(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    source_hash = sha256_file(path)
+    source_id = clean_name(path)
+    source_record: dict[str, Any] = {
+        "source_name": path.name,
+        "source_id": source_id,
+        "sha256": source_hash,
+        "size_bytes": path.stat().st_size,
+        "status": "rejected",
+        "reason": None,
+        "blocks": [],
+    }
+    try:
+        lines = ascii_text(path).splitlines()
+    except Exception as exc:
+        source_record["reason"] = f"pdf_parse_error:{type(exc).__name__}"
+        return source_record, []
 
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.search(r"CONCRETE:\s+\d+\s+CORNERS", line)
+    ]
+    if not starts:
+        source_record["reason"] = "no_section_headers"
+        return source_record, []
 
-def main():
-    pdf_dir = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HANDCALC_DIR", DEFAULT_DIR)
-    cases = []
-    for f in sorted(glob.glob(os.path.join(pdf_dir, "*.pdf"))):
-        base = clean_name(f)
-        try:
-            blocks = parse(f)
-        except Exception:
+    fixtures = []
+    for block_index, start in enumerate(starts, start=1):
+        end = starts[block_index] if block_index < len(starts) else len(lines)
+        fixture, outcome = parse_block(lines[start:end])
+        case_name = (
+            source_id if len(starts) == 1 else f"{source_id}_s{block_index}"
+        )
+        outcome["block_index"] = block_index
+        outcome["case_name"] = case_name
+        source_record["blocks"].append(outcome)
+        if fixture is None:
             continue
-        for bi, (section, concrete, steel, prestress, lines) in enumerate(blocks):
-            fx = case_matches(section, concrete, steel, prestress, lines)
-            if not fx:
-                continue
-            fx["name"] = base if len(blocks) == 1 else f"{base}_s{bi + 1}"
-            cases.append(fx)
+        fixtures.append(
+            {
+                "name": case_name,
+                "source_id": source_id,
+                "source_sha256": source_hash,
+                "source_block": block_index,
+                "available_result_rows": outcome["available_result_rows"],
+                "selected_row_indices": tuple(outcome["selected_row_indices"]),
+                **fixture,
+            }
+        )
 
-    out = os.path.join("tests", "handcalc_fixtures.py")
-    with open(out, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write('"""Auto-generated fixtures from the handcalc example outputs.\n\n')
-        fh.write("Each case is a real section reconstructed from a .pcr output with sampled\n")
-        fh.write("expected rows (P, V, Mx, My, eps_concrete, eps_steel, eps_cable, curvature).\n")
-        fh.write('Regenerate with tools/gen_handcalc_fixtures.py; do not edit by hand.\n"""\n\n')
-        fh.write("CASES = [\n")
-        for fx in cases:
-            fh.write("    {\n")
-            for key in ("name", "corners", "bars", "tendons", "concrete", "mild",
-                        "prestress", "rows"):
-                fh.write(f"        {key!r}: {fx[key]!r},\n")
-            fh.write("    },\n")
-        fh.write("]\n")
-    print("EMITTED", len(cases), "cases:", ", ".join(c["name"] for c in cases))
+    if fixtures:
+        source_record["status"] = "selected"
+    else:
+        source_record["reason"] = "no_selectable_blocks"
+    return source_record, fixtures
+
+
+def build_external_dataset(
+    pdf_dir: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    paths = sorted(pdf_dir.glob("*.pdf"), key=lambda path: path.name.casefold())
+    if not paths:
+        raise ValueError(f"no PDF files found in {pdf_dir}")
+
+    sources = []
+    fixtures = []
+    for path in paths:
+        source, cases = parse_source(path)
+        sources.append(source)
+        fixtures.extend(cases)
+
+    names = [case["name"] for case in fixtures]
+    if len(names) != len(set(names)):
+        raise ValueError("external case identities are not unique")
+
+    blocks = [block for source in sources for block in source["blocks"]]
+    summary = {
+        "source_files": len(sources),
+        "selected_source_files": sum(
+            source["status"] == "selected" for source in sources
+        ),
+        "rejected_source_files": sum(
+            source["status"] != "selected" for source in sources
+        ),
+        "discovered_blocks": len(blocks),
+        "selected_blocks": sum(block["status"] == "selected" for block in blocks),
+        "rejected_blocks": sum(block["status"] != "selected" for block in blocks),
+        "available_result_rows": sum(
+            block["available_result_rows"] for block in blocks
+        ),
+        "selected_result_rows": sum(
+            len(block["selected_row_indices"]) for block in blocks
+        ),
+    }
+    manifest = {
+        "schema_version": 1,
+        "generated_by": "tools/gen_handcalc_fixtures.py",
+        "selection_policy": {
+            "production_imports": False,
+            "production_result_filter": False,
+            "row_selection": (
+                "all rows when at most four exist; otherwise deterministic "
+                "indices range(0, count, count // 4 + 1)"
+            ),
+        },
+        "summary": summary,
+        "sources": sources,
+    }
+    return fixtures, manifest
+
+
+def render_fixture_module(fixtures: list[dict[str, Any]]) -> str:
+    lines = [
+        '"""External-first fixtures parsed from inventoried handcalc PDFs.',
+        "",
+        "Every independently parseable block is emitted before Sector comparison.",
+        "Source identities and all parse/selection outcomes are retained in",
+        "tests/fixtures/handcalc_source_manifest.json.",
+        'Regenerate with tools/gen_handcalc_fixtures.py; do not edit by hand.\n"""',
+        "",
+        "CASES = [",
+    ]
+    keys = (
+        "name",
+        "source_id",
+        "source_sha256",
+        "source_block",
+        "available_result_rows",
+        "selected_row_indices",
+        "corners",
+        "bars",
+        "tendons",
+        "concrete",
+        "mild",
+        "prestress",
+        "rows",
+    )
+    for fixture in fixtures:
+        lines.append("    {")
+        for key in keys:
+            lines.append(f"        {key!r}: {fixture[key]!r},")
+        lines.append("    },")
+    lines.append("]")
+    text = "\n".join(lines) + "\n"
+    if not text.isascii():
+        raise ValueError("generated fixture module must remain ASCII")
+    return text
+
+
+def write_external_dataset(
+    fixtures: list[dict[str, Any]],
+    manifest: dict[str, Any],
+    *,
+    fixture_path: Path = DEFAULT_FIXTURE_PATH,
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
+) -> None:
+    fixture_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    fixture_path.write_text(
+        render_fixture_module(fixtures), encoding="utf-8", newline="\n"
+    )
+    manifest_path.write_text(
+        json.dumps(
+            manifest,
+            ensure_ascii=True,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "pdf_dir",
+        nargs="?",
+        default=os.environ.get("HANDCALC_DIR"),
+        help="directory containing the external PDF outputs",
+    )
+    parser.add_argument("--fixtures", type=Path, default=DEFAULT_FIXTURE_PATH)
+    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST_PATH)
+    args = parser.parse_args(argv)
+    if not args.pdf_dir:
+        parser.error("PDF_DIR or HANDCALC_DIR is required")
+
+    fixtures, manifest = build_external_dataset(Path(args.pdf_dir))
+    write_external_dataset(
+        fixtures,
+        manifest,
+        fixture_path=args.fixtures,
+        manifest_path=args.manifest,
+    )
+    summary = manifest["summary"]
+    print(
+        "EMITTED",
+        summary["selected_blocks"],
+        "cases from",
+        summary["source_files"],
+        "sources; selected rows",
+        summary["selected_result_rows"],
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

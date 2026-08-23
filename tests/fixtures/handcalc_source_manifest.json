@@ -1,0 +1,880 @@
+{
+  "generated_by": "tools/gen_handcalc_fixtures.py",
+  "schema_version": 1,
+  "selection_policy": {
+    "production_imports": false,
+    "production_result_filter": false,
+    "row_selection": "all rows when at most four exist; otherwise deterministic indices range(0, count, count // 4 + 1)"
+  },
+  "sources": [
+    {
+      "blocks": [
+        {
+          "available_result_rows": 5,
+          "block_index": 1,
+          "case_name": "Bilag_4___Snit_A",
+          "declared_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 1
+          },
+          "parsed_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 1
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            2,
+            4
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "1b2187613b6d42a3c20c37fdd3f1de110c16b22035fed060a9ec039bebba2b45",
+      "size_bytes": 2023,
+      "source_id": "Bilag_4___Snit_A",
+      "source_name": "Bilag 4 - Snit A.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 5,
+          "block_index": 1,
+          "case_name": "Bilag_4___Snit_B",
+          "declared_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 1
+          },
+          "parsed_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 1
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            2,
+            4
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "5f7d15bdb0a300a966bb65a9959a31cbcf45ee0dc51625fe01144fccd38d7f2f",
+      "size_bytes": 2024,
+      "source_id": "Bilag_4___Snit_B",
+      "source_name": "Bilag 4 - Snit B.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 5,
+          "block_index": 1,
+          "case_name": "Bilag_4___Snit_C",
+          "declared_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 2
+          },
+          "parsed_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 2
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            2,
+            4
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "06b1563c7a1a447d28e555e9e61c9607fff4da2ba555b170b26987b307e71f29",
+      "size_bytes": 2034,
+      "source_id": "Bilag_4___Snit_C",
+      "source_name": "Bilag 4 - Snit C.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 5,
+          "block_index": 1,
+          "case_name": "Bilag_4___Snit_D",
+          "declared_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 2
+          },
+          "parsed_counts": {
+            "bars": 2,
+            "corners": 5,
+            "tendons": 2
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            2,
+            4
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "5cf10225a71ea3da758512fd27df22459bd742e27fe009776e96913459821896",
+      "size_bytes": 2035,
+      "source_id": "Bilag_4___Snit_D",
+      "source_name": "Bilag 4 - Snit D.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 3,
+          "block_index": 1,
+          "case_name": "Bro_337_0_010.00___s1",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 9,
+            "tendons": 4
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 9,
+            "tendons": 4
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            1,
+            2
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 5,
+          "block_index": 2,
+          "case_name": "Bro_337_0_010.00___s2",
+          "declared_counts": {
+            "bars": 2,
+            "corners": 10,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 2,
+            "corners": 10,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            2,
+            4
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 3,
+          "block_index": 3,
+          "case_name": "Bro_337_0_010.00___s3",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 9,
+            "tendons": 4
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 9,
+            "tendons": 4
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            1,
+            2
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 3,
+          "block_index": 4,
+          "case_name": "Bro_337_0_010.00___s4",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 9,
+            "tendons": 4
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 9,
+            "tendons": 4
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            1,
+            2
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "80b9adb1c16dc5277efbf1cd4a768e938dae9063f3f52295a672bece1befd2c4",
+      "size_bytes": 11137,
+      "source_id": "Bro_337_0_010.00__",
+      "source_name": "Bro 337-0-010.00 - Pcross.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "Connection1",
+          "declared_counts": {
+            "bars": 14,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 14,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "d7a682121f255cc1f4a8f5c8acca9514c6f9857557d7039bb7da5c25050166c5",
+      "size_bytes": 3406,
+      "source_id": "Connection1",
+      "source_name": "Connection1.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 5,
+          "block_index": 1,
+          "case_name": "Fundamentsbj_lke",
+          "declared_counts": {
+            "bars": 8,
+            "corners": 4,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 8,
+            "corners": 4,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            2,
+            4
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "085f817ee3519746ef233e8f594cad6381a8f5094680208d1e260327abef3a27",
+      "size_bytes": 2323,
+      "source_id": "Fundamentsbj_lke",
+      "source_name": "Fundamentsbj\u00e6lke.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 19,
+          "block_index": 1,
+          "case_name": "handcalc_example_s1",
+          "declared_counts": {
+            "bars": 8,
+            "corners": 5,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 8,
+            "corners": 5,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 2,
+          "case_name": "handcalc_example_s2",
+          "declared_counts": {
+            "bars": 24,
+            "corners": 5,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 24,
+            "corners": 5,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 3,
+          "case_name": "handcalc_example_s3",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 4,
+          "case_name": "handcalc_example_s4",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 5,
+          "case_name": "handcalc_example_s5",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 6,
+          "case_name": "handcalc_example_s6",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 7,
+          "case_name": "handcalc_example_s7",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 8,
+          "case_name": "handcalc_example_s8",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        },
+        {
+          "available_result_rows": 19,
+          "block_index": 9,
+          "case_name": "handcalc_example_s9",
+          "declared_counts": {
+            "bars": 10,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 10,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            5,
+            10,
+            15
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "3195d9336aa4277b71eb43c5ea200a6c30a29fc97d034d377b21a56518bafd88",
+      "size_bytes": 59467,
+      "source_id": "handcalc_example",
+      "source_name": "Pcross output example.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "Section0",
+          "declared_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "d4954c4e748c8a55d7834cd233faa5018e9081394c98d85d2defa08dcae8d0bb",
+      "size_bytes": 3419,
+      "source_id": "Section0",
+      "source_name": "Section0.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "Section0_Eschenburg",
+          "declared_counts": {
+            "bars": 20,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 20,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "c8285a87b7598c7f4cd69d360349fd02c75f0ab669afe6eebdf7ac87abf73dac",
+      "size_bytes": 3409,
+      "source_id": "Section0_Eschenburg",
+      "source_name": "Section0_Eschenburg.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "SectionC",
+          "declared_counts": {
+            "bars": 12,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 12,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "904081a7013d25ad33450f612469df18295380fdcda9e7bbdecb3ae36d99c155",
+      "size_bytes": 3366,
+      "source_id": "SectionC",
+      "source_name": "SectionC.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "SectionII",
+          "declared_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "982368874678652eed35a0c54d3c59396aedb16b3e9368f18e424d6a8c314588",
+      "size_bytes": 3422,
+      "source_id": "SectionII",
+      "source_name": "SectionII.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "SectionII_Eschenburg",
+          "declared_counts": {
+            "bars": 12,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 12,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "8412536355c3942e032409aa94618afd0b8f89afc796bc1cf586008db8e58576",
+      "size_bytes": 3367,
+      "source_id": "SectionII_Eschenburg",
+      "source_name": "SectionII_Eschenburg.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "SectionIV",
+          "declared_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "031a6f2ddaada126bfc02c2e6cacf62bd90798fabd29387bdf8073f3df089f3b",
+      "size_bytes": 3411,
+      "source_id": "SectionIV",
+      "source_name": "SectionIV.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 9,
+          "block_index": 1,
+          "case_name": "SectionVII",
+          "declared_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "parsed_counts": {
+            "bars": 18,
+            "corners": 74,
+            "tendons": 0
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            3,
+            6
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "528d4687d17f25fca226e5809568570f7353a7db2c30f477762c2df3ef263647",
+      "size_bytes": 3402,
+      "source_id": "SectionVII",
+      "source_name": "SectionVII.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 361,
+          "block_index": 1,
+          "case_name": "TB20_s3",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            91,
+            182,
+            273
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "eab0eec4cd2199095457768b463d44c845bd3bfb105d92df67e123f4d3346162",
+      "size_bytes": 21250,
+      "source_id": "TB20_s3",
+      "source_name": "TB20_s3.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 361,
+          "block_index": 1,
+          "case_name": "TB30_s4",
+          "declared_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 0,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            91,
+            182,
+            273
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "b1f76dc291d7d892f6c6ede1fbdc3fdb89325d7fee3a942746f68b767222b450",
+      "size_bytes": 21288,
+      "source_id": "TB30_s4",
+      "source_name": "TB30_s4.pcr.pdf",
+      "status": "selected"
+    },
+    {
+      "blocks": [
+        {
+          "available_result_rows": 361,
+          "block_index": 1,
+          "case_name": "TB30_s9",
+          "declared_counts": {
+            "bars": 10,
+            "corners": 5,
+            "tendons": 26
+          },
+          "parsed_counts": {
+            "bars": 10,
+            "corners": 5,
+            "tendons": 26
+          },
+          "reason": null,
+          "selected_row_indices": [
+            0,
+            91,
+            182,
+            273
+          ],
+          "status": "selected",
+          "warnings": []
+        }
+      ],
+      "reason": null,
+      "sha256": "ca3dc6d3eeeb8cf2bddea816393756cceb3686f739505dc5c6507f7978c21344",
+      "size_bytes": 22457,
+      "source_id": "TB30_s9",
+      "source_name": "TB30_s9.pcr.pdf",
+      "status": "selected"
+    }
+  ],
+  "summary": {
+    "available_result_rows": 1365,
+    "discovered_blocks": 29,
+    "rejected_blocks": 0,
+    "rejected_source_files": 0,
+    "selected_blocks": 29,
+    "selected_result_rows": 99,
+    "selected_source_files": 18,
+    "source_files": 18
+  }
+}
