@@ -4192,7 +4192,8 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
         {}, _inp(), origin_invalid, figures=False
     ))
     assert "INVALID - Plastic bending" in txt
-    assert "Global moment origin lies outside the closed M-M envelope" in txt
+    assert "does not contain the zero-moment origin" in txt
+    assert "Global moment origin lies outside the closed M-M envelope" not in txt
     assert "open arc" not in txt.casefold()
     assert "Utilisation (applied direction)" not in txt
     assert "Worked plastic calculation (peak resultant moment)" in txt

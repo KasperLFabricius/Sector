@@ -21,6 +21,19 @@ from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E4
 
 
 @pytest.mark.parametrize(
+    ("family", "state"),
+    (
+        ("shear", "stirrups (VRd,s)"),
+        ("shear", "crushing (VRd,max)"),
+        ("torsion", "stirrups (TRd,s)"),
+        ("torsion", "crushing (TRd,max)"),
+    ),
+)
+def test_authored_resistance_governing_states_survive_exactly(family, state):
+    assert presentation.result_reason(state, family) == state
+
+
+@pytest.mark.parametrize(
     ("retained", "expected_mm"),
     ((0.275, 275.0), (0.0, 0.0), (-0.0, 0.0), (np.float64(0.125), 125.0)),
 )
@@ -517,8 +530,8 @@ def test_plastic_assessment_text_is_compact_and_solver_neutral():
     assert origin_invalid["util"] is None
     assert origin_invalid["margin"] is None
     assert presentation.plastic_assessment_text(origin_invalid) == (
-        "INVALID - Plastic bending | Global moment origin lies outside the "
-        "closed M-M envelope"
+        "INVALID - Plastic bending | The closed M-M capacity envelope does not "
+        "contain the zero-moment origin"
     )
 
     legacy = presentation.plastic_action_assessment(_plastic(util_valid=None))
@@ -636,17 +649,22 @@ def test_action_sets_are_normalised_and_required_for_active_families():
 
     inp["plastic_case"]["id"] = " "
     inp["elastic_case"]["id"] = ""
-    assert presentation.required_action_set_errors(inp) == [
-        "Plastic action-set ID is required",
-        "Elastic action-set ID is required",
+    assert [
+        message.text for message in presentation.required_action_set_errors(inp)
+    ] == [
+        "Enter a Plastic action-set ID before calculating",
+        "Enter an Elastic action-set ID before calculating",
     ]
 
-    assert presentation.required_action_set_errors({
+    errors = presentation.required_action_set_errors({
         "mode": "Elastic",
         "combined_on": True,
         "plastic_case": {"id": ""},
         "elastic_case": {"id": "EL-01"},
-    }) == ["Plastic action-set ID is required"]
+    })
+    assert [message.text for message in errors] == [
+        "Enter a Plastic action-set ID before calculating"
+    ]
 
 
 def test_result_summary_uses_action_ids_and_explicit_status_vocabulary():
@@ -1128,12 +1146,18 @@ def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
     assert torsion_row["result"] == "-"
     assert torsion_row["criterion"] == "-"
     assert torsion_row["util"] is None
-    assert torsion_row["note"] == "closed_links_not_present"
+    assert torsion_row["note"] == (
+        "Closed torsion links are required before full torsion resistance can "
+        "be assessed"
+    )
 
     combined_row = by_check["Combined M-V-T"]
     assert combined_row["status"] == "NOT ASSESSED"
     assert combined_row["util"] is None
-    assert combined_row["note"] == "closed_links_not_present"
+    assert combined_row["note"] == (
+        "Closed torsion links are required before full torsion resistance can "
+        "be assessed"
+    )
 
 
 def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
@@ -1157,7 +1181,8 @@ def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
 
     blocker = presentation.combined_bending_assessment_blocker(results)
     assert blocker == (
-        "Torsion prerequisite is not assessed: closed_links_not_present"
+        "Torsion prerequisite is not assessed: Closed torsion links are required "
+        "before full torsion resistance can be assessed"
     )
 
     rows = presentation.result_summary_rows(
@@ -1199,7 +1224,9 @@ def test_torsion_geometry_failure_remains_distinct_from_missing_links():
     torsion_row = next(row for row in rows if row["check"] == "Torsion")
 
     assert torsion_row["status"] == "INVALID"
-    assert torsion_row["note"] == "compound outline requires subdivision"
+    assert torsion_row["note"] == (
+        "The compound outline requires subdivision before torsion can be assessed"
+    )
 
 
 def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
@@ -2009,7 +2036,10 @@ def test_link_detailing_summary_states_when_required_links_are_missing():
     assert row["status"] == "FAIL"
     assert row["result"] == "No links defined"
     assert row["criterion"] == "Links required"
-    assert row["note"] == "6.2.2; shear resistance without links is insufficient"
+    assert row["note"] == (
+        "6.2.2; Provide shear links because the resistance without links is "
+        "insufficient"
+    )
 
 
 def test_link_detailing_summary_does_not_treat_missing_links_as_not_applicable():

@@ -36,6 +36,7 @@ from app.table_field_definitions import (
     set_decimal_issue_ledger,
 )
 from sector.design_standards import DesignBasisKey, parse_design_basis_key
+from sector.engineer_message import EngineerMessage
 
 VERSION = 2
 
@@ -675,13 +676,46 @@ def apply_preset(entry: Mapping, preset: str) -> dict:
     return _normalise_entry(out, _text(out.get("id")))
 
 
-def catalog_errors(catalog) -> list[str]:
+_CATALOG_POSITIVE_MESSAGES = {
+    "n_star": EngineerMessage(
+        "FATIGUE-CYCLES-REFERENCE",
+        "Enter a positive reference cycle count N* for each fatigue detail",
+    ),
+    "k1": EngineerMessage(
+        "FATIGUE-SN-UPPER-SLOPE",
+        "Enter a positive upper-branch S-N exponent for each fatigue detail",
+    ),
+    "k2": EngineerMessage(
+        "FATIGUE-SN-LOWER-SLOPE",
+        "Enter a positive lower-branch S-N exponent for each fatigue detail",
+    ),
+    "delta_sigma_rsk_mpa": EngineerMessage(
+        "FATIGUE-REFERENCE-RANGE",
+        "Enter a positive reference stress range for each fatigue detail",
+    ),
+}
+_CATALOG_MANDREL_MESSAGE = EngineerMessage(
+    "FATIGUE-MANDREL",
+    "Enter a positive mandrel diameter for each bent-bar fatigue detail",
+)
+_CATALOG_NONNEGATIVE_MESSAGES = {
+    "bond_ratio_xi": EngineerMessage(
+        "FATIGUE-BOND-RATIO",
+        "Enter a non-negative bond-strength ratio for each fatigue detail",
+    ),
+    "bond_equivalent_diameter_mm": EngineerMessage(
+        "FATIGUE-EQUIVALENT-DIAMETER",
+        "Enter a non-negative equivalent tendon diameter for each fatigue detail",
+    ),
+}
+
+
+def catalog_errors(catalog) -> list[EngineerMessage]:
     errors = []
     for item in entries(catalog):
-        detail_id = item["id"]
         for field in ("n_star", "k1", "k2", "delta_sigma_rsk_mpa"):
             if not math.isfinite(float(item[field])) or float(item[field]) <= 0.0:
-                errors.append(f"{detail_id}: {field} must be greater than zero")
+                errors.append(_CATALOG_POSITIVE_MESSAGES[field])
         if (
             item["bend_reduction"]
             and (
@@ -689,15 +723,10 @@ def catalog_errors(catalog) -> list[str]:
                 or float(item["mandrel_diameter_mm"]) <= 0.0
             )
         ):
-            errors.append(
-                f"{detail_id}: mandrel_diameter_mm must be greater than zero "
-                "for a bent-bar detail"
-            )
+            errors.append(_CATALOG_MANDREL_MESSAGE)
         for field in ("bond_ratio_xi", "bond_equivalent_diameter_mm"):
             if float(item[field]) < 0.0:
-                errors.append(
-                    f"{detail_id}: {field} must be zero or greater"
-                )
+                errors.append(_CATALOG_NONNEGATIVE_MESSAGES[field])
     return errors
 
 

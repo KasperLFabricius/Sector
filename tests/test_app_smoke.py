@@ -14,6 +14,7 @@ import pathlib
 import re
 import sys
 import time
+import types
 
 import pytest
 
@@ -1277,9 +1278,11 @@ def test_origin_invalid_plastic_result_is_retained_and_rendered_invalid(monkeypa
     assert plastic["worked_point_basis"] == "peak resultant moment"
     _select_view(at, "Plastic Results")
     assert any(
-        "INVALID - Plastic bending" in item.value and reason in item.value
+        "INVALID - Plastic bending" in item.value
+        and "does not contain the zero-moment origin" in item.value
         for item in at.error
     )
+    assert not any(reason in item.value for item in at.error)
     assert not at.exception
 
 
@@ -2222,6 +2225,18 @@ def test_invalid_quick_section_is_explained_and_cannot_be_applied():
     assert any("Preview unavailable" in info.value for info in at.info)
 
 
+def test_quick_section_keeps_field_specific_cover_correction():
+    at = _fresh_qs(bot_c_mm=250.0)
+
+    assert not at.exception
+    assert at.button(key="qs_apply").disabled
+    assert any(
+        "Reduce the bottom reinforcement cover or enlarge the available section width"
+        in error.value
+        for error in at.error
+    )
+
+
 def test_zero_reinforcement_ignores_unused_cover_validation():
     at = _fresh_qs()
     at.selectbox(key="shape").set_value("Annulus").run()
@@ -2914,7 +2929,8 @@ def test_void_slicing_the_section_is_rejected():
          "y (mm)": [-20.0, -20.0, 20.0, 20.0]}))      # full-width slot at mid-height
     _goto_page(at, "Analysis")
     assert any(
-        "review the concrete outline and voids" in error.value
+        "Move each void wholly inside the concrete without touching the outer boundary"
+        in error.value
         for error in at.error
     )
     assert not any("disconnected" in error.value for error in at.error)
@@ -2938,11 +2954,9 @@ def test_bow_tie_outline_is_blocked_in_ui_before_solver_entry():
     )
     _goto_page(at, "Analysis")
     errors = [item.value for item in at.error]
-    assert any(
-        "Invalid section geometry" in message
-        and "review the concrete outline and voids" in message
-        for message in errors
-    )
+    assert errors == [
+        "Adjust the concrete boundary so its edges do not cross or touch"
+    ]
     assert not any("edge 1" in message or "edge 3" in message for message in errors)
     _calculate(at)
     assert not at.exception
@@ -2951,6 +2965,47 @@ def test_bow_tie_outline_is_blocked_in_ui_before_solver_entry():
     except KeyError:
         results = None
     assert not results
+
+
+def test_unknown_geometry_topology_diagnostic_fails_closed_and_logs(
+    monkeypatch,
+    caplog,
+):
+    import sector.section as section_core
+    from sector.geometry import (
+        GeometryTopologyError,
+        TopologyIssue,
+        TopologyValidation,
+    )
+
+    hostile = (
+        "RAW-GEOMETRY GitHub PR #96 SHA-256 payload schema contract "
+        "internal_private_ID EQ-GEOMETRY-7"
+    )
+    validation = TopologyValidation(
+        issues=(TopologyIssue("future-private-code", hostile, "outer ring"),),
+        scale=1.0,
+        length_tolerance=1e-9,
+        area_tolerance=1e-12,
+    )
+
+    def fail_from_polygon(_cls, *_args, **_kwargs):
+        raise GeometryTopologyError(validation)
+
+    monkeypatch.setattr(
+        section_core.Section,
+        "from_polygon",
+        classmethod(fail_from_polygon),
+    )
+    at = _fresh()
+    at.run()
+    _goto_page(at, "Analysis")
+
+    visible = " ".join(item.value for item in at.error)
+    assert "Review the concrete outline and voids" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert not at.exception
 
 
 def test_bar_outside_the_concrete_is_rejected():
@@ -4027,21 +4082,27 @@ def test_v4_multiple_case_rows_each_run_through_verified_solvers():
 def test_invalid_hidden_case_row_is_reported_before_calculation():
     import load_cases
 
+    hostile = (
+        "RAW-DUPLICATE GitHub PR #97 SHA-256 payload schema contract "
+        "internal_private_ID EQ-DUPLICATE-7"
+    )
     at = _fresh()
     at.run()
     _set(at, ("radio", "mode", "Both"))
+    elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY].to_dict("records")
+    elastic[0]["name"] = hostile
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, elastic)
     plastic = at.session_state[load_cases.PLASTIC_TABLE_KEY]
-    elastic_name = str(
-        at.session_state[load_cases.ELASTIC_TABLE_KEY].loc[0, "name"]
-    )
     _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [
         *plastic.to_dict("records"),
-        {"name": elastic_name.swapcase(), "mx_ed_knm": 20.0},
+        {"name": hostile.swapcase(), "mx_ed_knm": 20.0},
     ])
 
     _calculate(at)
 
-    assert any("duplicated" in error.value for error in at.error)
+    visible = " ".join(error.value for error in at.error)
+    assert "Use a unique name" in visible
+    assert hostile not in visible
     assert not at.exception
 
 
@@ -4325,6 +4386,75 @@ def test_report_failure_does_not_publish_software_diagnostics(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "source",
+    ("case analysis", "required action set", "heightened crack control"),
+)
+def test_report_preflight_hides_every_untrusted_diagnostic_source(
+    source,
+    monkeypatch,
+    caplog,
+):
+    import case_analysis
+    import result_presentation
+    import sector_app
+
+    hostile = (
+        "RAW-PREFLIGHT GitHub PR #91 SHA-256 payload schema contract "
+        "internal_private_ID EQ-PREFLIGHT-7"
+    )
+    state = {"report_buffer": b"stale"}
+    monkeypatch.setattr(sector_app, "st", types.SimpleNamespace(session_state=state))
+    monkeypatch.setattr(case_analysis, "validation_errors", lambda _inp: [])
+    monkeypatch.setattr(
+        result_presentation,
+        "required_action_set_errors",
+        lambda _inp: [],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_heightened_crack_control_validation_errors",
+        lambda _inp: [],
+    )
+    inp = {
+        "section": object(),
+        "geometry_error": None,
+        "void_error": None,
+        "steel_error": None,
+        "material_error": None,
+    }
+    if source == "case analysis":
+        inp["plastic_cases"] = []
+        monkeypatch.setattr(
+            case_analysis,
+            "validation_errors",
+            lambda _inp: [hostile],
+        )
+    elif source == "required action set":
+        monkeypatch.setattr(
+            result_presentation,
+            "required_action_set_errors",
+            lambda _inp: [hostile],
+        )
+    else:
+        monkeypatch.setattr(
+            sector_app,
+            "_heightened_crack_control_validation_errors",
+            lambda _inp: [hostile],
+        )
+
+    sector_app._generate_report(inp)
+
+    assert "report_buffer" not in state
+    status, messages = state["_report_msg"]
+    assert status == "error"
+    assert [message.text for message in messages] == [
+        "Review the calculation inputs before generating a report"
+    ]
+    assert hostile not in " ".join(message.text for message in messages)
+    assert hostile in caplog.text
+
+
 def test_fatigue_failure_boundary_hides_software_diagnostics(monkeypatch):
     import fatigue_analysis
     import sector_app
@@ -4391,11 +4521,198 @@ def test_calculation_failure_boundary_hides_software_diagnostics():
             "Calculation blocked: Sector could not complete the calculation. "
             "Review the inputs and try again."
         )
-        assert not re.search(
-            r"\b(?:sha|payload|contract|solver|internal_key)\b",
-            visible,
-            flags=re.IGNORECASE,
+
+
+@pytest.mark.parametrize("exception_kind", ("capacity result", "runtime"))
+def test_calculate_event_hides_unexpected_errors_and_preserves_prior_result(
+    exception_kind,
+    monkeypatch,
+    caplog,
+):
+    import case_analysis
+    import project_io
+    from sector.capacity import CapacityResultError
+
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    before_hash = project_io.result_sha256(at.session_state["results"])
+    before_record = copy.deepcopy(at.session_state["calculation_record"])
+    _set(
+        at,
+        (
+            "number_input",
+            "conc_fck",
+            float(at.session_state["conc_fck"]) + 1.0,
+        ),
+    )
+    hostile = (
+        "RAW-CALCULATE GitHub PR #92 SHA-256 payload schema contract "
+        "internal_private_ID EQ-CALCULATE-7"
+    )
+
+    def fail_calculation(*_args, **_kwargs):
+        if exception_kind == "capacity result":
+            raise CapacityResultError(hostile)
+        raise RuntimeError(hostile)
+
+    monkeypatch.setattr(case_analysis, "run_case_tables", fail_calculation)
+    _calculate(at)
+
+    visible = " ".join(str(item.value) for item in at.error)
+    assert not at.exception
+    assert "Sector could not complete the calculation" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert project_io.result_sha256(at.session_state["results"]) == before_hash
+    assert at.session_state["calculation_record"] == before_record
+
+
+def test_actual_input_issue_boundary_hides_raw_case_diagnostic(
+    monkeypatch,
+    caplog,
+):
+    import case_analysis
+
+    hostile = (
+        "RAW-CASE GitHub PR #93 SHA-256 payload schema contract "
+        "internal_private_ID EQ-CASE-7"
+    )
+    monkeypatch.setattr(
+        case_analysis,
+        "validation_errors",
+        lambda _inp: [hostile],
+    )
+    at = _fresh()
+    at.run()
+    _calculate(at)
+
+    visible = " ".join(str(item.value) for item in at.error)
+    assert not at.exception
+    assert "Review the Plastic and Elastic case tables" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+
+
+def test_actual_fatigue_catalogue_boundary_hides_raw_diagnostic(
+    monkeypatch,
+    caplog,
+):
+    import fatigue_inputs
+
+    hostile = (
+        "RAW-FATIGUE-CATALOGUE GitHub PR #94 SHA-256 payload schema contract "
+        "internal_private_ID EQ-FATIGUE-7"
+    )
+    monkeypatch.setattr(
+        fatigue_inputs,
+        "catalog_errors",
+        lambda _catalogue: [hostile],
+    )
+    at = _fresh()
+    at.run()
+    _set(at, ("toggle", "fatigue_on", True))
+    _goto_material_tab(at, "Fatigue details")
+
+    visible = " ".join(str(item.value) for item in at.error)
+    assert not at.exception
+    assert "Review the fatigue inputs and recalculate" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert not re.search(
+        r"\b(?:sha|payload|contract|solver|internal_key)\b",
+        visible,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_actual_result_views_hide_retained_plastic_and_transverse_reasons(
+    caplog,
+):
+    import load_cases
+
+    hostile = (
+        "RAW-RESULT GitHub PR #95 SHA-256 payload schema contract "
+        "internal_private_ID EQ-RESULT-7"
+    )
+
+    def poison(scope):
+        scope["plastic"].update(
+            util=None,
+            util_valid=False,
+            util_reason=hostile,
+            util_origin_inside_or_on=False,
+            check_util=True,
+            closed=True,
+            converged=True,
         )
+        scope["transverse_reinforcement"] = {
+            "status": "NOT ASSESSED",
+            "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+            "checks": [],
+            "governing": None,
+            "governing_utilisation": None,
+            "reason": hostile,
+        }
+
+    def visible_text(at):
+        parts = []
+        for element_type in (
+            "error",
+            "warning",
+            "success",
+            "info",
+            "caption",
+            "markdown",
+            "text",
+        ):
+            parts.extend(
+                str(item.value) for item in getattr(at, element_type)
+            )
+        parts.extend(frame.value.to_string() for frame in at.table)
+        parts.extend(frame.value.to_string() for frame in at.dataframe)
+        return " ".join(parts)
+
+    at = _fresh()
+    at.run()
+    plastic_cases = at.session_state[load_cases.PLASTIC_TABLE_KEY].to_dict(
+        "records"
+    )
+    plastic_cases[0]["vy_ed_kn"] = 40.0
+    _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, plastic_cases)
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "transverse_detailing_on", True),
+    )
+    _calculate(at)
+    results = copy.deepcopy(at.session_state["results"])
+    poison(results)
+    for entry in results["plastic_cases"]:
+        poison(entry["results"])
+    at.session_state["results"] = results
+
+    _select_view(at, "Plastic Results")
+    plastic_text = visible_text(at)
+    assert "Review the Plastic capacity envelope and applied actions" in plastic_text
+    assert hostile not in plastic_text
+
+    _select_view(at, "Results Overview")
+    overview_text = visible_text(at)
+    assert "Plastic bending" in overview_text
+    assert "Shear/torsion link detailing" in overview_text
+    assert hostile not in overview_text
+    assert "transverse-reinforcement summary reason" in caplog.text
+
+    _select_view(at, "Detailing")
+    detailing_text = visible_text(at)
+    assert (
+        "Review the shear and torsion link-detailing inputs and result status"
+        in detailing_text
+    )
+    assert hostile not in detailing_text
+    assert hostile in caplog.text
+    assert not at.exception
 
 
 def test_material_builder_boundary_hides_hostile_exception_text():
@@ -4419,7 +4736,7 @@ def test_material_builder_boundary_hides_hostile_exception_text():
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise ValueError(hostile)
+            raise RuntimeError(hostile)
         return values
 
     box = Box()
@@ -4438,7 +4755,80 @@ def test_material_builder_boundary_hides_hostile_exception_text():
     assert hostile not in " ".join(box.messages)
 
 
-def test_heightened_reference_boundary_hides_hostile_exception_text(monkeypatch):
+def test_material_builder_keeps_field_specific_rupture_stress_correction():
+    import sector_app
+    from sector import material_presets
+
+    class Box:
+        def __init__(self):
+            self.messages = []
+
+        def warning(self, message):
+            self.messages.append(message)
+
+    values = dict(material_presets.MILD_PRESETS["Curve 1 (bilinear hardening)"])
+    curve = values.pop("curve")
+    values["futk"] = 0.0
+    box = Box()
+
+    result = sector_app._safe_build(
+        box,
+        material_presets.build_mild,
+        curve,
+        values,
+    )
+
+    assert result.futk == pytest.approx(1.0)
+    assert box.messages == [
+        "Adjusted for this curve: Enter a positive ultimate tensile strength "
+        "for the selected mild-steel curve"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("item", "kind", "expected"),
+    (
+        (
+            {
+                "Es": 0.0,
+                "gamma_y": 1.15,
+                "gamma_u": 1.15,
+                "gamma_E": 1.0,
+                "curve": 3,
+                "futk": 550.0,
+            },
+            "mild",
+            "Enter a positive finite reinforcement modulus for the selected curve",
+        ),
+        (
+            {
+                "Es": 200.0,
+                "gamma_y": 1.15,
+                "gamma_u": 1.15,
+                "gamma_E": 1.0,
+                "curve": 7,
+                "fytk": 0.0,
+                "futk": 1860.0,
+            },
+            "prestress",
+            "Enter positive proof and ultimate strengths for the selected prestressing curve",
+        ),
+    ),
+)
+def test_material_catalogue_keeps_finite_field_specific_corrections(
+    item,
+    kind,
+    expected,
+):
+    import sector_app
+
+    assert sector_app._material_definition_message(item, kind).text == expected
+
+
+def test_heightened_reference_boundary_hides_hostile_exception_text(
+    monkeypatch,
+    caplog,
+):
     import case_analysis
     import heightened_crack_adapter
     import sector_app
@@ -4459,7 +4849,7 @@ def test_heightened_reference_boundary_hides_hostile_exception_text(monkeypatch)
 
     monkeypatch.setattr(
         heightened_crack_adapter,
-        "resolve_reference_case_name",
+        "crack_enabled_case_names",
         fail_reference,
     )
     inp = {
@@ -4476,8 +4866,45 @@ def test_heightened_reference_boundary_hides_hostile_exception_text(monkeypatch)
 
     errors = sector_app._heightened_crack_control_validation_errors(inp)
 
-    assert errors == ["Select one valid Elastic reference case"]
-    assert hostile not in " ".join(errors)
+    assert [message.text for message in errors] == [
+        "Review the Elastic reference case for heightened crack control"
+    ]
+    assert hostile not in " ".join(message.text for message in errors)
+    assert hostile in caplog.text
+
+
+def test_heightened_reference_validation_keeps_specific_correction(monkeypatch):
+    import case_analysis
+    import heightened_crack_adapter
+    import sector_app
+    from sector.design_standards import DesignBasisKey
+
+    monkeypatch.setattr(case_analysis, "case_records", lambda *_args: ())
+    monkeypatch.setattr(
+        heightened_crack_adapter,
+        "crack_enabled_case_names",
+        lambda _records: (),
+    )
+    inp = {
+        "sls_heightened_on": True,
+        "mode": "Both",
+        "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        sector_app.HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY: 0.3,
+        "sls_heightened_fine_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_reference_case": "",
+    }
+
+    errors = sector_app._heightened_crack_control_validation_errors(inp)
+
+    assert [(message.code, message.text) for message in errors] == [
+        (
+            "HEIGHTENED-REFERENCE-REQUIRED",
+            "Enable crack-width calculation for at least one Elastic case",
+        )
+    ]
 
 
 def test_metadata_only_report_edit_reuses_frozen_engineering_results(
@@ -7628,8 +8055,7 @@ def test_material_blocker_navigates_to_its_material_family(monkeypatch):
     }
 
     assert any(
-        "Invalid material definition: M2: Review the selected material values"
-        in item.value
+        "Review the selected material values" in item.value
         for item in at.error
     )
     assert not any("test-invalid material law" in item.value for item in at.error)

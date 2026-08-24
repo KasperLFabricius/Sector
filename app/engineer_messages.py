@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 
 from sector.engineer_message import EngineerMessage
 
@@ -106,6 +107,25 @@ _EQ_IDENTIFIER = re.compile(
     r"\beq[-_]+[a-z0-9][a-z0-9._-]*\b",
     flags=re.IGNORECASE,
 )
+_NORMALIZED_EQ_IDENTIFIER = re.compile(
+    r"\beq\s+(?=[a-z])(?:[a-z0-9]+\s+)*\d+\b",
+    flags=re.IGNORECASE,
+)
+_PRIVATE_APPLICATION_IDENTIFIER = re.compile(
+    r"\b(?:fatigue|report|project|plastic|elastic|torsion|shear|capacity|sls|"
+    r"heightened)(?:_[a-z0-9]+){2,}\b",
+    flags=re.IGNORECASE,
+)
+
+
+class EngineerValidationError(ValueError):
+    """Expected application validation carrying literal authored guidance."""
+
+    def __init__(self, message: EngineerMessage) -> None:
+        if not isinstance(message, EngineerMessage):
+            raise TypeError("message must be an EngineerMessage")
+        super().__init__(message.code)
+        self.engineer_message = message
 
 
 def normalize_authored_copy(text: str) -> str:
@@ -118,6 +138,10 @@ def development_process_terms(text: str) -> tuple[str, ...]:
     """Return development-specific expressions in authored visible copy."""
 
     normalized = normalize_authored_copy(text)
+    # PDF extraction can render the recognised engineering symbol ``u_eq`` as
+    # two words.  Protect that notation before applying the separator-neutral
+    # internal equation-ID detector.
+    normalized_equation_copy = re.sub(r"\bu\s+eq\b", "ueq", normalized)
     padded = f" {normalized} "
     found: list[str] = []
     for phrase in _NORMALIZED_PHRASES:
@@ -127,10 +151,19 @@ def development_process_terms(text: str) -> tuple[str, ...]:
         found.append("pr number")
     if _PRIVATE_IDENTIFIER.search(normalized) and "private identifier" not in found:
         found.append("private identifier")
-    # Internal EQ identifiers use a hyphen/underscore after the prefix. This
-    # leaves normative references such as "Eq. (6.31)" and u_eq notation intact.
-    if _EQ_IDENTIFIER.search(text) and "equation identifier" not in found:
+    # Internal EQ identifiers require a non-numeric token after the prefix. This
+    # leaves normative references such as "Eq. (6.31)" and u_eq notation intact
+    # while treating every identifier separator consistently.
+    if (
+        _EQ_IDENTIFIER.search(text)
+        or _NORMALIZED_EQ_IDENTIFIER.search(normalized_equation_copy)
+    ) and "equation identifier" not in found:
         found.append("equation identifier")
+    if (
+        _PRIVATE_APPLICATION_IDENTIFIER.search(text)
+        and "private application identifier" not in found
+    ):
+        found.append("private application identifier")
     return tuple(found)
 
 
@@ -177,6 +210,24 @@ def resolve(
         _diagnostic_repr(value),
     )
     return fallback
+
+
+def resolve_state(
+    value: object,
+    *,
+    authored: Mapping[object, EngineerMessage],
+    fallback: EngineerMessage,
+    context: str,
+) -> EngineerMessage:
+    """Resolve a typed message or one finite authored state mapping."""
+
+    candidate = value
+    if not isinstance(value, (EngineerMessage, BaseException)):
+        try:
+            candidate = authored.get(value, value)
+        except (TypeError, ValueError):
+            candidate = value
+    return resolve(candidate, fallback=fallback, context=context)
 
 
 def error_detail(

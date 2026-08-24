@@ -172,6 +172,164 @@ _FATIGUE_DISPLAY_WARNING = EngineerMessage(
     "FATIGUE-DISPLAY-WARNING",
     "Review the selected fatigue basis before using the result",
 )
+_INPUT_ISSUE_DISPLAY = EngineerMessage(
+    "INPUT-ISSUE",
+    "Review the highlighted input before calculating",
+)
+_INPUT_FOCUS_DISPLAY = EngineerMessage(
+    "INPUT-FOCUS",
+    "Review the cited input before calculating",
+)
+_REPORT_INPUTS_REQUIRED = EngineerMessage(
+    "REPORT-INPUTS",
+    "Open Inputs once to initialise the section before generating a report",
+)
+_REPORT_SECTION_REQUIRED = EngineerMessage(
+    "REPORT-SECTION",
+    "Define a valid section and resolve any geometry or reinforcement issue before generating a report",
+)
+_REPORT_PREFLIGHT_DISPLAY = EngineerMessage(
+    "REPORT-PREFLIGHT",
+    "Review the calculation inputs before generating a report",
+)
+_REPORT_REUSED_RESULTS = EngineerMessage(
+    "REPORT-GENERATED-REUSED",
+    "Report generated using the matching current Analysis results",
+)
+_REPORT_RECALCULATED_RESULTS = EngineerMessage(
+    "REPORT-GENERATED-RECALCULATED",
+    "Report generated after recalculating the current inputs",
+)
+_REPORT_GENERATION_FAILED = EngineerMessage(
+    "REPORT-GENERATION",
+    "Report generation failed. Review the current inputs, recalculate, and try again",
+)
+_MATERIAL_CURVE_DISPLAY = EngineerMessage(
+    "MATERIAL-CURVE",
+    "Review the material values for the selected curve",
+)
+_MILD_RUPTURE_STRESS = EngineerMessage(
+    "MILD-RUPTURE-STRESS",
+    "Enter a positive ultimate tensile strength for the selected mild-steel curve",
+)
+_PRESTRESS_STRENGTHS = EngineerMessage(
+    "PRESTRESS-STRENGTHS",
+    "Enter positive proof and ultimate strengths for the selected prestressing curve",
+)
+_MATERIAL_PARTIAL_FACTORS = EngineerMessage(
+    "MATERIAL-PARTIAL-FACTORS",
+    "Enter positive finite material partial factors for the selected curve",
+)
+_MATERIAL_MODULUS = EngineerMessage(
+    "MATERIAL-MODULUS",
+    "Enter a positive finite reinforcement modulus for the selected curve",
+)
+_MATERIAL_DEFINITION_DISPLAY = EngineerMessage(
+    "MATERIAL-DEFINITION",
+    "Review the selected material values",
+)
+_BAR_MATERIAL_ASSIGNMENT = EngineerMessage(
+    "BAR-MATERIAL-ASSIGNMENT",
+    "Assign every reinforcing bar to a defined mild-steel material",
+)
+_TENDON_MATERIAL_ASSIGNMENT = EngineerMessage(
+    "TENDON-MATERIAL-ASSIGNMENT",
+    "Assign every tendon to a defined prestressing-steel material",
+)
+_MEMBER_MATERIAL_ASSIGNMENT = EngineerMessage(
+    "MEMBER-MATERIAL-ASSIGNMENT",
+    "Select a defined mild-steel material for the member checks",
+)
+_MATERIAL_INPUT_BLOCKER = EngineerMessage(
+    "MATERIAL-INPUT-BLOCKER",
+    "Resolve the material definitions and assignments before calculating",
+)
+_TORSION_GAMMA_CT_INPUT = EngineerMessage(
+    "TORSION-GAMMA-CT",
+    "Enter a positive finite concrete tensile partial factor gamma_ct",
+)
+_SECTION_GEOMETRY_DISPLAY = EngineerMessage(
+    "SECTION-GEOMETRY",
+    "Review the concrete outline and voids",
+)
+_SECTION_TOPOLOGY_MESSAGES = {
+    "malformed-ring": EngineerMessage(
+        "SECTION-RING-SHAPE",
+        "Enter each concrete boundary as a numeric list of x-y points",
+    ),
+    "too-few-points": EngineerMessage(
+        "SECTION-RING-POINTS",
+        "Enter at least three distinct points for every concrete boundary",
+    ),
+    "non-finite-point": EngineerMessage(
+        "SECTION-FINITE-POINTS",
+        "Enter finite x and y coordinates for every concrete-boundary point",
+    ),
+    "repeated-point": EngineerMessage(
+        "SECTION-REPEATED-POINT",
+        "Remove repeated or coincident points from the concrete boundary",
+    ),
+    "degenerate-area": EngineerMessage(
+        "SECTION-DEGENERATE-AREA",
+        "Adjust the concrete-boundary points to enclose a positive area",
+    ),
+    "backtracking-edge": EngineerMessage(
+        "SECTION-BACKTRACKING-EDGE",
+        "Adjust the concrete boundary so adjacent edges do not overlap or reverse",
+    ),
+    "self-intersection": EngineerMessage(
+        "SECTION-SELF-INTERSECTION",
+        "Adjust the concrete boundary so its edges do not cross or touch",
+    ),
+    "hole-boundary-contact": EngineerMessage(
+        "SECTION-VOID-BOUNDARY",
+        "Move each void wholly inside the concrete without touching the outer boundary",
+    ),
+    "hole-outside": EngineerMessage(
+        "SECTION-VOID-OUTSIDE",
+        "Move each void wholly inside the outer concrete boundary",
+    ),
+    "hole-overlap": EngineerMessage(
+        "SECTION-VOID-OVERLAP",
+        "Adjust the voids so they do not overlap or touch",
+    ),
+    "nested-hole": EngineerMessage(
+        "SECTION-NESTED-VOID",
+        "Remove nested void boundaries from the section geometry",
+    ),
+}
+_SECTION_DISCONNECTED = EngineerMessage(
+    "SECTION-DISCONNECTED",
+    "Adjust the voids so the concrete outline remains connected",
+)
+_REINFORCEMENT_OUTSIDE = EngineerMessage(
+    "REINFORCEMENT-OUTSIDE",
+    "Move every bar and tendon inside the concrete and outside the voids",
+)
+_REINFORCEMENT_ROW_INPUT = EngineerMessage(
+    "REINFORCEMENT-ROW-INPUT",
+    "Complete each reinforcement row with finite coordinates, area, and diameter",
+)
+_QUICK_SECTION_DISPLAY = EngineerMessage(
+    "QUICK-SECTION",
+    "Review the section dimensions and reinforcement layout",
+)
+_QUICK_BOTTOM_COVER = EngineerMessage(
+    "QUICK-BOTTOM-COVER",
+    "Reduce the bottom reinforcement cover or enlarge the available section width",
+)
+_QUICK_TOP_COVER = EngineerMessage(
+    "QUICK-TOP-COVER",
+    "Reduce the top reinforcement cover or enlarge the available section width",
+)
+_QUICK_TENDON_COVER = EngineerMessage(
+    "QUICK-TENDON-COVER",
+    "Reduce the tendon cover or enlarge the available section width",
+)
+_QUICK_REINFORCEMENT_PLACEMENT = EngineerMessage(
+    "QUICK-REINFORCEMENT-PLACEMENT",
+    "Reduce the cover, number of layers, or layer spacing so all reinforcement remains in concrete",
+)
 
 
 def _shear_codes():
@@ -402,13 +560,24 @@ def _safe_build(box, builder, curve, vals, **extra):
     """
     try:
         return builder(curve=curve, **vals, **extra)
-    except ValueError as exc:
+    except Exception as exc:
+        if vals.get("Es", 1.0) <= 0.0:
+            fallback = _MATERIAL_MODULUS
+        elif any(vals.get(key, 1.0) <= 0.0 for key in ("gamma_y", "gamma_u", "gamma_E")):
+            fallback = _MATERIAL_PARTIAL_FACTORS
+        elif builder is mp.build_mild and curve in (1, 3) and vals.get("futk", 0.0) <= 0.0:
+            fallback = _MILD_RUPTURE_STRESS
+        elif (
+            builder is mp.build_prestress
+            and curve in (6, 7)
+            and (vals.get("fytk", 0.0) <= 0.0 or vals.get("futk", 0.0) <= 0.0)
+        ):
+            fallback = _PRESTRESS_STRENGTHS
+        else:
+            fallback = _MATERIAL_CURVE_DISPLAY
         detail = engineer_messages.error_detail(
             exc,
-            fallback=EngineerMessage(
-                "MATERIAL-CURVE",
-                "Review the material values for the selected curve",
-            ),
+            fallback=fallback,
             context="material curve construction",
         )
         _manual_warning(
@@ -419,6 +588,36 @@ def _safe_build(box, builder, curve, vals, **extra):
             if v.get(f, 1.0) <= 0.0:
                 v[f] = 1.0
         return builder(curve=curve, **v, **extra)
+
+
+def _material_definition_message(item, kind):
+    """Return field-specific authored guidance for a finite material category."""
+
+    def positive(field):
+        value = item.get(field)
+        if isinstance(value, bool):
+            return False
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return math.isfinite(number) and number > 0.0
+
+    if not positive("Es"):
+        return _MATERIAL_MODULUS
+    if any(not positive(field) for field in ("gamma_y", "gamma_u", "gamma_E")):
+        return _MATERIAL_PARTIAL_FACTORS
+    try:
+        curve = int(item.get("curve"))
+    except (TypeError, ValueError, OverflowError):
+        return _MATERIAL_DEFINITION_DISPLAY
+    if kind == "mild" and curve in (1, 3) and not positive("futk"):
+        return _MILD_RUPTURE_STRESS
+    if kind == "prestress" and curve in (6, 7) and (
+        not positive("fytk") or not positive("futk")
+    ):
+        return _PRESTRESS_STRENGTHS
+    return _MATERIAL_DEFINITION_DISPLAY
 
 
 def _clamp_eut(box, vals, fields):
@@ -1790,11 +1989,15 @@ def _reinforcement_editor(box, base_key, ed_key):
     elements = rebar_table.valid_elements(frame, kind)
     issues = rebar_table.row_issues(frame, kind)
     if issues:
-        details = "; ".join(f"{element_id}: {reason}" for element_id, reason in issues)
+        details = engineer_messages.error_detail(
+            issues,
+            fallback=_REINFORCEMENT_ROW_INPUT,
+            context="reinforcement row validation",
+        )
         _manual_warning(
             box,
             "geometry-invalid",
-            f"Incomplete element rows are not analysed ({details}).",
+            details,
         )
     points_mm = [
         (item["x_mm"], item["y_mm"], item["area_mm2"])
@@ -2706,15 +2909,20 @@ def _render_input_issues(
     """Render one alert per issue and a control only for a trusted target."""
 
     for index, issue in enumerate(issues, start=1):
+        message = engineer_messages.error_detail(
+            issue.message,
+            fallback=_INPUT_ISSUE_DISPLAY,
+            context="input issue renderer",
+        )
         if issue.target is None:
-            st.error(issue.message)
+            st.error(message)
             continue
         row = st.container(
             horizontal=True,
             vertical_alignment="center",
             gap="small",
         )
-        row.error(issue.message)
+        row.error(message)
         button_key = re.sub(
             r"[^a-zA-Z0-9_-]+",
             "-",
@@ -3559,16 +3767,17 @@ def _generate_report(inp):
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
             "error",
-            "Open Inputs once to initialise the section before generating a report.",
+            (_REPORT_INPUTS_REQUIRED,),
         )
         return
     if (inp.get("section") is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         _clear_report_artifact()
-        st.session_state["_report_msg"] = ("error", "Define a valid section (and "
-                                           "resolve any void or reinforcement error) "
-                                           "before generating a report.")
+        st.session_state["_report_msg"] = (
+            "error",
+            (_REPORT_SECTION_REQUIRED,),
+        )
         return
     case_errors = list(
         case_analysis.validation_errors(inp)
@@ -3579,7 +3788,15 @@ def _generate_report(inp):
     if case_errors:
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
-            "error", "; ".join(case_errors) + ".",
+            "error",
+            tuple(
+                engineer_messages.resolve(
+                    value,
+                    fallback=_REPORT_PREFLIGHT_DISPLAY,
+                    context="report preflight validation",
+                )
+                for value in case_errors
+            ),
         )
         return
     prog = _REPORT_PROG
@@ -3657,23 +3874,20 @@ def _generate_report(inp):
             st.session_state["report_generation_record"][
                 "analysis_performed_at_utc"
             ] = calculation.get("performed_at_utc")
-        source_text = (
-            "reused the matching current Analysis results"
-            if reuse_results
-            else "recalculated the current inputs for this report"
-        )
         st.session_state["_report_msg"] = (
             "success",
-            f"Report generated; Sector {source_text}.",
+            (
+                _REPORT_REUSED_RESULTS
+                if reuse_results
+                else _REPORT_RECALCULATED_RESULTS,
+            ),
         )
     except Exception:                              # never let it crash the app
         _LOGGER.exception("Report generation failed")
         _clear_report_artifact()
         st.session_state["_report_msg"] = (
             "error",
-            "Report generation failed. Review the current inputs, recalculate, "
-            "and try again. If the problem continues, report the steps that "
-            "produced it.",
+            (_REPORT_GENERATION_FAILED,),
         )
     if prog is not None:
         prog.empty()
@@ -3764,9 +3978,17 @@ def _report_workspace(inp):
 
     msg = st.session_state.pop("_report_msg", None)
     if msg:
-        (publication_box.success if msg[0] == "success" else publication_box.error)(
-            msg[1]
+        publisher = (
+            publication_box.success if msg[0] == "success" else publication_box.error
         )
+        values = msg[1] if isinstance(msg[1], (list, tuple)) else (msg[1],)
+        for value in values:
+            detail = engineer_messages.error_detail(
+                value,
+                fallback=_REPORT_PREFLIGHT_DISPLAY,
+                context="report publication message",
+            )
+            publisher(detail)
     if st.session_state.get("report_buffer") and not uncommitted_input:
         current_signature = _report_signature(
             inp.get("signature") if inp is not None else None
@@ -4179,9 +4401,9 @@ def _quick_section_geometry(box):
         bot_has_bars = int(nb_bot) > 0 or (ne_bot is not None and ne_bot > 0)
         top_has_bars = int(nb_top) > 0 or (ne_top is not None and ne_top > 0)
         if shape not in {"T-section", "I-section"} and bot_has_bars and bot_w < 0.0:
-            raise ValueError("bottom reinforcement cover leaves no valid face span")
+            raise engineer_messages.EngineerValidationError(_QUICK_BOTTOM_COVER)
         if shape not in {"T-section", "I-section"} and top_has_bars and top_w < 0.0:
-            raise ValueError("top reinforcement cover leaves no valid face span")
+            raise engineer_messages.EngineerValidationError(_QUICK_TOP_COVER)
         layer_s = _seeded_number(
             box, "Layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, "layer_s",
             disabled=int(nl_bot) == 1 and int(nl_top) == 1,
@@ -4206,16 +4428,16 @@ def _quick_section_geometry(box):
             def bottom_span_at(y):
                 row_width = section_width_at(y)
                 if bot_has_bars and row_width < 2.0 * bot_e:
-                    raise ValueError(
-                        "bottom reinforcement cover leaves no valid stepped span"
+                    raise engineer_messages.EngineerValidationError(
+                        _QUICK_BOTTOM_COVER
                     )
                 return -row_width / 2 + bot_e, row_width / 2 - bot_e
 
             def top_span_at(y):
                 row_width = section_width_at(y)
                 if top_has_bars and row_width < 2.0 * top_e:
-                    raise ValueError(
-                        "top reinforcement cover leaves no valid stepped span"
+                    raise engineer_messages.EngineerValidationError(
+                        _QUICK_TOP_COVER
                     )
                 return -row_width / 2 + top_e, row_width / 2 - top_e
 
@@ -4285,14 +4507,16 @@ def _quick_section_geometry(box):
                 def tendon_span_at(y):
                     row_width = section_width_at(y)
                     if row_width < 2.0 * cov_p:
-                        raise ValueError(
-                            "tendon cover leaves no valid stepped span"
+                        raise engineer_messages.EngineerValidationError(
+                            _QUICK_TENDON_COVER
                         )
                     return -row_width / 2 + cov_p, row_width / 2 - cov_p
             else:
                 tendon_span_at = None
                 if b < 2.0 * cov_p:
-                    raise ValueError("tendon cover leaves no valid face span")
+                    raise engineer_messages.EngineerValidationError(
+                        _QUICK_TENDON_COVER
+                    )
             tendons = templates.point_layers(-h / 2 + cov_p, 1.0, int(nl_t), ls_t,
                                              -b / 2 + cov_p, b / 2 - cov_p, int(nt), a_t,
                                              span_at=tendon_span_at)
@@ -4302,9 +4526,8 @@ def _quick_section_geometry(box):
             [(x, y) for x, y, _area in generated], outer, holes
         )
         if not all(contained):
-            raise ValueError(
-                "automatic reinforcement placement falls outside valid concrete; "
-                "reduce cover, layers or layer spacing"
+            raise engineer_messages.EngineerValidationError(
+                _QUICK_REINFORCEMENT_PLACEMENT
             )
     return outer, (holes or []), bars, tendons
 
@@ -4338,13 +4561,10 @@ def _quick_section_viewport():
     with form:
         try:
             outer, holes, bars, tendons = _quick_section_geometry(st)
-        except ValueError as exc:
+        except Exception as exc:
             generation_error = engineer_messages.error_detail(
                 exc,
-                fallback=EngineerMessage(
-                    "QUICK-SECTION",
-                    "Review the section dimensions and reinforcement layout",
-                ),
+                fallback=_QUICK_SECTION_DISPLAY,
                 context="Quick Section generation",
             )
             st.error(f"Quick Section cannot be generated: {generation_error}.")
@@ -5603,11 +5823,12 @@ def build_inputs(host=st):
         or not math.isfinite(torsion_gamma_ct_number)
         or torsion_gamma_ct_number <= 0.0
     ):
-        torsion_gamma_ct_error = (
-            "Concrete tensile factor gamma_ct must be a positive finite real "
-            "number."
-        )
-        sts.error(torsion_gamma_ct_error)
+        torsion_gamma_ct_error = _TORSION_GAMMA_CT_INPUT
+        sts.error(engineer_messages.error_detail(
+            torsion_gamma_ct_error,
+            fallback=_TORSION_GAMMA_CT_INPUT,
+            context="torsion concrete tensile factor",
+        ))
     elif not math.isclose(
         torsion_gamma_ct_number,
         torsion_gamma_default,
@@ -6072,33 +6293,19 @@ def build_inputs(host=st):
         or invalid_tendon_materials
         or invalid_capacity_materials
     ):
-        parts = []
         if invalid_bar_materials:
-            parts.append("bar material " + ", ".join(invalid_bar_materials))
-            material_assignment_errors.append(
-                "Bar material assignment references undefined ID(s): "
-                + ", ".join(invalid_bar_materials)
-            )
+            material_assignment_errors.append(_BAR_MATERIAL_ASSIGNMENT)
         if invalid_tendon_materials:
-            parts.append("tendon material " + ", ".join(invalid_tendon_materials))
-            material_assignment_errors.append(
-                "Tendon material assignment references undefined ID(s): "
-                + ", ".join(invalid_tendon_materials)
-            )
+            material_assignment_errors.append(_TENDON_MATERIAL_ASSIGNMENT)
         if invalid_capacity_materials:
-            parts.append(
-                "member-check material "
-                + ", ".join(invalid_capacity_materials)
-            )
-            material_assignment_errors.append(
-                "Member-check material references undefined ID(s): "
-                + ", ".join(invalid_capacity_materials)
-            )
-        material_assignment_error = (
-            "Undefined material assignment(s): " + "; ".join(parts) + "."
-        )
+            material_assignment_errors.append(_MEMBER_MATERIAL_ASSIGNMENT)
+        material_assignment_error = _MATERIAL_INPUT_BLOCKER
         for assignment_error in material_assignment_errors:
-            sec.error(assignment_error)
+            sec.error(engineer_messages.error_detail(
+                assignment_error,
+                fallback=_MATERIAL_INPUT_BLOCKER,
+                context="material assignment",
+            ))
     fatigue_assignment_error = None
     if fatigue_on and fatigue_check_steel:
         invalid_bar_details = fatigue_inputs.invalid_assignments(
@@ -6275,7 +6482,11 @@ def build_inputs(host=st):
             fatigue_edition,
         )
         for error in fatigue_inputs.catalog_errors(fatigue_catalogue):
-            fatigue_tab.error(error)
+            fatigue_tab.error(engineer_messages.error_detail(
+                error,
+                fallback=_FATIGUE_DISPLAY_ERROR,
+                context="fatigue detail catalogue",
+            ))
 
     material_definition_errors = []
 
@@ -6284,16 +6495,26 @@ def build_inputs(host=st):
         for item in catalogue["items"]:
             try:
                 out[item["id"]] = mat_catalog.build_material(item, kind)
-            except (TypeError, ValueError) as exc:
-                detail = engineer_messages.error_detail(
+            except Exception as exc:
+                detail = engineer_messages.resolve(
                     exc,
-                    fallback=EngineerMessage(
-                        "MATERIAL-DEFINITION",
-                        "Review the selected material values",
-                    ),
+                    fallback=_material_definition_message(item, kind),
                     context="material definition",
                 )
-                material_definition_errors.append(f"{item['id']}: {detail}")
+                family = (
+                    "Mild steel" if kind == "mild"
+                    else "Prestressing steel"
+                )
+                material_definition_errors.append(input_issues.InputIssue(
+                    "material-definition",
+                    detail,
+                    input_issues.InputTarget(
+                        input_issues.MATERIAL_PARAMETERS,
+                        widget_label=f"{family} values",
+                        material_family=family,
+                        material_id=str(item["id"]),
+                    ),
+                ))
         return out
 
     mild_material_map = _material_map(mild_catalogue, "mild")
@@ -6318,21 +6539,15 @@ def build_inputs(host=st):
     prestress = tendon_materials[0] if tendon_materials else selected_prestress
     material_error = material_assignment_error
     if torsion_gamma_ct_error:
-        material_error = (
-            f"{material_error} {torsion_gamma_ct_error}".strip()
-            if material_error else torsion_gamma_ct_error
-        )
+        material_error = _MATERIAL_INPUT_BLOCKER
     if material_definition_errors:
-        definition_message = (
-            "Invalid material definition(s): "
-            + "; ".join(material_definition_errors)
-        )
         for definition_error in material_definition_errors:
-            mat_tab.error(f"Invalid material definition: {definition_error}")
-        material_error = (
-            f"{material_error} {definition_message}".strip()
-            if material_error else definition_message
-        )
+            mat_tab.error(engineer_messages.error_detail(
+                definition_error.message,
+                fallback=_MATERIAL_DEFINITION_DISPLAY,
+                context="material definition display",
+            ))
+        material_error = _MATERIAL_INPUT_BLOCKER
 
     mild_entries_by_id = mat_catalog.entry_map(mild_catalogue, "mild")
     prestress_entries_by_id = mat_catalog.entry_map(
@@ -6378,21 +6593,20 @@ def build_inputs(host=st):
                 holes=holes,
             )
         except geometry.GeometryTopologyError as exc:
-            detail = engineer_messages.error_detail(
-                exc,
-                fallback=EngineerMessage(
-                    "SECTION-GEOMETRY",
-                    "review the concrete outline and voids",
-                ),
+            issue = next(iter(exc.validation.issues), None)
+            authored = _SECTION_TOPOLOGY_MESSAGES.get(
+                getattr(issue, "code", None)
+            )
+            geometry_error = engineer_messages.resolve(
+                authored if authored is not None else exc,
+                fallback=_SECTION_GEOMETRY_DISPLAY,
                 context="section geometry construction",
             )
-            geometry_error = f"Invalid section geometry: {detail}"
     # A void must not split the concrete into disconnected pieces (e.g. a slot
     # reaching across the section): such a section has no valid capacity.
     void_error = None
     if section is not None and holes and not geometry.concrete_is_connected(outer, holes):
-        void_error = ("A void splits the concrete into disconnected regions. "
-                      "Adjust the voids so the concrete outline stays continuous.")
+        void_error = _SECTION_DISCONNECTED
     # Every reinforcing bar and tendon must sit in the concrete: outside the outline
     # or inside a void it carries no force, so the section is ill-defined. Checked
     # only once the outline itself is valid (a void error is the more basic fault).
@@ -6411,9 +6625,7 @@ def build_inputs(host=st):
             if bad_tendons:
                 parts.append(f"tendon(s) {', '.join(map(str, bad_tendons))}")
             if parts:
-                steel_error = ("Reinforcement must lie within the concrete: "
-                               + " and ".join(parts) + " fall outside the section "
-                               "or inside a void. Move them into the concrete.")
+                steel_error = _REINFORCEMENT_OUTSIDE
     if outer:
         xs = [p[0] for p in outer]
         ys = [p[1] for p in outer]
@@ -6740,9 +6952,14 @@ def _input_workspace() -> None:
         if focus.get("material_family"):
             location += f" / {focus['material_family']}"
         correction = str(focus.get("widget_label") or "the cited input")
+        focus_message = engineer_messages.error_detail(
+            focus.get("message"),
+            fallback=_INPUT_FOCUS_DISPLAY,
+            context="input issue focus",
+        )
         st.info(
             f"Opened **{location}**. Correction target: **{correction}**.  \n"
-            f"{focus.get('message') or ''}"
+            f"{focus_message}"
         )
     pane_token = app_run_probe.start_phase(
         st.session_state, "pane_construction"
@@ -7865,6 +8082,52 @@ _HEIGHTENED_POSITIVE_INPUTS = (
         "Coarse-system effective tension area",
     ),
 )
+_HEIGHTENED_BOOLEAN = EngineerMessage(
+    "HEIGHTENED-ENABLED",
+    "Choose whether heightened crack control is enabled",
+)
+_HEIGHTENED_ELASTIC_MODE = EngineerMessage(
+    "HEIGHTENED-ELASTIC-MODE",
+    "Enable Elastic analysis before checking heightened crack control",
+)
+_HEIGHTENED_DESIGN_BASIS = EngineerMessage(
+    "HEIGHTENED-DESIGN-BASIS",
+    "Select the first-generation DK NA:2024 design basis for heightened crack control",
+)
+_HEIGHTENED_SURFACE = EngineerMessage(
+    "HEIGHTENED-SURFACE",
+    "Select ribbed or smooth reinforcement for heightened crack control",
+)
+_HEIGHTENED_POSITIVE_MESSAGES = {
+    "sls_heightened_effective_tensile_strength_mpa": EngineerMessage(
+        "HEIGHTENED-TENSILE-STRENGTH",
+        "Enter a positive finite effective tensile strength",
+    ),
+    HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY: EngineerMessage(
+        "HEIGHTENED-CRACK-LIMIT",
+        "Enter a positive finite heightened crack-width limit",
+    ),
+    "sls_heightened_fine_effective_tension_area_mm2": EngineerMessage(
+        "HEIGHTENED-FINE-AREA",
+        "Enter a positive finite fine-system effective tension area",
+    ),
+    "sls_heightened_coarse_effective_tension_area_mm2": EngineerMessage(
+        "HEIGHTENED-COARSE-AREA",
+        "Enter a positive finite coarse-system effective tension area",
+    ),
+}
+_HEIGHTENED_REFERENCE_REQUIRED = EngineerMessage(
+    "HEIGHTENED-REFERENCE-REQUIRED",
+    "Enable crack-width calculation for at least one Elastic case",
+)
+_HEIGHTENED_REFERENCE_SELECT = EngineerMessage(
+    "HEIGHTENED-REFERENCE-SELECT",
+    "Select one crack-enabled Elastic case as the heightened reference",
+)
+_HEIGHTENED_REFERENCE_DISPLAY = EngineerMessage(
+    "HEIGHTENED-REFERENCE-CASE",
+    "Review the Elastic reference case for heightened crack control",
+)
 
 
 def _heightened_crack_control_validation_errors(inp):
@@ -7872,31 +8135,26 @@ def _heightened_crack_control_validation_errors(inp):
 
     enabled = inp.get("sls_heightened_on", False)
     if type(enabled) is not bool:
-        return ["Heightened crack control must be explicitly true or false"]
+        return [_HEIGHTENED_BOOLEAN]
     if not enabled:
         return []
 
     errors = []
     if inp.get("mode") not in {"Elastic", "Both"}:
-        errors.append(
-            "Heightened crack control requires Elastic analysis to be enabled"
-        )
+        errors.append(_HEIGHTENED_ELASTIC_MODE)
     try:
         design_standards.capability_binding(
             inp.get("sls_code"),
             design_standards.Capability.HEIGHTENED_CRACK_CONTROL,
         )
     except ValueError:
-        errors.append(
-            "Heightened crack control is available only with the first-generation "
-            "DK NA:2024 design basis"
-        )
+        errors.append(_HEIGHTENED_DESIGN_BASIS)
     if inp.get("sls_heightened_reinforcement_surface") not in {
         "ribbed",
         "smooth",
     }:
-        errors.append("Heightened reinforcement surface must be ribbed or smooth")
-    for key, label in _HEIGHTENED_POSITIVE_INPUTS:
+        errors.append(_HEIGHTENED_SURFACE)
+    for key, _label in _HEIGHTENED_POSITIVE_INPUTS:
         value = inp.get(key)
         try:
             number = float(value)
@@ -7908,22 +8166,24 @@ def _heightened_crack_control_validation_errors(inp):
             or not math.isfinite(number)
             or number <= 0.0
         ):
-            errors.append(f"{label} must be a positive finite number")
+            errors.append(_HEIGHTENED_POSITIVE_MESSAGES[key])
     try:
         records = case_analysis.case_records(inp, "elastic")
-        heightened_adapter.resolve_reference_case_name(
-            records,
-            inp.get("sls_heightened_reference_case"),
-        )
-    except (KeyError, TypeError, ValueError) as exc:
-        errors.append(engineer_messages.error_detail(
+        names = heightened_adapter.crack_enabled_case_names(records)
+    except Exception as exc:
+        errors.append(engineer_messages.resolve(
             exc,
-            fallback=EngineerMessage(
-                "CRACK-REFERENCE-CASE",
-                "Select one valid Elastic reference case",
-            ),
+            fallback=_HEIGHTENED_REFERENCE_DISPLAY,
             context="heightened crack-control reference case",
         ))
+    else:
+        selected = inp.get("sls_heightened_reference_case")
+        if not names:
+            errors.append(_HEIGHTENED_REFERENCE_REQUIRED)
+        elif len(names) > 1 and (
+            not isinstance(selected, str) or selected not in names
+        ):
+            errors.append(_HEIGHTENED_REFERENCE_SELECT)
     return errors
 
 
@@ -8029,7 +8289,7 @@ def run_analysis(
     """Run every current named action and enabled calculation."""
     heightened_errors = _heightened_crack_control_validation_errors(inp)
     if heightened_errors:
-        raise ValueError("; ".join(heightened_errors))
+        raise engineer_messages.EngineerValidationError(heightened_errors[0])
     if (inp["section"] is None or inp.get("geometry_error")
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
@@ -9571,7 +9831,12 @@ def detailing_view(inp, results, *, global_results=None):
             ]
             result_text = (
                 f"governing utilisation {100.0 * max(utilisations):.1f} %"
-                if utilisations else str(minimum.get("reason") or "not evaluated")
+                if utilisations
+                else presentation.result_reason(
+                    minimum.get("reason"),
+                    "minimum_reinforcement",
+                    context="minimum-reinforcement card reason",
+                )
             )
             _detailing_status_callout(minimum.get("status"), result_text)
             st.caption(
@@ -9592,7 +9857,11 @@ def detailing_view(inp, results, *, global_results=None):
                 transverse.get("status") or "NOT ASSESSED"
             ).upper()
             incomplete_reason = next((
-                str(check["reason"])
+                presentation.result_reason(
+                    check["reason"],
+                    "transverse_reinforcement",
+                    context="transverse-reinforcement card check reason",
+                )
                 for check in transverse.get("checks") or []
                 if check.get("status") == "NOT ASSESSED"
                 and check.get("reason")
@@ -9605,8 +9874,10 @@ def detailing_view(inp, results, *, global_results=None):
                 if utilisation is not None:
                     result_text += f"; {_pct(utilisation)}"
             else:
-                result_text = str(
-                    transverse.get("reason") or "not evaluated"
+                result_text = presentation.result_reason(
+                    transverse.get("reason"),
+                    "transverse_reinforcement",
+                    context="transverse-reinforcement card reason",
                 )
             _detailing_status_callout(
                 transverse_status,
@@ -9631,7 +9902,11 @@ def detailing_view(inp, results, *, global_results=None):
                     f"{governing.get('required_mm', 0.0):.1f} mm required"
                 )
             else:
-                result_text = str(spacing.get("reason") or "not evaluated")
+                result_text = presentation.result_reason(
+                    spacing.get("reason"),
+                    "generic",
+                    context="clear-spacing card reason",
+                )
             _detailing_status_callout(spacing.get("status"), result_text)
             st.caption(
                 f"{spacing.get('edition', '-')} | {spacing.get('clause', '-')}"
@@ -9730,13 +10005,21 @@ def detailing_view(inp, results, *, global_results=None):
                 },
             )
             reasons = [
-                str(check["reason"])
+                presentation.result_reason(
+                    check["reason"],
+                    "minimum_reinforcement",
+                    context="minimum-reinforcement detail reason",
+                )
                 for check in checks if check.get("reason")
             ]
             if reasons:
                 st.caption("Outcome: " + "; ".join(dict.fromkeys(reasons)))
         elif minimum.get("reason"):
-            st.caption(str(minimum["reason"]))
+            st.caption(presentation.result_reason(
+                minimum["reason"],
+                "minimum_reinforcement",
+                context="minimum-reinforcement detail summary reason",
+            ))
         if minimum.get("limitations"):
             with st.expander("Minimum-reinforcement method notes"):
                 for note in minimum["limitations"]:
@@ -9763,7 +10046,11 @@ def detailing_view(inp, results, *, global_results=None):
                 },
             )
         elif spacing.get("reason"):
-            st.caption(str(spacing["reason"]))
+            st.caption(presentation.result_reason(
+                spacing["reason"],
+                "generic",
+                context="clear-spacing detail reason",
+            ))
         if spacing.get("limitations"):
             with st.expander("Clear-spacing method notes"):
                 for note in spacing["limitations"]:
@@ -9818,9 +10105,17 @@ def detailing_view(inp, results, *, global_results=None):
                 },
             )
         elif transverse.get("reason"):
-            st.caption(str(transverse["reason"]))
+            st.caption(presentation.result_reason(
+                transverse["reason"],
+                "transverse_reinforcement",
+                context="transverse-reinforcement detail summary reason",
+            ))
         reasons = [
-            str(check["reason"])
+            presentation.result_reason(
+                check["reason"],
+                "transverse_reinforcement",
+                context="transverse-reinforcement detail reason",
+            )
             for check in transverse.get("checks") or []
             if check.get("reason")
         ]
@@ -10650,8 +10945,17 @@ def _crack_width_panel(e):
         criterion = output.get("criterion_mm")
         criterion_source = output.get("criterion_source")
         ratio = output.get("ratio")
-        reason = str(output.get("reason") or "").strip()
-        if reason:
+        raw_reason = output.get("reason")
+        reason = (
+            presentation.result_reason(
+                raw_reason,
+                "crack",
+                context=f"{duration} crack-width result reason",
+            )
+            if raw_reason
+            else ""
+        )
+        if raw_reason:
             retained_reasons.append(reason)
         column.metric(
             f"{label} calculated crack width",
@@ -10973,7 +11277,11 @@ def _fatigue_reinforcement_panel(payload, spectrum):
         "Total cycles": screen["total_cycles"],
     }], height=120)
     if screen["reason"]:
-        st.caption(screen["reason"])
+        st.caption(presentation.result_reason(
+            screen["reason"],
+            "fatigue",
+            context="simplified fatigue-screen reason",
+        ))
     if screen["source"]:
         st.caption("Reference: " + screen["source"])
     st.caption(
@@ -11821,10 +12129,12 @@ def shear_view(inp, results):
         st.divider()
         st.markdown("**Shear reinforcement (links)**")
         if not lk["valid"]:
-            reason = (
+            reason = presentation.result_reason(
                 links.get("assessment_reason")
                 or lk.get("reason")
-                or "invalid reinforced-shear input"
+                or "invalid reinforced-shear input",
+                "shear",
+                context="reinforced-shear result reason",
             )
             _manual_warning(
                 st,
@@ -12210,22 +12520,26 @@ def torsion_view(inp, results):
             )
             st.dataframe(min_reinf_rows, hide_index=True, width="stretch")
     if tube_valid and not full_resistance_assessed:
-        reason = str(
+        raw_reason = (
             t.get("assessment_reason")
             or t.get("reason")
             or "full torsion resistance not assessed"
         )
-        if reason == "closed_links_not_present":
+        if raw_reason == "closed_links_not_present":
             detail = (
                 "Current shared links / closed torsion stirrups are not present."
             )
-        elif reason == "closed_link_reinforcement_not_positive":
+        elif raw_reason == "closed_link_reinforcement_not_positive":
             detail = (
                 "Current closed torsion stirrups are selected, but their one-leg "
                 "reinforcement per unit length is not positive."
             )
         else:
-            detail = reason.replace("_", " ").capitalize() + "."
+            detail = presentation.result_reason(
+                raw_reason,
+                "torsion",
+                context="torsion assessment reason",
+            ) + "."
         _manual_warning(
             st,
             "calculation-warning",
@@ -12325,13 +12639,16 @@ def torsion_view(inp, results):
                 "enter rectangles that partition the section.",
             )
         elif str(t.get("reason") or "").startswith("invalid sub-tube partition:"):
-            detail = (t.get("subdivision_reason")
-                      or str(t["reason"]).split(":", 1)[-1].strip())
+            presentation.result_reason(
+                t.get("subdivision_reason") or t.get("reason"),
+                "torsion",
+                context="torsion sub-tube partition reason",
+            )
             _manual_warning(
                 st,
                 "geometry-invalid",
-                f"Torsion is not assessed because the sub-tubes do not partition "
-                f"the concrete section: {detail}. Adjust centres and dimensions "
+                "Torsion is not assessed because the sub-tubes do not partition "
+                "the concrete section. Adjust centres and dimensions "
                 "to cover the net area without gaps, overlaps or boundary crossings."
             )
         else:
@@ -12541,7 +12858,11 @@ def _pct(value):
 
 def _no_common_angle_msg(d):
     """Message for a defensive failure of the shared member-angle check."""
-    reason = str(d.get("reason") or "no evaluable shared angle")
+    reason = presentation.result_reason(
+        d.get("reason") or "no evaluable shared angle",
+        "combined",
+        context="combined shared-angle reason",
+    )
     return (
         "The shared compression-strut check is NOT evaluated: "
         f"{reason}."
@@ -12649,7 +12970,11 @@ def combined_view(inp, results):
             + "; ".join(missing)
             + "."
             + (
-                " Reason: " + str(c["reason"]) + "."
+                " Reason: " + presentation.result_reason(
+                    c["reason"],
+                    "combined",
+                    context="combined result reason",
+                ) + "."
                 if c.get("reason")
                 else ""
             ),
@@ -13186,7 +13511,7 @@ def _analysis_workspace(inp):
                 reuse_elastic_cases=reuse_elastic_cases,
                 reuse_fatigue=reuse_fatigue,
             )
-        except ValueError as exc:
+        except Exception as exc:
             st.session_state["_case_error"] = _calculation_failure_message(exc)
             st.error(st.session_state["_case_error"])
         else:

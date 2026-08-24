@@ -400,6 +400,12 @@ def _html_escape(value, quote=True):
     ))
 
 
+def _result_reason(value, family, context):
+    """Resolve one retained diagnostic before placing it in report markup."""
+
+    return presentation.result_reason(value, family, context=context)
+
+
 def _modelled_direction_report_label(
     result=None, *, cut_direction=None, alias=None
 ):
@@ -3467,7 +3473,15 @@ class ReportBuilder:
                                 + "; Yield / proof util. = "
                                 + _pct(row["yield_utilisation"])
                                 + "; "
-                                + _html_escape(row["screen_reason"] or "-")
+                                + _html_escape(
+                                    _result_reason(
+                                        row["screen_reason"],
+                                        "fatigue",
+                                        "brief report fatigue-screen reason",
+                                    )
+                                    if row["screen_reason"]
+                                    else "-"
+                                )
                                 + (
                                     "; source = "
                                     + _html_escape(row["screen_source"])
@@ -5287,7 +5301,12 @@ class ReportBuilder:
         ]
         summary = (
             f"governing utilisation {_pct(max(utilisations))}"
-            if utilisations else str(result.get("reason") or "not evaluated")
+            if utilisations
+            else _result_reason(
+                result.get("reason"),
+                "minimum_reinforcement",
+                "report minimum-reinforcement summary reason",
+            )
         )
         self._status_block(f"{status} - {summary}", status)
         self._small(
@@ -5382,7 +5401,11 @@ class ReportBuilder:
             for check in checks:
                 if check.get("reason"):
                     self._small(
-                        "<b>Outcome:</b> " + _html_escape(check["reason"])
+                        "<b>Outcome:</b> " + _html_escape(_result_reason(
+                            check["reason"],
+                            "minimum_reinforcement",
+                            "report minimum-reinforcement check reason",
+                        ))
                     )
         elif checks and checks[0].get("type") == "pure tension":
             worked_check = max(
@@ -5518,7 +5541,11 @@ class ReportBuilder:
                     + f"; cracking factor {_fmt(check.get('cracking_factor'), 4)}."
                 )
         elif result.get("reason"):
-            self._small(_html_escape(result["reason"]))
+            self._small(_html_escape(_result_reason(
+                result["reason"],
+                "minimum_reinforcement",
+                "report minimum-reinforcement result reason",
+            )))
 
         if checks and not publish_worked:
             self._small(
@@ -5539,19 +5566,25 @@ class ReportBuilder:
         governing = result.get("governing") or {}
         utilisation = governing.get("utilisation")
         incomplete_reason = next((
-            str(check["reason"])
+            _result_reason(
+                check["reason"],
+                "transverse_reinforcement",
+                "report transverse-reinforcement check reason",
+            )
             for check in result.get("checks") or []
             if check.get("status") == "NOT ASSESSED" and check.get("reason")
         ), None)
         summary = (
             incomplete_reason
             if status == "NOT ASSESSED" and incomplete_reason
-            else str(
-                governing.get("scope")
-                or result.get("reason")
-                or "not evaluated"
-            )
+            else str(governing.get("scope") or "not evaluated")
         )
+        if not governing and result.get("reason"):
+            summary = _result_reason(
+                result["reason"],
+                "transverse_reinforcement",
+                "report transverse-reinforcement summary reason",
+            )
         if (
             status != "NOT ASSESSED"
             and utilisation is not None
@@ -5769,7 +5802,11 @@ class ReportBuilder:
                     "governing limit: " + str(check["governing_limit"])
                 )
             if check.get("reason"):
-                details.append(str(check["reason"]))
+                details.append(_result_reason(
+                    check["reason"],
+                    "transverse_reinforcement",
+                    "report transverse-reinforcement detail reason",
+                ))
             if details:
                 self._small(
                     f"<b>{_html_escape(check.get('scope') or 'Check')}:</b> "
@@ -5786,7 +5823,12 @@ class ReportBuilder:
         summary = (
             f"{_fmt(governing.get('clear_mm'), 1)} mm clear; "
             f"{_fmt(governing.get('required_mm'), 1)} mm required"
-            if governing else str(result.get("reason") or "not evaluated")
+            if governing
+            else _result_reason(
+                result.get("reason"),
+                "generic",
+                "report clear-spacing reason",
+            )
         )
         self._status_block(f"{status} - {summary}", status)
         self._small(
@@ -6627,10 +6669,12 @@ class ReportBuilder:
                 links
                 and not result.get("valid")
             ):
-                return (
+                return _result_reason(
                     links.get("assessment_reason")
                     or result.get("reason")
-                    or "invalid reinforced-shear input"
+                    or "invalid reinforced-shear input",
+                    "shear",
+                    "report shear-link result reason",
                 )
             return None
 
@@ -6673,7 +6717,7 @@ class ReportBuilder:
             if (reason := link_failure_reason(aggregate)) is not None:
                 self._small(
                     "NOT ASSESSED: "
-                    + _html_escape(str(reason))
+                    + _html_escape(reason)
                     + ". No link lever arm, resistance, utilisation or PASS/FAIL "
                       "verdict is published for this result."
                 )
@@ -6762,7 +6806,7 @@ class ReportBuilder:
                 label = "Vx,Ed" if component == "vx" else "Vy,Ed"
                 self._small(
                     f"{label} NOT ASSESSED: "
-                    + _html_escape(str(reason))
+                    + _html_escape(reason)
                     + ". No link lever arm, resistance, utilisation or PASS/FAIL "
                       "verdict is published for this result."
                 )
@@ -7019,14 +7063,16 @@ class ReportBuilder:
                 f"V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
                 f"(EN 1992-1-1 sec. {clause}). For this V<sub>Ed</sub>, links are {req}.")
         if not lk["valid"]:
-            reason = (
+            reason = _result_reason(
                 links.get("assessment_reason")
                 or lk.get("reason")
-                or "invalid reinforced-shear input"
+                or "invalid reinforced-shear input",
+                "shear",
+                "report reinforced-shear reason",
             )
             self._small(
                 "NOT ASSESSED: "
-                + _html_escape(str(reason))
+                + _html_escape(reason)
                 + ". No link lever arm, resistance, utilisation or PASS/FAIL "
                   "verdict is published for this result."
             )
@@ -7466,7 +7512,11 @@ class ReportBuilder:
                 missing.append("torsion")
             detail = ", ".join(missing) or "one or more component checks"
             reason = (
-                " " + _html_escape(str(c["reason"])) + "."
+                " " + _html_escape(_result_reason(
+                    c["reason"],
+                    "combined",
+                    "report combined result reason",
+                )) + "."
                 if c.get("reason")
                 else ""
             )
@@ -8218,13 +8268,15 @@ class ReportBuilder:
                     "verdict."
                 )
         if tube_valid and not full_resistance_assessed:
-            reason = str(
+            reason = _result_reason(
                 t.get("assessment_reason")
                 or t.get("reason")
-                or "full torsion resistance not assessed"
+                or "full torsion resistance not assessed",
+                "torsion",
+                "report torsion assessment reason",
             )
             self._small(
-                "Reason: " + _html_escape(reason.replace("_", " ")) + ". "
+                "Reason: " + _html_escape(reason) + ". "
                 "T<sub>Rd,max</sub> is the concrete-strut cap and "
                 "T<sub>Rd,c</sub> the cracking resistance. Full T<sub>Rd</sub>, "
                 "utilisation and status require current closed links."
@@ -8259,11 +8311,14 @@ class ReportBuilder:
                             "resistance result can be calculated.")
             elif str(t.get("reason") or "").startswith(
                     "invalid sub-tube partition:"):
-                detail = (t.get("subdivision_reason")
-                          or str(t["reason"]).split(":", 1)[-1].strip())
+                _result_reason(
+                    t.get("subdivision_reason") or t.get("reason"),
+                    "torsion",
+                    "report torsion sub-tube partition reason",
+                )
                 self._small(
                     "Torsion not assessed: the sub-tubes do not partition the "
-                    f"concrete section ({detail}). Adjust centres and dimensions "
+                    "concrete section. Adjust centres and dimensions "
                     "to cover the net area without gaps, overlaps or boundary "
                     "crossings. Torsion resistance and dependent interaction "
                     "checks are not calculated."
@@ -9106,7 +9161,16 @@ class ReportBuilder:
         duration = str(assessment.get("duration") or "").replace("_", "-")
         duration_label = duration.capitalize() if duration else "Duration"
         source = str(assessment.get("criterion_source") or "").strip()
-        reason = str(assessment.get("reason") or "").strip()
+        raw_reason = assessment.get("reason")
+        reason = (
+            _result_reason(
+                raw_reason,
+                "crack",
+                "report ordinary crack-width reason",
+            )
+            if raw_reason
+            else ""
+        )
         if criterion is None:
             self._small(
                 f"Calculation state: {status}. No user-specified crack-width "
@@ -10263,7 +10327,15 @@ class ReportBuilder:
                     + " / "
                     + _html_escape(row["element_id"])
                     + ":</b> "
-                    + _html_escape(row["screen_reason"] or "-")
+                    + _html_escape(
+                        _result_reason(
+                            row["screen_reason"],
+                            "fatigue",
+                            "report fatigue-screen summary reason",
+                        )
+                        if row["screen_reason"]
+                        else "-"
+                    )
                     + (
                         " <b>Reference:</b> "
                         + _html_escape(row["screen_source"])
@@ -10525,7 +10597,15 @@ class ReportBuilder:
                         keep=False,
                     )
                     self._small(
-                        _html_escape(screen["reason"] or "-")
+                        _html_escape(
+                            _result_reason(
+                                screen["reason"],
+                                "fatigue",
+                                "report simplified fatigue-screen reason",
+                            )
+                            if screen["reason"]
+                            else "-"
+                        )
                         + (
                             "<br/><b>Reference:</b> "
                             + _html_escape(screen["source"])

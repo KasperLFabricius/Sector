@@ -204,6 +204,8 @@ def _literal_text(
             _literal_text(value, bindings, seen) for value in node.elts
         )
     if isinstance(node, ast.Dict):
+        if _is_internal_key_collection(node):
+            return ""
         return " | ".join(
             value
             for key, item in zip(node.keys, node.values)
@@ -385,9 +387,13 @@ def inventory_file(path: Path) -> list[dict[str, Any]]:
                 else [node.target]
             )
             for target in targets:
-                if not isinstance(target, ast.Name) or not any(
+                if (
+                    not isinstance(target, ast.Name)
+                    or target.id.isupper()
+                    or not any(
                     token in target.id.casefold()
                     for token in ASSIGNMENT_COPY_NAME_TOKENS
+                    )
                 ):
                     continue
                 append(

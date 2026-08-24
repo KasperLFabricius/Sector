@@ -25,6 +25,7 @@ from app.table_field_definitions import (
     parse_decimal,
     set_decimal_issue_ledger,
 )
+from sector.engineer_message import EngineerMessage
 
 PLASTIC_TABLE_KEY = "plastic_cases_base"
 ELASTIC_TABLE_KEY = "elastic_cases_base"
@@ -106,6 +107,85 @@ TEXT_COLUMNS = {
     PLASTIC_TABLE_KEY: (NAME, DESCRIPTION, *PLASTIC_FACE_COLUMNS),
     ELASTIC_TABLE_KEY: (NAME, DESCRIPTION),
 }
+
+_PLASTIC_CASE_REQUIRED = EngineerMessage(
+    "PLASTIC-CASE-REQUIRED",
+    "Add at least one active Plastic case before calculating",
+)
+_ELASTIC_CASE_REQUIRED = EngineerMessage(
+    "ELASTIC-CASE-REQUIRED",
+    "Add at least one active Elastic case before calculating",
+)
+_PLASTIC_CASE_NAME = EngineerMessage(
+    "PLASTIC-CASE-NAME",
+    "Enter a name for every active Plastic case",
+)
+_ELASTIC_CASE_NAME = EngineerMessage(
+    "ELASTIC-CASE-NAME",
+    "Enter a name for every active Elastic case",
+)
+_CASE_NAME_UNIQUE = EngineerMessage(
+    "CASE-NAME-UNIQUE",
+    "Use a unique name for every Plastic and Elastic case",
+)
+_NUMERIC_MESSAGES = {
+    PLASTIC_TABLE_KEY: {
+        "n_ed_kn": EngineerMessage(
+            "PLASTIC-N-ED",
+            "Enter a finite axial force N_Ed in every active Plastic case",
+        ),
+        "mx_ed_knm": EngineerMessage(
+            "PLASTIC-MX-ED",
+            "Enter a finite bending moment Mx,Ed in every active Plastic case",
+        ),
+        "my_ed_knm": EngineerMessage(
+            "PLASTIC-MY-ED",
+            "Enter a finite bending moment My,Ed in every active Plastic case",
+        ),
+        "vx_ed_kn": EngineerMessage(
+            "PLASTIC-VX-ED",
+            "Enter a finite shear force Vx,Ed in every active Plastic case",
+        ),
+        "vy_ed_kn": EngineerMessage(
+            "PLASTIC-VY-ED",
+            "Enter a finite shear force Vy,Ed in every active Plastic case",
+        ),
+        "t_ed_knm": EngineerMessage(
+            "PLASTIC-T-ED",
+            "Enter a finite torsional moment T_Ed in every active Plastic case",
+        ),
+    },
+    ELASTIC_TABLE_KEY: {
+        "n_long_ed_kn": EngineerMessage(
+            "ELASTIC-N-LONG",
+            "Enter a finite sustained axial force N_Ed in every active Elastic case",
+        ),
+        "mx_long_ed_knm": EngineerMessage(
+            "ELASTIC-MX-LONG",
+            "Enter a finite sustained bending moment Mx,Ed in every active Elastic case",
+        ),
+        "my_long_ed_knm": EngineerMessage(
+            "ELASTIC-MY-LONG",
+            "Enter a finite sustained bending moment My,Ed in every active Elastic case",
+        ),
+        "n_short_ed_kn": EngineerMessage(
+            "ELASTIC-N-SHORT",
+            "Enter a finite short-term axial-force increment in every active Elastic case",
+        ),
+        "mx_short_ed_knm": EngineerMessage(
+            "ELASTIC-MX-SHORT",
+            "Enter a finite short-term Mx increment in every active Elastic case",
+        ),
+        "my_short_ed_knm": EngineerMessage(
+            "ELASTIC-MY-SHORT",
+            "Enter a finite short-term My increment in every active Elastic case",
+        ),
+    },
+}
+_PLASTIC_FACE_MESSAGE = EngineerMessage(
+    "PLASTIC-SHEAR-FACE",
+    "Select automatic, negative-coordinate or positive-coordinate shear faces",
+)
 
 
 def _kind(key: str) -> str:
@@ -487,7 +567,7 @@ def head_inputs(tables: Mapping | None) -> dict:
 
 
 def validation_errors(plastic, elastic, *, require_plastic=False,
-                      require_elastic=False) -> list[str]:
+                      require_elastic=False) -> list[EngineerMessage]:
     """Return deterministic table errors, including global name uniqueness."""
     tables = {
         PLASTIC_TABLE_KEY: active_table(plastic, PLASTIC_TABLE_KEY),
@@ -495,9 +575,9 @@ def validation_errors(plastic, elastic, *, require_plastic=False,
     }
     errors = []
     if require_plastic and tables[PLASTIC_TABLE_KEY].empty:
-        errors.append("At least one Plastic case is required")
+        errors.append(_PLASTIC_CASE_REQUIRED)
     if require_elastic and tables[ELASTIC_TABLE_KEY].empty:
-        errors.append("At least one Elastic case is required")
+        errors.append(_ELASTIC_CASE_REQUIRED)
 
     seen = {}
     for key, label in (
@@ -508,14 +588,15 @@ def validation_errors(plastic, elastic, *, require_plastic=False,
             number = index + 1
             name = _text(row[NAME])
             if not name:
-                errors.append(f"{label} row {number}: Name is required")
+                errors.append(
+                    _PLASTIC_CASE_NAME
+                    if key == PLASTIC_TABLE_KEY
+                    else _ELASTIC_CASE_NAME
+                )
             else:
                 folded = name.casefold()
                 if folded in seen:
-                    errors.append(
-                        f"Case name '{name}' is duplicated; names must be unique "
-                        f"across Plastic and Elastic tables"
-                    )
+                    errors.append(_CASE_NAME_UNIQUE)
                 else:
                     seen[folded] = (label, number)
             for column in NUMERIC_COLUMNS[key]:
@@ -532,19 +613,9 @@ def validation_errors(plastic, elastic, *, require_plastic=False,
                 if column in NULLABLE_NUMERIC_COLUMNS[key]:
                     invalid = invalid or number_at_position <= 0.0
                 if invalid:
-                    requirement = (
-                        "a positive finite number"
-                        if column in NULLABLE_NUMERIC_COLUMNS[key]
-                        else "a finite number"
-                    )
-                    errors.append(
-                        f"{label} row {number}: {column} must be {requirement}"
-                    )
+                    errors.append(_NUMERIC_MESSAGES[key][column])
             if key == PLASTIC_TABLE_KEY:
                 for column in PLASTIC_FACE_COLUMNS:
                     if _face(row[column]) not in FACE_OPTIONS:
-                        errors.append(
-                            f"{label} row {number}: {column} must be auto, "
-                            "negative or positive"
-                        )
+                        errors.append(_PLASTIC_FACE_MESSAGE)
     return errors

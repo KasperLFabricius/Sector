@@ -124,6 +124,6 @@ def test_duplicate_names_are_rejected_across_action_families():
         [{"name": "SAME"}], load_cases.ELASTIC_TABLE_KEY
     )
     assert any(
-        "duplicated" in error
+        "unique name" in error.text
         for error in load_cases.validation_errors(plastic, elastic)
     )

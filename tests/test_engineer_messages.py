@@ -154,10 +154,27 @@ def test_runtime_and_static_copy_checks_share_separator_normalisation():
         "SHA256",
         "internal.private.identifier",
         "EQ_PRIVATE_99",
+        "Eq.Plastic.07",
+        "EQ/PLASTIC/07",
+        "eq:plastic:07",
+        "fatigue_gamma_s",
     )
 
     for value in variants:
         assert engineer_messages.development_process_terms(value)
+
+
+def test_engineering_equation_and_variable_notation_remains_allowed():
+    allowed = (
+        "Eq. (6.31)",
+        "Formula (8.27)",
+        "u_eq",
+        "gamma_s",
+        "gamma_V",
+    )
+
+    for value in allowed:
+        assert engineer_messages.development_process_terms(value) == ()
 
 
 def test_fallback_must_be_an_authored_engineer_message():
@@ -171,6 +188,7 @@ def test_fallback_must_be_an_authored_engineer_message():
 
 def _engineer_message_constructor_violations(tree: ast.AST) -> list[int]:
     aliases = {"EngineerMessage"}
+    module_aliases = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in {
             "sector.engineer_message",
@@ -179,13 +197,42 @@ def _engineer_message_constructor_violations(tree: ast.AST) -> list[int]:
             for name in node.names:
                 if name.name == "EngineerMessage":
                     aliases.add(name.asname or name.name)
+        elif isinstance(node, ast.Import):
+            for name in node.names:
+                if name.name in {
+                    "sector.engineer_message",
+                    "app.engineer_messages",
+                }:
+                    module_aliases.add(name.asname or name.name)
+        elif isinstance(node, ast.ImportFrom) and node.module in {"sector", "app"}:
+            expected = (
+                "engineer_message" if node.module == "sector"
+                else "engineer_messages"
+            )
+            for name in node.names:
+                if name.name == expected:
+                    module_aliases.add(name.asname or name.name)
+
+    def dotted_name(node: ast.AST) -> str | None:
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return None
+        parts.append(node.id)
+        return ".".join(reversed(parts))
 
     violations = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        called = node.func.id if isinstance(node.func, ast.Name) else None
-        if called not in aliases:
+        called = dotted_name(node.func)
+        is_constructor = called in aliases or any(
+            called == f"{module_alias}.EngineerMessage"
+            for module_alias in module_aliases
+        )
+        if not is_constructor:
             continue
         literal_args = (
             len(node.args) == 2
@@ -207,10 +254,16 @@ def _engineer_message_constructor_violations(tree: ast.AST) -> list[int]:
         'EngineerMessage("X", str(exc))',
         'EngineerMessage("X", f"{exc}")',
         'EngineerMessage("X", "; ".join(errors))',
+        'import app.engineer_messages as em\nem.EngineerMessage("X", str(exc))',
+        'from app import engineer_messages as em\nem.EngineerMessage("X", f"{exc}")',
+        'from sector.engineer_message import EngineerMessage as EM\nEM("X", "; ".join(errors))',
+        'import sector.engineer_message\nsector.engineer_message.EngineerMessage("X", str(exc))',
     ),
 )
 def test_ast_guard_rejects_exception_and_join_laundering(source):
-    assert _engineer_message_constructor_violations(ast.parse(source)) == [1]
+    assert _engineer_message_constructor_violations(ast.parse(source)) == [
+        len(source.splitlines())
+    ]
 
 
 def test_production_engineer_messages_are_literal_authored_copy_only():
