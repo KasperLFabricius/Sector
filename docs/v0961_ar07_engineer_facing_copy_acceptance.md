@@ -16,9 +16,17 @@ product version or package surface.
 ## Audience rule
 
 Visible text must state the engineering fact, required action or calculation
-boundary. It must not expose development-process detail such as source revisions,
-SHA or hash values, payloads, schemas, migrations, solver contracts, internal
-identifiers, retained-state terminology or implementation history.
+boundary. Detailed diagnostic text is publishable only when it is an immutable,
+explicitly authored `EngineerMessage`, either passed directly or attached to a
+deliberate validation exception. Plain strings, arbitrary exceptions, unknown
+objects, deserialised text and calculation-result failures are untrusted. They
+are logged and replaced by contextual authored guidance.
+
+Trust does not depend on a list of forbidden words. The copy policy remains a
+separate check on authored messages and catches development-process language
+such as GitHub references, pull requests, source-control history, hashes,
+payloads, schemas and internal identifiers. Ordinary engineering use of words
+such as stable, retained, authoritative and identity is not prohibited.
 
 Internal equation keys and calculation bookkeeping remain available to the
 software's validation logic. Reports identify equations by ordinary report
@@ -42,21 +50,31 @@ depth never reruns a calculation or changes an engineering result.
 
 ## Review method
 
-The copy inventory uses the syntax tree rather than a hand-selected string list.
-It includes Streamlit controls and messages, manual/report builders, equation
-symbol meanings, editable-table field definitions, structured workflow and
-warning records, and user-facing return messages from calculation adapters.
+The publication gate uses positive provenance. A frozen neutral message type is
+defined in the headless package, while `app/engineer_messages.py` is the sole
+resolver allowed to return diagnostic copy for display. Capacity input,
+project-file and fatigue validation attach only literal authored messages.
+Capacity-result failures and unknown paths cannot acquire publication trust.
 
-The final inventory contains 3,117 visible surfaces:
+An AST guard rejects message construction from `str(exc)`, formatted exception
+text or joined diagnostics. A test-owned hostile corpus imports no production
+vocabulary constants. It exercises raw strings, exceptions, unknown objects,
+filesystem errors, result errors, JSON round trips and the actual UI, project,
+fatigue and report boundaries.
 
-- 2,138 Streamlit and supporting-message surfaces;
+The copy inventory uses the syntax tree rather than a hand-selected source-file
+sample. Runtime and static authored-copy checks call the same case/separator
+normalisation and detector.
+
+The candidate inventory contains 3,106 visible surfaces:
+
+- 2,127 Streamlit and supporting-message surfaces;
 - 459 manual surfaces; and
 - 520 report surfaces.
 
 The final automated result is zero development-process candidates. Generated
-manual and report PDFs are also extracted and scanned, including dynamically
-constructed text and internal-equation-identifier patterns that are not visible
-as source literals.
+manual PDF, accessible manual HTML and all three report PDFs are also extracted
+and scanned with an independent test-owned oracle.
 
 Long passages and negative wording remain review signals, not automatic defects.
 An explicit fail-closed calculation reason may need more words than a label.
@@ -77,29 +95,33 @@ calculation or correct the stated input.
 | AR07-08 | A chapter starts near a page end | The heading remains with its first calculation input or substantive content. |
 | AR07-09 | The final PDFs are rendered | No clipping, unbreakable equation, empty continuation or unintended sparse page remains. Figure-only plates may remain sparse when the figure is the page's intended content. |
 | AR07-10 | Repository scope is inspected | Engineering values, statuses, project-file format and product version remain unchanged. |
+| AR07-11 | A plain string, arbitrary exception, unknown object or result error reaches a boundary | It is logged and replaced even when its text appears harmless. |
+| AR07-12 | A deliberate validation has useful engineering guidance | Only its explicitly attached `EngineerMessage` is published; the exception text is not used. |
+| AR07-13 | A trusted message contains recognised Eurocode notation | `gamma_Ff`, `gamma_s`, `gamma_V`, `gamma_c,fat`, `beta_cc(t0)`, `alpha_cc`, strength and action notation survive exactly. |
+| AR07-14 | A message is serialised and read back | The reconstructed text has no publication trust. |
+| AR07-15 | A developer attempts diagnostic laundering | The AST guard rejects exception conversion, formatted strings and joined diagnostics in `EngineerMessage` construction. |
 
 ## Verification evidence
 
-- Static copy audit: 3,117 surfaces; zero development-process candidates.
-- Exact-G1 correction recheck: 100 message, report-profile and portable-startup
-  cases passed; `gamma_V` remains visible as Eurocode notation while the
-  application field name remains hidden.
-- Generated-artifact copy gate: 5 passed, including PDF text extraction and
-  internal equation-identifier rejection.
-- Consolidated manual/reference gate: 360 passed, 1 intentionally deselected
-  real-image test covered by the separate rendered fixture.
-- Consolidated report gate: 292 passed and 1 intentionally deselected; three
-  stale wording expectations were updated and their focused recheck passed 3/3.
-- Consolidated affected copy/calculation-message gate: 507 passed; one stale
-  wording expectation was updated and its focused recheck passed 1/1.
-- Earlier complete Streamlit smoke pass: all 262 tests closed after focused
-  updates to seven deliberate wording assertions.
-- Final manual fixture: 71 rendered pages plus accessible HTML.
-- Final illustrated Audit fixture: 66 rendered pages; only pages 13 and 15 are
-  sparse review signals, both intentional material-law figure plates. The
-  browser-free Audit fixture has no sparse non-opener pages.
-- Compile, focused Ruff and diff-whitespace checks pass.
+- Positive-provenance and laundering guard: 26 passed.
+- Static copy and extracted-publication checks: 31 passed; 3,106 inventoried
+  surfaces and zero development-process candidates.
+- Independent real-publication oracle: manual PDF, manual HTML and Brief,
+  Standard and Audit PDFs all have zero hits; hostile injected result messages
+  are hidden in every report profile.
+- Consolidated focused capacity, project, fatigue, geometry, report, copy and
+  actual UI-boundary gate: 742 passed. Its only failure was an invalid test
+  patch target on a lazy module; the corrected boundary test passed separately,
+  giving 743 focused checks with zero product failures.
+- CI-mode Streamlit smoke compatibility pass reached 265 passed with one
+  deliberate project-direction assertion requiring the new explicit authored
+  message. That exact path and the complete project suite passed after the
+  correction.
+- Ruff policy, strict mypy policy, bytecode compilation and diff-whitespace
+  checks pass.
+- Explicit result: **0 raw leaks; 0 false suppressions** in the independent
+  hostile and recognised-notation corpora.
 
 The product remains Sector 0.96 throughout this PR. Version elevation is owned by
-the final v0.96.1 release step after the remaining programme PRs and adversarial
-review gate.
+the final v0.96.1 release step after adversarial-review greenlight and exact-head
+CI. Those two final gates remain pending for this candidate.

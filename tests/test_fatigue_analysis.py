@@ -25,8 +25,17 @@ from sector.design_standards import (  # noqa: E402
     DesignBasisKey,
     capability_binding,
 )
+from sector.engineer_message import EngineerMessage  # noqa: E402
 from sector.materials import Concrete, MildSteel, Prestress  # noqa: E402
 from sector.section import Section  # noqa: E402
+
+
+def _message_codes(values) -> set[str]:
+    return {
+        value.code
+        for value in values
+        if isinstance(value, EngineerMessage)
+    }
 
 
 def _basis(**overrides):
@@ -332,11 +341,7 @@ def test_mixed_section_requires_explicit_tendon_bond_inputs():
 
     errors = fatigue_analysis.validation_errors(inp)
 
-    assert any("P1: bond_ratio_xi is required" in error for error in errors)
-    assert any(
-        "P1: bond_equivalent_diameter_mm is required" in error
-        for error in errors
-    )
+    assert "FATIGUE-BOND" in _message_codes(errors)
 
 
 def test_concrete_parameters_follow_the_selected_edition():
@@ -355,11 +360,8 @@ def test_concrete_parameters_follow_the_selected_edition():
     old["concrete"] = SimpleNamespace(fck=40.0)
     errors = fatigue_analysis.validation_errors(old)
 
-    assert "Concrete alpha_cc must be a finite number" in errors
-    assert (
-        "Concrete fatigue k1 must be a finite number greater than zero"
-        in errors
-    )
+    assert "FATIGUE-ALPHA-CC" in _message_codes(errors)
+    assert "FATIGUE-K1" in _message_codes(errors)
     references = fatigue_analysis.calculation_references(
         DesignBasisKey.FIRST_GEN_DK_NA_2024
     )
@@ -388,8 +390,8 @@ def test_fatigue_basis_dispatch_rejects_labels_whitespace_and_substrings(
 
     errors = fatigue_analysis.validation_errors(inp)
 
-    assert any("registered basis keys" in error for error in errors)
-    with pytest.raises(ValueError, match="registered basis keys"):
+    assert "FATIGUE-BASIS" in _message_codes(errors)
+    with pytest.raises(ValueError, match="fatigue input validation failed"):
         fatigue_analysis.prepare(inp)
     with pytest.raises(ValueError, match="registered basis keys"):
         fatigue_analysis.calculation_references(invalid_basis)
@@ -405,12 +407,7 @@ def test_standard_detail_presets_must_match_the_selected_fatigue_edition():
 
     errors = fatigue_analysis.validation_errors(inp)
 
-    assert any(
-        "R1: fatigue detail 'F1' uses DS/EN 1992-1-1:2005 resistance "
-        "with DS/EN 1992-1-1:2023 - published reference; project adoption "
-        "required" in error
-        for error in errors
-    )
+    assert "FATIGUE-DETAIL-EDITION" in _message_codes(errors)
 
     old = _base(
         fatigue_edition=DesignBasisKey.FIRST_GEN_DK_NA_2024.value
@@ -427,9 +424,8 @@ def test_standard_detail_presets_must_match_the_selected_fatigue_edition():
         )
         for item in old_catalogue["items"]
     ]
-    assert not any(
-        "resistance with" in error
-        for error in fatigue_analysis.validation_errors(old)
+    assert "FATIGUE-DETAIL-EDITION" not in _message_codes(
+        fatigue_analysis.validation_errors(old)
     )
 
 
@@ -450,10 +446,8 @@ def test_custom_detail_keeps_its_source_and_is_explicit_in_provenance():
     assert detail["custom"] is True
     assert detail["edition"] is None
     assert detail["source"] == "Project S-N test series SN-04"
-    assert (
-        "F1: custom/imported fatigue resistance is used "
-        "(source: Project S-N test series SN-04)"
-        in fatigue_analysis.validation_warnings(inp)
+    assert "FATIGUE-CUSTOM-DETAIL" in _message_codes(
+        fatigue_analysis.validation_warnings(inp)
     )
     result = fatigue_analysis.run_analysis(
         inp,
@@ -490,9 +484,8 @@ def test_builtin_prestress_curve_uses_explicit_catalogue_proof_stress():
         Prestress(curve=1, IS=0.005, gamma_y=1.1, Es=195_000.0)
     ]
     missing.pop(mat_catalog.PRESTRESS_CATALOG_KEY)
-    assert (
-        "P1: characteristic yield/proof stress must be greater than zero"
-        in fatigue_analysis.validation_errors(missing)
+    assert "FATIGUE-MATERIAL" in _message_codes(
+        fatigue_analysis.validation_errors(missing)
     )
 
 
@@ -506,8 +499,8 @@ def test_validation_catches_case_name_collisions_and_element_order_drift():
 
     errors = fatigue_analysis.validation_errors(inp)
 
-    assert any("Case name 'FAT-A1' is duplicated" in error for error in errors)
-    assert "R1: x does not match the current section input" in errors
+    assert "FATIGUE-SPECTRUM" in _message_codes(errors)
+    assert "FATIGUE-ELEMENT-GEOMETRY" in _message_codes(errors)
 
 
 def test_grouped_spectrum_method_accepts_multiple_bins():
@@ -804,10 +797,8 @@ def test_project_concrete_miner_is_uncited_and_validates_its_c_value():
     assert references["concrete"] == (
         "Project-defined concrete Miner S-N relation (uncited)"
     )
-    assert any(
-        "Project-defined concrete Miner S-N relation is used (uncited)"
-        == warning
-        for warning in fatigue_analysis.validation_warnings(inp)
+    assert "FATIGUE-PROJECT-RELATION" in _message_codes(
+        fatigue_analysis.validation_warnings(inp)
     )
     result = fatigue_analysis.run_analysis(
         inp,
@@ -828,7 +819,7 @@ def test_project_concrete_miner_is_uncited_and_validates_its_c_value():
 
     invalid = dict(inp)
     invalid["fatigue_concrete_c"] = -1.0
-    assert "Concrete fatigue C must be a finite number greater than zero" in (
+    assert "FATIGUE-CONCRETE-C" in _message_codes(
         fatigue_analysis.validation_errors(invalid)
     )
 
@@ -897,8 +888,7 @@ def test_invalid_result_preserves_missing_assignments_without_running_fatigue():
     assert payload["edition"] == payload["basis_label"]
     assert payload["solver_edition"] == fatigue_inputs.EC2_2023
     assert payload["capability_bindings"] == {}
-    assert "R1: fatigue detail ID is required" in payload["errors"]
-    assert "P1: fatigue detail ID is required" in payload["errors"]
+    assert _message_codes(payload["errors"]) == {"FATIGUE-DETAIL"}
     assert inp["bar_elements"][0]["fatigue_detail_id"] == ""
     assert inp["tendon_elements"][0]["fatigue_detail_id"] == ""
 

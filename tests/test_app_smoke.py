@@ -2212,6 +2212,10 @@ def test_invalid_quick_section_is_explained_and_cannot_be_applied():
     assert not at.exception
     assert at.button(key="qs_apply").disabled
     assert any(
+        "Review the section dimensions and reinforcement layout" in error.value
+        for error in at.error
+    )
+    assert not any(
         "inner diameter must be less than outer diameter" in error.value
         for error in at.error
     )
@@ -2909,7 +2913,11 @@ def test_void_slicing_the_section_is_rejected():
         {"x (mm)": [-250.0, 250.0, 250.0, -250.0],
          "y (mm)": [-20.0, -20.0, 20.0, 20.0]}))      # full-width slot at mid-height
     _goto_page(at, "Analysis")
-    assert any("disconnected" in e.value for e in at.error)
+    assert any(
+        "review the concrete outline and voids" in error.value
+        for error in at.error
+    )
+    assert not any("disconnected" in error.value for error in at.error)
     _calculate(at)
     assert not at.exception
     assert "results" not in at.session_state
@@ -2932,11 +2940,10 @@ def test_bow_tie_outline_is_blocked_in_ui_before_solver_entry():
     errors = [item.value for item in at.error]
     assert any(
         "Invalid section geometry" in message
-        and "outer ring" in message
-        and "edge 1" in message
-        and "edge 3" in message
+        and "review the concrete outline and voids" in message
         for message in errors
     )
+    assert not any("edge 1" in message or "edge 3" in message for message in errors)
     _calculate(at)
     assert not at.exception
     try:
@@ -3739,8 +3746,8 @@ def test_fatigue_validation_stays_in_the_ui_instead_of_raising():
     assert fatigue["spectra"] == ()
     assert not at.session_state["bars_base"].compare(before).size
     errors = " ".join(item.value for item in at.error)
-    assert "At least one fatigue spectrum bin is required" in errors
-    assert "fatigue detail ID is required" in errors
+    assert "Review the fatigue spectrum definitions" in errors
+    assert "Review the assigned fatigue details and their properties" in errors
 
 
 def test_catalogue_revisions_preserve_every_live_reinforcement_cell():
@@ -4328,38 +4335,41 @@ def test_fatigue_failure_boundary_hides_software_diagnostics(monkeypatch):
         "validation_errors",
         lambda _inp: [hostile],
     )
-    monkeypatch.setattr(
-        fatigue_analysis,
-        "invalid_result",
-        lambda _inp, errors: {"errors": tuple(errors)},
-    )
-
     result = sector_app._run_fatigue_or_invalid({})
 
-    assert result["errors"] == ("Review the fatigue inputs and recalculate",)
+    assert tuple(message.text for message in result["errors"]) == (
+        "Review the fatigue inputs and recalculate",
+    )
 
 
 def test_fatigue_failure_boundary_keeps_distinct_engineering_notation(monkeypatch):
     import fatigue_analysis
     import sector_app
+    from sector.engineer_message import EngineerMessage
 
     engineering_errors = [
-        "gamma_Ff must be a finite number greater than zero",
-        "gamma_s must be a finite number greater than zero",
-        "beta_cc(t0) must be a finite number greater than zero",
-        "Concrete alpha_cc must be a finite number",
+        EngineerMessage(
+            "TEST-GAMMA-FF",
+            "gamma_Ff must be a finite number greater than zero",
+        ),
+        EngineerMessage(
+            "TEST-GAMMA-S",
+            "gamma_s must be a finite number greater than zero",
+        ),
+        EngineerMessage(
+            "TEST-BETA-CC",
+            "beta_cc(t0) must be a finite number greater than zero",
+        ),
+        EngineerMessage(
+            "TEST-ALPHA-CC",
+            "Concrete alpha_cc must be a finite number",
+        ),
     ]
     monkeypatch.setattr(
         fatigue_analysis,
         "validation_errors",
         lambda _inp: engineering_errors,
     )
-    monkeypatch.setattr(
-        fatigue_analysis,
-        "invalid_result",
-        lambda _inp, errors: {"errors": tuple(errors)},
-    )
-
     result = sector_app._run_fatigue_or_invalid({})
 
     assert result["errors"] == tuple(engineering_errors)
@@ -4367,20 +4377,107 @@ def test_fatigue_failure_boundary_keeps_distinct_engineering_notation(monkeypatc
 
 def test_calculation_failure_boundary_hides_software_diagnostics():
     import sector_app
+    from sector.capacity import CapacityResultError
 
-    visible = sector_app._calculation_failure_message(
-        ValueError("SHA payload contract internal_key solver state")
+    for error in (
+        ValueError("SHA payload contract internal_key solver state"),
+        CapacityResultError(
+            "SHA payload contract internal_key solver state"
+        ),
+    ):
+        visible = sector_app._calculation_failure_message(error)
+
+        assert visible == (
+            "Calculation blocked: Sector could not complete the calculation. "
+            "Review the inputs and try again."
+        )
+        assert not re.search(
+            r"\b(?:sha|payload|contract|solver|internal_key)\b",
+            visible,
+            flags=re.IGNORECASE,
+        )
+
+
+def test_material_builder_boundary_hides_hostile_exception_text():
+    import sector_app
+
+    hostile = (
+        "RAW-MATERIAL GitHub PR #71 SHA-256 payload schema contract "
+        "internal_private_ID EQ-MATERIAL-4"
     )
 
-    assert visible == (
-        "Calculation blocked: Sector could not complete the calculation. "
-        "Review the inputs and try again."
+    class Box:
+        def __init__(self):
+            self.messages = []
+
+        def warning(self, message):
+            self.messages.append(message)
+
+    calls = 0
+
+    def builder(**values):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError(hostile)
+        return values
+
+    box = Box()
+    result = sector_app._safe_build(
+        box,
+        builder,
+        2,
+        {"fytk": 0.0, "futk": 0.0},
     )
-    assert not re.search(
-        r"\b(?:sha|payload|contract|solver|internal_key)\b",
-        visible,
-        flags=re.IGNORECASE,
+
+    assert result["fytk"] == 1.0
+    assert result["futk"] == 1.0
+    assert box.messages == [
+        "Adjusted for this curve: Review the material values for the selected curve"
+    ]
+    assert hostile not in " ".join(box.messages)
+
+
+def test_heightened_reference_boundary_hides_hostile_exception_text(monkeypatch):
+    import case_analysis
+    import heightened_crack_adapter
+    import sector_app
+    from sector.design_standards import DesignBasisKey
+
+    hostile = (
+        "RAW-REFERENCE GitHub PR #72 SHA-256 payload schema contract "
+        "internal_private_ID EQ-REFERENCE-4"
     )
+    monkeypatch.setattr(
+        case_analysis,
+        "case_records",
+        lambda *_args, **_kwargs: (),
+    )
+
+    def fail_reference(*_args, **_kwargs):
+        raise ValueError(hostile)
+
+    monkeypatch.setattr(
+        heightened_crack_adapter,
+        "resolve_reference_case_name",
+        fail_reference,
+    )
+    inp = {
+        "sls_heightened_on": True,
+        "mode": "Both",
+        "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        sector_app.HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY: 0.3,
+        "sls_heightened_fine_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_reference_case": "Reference",
+    }
+
+    errors = sector_app._heightened_crack_control_validation_errors(inp)
+
+    assert errors == ["Select one valid Elastic reference case"]
+    assert hostile not in " ".join(errors)
 
 
 def test_metadata_only_report_edit_reuses_frozen_engineering_results(
@@ -4788,8 +4885,8 @@ def test_pending_project_rejects_overlong_alias_before_widget_mount():
     assert not at.exception
     assert at.session_state["_project_msg"] == (
         "error",
-        "Could not load project: modelled direction alias must be at most "
-        "60 characters.",
+        "Could not load project: the modelled-direction description must be a "
+        "single line of at most 60 characters.",
     )
     assert at.text_input(key=modelled_direction.ALIAS_KEY).value == ""
     assert at.session_state[modelled_direction.ALIAS_KEY] == ""
@@ -7531,9 +7628,11 @@ def test_material_blocker_navigates_to_its_material_family(monkeypatch):
     }
 
     assert any(
-        "Invalid material definition: M2: test-invalid material law" in item.value
+        "Invalid material definition: M2: Review the selected material values"
+        in item.value
         for item in at.error
     )
+    assert not any("test-invalid material law" in item.value for item in at.error)
     at.button(
         key="analysis-input-issue-1-material-definition-1"
     ).click().run()

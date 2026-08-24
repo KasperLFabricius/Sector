@@ -872,45 +872,34 @@ def test_unknown_or_inexact_persisted_report_profile_fails_closed(value):
 
 
 @pytest.mark.parametrize(
-    ("diagnostic", "expected"),
+    ("operation", "expected"),
     (
         (
-            "unknown persisted report profile 'Retired report'",
-            "the saved report type is not available in this version of Sector",
+            lambda: project_io._decode("not JSON"),
+            "the selected file is not a readable Sector project",
         ),
         (
-            "unsupported Sector project schema 99",
+            lambda: project_io._decode(json.dumps({
+                "format": project_io.FORMAT,
+                "version": 99,
+            })),
             "the project file contains information that this version of Sector "
             "cannot read",
         ),
         (
-            "project input hash mismatch",
-            "the project file is damaged or was changed outside Sector",
-        ),
-        (
-            "project inputs are not canonical JSON",
-            "the project file is incomplete or damaged",
-        ),
-        (
-            "calculation result_sha256 must be a lowercase SHA-256",
-            "the recorded calculation is damaged; recalculate before saving the "
-            "project",
-        ),
-        (
-            "modelled direction alias must be at most 60 characters",
-            "modelled direction alias must be at most 60 characters",
-        ),
-        (
-            "unexpected payload contract internal_key",
-            "the project file contains an input that this version of Sector "
-            "cannot read",
+            lambda: project_io.normalise_report_profile("Retired report"),
+            "the saved report type is not available in this version of Sector",
         ),
     ),
 )
-def test_project_diagnostics_are_translated_for_engineers(
-    diagnostic, expected
+def test_authored_project_validation_paths_retain_engineering_guidance(
+    operation,
+    expected,
 ):
-    message = project_io.engineer_error_message(ValueError(diagnostic))
+    with pytest.raises(ValueError) as caught:
+        operation()
+
+    message = project_io.engineer_error_message(caught.value)
 
     assert message == expected
     assert not re.search(
@@ -918,6 +907,16 @@ def test_project_diagnostics_are_translated_for_engineers(
         message,
         flags=re.IGNORECASE,
     )
+
+
+def test_plain_project_exception_is_never_promoted_from_its_text(caplog):
+    hostile = "modelled direction alias is valid in GitHub PR #77 payload"
+
+    message = project_io.engineer_error_message(ValueError(hostile))
+
+    assert message == "the project file could not be read"
+    assert hostile not in message
+    assert "Suppressed untrusted diagnostic" in caplog.text
 
 
 def test_direction_alias_validation_is_separate_from_input_integrity():
@@ -928,8 +927,15 @@ def test_direction_alias_validation_is_separate_from_input_integrity():
     assert project_io.project_provenance(
         json.dumps(payload)
     )["input_hash_valid"] is True
-    with pytest.raises(ValueError, match="must be a single line"):
+    with pytest.raises(
+        project_io.ProjectInputError,
+        match="invalid modelled-direction description",
+    ) as caught:
         project_io.parse_project(json.dumps(payload))
+    assert project_io.engineer_error_message(caught.value) == (
+        "the modelled-direction description must be a single line of at most "
+        "60 characters"
+    )
 
 
 def test_direction_alias_length_limit_is_symmetric_and_presentation_only():
@@ -948,8 +954,15 @@ def test_direction_alias_length_limit_is_symmetric_and_presentation_only():
     text = json.dumps(payload)
 
     assert project_io.project_provenance(text)["input_hash_valid"] is True
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(
+        project_io.ProjectInputError,
+        match="invalid modelled-direction description",
+    ) as caught:
         project_io.parse_project(text)
+    assert project_io.engineer_error_message(caught.value) == (
+        "the modelled-direction description must be a single line of at most "
+        "60 characters"
+    )
 
 
 def test_project_round_trip_preserves_decimal_precision_and_blank_action_zero():

@@ -26,10 +26,11 @@ reinforcement forces and is greater than `F_c` for that case.
 
 Visible manual, report, calculation, Quick Section, material, project-load and
 fatigue failures state the engineering action without exposing software
-diagnostics. Concise engineering validation reasons are retained. Diagnostic
-text containing software identifiers, file-format terms or implementation
-language is replaced by action-specific guidance and retained only in the
-application log.
+diagnostics. Publication now uses positive provenance: only an immutable,
+explicitly authored `EngineerMessage`, or an exception carrying one, can provide
+detailed visible copy. Plain strings, arbitrary exceptions, deserialised text,
+unknown objects and calculation-result errors are logged and replaced by
+action-specific guidance regardless of their wording.
 
 Controlled tests inject development terms into calculation, fatigue, report,
 manual-generation, manual-figure and project-file failure paths. None reaches a
@@ -37,20 +38,18 @@ visible message. The saved-report warning, fatigue edition mismatch, section
 comparison and plastic worked-point wording were also rewritten in engineering
 language.
 
-The diagnostic screen explicitly preserves familiar Eurocode notation such as
-`gamma_Ff`, `gamma_s`, `gamma_V`, `gamma_c,fat`, `beta_cc(t0)` and `alpha_cc`.
-It still rejects longer application field names and rejects any message that
-also contains a development term. Distinct invalid fatigue factors therefore
-remain distinct, actionable messages for the engineer.
-Identifiers beginning with one or more underscores are also treated as
-software diagnostics and remain hidden.
-The runtime screen covers the complete vocabulary enforced by the static copy
-audit, with a parameterised test preventing those controls from drifting.
+The authored-copy check explicitly preserves familiar Eurocode notation such as
+`gamma_Ff`, `gamma_s`, `gamma_V`, `gamma_c,fat`, `beta_cc(t0)`, `alpha_cc`,
+strength notation and action/resistance symbols. Messages that mix this notation
+with development-process text are replaced. Runtime and static checks use the
+same case/separator normalisation. Ordinary engineering words are not banned in
+isolation.
 
-The syntax-tree inventory covers 3,117 UI, manual and report surfaces and finds
-zero development-process candidates. Extracted text from the real 71-page
-manual and the real-figure Brief, Standard and Audit reports also contains no
-development-process term.
+The syntax-tree inventory covers 3,106 UI, manual and report surfaces and finds
+zero development-process candidates. A separate test-owned oracle scans the
+manual PDF, accessible manual HTML and every report profile and finds zero hits.
+An AST guard prevents exception, formatted-string or join laundering when an
+authored message is constructed.
 
 ## AR-09: retained QA evidence
 
@@ -82,6 +81,8 @@ result under the uploaded directory.
 | AR07-02 | A software diagnostic reaches a publication boundary | It is logged and replaced; no development term is visible. |
 | AR07-03 | Manual and all report profiles are rendered | No development term, clipping or new layout failure is present. |
 | AR07-04 | A validation reason contains familiar Eurocode notation | The factor name and field-specific correction remain visible and distinct. |
+| AR07-05 | Raw text is harmless-looking or serialised/deserialised | It remains untrusted and is replaced. |
+| AR07-06 | Authored copy and static copy inventory are checked | Both use identical normalisation and development-process detection. |
 | AR09-01 | A real render step is removed, renamed, masked or redirected | Workflow validation fails. |
 | AR09-02 | The QA upload is narrowed or masked | Workflow validation fails. |
 | AR09-03 | The dependency report is relocated | Dependency-policy validation fails. |
@@ -90,19 +91,17 @@ result under the uploaded directory.
 
 ## Verification evidence
 
-- Consolidated calculation, publication, copy and policy suite: 464 passed.
-- Focused UI/manual controlled-failure and notation suite: 40 passed.
-- Post-review fatigue, copy and publication-boundary suite: 61 passed.
-- Second-review diagnostic and evidence-order suite: 82 passed.
-- Third-review runtime/static-copy alignment suite: 74 passed.
-- Final calculation, fatigue, report and plastic UI boundary recheck: 4 passed.
 - Compression-notation and evidence-retention suite: 131 passed.
-- Exact-G1 message and portable-startup correction suite: 100 passed.
-- Ruff, coverage-workflow and dependency-workflow policy validators: passed.
-- Static user-copy audit: 3,117 surfaces; zero development-process candidates.
-- Real publication render: Brief 9 pages, Standard 60 pages, Audit 66 pages and
-  manual 71 pages plus accessible HTML.
-- Extracted text from all four real PDFs: zero development-process term pages.
-- Visual review of the glossary and both Audit plastic-result pages: notation,
-  table fit, continuation and page composition accepted.
-- Bytecode compilation and diff-whitespace checks: passed.
+- Superseding positive-provenance focused gate: 743 checks across capacity,
+  project, fatigue, geometry, report, copy and actual UI boundaries; zero
+  product failures.
+- Independent raw-diagnostic result: **0 raw leaks; 0 false suppressions**.
+- Static user-copy audit: 3,106 surfaces; zero development-process candidates.
+- Independent publication extraction: manual PDF, accessible manual HTML and
+  Brief, Standard and Audit PDFs contain zero oracle hits. Hostile injected
+  result messages are hidden in every report profile.
+- Ruff policy, strict mypy policy, bytecode compilation and diff-whitespace
+  checks pass. Existing coverage-workflow and dependency-workflow policy gates
+  remain unchanged.
+- Sector remains 0.96 with project format 27. Exact-candidate adversarial review
+  and exact-head CI remain the final gates before the separate release step.

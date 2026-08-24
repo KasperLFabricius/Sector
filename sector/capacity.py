@@ -15,6 +15,7 @@ from importlib import import_module
 from typing import Any
 
 from . import codes
+from .engineer_message import EngineerMessage
 
 SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
@@ -29,6 +30,18 @@ def _module(name: str):
 
 class CapacityInputError(ValueError):
     """Expected invalid input at a member-capacity boundary."""
+
+    def __init__(
+        self,
+        *args: object,
+        engineer_message: EngineerMessage | None = None,
+    ) -> None:
+        super().__init__(*args)
+        if engineer_message is not None and not isinstance(
+            engineer_message, EngineerMessage
+        ):
+            raise TypeError("engineer_message must be an EngineerMessage")
+        self.engineer_message = engineer_message
 
 
 class CapacityMethodError(CapacityInputError):
@@ -1134,7 +1147,13 @@ def _build_shear_face_context(
                 label="gamma_V",
             )
         except ValueError as exc:
-            raise CapacityInputError(str(exc)) from exc
+            raise CapacityInputError(
+                "gamma_V must be a positive finite real number",
+                engineer_message=EngineerMessage(
+                    "SHEAR-GAMMA-V",
+                    "gamma_V must be a positive finite real number",
+                ),
+            ) from exc
     else:
         gamma_v = None
     if axis == "x":

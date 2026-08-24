@@ -54,6 +54,7 @@ import publication_theme
 import report_equation_contract
 import viz
 import result_presentation as presentation
+from app import engineer_messages
 from sector import codes as ec2_codes
 from sector import detailing
 from sector import fatigue as fatigue_core
@@ -64,6 +65,7 @@ from sector.design_standards import (
     get_design_basis,
     input_guidance,
 )
+from sector.engineer_message import EngineerMessage
 
 _MM = 1000.0                       # metres -> millimetres for display
 _KN = 1.0                          # forces already in kN
@@ -115,6 +117,14 @@ _EQUATION_DECIMAL_TOKEN_RE = re.compile(
 )
 _EQUATION_NEGATIVE_ZERO_RE = re.compile(
     r"(^|[=(:,;+*/\[\]{}|<>^])(?P<space>\s*)-0(?=$|[\s),;%\]}|])"
+)
+_REPORT_RESULT_WARNING = EngineerMessage(
+    "REPORT-RESULT-WARNING",
+    "Review the calculation warnings in Sector before using this report",
+)
+_REPORT_RESULT_ERROR = EngineerMessage(
+    "REPORT-RESULT-ERROR",
+    "Review the calculation inputs and recalculate before using this report",
 )
 
 
@@ -3485,7 +3495,16 @@ class ReportBuilder:
                 continue
             for key in ("warnings", "errors"):
                 for message in payload.get(key) or ():
-                    warnings.append((label, str(message)))
+                    fallback = (
+                        _REPORT_RESULT_WARNING
+                        if key == "warnings"
+                        else _REPORT_RESULT_ERROR
+                    )
+                    warnings.append((label, engineer_messages.error_detail(
+                        message,
+                        fallback=fallback,
+                        context=f"Brief report {label.casefold()} {key}",
+                    )))
         if not warnings:
             return
         self._h2("Calculation warnings", reserve=90)
@@ -10015,14 +10034,24 @@ class ReportBuilder:
         )
         warnings = tuple(payload.get("warnings") or ())
         for warning in warnings:
-            self._small("<b>Review:</b> " + _html_escape(str(warning)))
+            visible_warning = engineer_messages.error_detail(
+                warning,
+                fallback=_REPORT_RESULT_WARNING,
+                context="fatigue report warning",
+            )
+            self._small("<b>Review:</b> " + _html_escape(visible_warning))
         if errors:
             self._p(
                 "Fatigue input was incomplete or invalid at calculation time. "
                 "No fatigue resistance verdict has been issued."
             )
             for error in errors:
-                self._small("<b>Input error:</b> " + _html_escape(str(error)))
+                visible_error = engineer_messages.error_detail(
+                    error,
+                    fallback=_REPORT_RESULT_ERROR,
+                    context="fatigue report error",
+                )
+                self._small("<b>Input error:</b> " + _html_escape(visible_error))
             return
 
         self._h2("Basis and references")

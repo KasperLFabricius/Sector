@@ -42,6 +42,7 @@ from sector import (
     heightened_crack_control,
 )
 from sector.build_info import source_revision
+from sector.engineer_message import EngineerMessage
 from sector.sls_identity import (
     HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
     LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
@@ -55,6 +56,60 @@ LEGACY_MIGRATABLE_VERSION = 25
 MIGRATABLE_VERSIONS = (
     LEGACY_MIGRATABLE_VERSION,
     MIGRATABLE_VERSION,
+)
+
+
+class ProjectInputError(ValueError):
+    """A deliberate project-file validation error with optional public copy."""
+
+    def __init__(
+        self,
+        *args: object,
+        engineer_message: EngineerMessage | None = None,
+    ) -> None:
+        super().__init__(*args)
+        if engineer_message is not None and not isinstance(
+            engineer_message, EngineerMessage
+        ):
+            raise TypeError("engineer_message must be an EngineerMessage")
+        self.engineer_message = engineer_message
+
+
+_PROJECT_READ_FALLBACK = EngineerMessage(
+    "PROJECT-READ",
+    "the project file could not be read",
+)
+_PROJECT_UNREADABLE = EngineerMessage(
+    "PROJECT-UNREADABLE",
+    "the selected file is not a readable Sector project",
+)
+_PROJECT_INCOMPATIBLE = EngineerMessage(
+    "PROJECT-INCOMPATIBLE",
+    "the project file contains information that this version of Sector cannot read",
+)
+_PROJECT_DAMAGED = EngineerMessage(
+    "PROJECT-DAMAGED",
+    "the project file is incomplete or damaged",
+)
+_PROJECT_CHANGED = EngineerMessage(
+    "PROJECT-CHANGED",
+    "the project file is damaged or was changed outside Sector",
+)
+_PROJECT_CALCULATION_DAMAGED = EngineerMessage(
+    "PROJECT-CALCULATION-DAMAGED",
+    "the recorded calculation is damaged; recalculate before saving the project",
+)
+_PROJECT_REPORT_UNAVAILABLE = EngineerMessage(
+    "PROJECT-REPORT-UNAVAILABLE",
+    "the saved report type is not available in this version of Sector",
+)
+_PROJECT_REPORT_CONFLICT = EngineerMessage(
+    "PROJECT-REPORT-CONFLICT",
+    "the project file contains conflicting report settings",
+)
+_PROJECT_DIRECTION = EngineerMessage(
+    "PROJECT-DIRECTION",
+    "the modelled-direction description must be a single line of at most 60 characters",
 )
 
 LEGACY_SHARED_CRACK_WIDTH_KEY = "sls_permitted_crack_width_mm"
@@ -688,7 +743,10 @@ def normalise_report_profile(value=None) -> str:
     try:
         return report_profiles.resolve_profile(value).label
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"unknown persisted report profile {value!r}") from exc
+        raise ProjectInputError(
+            f"unknown persisted report profile {value!r}",
+            engineer_message=_PROJECT_REPORT_UNAVAILABLE,
+        ) from exc
 
 
 def _input_digest(content: Mapping) -> str:
@@ -899,8 +957,9 @@ def dump_project(
         )
         for key in ("engineering_input_sha256", "result_sha256"):
             if key in record and not _valid_sha256(record[key]):
-                raise ValueError(
-                    f"calculation {key} must be a lowercase SHA-256"
+                raise ProjectInputError(
+                    f"calculation {key} must be a lowercase SHA-256",
+                    engineer_message=_PROJECT_CALCULATION_DAMAGED,
                 )
         payload["calculation"] = record
     return json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False)
@@ -910,75 +969,53 @@ def _decode(text: str) -> dict:
     try:
         data = json.loads(text)
     except (json.JSONDecodeError, TypeError) as exc:
-        raise ValueError("not valid JSON") from exc
+        raise ProjectInputError(
+            "not valid JSON",
+            engineer_message=_PROJECT_UNREADABLE,
+        ) from exc
     if not isinstance(data, dict) or data.get("format") != FORMAT:
-        raise ValueError("not a Sector project file")
+        raise ProjectInputError(
+            "not a Sector project file",
+            engineer_message=_PROJECT_UNREADABLE,
+        )
     version = data.get("version")
     if version not in {*MIGRATABLE_VERSIONS, VERSION}:
-        raise ValueError(
+        raise ProjectInputError(
             f"unsupported Sector project schema {version!r}; "
             f"only current schema {VERSION} and migrations from schemas "
-            f"{LEGACY_MIGRATABLE_VERSION} and {MIGRATABLE_VERSION} are supported"
+            f"{LEGACY_MIGRATABLE_VERSION} and {MIGRATABLE_VERSION} are supported",
+            engineer_message=_PROJECT_INCOMPATIBLE,
         )
     if not isinstance(data.get("tables"), Mapping):
-        raise ValueError("malformed tables section")
+        raise ProjectInputError(
+            "malformed tables section",
+            engineer_message=_PROJECT_DAMAGED,
+        )
     if not isinstance(data.get("scalars"), Mapping):
-        raise ValueError("malformed scalars section")
+        raise ProjectInputError(
+            "malformed scalars section",
+            engineer_message=_PROJECT_DAMAGED,
+        )
     if not isinstance(data.get("presentation", {}), Mapping):
-        raise ValueError("malformed presentation section")
+        raise ProjectInputError(
+            "malformed presentation section",
+            engineer_message=_PROJECT_DAMAGED,
+        )
     if not isinstance(data.get("provenance"), Mapping):
-        raise ValueError("missing project provenance")
+        raise ProjectInputError(
+            "missing project provenance",
+            engineer_message=_PROJECT_DAMAGED,
+        )
     return data
 
 
 def engineer_error_message(error: Exception) -> str:
-    """Translate project-file diagnostics into useful engineer-facing copy."""
+    """Publish authored project guidance and hide every other diagnostic."""
 
-    message = " ".join(str(error).split())
-    lowered = message.casefold()
-    report_prefix = "unknown persisted report profile "
-    if lowered.startswith(report_prefix):
-        return (
-            "the saved report type is not available in this version of Sector"
-        )
-    if "conflicting report profiles" in lowered:
-        return "the project file contains conflicting report settings"
-    if lowered in {"not valid json", "not a sector project file"}:
-        return "the selected file is not a readable Sector project"
-    if "canonical json" in lowered:
-        return "the project file is incomplete or damaged"
-    if lowered.startswith("calculation ") and (
-        "sha" in lowered or "hash" in lowered
-    ):
-        return (
-            "the recorded calculation is damaged; recalculate before saving "
-            "the project"
-        )
-    if "hash mismatch" in lowered or "sha-256" in lowered:
-        return "the project file is damaged or was changed outside Sector"
-    if (
-        "unsupported sector project schema" in lowered
-        or lowered.startswith("unknown current-schema")
-        or lowered.startswith("unknown schema-")
-    ):
-        return (
-            "the project file contains information that this version of Sector "
-            "cannot read"
-        )
-    if (
-        lowered.startswith("missing current-schema")
-        or lowered.startswith("malformed ")
-        or lowered == "missing project provenance"
-    ):
-        return "the project file is incomplete or damaged"
-    if re.search(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b", message):
-        return (
-            "the project file contains an input that this version of Sector "
-            "cannot read"
-        )
     return engineer_messages.error_detail(
-        message,
-        fallback="the project file could not be read",
+        error,
+        fallback=_PROJECT_READ_FALLBACK,
+        context="project file",
     )
 
 
@@ -992,7 +1029,10 @@ def project_provenance(text: str) -> dict:
     try:
         actual = _input_digest(content)
     except (TypeError, ValueError) as exc:
-        raise ValueError("project inputs are not canonical JSON") from exc
+        raise ProjectInputError(
+            "project inputs are not canonical JSON",
+            engineer_message=_PROJECT_DAMAGED,
+        ) from exc
     provenance = data["provenance"]
     recorded = provenance.get("input_sha256")
     calculation = (
@@ -1121,15 +1161,21 @@ def _apply_presentation(
         set(raw_presentation) - set(PRESENTATION_SCALAR_KEYS)
     )
     if unknown_presentation:
-        raise ValueError(
+        raise ProjectInputError(
             "unknown current-schema presentation inputs: "
-            + ", ".join(sorted(unknown_presentation))
+            + ", ".join(sorted(unknown_presentation)),
+            engineer_message=_PROJECT_INCOMPATIBLE,
         )
-    scalars[modelled_direction.ALIAS_KEY] = (
-        modelled_direction.normalise_alias(
+    try:
+        direction = modelled_direction.normalise_alias(
             raw_presentation.get(modelled_direction.ALIAS_KEY)
         )
-    )
+    except ValueError as exc:
+        raise ProjectInputError(
+            "invalid modelled-direction description",
+            engineer_message=_PROJECT_DIRECTION,
+        ) from exc
+    scalars[modelled_direction.ALIAS_KEY] = direction
     legacy_report_profile = raw_scalars.get(REPORT_PROFILE_KEY)
     current_report_profile = raw_presentation.get(REPORT_PROFILE_KEY)
     if current_report_profile is None:
@@ -1138,8 +1184,9 @@ def _apply_presentation(
         if normalise_report_profile(current_report_profile) != (
             normalise_report_profile(legacy_report_profile)
         ):
-            raise ValueError(
-                "conflicting report profiles in scalars and presentation"
+            raise ProjectInputError(
+                "conflicting report profiles in scalars and presentation",
+                engineer_message=_PROJECT_REPORT_CONFLICT,
             )
     scalars[REPORT_PROFILE_KEY] = normalise_report_profile(
         current_report_profile
@@ -1156,18 +1203,23 @@ def parse_project_with_info(text: str):
     data = _decode(text)
     provenance = project_provenance(text)
     if not provenance["input_hash_valid"]:
-        raise ValueError("project input hash mismatch")
+        raise ProjectInputError(
+            "project input hash mismatch",
+            engineer_message=_PROJECT_CHANGED,
+        )
     unknown_tables = set(data["tables"]) - set(PROJECT_TABLE_KEYS)
     missing_tables = set(PROJECT_TABLE_KEYS) - set(data["tables"])
     if unknown_tables:
-        raise ValueError(
+        raise ProjectInputError(
             "unknown current-schema tables: "
-            + ", ".join(sorted(unknown_tables))
+            + ", ".join(sorted(unknown_tables)),
+            engineer_message=_PROJECT_INCOMPATIBLE,
         )
     if missing_tables:
-        raise ValueError(
+        raise ProjectInputError(
             "missing current-schema tables: "
-            + ", ".join(sorted(missing_tables))
+            + ", ".join(sorted(missing_tables)),
+            engineer_message=_PROJECT_DAMAGED,
         )
 
     source_version = data["version"]
@@ -1197,9 +1249,10 @@ def parse_project_with_info(text: str):
             - {REPORT_PROFILE_KEY}
         )
         if unknown_scalars:
-            raise ValueError(
+            raise ProjectInputError(
                 "unknown schema-25 inputs: "
-                + ", ".join(sorted(unknown_scalars))
+                + ", ".join(sorted(unknown_scalars)),
+                engineer_message=_PROJECT_INCOMPATIBLE,
             )
         migrated_widths, migration_warnings, migration_provenance = (
             _migrated_schema25_crack_widths(raw_scalars)
@@ -1251,9 +1304,10 @@ def parse_project_with_info(text: str):
             - {REPORT_PROFILE_KEY}
         )
         if unknown_scalars:
-            raise ValueError(
+            raise ProjectInputError(
                 "unknown schema-26 inputs: "
-                + ", ".join(sorted(unknown_scalars))
+                + ", ".join(sorted(unknown_scalars)),
+                engineer_message=_PROJECT_INCOMPATIBLE,
             )
         migrated_scalars = dict(raw_scalars)
         migrated_scalars.pop(REPORT_PROFILE_KEY, None)
@@ -1290,9 +1344,10 @@ def parse_project_with_info(text: str):
             - {REPORT_PROFILE_KEY}
         )
         if unknown_scalars:
-            raise ValueError(
+            raise ProjectInputError(
                 "unknown current-schema inputs: "
-                + ", ".join(sorted(unknown_scalars))
+                + ", ".join(sorted(unknown_scalars)),
+                engineer_message=_PROJECT_INCOMPATIBLE,
             )
         scalars = _canonical_scalars(raw_scalars, tables)
 

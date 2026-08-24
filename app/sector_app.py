@@ -47,6 +47,7 @@ from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, design_standards  # noqa: E402
 from sector.build_info import source_revision  # noqa: E402
+from sector.engineer_message import EngineerMessage  # noqa: E402
 from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
 from sector.sls_identity import (  # noqa: E402
     HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
@@ -158,6 +159,18 @@ _FATIGUE_CONCRETE_METHODS = (
     _FATIGUE_CONCRETE_MINER,
     _FATIGUE_CONCRETE_PROJECT_MINER,
     _FATIGUE_CONCRETE_EQUIVALENT,
+)
+_FATIGUE_ASSIGNMENT_MESSAGE = EngineerMessage(
+    "FATIGUE-ASSIGNMENT",
+    "One or more fatigue details are undefined; review the reinforcement assignments",
+)
+_FATIGUE_DISPLAY_ERROR = EngineerMessage(
+    "FATIGUE-DISPLAY-ERROR",
+    "Review the fatigue inputs and recalculate",
+)
+_FATIGUE_DISPLAY_WARNING = EngineerMessage(
+    "FATIGUE-DISPLAY-WARNING",
+    "Review the selected fatigue basis before using the result",
 )
 
 
@@ -392,7 +405,11 @@ def _safe_build(box, builder, curve, vals, **extra):
     except ValueError as exc:
         detail = engineer_messages.error_detail(
             exc,
-            fallback="Review the material values for the selected curve",
+            fallback=EngineerMessage(
+                "MATERIAL-CURVE",
+                "Review the material values for the selected curve",
+            ),
+            context="material curve construction",
         )
         _manual_warning(
             box, "input-invalid", f"Adjusted for this curve: {detail}"
@@ -4324,7 +4341,11 @@ def _quick_section_viewport():
         except ValueError as exc:
             generation_error = engineer_messages.error_detail(
                 exc,
-                fallback="Review the section dimensions and reinforcement layout",
+                fallback=EngineerMessage(
+                    "QUICK-SECTION",
+                    "Review the section dimensions and reinforcement layout",
+                ),
+                context="Quick Section generation",
             )
             st.error(f"Quick Section cannot be generated: {generation_error}.")
     apply = apply_slot.button(
@@ -6098,13 +6119,16 @@ def build_inputs(host=st):
                 parts.append(
                     "tendon detail " + ", ".join(invalid_tendon_details)
                 )
-            fatigue_assignment_error = (
-                "Undefined fatigue assignment(s): " + "; ".join(parts) + "."
+            fatigue_assignment_error = _FATIGUE_ASSIGNMENT_MESSAGE
+            assignment_text = engineer_messages.error_detail(
+                fatigue_assignment_error,
+                fallback=_FATIGUE_DISPLAY_ERROR,
+                context="fatigue assignment",
             )
             _manual_warning(
                 sec,
                 "input-invalid",
-                fatigue_assignment_error
+                assignment_text
                 + " Other requested analyses can still be calculated; fatigue "
                 "will be reported as INVALID until every assignment is resolved.",
             )
@@ -6263,7 +6287,11 @@ def build_inputs(host=st):
             except (TypeError, ValueError) as exc:
                 detail = engineer_messages.error_detail(
                     exc,
-                    fallback="Review the selected material values",
+                    fallback=EngineerMessage(
+                        "MATERIAL-DEFINITION",
+                        "Review the selected material values",
+                    ),
+                    context="material definition",
                 )
                 material_definition_errors.append(f"{item['id']}: {detail}")
         return out
@@ -6352,7 +6380,11 @@ def build_inputs(host=st):
         except geometry.GeometryTopologyError as exc:
             detail = engineer_messages.error_detail(
                 exc,
-                fallback="review the concrete outline and voids",
+                fallback=EngineerMessage(
+                    "SECTION-GEOMETRY",
+                    "review the concrete outline and voids",
+                ),
+                context="section geometry construction",
             )
             geometry_error = f"Invalid section geometry: {detail}"
     # A void must not split the concrete into disconnected pieces (e.g. a slot
@@ -7807,14 +7839,7 @@ def _run_fatigue_or_invalid(inp):
     Invalid fatigue input therefore cannot suppress otherwise valid results.
     """
 
-    raw_errors = fatigue_analysis.validation_errors(inp)
-    errors = list(dict.fromkeys(
-        engineer_messages.error_detail(
-            error,
-            fallback="Review the fatigue inputs and recalculate",
-        )
-        for error in raw_errors
-    ))
+    errors = fatigue_analysis.validation_errors(inp)
     return (
         fatigue_analysis.invalid_result(inp, errors)
         if errors
@@ -7893,7 +7918,11 @@ def _heightened_crack_control_validation_errors(inp):
     except (KeyError, TypeError, ValueError) as exc:
         errors.append(engineer_messages.error_detail(
             exc,
-            fallback="Select one valid Elastic reference case",
+            fallback=EngineerMessage(
+                "CRACK-REFERENCE-CASE",
+                "Select one valid Elastic reference case",
+            ),
+            context="heightened crack-control reference case",
         ))
     return errors
 
@@ -11348,7 +11377,12 @@ def fatigue_view(inp, results, *, stale=False):
         )
         st.error("Resolve the fatigue input errors, then recalculate fatigue.")
         for error in errors:
-            st.markdown(f"- {error}")
+            visible_error = engineer_messages.error_detail(
+                error,
+                fallback=_FATIGUE_DISPLAY_ERROR,
+                context="fatigue result error",
+            )
+            st.markdown(f"- {visible_error}")
         return
     governing_name = str(payload.get("governing_spectrum") or "-")
     utilisation = fatigue_presentation.evidence_number(
@@ -11367,7 +11401,12 @@ def fatigue_view(inp, results, *, stale=False):
     if warnings:
         with st.expander(f"Basis warnings ({len(warnings)})", expanded=True):
             for warning in warnings:
-                st.markdown(f"- {warning}")
+                visible_warning = engineer_messages.error_detail(
+                    warning,
+                    fallback=_FATIGUE_DISPLAY_WARNING,
+                    context="fatigue result warning",
+                )
+                st.markdown(f"- {visible_warning}")
 
     summary_rows = fatigue_presentation.spectrum_rows(payload)
     _fatigue_result_table([
@@ -13031,8 +13070,11 @@ def _calculation_failure_message(error: Exception) -> str:
 
     detail = engineer_messages.error_detail(
         error,
-        fallback="Sector could not complete the calculation. Review the inputs "
-        "and try again",
+        fallback=EngineerMessage(
+            "CALCULATION-BLOCKED",
+            "Sector could not complete the calculation. Review the inputs and try again",
+        ),
+        context="calculation",
     )
     return "Calculation blocked: " + detail + "."
 
@@ -13200,10 +13242,15 @@ def _analysis_workspace(inp):
         app_run_probe.close_fragment_run(st.session_state)
         return
     if inp.get("fatigue_assignment_error"):
+        assignment_text = engineer_messages.error_detail(
+            inp["fatigue_assignment_error"],
+            fallback=_FATIGUE_DISPLAY_ERROR,
+            context="fatigue assignment",
+        )
         _manual_warning(
             st,
             "input-invalid",
-            inp["fatigue_assignment_error"]
+            assignment_text
             + " Other requested analyses remain available; the fatigue result "
             "will be INVALID until the assignments are resolved.",
         )
@@ -13211,9 +13258,17 @@ def _analysis_workspace(inp):
         ((results or {}).get("fatigue") or {}).get("errors") or ()
     )
     if fatigue_errors and view != "Fatigue Results":
+        visible_fatigue_errors = tuple(
+            engineer_messages.error_detail(
+                error,
+                fallback=_FATIGUE_DISPLAY_ERROR,
+                context="fatigue result error",
+            )
+            for error in fatigue_errors
+        )
         st.error(
             "Fatigue not assessed: "
-            + "; ".join(str(error) for error in fatigue_errors)
+            + "; ".join(visible_fatigue_errors)
             + "."
         )
 

@@ -16,6 +16,7 @@ import pytest
 
 from sector import capacity, codes, torsion
 from sector import section as section_core
+from sector.engineer_message import EngineerMessage
 
 
 def _rect(b=0.3, h=0.6):
@@ -2551,7 +2552,7 @@ def test_2023_shear_context_rejects_malformed_gamma_v(gamma_v):
     with pytest.raises(
         capacity.CapacityInputError,
         match="gamma_V must be a positive finite real number",
-    ):
+    ) as caught:
         capacity.build_shear_context(
             _member_input(
                 shear_method=codes.EC2_2023.label,
@@ -2560,6 +2561,10 @@ def test_2023_shear_context_rejects_malformed_gamma_v(gamma_v):
             0.0,
             0.0,
         )
+    assert isinstance(caught.value.engineer_message, EngineerMessage)
+    assert caught.value.engineer_message.text == (
+        "gamma_V must be a positive finite real number"
+    )
 
 
 def test_2023_shear_context_rejects_a_missing_gamma_v():
@@ -2569,8 +2574,9 @@ def test_2023_shear_context_rejects_a_missing_gamma_v():
     with pytest.raises(
         capacity.CapacityInputError,
         match="gamma_V must be a positive finite real number",
-    ):
+    ) as caught:
         capacity.build_shear_context(inp, 0.0, 0.0)
+    assert isinstance(caught.value.engineer_message, EngineerMessage)
 
 
 def test_2023_shear_links_ignore_inactive_missing_or_malformed_gamma_v():
