@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app import engineer_messages
-from tools.audit_user_copy import developer_terms
+from tools.audit_user_copy import DEVELOPER_TOKENS, developer_terms
 
 
 @pytest.mark.parametrize(
@@ -83,6 +83,29 @@ def test_private_and_application_identifiers_remain_hidden(identifier):
 
     visible = engineer_messages.error_detail(
         f"Unexpected {identifier} state",
+        fallback=fallback,
+    )
+
+    assert visible == fallback
+
+
+@pytest.mark.parametrize("developer_term", DEVELOPER_TOKENS)
+def test_runtime_screen_covers_the_copy_audit_vocabulary(developer_term):
+    fallback = "Review the current engineering inputs"
+
+    visible = engineer_messages.error_detail(
+        f"Unexpected {developer_term.strip()} in the calculation",
+        fallback=fallback,
+    )
+
+    assert visible == fallback
+
+
+def test_internal_equation_identifier_is_hidden_without_an_explanatory_keyword():
+    fallback = "Review the current engineering inputs"
+
+    visible = engineer_messages.error_detail(
+        "EQ-PLASTIC-07 failed",
         fallback=fallback,
     )
 

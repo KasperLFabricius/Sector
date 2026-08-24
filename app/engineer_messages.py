@@ -17,8 +17,14 @@ _TECHNICAL_MARKER = re.compile(
     r"\bschema\b|\bcontract\b|\bprovenance\b|\bkernel\b|"
     r"\bsolver\b|\bcanonical\b|\bmetadata\b|\bmigration\b|"
     r"\bdispatch\b|\btraceback\b|\bstack\s*trace\b|\bjson\b|"
+    r"\binventory\b|\bcapability\s+binding\b|\bfallback\b|"
+    r"\bstable\b|\bbasis\s+key\b|\binput\s+snapshot\b|"
+    r"\bregistered\s+basis\b|\bretained\b|\bretains\b|"
+    r"\bauthoritative\b|\bsemantic\s+check\b|\bidentity\b|"
+    r"\btable[-\s]+owned\b|\blegacy\b|\bimplementation\b|"
     r"\bsource\s+(?:revision|version)\b|"
     r"\binternal\s+(?:id|identifier|key|keys)\b|"
+    r"\beq-[a-z0-9][a-z0-9._-]*\b|"
     r"(?<![a-z0-9_])_*[a-z][a-z0-9]*_[a-z0-9_]+\b)",
     flags=re.IGNORECASE,
 )

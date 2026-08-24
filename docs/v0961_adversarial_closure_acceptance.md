@@ -44,6 +44,8 @@ contains a development term. Distinct invalid fatigue factors therefore remain
 distinct, actionable messages for the engineer.
 Identifiers beginning with one or more underscores are also treated as
 software diagnostics and remain hidden.
+The runtime screen covers the complete vocabulary enforced by the static copy
+audit, with a parameterised test preventing those controls from drifting.
 
 The syntax-tree inventory covers 3,117 UI, manual and report surfaces and finds
 zero development-process candidates. Extracted text from the real 71-page
@@ -92,6 +94,7 @@ result under the uploaded directory.
 - Focused UI/manual controlled-failure and notation suite: 40 passed.
 - Post-review fatigue, copy and publication-boundary suite: 61 passed.
 - Second-review diagnostic and evidence-order suite: 82 passed.
+- Third-review runtime/static-copy alignment suite: 74 passed.
 - Final calculation, fatigue, report and plastic UI boundary recheck: 4 passed.
 - Compression-notation and evidence-retention suite: 131 passed.
 - Ruff, coverage-workflow and dependency-workflow policy validators: passed.
