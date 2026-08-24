@@ -37,6 +37,12 @@ visible message. The saved-report warning, fatigue edition mismatch, section
 comparison and plastic worked-point wording were also rewritten in engineering
 language.
 
+The diagnostic screen explicitly preserves familiar Eurocode notation such as
+`gamma_Ff`, `gamma_s`, `gamma_c,fat`, `beta_cc(t0)` and `alpha_cc`. It still
+rejects longer application field names and rejects any message that also
+contains a development term. Distinct invalid fatigue factors therefore remain
+distinct, actionable messages for the engineer.
+
 The syntax-tree inventory covers 3,117 UI, manual and report surfaces and finds
 zero development-process candidates. Extracted text from the real 71-page
 manual and the real-figure Brief, Standard and Audit reports also contains no
@@ -67,6 +73,7 @@ result under the uploaded directory.
 | AR07-01 | A controlled engineering validation fails | The useful engineering reason and next action remain visible. |
 | AR07-02 | A software diagnostic reaches a publication boundary | It is logged and replaced; no development term is visible. |
 | AR07-03 | Manual and all report profiles are rendered | No development term, clipping or new layout failure is present. |
+| AR07-04 | A validation reason contains familiar Eurocode notation | The factor name and field-specific correction remain visible and distinct. |
 | AR09-01 | A real render step is removed, renamed, masked or redirected | Workflow validation fails. |
 | AR09-02 | The QA upload is narrowed or masked | Workflow validation fails. |
 | AR09-03 | The dependency report is relocated | Dependency-policy validation fails. |
@@ -76,6 +83,7 @@ result under the uploaded directory.
 
 - Consolidated calculation, publication, copy and policy suite: 464 passed.
 - Focused UI/manual controlled-failure and notation suite: 40 passed.
+- Post-review fatigue, copy and publication-boundary suite: 61 passed.
 - Final calculation, fatigue, report and plastic UI boundary recheck: 4 passed.
 - Compression-notation and evidence-retention suite: 131 passed.
 - Ruff, coverage-workflow and dependency-workflow policy validators: passed.

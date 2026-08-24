@@ -42,6 +42,36 @@ def test_concise_engineering_detail_is_preserved_without_trailing_full_stop():
     assert visible == "Torsion wall thickness must be greater than zero"
 
 
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "gamma_Ff must be a finite number greater than zero",
+        "gamma_s must be a finite number greater than zero",
+        "gamma_c,fat must be a finite number greater than zero",
+        "beta_cc(t0) must be a finite number greater than zero",
+        "Concrete alpha_cc must be a finite number",
+    ],
+)
+def test_eurocode_notation_is_preserved_in_engineering_guidance(detail):
+    visible = engineer_messages.error_detail(
+        detail,
+        fallback="Review the fatigue inputs",
+    )
+
+    assert visible == detail
+
+
+def test_engineering_notation_does_not_mask_a_software_diagnostic():
+    fallback = "Review the fatigue inputs"
+
+    visible = engineer_messages.error_detail(
+        "gamma_s is unavailable in fatigue_gamma_s payload",
+        fallback=fallback,
+    )
+
+    assert visible == fallback
+
+
 def test_fallback_must_provide_an_engineering_action():
     with pytest.raises(ValueError, match="fallback"):
         engineer_messages.error_detail("detail", fallback="  ")

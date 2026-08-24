@@ -4339,6 +4339,32 @@ def test_fatigue_failure_boundary_hides_software_diagnostics(monkeypatch):
     assert result["errors"] == ("Review the fatigue inputs and recalculate",)
 
 
+def test_fatigue_failure_boundary_keeps_distinct_engineering_notation(monkeypatch):
+    import fatigue_analysis
+    import sector_app
+
+    engineering_errors = [
+        "gamma_Ff must be a finite number greater than zero",
+        "gamma_s must be a finite number greater than zero",
+        "beta_cc(t0) must be a finite number greater than zero",
+        "Concrete alpha_cc must be a finite number",
+    ]
+    monkeypatch.setattr(
+        fatigue_analysis,
+        "validation_errors",
+        lambda _inp: engineering_errors,
+    )
+    monkeypatch.setattr(
+        fatigue_analysis,
+        "invalid_result",
+        lambda _inp, errors: {"errors": tuple(errors)},
+    )
+
+    result = sector_app._run_fatigue_or_invalid({})
+
+    assert result["errors"] == tuple(engineering_errors)
+
+
 def test_calculation_failure_boundary_hides_software_diagnostics():
     import sector_app
 

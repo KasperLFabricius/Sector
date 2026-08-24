@@ -7,6 +7,11 @@ import re
 
 
 _LOGGER = logging.getLogger(__name__)
+_ENGINEERING_NOTATION = re.compile(
+    r"(?<![a-z0-9_])(?:gamma_(?:ff|s|c(?:,fat)?)|"
+    r"beta_cc(?:\(t0\))?|alpha_cc)(?![a-z0-9_])",
+    flags=re.IGNORECASE,
+)
 _TECHNICAL_MARKER = re.compile(
     r"(?:\bsha(?:-?256)?\b|\bhash(?:es|ed|ing)?\b|\bpayload\b|"
     r"\bschema\b|\bcontract\b|\bprovenance\b|\bkernel\b|"
@@ -30,10 +35,17 @@ def error_detail(value: object, *, fallback: str) -> str:
     replacement = " ".join(str(fallback).split()).strip().rstrip(".")
     if not replacement:
         raise ValueError("fallback must contain visible guidance")
+    # A small, explicit allow-list keeps familiar Eurocode notation useful in
+    # validation guidance.  It deliberately does not match longer application
+    # field names such as ``fatigue_gamma_s``.
+    detail_for_screening = _ENGINEERING_NOTATION.sub(
+        "engineering-symbol",
+        detail,
+    )
     unsafe = (
         not detail
         or len(detail) > 240
-        or _TECHNICAL_MARKER.search(detail) is not None
+        or _TECHNICAL_MARKER.search(detail_for_screening) is not None
         or any(character in detail for character in ("{", "}", "[", "]"))
     )
     if unsafe:
