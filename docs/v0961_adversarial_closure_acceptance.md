@@ -42,6 +42,8 @@ The diagnostic screen explicitly preserves familiar Eurocode notation such as
 rejects longer application field names and rejects any message that also
 contains a development term. Distinct invalid fatigue factors therefore remain
 distinct, actionable messages for the engineer.
+Identifiers beginning with one or more underscores are also treated as
+software diagnostics and remain hidden.
 
 The syntax-tree inventory covers 3,117 UI, manual and report surfaces and finds
 zero development-process candidates. Extracted text from the real 71-page
@@ -55,6 +57,10 @@ render to `qa-artifacts/report`, exactly one unconditional real-figure manual
 render to `qa-artifacts/manual`, and the complete `qa-artifacts/` upload. Names,
 commands, destinations, execution conditions, upload action, missing-file
 behaviour and retention period are exact.
+
+The full test-and-coverage step, branch-coverage step and both real-render
+steps must all precede the upload. A mutation that moves any evidence producer
+after the upload fails the workflow validator.
 
 The dependency validator independently pins its report to
 `qa-artifacts/dependency-audit.json`. Negative mutations prove that removing or
@@ -77,6 +83,7 @@ result under the uploaded directory.
 | AR09-01 | A real render step is removed, renamed, masked or redirected | Workflow validation fails. |
 | AR09-02 | The QA upload is narrowed or masked | Workflow validation fails. |
 | AR09-03 | The dependency report is relocated | Dependency-policy validation fails. |
+| AR09-04 | A QA evidence-producing step is moved after upload | Workflow validation fails. |
 | SCOPE-01 | Product identity and calculation scope are inspected | Sector remains 0.96, project format 27 and numerical behaviour is unchanged. |
 
 ## Verification evidence
@@ -84,6 +91,7 @@ result under the uploaded directory.
 - Consolidated calculation, publication, copy and policy suite: 464 passed.
 - Focused UI/manual controlled-failure and notation suite: 40 passed.
 - Post-review fatigue, copy and publication-boundary suite: 61 passed.
+- Second-review diagnostic and evidence-order suite: 82 passed.
 - Final calculation, fatigue, report and plastic UI boundary recheck: 4 passed.
 - Compression-notation and evidence-retention suite: 131 passed.
 - Ruff, coverage-workflow and dependency-workflow policy validators: passed.

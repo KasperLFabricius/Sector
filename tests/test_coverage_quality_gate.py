@@ -473,3 +473,24 @@ def test_complete_qa_artifact_upload_cannot_be_masked_or_narrowed(field, value):
 
     with pytest.raises(CoverageGateContractError, match="evidence upload"):
         validate_workflow(_contract(), _workflow_text(workflow))
+
+
+@pytest.mark.parametrize(
+    "step_name",
+    [
+        COVERAGE_STEP_NAME,
+        BRANCH_COVERAGE_STEP_NAME,
+        REPORT_RENDER_STEP_NAME,
+        MANUAL_RENDER_STEP_NAME,
+    ],
+)
+def test_every_qa_evidence_producer_must_precede_the_upload(step_name):
+    workflow = _workflow()
+    steps = workflow["jobs"]["test"]["steps"]
+    producer = _step(workflow, step_name)
+    upload = _step(workflow, QA_UPLOAD_STEP_NAME)
+    steps.remove(producer)
+    steps.insert(steps.index(upload) + 1, producer)
+
+    with pytest.raises(CoverageGateContractError, match="step order"):
+        validate_workflow(_contract(), _workflow_text(workflow))

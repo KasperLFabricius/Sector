@@ -692,6 +692,7 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         )
 
     ordered = [
+        coverage_step,
         branch_step,
         report_render,
         manual_render,

@@ -19,7 +19,7 @@ _TECHNICAL_MARKER = re.compile(
     r"\bdispatch\b|\btraceback\b|\bstack\s*trace\b|\bjson\b|"
     r"\bsource\s+(?:revision|version)\b|"
     r"\binternal\s+(?:id|identifier|key|keys)\b|"
-    r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b)",
+    r"(?<![a-z0-9_])_*[a-z][a-z0-9]*_[a-z0-9_]+\b)",
     flags=re.IGNORECASE,
 )
 

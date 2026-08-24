@@ -18,6 +18,8 @@ from tools.audit_user_copy import developer_terms
         "canonical JSON provenance hash mismatch",
         "Traceback from internal identifier",
         "dispatch kernel failure at source revision abc123",
+        "unexpected _private_key state",
+        "unexpected __cache_entry state",
         "details [private_key]",
         "x" * 241,
         "",
@@ -66,6 +68,21 @@ def test_engineering_notation_does_not_mask_a_software_diagnostic():
 
     visible = engineer_messages.error_detail(
         "gamma_s is unavailable in fatigue_gamma_s payload",
+        fallback=fallback,
+    )
+
+    assert visible == fallback
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["_private_key", "__cache_entry", "fatigue_gamma_s"],
+)
+def test_private_and_application_identifiers_remain_hidden(identifier):
+    fallback = "Review the current engineering inputs"
+
+    visible = engineer_messages.error_detail(
+        f"Unexpected {identifier} state",
         fallback=fallback,
     )
 
