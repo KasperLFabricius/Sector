@@ -8,7 +8,7 @@ import re
 
 _LOGGER = logging.getLogger(__name__)
 _ENGINEERING_NOTATION = re.compile(
-    r"(?<![a-z0-9_])(?:gamma_(?:ff|s|c(?:,fat)?)|"
+    r"(?<![a-z0-9_])(?:gamma_(?:ff|s|v|c(?:,fat)?)|"
     r"beta_cc(?:\(t0\))?|alpha_cc)(?![a-z0-9_])",
     flags=re.IGNORECASE,
 )

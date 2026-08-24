@@ -2550,7 +2550,7 @@ def test_2023_shear_context_uses_the_exact_selected_gamma_v():
 def test_2023_shear_context_rejects_malformed_gamma_v(gamma_v):
     with pytest.raises(
         capacity.CapacityInputError,
-        match="shear_gamma_v must be a positive finite real number",
+        match="gamma_V must be a positive finite real number",
     ):
         capacity.build_shear_context(
             _member_input(
@@ -2568,7 +2568,7 @@ def test_2023_shear_context_rejects_a_missing_gamma_v():
 
     with pytest.raises(
         capacity.CapacityInputError,
-        match="shear_gamma_v must be a positive finite real number",
+        match="gamma_V must be a positive finite real number",
     ):
         capacity.build_shear_context(inp, 0.0, 0.0)
 

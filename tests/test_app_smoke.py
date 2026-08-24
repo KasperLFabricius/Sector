@@ -4537,7 +4537,7 @@ def test_hot_reload_surfaces_unknown_report_profile_and_clears_old_report():
     ] == "Standard"
     assert "_pending_report_events" not in at.session_state
     assert any(
-        "not recognised" in item.value and "reset to Standard" in item.value
+        "not recognised" in item.value and "reset it to Standard" in item.value
         for item in at.warning
     )
 
@@ -4615,7 +4615,7 @@ def test_report_fragment_normalises_hostile_profile_before_strict_mount(
     ] == "Standard"
     assert "report_buffer" not in fake.session_state
     assert "report_signature" not in fake.session_state
-    assert any("reset to Standard" in warning for warning in fake.box.warnings)
+    assert any("reset it to Standard" in warning for warning in fake.box.warnings)
 
 
 def test_autosave_detects_report_profile_only_change(tmp_path, monkeypatch):

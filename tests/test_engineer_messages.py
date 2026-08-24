@@ -49,6 +49,7 @@ def test_concise_engineering_detail_is_preserved_without_trailing_full_stop():
     [
         "gamma_Ff must be a finite number greater than zero",
         "gamma_s must be a finite number greater than zero",
+        "gamma_V must be a finite number greater than zero",
         "gamma_c,fat must be a finite number greater than zero",
         "beta_cc(t0) must be a finite number greater than zero",
         "Concrete alpha_cc must be a finite number",

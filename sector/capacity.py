@@ -1131,7 +1131,7 @@ def _build_shear_face_context(
         try:
             gamma_v = shear.validate_gamma_v(
                 inp.get("shear_gamma_v", _MISSING),
-                label="shear_gamma_v",
+                label="gamma_V",
             )
         except ValueError as exc:
             raise CapacityInputError(str(exc)) from exc

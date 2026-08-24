@@ -38,10 +38,10 @@ comparison and plastic worked-point wording were also rewritten in engineering
 language.
 
 The diagnostic screen explicitly preserves familiar Eurocode notation such as
-`gamma_Ff`, `gamma_s`, `gamma_c,fat`, `beta_cc(t0)` and `alpha_cc`. It still
-rejects longer application field names and rejects any message that also
-contains a development term. Distinct invalid fatigue factors therefore remain
-distinct, actionable messages for the engineer.
+`gamma_Ff`, `gamma_s`, `gamma_V`, `gamma_c,fat`, `beta_cc(t0)` and `alpha_cc`.
+It still rejects longer application field names and rejects any message that
+also contains a development term. Distinct invalid fatigue factors therefore
+remain distinct, actionable messages for the engineer.
 Identifiers beginning with one or more underscores are also treated as
 software diagnostics and remain hidden.
 The runtime screen covers the complete vocabulary enforced by the static copy
@@ -97,6 +97,7 @@ result under the uploaded directory.
 - Third-review runtime/static-copy alignment suite: 74 passed.
 - Final calculation, fatigue, report and plastic UI boundary recheck: 4 passed.
 - Compression-notation and evidence-retention suite: 131 passed.
+- Exact-G1 message and portable-startup correction suite: 100 passed.
 - Ruff, coverage-workflow and dependency-workflow policy validators: passed.
 - Static user-copy audit: 3,117 surfaces; zero development-process candidates.
 - Real publication render: Brief 9 pages, Standard 60 pages, Audit 66 pages and

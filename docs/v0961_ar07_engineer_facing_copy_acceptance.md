@@ -47,9 +47,9 @@ It includes Streamlit controls and messages, manual/report builders, equation
 symbol meanings, editable-table field definitions, structured workflow and
 warning records, and user-facing return messages from calculation adapters.
 
-The final inventory contains 3,108 visible surfaces:
+The final inventory contains 3,117 visible surfaces:
 
-- 2,129 Streamlit and supporting-message surfaces;
+- 2,138 Streamlit and supporting-message surfaces;
 - 459 manual surfaces; and
 - 520 report surfaces.
 
@@ -80,7 +80,10 @@ calculation or correct the stated input.
 
 ## Verification evidence
 
-- Static copy audit: 3,108 surfaces; zero development-process candidates.
+- Static copy audit: 3,117 surfaces; zero development-process candidates.
+- Exact-G1 correction recheck: 100 message, report-profile and portable-startup
+  cases passed; `gamma_V` remains visible as Eurocode notation while the
+  application field name remains hidden.
 - Generated-artifact copy gate: 5 passed, including PDF text extraction and
   internal equation-identifier rejection.
 - Consolidated manual/reference gate: 360 passed, 1 intentionally deselected
