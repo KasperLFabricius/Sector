@@ -147,7 +147,6 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
             "author",
             "description",
             "keywords",
-            "sector-source-revision",
             "sector-version",
             "viewport",
         }

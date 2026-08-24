@@ -19,12 +19,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = Path("quality-mypy-policy.toml")
-INITIAL_FILES = (
+LEGACY_INITIAL_FILES = (
     "sector/bridge.py",
     "app/bridge_analysis.py",
     "app/manual_equation_contract.py",
     "app/manual_equation_publication.py",
 )
+INITIAL_FILES = (
+    "sector/sls_identity.py",
+    "app/report_profiles.py",
+    "app/manual_equation_contract.py",
+    "app/manual_equation_publication.py",
+)
+LEGACY_FILE_REPLACEMENTS = dict(zip(LEGACY_INITIAL_FILES, INITIAL_FILES, strict=True))
 CURRENT_WAIVERS = {"mypy-imported-module-debt"}
 FOLLOW_IMPORT_STRENGTH = {"silent": 0, "normal": 1}
 VALIDATE_STEP = "Validate mypy policy ratchet"
@@ -67,14 +74,20 @@ def _text_list(value: object, label: str) -> list[str]:
     return items
 
 
-def _validated_files(value: object, root: Path) -> list[str]:
+def _validated_files(
+    value: object,
+    root: Path,
+    *,
+    allowed_missing: set[str] | None = None,
+) -> list[str]:
     files = _text_list(value, "tool.mypy.files")
     resolved_root = root.resolve()
+    permitted = set() if allowed_missing is None else allowed_missing
     for relative in files:
         resolved = (resolved_root / relative).resolve()
         if resolved_root not in resolved.parents:
             raise MypyPolicyError("tool.mypy.files escapes the repository")
-        if not resolved.is_file():
+        if not resolved.is_file() and relative not in permitted:
             raise MypyPolicyError(f"typed boundary file does not exist: {relative}")
     return files
 
@@ -221,6 +234,7 @@ def _snapshot(
     *,
     required_waivers: set[str] | None,
     scan_sources: bool,
+    accepted_base: bool,
 ) -> MypyIdentity:
     if set(policy) != {"tool", "sector_policy"}:
         raise MypyPolicyError("mypy policy top-level keys differ")
@@ -245,8 +259,17 @@ def _snapshot(
     follow_imports = _nonblank(mypy.get("follow_imports"), "follow_imports")
     if follow_imports not in FOLLOW_IMPORT_STRENGTH:
         raise MypyPolicyError("follow_imports is unsupported or weaker than silent")
-    files = _validated_files(mypy.get("files"), root)
-    if tuple(files)[: len(INITIAL_FILES)] != INITIAL_FILES:
+    files = _validated_files(
+        mypy.get("files"),
+        root,
+        allowed_missing=(set(LEGACY_INITIAL_FILES) if accepted_base else None),
+    )
+    accepted_prefixes = (
+        {INITIAL_FILES, LEGACY_INITIAL_FILES}
+        if accepted_base
+        else {INITIAL_FILES}
+    )
+    if tuple(files)[: len(INITIAL_FILES)] not in accepted_prefixes:
         raise MypyPolicyError("initial typed boundary identity or order differs")
     if scan_sources:
         _reject_source_suppressions(files, root)
@@ -316,6 +339,7 @@ def validate_policy(
         root,
         required_waivers=required,
         scan_sources=True,
+        accepted_base=False,
     )
     if baseline is None:
         return
@@ -324,10 +348,15 @@ def validate_policy(
         root,
         required_waivers=None,
         scan_sources=False,
+        accepted_base=True,
     )
-    if not set(accepted.files) <= set(candidate.files):
+    accepted_files = tuple(
+        LEGACY_FILE_REPLACEMENTS.get(relative, relative)
+        for relative in accepted.files
+    )
+    if not set(accepted_files) <= set(candidate.files):
         raise MypyPolicyError("accepted typed boundary inventory shrank")
-    if not _ordered_subset(accepted.files, candidate.files):
+    if not _ordered_subset(accepted_files, candidate.files):
         raise MypyPolicyError("accepted typed boundary order changed")
     if FOLLOW_IMPORT_STRENGTH[candidate.follow_imports] < FOLLOW_IMPORT_STRENGTH[
         accepted.follow_imports

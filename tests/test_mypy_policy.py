@@ -15,6 +15,7 @@ from tools.verify_mypy_policy import (
     CHECKOUT_STEP,
     EXECUTE_STEP,
     INITIAL_FILES,
+    LEGACY_INITIAL_FILES,
     VALIDATE_STEP,
     MypyPolicyError,
     execute_policy,
@@ -28,7 +29,7 @@ from tools.verify_mypy_policy import (
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "quality-mypy-policy.toml"
 WORKFLOW = ROOT / ".github" / "workflows" / "qa.yml"
-V093_TYPED_FILES = (
+TYPED_BOUNDARY_FILES = (
     *INITIAL_FILES,
     "sector/design_standards.py",
     "app/modelled_direction.py",
@@ -77,14 +78,14 @@ def _write_policy(path: Path, files: tuple[str, ...] = INITIAL_FILES) -> None:
     )
 
 
-def _temporary_repository(tmp_path: Path, bridge_source: str) -> tuple[Path, Path]:
+def _temporary_repository(tmp_path: Path, owned_source: str) -> tuple[Path, Path]:
     repository = tmp_path / "repository"
     for relative in INITIAL_FILES:
         path = repository / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("VALUE: int = 1\n", encoding="utf-8")
-    (repository / "sector" / "bridge.py").write_text(
-        bridge_source,
+    (repository / INITIAL_FILES[0]).write_text(
+        owned_source,
         encoding="utf-8",
     )
     policy_path = repository / POLICY.name
@@ -98,13 +99,13 @@ def test_live_strict_policy_workflow_and_boundaries_pass():
     validate_workflow(WORKFLOW.read_text(encoding="utf-8"))
     execute_policy(POLICY, ROOT)
 
-    assert tuple(policy["tool"]["mypy"]["files"]) == V093_TYPED_FILES
+    assert tuple(policy["tool"]["mypy"]["files"]) == TYPED_BOUNDARY_FILES
     assert policy["tool"]["mypy"] == {
         "python_version": "3.13",
         "strict": True,
         "follow_imports": "silent",
         "incremental": False,
-        "files": list(V093_TYPED_FILES),
+        "files": list(TYPED_BOUNDARY_FILES),
     }
     assert validator_command().endswith(
         "--baseline-ref $env:SECTOR_MYPY_POLICY_BASE"
@@ -238,6 +239,22 @@ def test_accepted_file_inventory_and_order_cannot_shrink():
         validate_policy(candidate, ROOT, baseline=baseline)
 
 
+def test_deleted_legacy_boundary_is_migrated_only_for_the_accepted_base():
+    baseline = deepcopy(_policy())
+    baseline["tool"]["mypy"]["files"][: len(LEGACY_INITIAL_FILES)] = (
+        LEGACY_INITIAL_FILES
+    )
+
+    validate_policy(_policy(), ROOT, baseline=baseline)
+
+    candidate = deepcopy(_policy())
+    candidate["tool"]["mypy"]["files"][: len(LEGACY_INITIAL_FILES)] = (
+        LEGACY_INITIAL_FILES
+    )
+    with pytest.raises(MypyPolicyError, match="typed boundary file does not exist"):
+        validate_policy(candidate, ROOT, baseline=baseline)
+
+
 @pytest.mark.parametrize(
     "owned_file",
     (
@@ -245,11 +262,11 @@ def test_accepted_file_inventory_and_order_cannot_shrink():
         "sector/heightened_crack_control.py",
     ),
 )
-def test_v093_crack_boundaries_cannot_leave_the_live_typed_boundary(
+def test_live_crack_boundaries_cannot_leave_the_typed_boundary(
     owned_file: str,
 ):
     policy = deepcopy(_policy())
-    assert tuple(policy["tool"]["mypy"]["files"]) == V093_TYPED_FILES
+    assert tuple(policy["tool"]["mypy"]["files"]) == TYPED_BOUNDARY_FILES
 
     candidate = deepcopy(policy)
     candidate["tool"]["mypy"]["files"].remove(owned_file)

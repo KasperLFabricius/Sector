@@ -101,7 +101,6 @@ _EXPORTS = {
 _MODULES = {
     name: name
     for name in (
-        "bridge",
         "build_info",
         "capacity",
         "codes",

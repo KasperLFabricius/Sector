@@ -167,7 +167,6 @@ EQUATION_COPY_CALLS = {
     "_result",
 }
 RETURN_COPY_FILES = {
-    "bridge_analysis.py",
     "case_analysis.py",
     "fatigue_presentation.py",
     "heightened_crack_adapter.py",

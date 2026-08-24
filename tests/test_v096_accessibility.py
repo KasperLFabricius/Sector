@@ -163,9 +163,10 @@ def test_audit_equation_identities_semantics_and_sources_remain_colocated():
     total = 0
     for page_number, text in enumerate(page_texts, start=1):
         identities = re.findall(
-            r"(?m)^(?:Equation \([^\n]+\) \| )?EQ-[A-Z0-9][A-Z0-9.\-]+\s*$",
+            r"(?m)^Equation \([0-9]+(?:\.[0-9]+)*\)\s*$",
             text,
         )
+        assert "EQ-" not in text, page_number
         sources = re.findall(r"(?m)^Source / method note:", text)
         semantics = re.findall(r"(?m)^Mathematical expression:", text)
         assert len(identities) == len(sources), page_number

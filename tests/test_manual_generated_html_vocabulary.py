@@ -88,7 +88,6 @@ def _dormant_generator_html(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(manual, "manual_blocks", list)
     monkeypatch.setattr(manual, "manual_publication_blocks", lambda blocks: ())
     monkeypatch.setattr(manual, "publish_manual_blocks", lambda blocks: published)
-    monkeypatch.setattr(manual, "source_revision", lambda: "vocabulary-test")
     return manual.build_manual_html_bytes().decode("utf-8")
 
 
@@ -235,7 +234,6 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
             "author",
             "description",
             "keywords",
-            "sector-source-revision",
             "sector-version",
             "viewport",
         }

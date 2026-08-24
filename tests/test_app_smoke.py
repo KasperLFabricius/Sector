@@ -969,7 +969,8 @@ def test_combined_view_fails_closed_for_legacy_pre_contract_bending():
     assert not at.exception
     assert any(
         "not assessed" in item.value.casefold()
-        and "predates" in item.value.casefold()
+        and "saved bending result cannot confirm" in item.value.casefold()
+        and "contains the origin" in item.value.casefold()
         and "recalculate" in item.value.casefold()
         for item in at.warning
     )
@@ -3057,6 +3058,10 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     at.run()
 
     assert not at.exception
+    assert "Sector converted the project file for this session" in (
+        at.session_state["_project_msg"][1]
+    )
+    assert "schema" not in at.session_state["_project_msg"][1].casefold()
     for key in (
         "sls_long_term_permitted_crack_width_mm",
         "sls_short_term_permitted_crack_width_mm",

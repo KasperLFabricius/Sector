@@ -36,4 +36,6 @@ def test_internal_version_declares_the_simple_unsigned_portable_build():
     for live_surface in (product_identity, project_io_source):
         assert "Sector is unreleased" not in live_surface
         assert "Sector 0.96" in live_surface
-    assert 'f"Sector {APP_VERSION} reports' in manual_source
+    assert '<meta name="sector-version"' in manual_source
+    assert "source_revision" not in manual_source
+    assert "sector-source-revision" not in manual_source

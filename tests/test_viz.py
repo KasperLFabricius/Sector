@@ -667,6 +667,16 @@ def test_subtube_figure_draws_each_rectangle_with_walls():
     assert fig.layout.annotations[1].y == pytest.approx(300.0)
 
 
+def test_subtube_figure_handles_withheld_resistance():
+    sub = _sub(300, 600, 100.0, 0.10, 24.6, None, None)
+
+    fig = viz.subtube_figure([sub])
+
+    assert "not assessed" in fig.layout.annotations[0].text
+    assert fig.data[0].customdata[0][5] == "not assessed"
+    assert fig.data[0].customdata[0][6] == "not assessed"
+
+
 def test_subtube_figure_empty_is_safe():
     fig = viz.subtube_figure([])
     assert fig is not None and len(fig.data) == 0

@@ -1,4 +1,4 @@
-"""End-to-end absence guard for the retired component-mapped bridge workflows."""
+"""Absence guards for retired bridge workflows and superseded crack helpers."""
 
 from __future__ import annotations
 
@@ -27,6 +27,16 @@ LIVE_SURFACES = (
 PUBLICATION_FIXTURES = (
     ROOT / "tools" / "report_render_fixture.py",
     ROOT / "tools" / "manual_render_fixture.py",
+)
+
+REMOVED_IMPLEMENTATION_FILES = (
+    "app/bridge_analysis.py",
+    "sector/bridge.py",
+    "tests/test_bridge.py",
+    "app/crack_criterion_publication.py",
+    "app/crack_criterion_value.py",
+    "tests/test_crack_criterion_publication.py",
+    "tests/test_crack_criterion_value.py",
 )
 
 
@@ -70,3 +80,8 @@ def test_streamlit_has_only_a_hot_reload_alias_for_the_retired_view():
 
 def test_bridge_input_adapter_module_is_removed():
     assert not (ROOT / "app" / "bridge_inputs.py").exists()
+
+
+def test_superseded_implementation_and_self_only_tests_are_removed():
+    for relative in REMOVED_IMPLEMENTATION_FILES:
+        assert not (ROOT / relative).exists(), f"retired file survived: {relative}"

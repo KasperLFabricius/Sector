@@ -14,5 +14,8 @@ ruff>=0.16.1,<0.17
 mypy>=2.3,<2.4
 pip-audit>=2.10,<2.11
 
+# PDF structure inspection used by publication and report QA.
+pypdf>=6.15,<7
+
 # Cross-platform PDFium renderer used to inspect the actual report pages in CI.
 pypdfium2>=5.0,<6

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import pathlib
 import sys
 
@@ -11,6 +12,26 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packaging"))
 
 import run_sector
+
+
+def _spec_function(name: str):
+    spec = ROOT / "packaging" / "sector.spec"
+    tree = ast.parse(spec.read_text(encoding="utf-8"), filename=str(spec))
+    selected = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    ]
+    assert len(selected) == 1
+    harness = ast.Module(
+        body=[ast.Import(names=[ast.alias(name="os")]), selected[0]],
+        type_ignores=[],
+    )
+    namespace: dict[str, object] = {}
+    exec(  # noqa: S102 - isolated helper extraction for a spec contract test
+        compile(ast.fix_missing_locations(harness), str(spec), "exec"), namespace
+    )
+    return namespace[name]
 
 
 def test_single_packaging_path_is_present_and_retired_paths_are_absent():
@@ -143,7 +164,51 @@ def test_developer_only_modules_are_excluded_and_installer_records_are_omitted()
     assert '"include"' in spec
     assert '".py"' in spec
     assert "_without_installer_records" in spec
+    assert "_without_pyarrow_developer_payload" in spec
+    assert spec.index("a = Analysis(") < spec.index(
+        "a.datas = _without_pyarrow_developer_payload(a.datas)"
+    ) < spec.index("a.datas = _without_installer_records(a.datas)")
     assert "a.datas = _without_installer_records(a.datas)" in spec
+
+
+def test_pdf_structure_inspector_is_a_direct_qa_dependency_only():
+    runtime = (ROOT / "requirements.in").read_text(encoding="utf-8")
+    development = (ROOT / "requirements-dev.in").read_text(encoding="utf-8")
+    runtime_lock = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    development_lock = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    build_lock = (ROOT / "requirements-build.txt").read_text(encoding="utf-8")
+    spec = (ROOT / "packaging" / "sector.spec").read_text(encoding="utf-8")
+
+    assert not any(
+        line.strip().startswith("pypdf") for line in runtime.splitlines()
+    )
+    assert sum(
+        line.strip().split(">=", 1)[0] == "pypdf"
+        for line in development.splitlines()
+    ) == 1
+    assert not any(line.startswith("pypdf==") for line in runtime_lock.splitlines())
+    assert sum(
+        line.startswith("pypdf==") for line in development_lock.splitlines()
+    ) == 1
+    assert not any(line.startswith("pypdf==") for line in build_lock.splitlines())
+    assert '"pypdf"' not in spec
+
+
+def test_pyarrow_trim_removes_only_build_sources_and_test_payload():
+    trim = _spec_function("_without_pyarrow_developer_payload")
+    entries = [
+        ("pyarrow/include/arrow/api.h", "source-a", "DATA"),
+        ("pyarrow/src/arrow/array.cc", "source-b", "DATA"),
+        ("pyarrow/tests/data/sample.csv", "source-c", "DATA"),
+        ("pyarrow/includes/lib.pxi", "source-d", "DATA"),
+        ("pyarrow/lib.cp313-win_amd64.pyd", "source-e", "BINARY"),
+        ("pyarrow/arrow.dll", "source-f", "BINARY"),
+        ("pyarrow/arrow.lib", "source-g", "BINARY"),
+        ("pyarrow/config.py", "source-h", "DATA"),
+        ("other/include/header.h", "source-i", "DATA"),
+    ]
+
+    assert trim(entries) == entries[4:]
 
 
 def test_bundle_base_resolves_to_the_app_tree_in_dev():

@@ -1,7 +1,7 @@
 # Direct runtime dependencies for Sector.
 #
 # Generate the locked requirements.txt with:
-#   python -m piptools compile --generate-hashes --output-file requirements.txt requirements.in
+#   python -m piptools compile --generate-hashes --strip-extras --output-file requirements.txt requirements.in
 
 numpy>=1.24,<2.4
 
@@ -16,4 +16,3 @@ plotly>=5.18,<7
 reportlab>=4.0,<5
 kaleido>=1.3,<2
 choreographer>=1.3,<2
-pypdf>=6.15,<7

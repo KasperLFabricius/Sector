@@ -17,6 +17,7 @@ import dataclasses
 import hashlib
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
@@ -928,6 +929,56 @@ def _decode(text: str) -> dict:
     if not isinstance(data.get("provenance"), Mapping):
         raise ValueError("missing project provenance")
     return data
+
+
+def engineer_error_message(error: Exception) -> str:
+    """Translate project-file diagnostics into useful engineer-facing copy."""
+
+    message = " ".join(str(error).split())
+    lowered = message.casefold()
+    report_prefix = "unknown persisted report profile "
+    if lowered.startswith(report_prefix):
+        selected = message[len(report_prefix):]
+        return (
+            f"the saved report type {selected} is not available in this "
+            "version of Sector"
+        )
+    if "conflicting report profiles" in lowered:
+        return "the project file contains conflicting report settings"
+    if lowered in {"not valid json", "not a sector project file"}:
+        return "the selected file is not a readable Sector project"
+    if "canonical json" in lowered:
+        return "the project file is incomplete or damaged"
+    if lowered.startswith("calculation ") and (
+        "sha" in lowered or "hash" in lowered
+    ):
+        return (
+            "the recorded calculation is damaged; recalculate before saving "
+            "the project"
+        )
+    if "hash mismatch" in lowered or "sha-256" in lowered:
+        return "the project file is damaged or was changed outside Sector"
+    if (
+        "unsupported sector project schema" in lowered
+        or lowered.startswith("unknown current-schema")
+        or lowered.startswith("unknown schema-")
+    ):
+        return (
+            "the project file contains information that this version of Sector "
+            "cannot read"
+        )
+    if (
+        lowered.startswith("missing current-schema")
+        or lowered.startswith("malformed ")
+        or lowered == "missing project provenance"
+    ):
+        return "the project file is incomplete or damaged"
+    if re.search(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b", message):
+        return (
+            "the project file contains an input that this version of Sector "
+            "cannot read"
+        )
+    return message or "the project file could not be read"
 
 
 def project_provenance(text: str) -> dict:

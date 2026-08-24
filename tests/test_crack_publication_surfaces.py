@@ -43,7 +43,7 @@ _RETIRED_LITERAL_FRAGMENTS = (
 _REQUIRED_CURRENT_FRAGMENTS = (
     "long-term limit $w_{k,long}$ (mm; 0 = no comparison)",
     "short-term limit $w_{k,short}$ (mm; 0 = no comparison)",
-    "separate section-level formula 7.100 na calculation",
+    "formula 7.100 na is a separate section-level calculation",
     "duration-matched user comparisons; zero means no comparison",
 )
 

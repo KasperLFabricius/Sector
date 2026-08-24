@@ -147,10 +147,30 @@ def _without_installer_records(entries):
     return retained
 
 
+def _without_pyarrow_developer_payload(entries):
+    """Omit PyArrow build sources and tests while retaining runtime binaries."""
+    retained = []
+    source_suffixes = {
+        ".c", ".cc", ".cpp", ".h", ".hpp", ".pxd", ".pxi", ".pyx"
+    }
+    developer_parts = {"include", "includes", "src", "test", "tests", "testing"}
+    for entry in entries:
+        destination = str(entry[0]).replace("\\", "/")
+        parts = set(destination.casefold().split("/"))
+        is_pyarrow = "pyarrow" in parts
+        suffix = os.path.splitext(destination)[1].casefold()
+        if is_pyarrow and (
+            parts.intersection(developer_parts) or suffix in source_suffixes
+        ):
+            continue
+        retained.append(entry)
+    return retained
+
+
 # Heavy third-party packages: pull in their data files, binaries and submodules
 # (Streamlit ships its compiled frontend as data; numba/llvmlite ship binaries).
 for pkg in ("streamlit", "plotly", "numba", "llvmlite", "kaleido",
-            "reportlab", "pypdf", "pandas", "pyarrow", "altair"):
+            "reportlab", "pandas", "pyarrow", "altair"):
     d, b, h = collect_all(pkg, filter_submodules=_runtime_module)
     datas += _runtime_package_data(d)
     binaries += b
@@ -196,6 +216,7 @@ a = Analysis(
 # unique virtual-environment path; those launchers are not part of the frozen
 # package. Retain runtime metadata, licences and entry points, but omit only the
 # installer inventory after every hook has expanded its data inputs.
+a.datas = _without_pyarrow_developer_payload(a.datas)
 a.datas = _without_installer_records(a.datas)
 
 pyz = PYZ(a.pure)

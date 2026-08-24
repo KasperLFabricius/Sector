@@ -775,7 +775,7 @@ def test_app_transverse_detailing_uses_active_direction_and_renders_view():
     _select_view(at, "Detailing")
     assert not at.exception
     assert any(
-        "Shear/torsion link evidence" in item.value
+        "Shear/torsion link detailing" in item.value
         for item in at.markdown
     )
 
@@ -1034,7 +1034,8 @@ def test_legacy_bending_blocks_combined_evidence_in_both_face_shear_view():
     assert legacy_combined.iloc[0]["Status / outcome"] == "NOT ASSESSED"
     assert math.isnan(float(legacy_combined.iloc[0]["Value / utilisation"]))
     assert any(
-        "predates" in item.value.casefold()
+        "saved bending result cannot confirm" in item.value.casefold()
+        and "contains the origin" in item.value.casefold()
         and "recalculate" in item.value.casefold()
         for item in at.warning
     )
@@ -1268,7 +1269,11 @@ def test_app_shear_links_warn_outside_default_bounds_and_retain_verdict():
     assert "code_applicable" not in lk
     _select_view(at, "Shear")
     assert not at.exception
-    assert any("actual values are retained" in w.value.lower() for w in at.warning)
+    assert any(
+        "actual values are used in the reported calculations"
+        in w.value.lower()
+        for w in at.warning
+    )
     util_metric = next(
         m for m in at.metric
         if m.label == r"Utilisation $V_{Ed}/V_{Rd}$"

@@ -871,6 +871,51 @@ def test_unknown_or_inexact_persisted_report_profile_fails_closed(value):
         project_io.parse_project(text)
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "expected"),
+    (
+        (
+            "unknown persisted report profile 'Retired report'",
+            "the saved report type 'Retired report' is not available in this "
+            "version of Sector",
+        ),
+        (
+            "unsupported Sector project schema 99",
+            "the project file contains information that this version of Sector "
+            "cannot read",
+        ),
+        (
+            "project input hash mismatch",
+            "the project file is damaged or was changed outside Sector",
+        ),
+        (
+            "project inputs are not canonical JSON",
+            "the project file is incomplete or damaged",
+        ),
+        (
+            "calculation result_sha256 must be a lowercase SHA-256",
+            "the recorded calculation is damaged; recalculate before saving the "
+            "project",
+        ),
+        (
+            "modelled direction alias must be at most 60 characters",
+            "modelled direction alias must be at most 60 characters",
+        ),
+    ),
+)
+def test_project_diagnostics_are_translated_for_engineers(
+    diagnostic, expected
+):
+    message = project_io.engineer_error_message(ValueError(diagnostic))
+
+    assert message == expected
+    assert not re.search(
+        r"\b(?:sha(?:-?256)?|schema|payload|hash|contract|json|provenance)\b",
+        message,
+        flags=re.IGNORECASE,
+    )
+
+
 def test_direction_alias_validation_is_separate_from_input_integrity():
     tables, scalars = _current_project()
     payload = json.loads(project_io.dump_project(tables, scalars))
