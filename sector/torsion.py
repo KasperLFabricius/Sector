@@ -36,6 +36,10 @@ from typing import Optional, Sequence
 from . import geometry
 
 
+class TorsionWallThicknessError(ValueError):
+    """A user-entered tube wall is thicker than the physical hollow wall."""
+
+
 @dataclass(frozen=True, slots=True)
 class SubtubeTorqueShare:
     """One accepted stiffness-proportional sub-tube torque share."""
@@ -310,7 +314,7 @@ def tube_properties(outer: Sequence, holes: Optional[Sequence],
             math.ulp(tef_override_m),
         )
         if hollow and tef_override_m > wall + wall_equality_tolerance:
-            raise ValueError(
+            raise TorsionWallThicknessError(
                 f"tef override {tef_override_mm:.12g} mm exceeds the nearest real "
                 f"wall thickness {wall * 1000.0:.12g} mm"
             )

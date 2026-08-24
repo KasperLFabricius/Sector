@@ -1048,6 +1048,7 @@ def test_report_profiles_publish_retained_invalid_fatigue_screen(profile):
     payload = out["fatigue"]
     payload["governing_reinforcement_example"] = None
     expected = []
+    untrusted_reasons = []
     for index, spectrum in enumerate(payload["spectra"], start=1):
         for result in spectrum.reinforcement:
             result.element_id = f"SCREEN-R{index}"
@@ -1062,11 +1063,11 @@ def test_report_profiles_publish_retained_invalid_fatigue_screen(profile):
             screen.governing_bin = None
             screen.source = f"retained invalid-screen source {index}"
             screen.reason = f"Retained screen evidence group {index} is invalid"
+            untrusted_reasons.append(screen.reason)
             expected.extend((
                 result.element_id,
                 screen.detail_class,
                 screen.range_basis,
-                screen.reason,
                 screen.source,
             ))
 
@@ -1076,6 +1077,8 @@ def test_report_profiles_publish_retained_invalid_fatigue_screen(profile):
 
     assert text.count("INVALID") == 3
     assert all(token in text for token in expected)
+    assert "Review the fatigue inputs and result status" in text
+    assert all(reason not in text for reason in untrusted_reasons)
 
 
 def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
@@ -1448,7 +1451,9 @@ def test_report_records_invalid_fatigue_without_suppressing_other_results():
 
     assert "INVALID - fatigue not assessed" in text
     assert "other requested analyses were calculated" in text
-    assert "R1: fatigue detail ID is required" in text
+    assert "R1: fatigue detail ID is required" not in text
+    assert "At least one fatigue spectrum bin is required" not in text
+    assert "Review the calculation inputs and recalculate before using this report" in text
     assert "No fatigue resistance verdict has been issued" in text
     assert "No fatigue calculation method was applied" in text
     assert "No fatigue methodology or resistance verdict was applied" in text
@@ -2456,7 +2461,7 @@ def test_report_states_when_required_shear_links_are_not_defined():
     assert "Required links" in text
     assert "not defined" in text
     assert "required" in text
-    assert "shear resistance without links is insufficient" in text
+    assert "Provide shear links because the resistance without links is insufficient" in text
 
 
 def test_report_explains_one_sided_transverse_spacing_screen():
@@ -5954,7 +5959,10 @@ def test_report_with_unavailable_calculated_link_arm_fails_closed():
     normalized = " ".join(txt.split())
 
     assert "NOT ASSESSED" in txt
-    assert "face-aligned Plastic solve did not converge" in normalized
+    assert (
+        "The exact face-aligned Plastic calculation did not converge, so the "
+        "link lever arm is unavailable"
+    ) in normalized
 
 
 def test_report_includes_2023_shear_links_stress_checks():

@@ -119,6 +119,12 @@ _PLASTIC_REASON_MESSAGES = {
         "The governing M-M capacity intersection is not positive and finite",
     ),
 }
+_MINIMUM_REINFORCEMENT_REASON_MESSAGES = {
+    "No ordinary reinforcement bar lies in the tension zone.": EngineerMessage(
+        "MINIMUM-REINFORCEMENT-TENSION-ZONE",
+        "No ordinary reinforcement bar lies in the tension zone.",
+    ),
+}
 _TRANSVERSE_REASON_MESSAGES = {
     "minimum shear reinforcement is required for this beam": EngineerMessage(
         "TRANSVERSE-MINIMUM-LINKS",
@@ -139,6 +145,10 @@ _TRANSVERSE_REASON_MESSAGES = {
     "no active shear or torsion action requiring link-detailing checks": EngineerMessage(
         "TRANSVERSE-NOT-APPLICABLE",
         "No active shear or torsion action requires a link-detailing check",
+    ),
+    "gross web breadth exceeds the spacing limit; enter the actual maximum centre-to-centre leg spacing for a definitive assessment": EngineerMessage(
+        "TRANSVERSE-LEG-SPACING",
+        "Enter the actual maximum centre-to-centre leg spacing for a definitive assessment",
     ),
 }
 _SHEAR_REASON_MESSAGES = {
@@ -288,6 +298,18 @@ _CRACK_REASON_MESSAGES = {
         "CRACK-EXCEEDS-LIMIT",
         "The calculated crack width exceeds the user-specified limit",
     ),
+    "Crack width was not requested for this run.": EngineerMessage(
+        "CRACK-RUN-NOT-REQUESTED",
+        "Crack width was not requested for this run.",
+    ),
+    "The selected action state is outside the validated ordinary crack-width scope.": EngineerMessage(
+        "CRACK-ACTION-STATE-SCOPE",
+        "The selected action state is outside the validated ordinary crack-width scope.",
+    ),
+    "Section uncracked; no width is available.": EngineerMessage(
+        "CRACK-SECTION-UNCRACKED",
+        "Section uncracked; no width is available.",
+    ),
 }
 _FATIGUE_REASON_MESSAGES = {
     "No simplified fatigue-screen result is available": EngineerMessage(
@@ -334,9 +356,18 @@ _FATIGUE_REASON_MESSAGES = {
         "FATIGUE-SCREEN-DETAILED",
         "The governing stress range exceeds the simplified limit; use the detailed assessment",
     ),
+    "DS/EN 1992-1-1 6.8.6 shortcut covers unwelded or welded reinforcing bars in tension": EngineerMessage(
+        "FATIGUE-FIRST-GENERATION-SCOPE",
+        "DS/EN 1992-1-1 6.8.6 shortcut covers unwelded or welded reinforcing bars in tension",
+    ),
+    "DS/EN 1992-1-1:2023 10.4 does not assign this preset a simplified limit": EngineerMessage(
+        "FATIGUE-PUBLISHED-2023-SCOPE",
+        "DS/EN 1992-1-1:2023 10.4 does not assign this preset a simplified limit",
+    ),
 }
 _RESULT_REASON_MESSAGES = {
     "plastic": _PLASTIC_REASON_MESSAGES,
+    "minimum_reinforcement": _MINIMUM_REINFORCEMENT_REASON_MESSAGES,
     "transverse_reinforcement": _TRANSVERSE_REASON_MESSAGES,
     "shear": _SHEAR_REASON_MESSAGES,
     "torsion": _TORSION_REASON_MESSAGES,

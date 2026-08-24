@@ -216,9 +216,13 @@ def test_blank_load_actions_preserve_named_row_and_boolean_is_malformed():
         [{"name": "P2", "n_ed_kn": True}],
         load_cases.PLASTIC_TABLE_KEY,
     )
-    assert load_cases.validation_errors(
+    errors = load_cases.validation_errors(
         malformed, load_cases.empty_table(load_cases.ELASTIC_TABLE_KEY)
-    ) == ["Plastic row 1: n_ed_kn must be a finite number"]
+    )
+    assert [(message.code, message.text) for message in errors] == [(
+        "PLASTIC-N-ED",
+        "Enter a finite axial force N_Ed in every active Plastic case",
+    )]
 
 
 def test_fatigue_required_cycles_and_zero_action_policies_are_distinct():

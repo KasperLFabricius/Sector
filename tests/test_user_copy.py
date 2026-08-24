@@ -24,6 +24,22 @@ def test_inventory_covers_all_engineering_publication_domains() -> None:
     assert result["domains"]["report"] >= 500
 
 
+def test_routing_registries_do_not_concatenate_independent_messages() -> None:
+    rows = audit_user_copy.inventory_file(
+        audit_user_copy.ROOT / "app" / "result_presentation.py"
+    )
+    surfaces = {str(row["surface"]) for row in rows}
+
+    assert not any(
+        surface.startswith("registry__result_reason_messages[")
+        for surface in surfaces
+    )
+    assert any(
+        surface.startswith("registry__plastic_reason_messages[")
+        for surface in surfaces
+    )
+
+
 def test_engineer_facing_copy_has_no_development_process_jargon() -> None:
     offenders = [
         (row["file"], row["line"], row["developer_tokens"], row["text"])

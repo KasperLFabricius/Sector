@@ -20,6 +20,22 @@ from .engineer_message import EngineerMessage
 SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
 _MISSING = object()
+_TORSION_GAMMA_CT_INPUT = EngineerMessage(
+    "TORSION-GAMMA-CT",
+    "Enter a positive finite concrete tensile partial factor gamma_ct",
+)
+_TORSION_WALL_INPUT = EngineerMessage(
+    "TORSION-WALL-INPUT",
+    "Enter a non-negative finite torsion wall thickness in millimetres",
+)
+_TORSION_HOLLOW_WALL_INPUT = EngineerMessage(
+    "TORSION-HOLLOW-WALL",
+    "Enter a torsion wall thickness no greater than the nearest real wall thickness",
+)
+_TORSION_SUBDIVISION_WALL_INPUT = EngineerMessage(
+    "TORSION-SUBDIVISION-WALL",
+    "Set the torsion wall-thickness override to 0 mm when sub-tube subdivision is enabled",
+)
 
 
 def _module(name: str):
@@ -161,39 +177,55 @@ def combined_angle_objective_r_m(plastic: object) -> float | None:
     return r_m if math.isfinite(r_m) and r_m >= 0.0 else None
 
 
-def _positive_finite_real(value, label):
+def _positive_finite_real(
+    value,
+    label,
+    *,
+    engineer_message: EngineerMessage | None = None,
+):
     """Return one calculation coefficient, rejecting only malformed values."""
     if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
         raise CapacityInputError(
-            f"{label} must be a positive finite real number"
+            f"{label} must be a positive finite real number",
+            engineer_message=engineer_message,
         )
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
         raise CapacityInputError(
-            f"{label} must be a positive finite real number"
+            f"{label} must be a positive finite real number",
+            engineer_message=engineer_message,
         ) from exc
     if not math.isfinite(number) or number <= 0.0:
         raise CapacityInputError(
-            f"{label} must be a positive finite real number"
+            f"{label} must be a positive finite real number",
+            engineer_message=engineer_message,
         )
     return number
 
 
-def _nonnegative_finite_real(value: Any, label: str) -> float:
+def _nonnegative_finite_real(
+    value: Any,
+    label: str,
+    *,
+    engineer_message: EngineerMessage | None = None,
+) -> float:
     if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
         raise CapacityInputError(
-            f"{label} must be a non-negative finite real number"
+            f"{label} must be a non-negative finite real number",
+            engineer_message=engineer_message,
         )
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
         raise CapacityInputError(
-            f"{label} must be a non-negative finite real number"
+            f"{label} must be a non-negative finite real number",
+            engineer_message=engineer_message,
         ) from exc
     if not math.isfinite(number) or number < 0.0:
         raise CapacityInputError(
-            f"{label} must be a non-negative finite real number"
+            f"{label} must be a non-negative finite real number",
+            engineer_message=engineer_message,
         )
     return number
 
@@ -1376,19 +1408,28 @@ def build_torsion_context(inp, n_ed_comp):
     sigma_cp = n_ed_comp / area / 1000.0 if area > 0.0 else 0.0
     alpha_cw = tcode.shear_alpha_cw(sigma_cp, fcd)
     subdivision_requested = bool(inp.get("torsion_subdivide"))
+    tef_override_mm = _nonnegative_finite_real(
+        inp["torsion_tef"],
+        "torsion wall-thickness override",
+        engineer_message=_TORSION_WALL_INPUT,
+    )
     if subdivision_requested:
-        tef_override_mm = _nonnegative_finite_real(
-            inp["torsion_tef"], "torsion wall-thickness override"
-        )
         if tef_override_mm > 0.0:
             raise CapacityInputError(
                 "torsion wall-thickness override must be 0 (automatic per sub-tube) "
-                "when torsion subdivision is enabled"
+                "when torsion subdivision is enabled",
+                engineer_message=_TORSION_SUBDIVISION_WALL_INPUT,
             )
     torsion = _module("torsion")
-    tube = torsion.tube_properties(
-        inp["outer"], inp["holes"], tef_override=inp["torsion_tef"]
-    )
+    try:
+        tube = torsion.tube_properties(
+            inp["outer"], inp["holes"], tef_override=tef_override_mm
+        )
+    except torsion.TorsionWallThicknessError as exc:
+        raise CapacityInputError(
+            *exc.args,
+            engineer_message=_TORSION_HOLLOW_WALL_INPUT,
+        ) from exc
     gamma_s = inp["steel"].gamma_y
     fywd = (
         inp["shear_fywk"] / gamma_s
@@ -1415,7 +1456,11 @@ def build_torsion_context(inp, n_ed_comp):
         != tcode.torsion_nu(fck, closed_detailing=False)
     )
     gamma_c = inp["concrete"].gamma_c
-    gamma_ct = _positive_finite_real(inp["torsion_gamma_ct"], "gamma_ct")
+    gamma_ct = _positive_finite_real(
+        inp["torsion_gamma_ct"],
+        "gamma_ct",
+        engineer_message=_TORSION_GAMMA_CT_INPUT,
+    )
     fctk_005 = 0.7 * codes.fctm(fck)
     fctd = fctk_005 / gamma_ct
     t_ed = inp["torsion_T"]

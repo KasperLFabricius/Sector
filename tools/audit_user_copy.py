@@ -227,6 +227,12 @@ def _literal_text(
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         if node.func.attr in {"format", "replace", "strip"}:
             return _literal_text(node.func.value, bindings, seen)
+    if (
+        isinstance(node, ast.Call)
+        and _call_name(node) == "EngineerMessage"
+        and len(node.args) >= 2
+    ):
+        return _literal_text(node.args[1], bindings, seen)
     return ""
 
 
@@ -298,6 +304,15 @@ def inventory_file(path: Path) -> list[dict[str, Any]]:
             for index, (key, item) in enumerate(
                 zip(value.keys, value.values), start=1
             ):
+                # A registry may route categories to separately declared copy
+                # registries.  Inventory each underlying registry at its own
+                # assignment; expanding the alias here concatenates unrelated
+                # messages into one artificial user-facing surface.
+                if (
+                    isinstance(item, ast.Name)
+                    and isinstance(bindings.get(item.id), ast.Dict)
+                ):
+                    continue
                 key_text = " ".join(_literal_text(key, bindings).split())
                 suffix = key_text or str(index)
                 append(

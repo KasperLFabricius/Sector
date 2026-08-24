@@ -3106,7 +3106,7 @@ def test_bar_outside_the_concrete_is_rejected():
     _replace_base_table(at, "bars_base", pd.DataFrame(
         {"x (mm)": [0.0], "y (mm)": [1000.0], "area (mm2)": [314.0]}))
     _goto_page(at, "Analysis")
-    assert any("within the concrete" in e.value for e in at.error)
+    assert any("inside the concrete" in e.value for e in at.error)
     _calculate(at)
     assert not at.exception
     assert "results" not in at.session_state
@@ -3980,9 +3980,11 @@ def test_startup_catalogue_repair_reserves_incomplete_row_assignments():
         "_capacity_steel_unresolved_material_id"
     ] == "M3"
     assert at.selectbox(key="capacity_steel_material_id").value == "M3"
-    assert "member-check material M3" in at.session_state[
-        "_latest_inputs"
-    ]["material_error"]
+    latest = at.session_state["_latest_inputs"]
+    assert latest["material_error"].code == "MATERIAL-INPUT-BLOCKER"
+    assert [message.code for message in latest["material_assignment_errors"]] == [
+        "MEMBER-MATERIAL-ASSIGNMENT",
+    ]
 
 
 def test_bulk_reinforcement_assignment_updates_all_and_selected_rows():
@@ -6968,7 +6970,7 @@ def test_calculate_requires_active_action_set_identifiers():
     assert not at.exception
     assert "results" not in at.session_state
     assert any(
-        "At least one Plastic case is required" in error.value
+        "Add at least one active Plastic case before calculating" in error.value
         for error in at.error
     )
 
@@ -7774,6 +7776,8 @@ def test_independent_duration_crack_criteria_are_assessed_for_elastic_rows():
 
 
 def test_no_crack_width_is_not_assessed_without_a_numerical_result():
+    import result_presentation
+
     at = _fresh()
     at.run()
     _set_and_click(
@@ -7796,7 +7800,18 @@ def test_no_crack_width_is_not_assessed_without_a_numerical_result():
         if output.get("reason")
     }
     assert reasons
-    assert all(any(reason in item.value for item in at.info) for reason in reasons)
+    visible_reasons = {
+        result_presentation.result_reason(
+            reason,
+            "crack",
+            context="crack result smoke-test expectation",
+        )
+        for reason in reasons
+    }
+    assert all(
+        any(reason in item.value for item in at.info)
+        for reason in visible_reasons
+    )
     assert not any(
         "No crack width: section uncracked or no reinforcement" in item.value
         for item in at.info
@@ -8091,8 +8106,8 @@ def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
     _calculate(at)
     assert "results" not in at.session_state
     assert any(
-        "Heightened crack control is available only with the first-generation "
-        "DK NA:2024 design basis" in item.value
+        "Select the first-generation DK NA:2024 design basis for heightened "
+        "crack control" in item.value
         for item in at.error
     )
 
@@ -8131,12 +8146,10 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
 
     errors = [item.value for item in at.error]
     assert any("cannot be matched to its inputs" in message for message in errors)
-    assert "Effective tensile strength must be a positive finite number" in errors
-    assert "Fine-system effective tension area must be a positive finite number" in errors
-    assert "Coarse-system effective tension area must be a positive finite number" in errors
-    assert len(
-        [message for message in errors if "positive finite number" in message]
-    ) == 4
+    assert "Enter a positive finite effective tensile strength" in errors
+    assert "Enter a positive finite heightened crack-width limit" in errors
+    assert "Enter a positive finite fine-system effective tension area" in errors
+    assert "Enter a positive finite coarse-system effective tension area" in errors
     assert any(
         button.key and button.key.endswith("heightened-2")
         for button in at.button
