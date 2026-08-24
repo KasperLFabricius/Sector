@@ -2207,21 +2207,110 @@ def test_annulus_applies_one_void_and_contained_bar_and_tendon_rings():
     assert points_inside_concrete(points, outer, [hole]).all()
 
 
-def test_invalid_quick_section_is_explained_and_cannot_be_applied():
+@pytest.mark.parametrize(
+    ("shape", "key", "value", "expected", "raw_diagnostic"),
+    (
+        (
+            "T-section",
+            "bw_mm",
+            1200.0,
+            "Reduce the web width or increase the flange width",
+            "web width must be less than flange width",
+        ),
+        (
+            "I-section",
+            "i_bw_mm",
+            800.0,
+            "Reduce the web width or increase the flange width",
+            "web width must be less than flange width",
+        ),
+        (
+            "L-section",
+            "l_web_mm",
+            800.0,
+            "Reduce the web thickness or increase the overall width",
+            "web thickness must be less than overall width",
+        ),
+        (
+            "L-section",
+            "l_flange_mm",
+            800.0,
+            "Reduce the flange thickness or increase the overall height",
+            "flange thickness must be less than overall height",
+        ),
+        (
+            "U-section",
+            "u_web_mm",
+            400.0,
+            "Reduce the side-web thickness or increase the overall width",
+            "twice the web thickness must be less than overall width",
+        ),
+        (
+            "U-section",
+            "u_base_mm",
+            800.0,
+            "Reduce the base thickness or increase the overall height",
+            "base thickness must be less than overall height",
+        ),
+        (
+            "Annulus",
+            "annulus_inner_mm",
+            800.0,
+            "Reduce the inner diameter or increase the outer diameter",
+            "inner diameter must be less than outer diameter",
+        ),
+        (
+            "Annulus",
+            "ring_c_mm",
+            250.0,
+            "Reduce the reinforcement cover, reduce the inner diameter, or increase the outer diameter",
+            "cover places the reinforcement ring inside the annulus void",
+        ),
+    ),
+)
+def test_invalid_quick_section_keeps_finite_corrective_guidance(
+    shape,
+    key,
+    value,
+    expected,
+    raw_diagnostic,
+):
     at = _fresh_qs()
-    at.selectbox(key="shape").set_value("Annulus").run()
-    at.number_input(key="annulus_inner_mm").set_value(900.0).run()
+    at.selectbox(key="shape").set_value(shape).run()
+    at.number_input(key=key).set_value(value).run()
 
+    visible = " ".join(str(error.value) for error in at.error)
     assert not at.exception
     assert at.button(key="qs_apply").disabled
-    assert any(
-        "Review the section dimensions and reinforcement layout" in error.value
-        for error in at.error
+    assert expected in visible
+    assert raw_diagnostic not in visible
+    assert any("Preview unavailable" in info.value for info in at.info)
+
+
+def test_unexpected_quick_section_failure_is_generic_and_logged(
+    monkeypatch,
+    caplog,
+):
+    from sector import templates as template_module
+
+    hostile = (
+        "RAW-QUICK-SECTION GitHub PR #97 SHA-256 payload schema contract "
+        "internal_private_ID EQ-QUICK-7"
     )
-    assert not any(
-        "inner diameter must be less than outer diameter" in error.value
-        for error in at.error
-    )
+    at = _fresh_qs()
+
+    def fail_annulus(*_args, **_kwargs):
+        raise RuntimeError(hostile)
+
+    monkeypatch.setattr(template_module, "annulus", fail_annulus)
+    at.selectbox(key="shape").set_value("Annulus").run()
+
+    visible = " ".join(str(error.value) for error in at.error)
+    assert not at.exception
+    assert at.button(key="qs_apply").disabled
+    assert "Review the section dimensions and reinforcement layout" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
     assert any("Preview unavailable" in info.value for info in at.info)
 
 
@@ -4753,6 +4842,49 @@ def test_material_builder_boundary_hides_hostile_exception_text():
         "Adjusted for this curve: Review the material values for the selected curve"
     ]
     assert hostile not in " ".join(box.messages)
+
+
+def test_material_panel_persistent_builder_failure_is_fail_closed(
+    monkeypatch,
+    caplog,
+):
+    from sector import material_presets
+
+    hostile = (
+        "RAW-MATERIAL-RETRY GitHub PR #98 SHA-256 payload schema contract "
+        "internal_private_ID EQ-MATERIAL-8"
+    )
+
+    def always_fail(*_args, **_kwargs):
+        raise RuntimeError(hostile)
+
+    monkeypatch.setattr(material_presets, "build_mild", always_fail)
+    at = _fresh()
+    at.run()
+    _goto_material_tab(at, "Mild steel")
+
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("error", "warning", "caption", "info")
+        for item in getattr(at, element_type)
+    )
+    assert not at.exception
+    assert "Material unavailable: Review the material values" in visible
+    assert "Material diagram unavailable until the values are corrected" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert at.session_state["_latest_inputs"]["material_error"] is not None
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    assert all(
+        material is None
+        for material in at.session_state["_latest_inputs"]["bar_materials"]
+    )
+
+    _calculate(at)
+
+    assert not at.exception
+    assert "results" not in at.session_state
+    assert "result_input_snapshot" not in at.session_state
 
 
 def test_material_builder_keeps_field_specific_rupture_stress_correction():

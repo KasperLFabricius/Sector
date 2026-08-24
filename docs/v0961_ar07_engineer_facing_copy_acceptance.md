@@ -66,9 +66,9 @@ The copy inventory uses the syntax tree rather than a hand-selected source-file
 sample. Runtime and static authored-copy checks call the same case/separator
 normalisation and detector.
 
-The candidate inventory contains 3,090 visible surfaces:
+The candidate inventory contains 3,092 visible surfaces:
 
-- 2,114 Streamlit and supporting-message surfaces;
+- 2,116 Streamlit and supporting-message surfaces;
 - 459 manual surfaces; and
 - 517 report surfaces.
 
@@ -104,13 +104,13 @@ calculation or correct the stated input.
 ## Verification evidence
 
 - Positive-provenance and laundering guard: 31 passed.
-- Independent publication-oracle checks: 12 passed; 3,090 inventoried surfaces
+- Independent publication-oracle checks: 12 passed; 3,092 inventoried surfaces
   and zero development-process candidates.
 - Independent real-publication oracle: manual PDF, manual HTML and Brief,
   Standard and Audit PDFs all have zero hits; hostile injected result messages
   are hidden in every report profile.
 - Exact-head focused project, fatigue, geometry, result-presentation, report,
-  copy and actual UI-boundary gate: 257 passed with zero failures, errors or
+  copy and actual UI-boundary gate: 319 passed with zero failures, errors or
   skipped tests.
 - Ruff policy, strict mypy policy, bytecode compilation and diff-whitespace
   checks pass.

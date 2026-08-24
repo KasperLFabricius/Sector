@@ -38,6 +38,12 @@ visible message. The saved-report warning, fatigue edition mismatch, section
 comparison and plastic worked-point wording were also rewritten in engineering
 language.
 
+Quick Section preserves literal corrective guidance for the finite T, I, L, U
+and annulus dimension relations while an unexpected template failure remains
+generic and logged. Material construction now contains a failed adjusted retry,
+leaves the material unavailable and blocks calculation instead of substituting a
+calculation material.
+
 The authored-copy check explicitly preserves familiar Eurocode notation such as
 `gamma_Ff`, `gamma_s`, `gamma_V`, `gamma_c,fat`, `beta_cc(t0)`, `alpha_cc`,
 strength notation and action/resistance symbols. Messages that mix this notation
@@ -45,7 +51,7 @@ with development-process text are replaced. Runtime and static checks use the
 same case/separator normalisation. Ordinary engineering words are not banned in
 isolation.
 
-The syntax-tree inventory covers 3,090 UI, manual and report surfaces and finds
+The syntax-tree inventory covers 3,092 UI, manual and report surfaces and finds
 zero development-process candidates. A separate test-owned oracle scans the
 manual PDF, accessible manual HTML and every report profile and finds zero hits.
 An AST guard prevents exception, formatted-string or join laundering when an
@@ -92,11 +98,11 @@ result under the uploaded directory.
 ## Verification evidence
 
 - Compression-notation and evidence-retention suite: 131 passed.
-- Exact-head positive-provenance focused gate: 257 tests across project,
+- Exact-head positive-provenance focused gate: 319 tests across project,
   fatigue, geometry, result presentation, report, copy and actual UI
   boundaries; zero failures, errors or skipped tests.
 - Independent raw-diagnostic result: **0 raw leaks; 0 false suppressions**.
-- Static user-copy audit: 3,090 surfaces; zero development-process candidates.
+- Static user-copy audit: 3,092 surfaces; zero development-process candidates.
 - Independent publication extraction: manual PDF, accessible manual HTML and
   Brief, Standard and Audit PDFs contain zero oracle hits. Hostile injected
   result messages are hidden in every report profile.

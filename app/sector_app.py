@@ -554,8 +554,9 @@ def _safe_build(box, builder, curve, vals, **extra):
 
     A flat form lets the user enter values the active curve cannot accept (e.g. a
     zero rupture stress on a hardening curve). Rather than break the whole app,
-    show a notice and retry with the offending stresses nudged just above zero so
-    the diagram and the analysis still render. ``extra`` carries non-field options
+    show a notice and retry with the offending stresses nudged just above zero.
+    A persistent failure returns no material so the surrounding input boundary can
+    remain usable while calculation is blocked. ``extra`` carries non-field options
     (e.g. ``active_in_compression``) straight through to the builder.
     """
     try:
@@ -580,14 +581,28 @@ def _safe_build(box, builder, curve, vals, **extra):
             fallback=fallback,
             context="material curve construction",
         )
-        _manual_warning(
-            box, "input-invalid", f"Adjusted for this curve: {detail}"
-        )
         v = dict(vals)
         for f in ("fytk", "futk"):
             if v.get(f, 1.0) <= 0.0:
                 v[f] = 1.0
-        return builder(curve=curve, **v, **extra)
+        try:
+            material = builder(curve=curve, **v, **extra)
+        except Exception as retry_exc:
+            retry_detail = engineer_messages.error_detail(
+                retry_exc,
+                fallback=fallback,
+                context="material curve adjusted retry",
+            )
+            _manual_warning(
+                box,
+                "input-invalid",
+                f"Material unavailable: {retry_detail}",
+            )
+            return None
+        _manual_warning(
+            box, "input-invalid", f"Adjusted for this curve: {detail}"
+        )
+        return material
 
 
 def _material_definition_message(item, kind):
@@ -937,8 +952,11 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     steel = _safe_build(box, mp.build_mild, curve, vals,
                         active_in_compression=active_comp)
     comp = "active" if active_comp else "tension-only"
-    box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.3f} MPa,  "
-                f"$E_s$ = {vals['Es']:.0f} GPa,  compression {comp}")
+    if steel is None:
+        box.caption("Material diagram unavailable until the values are corrected.")
+    else:
+        box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.3f} MPa,  "
+                    f"$E_s$ = {vals['Es']:.0f} GPa,  compression {comp}")
     if not catalogue_mode:
         return steel
     updated = {
@@ -6519,21 +6537,13 @@ def build_inputs(host=st):
 
     mild_material_map = _material_map(mild_catalogue, "mild")
     prestress_material_map = _material_map(prestress_catalogue, "prestress")
-    fallback_steel = mat_catalog.build_material(
-        mat_catalog.default_entry("mild"), "mild"
-    )
-    fallback_prestress = mat_catalog.build_material(
-        mat_catalog.default_entry("prestress"), "prestress"
-    )
-    reference_steel = mild_material_map.get(
-        capacity_steel_material_id, fallback_steel
-    )
+    reference_steel = mild_material_map.get(capacity_steel_material_id)
     bar_materials = [
-        mild_material_map.get(item["material_id"], fallback_steel)
+        mild_material_map.get(item["material_id"])
         for item in bar_elements
     ]
     tendon_materials = [
-        prestress_material_map.get(item["material_id"], fallback_prestress)
+        prestress_material_map.get(item["material_id"])
         for item in tendon_elements
     ]
     prestress = tendon_materials[0] if tendon_materials else selected_prestress
@@ -9629,7 +9639,7 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
 def _material_input_preview(box, cache_name, material, figure_builder, *, visible,
                             title=None):
     """Render one live material law only when its nested input tab is visible."""
-    if visible:
+    if visible and material is not None:
         preview_token = app_run_probe.start_phase(st.session_state, "preview")
         try:
             signature = (material, title) if title is not None else material
