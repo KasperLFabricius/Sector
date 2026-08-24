@@ -45,7 +45,7 @@ with development-process text are replaced. Runtime and static checks use the
 same case/separator normalisation. Ordinary engineering words are not banned in
 isolation.
 
-The syntax-tree inventory covers 3,106 UI, manual and report surfaces and finds
+The syntax-tree inventory covers 3,090 UI, manual and report surfaces and finds
 zero development-process candidates. A separate test-owned oracle scans the
 manual PDF, accessible manual HTML and every report profile and finds zero hits.
 An AST guard prevents exception, formatted-string or join laundering when an
@@ -92,11 +92,11 @@ result under the uploaded directory.
 ## Verification evidence
 
 - Compression-notation and evidence-retention suite: 131 passed.
-- Superseding positive-provenance focused gate: 743 checks across capacity,
-  project, fatigue, geometry, report, copy and actual UI boundaries; zero
-  product failures.
+- Exact-head positive-provenance focused gate: 257 tests across project,
+  fatigue, geometry, result presentation, report, copy and actual UI
+  boundaries; zero failures, errors or skipped tests.
 - Independent raw-diagnostic result: **0 raw leaks; 0 false suppressions**.
-- Static user-copy audit: 3,106 surfaces; zero development-process candidates.
+- Static user-copy audit: 3,090 surfaces; zero development-process candidates.
 - Independent publication extraction: manual PDF, accessible manual HTML and
   Brief, Standard and Audit PDFs contain zero oracle hits. Hostile injected
   result messages are hidden in every report profile.

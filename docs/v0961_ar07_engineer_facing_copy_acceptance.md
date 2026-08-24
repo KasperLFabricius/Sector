@@ -66,11 +66,11 @@ The copy inventory uses the syntax tree rather than a hand-selected source-file
 sample. Runtime and static authored-copy checks call the same case/separator
 normalisation and detector.
 
-The candidate inventory contains 3,106 visible surfaces:
+The candidate inventory contains 3,090 visible surfaces:
 
-- 2,127 Streamlit and supporting-message surfaces;
+- 2,114 Streamlit and supporting-message surfaces;
 - 459 manual surfaces; and
-- 520 report surfaces.
+- 517 report surfaces.
 
 The final automated result is zero development-process candidates. Generated
 manual PDF, accessible manual HTML and all three report PDFs are also extracted
@@ -103,20 +103,15 @@ calculation or correct the stated input.
 
 ## Verification evidence
 
-- Positive-provenance and laundering guard: 26 passed.
-- Static copy and extracted-publication checks: 31 passed; 3,106 inventoried
-  surfaces and zero development-process candidates.
+- Positive-provenance and laundering guard: 31 passed.
+- Independent publication-oracle checks: 12 passed; 3,090 inventoried surfaces
+  and zero development-process candidates.
 - Independent real-publication oracle: manual PDF, manual HTML and Brief,
   Standard and Audit PDFs all have zero hits; hostile injected result messages
   are hidden in every report profile.
-- Consolidated focused capacity, project, fatigue, geometry, report, copy and
-  actual UI-boundary gate: 742 passed. Its only failure was an invalid test
-  patch target on a lazy module; the corrected boundary test passed separately,
-  giving 743 focused checks with zero product failures.
-- CI-mode Streamlit smoke compatibility pass reached 265 passed with one
-  deliberate project-direction assertion requiring the new explicit authored
-  message. That exact path and the complete project suite passed after the
-  correction.
+- Exact-head focused project, fatigue, geometry, result-presentation, report,
+  copy and actual UI-boundary gate: 257 passed with zero failures, errors or
+  skipped tests.
 - Ruff policy, strict mypy policy, bytecode compilation and diff-whitespace
   checks pass.
 - Explicit result: **0 raw leaks; 0 false suppressions** in the independent
