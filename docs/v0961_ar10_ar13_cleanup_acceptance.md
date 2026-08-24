@@ -128,6 +128,10 @@ keys.
 - User-copy inventory: 3,116 surfaces; zero development-process candidates.
 - Windows differential build, packaged first-page execution and the expanded
   packaged-product probe: passed on the exact candidate.
+- The complete Windows test/report job retains every test and publication gate;
+  its time allowance is 90 minutes because the preceding release already used
+  57.6 minutes before the decision-branch coverage gate was added. The focused
+  workflow-policy recheck passed 179 tests.
 
 The version elevation to 0.96.1 remains a later release step after the exact
 candidate receives the requested adversarial-review greenlight.

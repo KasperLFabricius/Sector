@@ -507,7 +507,7 @@ def validate_workflow(text: str) -> None:
         raise DependencyAuditError("test job execution context differs")
     if job.get("name") != "Full test and report gate":
         raise DependencyAuditError("test job name differs")
-    if job.get("runs-on") != "windows-latest" or job.get("timeout-minutes") != 60:
+    if job.get("runs-on") != "windows-latest" or job.get("timeout-minutes") != 90:
         raise DependencyAuditError("test job Windows identity or timeout differs")
     steps = job.get("steps")
 
