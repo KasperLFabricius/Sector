@@ -10,7 +10,8 @@ def test_transverse_provenance_reaches_every_publication_surface():
     expected = {
         "app/sector_app.py": ("torsional wall shear flow (6.27)",
                               "transverse equilibrium (6.8)",
-                              "f_{yd})$ (6.28) is"),
+                              "f_{yd})$ (6.28) ",
+                              "is additional to bending reinforcement"),
         "app/sector_report.py": ("wall shear flow (6.27)",
                                  "transverse equilibrium (6.8)",
                                  'ref="EN 1992-1-1 (6.28)"'),

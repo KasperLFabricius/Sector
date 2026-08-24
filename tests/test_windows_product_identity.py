@@ -58,7 +58,7 @@ def _sector_metadata_helper():
     return namespace["_sector_metadata"]
 
 
-def test_source_product_identity_is_exact_and_version_is_095():
+def test_source_product_identity_is_exact_and_version_is_096():
     assert _source_identity() == EXPECTED
 
 

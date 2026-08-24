@@ -13,7 +13,7 @@ import struct
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -23,11 +23,23 @@ _HEALTH_BODY = b"ok"
 _PAGE_STREAM_PATH = "/_stcore/stream"
 _PAGE_RERUN_BACKMSG = b"\x5a\x00"
 _PAGE_SUCCESS_STATUS = 0
+_PAGE_EARLY_RERUN_STATUS = 2
+_PAGE_FRAGMENT_SUCCESS_STATUS = 3
 _WORKSPACE_LABEL = "Workspace"
+_INPUT_WORKSPACE = "Inputs"
 _REPORT_WORKSPACE = "Report"
 _REPORT_PROFILE_LABEL = "Report profile"
 _REPORT_PROFILE_DEFAULT = "Standard"
+_SECTION_TAB_LABEL = "2 \u00b7 Section"
 _PROJECT_TAB_LABEL = "Project"
+_PROJECT_DOWNLOAD_LABEL = "Download project"
+_USER_MANUAL_BUTTON_LABEL = "User manual"
+_MANUAL_GENERATE_BUTTON_LABEL = "Generate PDF"
+_MANUAL_CLOSE_BUTTON_LABEL = "Close"
+_MANUAL_PDF_DOWNLOAD_LABEL = "Download PDF"
+_MANUAL_HTML_DOWNLOAD_LABEL = "Download accessible HTML"
+_REPORT_GENERATE_BUTTON_LABEL = "Generate report"
+_REPORT_DOWNLOAD_LABEL = "Download report (PDF)"
 _LEGACY_REPORT_PROFILE = "Default report"
 _HOSTILE_REPORT_PROFILE = "Unknown pre-v0.94 report profile"
 _LEGACY_SCENARIO = "legacy-report-profile"
@@ -35,7 +47,7 @@ _HOSTILE_SCENARIO = "hostile-report-profile"
 _AUTOSAVE_NAME = "autosave.json"
 _CURRENT_PROJECT_VERSION = 27
 _AUTOSAVE_RESTORED_TEXT = "Restored autosaved session."
-_AUTOSAVE_REJECTED_PREFIX = "Autosave not restored: unknown persisted report profile"
+_AUTOSAVE_REJECTED_PREFIX = "Autosave not restored: the saved report type"
 _MAX_WEBSOCKET_HEADERS = 16 * 1024
 _MAX_WEBSOCKET_FRAME = 16 * 1024 * 1024
 _MAX_PAGE_MESSAGES = 4096
@@ -68,12 +80,14 @@ class PortableStartupScenarioEvidence:
     page_message_count: int
     stdout_log: str
     stderr_log: str
+    product_probes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class _PageExecutionEvidence:
     message_count: int
     status: str
+    product_probes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,10 +99,44 @@ class _ButtonGroupEvidence:
 
 
 @dataclass(frozen=True)
+class _ButtonEvidence:
+    widget_id: str
+    label: str
+    disabled: bool
+
+
+@dataclass(frozen=True)
+class _DownloadEvidence:
+    widget_id: str
+    label: str
+    disabled: bool
+    has_file: bool
+
+
+@dataclass(frozen=True)
+class _DataframeEvidence:
+    widget_id: str
+    editing_mode: int
+
+
+@dataclass(frozen=True)
+class _BidiComponentEvidence:
+    widget_id: str
+    component_name: str
+    has_json_data: bool
+
+
+@dataclass(frozen=True)
 class _PageSurfaceEvidence:
     button_groups: dict[str, _ButtonGroupEvidence]
     alerts: tuple[tuple[int, str], ...]
     tab_containers: dict[str, int]
+    buttons: dict[str, _ButtonEvidence] = field(default_factory=dict)
+    downloads: dict[str, _DownloadEvidence] = field(default_factory=dict)
+    dataframes: dict[str, _DataframeEvidence] = field(default_factory=dict)
+    bidi_components: dict[str, _BidiComponentEvidence] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -273,15 +321,59 @@ def _string_widget_rerun_backmsg(states: tuple[tuple[str, str], ...]) -> bytes:
     return _protobuf_bytes_field(11, client_state)
 
 
-def _autosave_payload(report_profile: str) -> bytes:
-    """Build the smallest canonical current project with one raw profile value."""
+def _trigger_widget_rerun_backmsg(
+    trigger_widget_id: str,
+    *,
+    string_arrays: tuple[tuple[str, str], ...] = (),
+    strings: tuple[tuple[str, str], ...] = (),
+) -> bytes:
+    """Encode retained navigation state plus one browser-style button click."""
 
-    def table(columns: tuple[str, ...]) -> dict:
-        return {"columns": list(columns), "rows": []}
+    widget_ids = [item[0] for item in (*string_arrays, *strings)]
+    if trigger_widget_id in widget_ids or len(set(widget_ids)) != len(widget_ids):
+        raise PortableStartupError("page widget state repeats an identity")
+    widgets = bytearray()
+    try:
+        for widget_id, value in string_arrays:
+            string_array = _protobuf_bytes_field(1, value.encode("utf-8"))
+            widget = _protobuf_bytes_field(
+                1, widget_id.encode("utf-8")
+            ) + _protobuf_bytes_field(9, string_array)
+            widgets.extend(_protobuf_bytes_field(1, widget))
+        for widget_id, value in strings:
+            widget = _protobuf_bytes_field(
+                1, widget_id.encode("utf-8")
+            ) + _protobuf_bytes_field(6, value.encode("utf-8"))
+            widgets.extend(_protobuf_bytes_field(1, widget))
+        trigger = (
+            _protobuf_bytes_field(1, trigger_widget_id.encode("utf-8"))
+            + _encode_varint((2 << 3) | 0)
+            + _encode_varint(1)
+        )
+    except UnicodeEncodeError as exc:
+        raise PortableStartupError("page widget state is not UTF-8") from exc
+    widgets.extend(_protobuf_bytes_field(1, trigger))
+    client_state = _protobuf_bytes_field(2, bytes(widgets))
+    return _protobuf_bytes_field(11, client_state)
+
+
+def _autosave_payload(report_profile: str) -> bytes:
+    """Build a small valid current project with one raw profile value."""
+
+    def table(columns: tuple[str, ...], rows: tuple[tuple, ...] = ()) -> dict:
+        return {"columns": list(columns), "rows": [list(row) for row in rows]}
 
     content = {
         "tables": {
-            "corners_base": table(("x (mm)", "y (mm)")),
+            "corners_base": table(
+                ("x (mm)", "y (mm)"),
+                (
+                    (-200.0, -300.0),
+                    (200.0, -300.0),
+                    (200.0, 300.0),
+                    (-200.0, 300.0),
+                ),
+            ),
             "hole_base": table(("x (mm)", "y (mm)")),
             "bars_base": table((
                 "ID",
@@ -315,6 +407,20 @@ def _autosave_payload(report_profile: str) -> bytes:
                 "vy_face",
                 "t_ed_knm",
                 "check_minimum_reinforcement",
+            ), (
+                (
+                    "QA-1",
+                    "Portable report gate",
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    "negative",
+                    "positive",
+                    0.0,
+                    False,
+                ),
             )),
             "elastic_cases_base": table((
                 "name",
@@ -465,6 +571,134 @@ def _page_button_groups(payload: bytes) -> tuple[_ButtonGroupEvidence, ...]:
                     )
                 )
     return tuple(groups)
+
+
+def _page_buttons(payload: bytes) -> tuple[_ButtonEvidence, ...]:
+    """Extract ordinary keyed buttons needed for document-generation probes."""
+
+    buttons = []
+    for delta_payload in _nested_bytes(_protobuf_fields(payload), 5):
+        for element_payload in _nested_bytes(_protobuf_fields(delta_payload), 3):
+            for button_payload in _nested_bytes(
+                _protobuf_fields(element_payload), 19
+            ):
+                fields = _protobuf_fields(button_payload)
+                widget_ids = _utf8_fields(fields, 1, "button id")
+                labels = _utf8_fields(fields, 2, "button label")
+                disabled = [
+                    cast(int, item.value)
+                    for item in fields
+                    if item.number == 8 and item.wire_type == 0
+                ]
+                if (
+                    len(widget_ids) != 1
+                    or len(labels) != 1
+                    or len(disabled) > 1
+                ):
+                    raise PortableStartupError("page button is malformed")
+                buttons.append(
+                    _ButtonEvidence(
+                        widget_id=widget_ids[0],
+                        label=labels[0],
+                        disabled=bool(disabled[0]) if disabled else False,
+                    )
+                )
+    return tuple(buttons)
+
+
+def _page_downloads(payload: bytes) -> tuple[_DownloadEvidence, ...]:
+    """Extract registered download controls without fetching private contents."""
+
+    downloads = []
+    for delta_payload in _nested_bytes(_protobuf_fields(payload), 5):
+        for element_payload in _nested_bytes(_protobuf_fields(delta_payload), 3):
+            for download_payload in _nested_bytes(
+                _protobuf_fields(element_payload), 43
+            ):
+                fields = _protobuf_fields(download_payload)
+                widget_ids = _utf8_fields(fields, 1, "download id")
+                labels = _utf8_fields(fields, 2, "download label")
+                urls = _utf8_fields(fields, 6, "download URL")
+                deferred_ids = _utf8_fields(fields, 12, "deferred download id")
+                disabled = [
+                    cast(int, item.value)
+                    for item in fields
+                    if item.number == 7 and item.wire_type == 0
+                ]
+                if (
+                    len(widget_ids) != 1
+                    or len(labels) != 1
+                    or len(urls) > 1
+                    or len(deferred_ids) > 1
+                    or len(disabled) > 1
+                ):
+                    raise PortableStartupError("page download control is malformed")
+                downloads.append(
+                    _DownloadEvidence(
+                        widget_id=widget_ids[0],
+                        label=labels[0],
+                        disabled=bool(disabled[0]) if disabled else False,
+                        has_file=any(value for value in (*urls, *deferred_ids)),
+                    )
+                )
+    return tuple(downloads)
+
+
+def _page_dataframes(payload: bytes) -> tuple[_DataframeEvidence, ...]:
+    """Extract keyed dataframes and their editing mode from one page message."""
+
+    dataframes = []
+    for delta_payload in _nested_bytes(_protobuf_fields(payload), 5):
+        for element_payload in _nested_bytes(_protobuf_fields(delta_payload), 3):
+            for dataframe_payload in _nested_bytes(
+                _protobuf_fields(element_payload), 40
+            ):
+                fields = _protobuf_fields(dataframe_payload)
+                widget_ids = _utf8_fields(fields, 2, "dataframe id")
+                modes = [
+                    cast(int, item.value)
+                    for item in fields
+                    if item.number == 4 and item.wire_type == 0
+                ]
+                if len(widget_ids) > 1 or len(modes) > 1:
+                    raise PortableStartupError("page dataframe is malformed")
+                if widget_ids:
+                    dataframes.append(
+                        _DataframeEvidence(
+                            widget_id=widget_ids[0],
+                            editing_mode=modes[0] if modes else 0,
+                        )
+                    )
+    return tuple(dataframes)
+
+
+def _page_bidi_components(payload: bytes) -> tuple[_BidiComponentEvidence, ...]:
+    """Extract registered Streamlit Components v2 elements from one message."""
+
+    components = []
+    for delta_payload in _nested_bytes(_protobuf_fields(payload), 5):
+        for element_payload in _nested_bytes(_protobuf_fields(delta_payload), 3):
+            for component_payload in _nested_bytes(
+                _protobuf_fields(element_payload), 59
+            ):
+                fields = _protobuf_fields(component_payload)
+                widget_ids = _utf8_fields(fields, 1, "component id")
+                names = _utf8_fields(fields, 2, "component name")
+                json_values = _utf8_fields(fields, 10, "component data")
+                if (
+                    len(widget_ids) != 1
+                    or len(names) != 1
+                    or len(json_values) > 1
+                ):
+                    raise PortableStartupError("page component is malformed")
+                components.append(
+                    _BidiComponentEvidence(
+                        widget_id=widget_ids[0],
+                        component_name=names[0],
+                        has_json_data=bool(json_values and json_values[0]),
+                    )
+                )
+    return tuple(components)
 
 
 def _page_alerts(payload: bytes) -> tuple[tuple[int, str], ...]:
@@ -656,6 +890,10 @@ def _execute_page_run(
     saw_new_session = False
     saw_element = False
     button_groups: dict[str, _ButtonGroupEvidence] = {}
+    buttons: dict[str, _ButtonEvidence] = {}
+    downloads: dict[str, _DownloadEvidence] = {}
+    dataframes: dict[str, _DataframeEvidence] = {}
+    bidi_components: dict[str, _BidiComponentEvidence] = {}
     alerts: list[tuple[int, str]] = []
     tab_containers: dict[str, int] = {}
     connection.sendall(_masked_websocket_frame(2, backmsg))
@@ -695,11 +933,24 @@ def _execute_page_run(
         saw_element = saw_element or _page_has_element(payload)
         for group in _page_button_groups(payload):
             button_groups[group.label] = group
+        for button in _page_buttons(payload):
+            buttons[button.label] = button
+        for download in _page_downloads(payload):
+            downloads[download.label] = download
+        for dataframe in _page_dataframes(payload):
+            dataframes[dataframe.widget_id] = dataframe
+        for component in _page_bidi_components(payload):
+            bidi_components[component.widget_id] = component
         alerts.extend(_page_alerts(payload))
         for widget_id, default_index in _page_tab_containers(payload):
             tab_containers[widget_id] = default_index
         if (status := _page_finished_status(payload)) is not None:
-            if status != _PAGE_SUCCESS_STATUS:
+            if status == _PAGE_EARLY_RERUN_STATUS:
+                continue
+            if status not in {
+                _PAGE_SUCCESS_STATUS,
+                _PAGE_FRAGMENT_SUCCESS_STATUS,
+            }:
                 raise PortableStartupError(
                     f"packaged page finished with Streamlit status {status}"
                 )
@@ -716,6 +967,10 @@ def _execute_page_run(
                     button_groups=button_groups,
                     alerts=tuple(alerts),
                     tab_containers=tab_containers,
+                    buttons=buttons,
+                    downloads=downloads,
+                    dataframes=dataframes,
+                    bidi_components=bidi_components,
                 ),
             )
     raise PortableStartupError("packaged page did not finish before the timeout")
@@ -730,6 +985,42 @@ def _required_button_group(
             f"packaged page did not expose {label!r} with option {option!r}"
         )
     return group
+
+
+def _required_button(
+    buttons: dict[str, _ButtonEvidence], label: str
+) -> _ButtonEvidence:
+    button = buttons.get(label)
+    if button is None or button.disabled:
+        raise PortableStartupError(
+            f"packaged page did not expose enabled button {label!r}"
+        )
+    return button
+
+
+def _required_download(
+    downloads: dict[str, _DownloadEvidence], label: str
+) -> _DownloadEvidence:
+    download = downloads.get(label)
+    if download is None or download.disabled or not download.has_file:
+        raise PortableStartupError(
+            f"packaged page did not register enabled download {label!r}"
+        )
+    return download
+
+
+def _require_editable_grid(surface: _PageSurfaceEvidence) -> None:
+    native_editor = any(
+        item.editing_mode != 0 for item in surface.dataframes.values()
+    )
+    sector_grid = any(
+        item.component_name == "sector.point_grid_rich_v1" and item.has_json_data
+        for item in surface.bidi_components.values()
+    )
+    if not native_editor and not sector_grid:
+        raise PortableStartupError(
+            "packaged first input page did not register an editable data grid"
+        )
 
 
 def _required_input_tabs(surface: _PageSurfaceEvidence) -> str:
@@ -773,6 +1064,106 @@ def _require_autosave_notice(
     raise PortableStartupError(f"unknown packaged startup scenario: {scenario}")
 
 
+def _run_manual_document_probe(
+    process: subprocess.Popen[bytes],
+    connection: socket.socket,
+    reader: _SocketReader,
+    deadline: float,
+    workspace: _ButtonGroupEvidence,
+    input_tabs_id: str,
+    project_surface: _PageSurfaceEvidence,
+) -> int:
+    """Open the frozen manual, generate both formats, then close the dialog."""
+
+    manual = _required_button(
+        project_surface.buttons, _USER_MANUAL_BUTTON_LABEL
+    )
+    open_page, surface = _execute_page_run(
+        process,
+        connection,
+        reader,
+        deadline,
+        _trigger_widget_rerun_backmsg(
+            manual.widget_id,
+            string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
+            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+        ),
+        require_new_session=False,
+    )
+    generate = _required_button(
+        surface.buttons, _MANUAL_GENERATE_BUTTON_LABEL
+    )
+    generated_page, surface = _execute_page_run(
+        process,
+        connection,
+        reader,
+        deadline,
+        _trigger_widget_rerun_backmsg(
+            generate.widget_id,
+            string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
+            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+        ),
+        require_new_session=False,
+    )
+    _required_download(surface.downloads, _MANUAL_PDF_DOWNLOAD_LABEL)
+    _required_download(surface.downloads, _MANUAL_HTML_DOWNLOAD_LABEL)
+    close = _required_button(surface.buttons, _MANUAL_CLOSE_BUTTON_LABEL)
+    closed_page, _surface = _execute_page_run(
+        process,
+        connection,
+        reader,
+        deadline,
+        _trigger_widget_rerun_backmsg(
+            close.widget_id,
+            string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
+            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+        ),
+        require_new_session=False,
+    )
+    return (
+        open_page.message_count
+        + generated_page.message_count
+        + closed_page.message_count
+    )
+
+
+def _run_report_document_probe(
+    process: subprocess.Popen[bytes],
+    connection: socket.socket,
+    reader: _SocketReader,
+    deadline: float,
+    workspace: _ButtonGroupEvidence,
+    report_profile: _ButtonGroupEvidence,
+    report_surface: _PageSurfaceEvidence,
+) -> int:
+    """Generate and register the frozen program's Standard PDF report."""
+
+    generate = _required_button(
+        report_surface.buttons, _REPORT_GENERATE_BUTTON_LABEL
+    )
+    generated_page, surface = _execute_page_run(
+        process,
+        connection,
+        reader,
+        deadline,
+        _trigger_widget_rerun_backmsg(
+            generate.widget_id,
+            string_arrays=(
+                (workspace.widget_id, _REPORT_WORKSPACE),
+                (report_profile.widget_id, _REPORT_PROFILE_DEFAULT),
+            ),
+        ),
+        require_new_session=False,
+    )
+    try:
+        _required_download(surface.downloads, _REPORT_DOWNLOAD_LABEL)
+    except PortableStartupError as exc:
+        alerts = " | ".join(body for _format, body in surface.alerts)
+        detail = alerts or "no report message was rendered"
+        raise PortableStartupError(f"{exc}; report page: {detail}") from exc
+    return generated_page.message_count
+
+
 def _run_page_session(
     process: subprocess.Popen[bytes],
     port: int,
@@ -800,7 +1191,19 @@ def _run_page_session(
             require_new_session=True,
         )
         input_tabs_id = _required_input_tabs(surface)
-        project_page, surface = _execute_page_run(
+        section_page, section_surface = _execute_page_run(
+            process,
+            connection,
+            reader,
+            deadline,
+            _string_widget_rerun_backmsg(
+                ((input_tabs_id, _SECTION_TAB_LABEL),)
+            ),
+            require_new_session=False,
+        )
+        _require_editable_grid(section_surface)
+        probes = ["editable-data-grid"]
+        project_page, project_surface = _execute_page_run(
             process,
             connection,
             reader,
@@ -810,11 +1213,32 @@ def _run_page_session(
             ),
             require_new_session=False,
         )
-        _require_autosave_notice(surface.alerts, scenario)
-        workspace = _required_button_group(
-            surface.button_groups, _WORKSPACE_LABEL, _REPORT_WORKSPACE
+        _require_autosave_notice(project_surface.alerts, scenario)
+        probes.append(
+            "project-load"
+            if scenario == _LEGACY_SCENARIO
+            else "invalid-project-rejection"
         )
-        report_page, surface = _execute_page_run(
+        _required_download(
+            project_surface.downloads, _PROJECT_DOWNLOAD_LABEL
+        )
+        probes.append("project-save")
+        workspace = _required_button_group(
+            project_surface.button_groups, _WORKSPACE_LABEL, _REPORT_WORKSPACE
+        )
+        document_message_count = 0
+        if scenario == _LEGACY_SCENARIO:
+            document_message_count += _run_manual_document_probe(
+                process,
+                connection,
+                reader,
+                deadline,
+                workspace,
+                input_tabs_id,
+                project_surface,
+            )
+            probes.extend(("manual-pdf", "manual-html"))
+        report_page, report_surface = _execute_page_run(
             process,
             connection,
             reader,
@@ -825,20 +1249,37 @@ def _run_page_session(
             require_new_session=False,
         )
         report_profile = _required_button_group(
-            surface.button_groups, _REPORT_PROFILE_LABEL, _REPORT_PROFILE_DEFAULT
+            report_surface.button_groups,
+            _REPORT_PROFILE_LABEL,
+            _REPORT_PROFILE_DEFAULT,
         )
         if report_profile.selected != (_REPORT_PROFILE_DEFAULT,):
             raise PortableStartupError(
                 "packaged page did not normalize the persisted report profile "
                 "to Standard"
             )
+        probes.append("report-profile")
+        if scenario == _LEGACY_SCENARIO:
+            document_message_count += _run_report_document_probe(
+                process,
+                connection,
+                reader,
+                deadline,
+                workspace,
+                report_profile,
+                report_surface,
+            )
+            probes.append("report-pdf")
         return _PageExecutionEvidence(
             message_count=(
                 first.message_count
+                + section_page.message_count
                 + project_page.message_count
                 + report_page.message_count
+                + document_message_count
             ),
             status="finished-successfully",
+            product_probes=tuple(probes),
         )
     except (OSError, struct.error) as exc:
         raise PortableStartupError(f"packaged page session failed: {exc}") from exc
@@ -937,6 +1378,7 @@ def _run_startup_scenario(
         page_message_count=page.message_count,
         stdout_log=str(stdout_path),
         stderr_log=str(stderr_path),
+        product_probes=page.product_probes,
     )
 
 

@@ -165,6 +165,82 @@ def test_page_protocol_extracts_project_notice_and_stateful_tabs():
     )
 
 
+def test_page_protocol_extracts_document_controls_and_editable_grid():
+    button = _bytes_field(1, b"$$ID-generate") + _bytes_field(
+        2, b"Generate report"
+    )
+    download = b"".join(
+        (
+            _bytes_field(1, b"$$ID-download"),
+            _bytes_field(2, b"Download report (PDF)"),
+            _bytes_field(6, b"/media/report.pdf"),
+        )
+    )
+    dataframe = (
+        _bytes_field(2, b"$$ID-grid")
+        + _varint((4 << 3) | 0)
+        + _varint(2)
+    )
+    component = b"".join(
+        (
+            _bytes_field(1, b"$$ID-sector-grid"),
+            _bytes_field(2, b"sector.point_grid_rich_v1"),
+            _bytes_field(10, b'{"rows":[{"x":0,"y":0}]}'),
+        )
+    )
+    element = b"".join(
+        (
+            _bytes_field(19, button),
+            _bytes_field(43, download),
+            _bytes_field(40, dataframe),
+            _bytes_field(59, component),
+        )
+    )
+    forward = _bytes_field(5, _bytes_field(3, element))
+
+    assert startup._page_buttons(forward) == (
+        startup._ButtonEvidence("$$ID-generate", "Generate report", False),
+    )
+    assert startup._page_downloads(forward) == (
+        startup._DownloadEvidence(
+            "$$ID-download", "Download report (PDF)", False, True
+        ),
+    )
+    assert startup._page_dataframes(forward) == (
+        startup._DataframeEvidence("$$ID-grid", 2),
+    )
+    assert startup._page_bidi_components(forward) == (
+        startup._BidiComponentEvidence(
+            "$$ID-sector-grid", "sector.point_grid_rich_v1", True
+        ),
+    )
+
+    workspace_array = _bytes_field(1, b"Report")
+    workspace_widget = _bytes_field(1, b"workspace-id") + _bytes_field(
+        9, workspace_array
+    )
+    tab_widget = _bytes_field(1, b"tabs-id") + _bytes_field(6, b"Project")
+    trigger_widget = (
+        _bytes_field(1, b"button-id")
+        + _varint((2 << 3) | 0)
+        + _varint(1)
+    )
+    expected = _bytes_field(
+        11,
+        _bytes_field(
+            2,
+            _bytes_field(1, workspace_widget)
+            + _bytes_field(1, tab_widget)
+            + _bytes_field(1, trigger_widget),
+        ),
+    )
+    assert startup._trigger_widget_rerun_backmsg(
+        "button-id",
+        string_arrays=(("workspace-id", "Report"),),
+        strings=(("tabs-id", "Project"),),
+    ) == expected
+
+
 @pytest.mark.parametrize(
     ("scenario", "alert"),
     [
@@ -178,7 +254,8 @@ def test_page_protocol_extracts_project_notice_and_stateful_tabs():
                 1,
                 (
                     f"{startup._AUTOSAVE_REJECTED_PREFIX} "
-                    f"'{startup._HOSTILE_REPORT_PROFILE}'. Starting with the "
+                    f"'{startup._HOSTILE_REPORT_PROFILE}' is not available in "
+                    "this version of Sector. Starting with the "
                     "default section."
                 ),
             ),
@@ -205,10 +282,28 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
         alerts=(),
         tab_containers={"input-tabs-id": 0},
     )
+    section_surface = startup._PageSurfaceEvidence(
+        button_groups={"Workspace": workspace},
+        alerts=(),
+        tab_containers={"input-tabs-id": 1},
+        bidi_components={
+            "grid-id": startup._BidiComponentEvidence(
+                "grid-id", "sector.point_grid_rich_v1", True
+            ),
+        },
+    )
     project_surface = startup._PageSurfaceEvidence(
         button_groups={"Workspace": workspace},
         alerts=(alert,),
         tab_containers={"input-tabs-id": 4},
+        downloads={
+            startup._PROJECT_DOWNLOAD_LABEL: startup._DownloadEvidence(
+                "project-download-id",
+                startup._PROJECT_DOWNLOAD_LABEL,
+                False,
+                True,
+            ),
+        },
     )
     report_surface = startup._PageSurfaceEvidence(
         button_groups={
@@ -221,11 +316,13 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
     runs = iter(
         (
             (startup._PageExecutionEvidence(10, "finished-successfully"), first_surface),
+            (startup._PageExecutionEvidence(4, "finished-successfully"), section_surface),
             (startup._PageExecutionEvidence(5, "finished-successfully"), project_surface),
             (startup._PageExecutionEvidence(6, "finished-successfully"), report_surface),
         )
     )
     backmsgs = []
+    document_probes = []
 
     class FakeConnection:
         def settimeout(self, _timeout):
@@ -250,14 +347,54 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
         lambda _process, _connection, _reader, _deadline, backmsg,
         **_kwargs: (backmsgs.append(backmsg), next(runs))[1],
     )
+    monkeypatch.setattr(
+        startup,
+        "_run_manual_document_probe",
+        lambda *_args: (document_probes.append("manual"), 7)[1],
+    )
+    monkeypatch.setattr(
+        startup,
+        "_run_report_document_probe",
+        lambda *_args: (document_probes.append("report"), 9)[1],
+    )
 
     evidence = startup._run_page_session(
         _FakeProcess([]), 54321, 30, scenario
     )
 
-    assert evidence == startup._PageExecutionEvidence(21, "finished-successfully")
+    expected_probes = (
+        (
+            "editable-data-grid",
+            "project-load",
+            "project-save",
+            "manual-pdf",
+            "manual-html",
+            "report-profile",
+            "report-pdf",
+        )
+        if scenario == startup._LEGACY_SCENARIO
+        else (
+            "editable-data-grid",
+            "invalid-project-rejection",
+            "project-save",
+            "report-profile",
+        )
+    )
+    assert evidence == startup._PageExecutionEvidence(
+        41 if scenario == startup._LEGACY_SCENARIO else 25,
+        "finished-successfully",
+        expected_probes,
+    )
+    assert document_probes == (
+        ["manual", "report"]
+        if scenario == startup._LEGACY_SCENARIO
+        else []
+    )
     assert backmsgs == [
         startup._PAGE_RERUN_BACKMSG,
+        startup._string_widget_rerun_backmsg(
+            (("input-tabs-id", startup._SECTION_TAB_LABEL),)
+        ),
         startup._string_widget_rerun_backmsg(
             (("input-tabs-id", "Project"),)
         ),
@@ -332,6 +469,40 @@ class _FakeProcess:
     def wait(self, timeout=None):
         del timeout
         return self.returncode
+
+
+def test_page_execution_waits_for_the_rerun_requested_by_a_widget(monkeypatch):
+    element = _bytes_field(5, _bytes_field(3, _bytes_field(29, b"visible")))
+    early = _varint((6 << 3) | 0) + _varint(
+        startup._PAGE_EARLY_RERUN_STATUS
+    )
+    finished = _varint((6 << 3) | 0) + _varint(
+        startup._PAGE_SUCCESS_STATUS
+    )
+    frames = iter(((2, element), (2, early), (2, element), (2, finished)))
+
+    class FakeSocket:
+        def sendall(self, _payload):
+            return None
+
+        def settimeout(self, _timeout):
+            return None
+
+    monkeypatch.setattr(
+        startup, "_read_websocket_frame", lambda _reader: next(frames)
+    )
+
+    evidence, _surface = startup._execute_page_run(
+        _FakeProcess([]),
+        FakeSocket(),
+        object(),
+        float("inf"),
+        startup._PAGE_RERUN_BACKMSG,
+        require_new_session=False,
+    )
+
+    assert evidence.message_count == 4
+    assert evidence.status == "finished-successfully"
 
 
 def _package(tmp_path: Path) -> Path:

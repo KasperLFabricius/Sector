@@ -78,7 +78,6 @@ def _dormant_generator_html(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(manual, "manual_blocks", list)
     monkeypatch.setattr(manual, "manual_publication_blocks", lambda blocks: ())
     monkeypatch.setattr(manual, "publish_manual_blocks", lambda blocks: published)
-    monkeypatch.setattr(manual, "source_revision", lambda: "parser-test")
     return manual.build_manual_html_bytes().decode("utf-8")
 
 

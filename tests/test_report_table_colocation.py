@@ -126,7 +126,7 @@ def test_multi_panel_table_publishes_one_destination_and_compact_captions():
     )
 
 
-def test_case_action_table_contains_no_location_changing_guard():
+def test_case_action_table_reserves_space_for_heading_and_input_table():
     inp = {
         "plastic_case": {"id": "PL-EDGE", "type": "ULS"},
         "_report_case_actions": {
@@ -142,7 +142,7 @@ def test_case_action_table_contains_no_location_changing_guard():
     builder._case_heading("Plastic section capacity", "plastic")
 
     nested = list(_all_flowables(builder.flow))
-    assert not any(isinstance(item, CondPageBreak) for item in nested)
+    assert any(isinstance(item, CondPageBreak) for item in nested)
     assert not any(isinstance(item, NotAtTopPageBreak) for item in nested)
     table = next(
         item for item in nested

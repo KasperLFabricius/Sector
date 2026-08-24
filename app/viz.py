@@ -2905,6 +2905,17 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
     for i, s in enumerate(subtubes):
         b, h, tef = s["b_mm"], s["h_mm"], s["tube"]["tef"]
         cx, cy = s.get("x_mm", 0.0), s.get("y_mm", 0.0)
+        trd = s.get("trd")
+        util = s.get("util")
+        trd_text = (
+            "not assessed" if trd is None else f"{float(trd):.2f} kNm"
+        )
+        if util is None:
+            util_text = "not assessed"
+        elif not math.isfinite(float(util)):
+            util_text = "inf"
+        else:
+            util_text = f"{float(util) * 100:.0f}%"
         xmin, xmax = cx - b / 2.0, cx + b / 2.0
         ymin, ymax = cy - h / 2.0, cy + h / 2.0
         role = "web" if i == 0 else f"part {i + 1}"
@@ -2913,14 +2924,16 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
             y=[ymin, ymin, ymax, ymax, ymin],
             fill="toself", mode="lines", fillcolor=CONCRETE_FILL,
             line=dict(color=CONCRETE_LINE, width=2), name=role,
-            customdata=[[cx, cy, b, h, s["t_ed"], s["trd"], s["util"]]] * 5,
+            customdata=[[
+                cx, cy, b, h, s["t_ed"], trd_text, util_text
+            ]] * 5,
             hovertemplate=(
                 f"<b>{role}</b><br>"
                 "centre (%{customdata[0]:.0f}, %{customdata[1]:.0f}) mm<br>"
                 "b x h %{customdata[2]:.0f} x %{customdata[3]:.0f} mm<br>"
                 "TEd %{customdata[4]:.2f} kNm<br>"
-                "TRd %{customdata[5]:.2f} kNm<br>"
-                "util %{customdata[6]:.1%}<extra></extra>"
+                "TRd %{customdata[5]}<br>"
+                "util %{customdata[6]}<extra></extra>"
             ),
             showlegend=False))
         if 0.0 < tef < min(b, h):            # wall centre-line, inset by tef/2
@@ -2931,11 +2944,10 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
                    ymax - tef / 2, ymin + tef / 2],
                 mode="lines", line=dict(color=ENVELOPE, width=1.5, dash="dash"),
                 hoverinfo="skip", showlegend=False))
-        util_txt = "inf" if not math.isfinite(s["util"]) else f"{s['util'] * 100:.0f}%"
         fig.add_annotation(
             x=cx, y=cy, showarrow=False,
             text=(f"<b>{role}</b><br>{b:.0f} x {h:.0f} mm<br>"
-                  f"util {util_txt}"),
+                  f"util {util_text}"),
             font=dict(size=11, color=SCHEMATIC_INK), align="center")
     fig.update_layout(
         title=title, template=_TEMPLATE, height=420,

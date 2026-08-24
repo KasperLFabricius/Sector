@@ -2990,7 +2990,9 @@ def _autosave_startup() -> None:
     except ValueError as exc:
         st.session_state["_project_msg"] = (
             "error",
-            f"Autosave not restored: {exc}. Starting with the default section.",
+            "Autosave not restored: "
+            f"{project_io.engineer_error_message(exc)}. "
+            "Starting with the default section.",
         )
         return
     except (OSError, UnicodeError):
@@ -3035,7 +3037,11 @@ def _apply_pending_project() -> None:
         tables, scalars, parse_info = project_io.parse_project_with_info(text)
         provenance = parse_info["provenance"]
     except ValueError as exc:
-        st.session_state["_project_msg"] = ("error", f"Could not load project: {exc}.")
+        st.session_state["_project_msg"] = (
+            "error",
+            "Could not load project: "
+            f"{project_io.engineer_error_message(exc)}.",
+        )
         return
     # Parsing is the transaction boundary for a project replacement. A rejected
     # upload leaves the existing project active, so its migration warning and
@@ -3215,9 +3221,9 @@ def _apply_pending_project() -> None:
         )
         if parse_info.get("migrated"):
             message += (
-                f" Schema {parse_info['source_schema_version']} was migrated in "
-                f"memory to schema {parse_info['target_schema_version']}; the "
-                "source file was not changed."
+                " Sector converted the project file for this session; the "
+                "source file was not changed. Review the converted inputs before "
+                "recalculating."
             )
         st.session_state["_project_msg"] = (
             "success" if verified is not False else "error",
@@ -3242,7 +3248,7 @@ def _save_load_panel() -> None:
         project_error = None
     except ValueError as exc:
         project_data = b""
-        project_error = str(exc)
+        project_error = project_io.engineer_error_message(exc)
     box.download_button("Download project", data=project_data,
                         file_name="sector_section.json", mime="application/json",
                         disabled=project_error is not None,
@@ -12375,10 +12381,11 @@ def torsion_view(inp, results):
                        f"{t['asl_req']:.0f} mm2"]},
             hide_index=True, width="stretch")
         st.caption(
-            r"$T_{Rd,s}$, $T_{Rd,max}$ and required $\sum A_{sl}$ follow "
-            "EN 1992-1-1 6.27, 6.30 and 6.28; $T_{Rd,c}$ uses $f_{ctd}$. "
-            "Required longitudinal torsion steel is additional to bending "
-            "reinforcement on the tension side."
+            r"$T_{Rd,s}$ follows the torsional wall shear flow (6.27) and "
+            r"transverse equilibrium (6.8); $T_{Rd,max}$ follows (6.30). "
+            r"Required $\sum A_{sl}=T_{Ed}u_k\cot\theta/(2A_kf_{yd})$ (6.28) "
+            "is additional to bending reinforcement on the tension side; "
+            r"$T_{Rd,c}$ uses $f_{ctd}$."
         )
         st.plotly_chart(viz.tube_figure(inp["outer"], inp.get("holes"), tube["tef"],
                                         ak_m2=tube["Ak"]), width="stretch")

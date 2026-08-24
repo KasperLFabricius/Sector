@@ -40,13 +40,13 @@ def calculated_example():
     at.button(key="calculate").click().run(timeout=300)
     assert not at.exception
     assert [message.value for message in at.error] == [
-        "A retained governing comparison fails or is invalid. Review the "
+        "A governing comparison fails or is invalid. Review the "
         "highlighted rows below."
     ]
     assert any(
         message.value == (
-            "Each row reports its own calculation status. Sector does not issue "
-            "a section or project compliance verdict."
+            "Interpret each row independently; an aggregate section status is not "
+            "calculated."
         )
         for message in at.caption
     )
@@ -301,6 +301,9 @@ def test_fatigue_outputs_match_independent_equations(
 def test_checking_pack_remains_a_qa_asset_outside_the_end_user_manual():
     pack = reproducible_example.checking_pack()
     assert EXPECTED_INPUT_SHA256 in pack
+    assert "Saved-input reference" in pack
+    assert "SHA-256" not in pack
+    assert "schema" not in pack.casefold()
     flat_pack = " ".join(pack.split())
     for text in (
         "Plastic capacity and applied ray", "Cracked elastic and crack width",

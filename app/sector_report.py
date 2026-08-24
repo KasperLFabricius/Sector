@@ -9777,7 +9777,8 @@ class ReportBuilder:
         self._small(
             "Project inputs define applicability, permitted width, reinforcement "
             "surface, tensile strength and both effective tension areas. The "
-            "selected ordinary crack-width result supplies the shared reinforcement terms; "
+            "selected ordinary crack-width result supplies the reinforcement terms "
+            "used by the heightened check; "
             "record restraint, watertightness, exposure and owner criteria in the "
             "project basis."
         )

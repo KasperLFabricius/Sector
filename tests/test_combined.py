@@ -615,7 +615,11 @@ def test_app_combined_out_of_default_range_warns_and_retains_verdicts():
     assert "code_applicable" not in c["crushing"]
     assert "code_applicable" not in c["longitudinal"]
     _select_view(at, "M-V-T Combined")
-    assert any("actual values are retained" in w.value.lower() for w in at.warning)
+    assert any(
+        "actual values are used in every combined calculation"
+        in w.value.lower()
+        for w in at.warning
+    )
     verdict_labels = (
         r"$\sum(S_{Ed}/S_{Rd})$", "Sum",
         r"$M_{Ed,\mathrm{total}}/M_{Rd}$",

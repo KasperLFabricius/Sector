@@ -282,8 +282,8 @@ def checking_pack() -> str:
     return dedent(f"""
         # Sector v{__version__} complete reference checking pack
 
-        Input SHA-256: `{input_sha256()}`
-        Project schema: `{project_io.VERSION}`
+        Saved-input reference: `{input_sha256()}`
+        Sector project format: `{project_io.VERSION}`
 
         This hand pack is completed from original inputs and published equations.
         It does not use a Sector solver as its oracle. The project enables every
@@ -407,7 +407,7 @@ def checking_pack() -> str:
         heightened crack-control minimum, Grouped fatigue, Shear resistance,
         Torsion, M-V-T interaction, minimum reinforcement, link detailing, clear
         spacing, explicit equations, numerical substitutions, source notes,
-        units and genuine demand/resistance verdicts. The saved input SHA-256 above
+        units and genuine demand/resistance verdicts. The saved-input reference above
         identifies the exact project used for these independent comparisons.
 
         ## Numerical algorithms and failure states

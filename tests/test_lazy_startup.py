@@ -65,7 +65,6 @@ EXPECTED_EXPORTS = {
 }
 
 EXPECTED_MODULES = (
-    "bridge",
     "build_info",
     "capacity",
     "codes",
@@ -249,7 +248,6 @@ def test_deferred_module_does_not_cache_failed_import(monkeypatch):
 
 def test_default_app_run_leaves_hidden_heavy_families_unloaded(tmp_path):
     absent = (
-        "bridge_analysis",
         "fatigue_analysis",
         "fatigue_presentation",
         "result_presentation",

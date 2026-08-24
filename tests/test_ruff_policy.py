@@ -127,7 +127,7 @@ def test_gitignore_cannot_hide_a_scoped_file(tmp_path):
 def test_accepted_scope_path_selector_and_order_ratchets():
     baseline = deepcopy(_policy())
     capacity = _scope(baseline, "capacity-typed-boundary")
-    capacity["paths"].append("sector/bridge.py")
+    capacity["paths"].append("sector/geometry.py")
     capacity["select"].append("UP")
 
     candidate = deepcopy(baseline)
@@ -136,7 +136,7 @@ def test_accepted_scope_path_selector_and_order_ratchets():
         validate_policy(candidate, ROOT, baseline=baseline)
 
     candidate = deepcopy(baseline)
-    _scope(candidate, "capacity-typed-boundary")["paths"].remove("sector/bridge.py")
+    _scope(candidate, "capacity-typed-boundary")["paths"].remove("sector/geometry.py")
     with pytest.raises(RuffPolicyError, match="paths shrank"):
         validate_policy(candidate, ROOT, baseline=baseline)
 

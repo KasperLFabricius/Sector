@@ -1083,10 +1083,13 @@ def test_app_torsion_subdivided_without_links_withholds_capacity_sum():
     )
 
     _select_view(at, "Torsion")
+    assert not at.exception
     assert any("NOT ASSESSED" in item.value for item in at.warning)
     assert not any("Utilisation" in metric.label for metric in at.metric)
     assert any(
-        "No sum of full capacities" in item.value for item in at.caption
+        "full capacity sum" in item.value
+        and "require current closed links" in item.value
+        for item in at.caption
     )
 
 
@@ -1144,8 +1147,12 @@ def test_app_compound_torsion_requires_subdivision():
     assert t["valid"] is False
     assert t["reason"] == "compound outline requires subdivision"
     _select_view(at, "Torsion")
-    assert any("compound" in w.value and "Subdivide" in w.value
-               for w in at.warning)
+    assert any(
+        "compound outline" in w.value
+        and "enable subdivision" in w.value.casefold()
+        and "partition the section" in w.value
+        for w in at.warning
+    )
 
 
 def test_app_compound_torsion_is_valid_after_subdivision():
@@ -1177,7 +1184,11 @@ def test_app_invalid_subtube_partition_withholds_torsion_verdict():
     assert t["subtubes"] is None
     assert t["reason"].startswith("invalid sub-tube partition:")
     _select_view(at, "Torsion")
-    assert any("do not form the concrete section" in w.value for w in at.warning)
+    assert any(
+        "do not partition the concrete section" in w.value
+        and "gaps, overlaps or boundary crossings" in w.value
+        for w in at.warning
+    )
     assert not any(
         m.label == r"Utilisation $T_{Ed}/T_{Rd}$" for m in at.metric
     )
@@ -1643,7 +1654,11 @@ def test_app_torsion_out_of_default_range_warns_and_retains_verdict():
     assert t["out_of_limits"] is True
     assert "code_applicable" not in t
     _select_view(at, "Torsion")
-    assert any("actual values are retained" in w.value.lower() for w in at.warning)
+    assert any(
+        "actual values are used in the reported torsion and interaction "
+        "calculations" in w.value.lower()
+        for w in at.warning
+    )
     util_metric = next(
         m for m in at.metric
         if m.label == r"Utilisation $T_{Ed}/T_{Rd}$"
