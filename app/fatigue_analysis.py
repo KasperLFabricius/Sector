@@ -140,7 +140,7 @@ def _solver_edition(bindings: Mapping[str, CapabilityBinding]) -> str:
     editions = {binding.solver_edition for binding in bindings.values()}
     if len(editions) != 1:
         raise ValueError(
-            "selected fatigue capabilities do not share one solver edition"
+            "The selected fatigue checks do not use the same design-standard edition"
         )
     return next(iter(editions))
 
@@ -237,7 +237,7 @@ def _validate_element_geometry(
                 abs_tol=1.0e-9,
             ):
                 errors.append(
-                    f"{element_id}: {field} does not match the solver section"
+                    f"{element_id}: {field} does not match the current section input"
                 )
 
 

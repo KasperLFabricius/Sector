@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import html
 import io
+import logging
 import re
 
 import plotly.graph_objects as go
@@ -58,6 +59,7 @@ import viz
 # Display scale for the section drawings: the geometry is in metres, drawn in mm.
 _MM = 1000.0
 _PERMILLE = chr(0x2030)
+_LOGGER = logging.getLogger(__name__)
 
 
 def _manual_input_source(basis_key, guidance_key) -> str:
@@ -2245,6 +2247,8 @@ def manual_blocks() -> list:
            ["$D_{upper}$", "Upper aggregate size used in the clear-spacing rule; mm"],
            ["$A_{sw}/s$", "Shear-link area per spacing; mm2/mm"],
            ["$F_c$", "Concrete compression resultant; kN"],
+           ["$F_{comp}$", "Total compression resultant from concrete and any "
+            "reinforcement acting in compression; kN"],
            ["$z$, $z_x$, $z_y$", "Internal resultant lever arm and its Cartesian components; mm"],
            ["TOTAL", "Elastic stress from long- and short-term actions; MPa"],
            ["LONG", "Elastic stress from the long-term action alone; MPa"],
@@ -3435,10 +3439,14 @@ def render_manual_streamlit():
                 try:
                     st.session_state["manual_pdf"] = build_manual_pdf_bytes()
                     st.session_state["manual_html"] = build_manual_html_bytes()
-                except Exception as e:                   # never break the dialog
+                except Exception:                        # never break the dialog
+                    _LOGGER.exception("Manual generation failed")
                     st.session_state["manual_pdf"] = None
                     st.session_state["manual_html"] = None
-                    st.error(f"Manual build failed: {e}")
+                    st.error(
+                        "Manual generation failed. Try again. If the problem "
+                        "continues, report the steps that produced it."
+                    )
         if st.session_state.get("manual_pdf"):
             st.download_button(
                 "Download PDF", st.session_state["manual_pdf"],
@@ -3506,8 +3514,12 @@ def render_manual_streamlit():
                 # otherwise share an auto-generated element id and Streamlit raises a
                 # duplicate-id error (seen once other charts exist, e.g. after Calculate).
                 st.plotly_chart(block[1](), width="stretch", key=f"manual_fig_{i}")
-            except Exception as e:                       # a broken figure must not
-                st.caption(f"[figure unavailable: {e}]")  # break the whole manual
+            except Exception:                            # a broken figure must not
+                _LOGGER.exception("Manual figure unavailable")
+                st.caption(
+                    "[Figure unavailable. Continue with the accompanying text "
+                    "and tables, or regenerate the manual.]"
+                )  # break the whole manual
             st.caption(item.caption)
         elif kind == "table":
             if item is None:

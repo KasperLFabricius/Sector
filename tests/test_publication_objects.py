@@ -238,6 +238,31 @@ def test_streamlit_manual_uses_matching_reference_heading_and_caption(monkeypatc
     assert any("Worked-example section" in text for text in fake.captions)
 
 
+def test_streamlit_manual_figure_failure_hides_software_diagnostics(monkeypatch):
+    fake = _FakeStreamlit()
+
+    def fail_figure(*_args, **_kwargs):
+        raise RuntimeError("SHA payload contract internal_key solver state")
+
+    fake.plotly_chart = fail_figure
+    monkeypatch.setattr(manual, "st", fake)
+
+    manual.render_manual_streamlit()
+
+    unavailable = [
+        text for text in fake.captions if "Figure unavailable" in text
+    ]
+    assert unavailable
+    assert all(
+        not re.search(
+            r"\b(?:sha|payload|contract|solver|internal_key)\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+        for text in unavailable
+    )
+
+
 def test_report_table_caption_and_fragments_share_one_identity_without_self_reference():
     builder = sector_report.ReportBuilder(
         io.BytesIO(), {}, {}, {}, figures=False, profile="Audit"

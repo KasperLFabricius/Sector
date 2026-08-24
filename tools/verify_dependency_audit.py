@@ -17,6 +17,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = Path("quality-dependency-audit.toml")
 INITIAL_REQUIREMENTS = ("requirements-dev.txt", "requirements-build.txt")
+REPORT_PATH = "qa-artifacts/dependency-audit.json"
 CHECKOUT_STEP = "Check out source"
 CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 SETUP_STEP = "Set up pinned Python"
@@ -160,6 +161,10 @@ def _snapshot(policy: Mapping[str, Any], root: Path) -> AuditPolicy:
         if audit.get(key) != expected:
             raise DependencyAuditError(f"audit.{key} must remain {expected!r}")
     report = _relative_file(audit.get("report_path"), "audit.report_path", root)
+    if report != REPORT_PATH:
+        raise DependencyAuditError(
+            f"audit.report_path must remain {REPORT_PATH!r}"
+        )
     cache = _relative_file(audit.get("cache_path"), "audit.cache_path", root)
     if report in requirements or cache in requirements or report == cache:
         raise DependencyAuditError("audit output/cache paths collide with locked inputs")

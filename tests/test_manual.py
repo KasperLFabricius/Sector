@@ -279,6 +279,19 @@ def test_manual_has_the_expected_parts_in_order():
                      "Part C - Theory & methodology", "Part D - Reference"]
 
 
+def test_manual_distinguishes_concrete_and_total_compression_resultants():
+    text = " ".join(
+        " ".join(str(cell) for cell in row)
+        for block in manual.manual_blocks()
+        if block[0] == "table"
+        for row in block[2]
+    )
+
+    assert "$F_c$ Concrete compression resultant; kN" in text
+    assert "$F_{comp}$ Total compression resultant" in text
+    assert "reinforcement acting in compression" in text
+
+
 def test_manual_part_navigation_preserves_every_block_in_order():
     parts = manual.manual_parts()
     assert list(parts) == list(manual._PART_SUMMARIES)
@@ -902,6 +915,29 @@ def test_manual_generation_exposes_pdf_and_accessible_html_downloads(monkeypatch
         if element.type == "download_button"
     }
     assert {"manual_dl_pdf", "manual_dl_html"} <= download_keys
+
+
+def test_manual_generation_failure_is_engineer_facing(monkeypatch):
+    def fail_manual():
+        raise RuntimeError("SHA payload contract internal_key solver state")
+
+    monkeypatch.setattr(manual, "build_manual_pdf_bytes", fail_manual)
+
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    at.session_state["_input_tab"] = "Project"
+    at.run()
+    at.button(key="open_manual").click().run()
+    at.button(key="manual_gen_pdf").click().run()
+
+    assert not at.exception
+    visible = " ".join(str(item.value) for item in at.error)
+    assert "Manual generation failed" in visible
+    assert not re.search(
+        r"\b(?:sha|payload|contract|solver|internal_key)\b",
+        visible,
+        flags=re.IGNORECASE,
+    )
 
 
 def test_native_manual_dismissal_event_closes_and_stays_closed():

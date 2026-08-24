@@ -1525,6 +1525,8 @@ def test_plastic_table_splits_steel_strain_when_active_in_compression():
     assert any(",t (%)" in c for c in active) and any(",c (%)" in c for c in active)
     assert f"NA angle ({chr(0x00B0)})" in active
     assert "Internal lever z (mm)" in active
+    assert "F_comp (kN)" in active
+    assert "Fc (kN)" not in active
     assert "z_x (mm)" in active and "z_y (mm)" in active
     assert "dx (mm)" not in active and "dy (mm)" not in active
     assert not any("deg" in c for c in active)
@@ -4289,6 +4291,69 @@ def test_generate_report_produces_pdf():
     assert at.session_state["report_filename"].endswith(".pdf")
     assert at.session_state["report_generation_record"]["result_source"] == (
         "recalculated-for-report"
+    )
+
+
+def test_report_failure_does_not_publish_software_diagnostics(monkeypatch):
+    import sector_report
+
+    def fail_report(*_args, **_kwargs):
+        raise RuntimeError("SHA payload contract internal_key solver state")
+
+    monkeypatch.setattr(sector_report, "build_report", fail_report)
+    at = _fresh()
+    at.run()
+    _goto_page(at, "Report")
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+
+    assert not at.exception
+    assert "report_buffer" not in at.session_state
+    visible = " ".join(str(item.value) for item in at.error)
+    assert "Report generation failed" in visible
+    assert not re.search(
+        r"\b(?:sha|payload|contract|solver|internal_key)\b",
+        visible,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_fatigue_failure_boundary_hides_software_diagnostics(monkeypatch):
+    import fatigue_analysis
+    import sector_app
+
+    hostile = "SHA payload contract internal_key solver state"
+    monkeypatch.setattr(
+        fatigue_analysis,
+        "validation_errors",
+        lambda _inp: [hostile],
+    )
+    monkeypatch.setattr(
+        fatigue_analysis,
+        "invalid_result",
+        lambda _inp, errors: {"errors": tuple(errors)},
+    )
+
+    result = sector_app._run_fatigue_or_invalid({})
+
+    assert result["errors"] == ("Review the fatigue inputs and recalculate",)
+
+
+def test_calculation_failure_boundary_hides_software_diagnostics():
+    import sector_app
+
+    visible = sector_app._calculation_failure_message(
+        ValueError("SHA payload contract internal_key solver state")
+    )
+
+    assert visible == (
+        "Calculation blocked: Sector could not complete the calculation. "
+        "Review the inputs and try again."
+    )
+    assert not re.search(
+        r"\b(?:sha|payload|contract|solver|internal_key)\b",
+        visible,
+        flags=re.IGNORECASE,
     )
 
 

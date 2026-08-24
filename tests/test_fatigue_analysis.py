@@ -507,7 +507,7 @@ def test_validation_catches_case_name_collisions_and_element_order_drift():
     errors = fatigue_analysis.validation_errors(inp)
 
     assert any("Case name 'FAT-A1' is duplicated" in error for error in errors)
-    assert "R1: x does not match the solver section" in errors
+    assert "R1: x does not match the current section input" in errors
 
 
 def test_grouped_spectrum_method_accepts_multiple_bins():

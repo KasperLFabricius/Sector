@@ -3331,7 +3331,7 @@ def test_report_escapes_user_entered_action_provenance():
 def test_report_mirrors_the_views():
     txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
     flat = " ".join(txt.split())
-    assert "Fc" in txt and "NA x" in txt           # full plastic table columns
+    assert "Fcomp" in txt and "NA x" in txt        # full plastic table columns
     assert "PASS - Plastic bending" in txt
     assert " pp" not in flat
     assert "does not exceed" not in flat

@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import functools
+import logging
 import math
 import os
 import pathlib
@@ -30,6 +31,7 @@ import streamlit as st  # noqa: E402
 
 import app_run_probe  # noqa: E402
 from app import input_issues  # noqa: E402
+from app import engineer_messages  # noqa: E402
 from app import manual_information_architecture as manual_ia  # noqa: E402
 from app import report_profiles  # noqa: E402
 from deferred_import import deferred_module  # noqa: E402
@@ -129,6 +131,7 @@ APP_AUTHOR = sector_author
 APP_LICENSEE = sector_licensee
 APP_EMAIL = "Kasper.LindskovFabricius@sweco.dk"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+_LOGGER = logging.getLogger(__name__)
 
 # Greek glyphs for the result tables (st.dataframe renders plain Unicode, not LaTeX,
 # so widget labels use $...$ but table headers/cells use these). Written via chr()
@@ -387,8 +390,12 @@ def _safe_build(box, builder, curve, vals, **extra):
     try:
         return builder(curve=curve, **vals, **extra)
     except ValueError as exc:
+        detail = engineer_messages.error_detail(
+            exc,
+            fallback="Review the material values for the selected curve",
+        )
         _manual_warning(
-            box, "input-invalid", f"Adjusted for this curve: {exc}"
+            box, "input-invalid", f"Adjusted for this curve: {detail}"
         )
         v = dict(vals)
         for f in ("fytk", "futk"):
@@ -3378,15 +3385,13 @@ def _normalise_report_profile_session_state() -> None:
         for container in containers:
             container.pop(project_io.REPORT_PROFILE_KEY, None)
         _clear_report_artifact()
-        values = ", ".join(sorted({repr(value) for value in invalid}))
         report_durable = dict(st.session_state.get(_REPORT_STATE_KEY, {}))
         report_durable[project_io.REPORT_PROFILE_KEY] = _REPORT_DEFAULT
         st.session_state[_REPORT_STATE_KEY] = report_durable
         st.session_state[project_io.REPORT_PROFILE_KEY] = _REPORT_DEFAULT
         st.session_state[_REPORT_PROFILE_ERROR_KEY] = (
-            f"Stored report profile {values} is not recognised. It was removed "
-            f"from saved and pending state and reset to {_REPORT_DEFAULT}; any "
-            "older report was invalidated."
+            f"The saved report type is not recognised. Sector reset it to "
+            f"{_REPORT_DEFAULT}. Generate a new report before download."
         )
 
     # v0.93 owned these values in the Inputs mirror. Move them into the Report
@@ -3644,9 +3649,15 @@ def _generate_report(inp):
             "success",
             f"Report generated; Sector {source_text}.",
         )
-    except Exception as exc:                       # never let it crash the app
+    except Exception:                              # never let it crash the app
+        _LOGGER.exception("Report generation failed")
         _clear_report_artifact()
-        st.session_state["_report_msg"] = ("error", f"Report generation failed: {exc}")
+        st.session_state["_report_msg"] = (
+            "error",
+            "Report generation failed. Review the current inputs, recalculate, "
+            "and try again. If the problem continues, report the steps that "
+            "produced it.",
+        )
     if prog is not None:
         prog.empty()
 
@@ -4311,8 +4322,11 @@ def _quick_section_viewport():
         try:
             outer, holes, bars, tendons = _quick_section_geometry(st)
         except ValueError as exc:
-            generation_error = str(exc)
-            st.error(f"Quick Section cannot be generated: {exc}")
+            generation_error = engineer_messages.error_detail(
+                exc,
+                fallback="Review the section dimensions and reinforcement layout",
+            )
+            st.error(f"Quick Section cannot be generated: {generation_error}.")
     apply = apply_slot.button(
         "Apply to point tables",
         type="primary",
@@ -6247,7 +6261,11 @@ def build_inputs(host=st):
             try:
                 out[item["id"]] = mat_catalog.build_material(item, kind)
             except (TypeError, ValueError) as exc:
-                material_definition_errors.append(f"{item['id']}: {exc}")
+                detail = engineer_messages.error_detail(
+                    exc,
+                    fallback="Review the selected material values",
+                )
+                material_definition_errors.append(f"{item['id']}: {detail}")
         return out
 
     mild_material_map = _material_map(mild_catalogue, "mild")
@@ -6332,7 +6350,11 @@ def build_inputs(host=st):
                 holes=holes,
             )
         except geometry.GeometryTopologyError as exc:
-            geometry_error = f"Invalid section geometry: {exc}"
+            detail = engineer_messages.error_detail(
+                exc,
+                fallback="review the concrete outline and voids",
+            )
+            geometry_error = f"Invalid section geometry: {detail}"
     # A void must not split the concrete into disconnected pieces (e.g. a slot
     # reaching across the section): such a section has no valid capacity.
     void_error = None
@@ -7785,7 +7807,14 @@ def _run_fatigue_or_invalid(inp):
     Invalid fatigue input therefore cannot suppress otherwise valid results.
     """
 
-    errors = fatigue_analysis.validation_errors(inp)
+    raw_errors = fatigue_analysis.validation_errors(inp)
+    errors = list(dict.fromkeys(
+        engineer_messages.error_detail(
+            error,
+            fallback="Review the fatigue inputs and recalculate",
+        )
+        for error in raw_errors
+    ))
     return (
         fatigue_analysis.invalid_result(inp, errors)
         if errors
@@ -7862,7 +7891,10 @@ def _heightened_crack_control_validation_errors(inp):
             inp.get("sls_heightened_reference_case"),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        errors.append(str(exc))
+        errors.append(engineer_messages.error_detail(
+            exc,
+            fallback="Select one valid Elastic reference case",
+        ))
     return errors
 
 
@@ -9793,7 +9825,7 @@ def _plastic_table(pts, cable, steel_comp=False):
         f"{_EPS}c (%)": [round(pt["eps_c"], 3) for pt in pts],
         **eps_s_cols,
         f"{_KAPPA} (1/m)": [round(pt["kappa"], 4) for pt in pts],
-        "Fc (kN)": [round(pt["comp_force"], 3) for pt in pts],
+        "F_comp (kN)": [round(pt["comp_force"], 3) for pt in pts],
         "Internal lever z (mm)": [round(pt["lever"] * _MM, 3) for pt in pts],
         "z_x (mm)": [round(pt["dx"] * _MM, 3) for pt in pts],
         "z_y (mm)": [round(pt["dy"] * _MM, 3) for pt in pts],
@@ -9999,7 +10031,8 @@ def plastic_view(inp, results):
             f"NA angle = {pt['V']:.0f}{_DEG} (sweep point {sel + 1})",
             f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
             f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
-            f"- **Compression force**: {pt['comp_force']:.3f} kN",
+            f"- **Compression resultant $F_{{comp}}$**: "
+            f"{pt['comp_force']:.3f} kN",
             f"- **Compression-zone depth $c$**: {compression_depth_text}",
             f"- **Internal lever arm $z$**: {pt['lever'] * _MM:.3f} mm",
             f"- **Lever-arm components $z_x$ / $z_y$**: "
@@ -12993,6 +13026,17 @@ def _store_completed_analysis(
     st.session_state.pop("pl_state", None)
 
 
+def _calculation_failure_message(error: Exception) -> str:
+    """Return the complete engineer-facing calculation failure message."""
+
+    detail = engineer_messages.error_detail(
+        error,
+        fallback="Sector could not complete the calculation. Review the inputs "
+        "and try again",
+    )
+    return "Calculation blocked: " + detail + "."
+
+
 @st.fragment
 def _analysis_workspace(inp):
     """Render and operate the main analysis workspace independently.
@@ -13101,9 +13145,7 @@ def _analysis_workspace(inp):
                 reuse_fatigue=reuse_fatigue,
             )
         except ValueError as exc:
-            st.session_state["_case_error"] = (
-                "Calculation blocked: " + str(exc).rstrip(".") + "."
-            )
+            st.session_state["_case_error"] = _calculation_failure_message(exc)
             st.error(st.session_state["_case_error"])
         else:
             _store_completed_analysis(

@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import reinforcement_table as rebar_table
 
-from app import modelled_direction, report_profiles
+from app import engineer_messages, modelled_direction, report_profiles
 from app import heightened_crack_adapter
 from app.table_field_definitions import (
     decimal_issue_ledger,
@@ -938,10 +938,8 @@ def engineer_error_message(error: Exception) -> str:
     lowered = message.casefold()
     report_prefix = "unknown persisted report profile "
     if lowered.startswith(report_prefix):
-        selected = message[len(report_prefix):]
         return (
-            f"the saved report type {selected} is not available in this "
-            "version of Sector"
+            "the saved report type is not available in this version of Sector"
         )
     if "conflicting report profiles" in lowered:
         return "the project file contains conflicting report settings"
@@ -978,7 +976,10 @@ def engineer_error_message(error: Exception) -> str:
             "the project file contains an input that this version of Sector "
             "cannot read"
         )
-    return message or "the project file could not be read"
+    return engineer_messages.error_detail(
+        message,
+        fallback="the project file could not be read",
+    )
 
 
 def project_provenance(text: str) -> dict:

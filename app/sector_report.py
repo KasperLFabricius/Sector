@@ -5504,7 +5504,7 @@ class ReportBuilder:
         if checks and not publish_worked:
             self._small(
                 "The complete minimum-reinforcement worked example is published "
-                "only for the governing stored utilisation across all plastic cases."
+                "only for the governing utilisation across all plastic cases."
             )
 
         for limitation in result.get("limitations") or []:
@@ -5733,7 +5733,7 @@ class ReportBuilder:
         elif result.get("checks"):
             self._small(
                 "The complete link-detailing worked example is published only "
-                "for the governing stored utilisation across all plastic cases."
+                "for the governing utilisation across all plastic cases."
             )
         for check in result.get("checks") or []:
             details = []
@@ -6008,7 +6008,7 @@ class ReportBuilder:
         eps_s_head = (["eps<sub>s,t</sub>", "eps<sub>s,c</sub>"]
                       if comp else ["eps<sub>s</sub>"])
         detail_head = (["NA angle", "eps<sub>c</sub>"] + eps_s_head
-                       + ["kappa", "F<sub>c</sub>", "lever z",
+                       + ["kappa", "F<sub>comp</sub>", "lever z",
                           "z<sub>x</sub>", "z<sub>y</sub>"])
         if cable:
             detail_head.append("eps<sub>p</sub>")
@@ -6048,14 +6048,14 @@ class ReportBuilder:
         )
         self._small("NA angle in &#176;; M in kN&#183;m; NA x/y, lever z, "
                     "z<sub>x</sub> and z<sub>y</sub> in mm; strain in %; "
-                    "kappa in 1/m; F<sub>c</sub> in kN.")
+                    "kappa in 1/m; F<sub>comp</sub> in kN.")
 
     def _plastic_worked(self, pl):
         pts = pl["points"]
         worked_index = pl.get("worked_point_index")
         assessment = presentation.plastic_action_assessment(pl)
         retained_basis = str(
-            pl.get("worked_point_basis") or "retained solver state"
+            pl.get("worked_point_basis") or "selected capacity point"
         )
         if retained_basis == "utilisation direction" and not assessment.get(
             "assessed"

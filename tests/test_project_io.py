@@ -876,8 +876,7 @@ def test_unknown_or_inexact_persisted_report_profile_fails_closed(value):
     (
         (
             "unknown persisted report profile 'Retired report'",
-            "the saved report type 'Retired report' is not available in this "
-            "version of Sector",
+            "the saved report type is not available in this version of Sector",
         ),
         (
             "unsupported Sector project schema 99",
@@ -900,6 +899,11 @@ def test_unknown_or_inexact_persisted_report_profile_fails_closed(value):
         (
             "modelled direction alias must be at most 60 characters",
             "modelled direction alias must be at most 60 characters",
+        ),
+        (
+            "unexpected payload contract internal_key",
+            "the project file contains an input that this version of Sector "
+            "cannot read",
         ),
     ),
 )

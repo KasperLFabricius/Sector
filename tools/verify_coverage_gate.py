@@ -25,6 +25,24 @@ COVERAGE_STEP_NAME = "Run complete test suite with coverage"
 BRANCH_COVERAGE_STEP_NAME = "Run decision-branch coverage gate"
 CHECKOUT_STEP_NAME = "Check out source"
 CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+REPORT_RENDER_STEP_NAME = "Render report fixture with real figures"
+REPORT_RENDER_COMMAND = (
+    "python tools/report_render_fixture.py --output qa-artifacts/report"
+)
+MANUAL_RENDER_STEP_NAME = "Render manual fixture with real figures"
+MANUAL_RENDER_COMMAND = (
+    "python tools/manual_render_fixture.py --output qa-artifacts/manual"
+)
+QA_UPLOAD_STEP_NAME = "Upload QA diagnostics"
+QA_UPLOAD_ACTION = (
+    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+)
+QA_UPLOAD_SETTINGS = {
+    "name": "sector-qa-${{ github.run_id }}",
+    "path": "qa-artifacts/",
+    "if-no-files-found": "error",
+    "retention-days": 7,
+}
 BASELINE_ENV = "SECTOR_COVERAGE_BASELINE_REF"
 BASELINE_EXPRESSION = (
     "${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}"
@@ -555,6 +573,32 @@ def _named_step(steps: object, name: str) -> Mapping[str, Any]:
     return matches[0]
 
 
+def _always_run_step(
+    steps: object,
+    name: str,
+    command: str,
+) -> Mapping[str, Any]:
+    step = _named_step(steps, name)
+    if (
+        set(step) != {"name", "if", "run"}
+        or step.get("if") != "always()"
+        or step.get("run") != command
+    ):
+        raise CoverageGateContractError(
+            f"{name} must always retain its exact evidence destination"
+        )
+    command_matches = [
+        candidate
+        for candidate in steps
+        if isinstance(candidate, Mapping) and candidate.get("run") == command
+    ]
+    if len(command_matches) != 1:
+        raise CoverageGateContractError(
+            f"workflow must contain exactly one command for {name}"
+        )
+    return step
+
+
 def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
     workflow = _workflow_mapping(workflow_text)
     triggers = workflow.get("on", workflow.get(True))
@@ -625,6 +669,39 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         raise CoverageGateContractError("branch coverage shell differs")
     if branch_step.get("run") != expected_branch_coverage_command(data):
         raise CoverageGateContractError("branch coverage command differs")
+
+    report_render = _always_run_step(
+        steps,
+        REPORT_RENDER_STEP_NAME,
+        REPORT_RENDER_COMMAND,
+    )
+    manual_render = _always_run_step(
+        steps,
+        MANUAL_RENDER_STEP_NAME,
+        MANUAL_RENDER_COMMAND,
+    )
+    upload = _named_step(steps, QA_UPLOAD_STEP_NAME)
+    if (
+        set(upload) != {"name", "if", "uses", "with"}
+        or upload.get("if") != "always()"
+        or upload.get("uses") != QA_UPLOAD_ACTION
+        or upload.get("with") != QA_UPLOAD_SETTINGS
+    ):
+        raise CoverageGateContractError(
+            "QA evidence upload must always retain the complete qa-artifacts directory"
+        )
+
+    ordered = [
+        branch_step,
+        report_render,
+        manual_render,
+        upload,
+    ]
+    positions = [steps.index(step) for step in ordered]
+    if positions != sorted(positions) or len(set(positions)) != len(positions):
+        raise CoverageGateContractError(
+            "coverage, render and evidence-upload step order differs"
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
