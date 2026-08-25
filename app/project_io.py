@@ -1386,9 +1386,7 @@ def _valid_sha256(value) -> bool:
     )
 
 
-_RECORDED_VERSION_RE = re.compile(
-    r"[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?"
-)
+_RECORDED_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+){1,3}")
 _RECORDED_REVISION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,127}")
 _PROVENANCE_FIELDS = frozenset({
     "sector_version",

@@ -1807,6 +1807,7 @@ def test_provenance_and_calculation_input_checks_are_independent():
     (
         ("sector_version", True),
         ("sector_version", "RAW payload schema contract"),
+        ("sector_version", "0.96.1-payload-schema-contract"),
         ("source_revision", []),
         ("source_revision", "source control history"),
         ("saved_at_utc", 1),
@@ -1852,6 +1853,7 @@ def test_project_calculation_record_requires_an_object(invalid):
         ("performed_at_utc", "2026-08-25T12:00:00"),
         ("sector_version", {}),
         ("sector_version", "RAW source-control process"),
+        ("sector_version", "0.96.1-payload-schema-contract"),
         ("source_revision", 1),
         ("source_revision", "source control history"),
         ("input_sha256", "not-a-check"),
@@ -1890,6 +1892,9 @@ def test_recorded_labels_never_echo_unvalidated_values():
     hostile = "RAW GitHub SHA-256 payload schema contract internal_private_ID"
 
     assert project_io.recorded_sector_version_label(hostile) is None
+    assert project_io.recorded_sector_version_label(
+        "0.96.1-payload-schema-contract"
+    ) is None
     assert project_io.recorded_sector_version_label("0.96.1") == "0.96.1"
     assert project_io.recorded_utc_label(hostile) is None
     assert project_io.recorded_utc_label("2026-08-25T14:30:00+02:00") == (

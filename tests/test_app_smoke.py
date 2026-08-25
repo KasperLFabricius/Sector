@@ -3239,7 +3239,18 @@ def test_project_record_copy_distinguishes_independent_input_checks():
 def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
     import project_io
 
-    tables, scalars = {}, {"conc_fck": 41.0}
+    at = _fresh().run()
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    scalars["conc_fck"] = 41.0
     digest = project_io.input_sha256(tables, scalars)
     base = json.loads(project_io.dump_project(
         tables,
@@ -3259,7 +3270,6 @@ def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
         "RAW GitHub SHA-256 payload schema contract internal_private_ID traceback"
     )
 
-    at = _fresh().run()
     _goto_input_tab(at, "Project")
 
     def upload(data, filename):
@@ -3278,23 +3288,38 @@ def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
     )
     visible_captions = tuple(str(item.value) for item in at.caption)
     assert all(expected in visible_captions for expected in expected_captions)
+    _calculate(at)
+    assert "results" in at.session_state
+    retained_result = project_io.result_sha256(at.session_state["results"])
+    retained_calculation = copy.deepcopy(at.session_state["calculation_record"])
+    _goto_input_tab(at, "Project")
     before = copy.deepcopy(at.session_state["_loaded_project_provenance"])
 
-    for area, field in (
-        ("provenance", "sector_version"),
-        ("calculation", "performed_at_utc"),
+    for area, field, invalid_value in (
+        ("provenance", "sector_version", hostile),
+        (
+            "provenance",
+            "sector_version",
+            "0.96.1-payload-schema-contract",
+        ),
+        ("calculation", "performed_at_utc", hostile),
     ):
         invalid = copy.deepcopy(base)
-        invalid[area][field] = hostile
+        invalid[area][field] = invalid_value
         upload(invalid, f"invalid-{area}.json")
 
         assert at.session_state["conc_fck"] == pytest.approx(41.0)
         assert at.session_state["_loaded_project_provenance"] == before
+        assert project_io.result_sha256(at.session_state["results"]) == (
+            retained_result
+        )
+        assert at.session_state["calculation_record"] == retained_calculation
         visible = "\n".join(
             str(item.value) for item in (*at.error, *at.caption)
         )
         assert "New file was not applied" in visible
         assert hostile not in visible
+        assert "payload-schema-contract" not in visible
         for forbidden in (
             "GitHub",
             "SHA-256",
@@ -3317,6 +3342,7 @@ def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
         "differs from the current saved inputs"
     ) in visible_captions
     assert any("Project loaded" in str(item.value) for item in at.success)
+    assert "results" not in at.session_state
     assert not at.exception
 
 
