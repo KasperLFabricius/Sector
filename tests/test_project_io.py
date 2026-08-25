@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import math
 import pathlib
 import re
 import sys
@@ -325,6 +326,98 @@ def test_current_schema_save_load_resave_retains_exact_inputs():
     assert project_io.project_provenance(second)["input_hash_valid"] is True
     assert json.loads(first)["version"] == project_io.VERSION
     assert json.loads(second)["version"] == project_io.VERSION
+
+
+def test_current_schema_round_trip_ignores_orphaned_material_aliases():
+    mild = {
+        "version": material_catalog.VERSION,
+        "next_id": 3,
+        "items": [
+            material_catalog.default_entry("mild", material_id="M2")
+        ],
+    }
+    prestress = {
+        "version": material_catalog.VERSION,
+        "next_id": 3,
+        "items": [
+            material_catalog.default_entry("prestress", material_id="P2")
+        ],
+    }
+    scalars = {
+        material_catalog.MILD_CATALOG_KEY: mild,
+        material_catalog.PRESTRESS_CATALOG_KEY: prestress,
+        "mild_fytk": 500.0,
+        "mild_fyck": 700.0,
+        "mild_futk": 600.0,
+        "pre_fytk": 1600.0,
+        "pre_futk": 1500.0,
+    }
+
+    first = project_io.dump_project({}, scalars)
+    tables, loaded = project_io.parse_project(first)
+    second = project_io.dump_project(tables, loaded)
+    _, reloaded = project_io.parse_project(second)
+
+    for project_text in (first, second):
+        assert project_io.project_provenance(project_text)["input_hash_valid"] is True
+    assert [
+        item["id"]
+        for item in reloaded[material_catalog.MILD_CATALOG_KEY]["items"]
+    ] == ["M2"]
+    assert [
+        item["id"]
+        for item in reloaded[material_catalog.PRESTRESS_CATALOG_KEY]["items"]
+    ] == ["P2"]
+    assert reloaded["mild_fyck"] == pytest.approx(700.0)
+    assert reloaded["pre_futk"] == pytest.approx(1500.0)
+
+
+def test_current_schema_extreme_finite_material_laws_round_trip_safely():
+    mild = material_catalog.default_catalog("mild")
+    mild["items"][0].update(
+        preset=material_catalog.CUSTOM_PRESET,
+        curve=1,
+        active_in_compression=False,
+        fytk=1.0,
+        fyck=0.0,
+        futk=1.0e308,
+        eut=1.0e308,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        Es=200.0,
+    )
+    prestress = material_catalog.default_catalog("prestress")
+    prestress["items"][0].update(
+        preset=material_catalog.CUSTOM_PRESET,
+        curve=6,
+        IS=0.0,
+        fytk=1.0,
+        futk=1.0e308,
+        eut=1.0e308,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        Es=200.0,
+    )
+
+    first = project_io.dump_project(
+        {},
+        {
+            material_catalog.MILD_CATALOG_KEY: mild,
+            material_catalog.PRESTRESS_CATALOG_KEY: prestress,
+        },
+    )
+    tables, loaded = project_io.parse_project(first)
+    second = project_io.dump_project(tables, loaded)
+    _, reloaded = project_io.parse_project(second)
+
+    for kind in material_catalog.KINDS:
+        item = reloaded[material_catalog.catalog_key(kind)]["items"][0]
+        material = material_catalog.build_material(item, kind)
+        assert material.stress(material.eut) == 1.0e308
+        assert math.isfinite(material.stress(0.0035))
+    assert project_io.project_provenance(second)["input_hash_valid"] is True
 
 
 def test_current_schema_round_trip_retains_selected_gamma_v_exactly():

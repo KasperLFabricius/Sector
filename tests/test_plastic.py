@@ -333,17 +333,78 @@ def test_slab_matches_eurocode_rectangular_block():
 def test_governing_curvature_caps_compression_steel_rupture():
     # The symmetric rupture must also cap the curvature for a compression bar: with
     # eut below the concrete crushing strain, a compression bar reaches eut first.
-    # s_na = s_max - c = 0.1. A bar 0.08 past the NA on the compression side (s = 0.18)
-    # reaches eut = 2 permille before the concrete crushes. s_bars are the projections.
-    s_bars = np.array([0.18, 0.099])
+    # s_na = s_max - c = 0.1. A bar 0.09 past the NA on the compression side
+    # (s = 0.19) reaches the valid post-yield rupture strain eut = 3 permille
+    # before the concrete crushes. s_bars are the projections.
+    s_bars = np.array([0.19, 0.099])
     empty = np.empty(0)
-    low = MildSteel(fytk=500.0, fyck=500.0, eut=0.002, gamma_y=1.0, curve=2)
+    low = MildSteel(fytk=500.0, fyck=500.0, eut=0.003, gamma_y=1.0, curve=2)
     phi = _governing_curvature(low, None, 0.2, 0.1, s_bars, empty, 0.0035)
-    assert phi == pytest.approx(0.002 / 0.08, rel=1e-6)    # compression bar governs
+    assert phi == pytest.approx(0.003 / 0.09, rel=1e-6)    # compression bar governs
     # With a large eut the concrete crushing limit governs instead (no cap effect).
     high = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.0, curve=2)
     phi2 = _governing_curvature(high, None, 0.2, 0.1, s_bars, empty, 0.0035)
     assert phi2 == pytest.approx(0.0035 / 0.1, rel=1e-6)   # concrete governs
+
+
+def test_governing_curvature_ignores_zero_capacity_compression_rupture():
+    # fyck=0 owns no compression branch even when the explicit toggle remains on.
+    # The ignored bar therefore cannot cap curvature at its nominal eut.
+    s_bars = np.array([0.19, 0.099])
+    empty = np.empty(0)
+    zero_compression = MildSteel(
+        fytk=500.0,
+        fyck=0.0,
+        eut=0.003,
+        gamma_y=1.0,
+        curve=2,
+        active_in_compression=True,
+    )
+
+    phi = _governing_curvature(
+        zero_compression,
+        None,
+        0.2,
+        0.1,
+        s_bars,
+        empty,
+        0.0035,
+    )
+
+    assert phi == pytest.approx(0.0035 / 0.1, rel=1e-6)
+
+
+def test_zero_fyck_toggle_does_not_change_plastic_capacity_or_governor():
+    section = _rect_with_top_and_bottom_bars()
+    values = dict(
+        fytk=500.0,
+        fyck=0.0,
+        eut=0.003,
+        gamma_y=1.0,
+        curve=2,
+    )
+    sentinel = MildSteel(**values, active_in_compression=True)
+    tension_only = MildSteel(**values, active_in_compression=False)
+
+    sentinel_result = plastic_capacity_at_angle(
+        section, _C30, sentinel, 0.0, 90.0
+    )
+    tension_only_result = plastic_capacity_at_angle(
+        section, _C30, tension_only, 0.0, 90.0
+    )
+
+    assert sentinel_result.Mx == pytest.approx(tension_only_result.Mx)
+    assert sentinel_result.My == pytest.approx(tension_only_result.My)
+    assert sentinel_result.curvature == pytest.approx(
+        tension_only_result.curvature
+    )
+    assert sentinel_result.curvature_selection.selected_mode == (
+        tension_only_result.curvature_selection.selected_mode
+    )
+    assert not any(
+        candidate.mode == "bar_compression_rupture"
+        for candidate in sentinel_result.curvature_selection.candidates
+    )
 
 
 def test_plastic_capacity_responds_to_ultimate_strain():

@@ -131,6 +131,53 @@ def test_curve3_figure_labels_input_parameters_not_derived():
         assert sym not in texts, sym
 
 
+@pytest.mark.parametrize(
+    ("active_in_compression", "fyck", "ey0c"),
+    (
+        (False, 700.0, -0.01),
+        (True, 0.0, -0.001),
+    ),
+)
+def test_curve3_figure_omits_inactive_compression_points_and_labels(
+    active_in_compression,
+    fyck,
+    ey0c,
+):
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=fyck,
+        futk=600.0,
+        eut=0.05,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        k=0.9,
+        ey0t=0.002,
+        ey0c=ey0c,
+        curve=3,
+        active_in_compression=active_in_compression,
+    )
+
+    fig = viz.steel_curve_figure(steel)
+    texts = " ".join(annotation.text for annotation in fig.layout.annotations)
+    forbidden = (
+        "f<sub>yck</sub>",
+        "k" + viz._MID + "f<sub>yck</sub>",
+        _EPS + "<sub>0c</sub>",
+    )
+
+    assert not any(symbol in texts for symbol in forbidden)
+    marker = next(trace for trace in fig.data if trace.mode == "markers")
+    assert all(value >= 0.0 for value in marker.x)
+    assert all(value >= 0.0 for value in marker.y)
+    characteristic = _named_trace(fig, "characteristic")
+    assert all(
+        abs(stress) < 1.0e-12
+        for strain, stress in zip(characteristic.x, characteristic.y)
+        if strain < 0.0
+    )
+
+
 def _named_trace(fig, name):
     return next(t for t in fig.data if getattr(t, "name", None) == name)
 

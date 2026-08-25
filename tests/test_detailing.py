@@ -39,6 +39,37 @@ def _rectangle():
     return section, elements, [_steel()] * len(bars)
 
 
+@pytest.mark.parametrize(
+    ("active_in_compression", "fyck", "expected_active"),
+    (
+        (True, 500.0, True),
+        (True, 0.0, False),
+        (False, 500.0, False),
+    ),
+)
+def test_characteristic_plateau_preserves_effective_compression_applicability(
+    active_in_compression,
+    fyck,
+    expected_active,
+):
+    source = MildSteel(
+        fytk=500.0,
+        fyck=fyck,
+        eut=0.05,
+        gamma_y=1.15,
+        curve=2,
+        active_in_compression=active_in_compression,
+    )
+
+    plateau = detailing._characteristic_plateau(source)
+
+    assert plateau.active_in_compression is expected_active
+    assert plateau.fyck == pytest.approx(500.0 if expected_active else 0.0)
+    assert plateau.stress(-0.01, design=False) == pytest.approx(
+        -500.0 if expected_active else 0.0
+    )
+
+
 def test_tension_zone_mean_width_uses_net_clipped_concrete():
     section, _elements, _materials = _rectangle()
     assert detailing.tension_zone_mean_width(section, "x", True) == pytest.approx(

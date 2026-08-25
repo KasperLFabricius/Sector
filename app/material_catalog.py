@@ -12,6 +12,7 @@ import copy
 import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from numbers import Integral, Real
 
 from sector import codes
 from sector import material_presets as mp
@@ -193,7 +194,20 @@ def _normalise_entry(raw: Mapping, kind: str, material_id: str) -> dict:
         )
     for field in fields(kind):
         fallback = base[field]
-        base[field] = _finite(raw.get(field, fallback), fallback)
+        if field not in raw:
+            base[field] = fallback
+            continue
+        value = raw[field]
+        if isinstance(value, bool):
+            base[field] = value
+            continue
+        try:
+            base[field] = float(value)
+        except (TypeError, ValueError, OverflowError):
+            # Preserve an invalid engineering value for the strict material-law
+            # boundary. Catalogue normalisation may repair structure and IDs, but
+            # must never substitute a different strength, strain or factor.
+            base[field] = value
     return base
 
 
@@ -420,15 +434,66 @@ def apply_preset(entry: Mapping, kind: str, preset: str) -> dict:
     return _normalise_entry(out, kind, _text(out.get("id")))
 
 
-def build_material(entry: Mapping, kind: str):
-    item = _normalise_entry(entry, kind, _text(entry.get("id")))
-    values = {field: item[field] for field in fields(kind)}
-    if _kind(kind) == "mild":
+def required_fields(kind: str, curve: int) -> tuple[str, ...]:
+    """Return the numerical fields owned by one active material curve."""
+
+    kind = _kind(kind)
+    by_curve = (
+        mp.MILD_FIELDS_BY_CURVE
+        if kind == "mild"
+        else mp.PRESTRESS_FIELDS_BY_CURVE
+    )
+    if curve not in by_curve:
+        raise ValueError(f"{kind} material curve is not supported")
+    return tuple(by_curve[curve])
+
+
+def validate_material_definition(entry: Mapping, kind: str):
+    """Build one law without repairing an invalid engineering definition.
+
+    Catalogue normalisation remains responsible for stable IDs and editable
+    metadata. Numerical laws cross this stricter boundary: every field used by
+    the selected curve must be present, and the material constructor owns its
+    finite, positive and relational domain checks. Fields that the selected law
+    does not use remain deliberately inapplicable.
+    """
+
+    kind = _kind(kind)
+    if not isinstance(entry, Mapping):
+        raise ValueError(f"{kind} material entry must be an object")
+    if "curve" not in entry:
+        raise ValueError(f"{kind} material curve is required")
+    raw_curve = entry["curve"]
+    if isinstance(raw_curve, bool) or not isinstance(raw_curve, Integral):
+        raise ValueError(f"{kind} material curve must be an integer")
+    curve = int(raw_curve)
+
+    owned_fields = required_fields(kind, curve)
+    missing = [field for field in owned_fields if field not in entry]
+    if missing:
+        raise ValueError(
+            f"{kind} material curve {curve} requires " + ", ".join(missing)
+        )
+    values = {field: entry[field] for field in owned_fields}
+    for field, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise ValueError(f"{field} must be a real number")
+    if kind == "mild":
+        active = entry.get(
+            "active_in_compression", entry.get("active_comp", True)
+        )
+        if type(active) is not bool:
+            raise ValueError("active_in_compression must be a Boolean")
         return mp.build_mild(
-            item["curve"], active_in_compression=item["active_in_compression"],
+            curve,
+            active_in_compression=active,
             **values,
         )
-    return mp.build_prestress(item["curve"], **values)
+    return mp.build_prestress(curve, **values)
+
+
+def build_material(entry: Mapping, kind: str):
+    return validate_material_definition(entry, kind)
 
 
 def signature(catalog, kind: str) -> tuple:

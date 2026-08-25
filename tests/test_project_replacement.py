@@ -29,7 +29,9 @@ _EXPLICIT_FIELDS_WITHOUT_PRESETS_PROJECT = project_io.dump_project(
         "rep_proj_no": "STATE-H02 explicit fields without presets",
         "conc_fck": 41.0,
         "mild_fytk": 615.0,
+        "mild_futk": 650.0,
         "pre_fytk": 1711.0,
+        "pre_futk": 1800.0,
     },
 ).encode("utf-8")
 
@@ -335,10 +337,12 @@ def test_explicit_preset_fields_survive_when_selectors_are_omitted(
         "DS/EN 1992-1-1:2005 + DK NA:2024"
     )
     assert at.number_input(key="mild_fytk").value == pytest.approx(615.0)
+    assert at.number_input(key="mild_futk").value == pytest.approx(650.0)
 
     _goto_material_tab(at, "Prestressing steel")
     assert at.selectbox(key="pre_preset").value == "EN 1992-1-1:2005"
     assert at.number_input(key="pre_fytk").value == pytest.approx(1711.0)
+    assert at.number_input(key="pre_futk").value == pytest.approx(1800.0)
 
     assert at.session_state["_durable_input_scalars"]["conc_fck"] == (
         pytest.approx(41.0)
@@ -349,9 +353,15 @@ def test_explicit_preset_fields_survive_when_selectors_are_omitted(
     assert at.session_state["_latest_inputs"]["mild_material_catalog"][
         "items"
     ][0]["fytk"] == pytest.approx(615.0)
+    assert at.session_state["_latest_inputs"]["mild_material_catalog"][
+        "items"
+    ][0]["futk"] == pytest.approx(650.0)
     assert at.session_state["_latest_inputs"]["prestress_material_catalog"][
         "items"
     ][0]["fytk"] == pytest.approx(1711.0)
+    assert at.session_state["_latest_inputs"]["prestress_material_catalog"][
+        "items"
+    ][0]["futk"] == pytest.approx(1800.0)
     assert not at.exception
 
 
@@ -369,16 +379,24 @@ def test_initial_replacement_preserves_explicit_fields_without_presets() -> None
     assert at.number_input(key="conc_fck").value == pytest.approx(41.0)
     assert at.session_state["conc_fck"] == pytest.approx(41.0)
     assert at.session_state["mild_fytk"] == pytest.approx(615.0)
+    assert at.session_state["mild_futk"] == pytest.approx(650.0)
     assert at.session_state["pre_fytk"] == pytest.approx(1711.0)
+    assert at.session_state["pre_futk"] == pytest.approx(1800.0)
     assert at.session_state["_latest_inputs"]["concrete"].fck == pytest.approx(
         41.0
     )
     assert at.session_state["_latest_inputs"]["mild_material_catalog"][
         "items"
     ][0]["fytk"] == pytest.approx(615.0)
+    assert at.session_state["_latest_inputs"]["mild_material_catalog"][
+        "items"
+    ][0]["futk"] == pytest.approx(650.0)
     assert at.session_state["_latest_inputs"]["prestress_material_catalog"][
         "items"
     ][0]["fytk"] == pytest.approx(1711.0)
+    assert at.session_state["_latest_inputs"]["prestress_material_catalog"][
+        "items"
+    ][0]["futk"] == pytest.approx(1800.0)
 
 
 def test_successful_sparse_replacement_discards_old_results_events_and_reports() -> None:

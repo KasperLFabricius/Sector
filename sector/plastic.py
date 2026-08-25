@@ -278,7 +278,11 @@ def _curvature_at_depth(
                 selected_element_index = index
         # The rupture strain is symmetric, so a compression bar must not be driven
         # past eut either. This only bites when eut < the concrete crushing strain.
-        if material.active_in_compression and s_bar > s_na:
+        if (
+            material.active_in_compression
+            and material.fyck > 0.0
+            and s_bar > s_na
+        ):
             strain_limit = intact * material.eut
             distance = float(s_bar) - s_na
             candidate = strain_limit / distance
