@@ -1250,7 +1250,7 @@ def test_current_schema_retains_every_capacity_method_identity(key, label):
 )
 @pytest.mark.parametrize(
     "invalid",
-    [None, "", "unsupported method", True, 1, []],
+    ["", "unsupported method"],
 )
 def test_current_schema_rejects_present_unsupported_capacity_method(
     key,
@@ -1414,7 +1414,6 @@ def test_fatigue_edition_round_trips_only_as_a_registered_basis_key(basis_key):
         "DS/EN 1992-1-1:2023",
         "ec2_1_1_2023_published ",
         "",
-        None,
     ),
 )
 def test_fatigue_edition_rejects_labels_legacy_tokens_and_near_matches(
@@ -1462,8 +1461,6 @@ def test_sls_code_round_trips_only_as_a_registered_basis_key(basis_key):
         "ec2_1_1_first_gen_dk_na_2024 ",
         "unknown",
         "",
-        None,
-        True,
     ),
 )
 def test_sls_code_rejects_labels_aliases_whitespace_and_unknown_values(invalid):

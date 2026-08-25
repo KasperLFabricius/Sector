@@ -391,8 +391,14 @@ _EXACT_TEXT_OPTIONS = {
     "qsv_t_orientation": frozenset({"Flange at top", "Flange at bottom"}),
     "qsv_qs_rebar_mode": frozenset({"By number", "By spacing"}),
     "conc_preset": frozenset(material_presets.CONCRETE_PRESETS),
-    "mild_preset": frozenset(material_catalog.presets("mild")),
-    "pre_preset": frozenset(material_catalog.presets("prestress")),
+    "mild_preset": frozenset({
+        *material_catalog.presets("mild"),
+        material_catalog.CUSTOM_PRESET,
+    }),
+    "pre_preset": frozenset({
+        *material_catalog.presets("prestress"),
+        material_catalog.CUSTOM_PRESET,
+    }),
     "mode": frozenset({"Plastic", "Elastic", "Both"}),
     "sls_bond": frozenset({
         "Ribbed / high bond (k1 = 0.8)",
@@ -595,9 +601,9 @@ def _validated_scalar_payload(scalars: Mapping) -> dict:
         if key not in scalars:
             continue
         value = _json_value(scalars[key])
-        # These exact-choice resolvers already reject every unsupported type and
-        # value before publication. Preserve their established diagnostic class
-        # and detail while the generic manifest handles the remaining text keys.
+        # These exact-choice resolvers retain their established unknown-value
+        # diagnostics. Reject non-text values at this authored input boundary
+        # before handing supported strings to those resolvers.
         if key in {
             "shear_method",
             "torsion_method",
@@ -605,7 +611,7 @@ def _validated_scalar_payload(scalars: Mapping) -> dict:
             "sls_code",
             "fatigue_edition",
         }:
-            payload[key] = value
+            payload[key] = _strict_text(value, key)
             continue
         if (
             key == "sls_heightened_reinforcement_surface"

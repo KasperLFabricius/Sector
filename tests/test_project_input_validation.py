@@ -97,6 +97,27 @@ def test_every_text_scalar_rejects_nontext_values(key: str) -> None:
             project_io._canonical_scalars({key: invalid}, {})
 
 
+@pytest.mark.parametrize(
+    "key",
+    (
+        "shear_method",
+        "torsion_method",
+        "combined_method",
+        "sls_code",
+        "fatigue_edition",
+    ),
+)
+def test_method_and_design_basis_types_use_the_authored_input_boundary(
+    key: str,
+) -> None:
+    for invalid in (True, 1, 1.0, [], {}):
+        with pytest.raises(project_io.ProjectInputError) as exc_info:
+            project_io._canonical_scalars({key: invalid}, {})
+        assert project_io.engineer_error_message(exc_info.value) == (
+            "the project file contains an invalid input value"
+        )
+
+
 @pytest.mark.parametrize("key", sorted(project_io._EXACT_TEXT_OPTIONS))
 def test_every_exact_text_selection_rejects_unknown_text(key: str) -> None:
     with pytest.raises(project_io.ProjectInputError):
@@ -206,6 +227,31 @@ def test_all_current_nested_scalar_defaults_pass_the_type_boundary() -> None:
         fatigue_inputs.VERSION
     )
     assert loaded[fatigue_inputs.BASIS_KEY] == fatigue_inputs.default_basis()
+
+
+def test_custom_material_catalogues_and_live_aliases_round_trip() -> None:
+    custom = material_catalog.CUSTOM_PRESET
+    mild = material_catalog.default_catalog("mild")
+    prestress = material_catalog.default_catalog("prestress")
+    mild["items"][0]["preset"] = custom
+    prestress["items"][0]["preset"] = custom
+    source_scalars = {
+        material_catalog.MILD_CATALOG_KEY: mild,
+        material_catalog.PRESTRESS_CATALOG_KEY: prestress,
+        "mild_preset": custom,
+        "pre_preset": custom,
+    }
+
+    text = project_io.dump_project({}, source_scalars)
+    _tables, loaded = project_io.parse_project(text)
+
+    assert loaded["mild_preset"] == custom
+    assert loaded["pre_preset"] == custom
+    assert loaded[material_catalog.MILD_CATALOG_KEY]["items"][0]["preset"] == custom
+    assert (
+        loaded[material_catalog.PRESTRESS_CATALOG_KEY]["items"][0]["preset"]
+        == custom
+    )
 
 
 @pytest.mark.parametrize(
@@ -501,6 +547,8 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
         _mutated_project(valid_a, scalar("conc_fck", True)),
         _mutated_project(valid_a, scalar("qsv_b_mm", "400")),
         _mutated_project(valid_a, scalar("mode", {"value": "Both"})),
+        _mutated_project(valid_a, scalar("shear_method", True)),
+        _mutated_project(valid_a, scalar("sls_code", {})),
         _mutated_project(valid_a, wrong_rows),
         _mutated_project(
             valid_a,
@@ -512,6 +560,8 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
     forbidden = (
         "conc_fck",
         "qsv_b_mm",
+        "shear_method",
+        "sls_code",
         "plastic_cases_base",
         "Boolean",
         "finite number",
