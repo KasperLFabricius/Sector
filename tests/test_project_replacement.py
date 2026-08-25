@@ -73,6 +73,7 @@ def _goto_input_tab(at: AppTest, name: str) -> AppTest:
     dot = chr(0x00B7)
     labels = {
         "Analysis settings": f"1 {dot} Analysis settings",
+        "Section": f"2 {dot} Section",
         "Material parameters": f"3 {dot} Material parameters",
         "Project": "Project",
     }
@@ -130,6 +131,15 @@ def _build_history(name: str) -> AppTest:
         _goto_input_tab(at, "Analysis settings")
         at.checkbox(key="torsion_on").set_value(True).run()
         assert at.session_state["torsion_on"] is True
+        return at
+    if name == "altered-section-labels":
+        _goto_input_tab(at, "Section")
+        at.number_input(key="label_scale").set_value(2.5).run()
+        at.number_input(key="label_min_gap").set_value(0.25).run()
+        assert at.number_input(key="label_scale").value == pytest.approx(2.5)
+        assert at.number_input(key="label_min_gap").value == pytest.approx(0.25)
+        assert at.session_state["_workspace_label_scale"] == pytest.approx(2.5)
+        assert at.session_state["_workspace_label_min_gap"] == pytest.approx(0.25)
         return at
     if name == "quick-section":
         at.session_state["_qs_open"] = True
@@ -192,6 +202,7 @@ def clean_replacement_snapshot() -> tuple[str, str]:
         "altered-material",
         "fatigue-enabled",
         "torsion-enabled",
+        "altered-section-labels",
         "quick-section",
     ),
 )
@@ -225,6 +236,34 @@ def test_same_sparse_project_reconstructs_identically_from_every_history(
     elif history == "torsion-enabled":
         _goto_input_tab(at, "Analysis settings")
         assert at.checkbox(key="torsion_on").value is False
+    elif history == "altered-section-labels":
+        defaults = {
+            "label_scale": 1.0,
+            "label_min_gap": 0.04,
+        }
+
+        def assert_section_defaults() -> None:
+            for key, expected in defaults.items():
+                mirror = f"_workspace_{key}"
+                assert at.number_input(key=key).value == pytest.approx(expected)
+                assert at.session_state[key] == pytest.approx(expected)
+                assert at.session_state[mirror] == pytest.approx(expected)
+                assert at.session_state["_durable_input_scalars"][key] == (
+                    pytest.approx(expected)
+                )
+                assert at.session_state["_latest_inputs"][key] == pytest.approx(
+                    expected
+                )
+
+        # Mount the real controls, then leave and remount their owner stage. The
+        # canonical defaults must remain authoritative in every mirror and in the
+        # completed calculation payload throughout that lifecycle.
+        _goto_input_tab(at, "Section")
+        assert_section_defaults()
+        _goto_project(at)
+        _goto_input_tab(at, "Section")
+        assert_section_defaults()
+        assert _replacement_snapshot(at) == clean_replacement_snapshot
     elif history == "quick-section":
         at.session_state["_qs_open"] = True
         at.session_state["_main_page"] = "Analysis"

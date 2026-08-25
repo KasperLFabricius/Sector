@@ -3373,6 +3373,8 @@ def _apply_project_text(text: str) -> None:
         "_capacity_steel_unresolved_material_id",
         "_material_tab",
         "_material_tab_preference",
+        "_workspace_label_scale",
+        "_workspace_label_min_gap",
         _TORSION_GAMMA_METHOD_KEY,
         _TORSION_GAMMA_MANAGED_KEY,
         _INPUT_BUILD_KEY,
