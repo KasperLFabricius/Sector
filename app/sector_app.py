@@ -3345,18 +3345,39 @@ def _apply_project_text(text: str) -> None:
     st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
     st.session_state.pop(_HEIGHTENED_EXPLICIT_REFERENCE_KEY, None)
     st.session_state.pop(_PENDING_REPORT_EVENTS_KEY, None)
-    # A current project load replaces every optional calculation family and the
-    # complete Quick Section builder state from the prior session. These fields may
-    # be absent from a valid current project, so clear them before applying the
-    # loaded scalars; otherwise an omitted field can inherit a stale value. In
-    # particular, schema-25 projects written before expanded Quick Sections have no
-    # orientation and must retain the historical upright-T default.
-    replacement_scoped_scalar_keys = (
-        *project_io.FATIGUE_SCALAR_KEYS,
-        *project_io.HEIGHTENED_CRACK_SCALAR_KEYS,
-        *project_io.QUICK_SECTION_SCALAR_KEYS,
+    # A valid project is a whole-project replacement. Current-schema files may
+    # intentionally omit any persisted scalar, so remove every live project value
+    # before overlaying the parsed file. Missing values are then reconstructed by
+    # the same canonical widget/default paths as a clean session, never inherited
+    # from the project that happened to be open before the load.
+    project_scalar_keys = frozenset(
+        (*project_io.SCALAR_KEYS, *project_io.PRESENTATION_SCALAR_KEYS)
     )
-    for key in replacement_scoped_scalar_keys:
+    for key in project_scalar_keys:
+        st.session_state.pop(key, None)
+    # Reset non-persisted controllers whose old values can seed, select or mutate a
+    # persisted family after the scalar overlay. An already mounted outer stage is
+    # retained below; nested material navigation restarts at its canonical first tab.
+    for key in (
+        *project_io.PREV_MARKERS,
+        "conc_alpha_fck",
+        "_auto_all",
+        "_material_alias_revision",
+        "_mild_catalog_selected",
+        "_mild_catalog_pending_selected",
+        "_prestress_catalog_selected",
+        "_prestress_catalog_pending_selected",
+        "_fatigue_catalog_selected",
+        "_fatigue_catalog_pending_selected",
+        "_capacity_steel_pending_material_id",
+        "_capacity_steel_unresolved_material_id",
+        "_material_tab",
+        "_material_tab_preference",
+        _TORSION_GAMMA_METHOD_KEY,
+        _TORSION_GAMMA_MANAGED_KEY,
+        _INPUT_BUILD_KEY,
+        _REPORT_BUILD_KEY,
+    ):
         st.session_state.pop(key, None)
     for key in _QS_WIDGET_KEYS:
         st.session_state.pop(key, None)
@@ -3384,8 +3405,6 @@ def _apply_project_text(text: str) -> None:
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
         _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
-    for key in _REPORT_STATE_SCALARS:
-        st.session_state.pop(key, None)
     for key, value in scalars.items():
         st.session_state[key] = value
     if "torsion_gamma_ct" in scalars:
@@ -3400,32 +3419,33 @@ def _apply_project_text(text: str) -> None:
         # A loaded value is an explicit persisted input even when it happens to
         # equal the selected method's current default.
         st.session_state[_TORSION_GAMMA_MANAGED_KEY] = False
-    if any(key in scalars for key in mat_catalog.CATALOG_KEYS):
-        _bump_material_catalog_revision()
-        st.session_state.pop("_material_alias_revision", None)
-        st.session_state.pop("_mild_catalog_selected", None)
-        st.session_state.pop("_prestress_catalog_selected", None)
-    if (
-        fatigue_inputs.DETAIL_CATALOG_KEY in scalars
-        or any(key.startswith("fatiguecat_r") for key in st.session_state)
-    ):
-        _bump_fatigue_catalog_revision()
-        st.session_state.pop("_fatigue_catalog_selected", None)
-        st.session_state.pop("_fatigue_catalog_pending_selected", None)
+    # Always rotate catalogue widget namespaces. A sparse file that omits a
+    # catalogue must be just as independent of a previously edited catalogue as a
+    # file that contains one explicitly.
+    _bump_material_catalog_revision()
+    _bump_fatigue_catalog_revision()
     st.session_state["_fatigue_basis_revision"] = (
         int(st.session_state.get("_fatigue_basis_revision", 0)) + 1
     )
     for key in list(st.session_state):
-        if key.startswith("fatiguecat_r") or key.startswith("fatiguebasis_r"):
+        if key.startswith(
+            ("mildcat_r", "prestresscat_r", "fatiguecat_r", "fatiguebasis_r")
+        ):
             st.session_state.pop(key, None)
+    # Rebuild the durable mirror from the replacement only. Retain an already
+    # mounted outer stage and the freshly rotated internal widget revisions, but
+    # never carry an engineering scalar or family selection across projects.
     durable = {
-        key: value
-        for key, value in st.session_state.get(_INPUT_STATE_KEY, {}).items()
-        if (
-            key not in replacement_scoped_scalar_keys
-            and key not in _REPORT_STATE_SCALAR_SET
-        )
+        "_material_catalog_revision": st.session_state[
+            "_material_catalog_revision"
+        ],
+        "_fatigue_catalog_revision": st.session_state[
+            "_fatigue_catalog_revision"
+        ],
+        "_fatigue_basis_revision": st.session_state["_fatigue_basis_revision"],
     }
+    if "_input_tab" in st.session_state:
+        durable["_input_tab"] = st.session_state["_input_tab"]
     durable.update(
         {
             key: value
