@@ -75,6 +75,14 @@ class ProjectInputError(ValueError):
         self.engineer_message = engineer_message
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class PreparedProjectUpload:
+    """Validated upload text paired with its raw-byte content identity."""
+
+    content_identity: str
+    text: str
+
+
 _PROJECT_READ_FALLBACK = EngineerMessage(
     "PROJECT-READ",
     "the project file could not be read",
@@ -1371,3 +1379,29 @@ def parse_project(text: str):
 
     tables, scalars, _info = parse_project_with_info(text)
     return tables, scalars
+
+
+def project_upload_identity(content: bytes | bytearray | memoryview) -> str:
+    """Return an identity derived exclusively from the uploaded raw bytes."""
+
+    if not isinstance(content, (bytes, bytearray, memoryview)):
+        raise TypeError("project upload content must be bytes-like")
+    return hashlib.sha256(bytes(content)).hexdigest()
+
+
+def prepare_project_upload(
+    content: bytes | bytearray | memoryview,
+) -> PreparedProjectUpload:
+    """Decode and fully validate one uploaded project without mutating app state."""
+
+    raw = bytes(content)
+    identity = project_upload_identity(raw)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as exc:
+        raise ProjectInputError(
+            "project upload is not valid UTF-8",
+            engineer_message=_PROJECT_UNREADABLE,
+        ) from exc
+    parse_project_with_info(text)
+    return PreparedProjectUpload(content_identity=identity, text=text)

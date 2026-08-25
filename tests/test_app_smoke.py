@@ -5446,8 +5446,9 @@ def test_pending_project_rejects_overlong_alias_before_widget_mount():
     assert not at.exception
     assert at.session_state["_project_msg"] == (
         "error",
-        "Could not load project: the modelled-direction description must be a "
-        "single line of at most 60 characters.",
+        "New file was not applied: the modelled-direction description must be a "
+        "single line of at most 60 characters. Select an intact, compatible "
+        "Sector project file and try again.",
     )
     assert at.text_input(key=modelled_direction.ALIAS_KEY).value == ""
     assert at.session_state[modelled_direction.ALIAS_KEY] == ""

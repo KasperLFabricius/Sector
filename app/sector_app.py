@@ -2644,6 +2644,10 @@ _INPUT_ISSUE_FOCUS_KEY = "_input_issue_focus"
 _SHOW_INPUT_ISSUES_KEY = "_show_input_validation_issues"
 _HEIGHTENED_AUTO_REFERENCE_KEY = "_heightened_auto_reference_case"
 _HEIGHTENED_EXPLICIT_REFERENCE_KEY = "_heightened_explicit_reference_case"
+_PROJECT_UPLOAD_CONTENT_ID_KEY = "_project_upload_content_identity"
+_PROJECT_UPLOAD_GENERATION_KEY = "_project_upload_widget_generation"
+_PENDING_PROJECT_CONTENT_ID_KEY = "_pending_project_content_identity"
+_PENDING_PROJECT_WIDGET_KEY = "_pending_project_widget_key"
 
 
 def _input_stage_labels() -> dict[str, str]:
@@ -3273,30 +3277,65 @@ def _autosave_panel(box) -> None:
                 else "Local recovery is restored on the next launch.")
 
 
-def _apply_pending_project() -> None:
-    """Apply an uploaded project, if any, before the widgets are created.
+def _project_not_applied_message(error: Exception) -> str:
+    """Return concise authored guidance without publishing raw diagnostics."""
+
+    detail = project_io.engineer_error_message(error).rstrip(".")
+    return (
+        f"New file was not applied: {detail}. "
+        "Select an intact, compatible Sector project file and try again."
+    )
+
+
+def _project_upload_widget_key() -> str:
+    """Return the transport widget key; it never contributes to file identity."""
+
+    generation = st.session_state.get(_PROJECT_UPLOAD_GENERATION_KEY, 0)
+    if not isinstance(generation, int) or isinstance(generation, bool):
+        generation = 0
+    generation = max(generation, 0)
+    if generation == 0:
+        return "project_upload"
+    return f"project_upload_{generation}"
+
+
+def _advance_project_upload_widget(widget_key: str | None = None) -> None:
+    """Clear one attempted upload without treating widget state as identity."""
+
+    generation = st.session_state.get(_PROJECT_UPLOAD_GENERATION_KEY, 0)
+    if not isinstance(generation, int) or isinstance(generation, bool):
+        generation = 0
+    st.session_state[_PROJECT_UPLOAD_GENERATION_KEY] = max(generation, 0) + 1
+    if widget_key is not None:
+        st.session_state.pop(widget_key, None)
+
+
+def _project_transaction_snapshot() -> dict[str, object]:
+    """Deep-copy the complete keyed session namespace before replacement."""
+
+    return copy.deepcopy(st.session_state.to_dict())
+
+
+def _restore_project_transaction(snapshot: dict[str, object]) -> None:
+    """Restore the exact pre-transaction keyed namespace before widgets mount."""
+
+    for key in tuple(st.session_state.to_dict()):
+        st.session_state.pop(key, None)
+    for key, value in snapshot.items():
+        st.session_state[key] = value
+
+
+def _apply_project_text(text: str) -> None:
+    """Apply one validated project before any widgets are created.
 
     Runs at the top of the script so writing the loaded values into the widget
     keys (and the point-table bases) happens before those widgets exist -- the
     only point at which Streamlit allows their state to be set.
     """
-    text = st.session_state.pop("_pending_project", None)
-    if text is None:
-        return
-    try:
-        tables, scalars, parse_info = project_io.parse_project_with_info(text)
-        provenance = parse_info["provenance"]
-    except ValueError as exc:
-        st.session_state["_project_msg"] = (
-            "error",
-            "Could not load project: "
-            f"{project_io.engineer_error_message(exc)}.",
-        )
-        return
-    # Parsing is the transaction boundary for a project replacement. A rejected
-    # upload leaves the existing project active, so its migration warning and
-    # structured provenance must remain intact. Clear them only once a valid
-    # replacement has been authenticated and is about to be applied.
+    tables, scalars, parse_info = project_io.parse_project_with_info(text)
+    provenance = parse_info["provenance"]
+    # The caller owns the all-state transaction. These values are cleared only
+    # inside that rollback-protected boundary, after complete project validation.
     st.session_state.pop("_project_migration_warnings", None)
     st.session_state.pop("_loaded_project_migration", None)
     st.session_state.pop(_REPORT_PROFILE_ERROR_KEY, None)
@@ -3443,7 +3482,9 @@ def _apply_pending_project() -> None:
         "result_fatigue_sig",
         "result_plastic_case_context_sig", "result_elastic_case_context_sig",
         "result_plastic_bending_context_sig",
-        "result_input_snapshot",
+        "result_input_snapshot", "_latest_inputs",
+        "_case_error", "pl_state", "_report_msg",
+        _INPUT_ISSUE_FOCUS_KEY, _SHOW_INPUT_ISSUES_KEY,
     ):
         st.session_state.pop(key, None)
     _clear_report_artifact()
@@ -3478,6 +3519,56 @@ def _apply_pending_project() -> None:
         st.session_state["_project_msg"] = (
             "success" if verified is not False else "error",
             message,
+        )
+
+
+def _apply_pending_project() -> None:
+    """Apply a pending project as one all-state transaction."""
+
+    text = st.session_state.get("_pending_project")
+    if text is None:
+        return
+    content_identity = st.session_state.get(_PENDING_PROJECT_CONTENT_ID_KEY)
+    widget_key = st.session_state.get(_PENDING_PROJECT_WIDGET_KEY)
+    try:
+        snapshot = _project_transaction_snapshot()
+    except Exception as exc:
+        st.session_state.pop("_pending_project", None)
+        st.session_state.pop(_PENDING_PROJECT_CONTENT_ID_KEY, None)
+        st.session_state.pop(_PENDING_PROJECT_WIDGET_KEY, None)
+        st.session_state.pop("_autosave_restoring", None)
+        if isinstance(widget_key, str):
+            _advance_project_upload_widget(widget_key)
+        st.session_state["_project_msg"] = (
+            "error",
+            _project_not_applied_message(exc),
+        )
+        return
+
+    try:
+        st.session_state.pop("_pending_project", None)
+        st.session_state.pop(_PENDING_PROJECT_CONTENT_ID_KEY, None)
+        st.session_state.pop(_PENDING_PROJECT_WIDGET_KEY, None)
+        _apply_project_text(text)
+        if isinstance(widget_key, str):
+            _advance_project_upload_widget(widget_key)
+        if content_identity is None:
+            st.session_state.pop(_PROJECT_UPLOAD_CONTENT_ID_KEY, None)
+        else:
+            # Commit the raw-byte identity last, after every state mutation and
+            # dependent-result invalidation has completed successfully.
+            st.session_state[_PROJECT_UPLOAD_CONTENT_ID_KEY] = content_identity
+    except Exception as exc:
+        _restore_project_transaction(snapshot)
+        st.session_state.pop("_pending_project", None)
+        st.session_state.pop(_PENDING_PROJECT_CONTENT_ID_KEY, None)
+        st.session_state.pop(_PENDING_PROJECT_WIDGET_KEY, None)
+        st.session_state.pop("_autosave_restoring", None)
+        if isinstance(widget_key, str):
+            _advance_project_upload_widget(widget_key)
+        st.session_state["_project_msg"] = (
+            "error",
+            _project_not_applied_message(exc),
         )
 
 
@@ -3547,13 +3638,33 @@ def _save_load_panel() -> None:
             f"Project file updated | {detail}"
         )
     _autosave_panel(box)
-    up = box.file_uploader("Load project", type=["json"], key="project_upload",
+    # Retire the pre-0.96.2 filename/size latch if this process hot-reloads from
+    # an older session. It is deliberately never consulted.
+    st.session_state.pop("_project_upload_id", None)
+    upload_widget_key = _project_upload_widget_key()
+    up = box.file_uploader("Load project", type=["json"], key=upload_widget_key,
                            help="Restore a section from a downloaded project file.")
     if up is not None:
-        fid = (up.name, up.size)
-        if st.session_state.get("_project_upload_id") != fid:
-            st.session_state["_project_upload_id"] = fid
-            st.session_state["_pending_project"] = up.getvalue().decode("utf-8")
+        try:
+            prepared = project_io.prepare_project_upload(up.getvalue())
+        except Exception as exc:
+            st.session_state["_project_msg"] = (
+                "error",
+                _project_not_applied_message(exc),
+            )
+            # A new empty uploader is mounted on the next interaction. The same
+            # bytes remain selectable and no failed identity is retained.
+            _advance_project_upload_widget()
+            app_run_probe.close_fragment_run(st.session_state)
+            st.rerun()
+        else:
+            # A selection on this fresh uploader is an explicit replacement,
+            # including when its bytes match the last successfully loaded file.
+            st.session_state["_pending_project"] = prepared.text
+            st.session_state[_PENDING_PROJECT_CONTENT_ID_KEY] = (
+                prepared.content_identity
+            )
+            st.session_state[_PENDING_PROJECT_WIDGET_KEY] = upload_widget_key
             app_run_probe.close_fragment_run(st.session_state)
             st.rerun()
     msg = st.session_state.pop("_project_msg", None)
