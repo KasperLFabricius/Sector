@@ -1760,6 +1760,148 @@ def test_calculation_record_is_correlated_but_results_are_not_persisted():
         )
 
 
+def test_provenance_and_calculation_input_checks_are_independent():
+    tables, scalars = _current_project()
+    digest = project_io.input_sha256(tables, scalars)
+    text = project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-07-29T12:00:00+00:00",
+            "sector_version": "0.96.1",
+            "source_revision": "a" * 40,
+            "input_sha256": digest,
+            "engineering_input_sha256": "e" * 64,
+            "result_sha256": "f" * 64,
+        },
+        app_version="0.96.1",
+        revision="a" * 40,
+    )
+    original = json.loads(text)
+
+    changed_provenance = copy.deepcopy(original)
+    changed_provenance["provenance"]["input_sha256"] = "0" * 64
+    provenance_changed = project_io.project_provenance(
+        json.dumps(changed_provenance)
+    )
+    assert provenance_changed["input_hash_valid"] is False
+    assert provenance_changed["calculation"]["matches_saved_inputs"] is True
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io.parse_project(json.dumps(changed_provenance))
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file is damaged or was changed outside Sector"
+    )
+
+    changed_calculation = copy.deepcopy(original)
+    changed_calculation["calculation"]["input_sha256"] = "1" * 64
+    calculation_changed = project_io.project_provenance(
+        json.dumps(changed_calculation)
+    )
+    assert calculation_changed["input_hash_valid"] is True
+    assert calculation_changed["calculation"]["matches_saved_inputs"] is False
+    project_io.parse_project(json.dumps(changed_calculation))
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    (
+        ("sector_version", True),
+        ("sector_version", "RAW payload schema contract"),
+        ("sector_version", "0.96.1-payload-schema-contract"),
+        ("source_revision", []),
+        ("source_revision", "source control history"),
+        ("saved_at_utc", 1),
+        ("saved_at_utc", "2026-08-25T12:00:00"),
+        ("input_sha256", "g" * 64),
+        ("results_included", "false"),
+        ("results_included", True),
+        ("private_payload", "RAW internal value"),
+    ),
+)
+def test_project_provenance_rejects_unpublishable_fields(field, invalid):
+    tables, scalars = _current_project()
+    data = json.loads(project_io.dump_project(tables, scalars))
+    data["provenance"][field] = invalid
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io.project_provenance(json.dumps(data))
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file is incomplete or damaged"
+    )
+
+
+@pytest.mark.parametrize("invalid", (None, True, "RAW payload", []))
+def test_project_calculation_record_requires_an_object(invalid):
+    tables, scalars = _current_project()
+    data = json.loads(project_io.dump_project(tables, scalars))
+    data["calculation"] = invalid
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io.project_provenance(json.dumps(data))
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the recorded calculation is damaged; recalculate before saving the project"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    (
+        ("performed_at_utc", True),
+        ("performed_at_utc", "RAW traceback payload"),
+        ("performed_at_utc", "2026-08-25T12:00:00"),
+        ("sector_version", {}),
+        ("sector_version", "RAW source-control process"),
+        ("sector_version", "0.96.1-payload-schema-contract"),
+        ("source_revision", 1),
+        ("source_revision", "source control history"),
+        ("input_sha256", "not-a-check"),
+        ("engineering_input_sha256", False),
+        ("result_sha256", "f" * 63),
+        ("matches_saved_inputs", "true"),
+        ("private_payload", "RAW internal value"),
+    ),
+)
+def test_project_calculation_record_rejects_unpublishable_fields(field, invalid):
+    tables, scalars = _current_project()
+    digest = project_io.input_sha256(tables, scalars)
+    data = json.loads(project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-08-25T12:00:00+00:00",
+            "sector_version": "0.96.1",
+            "source_revision": "a" * 40,
+            "input_sha256": digest,
+            "engineering_input_sha256": "e" * 64,
+            "result_sha256": "f" * 64,
+        },
+    ))
+    data["calculation"][field] = invalid
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io.project_provenance(json.dumps(data))
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the recorded calculation is damaged; recalculate before saving the project"
+    )
+
+
+def test_recorded_labels_never_echo_unvalidated_values():
+    hostile = "RAW GitHub SHA-256 payload schema contract internal_private_ID"
+
+    assert project_io.recorded_sector_version_label(hostile) is None
+    assert project_io.recorded_sector_version_label(
+        "0.96.1-payload-schema-contract"
+    ) is None
+    assert project_io.recorded_sector_version_label("0.96.1") == "0.96.1"
+    assert project_io.recorded_utc_label(hostile) is None
+    assert project_io.recorded_utc_label("2026-08-25T14:30:00+02:00") == (
+        "2026-08-25 12:30 UTC"
+    )
+
+
 def test_nonpositive_factor_is_rejected_but_positive_custom_values_are_not():
     tables, scalars = _current_project()
     for value in (0.5, 2.0):

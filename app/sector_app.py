@@ -3287,6 +3287,45 @@ def _project_not_applied_message(error: Exception) -> str:
     )
 
 
+def _saved_input_check_copy(matches: object) -> str:
+    if matches is True:
+        return "saved-input check matches the current saved inputs"
+    return "saved-input check does not match the current saved inputs"
+
+
+def _calculation_input_check_copy(matches: object) -> str:
+    if matches is True:
+        return "recorded input check matches the current saved inputs"
+    return "recorded input check differs from the current saved inputs"
+
+
+def _project_record_captions(loaded: object) -> tuple[str, ...]:
+    """Build engineer-facing project-record copy from validated values only."""
+
+    if not isinstance(loaded, dict):
+        return ()
+    version = project_io.recorded_sector_version_label(
+        loaded.get("sector_version")
+    )
+    if version is None:
+        return ("Loaded project: saving version unavailable",)
+    lines = [
+        f"Loaded project | recorded Sector version {version} | "
+        f"{_saved_input_check_copy(loaded.get('input_hash_valid'))}"
+    ]
+    calculation = loaded.get("calculation")
+    if isinstance(calculation, dict) and calculation:
+        performed = project_io.recorded_utc_label(
+            calculation.get("performed_at_utc")
+        )
+        lines.append(
+            "Recorded calculation: "
+            f"{performed or 'time unavailable'} | "
+            f"{_calculation_input_check_copy(calculation.get('matches_saved_inputs'))}"
+        )
+    return tuple(lines)
+
+
 def _project_upload_widget_key() -> str:
     """Return the transport widget key; it never contributes to file identity."""
 
@@ -3547,15 +3586,13 @@ def _apply_project_text(text: str) -> None:
     if st.session_state.pop("_autosave_restoring", False):
         st.session_state["_project_msg"] = ("success", "Restored autosaved session.")
     else:
-        version = provenance.get("sector_version")
-        verified = provenance.get("input_hash_valid")
+        version = project_io.recorded_sector_version_label(
+            provenance.get("sector_version")
+        )
+        input_matches = provenance.get("input_hash_valid") is True
         if version:
-            integrity = (
-                "saved inputs verified"
-                if verified
-                else "saved input record does not match"
-            )
-            detail = f"Sector {version}; {integrity}"
+            integrity = _saved_input_check_copy(input_matches)
+            detail = f"recorded Sector version {version}; {integrity}"
         else:
             detail = "saving version unavailable"
         message = (
@@ -3568,7 +3605,7 @@ def _apply_project_text(text: str) -> None:
                 "recalculating."
             )
         st.session_state["_project_msg"] = (
-            "success" if verified is not False else "error",
+            "success" if input_matches else "error",
             message,
         )
 
@@ -3654,29 +3691,8 @@ def _save_load_panel() -> None:
     )
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
-        if loaded.get("sector_version"):
-            integrity = (
-                "file integrity verified"
-                if loaded.get("input_hash_valid") is True
-                else "saved input record does not match"
-            )
-            box.caption(
-                f"Loaded: Sector {loaded['sector_version']} | {integrity}"
-            )
-            calculation = loaded.get("calculation") or {}
-            if calculation:
-                match = (
-                    "input match"
-                    if calculation.get("matches_saved_inputs")
-                    else "inputs changed after calculation"
-                )
-                box.caption(
-                    "Recorded calculation: "
-                    f"{calculation.get('performed_at_utc') or 'time unavailable'}"
-                    f" | {match}"
-                )
-        else:
-            box.caption("Loaded project: saving version unavailable")
+        for caption in _project_record_captions(loaded):
+            box.caption(caption)
     loaded_migration = st.session_state.get("_loaded_project_migration")
     if loaded_migration:
         migration = loaded_migration.get("migration_provenance") or {}

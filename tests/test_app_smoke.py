@@ -3170,7 +3170,180 @@ def test_save_load_round_trip_through_the_app():
     assert plastic.loc[0, "description"] == "Source: Register C7"
     assert at.session_state["_loaded_project_provenance"]["input_hash_valid"] is True
     _goto_input_tab(at, "Project")
-    assert any("file integrity verified" in caption.value for caption in at.caption)
+    assert any(
+        "saved-input check matches the current saved inputs" in caption.value
+        for caption in at.caption
+    )
+    assert not any("file integrity" in caption.value.casefold() for caption in at.caption)
+
+
+def test_project_record_copy_distinguishes_independent_input_checks():
+    import project_io
+    import sector_app
+
+    tables, scalars = {}, {"conc_fck": 41.0}
+    digest = project_io.input_sha256(tables, scalars)
+    original = json.loads(project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-08-25T14:30:00+02:00",
+            "sector_version": "0.96.1",
+            "source_revision": "a" * 40,
+            "input_sha256": digest,
+            "engineering_input_sha256": "e" * 64,
+            "result_sha256": "f" * 64,
+        },
+        app_version="0.96.1",
+        revision="a" * 40,
+    ))
+
+    changed_provenance = copy.deepcopy(original)
+    changed_provenance["provenance"]["input_sha256"] = "0" * 64
+    provenance_copy = sector_app._project_record_captions(
+        project_io.project_provenance(json.dumps(changed_provenance))
+    )
+    assert provenance_copy == (
+        "Loaded project | recorded Sector version 0.96.1 | saved-input check does "
+        "not match the current saved inputs",
+        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
+        "matches the current saved inputs",
+    )
+
+    changed_calculation = copy.deepcopy(original)
+    changed_calculation["calculation"]["input_sha256"] = "1" * 64
+    calculation_copy = sector_app._project_record_captions(
+        project_io.project_provenance(json.dumps(changed_calculation))
+    )
+    assert calculation_copy == (
+        "Loaded project | recorded Sector version 0.96.1 | saved-input check "
+        "matches the current saved inputs",
+        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
+        "differs from the current saved inputs",
+    )
+
+    published = " ".join((*provenance_copy, *calculation_copy)).casefold()
+    for forbidden in (
+        "file integrity",
+        "hash",
+        "digest",
+        "payload",
+        "schema",
+        "contract",
+        "github",
+        "internal_private",
+    ):
+        assert forbidden not in published
+
+
+def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
+    import project_io
+
+    at = _fresh().run()
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    scalars["conc_fck"] = 41.0
+    digest = project_io.input_sha256(tables, scalars)
+    base = json.loads(project_io.dump_project(
+        tables,
+        scalars,
+        calculation={
+            "performed_at_utc": "2026-08-25T14:30:00+02:00",
+            "sector_version": "0.96.1",
+            "source_revision": "a" * 40,
+            "input_sha256": digest,
+            "engineering_input_sha256": "e" * 64,
+            "result_sha256": "f" * 64,
+        },
+        app_version="0.96.1",
+        revision="a" * 40,
+    ))
+    hostile = (
+        "RAW GitHub SHA-256 payload schema contract internal_private_ID traceback"
+    )
+
+    _goto_input_tab(at, "Project")
+
+    def upload(data, filename):
+        assert len(at.file_uploader) == 1
+        at.file_uploader[0].set_value(
+            (filename, json.dumps(data).encode("utf-8"), "application/json")
+        ).run()
+        assert not at.exception
+
+    upload(base, "valid-record.json")
+    expected_captions = (
+        "Loaded project | recorded Sector version 0.96.1 | saved-input check "
+        "matches the current saved inputs",
+        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
+        "matches the current saved inputs",
+    )
+    visible_captions = tuple(str(item.value) for item in at.caption)
+    assert all(expected in visible_captions for expected in expected_captions)
+    _calculate(at)
+    assert "results" in at.session_state
+    retained_result = project_io.result_sha256(at.session_state["results"])
+    retained_calculation = copy.deepcopy(at.session_state["calculation_record"])
+    _goto_input_tab(at, "Project")
+    before = copy.deepcopy(at.session_state["_loaded_project_provenance"])
+
+    for area, field, invalid_value in (
+        ("provenance", "sector_version", hostile),
+        (
+            "provenance",
+            "sector_version",
+            "0.96.1-payload-schema-contract",
+        ),
+        ("calculation", "performed_at_utc", hostile),
+    ):
+        invalid = copy.deepcopy(base)
+        invalid[area][field] = invalid_value
+        upload(invalid, f"invalid-{area}.json")
+
+        assert at.session_state["conc_fck"] == pytest.approx(41.0)
+        assert at.session_state["_loaded_project_provenance"] == before
+        assert project_io.result_sha256(at.session_state["results"]) == (
+            retained_result
+        )
+        assert at.session_state["calculation_record"] == retained_calculation
+        visible = "\n".join(
+            str(item.value) for item in (*at.error, *at.caption)
+        )
+        assert "New file was not applied" in visible
+        assert hostile not in visible
+        assert "payload-schema-contract" not in visible
+        for forbidden in (
+            "GitHub",
+            "SHA-256",
+            "payload",
+            "schema",
+            "contract",
+            "internal_private_ID",
+            "traceback",
+        ):
+            assert forbidden not in visible
+
+    changed_calculation = copy.deepcopy(base)
+    changed_calculation["calculation"]["input_sha256"] = "1" * 64
+    upload(changed_calculation, "different-calculation-inputs.json")
+
+    visible_captions = tuple(str(item.value) for item in at.caption)
+    assert expected_captions[0] in visible_captions
+    assert (
+        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
+        "differs from the current saved inputs"
+    ) in visible_captions
+    assert any("Project loaded" in str(item.value) for item in at.success)
+    assert "results" not in at.session_state
+    assert not at.exception
 
 
 def test_schema_25_shared_crack_width_migrates_with_visible_warning():

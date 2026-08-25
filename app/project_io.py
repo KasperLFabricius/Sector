@@ -1386,6 +1386,221 @@ def _valid_sha256(value) -> bool:
     )
 
 
+_RECORDED_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+){1,3}")
+_RECORDED_REVISION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,127}")
+_PROVENANCE_FIELDS = frozenset({
+    "sector_version",
+    "source_revision",
+    "saved_at_utc",
+    "input_sha256",
+    "results_included",
+})
+_CALCULATION_FIELDS = frozenset({
+    "performed_at_utc",
+    "sector_version",
+    "source_revision",
+    "input_sha256",
+    "engineering_input_sha256",
+    "result_sha256",
+    "matches_saved_inputs",
+})
+
+
+def _valid_recorded_version(value) -> bool:
+    return (
+        type(value) is str
+        and len(value) <= 64
+        and _RECORDED_VERSION_RE.fullmatch(value) is not None
+    )
+
+
+def _valid_recorded_revision(value) -> bool:
+    return (
+        type(value) is str
+        and _RECORDED_REVISION_RE.fullmatch(value) is not None
+    )
+
+
+def _parse_recorded_time(value) -> datetime | None:
+    if type(value) is not str or not value or len(value) > 64:
+        return None
+    try:
+        recorded = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if recorded.tzinfo is None or recorded.utcoffset() is None:
+        return None
+    return recorded.astimezone(timezone.utc)
+
+
+def recorded_sector_version_label(value) -> str | None:
+    """Return a display-safe recorded product version or no label."""
+
+    return value if _valid_recorded_version(value) else None
+
+
+def recorded_utc_label(value) -> str | None:
+    """Return a display-safe UTC time without echoing an unvalidated value."""
+
+    recorded = _parse_recorded_time(value)
+    return recorded.strftime("%Y-%m-%d %H:%M UTC") if recorded else None
+
+
+def _record_field_error(
+    detail: str,
+    *,
+    engineer_message: EngineerMessage,
+) -> ProjectInputError:
+    return ProjectInputError(detail, engineer_message=engineer_message)
+
+
+def _validated_recorded_time(
+    value,
+    label: str,
+    *,
+    engineer_message: EngineerMessage,
+) -> str:
+    recorded = _parse_recorded_time(value)
+    if recorded is None:
+        raise _record_field_error(
+            f"{label} must be a timezone-aware ISO timestamp",
+            engineer_message=engineer_message,
+        )
+    return recorded.isoformat(timespec="seconds")
+
+
+def _validated_recorded_version(
+    value,
+    label: str,
+    *,
+    engineer_message: EngineerMessage,
+) -> str:
+    if not _valid_recorded_version(value):
+        raise _record_field_error(
+            f"{label} must be a product version",
+            engineer_message=engineer_message,
+        )
+    return value
+
+
+def _validated_recorded_revision(
+    value,
+    label: str,
+    *,
+    engineer_message: EngineerMessage,
+) -> str:
+    if not _valid_recorded_revision(value):
+        raise _record_field_error(
+            f"{label} must be a source revision token",
+            engineer_message=engineer_message,
+        )
+    return value
+
+
+def _validated_recorded_sha256(
+    value,
+    label: str,
+    *,
+    engineer_message: EngineerMessage,
+) -> str:
+    if not _valid_sha256(value):
+        raise _record_field_error(
+            f"{label} must be a lowercase SHA-256",
+            engineer_message=engineer_message,
+        )
+    return value
+
+
+def _validated_provenance_record(value: Mapping) -> dict:
+    unknown = set(value) - _PROVENANCE_FIELDS
+    if unknown:
+        raise _record_field_error(
+            "project provenance contains unknown fields",
+            engineer_message=_PROJECT_DAMAGED,
+        )
+    record = {}
+    if "sector_version" in value:
+        record["sector_version"] = _validated_recorded_version(
+            value["sector_version"],
+            "project sector_version",
+            engineer_message=_PROJECT_DAMAGED,
+        )
+    if "source_revision" in value:
+        record["source_revision"] = _validated_recorded_revision(
+            value["source_revision"],
+            "project source_revision",
+            engineer_message=_PROJECT_DAMAGED,
+        )
+    if "saved_at_utc" in value:
+        record["saved_at_utc"] = _validated_recorded_time(
+            value["saved_at_utc"],
+            "project saved_at_utc",
+            engineer_message=_PROJECT_DAMAGED,
+        )
+    if "input_sha256" in value:
+        record["input_sha256"] = _validated_recorded_sha256(
+            value["input_sha256"],
+            "project input_sha256",
+            engineer_message=_PROJECT_DAMAGED,
+        )
+    if "results_included" in value:
+        if value["results_included"] is not False:
+            raise _record_field_error(
+                "project results_included must be false",
+                engineer_message=_PROJECT_DAMAGED,
+            )
+        record["results_included"] = False
+    return record
+
+
+def _validated_calculation_record(value: Mapping, actual_input_sha256: str) -> dict:
+    unknown = set(value) - _CALCULATION_FIELDS
+    if unknown:
+        raise _record_field_error(
+            "calculation record contains unknown fields",
+            engineer_message=_PROJECT_CALCULATION_DAMAGED,
+        )
+    record = {}
+    if "performed_at_utc" in value:
+        record["performed_at_utc"] = _validated_recorded_time(
+            value["performed_at_utc"],
+            "calculation performed_at_utc",
+            engineer_message=_PROJECT_CALCULATION_DAMAGED,
+        )
+    if "sector_version" in value:
+        record["sector_version"] = _validated_recorded_version(
+            value["sector_version"],
+            "calculation sector_version",
+            engineer_message=_PROJECT_CALCULATION_DAMAGED,
+        )
+    if "source_revision" in value:
+        record["source_revision"] = _validated_recorded_revision(
+            value["source_revision"],
+            "calculation source_revision",
+            engineer_message=_PROJECT_CALCULATION_DAMAGED,
+        )
+    for key in ("input_sha256", "engineering_input_sha256", "result_sha256"):
+        if key in value:
+            record[key] = _validated_recorded_sha256(
+                value[key],
+                f"calculation {key}",
+                engineer_message=_PROJECT_CALCULATION_DAMAGED,
+            )
+    if (
+        "matches_saved_inputs" in value
+        and type(value["matches_saved_inputs"]) is not bool
+    ):
+        raise _record_field_error(
+            "calculation matches_saved_inputs must be a Boolean",
+            engineer_message=_PROJECT_CALCULATION_DAMAGED,
+        )
+    record["matches_saved_inputs"] = (
+        bool(record.get("input_sha256"))
+        and record.get("input_sha256") == actual_input_sha256
+    )
+    return record
+
+
 def dump_project(
     tables: Mapping,
     scalars: Mapping,
@@ -1397,8 +1612,16 @@ def dump_project(
     """Serialize one current-schema project."""
     content = _canonical_inputs(tables, scalars)
     digest = _input_digest(content)
-    app_version = str(app_version or sector_version)
-    revision = str(revision or source_revision())
+    app_version = _validated_recorded_version(
+        app_version or sector_version,
+        "project sector_version",
+        engineer_message=_PROJECT_DAMAGED,
+    )
+    revision = _validated_recorded_revision(
+        revision or source_revision(),
+        "project source_revision",
+        engineer_message=_PROJECT_DAMAGED,
+    )
     payload = {
         "format": FORMAT,
         "version": VERSION,
@@ -1414,29 +1637,20 @@ def dump_project(
             "results_included": False,
         },
     }
-    if isinstance(calculation, Mapping):
-        record = {
-            key: _json_value(calculation.get(key))
-            for key in (
-                "performed_at_utc",
-                "sector_version",
-                "source_revision",
-                "input_sha256",
-                "engineering_input_sha256",
-                "result_sha256",
+    if calculation is not None:
+        if not isinstance(calculation, Mapping):
+            raise _record_field_error(
+                "calculation record must be an object",
+                engineer_message=_PROJECT_CALCULATION_DAMAGED,
             )
-            if calculation.get(key) not in (None, "")
-        }
-        record["matches_saved_inputs"] = (
-            record.get("input_sha256") == digest
+        payload["calculation"] = _validated_calculation_record(
+            {
+                key: _json_value(value)
+                for key, value in calculation.items()
+                if value not in (None, "")
+            },
+            digest,
         )
-        for key in ("engineering_input_sha256", "result_sha256"):
-            if key in record and not _valid_sha256(record[key]):
-                raise ProjectInputError(
-                    f"calculation {key} must be a lowercase SHA-256",
-                    engineer_message=_PROJECT_CALCULATION_DAMAGED,
-                )
-        payload["calculation"] = record
     return json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False)
 
 
@@ -1508,17 +1722,18 @@ def project_provenance(text: str) -> dict:
             "project inputs are not canonical JSON",
             engineer_message=_PROJECT_DAMAGED,
         ) from exc
-    provenance = data["provenance"]
+    provenance = _validated_provenance_record(data["provenance"])
     recorded = provenance.get("input_sha256")
-    calculation = (
-        dict(data["calculation"])
-        if isinstance(data.get("calculation"), Mapping)
-        else None
-    )
-    if calculation is not None:
-        calculation["matches_saved_inputs"] = (
-            bool(calculation.get("input_sha256"))
-            and calculation.get("input_sha256") == actual
+    calculation = None
+    if "calculation" in data:
+        if not isinstance(data["calculation"], Mapping):
+            raise _record_field_error(
+                "calculation record must be an object",
+                engineer_message=_PROJECT_CALCULATION_DAMAGED,
+            )
+        calculation = _validated_calculation_record(
+            data["calculation"],
+            actual,
         )
     return {
         "schema_version": data["version"],
