@@ -7,8 +7,6 @@ import pathlib
 import sys
 
 import pytest
-from streamlit.proto.Common_pb2 import FileURLs
-from streamlit.runtime.uploaded_file_manager import UploadedFile, UploadedFileRec
 from streamlit.testing.v1 import AppTest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -63,32 +61,18 @@ def _project_bytes(fck: float, *, fatigue: bool = False) -> bytes:
     return project_io.dump_project(tables, scalars).encode("utf-8")
 
 
-def _uploaded(content: bytes, *, file_id: str = "same-file") -> UploadedFile:
-    return UploadedFile(
-        UploadedFileRec(
-            file_id,
-            "sector_section.json",
-            "application/json",
-            content,
-        ),
-        FileURLs(),
-    )
-
-
-def _upload_widget_key(at: AppTest) -> str:
-    generation = (
-        at.session_state["_project_upload_widget_generation"]
-        if "_project_upload_widget_generation" in at.session_state
-        else 0
-    )
-    return "project_upload" if generation == 0 else f"project_upload_{generation}"
+def _rendered_upload_key(at: AppTest) -> str:
+    assert len(at.file_uploader) == 1
+    key = at.file_uploader[0].key
+    assert isinstance(key, str)
+    return key
 
 
 def _fresh_with_upload(content: bytes) -> AppTest:
     at = AppTest.from_file(APP, default_timeout=90)
     at.session_state["_input_tab"] = "Project"
-    at.session_state["project_upload"] = _uploaded(content)
-    return at.run()
+    at.run()
+    return _upload(at, content)
 
 
 def _fresh() -> AppTest:
@@ -96,8 +80,11 @@ def _fresh() -> AppTest:
 
 
 def _upload(at: AppTest, content: bytes) -> AppTest:
-    at.session_state[_upload_widget_key(at)] = _uploaded(content)
-    return at.run()
+    assert len(at.file_uploader) == 1
+    at.file_uploader[0].set_value(
+        ("sector_section.json", content, "application/json")
+    ).run()
+    return at
 
 
 def _goto_page(at: AppTest, page: str) -> AppTest:
@@ -115,6 +102,30 @@ def _goto_project(at: AppTest) -> AppTest:
     _goto_page(at, "Inputs")
     if at.session_state["_input_tab"] != "Project":
         at.session_state["_input_tab"] = "Project"
+        at.run()
+    return at
+
+
+def _goto_concrete(at: AppTest) -> AppTest:
+    _goto_page(at, "Inputs")
+    material_stage = f"3 {chr(0x00B7)} Material parameters"
+    current_stage = (
+        at.session_state["_input_tab"]
+        if "_input_tab" in at.session_state
+        else None
+    )
+    current_material = (
+        at.session_state["_material_tab"]
+        if "_material_tab" in at.session_state
+        else None
+    )
+    if (
+        current_stage != material_stage
+        or current_material != "Concrete"
+    ):
+        at.session_state["_input_tab"] = material_stage
+        at.session_state["_material_tab"] = "Concrete"
+        at.session_state["_material_tab_preference"] = "Concrete"
         at.run()
     return at
 
@@ -216,6 +227,10 @@ def _visible_upload_errors(at: AppTest) -> list[str]:
     return [str(item.value) for item in at.error]
 
 
+def _visible_upload_successes(at: AppTest) -> list[str]:
+    return [str(item.value) for item in at.success]
+
+
 def test_content_identity_and_validation_depend_only_on_raw_bytes() -> None:
     assert list(inspect.signature(project_io.prepare_project_upload).parameters) == [
         "content"
@@ -266,6 +281,40 @@ def test_real_streamlit_upload_applies_same_name_same_size_a_b_a() -> None:
     )
 
 
+def test_real_streamlit_same_file_reload_restores_edited_project() -> None:
+    at = _fresh()
+    a = _replacement_bytes(at, 41.0)
+    _goto_project(at)
+    _upload(at, a)
+    assert at.session_state["conc_fck"] == pytest.approx(41.0)
+
+    before_results = _completed_result_evidence(at)
+    _goto_concrete(at)
+    at.number_input(key="conc_fck").set_value(55.0).run()
+    assert at.session_state["conc_fck"] == pytest.approx(55.0)
+    _assert_result_evidence(at, before_results)
+
+    _goto_project(at)
+    previous_key = _rendered_upload_key(at)
+    previous_generation = at.session_state["_project_upload_widget_generation"]
+    _upload(at, a)
+
+    assert not at.exception
+    assert at.session_state["conc_fck"] == pytest.approx(41.0)
+    assert at.session_state["_project_upload_content_identity"] == (
+        project_io.project_upload_identity(a)
+    )
+    assert at.session_state["_project_upload_widget_generation"] == (
+        previous_generation + 1
+    )
+    assert _rendered_upload_key(at) != previous_key
+    assert any(
+        "Project loaded" in message for message in _visible_upload_successes(at)
+    )
+    for key in _RESULT_KEYS:
+        assert key not in at.session_state
+
+
 def test_invalid_retries_retain_results_then_corrected_same_size_applies() -> None:
     at = _fresh()
     a = _replacement_bytes(at, 41.0)
@@ -287,9 +336,17 @@ def test_invalid_retries_retain_results_then_corrected_same_size_applies() -> No
     # Re-submit identical invalid bytes, then a different invalid encoding. No
     # failed identity is latched, and every attempt leaves the last valid state.
     for invalid in (invalid_utf8, invalid_utf8, invalid_json):
+        previous_key = _rendered_upload_key(at)
+        previous_generation = at.session_state[
+            "_project_upload_widget_generation"
+        ]
         _upload(at, invalid)
 
         assert not at.exception
+        assert at.session_state["_project_upload_widget_generation"] == (
+            previous_generation + 1
+        )
+        assert _rendered_upload_key(at) != previous_key
         assert _project_signature(at) == before_project
         assert at.session_state["_project_upload_content_identity"] == (
             before_identity
@@ -304,9 +361,15 @@ def test_invalid_retries_retain_results_then_corrected_same_size_applies() -> No
         assert all("UnicodeDecodeError" not in message for message in errors)
         assert all("JSONDecodeError" not in message for message in errors)
 
+    corrected_key = _rendered_upload_key(at)
+    corrected_generation = at.session_state["_project_upload_widget_generation"]
     _upload(at, b)
 
     assert not at.exception
+    assert at.session_state["_project_upload_widget_generation"] == (
+        corrected_generation + 1
+    )
+    assert _rendered_upload_key(at) != corrected_key
     assert at.session_state["conc_fck"] == pytest.approx(42.0)
     assert at.session_state["_project_upload_content_identity"] == (
         project_io.project_upload_identity(b)

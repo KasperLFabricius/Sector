@@ -3653,17 +3653,18 @@ def _save_load_panel() -> None:
             # A new empty uploader is mounted on the next interaction. The same
             # bytes remain selectable and no failed identity is retained.
             _advance_project_upload_widget()
+            app_run_probe.close_fragment_run(st.session_state)
+            st.rerun()
         else:
-            if st.session_state.get(_PROJECT_UPLOAD_CONTENT_ID_KEY) != (
+            # A selection on this fresh uploader is an explicit replacement,
+            # including when its bytes match the last successfully loaded file.
+            st.session_state["_pending_project"] = prepared.text
+            st.session_state[_PENDING_PROJECT_CONTENT_ID_KEY] = (
                 prepared.content_identity
-            ):
-                st.session_state["_pending_project"] = prepared.text
-                st.session_state[_PENDING_PROJECT_CONTENT_ID_KEY] = (
-                    prepared.content_identity
-                )
-                st.session_state[_PENDING_PROJECT_WIDGET_KEY] = upload_widget_key
-                app_run_probe.close_fragment_run(st.session_state)
-                st.rerun()
+            )
+            st.session_state[_PENDING_PROJECT_WIDGET_KEY] = upload_widget_key
+            app_run_probe.close_fragment_run(st.session_state)
+            st.rerun()
     msg = st.session_state.pop("_project_msg", None)
     if msg:
         (box.success if msg[0] == "success" else box.error)(msg[1])
