@@ -507,7 +507,7 @@ def test_page_execution_waits_for_the_rerun_requested_by_a_widget(monkeypatch):
 
 
 def _package(tmp_path: Path) -> Path:
-    package = tmp_path / "Sector-v0.96-windows-portable"
+    package = tmp_path / "Sector-v0.96.1-windows-portable"
     package.mkdir()
     (package / "Sector.exe").write_bytes(b"fake")
     return package
