@@ -3536,6 +3536,7 @@ def _apply_pending_project() -> None:
         st.session_state.pop("_pending_project", None)
         st.session_state.pop(_PENDING_PROJECT_CONTENT_ID_KEY, None)
         st.session_state.pop(_PENDING_PROJECT_WIDGET_KEY, None)
+        st.session_state.pop("_autosave_restoring", None)
         if isinstance(widget_key, str):
             _advance_project_upload_widget(widget_key)
         st.session_state["_project_msg"] = (
@@ -3562,6 +3563,7 @@ def _apply_pending_project() -> None:
         st.session_state.pop("_pending_project", None)
         st.session_state.pop(_PENDING_PROJECT_CONTENT_ID_KEY, None)
         st.session_state.pop(_PENDING_PROJECT_WIDGET_KEY, None)
+        st.session_state.pop("_autosave_restoring", None)
         if isinstance(widget_key, str):
             _advance_project_upload_widget(widget_key)
         st.session_state["_project_msg"] = (

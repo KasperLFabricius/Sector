@@ -440,3 +440,53 @@ def test_late_application_failure_rolls_back_and_identical_bytes_retry(
     )
     for key in _RESULT_KEYS:
         assert key not in at.session_state
+
+
+def test_failed_autosave_application_cannot_label_next_manual_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    at = _fresh()
+    autosave_project = _replacement_bytes(at, 41.0, fatigue=True)
+    manual_project = _replacement_bytes(at, 42.0)
+    original_normalise = fatigue_inputs.normalise_spectrum_table
+
+    def fail_during_autosave_application(value):
+        if sys._getframe(1).f_code.co_name == "_apply_project_text":
+            raise RuntimeError("private forced autosave diagnostic")
+        return original_normalise(value)
+
+    monkeypatch.setattr(
+        fatigue_inputs,
+        "normalise_spectrum_table",
+        fail_during_autosave_application,
+    )
+    at.session_state["_pending_project"] = autosave_project.decode("utf-8")
+    at.session_state["_autosave_restoring"] = True
+    at.run()
+
+    assert not at.exception
+    assert "_autosave_restoring" not in at.session_state
+    assert at.session_state["_project_msg"][0] == "error"
+    assert "New file was not applied" in at.session_state["_project_msg"][1]
+
+    _goto_project(at)
+    assert any(
+        "New file was not applied" in message
+        for message in _visible_upload_errors(at)
+    )
+    assert all(
+        "private forced" not in message for message in _visible_upload_errors(at)
+    )
+
+    monkeypatch.setattr(
+        fatigue_inputs,
+        "normalise_spectrum_table",
+        original_normalise,
+    )
+    _upload(at, manual_project)
+
+    assert not at.exception
+    successes = _visible_upload_successes(at)
+    assert any("Project loaded" in message for message in successes)
+    assert all("Restored autosaved session" not in message for message in successes)
+    assert at.session_state["conc_fck"] == pytest.approx(42.0)
