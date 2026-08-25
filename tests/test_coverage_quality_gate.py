@@ -15,6 +15,13 @@ from tools.verify_coverage_gate import (
     CHECKOUT_ACTION,
     CHECKOUT_STEP_NAME,
     COVERAGE_STEP_NAME,
+    MANUAL_RENDER_COMMAND,
+    MANUAL_RENDER_STEP_NAME,
+    QA_UPLOAD_ACTION,
+    QA_UPLOAD_SETTINGS,
+    QA_UPLOAD_STEP_NAME,
+    REPORT_RENDER_COMMAND,
+    REPORT_RENDER_STEP_NAME,
     VALIDATOR_STEP_NAME,
     CoverageGateContractError,
     expected_branch_coverage_command,
@@ -398,4 +405,92 @@ def test_filtered_trigger_or_command_drift_is_rejected():
         workflow, BRANCH_COVERAGE_STEP_NAME
     )["run"].replace("--cov-branch", "", 1)
     with pytest.raises(CoverageGateContractError, match="branch coverage command"):
+        validate_workflow(_contract(), _workflow_text(workflow))
+
+
+def test_real_render_and_upload_evidence_identity_is_pinned():
+    workflow = _workflow()
+
+    assert _step(workflow, REPORT_RENDER_STEP_NAME) == {
+        "name": REPORT_RENDER_STEP_NAME,
+        "if": "always()",
+        "run": REPORT_RENDER_COMMAND,
+    }
+    assert _step(workflow, MANUAL_RENDER_STEP_NAME) == {
+        "name": MANUAL_RENDER_STEP_NAME,
+        "if": "always()",
+        "run": MANUAL_RENDER_COMMAND,
+    }
+    assert _step(workflow, QA_UPLOAD_STEP_NAME) == {
+        "name": QA_UPLOAD_STEP_NAME,
+        "if": "always()",
+        "uses": QA_UPLOAD_ACTION,
+        "with": QA_UPLOAD_SETTINGS,
+    }
+
+
+@pytest.mark.parametrize(
+    ("step_name", "mutation"),
+    [
+        (REPORT_RENDER_STEP_NAME, "remove"),
+        (REPORT_RENDER_STEP_NAME, "rename"),
+        (REPORT_RENDER_STEP_NAME, "mask"),
+        (REPORT_RENDER_STEP_NAME, "destination"),
+        (MANUAL_RENDER_STEP_NAME, "remove"),
+        (MANUAL_RENDER_STEP_NAME, "rename"),
+        (MANUAL_RENDER_STEP_NAME, "mask"),
+        (MANUAL_RENDER_STEP_NAME, "destination"),
+    ],
+)
+def test_real_render_evidence_mutations_are_rejected(step_name, mutation):
+    workflow = _workflow()
+    steps = workflow["jobs"]["test"]["steps"]
+    step = _step(workflow, step_name)
+    if mutation == "remove":
+        steps.remove(step)
+    elif mutation == "rename":
+        step["name"] += " renamed"
+    elif mutation == "mask":
+        step["if"] = "success()"
+    else:
+        step["run"] = step["run"].replace("qa-artifacts/", "temporary/")
+
+    with pytest.raises(CoverageGateContractError, match="evidence|contain one"):
+        validate_workflow(_contract(), _workflow_text(workflow))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("if", "success()"),
+        ("uses", "actions/upload-artifact@main"),
+        ("with", {**QA_UPLOAD_SETTINGS, "path": "qa-artifacts/report/"}),
+    ],
+)
+def test_complete_qa_artifact_upload_cannot_be_masked_or_narrowed(field, value):
+    workflow = _workflow()
+    _step(workflow, QA_UPLOAD_STEP_NAME)[field] = value
+
+    with pytest.raises(CoverageGateContractError, match="evidence upload"):
+        validate_workflow(_contract(), _workflow_text(workflow))
+
+
+@pytest.mark.parametrize(
+    "step_name",
+    [
+        COVERAGE_STEP_NAME,
+        BRANCH_COVERAGE_STEP_NAME,
+        REPORT_RENDER_STEP_NAME,
+        MANUAL_RENDER_STEP_NAME,
+    ],
+)
+def test_every_qa_evidence_producer_must_precede_the_upload(step_name):
+    workflow = _workflow()
+    steps = workflow["jobs"]["test"]["steps"]
+    producer = _step(workflow, step_name)
+    upload = _step(workflow, QA_UPLOAD_STEP_NAME)
+    steps.remove(producer)
+    steps.insert(steps.index(upload) + 1, producer)
+
+    with pytest.raises(CoverageGateContractError, match="step order"):
         validate_workflow(_contract(), _workflow_text(workflow))

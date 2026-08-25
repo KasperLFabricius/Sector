@@ -14,6 +14,7 @@ import pathlib
 import re
 import sys
 import time
+import types
 
 import pytest
 
@@ -1277,9 +1278,11 @@ def test_origin_invalid_plastic_result_is_retained_and_rendered_invalid(monkeypa
     assert plastic["worked_point_basis"] == "peak resultant moment"
     _select_view(at, "Plastic Results")
     assert any(
-        "INVALID - Plastic bending" in item.value and reason in item.value
+        "INVALID - Plastic bending" in item.value
+        and "does not contain the zero-moment origin" in item.value
         for item in at.error
     )
+    assert not any(reason in item.value for item in at.error)
     assert not at.exception
 
 
@@ -1525,6 +1528,8 @@ def test_plastic_table_splits_steel_strain_when_active_in_compression():
     assert any(",t (%)" in c for c in active) and any(",c (%)" in c for c in active)
     assert f"NA angle ({chr(0x00B0)})" in active
     assert "Internal lever z (mm)" in active
+    assert "F_comp (kN)" in active
+    assert "Fc (kN)" not in active
     assert "z_x (mm)" in active and "z_y (mm)" in active
     assert "dx (mm)" not in active and "dy (mm)" not in active
     assert not any("deg" in c for c in active)
@@ -2202,18 +2207,123 @@ def test_annulus_applies_one_void_and_contained_bar_and_tendon_rings():
     assert points_inside_concrete(points, outer, [hole]).all()
 
 
-def test_invalid_quick_section_is_explained_and_cannot_be_applied():
+@pytest.mark.parametrize(
+    ("shape", "key", "value", "expected", "raw_diagnostic"),
+    (
+        (
+            "T-section",
+            "bw_mm",
+            1200.0,
+            "Reduce the web width or increase the flange width",
+            "web width must be less than flange width",
+        ),
+        (
+            "I-section",
+            "i_bw_mm",
+            800.0,
+            "Reduce the web width or increase the flange width",
+            "web width must be less than flange width",
+        ),
+        (
+            "L-section",
+            "l_web_mm",
+            800.0,
+            "Reduce the web thickness or increase the overall width",
+            "web thickness must be less than overall width",
+        ),
+        (
+            "L-section",
+            "l_flange_mm",
+            800.0,
+            "Reduce the flange thickness or increase the overall height",
+            "flange thickness must be less than overall height",
+        ),
+        (
+            "U-section",
+            "u_web_mm",
+            400.0,
+            "Reduce the side-web thickness or increase the overall width",
+            "twice the web thickness must be less than overall width",
+        ),
+        (
+            "U-section",
+            "u_base_mm",
+            800.0,
+            "Reduce the base thickness or increase the overall height",
+            "base thickness must be less than overall height",
+        ),
+        (
+            "Annulus",
+            "annulus_inner_mm",
+            800.0,
+            "Reduce the inner diameter or increase the outer diameter",
+            "inner diameter must be less than outer diameter",
+        ),
+        (
+            "Annulus",
+            "ring_c_mm",
+            250.0,
+            "Reduce the reinforcement cover, reduce the inner diameter, or increase the outer diameter",
+            "cover places the reinforcement ring inside the annulus void",
+        ),
+    ),
+)
+def test_invalid_quick_section_keeps_finite_corrective_guidance(
+    shape,
+    key,
+    value,
+    expected,
+    raw_diagnostic,
+):
     at = _fresh_qs()
+    at.selectbox(key="shape").set_value(shape).run()
+    at.number_input(key=key).set_value(value).run()
+
+    visible = " ".join(str(error.value) for error in at.error)
+    assert not at.exception
+    assert at.button(key="qs_apply").disabled
+    assert expected in visible
+    assert raw_diagnostic not in visible
+    assert any("Preview unavailable" in info.value for info in at.info)
+
+
+def test_unexpected_quick_section_failure_is_generic_and_logged(
+    monkeypatch,
+    caplog,
+):
+    from sector import templates as template_module
+
+    hostile = (
+        "RAW-QUICK-SECTION GitHub PR #97 SHA-256 payload schema contract "
+        "internal_private_ID EQ-QUICK-7"
+    )
+    at = _fresh_qs()
+
+    def fail_annulus(*_args, **_kwargs):
+        raise RuntimeError(hostile)
+
+    monkeypatch.setattr(template_module, "annulus", fail_annulus)
     at.selectbox(key="shape").set_value("Annulus").run()
-    at.number_input(key="annulus_inner_mm").set_value(900.0).run()
+
+    visible = " ".join(str(error.value) for error in at.error)
+    assert not at.exception
+    assert at.button(key="qs_apply").disabled
+    assert "Review the section dimensions and reinforcement layout" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert any("Preview unavailable" in info.value for info in at.info)
+
+
+def test_quick_section_keeps_field_specific_cover_correction():
+    at = _fresh_qs(bot_c_mm=250.0)
 
     assert not at.exception
     assert at.button(key="qs_apply").disabled
     assert any(
-        "inner diameter must be less than outer diameter" in error.value
+        "Reduce the bottom reinforcement cover or enlarge the available section width"
+        in error.value
         for error in at.error
     )
-    assert any("Preview unavailable" in info.value for info in at.info)
 
 
 def test_zero_reinforcement_ignores_unused_cover_validation():
@@ -2907,7 +3017,12 @@ def test_void_slicing_the_section_is_rejected():
         {"x (mm)": [-250.0, 250.0, 250.0, -250.0],
          "y (mm)": [-20.0, -20.0, 20.0, 20.0]}))      # full-width slot at mid-height
     _goto_page(at, "Analysis")
-    assert any("disconnected" in e.value for e in at.error)
+    assert any(
+        "Move each void wholly inside the concrete without touching the outer boundary"
+        in error.value
+        for error in at.error
+    )
+    assert not any("disconnected" in error.value for error in at.error)
     _calculate(at)
     assert not at.exception
     assert "results" not in at.session_state
@@ -2928,13 +3043,10 @@ def test_bow_tie_outline_is_blocked_in_ui_before_solver_entry():
     )
     _goto_page(at, "Analysis")
     errors = [item.value for item in at.error]
-    assert any(
-        "Invalid section geometry" in message
-        and "outer ring" in message
-        and "edge 1" in message
-        and "edge 3" in message
-        for message in errors
-    )
+    assert errors == [
+        "Adjust the concrete boundary so its edges do not cross or touch"
+    ]
+    assert not any("edge 1" in message or "edge 3" in message for message in errors)
     _calculate(at)
     assert not at.exception
     try:
@@ -2942,6 +3054,47 @@ def test_bow_tie_outline_is_blocked_in_ui_before_solver_entry():
     except KeyError:
         results = None
     assert not results
+
+
+def test_unknown_geometry_topology_diagnostic_fails_closed_and_logs(
+    monkeypatch,
+    caplog,
+):
+    import sector.section as section_core
+    from sector.geometry import (
+        GeometryTopologyError,
+        TopologyIssue,
+        TopologyValidation,
+    )
+
+    hostile = (
+        "RAW-GEOMETRY GitHub PR #96 SHA-256 payload schema contract "
+        "internal_private_ID EQ-GEOMETRY-7"
+    )
+    validation = TopologyValidation(
+        issues=(TopologyIssue("future-private-code", hostile, "outer ring"),),
+        scale=1.0,
+        length_tolerance=1e-9,
+        area_tolerance=1e-12,
+    )
+
+    def fail_from_polygon(_cls, *_args, **_kwargs):
+        raise GeometryTopologyError(validation)
+
+    monkeypatch.setattr(
+        section_core.Section,
+        "from_polygon",
+        classmethod(fail_from_polygon),
+    )
+    at = _fresh()
+    at.run()
+    _goto_page(at, "Analysis")
+
+    visible = " ".join(item.value for item in at.error)
+    assert "Review the concrete outline and voids" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert not at.exception
 
 
 def test_bar_outside_the_concrete_is_rejected():
@@ -2953,7 +3106,7 @@ def test_bar_outside_the_concrete_is_rejected():
     _replace_base_table(at, "bars_base", pd.DataFrame(
         {"x (mm)": [0.0], "y (mm)": [1000.0], "area (mm2)": [314.0]}))
     _goto_page(at, "Analysis")
-    assert any("within the concrete" in e.value for e in at.error)
+    assert any("inside the concrete" in e.value for e in at.error)
     _calculate(at)
     assert not at.exception
     assert "results" not in at.session_state
@@ -3737,8 +3890,8 @@ def test_fatigue_validation_stays_in_the_ui_instead_of_raising():
     assert fatigue["spectra"] == ()
     assert not at.session_state["bars_base"].compare(before).size
     errors = " ".join(item.value for item in at.error)
-    assert "At least one fatigue spectrum bin is required" in errors
-    assert "fatigue detail ID is required" in errors
+    assert "Review the fatigue spectrum definitions" in errors
+    assert "Review the assigned fatigue details and their properties" in errors
 
 
 def test_catalogue_revisions_preserve_every_live_reinforcement_cell():
@@ -3827,9 +3980,11 @@ def test_startup_catalogue_repair_reserves_incomplete_row_assignments():
         "_capacity_steel_unresolved_material_id"
     ] == "M3"
     assert at.selectbox(key="capacity_steel_material_id").value == "M3"
-    assert "member-check material M3" in at.session_state[
-        "_latest_inputs"
-    ]["material_error"]
+    latest = at.session_state["_latest_inputs"]
+    assert latest["material_error"].code == "MATERIAL-INPUT-BLOCKER"
+    assert [message.code for message in latest["material_assignment_errors"]] == [
+        "MEMBER-MATERIAL-ASSIGNMENT",
+    ]
 
 
 def test_bulk_reinforcement_assignment_updates_all_and_selected_rows():
@@ -4018,21 +4173,27 @@ def test_v4_multiple_case_rows_each_run_through_verified_solvers():
 def test_invalid_hidden_case_row_is_reported_before_calculation():
     import load_cases
 
+    hostile = (
+        "RAW-DUPLICATE GitHub PR #97 SHA-256 payload schema contract "
+        "internal_private_ID EQ-DUPLICATE-7"
+    )
     at = _fresh()
     at.run()
     _set(at, ("radio", "mode", "Both"))
+    elastic = at.session_state[load_cases.ELASTIC_TABLE_KEY].to_dict("records")
+    elastic[0]["name"] = hostile
+    _replace_case_table(at, load_cases.ELASTIC_TABLE_KEY, elastic)
     plastic = at.session_state[load_cases.PLASTIC_TABLE_KEY]
-    elastic_name = str(
-        at.session_state[load_cases.ELASTIC_TABLE_KEY].loc[0, "name"]
-    )
     _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [
         *plastic.to_dict("records"),
-        {"name": elastic_name.swapcase(), "mx_ed_knm": 20.0},
+        {"name": hostile.swapcase(), "mx_ed_knm": 20.0},
     ])
 
     _calculate(at)
 
-    assert any("duplicated" in error.value for error in at.error)
+    visible = " ".join(error.value for error in at.error)
+    assert "Use a unique name" in visible
+    assert hostile not in visible
     assert not at.exception
 
 
@@ -4292,6 +4453,594 @@ def test_generate_report_produces_pdf():
     )
 
 
+def test_report_failure_does_not_publish_software_diagnostics(monkeypatch):
+    import sector_report
+
+    def fail_report(*_args, **_kwargs):
+        raise RuntimeError("SHA payload contract internal_key solver state")
+
+    monkeypatch.setattr(sector_report, "build_report", fail_report)
+    at = _fresh()
+    at.run()
+    _goto_page(at, "Report")
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+
+    assert not at.exception
+    assert "report_buffer" not in at.session_state
+    visible = " ".join(str(item.value) for item in at.error)
+    assert "Report generation failed" in visible
+    assert not re.search(
+        r"\b(?:sha|payload|contract|solver|internal_key)\b",
+        visible,
+        flags=re.IGNORECASE,
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    ("case analysis", "required action set", "heightened crack control"),
+)
+def test_report_preflight_hides_every_untrusted_diagnostic_source(
+    source,
+    monkeypatch,
+    caplog,
+):
+    import case_analysis
+    import result_presentation
+    import sector_app
+
+    hostile = (
+        "RAW-PREFLIGHT GitHub PR #91 SHA-256 payload schema contract "
+        "internal_private_ID EQ-PREFLIGHT-7"
+    )
+    state = {"report_buffer": b"stale"}
+    monkeypatch.setattr(sector_app, "st", types.SimpleNamespace(session_state=state))
+    monkeypatch.setattr(case_analysis, "validation_errors", lambda _inp: [])
+    monkeypatch.setattr(
+        result_presentation,
+        "required_action_set_errors",
+        lambda _inp: [],
+    )
+    monkeypatch.setattr(
+        sector_app,
+        "_heightened_crack_control_validation_errors",
+        lambda _inp: [],
+    )
+    inp = {
+        "section": object(),
+        "geometry_error": None,
+        "void_error": None,
+        "steel_error": None,
+        "material_error": None,
+    }
+    if source == "case analysis":
+        inp["plastic_cases"] = []
+        monkeypatch.setattr(
+            case_analysis,
+            "validation_errors",
+            lambda _inp: [hostile],
+        )
+    elif source == "required action set":
+        monkeypatch.setattr(
+            result_presentation,
+            "required_action_set_errors",
+            lambda _inp: [hostile],
+        )
+    else:
+        monkeypatch.setattr(
+            sector_app,
+            "_heightened_crack_control_validation_errors",
+            lambda _inp: [hostile],
+        )
+
+    sector_app._generate_report(inp)
+
+    assert "report_buffer" not in state
+    status, messages = state["_report_msg"]
+    assert status == "error"
+    assert [message.text for message in messages] == [
+        "Review the calculation inputs before generating a report"
+    ]
+    assert hostile not in " ".join(message.text for message in messages)
+    assert hostile in caplog.text
+
+
+def test_fatigue_failure_boundary_hides_software_diagnostics(monkeypatch):
+    import fatigue_analysis
+    import sector_app
+
+    hostile = "SHA payload contract internal_key solver state"
+    monkeypatch.setattr(
+        fatigue_analysis,
+        "validation_errors",
+        lambda _inp: [hostile],
+    )
+    result = sector_app._run_fatigue_or_invalid({})
+
+    assert tuple(message.text for message in result["errors"]) == (
+        "Review the fatigue inputs and recalculate",
+    )
+
+
+def test_fatigue_failure_boundary_keeps_distinct_engineering_notation(monkeypatch):
+    import fatigue_analysis
+    import sector_app
+    from sector.engineer_message import EngineerMessage
+
+    engineering_errors = [
+        EngineerMessage(
+            "TEST-GAMMA-FF",
+            "gamma_Ff must be a finite number greater than zero",
+        ),
+        EngineerMessage(
+            "TEST-GAMMA-S",
+            "gamma_s must be a finite number greater than zero",
+        ),
+        EngineerMessage(
+            "TEST-BETA-CC",
+            "beta_cc(t0) must be a finite number greater than zero",
+        ),
+        EngineerMessage(
+            "TEST-ALPHA-CC",
+            "Concrete alpha_cc must be a finite number",
+        ),
+    ]
+    monkeypatch.setattr(
+        fatigue_analysis,
+        "validation_errors",
+        lambda _inp: engineering_errors,
+    )
+    result = sector_app._run_fatigue_or_invalid({})
+
+    assert result["errors"] == tuple(engineering_errors)
+
+
+def test_calculation_failure_boundary_hides_software_diagnostics():
+    import sector_app
+    from sector.capacity import CapacityResultError
+
+    for error in (
+        ValueError("SHA payload contract internal_key solver state"),
+        CapacityResultError(
+            "SHA payload contract internal_key solver state"
+        ),
+    ):
+        visible = sector_app._calculation_failure_message(error)
+
+        assert visible == (
+            "Calculation blocked: Sector could not complete the calculation. "
+            "Review the inputs and try again."
+        )
+
+
+@pytest.mark.parametrize("exception_kind", ("capacity result", "runtime"))
+def test_calculate_event_hides_unexpected_errors_and_preserves_prior_result(
+    exception_kind,
+    monkeypatch,
+    caplog,
+):
+    import case_analysis
+    import project_io
+    from sector.capacity import CapacityResultError
+
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    before_hash = project_io.result_sha256(at.session_state["results"])
+    before_record = copy.deepcopy(at.session_state["calculation_record"])
+    _set(
+        at,
+        (
+            "number_input",
+            "conc_fck",
+            float(at.session_state["conc_fck"]) + 1.0,
+        ),
+    )
+    hostile = (
+        "RAW-CALCULATE GitHub PR #92 SHA-256 payload schema contract "
+        "internal_private_ID EQ-CALCULATE-7"
+    )
+
+    def fail_calculation(*_args, **_kwargs):
+        if exception_kind == "capacity result":
+            raise CapacityResultError(hostile)
+        raise RuntimeError(hostile)
+
+    monkeypatch.setattr(case_analysis, "run_case_tables", fail_calculation)
+    _calculate(at)
+
+    visible = " ".join(str(item.value) for item in at.error)
+    assert not at.exception
+    assert "Sector could not complete the calculation" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert project_io.result_sha256(at.session_state["results"]) == before_hash
+    assert at.session_state["calculation_record"] == before_record
+
+
+def test_actual_input_issue_boundary_hides_raw_case_diagnostic(
+    monkeypatch,
+    caplog,
+):
+    import case_analysis
+
+    hostile = (
+        "RAW-CASE GitHub PR #93 SHA-256 payload schema contract "
+        "internal_private_ID EQ-CASE-7"
+    )
+    monkeypatch.setattr(
+        case_analysis,
+        "validation_errors",
+        lambda _inp: [hostile],
+    )
+    at = _fresh()
+    at.run()
+    _calculate(at)
+
+    visible = " ".join(str(item.value) for item in at.error)
+    assert not at.exception
+    assert "Review the Plastic and Elastic case tables" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+
+
+def test_actual_fatigue_catalogue_boundary_hides_raw_diagnostic(
+    monkeypatch,
+    caplog,
+):
+    import fatigue_inputs
+
+    hostile = (
+        "RAW-FATIGUE-CATALOGUE GitHub PR #94 SHA-256 payload schema contract "
+        "internal_private_ID EQ-FATIGUE-7"
+    )
+    monkeypatch.setattr(
+        fatigue_inputs,
+        "catalog_errors",
+        lambda _catalogue: [hostile],
+    )
+    at = _fresh()
+    at.run()
+    _set(at, ("toggle", "fatigue_on", True))
+    _goto_material_tab(at, "Fatigue details")
+
+    visible = " ".join(str(item.value) for item in at.error)
+    assert not at.exception
+    assert "Review the fatigue inputs and recalculate" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert not re.search(
+        r"\b(?:sha|payload|contract|solver|internal_key)\b",
+        visible,
+        flags=re.IGNORECASE,
+    )
+
+
+def test_actual_result_views_hide_retained_plastic_and_transverse_reasons(
+    caplog,
+):
+    import load_cases
+
+    hostile = (
+        "RAW-RESULT GitHub PR #95 SHA-256 payload schema contract "
+        "internal_private_ID EQ-RESULT-7"
+    )
+
+    def poison(scope):
+        scope["plastic"].update(
+            util=None,
+            util_valid=False,
+            util_reason=hostile,
+            util_origin_inside_or_on=False,
+            check_util=True,
+            closed=True,
+            converged=True,
+        )
+        scope["transverse_reinforcement"] = {
+            "status": "NOT ASSESSED",
+            "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+            "checks": [],
+            "governing": None,
+            "governing_utilisation": None,
+            "reason": hostile,
+        }
+
+    def visible_text(at):
+        parts = []
+        for element_type in (
+            "error",
+            "warning",
+            "success",
+            "info",
+            "caption",
+            "markdown",
+            "text",
+        ):
+            parts.extend(
+                str(item.value) for item in getattr(at, element_type)
+            )
+        parts.extend(frame.value.to_string() for frame in at.table)
+        parts.extend(frame.value.to_string() for frame in at.dataframe)
+        return " ".join(parts)
+
+    at = _fresh()
+    at.run()
+    plastic_cases = at.session_state[load_cases.PLASTIC_TABLE_KEY].to_dict(
+        "records"
+    )
+    plastic_cases[0]["vy_ed_kn"] = 40.0
+    _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, plastic_cases)
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "transverse_detailing_on", True),
+    )
+    _calculate(at)
+    results = copy.deepcopy(at.session_state["results"])
+    poison(results)
+    for entry in results["plastic_cases"]:
+        poison(entry["results"])
+    at.session_state["results"] = results
+
+    _select_view(at, "Plastic Results")
+    plastic_text = visible_text(at)
+    assert "Review the Plastic capacity envelope and applied actions" in plastic_text
+    assert hostile not in plastic_text
+
+    _select_view(at, "Results Overview")
+    overview_text = visible_text(at)
+    assert "Plastic bending" in overview_text
+    assert "Shear/torsion link detailing" in overview_text
+    assert hostile not in overview_text
+    assert "transverse-reinforcement summary reason" in caplog.text
+
+    _select_view(at, "Detailing")
+    detailing_text = visible_text(at)
+    assert (
+        "Review the shear and torsion link-detailing inputs and result status"
+        in detailing_text
+    )
+    assert hostile not in detailing_text
+    assert hostile in caplog.text
+    assert not at.exception
+
+
+def test_material_builder_boundary_hides_hostile_exception_text():
+    import sector_app
+
+    hostile = (
+        "RAW-MATERIAL GitHub PR #71 SHA-256 payload schema contract "
+        "internal_private_ID EQ-MATERIAL-4"
+    )
+
+    class Box:
+        def __init__(self):
+            self.messages = []
+
+        def warning(self, message):
+            self.messages.append(message)
+
+    calls = 0
+
+    def builder(**values):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError(hostile)
+        return values
+
+    box = Box()
+    result = sector_app._safe_build(
+        box,
+        builder,
+        2,
+        {"fytk": 0.0, "futk": 0.0},
+    )
+
+    assert result["fytk"] == 1.0
+    assert result["futk"] == 1.0
+    assert box.messages == [
+        "Adjusted for this curve: Review the material values for the selected curve"
+    ]
+    assert hostile not in " ".join(box.messages)
+
+
+def test_material_panel_persistent_builder_failure_is_fail_closed(
+    monkeypatch,
+    caplog,
+):
+    from sector import material_presets
+
+    hostile = (
+        "RAW-MATERIAL-RETRY GitHub PR #98 SHA-256 payload schema contract "
+        "internal_private_ID EQ-MATERIAL-8"
+    )
+
+    def always_fail(*_args, **_kwargs):
+        raise RuntimeError(hostile)
+
+    monkeypatch.setattr(material_presets, "build_mild", always_fail)
+    at = _fresh()
+    at.run()
+    _goto_material_tab(at, "Mild steel")
+
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("error", "warning", "caption", "info")
+        for item in getattr(at, element_type)
+    )
+    assert not at.exception
+    assert "Material unavailable: Review the material values" in visible
+    assert "Material diagram unavailable until the values are corrected" in visible
+    assert hostile not in visible
+    assert hostile in caplog.text
+    assert at.session_state["_latest_inputs"]["material_error"] is not None
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    assert all(
+        material is None
+        for material in at.session_state["_latest_inputs"]["bar_materials"]
+    )
+
+    _calculate(at)
+
+    assert not at.exception
+    assert "results" not in at.session_state
+    assert "result_input_snapshot" not in at.session_state
+
+
+def test_material_builder_keeps_field_specific_rupture_stress_correction():
+    import sector_app
+    from sector import material_presets
+
+    class Box:
+        def __init__(self):
+            self.messages = []
+
+        def warning(self, message):
+            self.messages.append(message)
+
+    values = dict(material_presets.MILD_PRESETS["Curve 1 (bilinear hardening)"])
+    curve = values.pop("curve")
+    values["futk"] = 0.0
+    box = Box()
+
+    result = sector_app._safe_build(
+        box,
+        material_presets.build_mild,
+        curve,
+        values,
+    )
+
+    assert result.futk == pytest.approx(1.0)
+    assert box.messages == [
+        "Adjusted for this curve: Enter a positive ultimate tensile strength "
+        "for the selected mild-steel curve"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("item", "kind", "expected"),
+    (
+        (
+            {
+                "Es": 0.0,
+                "gamma_y": 1.15,
+                "gamma_u": 1.15,
+                "gamma_E": 1.0,
+                "curve": 3,
+                "futk": 550.0,
+            },
+            "mild",
+            "Enter a positive finite reinforcement modulus for the selected curve",
+        ),
+        (
+            {
+                "Es": 200.0,
+                "gamma_y": 1.15,
+                "gamma_u": 1.15,
+                "gamma_E": 1.0,
+                "curve": 7,
+                "fytk": 0.0,
+                "futk": 1860.0,
+            },
+            "prestress",
+            "Enter positive proof and ultimate strengths for the selected prestressing curve",
+        ),
+    ),
+)
+def test_material_catalogue_keeps_finite_field_specific_corrections(
+    item,
+    kind,
+    expected,
+):
+    import sector_app
+
+    assert sector_app._material_definition_message(item, kind).text == expected
+
+
+def test_heightened_reference_boundary_hides_hostile_exception_text(
+    monkeypatch,
+    caplog,
+):
+    import case_analysis
+    import heightened_crack_adapter
+    import sector_app
+    from sector.design_standards import DesignBasisKey
+
+    hostile = (
+        "RAW-REFERENCE GitHub PR #72 SHA-256 payload schema contract "
+        "internal_private_ID EQ-REFERENCE-4"
+    )
+    monkeypatch.setattr(
+        case_analysis,
+        "case_records",
+        lambda *_args, **_kwargs: (),
+    )
+
+    def fail_reference(*_args, **_kwargs):
+        raise ValueError(hostile)
+
+    monkeypatch.setattr(
+        heightened_crack_adapter,
+        "crack_enabled_case_names",
+        fail_reference,
+    )
+    inp = {
+        "sls_heightened_on": True,
+        "mode": "Both",
+        "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        sector_app.HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY: 0.3,
+        "sls_heightened_fine_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_reference_case": "Reference",
+    }
+
+    errors = sector_app._heightened_crack_control_validation_errors(inp)
+
+    assert [message.text for message in errors] == [
+        "Review the Elastic reference case for heightened crack control"
+    ]
+    assert hostile not in " ".join(message.text for message in errors)
+    assert hostile in caplog.text
+
+
+def test_heightened_reference_validation_keeps_specific_correction(monkeypatch):
+    import case_analysis
+    import heightened_crack_adapter
+    import sector_app
+    from sector.design_standards import DesignBasisKey
+
+    monkeypatch.setattr(case_analysis, "case_records", lambda *_args: ())
+    monkeypatch.setattr(
+        heightened_crack_adapter,
+        "crack_enabled_case_names",
+        lambda _records: (),
+    )
+    inp = {
+        "sls_heightened_on": True,
+        "mode": "Both",
+        "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
+        "sls_heightened_reinforcement_surface": "ribbed",
+        "sls_heightened_effective_tensile_strength_mpa": 2.9,
+        sector_app.HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY: 0.3,
+        "sls_heightened_fine_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_coarse_effective_tension_area_mm2": 1000.0,
+        "sls_heightened_reference_case": "",
+    }
+
+    errors = sector_app._heightened_crack_control_validation_errors(inp)
+
+    assert [(message.code, message.text) for message in errors] == [
+        (
+            "HEIGHTENED-REFERENCE-REQUIRED",
+            "Enable crack-width calculation for at least one Elastic case",
+        )
+    ]
+
+
 def test_metadata_only_report_edit_reuses_frozen_engineering_results(
     monkeypatch,
 ):
@@ -4446,7 +5195,7 @@ def test_hot_reload_surfaces_unknown_report_profile_and_clears_old_report():
     ] == "Standard"
     assert "_pending_report_events" not in at.session_state
     assert any(
-        "not recognised" in item.value and "reset to Standard" in item.value
+        "not recognised" in item.value and "reset it to Standard" in item.value
         for item in at.warning
     )
 
@@ -4524,7 +5273,7 @@ def test_report_fragment_normalises_hostile_profile_before_strict_mount(
     ] == "Standard"
     assert "report_buffer" not in fake.session_state
     assert "report_signature" not in fake.session_state
-    assert any("reset to Standard" in warning for warning in fake.box.warnings)
+    assert any("reset it to Standard" in warning for warning in fake.box.warnings)
 
 
 def test_autosave_detects_report_profile_only_change(tmp_path, monkeypatch):
@@ -4697,8 +5446,8 @@ def test_pending_project_rejects_overlong_alias_before_widget_mount():
     assert not at.exception
     assert at.session_state["_project_msg"] == (
         "error",
-        "Could not load project: modelled direction alias must be at most "
-        "60 characters.",
+        "Could not load project: the modelled-direction description must be a "
+        "single line of at most 60 characters.",
     )
     assert at.text_input(key=modelled_direction.ALIAS_KEY).value == ""
     assert at.session_state[modelled_direction.ALIAS_KEY] == ""
@@ -6221,7 +6970,7 @@ def test_calculate_requires_active_action_set_identifiers():
     assert not at.exception
     assert "results" not in at.session_state
     assert any(
-        "At least one Plastic case is required" in error.value
+        "Add at least one active Plastic case before calculating" in error.value
         for error in at.error
     )
 
@@ -7027,6 +7776,8 @@ def test_independent_duration_crack_criteria_are_assessed_for_elastic_rows():
 
 
 def test_no_crack_width_is_not_assessed_without_a_numerical_result():
+    import result_presentation
+
     at = _fresh()
     at.run()
     _set_and_click(
@@ -7049,7 +7800,18 @@ def test_no_crack_width_is_not_assessed_without_a_numerical_result():
         if output.get("reason")
     }
     assert reasons
-    assert all(any(reason in item.value for item in at.info) for reason in reasons)
+    visible_reasons = {
+        result_presentation.result_reason(
+            reason,
+            "crack",
+            context="crack result smoke-test expectation",
+        )
+        for reason in reasons
+    }
+    assert all(
+        any(reason in item.value for item in at.info)
+        for reason in visible_reasons
+    )
     assert not any(
         "No crack width: section uncracked or no reinforcement" in item.value
         for item in at.info
@@ -7344,8 +8106,8 @@ def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
     _calculate(at)
     assert "results" not in at.session_state
     assert any(
-        "Heightened crack control is available only with the first-generation "
-        "DK NA:2024 design basis" in item.value
+        "Select the first-generation DK NA:2024 design basis for heightened "
+        "crack control" in item.value
         for item in at.error
     )
 
@@ -7384,12 +8146,10 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
 
     errors = [item.value for item in at.error]
     assert any("cannot be matched to its inputs" in message for message in errors)
-    assert "Effective tensile strength must be a positive finite number" in errors
-    assert "Fine-system effective tension area must be a positive finite number" in errors
-    assert "Coarse-system effective tension area must be a positive finite number" in errors
-    assert len(
-        [message for message in errors if "positive finite number" in message]
-    ) == 4
+    assert "Enter a positive finite effective tensile strength" in errors
+    assert "Enter a positive finite heightened crack-width limit" in errors
+    assert "Enter a positive finite fine-system effective tension area" in errors
+    assert "Enter a positive finite coarse-system effective tension area" in errors
     assert any(
         button.key and button.key.endswith("heightened-2")
         for button in at.button
@@ -7440,9 +8200,10 @@ def test_material_blocker_navigates_to_its_material_family(monkeypatch):
     }
 
     assert any(
-        "Invalid material definition: M2: test-invalid material law" in item.value
+        "Review the selected material values" in item.value
         for item in at.error
     )
+    assert not any("test-invalid material law" in item.value for item in at.error)
     at.button(
         key="analysis-input-issue-1-material-definition-1"
     ).click().run()

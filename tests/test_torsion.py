@@ -854,13 +854,12 @@ def test_app_hollow_override_above_real_wall_preserves_completed_result():
         at.session_state["results"]["torsion"]["tube"]["tef_selection"]
         == "real-wall cap"
     )
-    assert (
-        at.session_state["_case_error"]
-        == "Calculation blocked: tef override 150 mm exceeds the nearest real wall "
-        "thickness 100 mm."
+    assert at.session_state["_case_error"] == (
+        "Calculation blocked: Enter a torsion wall thickness no greater than "
+        "the nearest real wall thickness."
     )
     assert any(
-        "exceeds the nearest real wall thickness" in item.value
+        "no greater than the nearest real wall thickness" in item.value
         for item in at.error
     )
 
@@ -898,7 +897,8 @@ def test_app_torsion_rejects_injected_numpy_boolean_gamma_ct():
     )
     assert at.session_state["_torsion_gamma_ct_uses_method_default"] is False
     assert any(
-        "gamma_ct must be a positive finite real number" in item.value
+        "Enter a positive finite concrete tensile partial factor gamma_ct"
+        in item.value
         for item in at.error
     )
 
@@ -1128,10 +1128,10 @@ def test_app_subdivision_override_blocks_and_preserves_completed_result():
     assert at.session_state["result_input_snapshot"]["torsion_tef"] == 0.0
     assert at.session_state["_latest_inputs"]["torsion_tef"] == 25.0
     assert at.session_state["_case_error"] == (
-        "Calculation blocked: torsion wall-thickness override must be 0 "
-        "(automatic per sub-tube) when torsion subdivision is enabled."
+        "Calculation blocked: Set the torsion wall-thickness override to 0 mm "
+        "when sub-tube subdivision is enabled."
     )
-    assert any("automatic per sub-tube" in item.value for item in at.error)
+    assert any("override to 0 mm" in item.value for item in at.error)
 
 
 def test_app_compound_torsion_requires_subdivision():

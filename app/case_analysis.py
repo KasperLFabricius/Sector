@@ -15,6 +15,9 @@ from collections.abc import Callable, Mapping, Sequence
 import load_cases
 from deferred_import import deferred_module
 
+from app.engineer_messages import EngineerValidationError
+from sector.engineer_message import EngineerMessage
+
 sls_core = deferred_module("sector.sls")
 
 _PLASTIC_RESULT_KEYS = (
@@ -290,7 +293,7 @@ def _primary_results(entries: Sequence[Mapping], keys: Sequence[str]) -> dict:
     return {key: result[key] for key in keys if key in result}
 
 
-def validation_errors(inp: Mapping) -> list[str]:
+def validation_errors(inp: Mapping) -> list[EngineerMessage]:
     """Return table/name errors for the analyses enabled in ``inp``."""
     mode = str(inp.get("mode") or "")
     plastic_required = (
@@ -339,7 +342,7 @@ def run_case_tables(
     elastic_required = mode in {"Elastic", "Both"}
     errors = validation_errors(inp)
     if errors:
-        raise ValueError("; ".join(errors))
+        raise EngineerValidationError(errors[0])
 
     plastic_rows = _rows(plastic_table, load_cases.PLASTIC_TABLE_KEY)
     elastic_rows = _rows(elastic_table, load_cases.ELASTIC_TABLE_KEY)

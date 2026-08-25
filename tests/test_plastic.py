@@ -164,6 +164,24 @@ def test_accepted_plastic_state_retains_authoritative_corner_and_bar_rows():
     )
 
 
+def test_total_compression_resultant_includes_compressive_reinforcement():
+    section, concrete, steel = fundamentsbjaelke()
+    point = plastic_capacity_at_angle(section, concrete, steel, 0.0, 90.0)
+
+    compressive_bars = sum(
+        state.force for state in point.bar_states if state.force > 0.0
+    )
+    compressive_tendons = sum(
+        state.force for state in point.tendon_states if state.force > 0.0
+    )
+
+    assert compressive_bars > 0.0
+    assert point.compression_force == pytest.approx(
+        point.concrete_force + compressive_bars + compressive_tendons
+    )
+    assert point.compression_force > point.concrete_force
+
+
 def test_accepted_curvature_selection_retains_candidates_and_stable_governor():
     section = Section.from_polygon(
         corners=[(-0.15, -0.3), (-0.15, 0.3), (0.15, 0.3), (0.15, -0.3)],

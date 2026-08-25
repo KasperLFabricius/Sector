@@ -16,14 +16,377 @@ import case_analysis
 import fatigue_presentation
 import viz
 
+from app import engineer_messages
 from app import modelled_direction
 from sector.design_standards import get_design_basis
+from sector.engineer_message import EngineerMessage
 
 _DEGREE = chr(0x00B0)
 _THETA = chr(0x03B8)
 _RHO = chr(0x03C1)
 
 _SINGLE_CASE_ID = "__single__"
+
+_PLASTIC_ACTION_SET_REQUIRED = EngineerMessage(
+    "PLASTIC-ACTION-SET",
+    "Enter a Plastic action-set ID before calculating",
+)
+_ELASTIC_ACTION_SET_REQUIRED = EngineerMessage(
+    "ELASTIC-ACTION-SET",
+    "Enter an Elastic action-set ID before calculating",
+)
+_RESULT_REASON_FALLBACKS = {
+    "plastic": EngineerMessage(
+        "PLASTIC-RESULT-DETAIL",
+        "Review the Plastic capacity envelope and applied actions",
+    ),
+    "minimum_reinforcement": EngineerMessage(
+        "MINIMUM-REINFORCEMENT-DETAIL",
+        "Review the minimum-reinforcement inputs and result status",
+    ),
+    "transverse_reinforcement": EngineerMessage(
+        "TRANSVERSE-REINFORCEMENT-DETAIL",
+        "Review the shear and torsion link-detailing inputs and result status",
+    ),
+    "shear": EngineerMessage(
+        "SHEAR-RESULT-DETAIL",
+        "Review the shear inputs and result status",
+    ),
+    "torsion": EngineerMessage(
+        "TORSION-RESULT-DETAIL",
+        "Review the torsion inputs and result status",
+    ),
+    "combined": EngineerMessage(
+        "COMBINED-RESULT-DETAIL",
+        "Review the combined M-V-T prerequisites and result status",
+    ),
+    "crack": EngineerMessage(
+        "CRACK-RESULT-DETAIL",
+        "Review the crack-width inputs and calculation status",
+    ),
+    "fatigue": EngineerMessage(
+        "FATIGUE-RESULT-DETAIL",
+        "Review the fatigue inputs and result status",
+    ),
+    "generic": EngineerMessage(
+        "RESULT-DETAIL",
+        "Review the calculation inputs and result status",
+    ),
+}
+_PLASTIC_REASON_MESSAGES = {
+    "M-M envelope coordinates are malformed or non-finite": EngineerMessage(
+        "PLASTIC-ENVELOPE-COORDINATES",
+        "The M-M capacity envelope contains an invalid coordinate; review the section inputs",
+    ),
+    "M-M envelope is self-intersecting, self-touching, or self-overlapping": EngineerMessage(
+        "PLASTIC-ENVELOPE-TOPOLOGY",
+        "The M-M capacity envelope does not form one valid closed boundary",
+    ),
+    "Global moment origin lies outside the closed M-M envelope": EngineerMessage(
+        "PLASTIC-ENVELOPE-ORIGIN",
+        "The closed M-M capacity envelope does not contain the zero-moment origin",
+    ),
+    "Applied moment components are non-finite": EngineerMessage(
+        "PLASTIC-APPLIED-MOMENT",
+        "Enter finite applied bending moments Mx,Ed and My,Ed",
+    ),
+    "Collapsed M-M envelope resistance is not finite and positive": EngineerMessage(
+        "PLASTIC-COLLAPSED-ENVELOPE",
+        "The collapsed M-M capacity envelope has no positive finite resistance",
+    ),
+    "No admissible positive M-M envelope intersection in the applied direction": EngineerMessage(
+        "PLASTIC-ENVELOPE-INTERSECTION",
+        "The applied moment direction has no admissible positive M-M capacity intersection",
+    ),
+    "Initial M-M envelope crossing interval is not numerically resolvable": EngineerMessage(
+        "PLASTIC-INITIAL-CROSSING",
+        "The initial M-M capacity-envelope crossing could not be resolved",
+    ),
+    "Applied ray initially leaves the admissible M-M envelope": EngineerMessage(
+        "PLASTIC-APPLIED-RAY",
+        "The applied moment ray immediately leaves the admissible M-M capacity envelope",
+    ),
+    "M-M envelope crossing interval is not numerically resolvable": EngineerMessage(
+        "PLASTIC-CROSSING",
+        "The governing M-M capacity-envelope crossing could not be resolved",
+    ),
+    "No verified inside-to-outside M-M envelope crossing in the applied direction": EngineerMessage(
+        "PLASTIC-VERIFIED-CROSSING",
+        "No verified M-M capacity-envelope boundary was found in the applied direction",
+    ),
+    "M-M envelope intersection is not finite and positive": EngineerMessage(
+        "PLASTIC-FINITE-INTERSECTION",
+        "The governing M-M capacity intersection is not positive and finite",
+    ),
+}
+_MINIMUM_REINFORCEMENT_REASON_MESSAGES = {
+    "No ordinary reinforcement bar lies in the tension zone.": EngineerMessage(
+        "MINIMUM-REINFORCEMENT-TENSION-ZONE",
+        "No ordinary reinforcement bar lies in the tension zone.",
+    ),
+}
+_TRANSVERSE_REASON_MESSAGES = {
+    "minimum shear reinforcement is required for this beam": EngineerMessage(
+        "TRANSVERSE-MINIMUM-LINKS",
+        "Provide the minimum shear reinforcement required for this beam",
+    ),
+    "shear resistance without links is insufficient": EngineerMessage(
+        "TRANSVERSE-LINKS-REQUIRED",
+        "Provide shear links because the resistance without links is insufficient",
+    ),
+    "shear resistance without links is invalid": EngineerMessage(
+        "TRANSVERSE-SHEAR-INVALID",
+        "Review the shear resistance without links before assessing link detailing",
+    ),
+    "effective depth is unavailable for the 2023 minimum-link applicability check": EngineerMessage(
+        "TRANSVERSE-EFFECTIVE-DEPTH",
+        "Provide a valid effective depth for the 2023 minimum-link applicability check",
+    ),
+    "no active shear or torsion action requiring link-detailing checks": EngineerMessage(
+        "TRANSVERSE-NOT-APPLICABLE",
+        "No active shear or torsion action requires a link-detailing check",
+    ),
+    "gross web breadth exceeds the spacing limit; enter the actual maximum centre-to-centre leg spacing for a definitive assessment": EngineerMessage(
+        "TRANSVERSE-LEG-SPACING",
+        "Enter the actual maximum centre-to-centre leg spacing for a definitive assessment",
+    ),
+}
+_SHEAR_REASON_MESSAGES = {
+    "stirrups (VRd,s)": EngineerMessage(
+        "SHEAR-GOVERNS-STIRRUPS",
+        "stirrups (VRd,s)",
+    ),
+    "crushing (VRd,max)": EngineerMessage(
+        "SHEAR-GOVERNS-CRUSHING",
+        "crushing (VRd,max)",
+    ),
+    "the calculated face-aligned arm is unavailable": EngineerMessage(
+        "SHEAR-LINK-ARM",
+        "The face-aligned lever arm is unavailable; review the Plastic result and link inputs",
+    ),
+    "no shear check": EngineerMessage(
+        "SHEAR-NOT-REQUESTED",
+        "No shear calculation is available for this direction",
+    ),
+    "zero resistance": EngineerMessage(
+        "SHEAR-ZERO-RESISTANCE",
+        "The calculated shear resistance is zero",
+    ),
+    "exact calculated plastic lever arm z is unavailable": EngineerMessage(
+        "SHEAR-LINK-ARM-UNAVAILABLE",
+        "Calculate a valid Plastic lever arm before assessing the shear links",
+    ),
+    "invalid reinforced-shear input": EngineerMessage(
+        "SHEAR-LINK-INPUT",
+        "Review the reinforced-shear geometry, link reinforcement, and material inputs",
+    ),
+    "reinforced-shear prerequisite was not assessed": EngineerMessage(
+        "SHEAR-LINK-PREREQUISITE",
+        "Complete the reinforced-shear calculation before assessing the combined check",
+    ),
+    "calculated plastic lever arm unavailable: section model is not available": EngineerMessage(
+        "SHEAR-LINK-SECTION",
+        "The calculated Plastic lever arm is unavailable because the section model is not available",
+    ),
+    "calculated plastic lever arm unavailable: the exact face-aligned Plastic solve did not converge": EngineerMessage(
+        "SHEAR-LINK-CONVERGENCE",
+        "The exact face-aligned Plastic calculation did not converge, so the link lever arm is unavailable",
+    ),
+    "calculated plastic lever arm unavailable: the face-aligned tension-compression resultant arm is zero or degenerate": EngineerMessage(
+        "SHEAR-LINK-DEGENERATE",
+        "The face-aligned tension-compression resultant arm is zero or degenerate, so the link lever arm is unavailable",
+    ),
+}
+_TORSION_REASON_MESSAGES = {
+    "stirrups (TRd,s)": EngineerMessage(
+        "TORSION-GOVERNS-STIRRUPS",
+        "stirrups (TRd,s)",
+    ),
+    "crushing (TRd,max)": EngineerMessage(
+        "TORSION-GOVERNS-CRUSHING",
+        "crushing (TRd,max)",
+    ),
+    "closed_links_not_present": EngineerMessage(
+        "TORSION-CLOSED-LINKS",
+        "Closed torsion links are required before full torsion resistance can be assessed",
+    ),
+    "closed_link_reinforcement_not_positive": EngineerMessage(
+        "TORSION-LINK-AREA",
+        "Enter a positive closed-link reinforcement area before assessing torsion resistance",
+    ),
+    "full torsion resistance not assessed": EngineerMessage(
+        "TORSION-NOT-ASSESSED",
+        "Full torsion resistance has not been assessed",
+    ),
+    "torsion tube evidence is invalid": EngineerMessage(
+        "TORSION-TUBE-INVALID",
+        "The equivalent torsion tube is invalid; review the section geometry and torsion inputs",
+    ),
+    "torsion result is invalid": EngineerMessage(
+        "TORSION-RESULT-INVALID",
+        "The torsion result is invalid; review the section geometry and torsion inputs",
+    ),
+    "multi-cell (2+ voids)": EngineerMessage(
+        "TORSION-MULTI-CELL",
+        "The section contains multiple cells; subdivide it into single-cell torsion tubes",
+    ),
+    "compound outline requires subdivision": EngineerMessage(
+        "TORSION-SUBDIVISION",
+        "The compound outline requires subdivision before torsion can be assessed",
+    ),
+    "degenerate outline": EngineerMessage(
+        "TORSION-DEGENERATE-OUTLINE",
+        "The section outline cannot form a valid equivalent torsion tube",
+    ),
+    "wall exceeds section": EngineerMessage(
+        "TORSION-WALL-THICKNESS",
+        "The equivalent torsion-tube wall thickness exceeds the section geometry",
+    ),
+    "no outline": EngineerMessage(
+        "TORSION-NO-OUTLINE",
+        "A valid section outline is required for the torsion calculation",
+    ),
+}
+_COMBINED_REASON_MESSAGES = {
+    "no evaluable shared angle": EngineerMessage(
+        "COMBINED-SHARED-ANGLE",
+        "No common strut angle could be evaluated for the combined M-V-T check",
+    ),
+    "shared member-angle calculation is invalid": EngineerMessage(
+        "COMBINED-MEMBER-ANGLE",
+        "The common member-angle calculation is invalid; review the shear and torsion prerequisites",
+    ),
+    "Combined calculation is invalid": EngineerMessage(
+        "COMBINED-INVALID",
+        "The combined M-V-T calculation is invalid; review its prerequisites",
+    ),
+}
+_CRACK_REASON_MESSAGES = {
+    "Crack-width calculation was not requested for this Elastic case.": EngineerMessage(
+        "CRACK-NOT-REQUESTED",
+        "Crack-width calculation was not requested for this Elastic case",
+    ),
+    "The crack-width criterion must be a non-negative finite number.": EngineerMessage(
+        "CRACK-LIMIT-NUMBER",
+        "Enter a non-negative finite crack-width limit",
+    ),
+    "The user-specified crack-width criterion requires a nonblank criterion source.": EngineerMessage(
+        "CRACK-LIMIT-SOURCE",
+        "Enter the source of the user-specified crack-width limit",
+    ),
+    "No calculated crack width is available for assessment.": EngineerMessage(
+        "CRACK-NO-RESULT",
+        "No calculated crack width is available; review the Elastic case and crack-width inputs",
+    ),
+    "The long-term permitted crack width is 0 mm; no comparison was requested.": EngineerMessage(
+        "CRACK-LONG-NO-COMPARISON",
+        "The long-term crack width is reported without comparison because its limit is 0 mm",
+    ),
+    "The short-term permitted crack width is 0 mm; no comparison was requested.": EngineerMessage(
+        "CRACK-SHORT-NO-COMPARISON",
+        "The short-term crack width is reported without comparison because its limit is 0 mm",
+    ),
+    "The calculated crack width must be expressed in millimetres before comparison with the user-specified criterion.": EngineerMessage(
+        "CRACK-RESULT-UNIT",
+        "Express the calculated crack width in millimetres before comparing it with the limit",
+    ),
+    "The calculated crack width is within the user-specified limit.": EngineerMessage(
+        "CRACK-WITHIN-LIMIT",
+        "The calculated crack width is within the user-specified limit",
+    ),
+    "The calculated crack width exceeds the user-specified limit.": EngineerMessage(
+        "CRACK-EXCEEDS-LIMIT",
+        "The calculated crack width exceeds the user-specified limit",
+    ),
+    "Crack width was not requested for this run.": EngineerMessage(
+        "CRACK-RUN-NOT-REQUESTED",
+        "Crack width was not requested for this run.",
+    ),
+    "The selected action state is outside the validated ordinary crack-width scope.": EngineerMessage(
+        "CRACK-ACTION-STATE-SCOPE",
+        "The selected action state is outside the validated ordinary crack-width scope.",
+    ),
+    "Section uncracked; no width is available.": EngineerMessage(
+        "CRACK-SECTION-UNCRACKED",
+        "Section uncracked; no width is available.",
+    ),
+}
+_FATIGUE_REASON_MESSAGES = {
+    "No simplified fatigue-screen result is available": EngineerMessage(
+        "FATIGUE-SCREEN-UNAVAILABLE",
+        "No simplified fatigue-screen result is available",
+    ),
+    "No supported simplified fatigue rule is assigned": EngineerMessage(
+        "FATIGUE-SCREEN-RULE",
+        "No supported simplified fatigue rule is assigned to this detail",
+    ),
+    "Custom/imported fatigue details are not assigned a simplified limit": EngineerMessage(
+        "FATIGUE-SCREEN-CUSTOM",
+        "Custom fatigue details are not assigned a simplified stress-range limit",
+    ),
+    "Named fatigue detail does not belong to the selected design basis": EngineerMessage(
+        "FATIGUE-SCREEN-DESIGN-BASIS",
+        "The selected fatigue detail does not belong to the selected design basis",
+    ),
+    "The calculated cycle total is not finite": EngineerMessage(
+        "FATIGUE-SCREEN-CYCLES",
+        "The calculated fatigue cycle total is not finite",
+    ),
+    "One or more fatigue bins did not converge": EngineerMessage(
+        "FATIGUE-SCREEN-CONVERGENCE",
+        "One or more fatigue bins did not converge",
+    ),
+    "The calculated stress-range data are invalid": EngineerMessage(
+        "FATIGUE-SCREEN-RANGE",
+        "The calculated fatigue stress-range data are invalid",
+    ),
+    "The calculated stress ranges do not match the endpoint stresses": EngineerMessage(
+        "FATIGUE-SCREEN-ENDPOINTS",
+        "The calculated fatigue stress ranges do not match the endpoint stresses",
+    ),
+    "At least one fatigue bin has no tensile endpoint": EngineerMessage(
+        "FATIGUE-SCREEN-TENSION",
+        "At least one fatigue bin has no tensile stress endpoint",
+    ),
+    "Stress range is within the supported simplified limit": EngineerMessage(
+        "FATIGUE-SCREEN-PASS",
+        "The governing stress range is within the supported simplified limit",
+    ),
+    "Stress range exceeds the shortcut limit; detailed assessment governs": EngineerMessage(
+        "FATIGUE-SCREEN-DETAILED",
+        "The governing stress range exceeds the simplified limit; use the detailed assessment",
+    ),
+    "DS/EN 1992-1-1 6.8.6 shortcut covers unwelded or welded reinforcing bars in tension": EngineerMessage(
+        "FATIGUE-FIRST-GENERATION-SCOPE",
+        "DS/EN 1992-1-1 6.8.6 shortcut covers unwelded or welded reinforcing bars in tension",
+    ),
+    "DS/EN 1992-1-1:2023 10.4 does not assign this preset a simplified limit": EngineerMessage(
+        "FATIGUE-PUBLISHED-2023-SCOPE",
+        "DS/EN 1992-1-1:2023 10.4 does not assign this preset a simplified limit",
+    ),
+}
+_RESULT_REASON_MESSAGES = {
+    "plastic": _PLASTIC_REASON_MESSAGES,
+    "minimum_reinforcement": _MINIMUM_REINFORCEMENT_REASON_MESSAGES,
+    "transverse_reinforcement": _TRANSVERSE_REASON_MESSAGES,
+    "shear": _SHEAR_REASON_MESSAGES,
+    "torsion": _TORSION_REASON_MESSAGES,
+    "combined": _COMBINED_REASON_MESSAGES,
+    "crack": _CRACK_REASON_MESSAGES,
+    "fatigue": _FATIGUE_REASON_MESSAGES,
+}
+
+
+def result_reason(value, family: str, *, context: str | None = None) -> str:
+    """Publish one retained result reason only through positive provenance."""
+
+    selected_family = family if family in _RESULT_REASON_FALLBACKS else "generic"
+    return engineer_messages.resolve_state(
+        value,
+        authored=_RESULT_REASON_MESSAGES.get(selected_family, {}),
+        fallback=_RESULT_REASON_FALLBACKS[selected_family],
+        context=context or f"{selected_family} retained result reason",
+    ).text
 
 GOVERNING_OVERVIEW_STATUS_PRECEDENCE = (
     "INVALID",
@@ -108,26 +471,34 @@ def combined_bending_assessment_blocker(results):
         )
     ):
         if torsion.get("tube_valid") is not True:
-            reason = str(
-                torsion.get("reason") or "torsion tube evidence is invalid"
+            reason = result_reason(
+                torsion.get("reason") or "torsion tube evidence is invalid",
+                "torsion",
+                context="combined prerequisite torsion-tube reason",
             )
         elif (
             "closed_links_present" in torsion
             and torsion.get("closed_links_present") is not True
         ):
-            reason = str(
+            reason = result_reason(
                 torsion.get("assessment_reason")
-                or "closed_links_not_present"
+                or "closed_links_not_present",
+                "torsion",
+                context="combined prerequisite closed-links reason",
             )
         elif torsion.get("full_resistance_assessed") is not True:
-            reason = str(
+            reason = result_reason(
                 torsion.get("assessment_reason")
                 or torsion.get("reason")
-                or "full torsion resistance not assessed"
+                or "full torsion resistance not assessed",
+                "torsion",
+                context="combined prerequisite torsion-assessment reason",
             )
         elif torsion.get("valid") is not True:
-            reason = str(
-                torsion.get("reason") or "torsion result is invalid"
+            reason = result_reason(
+                torsion.get("reason") or "torsion result is invalid",
+                "torsion",
+                context="combined prerequisite torsion-result reason",
             )
         else:
             reason = ""
@@ -457,9 +828,10 @@ def plastic_action_assessment(pl):
         )
     elif pl.get("util_valid") is False:
         status = "INVALID"
-        detail = str(
-            pl.get("util_reason")
-            or "Plastic utilisation prerequisites are invalid"
+        detail = result_reason(
+            pl.get("util_reason"),
+            "plastic",
+            context="plastic utilisation reason",
         )
     elif plastic_result_predates_origin_contract(pl):
         status = "NOT ASSESSED"
@@ -610,10 +982,12 @@ def shear_geometry_basis(inp, shear_result):
     if links:
         z_mm = _publication_metric(link_result.get("z"))
         if not link_result.get("valid") or z_mm is None or z_mm <= 0.0:
-            reason = (
+            reason = result_reason(
                 links.get("assessment_reason")
                 or link_result.get("reason")
-                or "the calculated face-aligned arm is unavailable"
+                or "the calculated face-aligned arm is unavailable",
+                "shear",
+                context="shear geometry-basis link reason",
             )
             return {
                 "z_mm": None,
@@ -689,9 +1063,9 @@ def required_action_set_errors(inp):
     elastic_active = mode in {"Elastic", "Both"}
     errors = []
     if plastic_active and not action_set(inp, "plastic")["id"]:
-        errors.append("Plastic action-set ID is required")
+        errors.append(_PLASTIC_ACTION_SET_REQUIRED)
     if elastic_active and not action_set(inp, "elastic")["id"]:
-        errors.append("Elastic action-set ID is required")
+        errors.append(_ELASTIC_ACTION_SET_REQUIRED)
     return errors
 
 
@@ -1263,12 +1637,21 @@ def result_summary_rows(inp, results, *, stale=False):
     elif minimum is not None and inp.get("minimum_reinforcement_on"):
         checks = minimum.get("checks") or []
         if not checks:
+            minimum_note = (
+                result_reason(
+                    minimum.get("reason"),
+                    "minimum_reinforcement",
+                    context="minimum-reinforcement summary reason",
+                )
+                if minimum.get("reason")
+                else str(minimum.get("clause") or "")
+            )
             rows.append(_summary_row(
                 minimum_label,
                 "plastic",
                 _map_assessment_status(minimum.get("status")),
                 view="Detailing",
-                note=str(minimum.get("reason") or minimum.get("clause") or ""),
+                note=minimum_note,
                 inp=inp,
                 overview_key="minimum_reinforcement",
             ))
@@ -1319,7 +1702,11 @@ def result_summary_rows(inp, results, *, stale=False):
                     else "nominal axial equilibrium not available"
                 )
             if check.get("reason"):
-                note_parts.append(str(check["reason"]))
+                note_parts.append(result_reason(
+                    check["reason"],
+                    "minimum_reinforcement",
+                    context="minimum-reinforcement check reason",
+                ))
             rows.append(_summary_row(
                 f"{minimum_label}{suffix}",
                 "plastic",
@@ -1349,16 +1736,21 @@ def result_summary_rows(inp, results, *, stale=False):
     elif transverse is not None and inp.get("transverse_detailing_on"):
         checks = transverse.get("checks") or []
         if not checks:
+            transverse_note = (
+                result_reason(
+                    transverse.get("reason"),
+                    "transverse_reinforcement",
+                    context="transverse-reinforcement summary reason",
+                )
+                if transverse.get("reason")
+                else str(transverse.get("edition") or "")
+            )
             rows.append(_summary_row(
                 "Shear/torsion link detailing",
                 "plastic",
                 _map_assessment_status(transverse.get("status")),
                 view="Detailing",
-                note=str(
-                    transverse.get("reason")
-                    or transverse.get("edition")
-                    or ""
-                ),
+                note=transverse_note,
                 inp=inp,
                 overview_key="link_detailing",
                 overview_parent="link_detailing",
@@ -1406,7 +1798,15 @@ def result_summary_rows(inp, results, *, stale=False):
             note = "; ".join(
                 part for part in (
                     str(check.get("clause") or ""),
-                    str(check.get("reason") or ""),
+                    (
+                        result_reason(
+                            check.get("reason"),
+                            "transverse_reinforcement",
+                            context="transverse-reinforcement check reason",
+                        )
+                        if check.get("reason")
+                        else ""
+                    ),
                     (
                         "spacing " + str(check.get("spacing_source"))
                         if check.get("spacing_source") else ""
@@ -1537,11 +1937,13 @@ def result_summary_rows(inp, results, *, stale=False):
                     "<= 100 %",
                     links.get("util"),
                     "Shear",
-                    str(
+                    result_reason(
                         links.get("assessment_reason")
                         or link_result.get("reason")
                         or link_result.get("governs")
-                        or ""
+                        or "the calculated face-aligned arm is unavailable",
+                        "shear",
+                        context="shear summary link reason",
                     ),
                     inp,
                     overview_key="shear:with_links",
@@ -1605,10 +2007,12 @@ def result_summary_rows(inp, results, *, stale=False):
                 "-",
                 None,
                 "Torsion",
-                str(
+                result_reason(
                     torsion.get("assessment_reason")
                     or torsion.get("reason")
-                    or "full torsion resistance not assessed"
+                    or "full torsion resistance not assessed",
+                    "torsion",
+                    context="torsion summary assessment reason",
                 ),
                 inp,
                 overview_key="torsion",
@@ -1625,7 +2029,13 @@ def result_summary_rows(inp, results, *, stale=False):
                 "<= 100 %",
                 torsion.get("util"),
                 "Torsion",
-                str(torsion.get("governs") or torsion.get("reason") or ""),
+                result_reason(
+                    torsion.get("governs")
+                    or torsion.get("reason")
+                    or "torsion result is invalid",
+                    "torsion",
+                    context="torsion summary result reason",
+                ),
                 inp,
                 overview_key="torsion",
             ))
@@ -1643,10 +2053,12 @@ def result_summary_rows(inp, results, *, stale=False):
             "NOT ASSESSED" if torsion_not_assessed else "NOT RUN",
             view="M-V-T Combined",
             note=(
-                str(
+                result_reason(
                     torsion.get("assessment_reason")
                     or torsion.get("reason")
-                    or "full torsion resistance not assessed"
+                    or "full torsion resistance not assessed",
+                    "torsion",
+                    context="combined summary torsion reason",
                 )
                 if torsion_not_assessed
                 else "Calculate required"
@@ -1745,10 +2157,16 @@ def result_summary_rows(inp, results, *, stale=False):
         elif missing:
             combined_note = "Missing prerequisite: " + ", ".join(missing)
             if combined.get("reason"):
-                combined_note += "; " + str(combined["reason"])
+                combined_note += "; " + result_reason(
+                    combined["reason"],
+                    "combined",
+                    context="combined summary missing-prerequisite reason",
+                )
         else:
-            combined_note = str(
-                combined.get("reason") or "Combined calculation is invalid"
+            combined_note = result_reason(
+                combined.get("reason") or "Combined calculation is invalid",
+                "combined",
+                context="combined summary result reason",
             )
         combined_status = (
             "NOT ASSESSED"

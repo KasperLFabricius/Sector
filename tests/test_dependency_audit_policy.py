@@ -22,6 +22,7 @@ from tools.verify_dependency_audit import (
     INSTALL_STEP,
     PREFLIGHT_STEP,
     PREPARE_STEP,
+    REPORT_PATH,
     SETUP_ACTION,
     SETUP_STEP,
     VALIDATE_STEP,
@@ -193,6 +194,15 @@ def test_unknown_duplicate_escaping_and_colliding_policy_paths_fail(tmp_path):
     policy = deepcopy(_policy())
     policy["audit"]["cache_path"] = policy["audit"]["report_path"]
     with pytest.raises(DependencyAuditError, match="collide"):
+        validate_policy(policy, ROOT)
+
+
+def test_dependency_report_remains_in_the_uploaded_qa_evidence_directory():
+    policy = deepcopy(_policy())
+    assert policy["audit"]["report_path"] == REPORT_PATH
+
+    policy["audit"]["report_path"] = "dependency-audit.json"
+    with pytest.raises(DependencyAuditError, match="report_path must remain"):
         validate_policy(policy, ROOT)
 
 

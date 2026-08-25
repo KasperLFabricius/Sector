@@ -12,11 +12,19 @@ import argparse
 import ast
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from app.engineer_messages import (  # noqa: E402
+    DEVELOPMENT_COPY_EXAMPLES,
+    development_process_terms,
+)
+
 APP = ROOT / "app"
 SECTOR = ROOT / "sector"
 
@@ -112,51 +120,7 @@ NEGATIVE_TOKENS = (
     "rather than",
     "instead of",
 )
-DEVELOPER_TOKENS = (
-    " sha ",
-    "sha-",
-    "sha256",
-    "hash",
-    "payload",
-    "dispatch",
-    "canonical",
-    "internal identifier",
-    "inventory",
-    "capability binding",
-    "kernel",
-    "fallback",
-    "contract",
-    "provenance",
-    "stable key",
-    "basis key",
-    "solver edition",
-    "source revision",
-    "source version",
-    "input snapshot",
-    "solver binding",
-    "registered basis",
-    "retained result",
-    " retained ",
-    " retains ",
-    "authoritative output",
-    "semantic check",
-    "schema",
-    " solver ",
-    "solver-state",
-    "solver state",
-    "solver target",
-    "stable identity",
-    "stable identifier",
-    " stable ",
-    " identity ",
-    " authoritative ",
-    "table-owned",
-    " metadata ",
-    " migration ",
-    " legacy ",
-    " fallback ",
-    "implementation",
-)
+DEVELOPER_TOKENS = DEVELOPMENT_COPY_EXAMPLES
 
 STRUCTURED_COPY_CALLS = {
     "WarningReference",
@@ -181,17 +145,7 @@ RETURN_COPY_FILES = {
 def developer_terms(text: str) -> tuple[str, ...]:
     """Return development-process terms found in normalized visible text."""
 
-    compact = " ".join(text.split())
-    words = " " + re.sub(r"[^a-z0-9]+", " ", compact.casefold()).strip() + " "
-    found = []
-    if re.search(r"\bEQ-[A-Z0-9][A-Z0-9._-]*\b", compact):
-        found.append("internal equation identifier")
-    for token in DEVELOPER_TOKENS:
-        normalized = re.sub(r"[^a-z0-9]+", " ", token.casefold()).strip()
-        label = token.strip()
-        if normalized and f" {normalized} " in words and label not in found:
-            found.append(label)
-    return tuple(found)
+    return development_process_terms(text)
 
 
 def _call_name(node: ast.Call) -> str:
@@ -250,6 +204,8 @@ def _literal_text(
             _literal_text(value, bindings, seen) for value in node.elts
         )
     if isinstance(node, ast.Dict):
+        if _is_internal_key_collection(node):
+            return ""
         return " | ".join(
             value
             for key, item in zip(node.keys, node.values)
@@ -271,6 +227,12 @@ def _literal_text(
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
         if node.func.attr in {"format", "replace", "strip"}:
             return _literal_text(node.func.value, bindings, seen)
+    if (
+        isinstance(node, ast.Call)
+        and _call_name(node) == "EngineerMessage"
+        and len(node.args) >= 2
+    ):
+        return _literal_text(node.args[1], bindings, seen)
     return ""
 
 
@@ -342,6 +304,15 @@ def inventory_file(path: Path) -> list[dict[str, Any]]:
             for index, (key, item) in enumerate(
                 zip(value.keys, value.values), start=1
             ):
+                # A registry may route categories to separately declared copy
+                # registries.  Inventory each underlying registry at its own
+                # assignment; expanding the alias here concatenates unrelated
+                # messages into one artificial user-facing surface.
+                if (
+                    isinstance(item, ast.Name)
+                    and isinstance(bindings.get(item.id), ast.Dict)
+                ):
+                    continue
                 key_text = " ".join(_literal_text(key, bindings).split())
                 suffix = key_text or str(index)
                 append(
@@ -431,9 +402,13 @@ def inventory_file(path: Path) -> list[dict[str, Any]]:
                 else [node.target]
             )
             for target in targets:
-                if not isinstance(target, ast.Name) or not any(
+                if (
+                    not isinstance(target, ast.Name)
+                    or target.id.isupper()
+                    or not any(
                     token in target.id.casefold()
                     for token in ASSIGNMENT_COPY_NAME_TOKENS
+                    )
                 ):
                     continue
                 append(

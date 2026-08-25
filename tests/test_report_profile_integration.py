@@ -543,7 +543,7 @@ def test_brief_invalid_fatigue_falls_back_to_assigned_source_catalog():
 
     text = _brief_text(inp, out)
     for expected in (
-        "deliberate invalid-fatigue fixture",
+        "Review the fatigue inputs and recalculate",
         "Fatigue detail F2",
         "Fatigue detail F1",
         "preset = EC2:2023 - bent reinforcing bars",

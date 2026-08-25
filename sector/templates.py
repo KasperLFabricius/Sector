@@ -12,9 +12,48 @@ import math
 from typing import Sequence
 
 from . import geometry
+from .engineer_message import EngineerMessage
 
 # Standard reinforcement bar diameters (mm).
 BAR_DIAMETERS = (8, 10, 12, 16, 20, 25, 32, 40)
+
+
+class TemplateInputError(ValueError):
+    """Expected template relation carrying deliberate engineer guidance."""
+
+    def __init__(self, diagnostic: str, message: EngineerMessage) -> None:
+        super().__init__(diagnostic)
+        self.engineer_message = message
+
+
+_WEB_NARROWER_THAN_FLANGE = EngineerMessage(
+    "TEMPLATE-WEB-FLANGE",
+    "Reduce the web width or increase the flange width so the web is narrower than the flange",
+)
+_L_WEB_WITHIN_WIDTH = EngineerMessage(
+    "TEMPLATE-L-WEB",
+    "Reduce the web thickness or increase the overall width so the web is thinner than the section width",
+)
+_L_FLANGE_WITHIN_HEIGHT = EngineerMessage(
+    "TEMPLATE-L-FLANGE",
+    "Reduce the flange thickness or increase the overall height so the flange is thinner than the section height",
+)
+_U_WEBS_WITHIN_WIDTH = EngineerMessage(
+    "TEMPLATE-U-WEBS",
+    "Reduce the side-web thickness or increase the overall width so the two webs leave an opening between them",
+)
+_U_BASE_WITHIN_HEIGHT = EngineerMessage(
+    "TEMPLATE-U-BASE",
+    "Reduce the base thickness or increase the overall height so the base is thinner than the section height",
+)
+_ANNULUS_DIAMETERS = EngineerMessage(
+    "TEMPLATE-ANNULUS-DIAMETERS",
+    "Reduce the inner diameter or increase the outer diameter so the annulus has a concrete wall",
+)
+_ANNULUS_REINFORCEMENT_RING = EngineerMessage(
+    "TEMPLATE-ANNULUS-REINFORCEMENT",
+    "Reduce the reinforcement cover, reduce the inner diameter, or increase the outer diameter so the reinforcement ring remains in concrete",
+)
 
 
 def bar_area(diameter_mm: float) -> float:
@@ -87,7 +126,10 @@ def t_section(
         web_depth=hw,
     )
     if bw >= bf:
-        raise ValueError("web width must be less than flange width")
+        raise TemplateInputError(
+            "web width must be less than flange width",
+            _WEB_NARROWER_THAN_FLANGE,
+        )
     if orientation not in {"upright", "inverted"}:
         raise ValueError("orientation must be 'upright' or 'inverted'")
     height = hf + hw
@@ -139,9 +181,15 @@ def l_section(
         flange_thickness=flange_thickness,
     )
     if web_thickness >= width:
-        raise ValueError("web thickness must be less than overall width")
+        raise TemplateInputError(
+            "web thickness must be less than overall width",
+            _L_WEB_WITHIN_WIDTH,
+        )
     if flange_thickness >= height:
-        raise ValueError("flange thickness must be less than overall height")
+        raise TemplateInputError(
+            "flange thickness must be less than overall height",
+            _L_FLANGE_WITHIN_HEIGHT,
+        )
     xmin, xmax = -width / 2, width / 2
     ymin, ymax = -height / 2, height / 2
     web_right = xmin + web_thickness
@@ -172,7 +220,10 @@ def i_section(
         web_height=web_height,
     )
     if web_width >= flange_width:
-        raise ValueError("web width must be less than flange width")
+        raise TemplateInputError(
+            "web width must be less than flange width",
+            _WEB_NARROWER_THAN_FLANGE,
+        )
     total_height = web_height + 2.0 * flange_thickness
     top = total_height / 2
     bottom = -top
@@ -210,9 +261,15 @@ def u_section(
         base_thickness=base_thickness,
     )
     if 2.0 * web_thickness >= width:
-        raise ValueError("twice the web thickness must be less than overall width")
+        raise TemplateInputError(
+            "twice the web thickness must be less than overall width",
+            _U_WEBS_WITHIN_WIDTH,
+        )
     if base_thickness >= height:
-        raise ValueError("base thickness must be less than overall height")
+        raise TemplateInputError(
+            "base thickness must be less than overall height",
+            _U_BASE_WITHIN_HEIGHT,
+        )
     xmin, xmax = -width / 2, width / 2
     ymin, ymax = -height / 2, height / 2
     inner_left = xmin + web_thickness
@@ -263,7 +320,10 @@ def annulus(
         inner_diameter=inner_diameter,
     )
     if inner_diameter >= outer_diameter:
-        raise ValueError("inner diameter must be less than outer diameter")
+        raise TemplateInputError(
+            "inner diameter must be less than outer diameter",
+            _ANNULUS_DIAMETERS,
+        )
     outer = circular(outer_diameter, segments=segments)
     hole = circular(inner_diameter, segments=segments)
     return _validated_geometry(outer, [hole])
@@ -301,8 +361,9 @@ def annulus_ring_radius(
     radius = ring_radius(outer_diameter, cover, segments=segments)
     inner_radius = inner_diameter / 2.0
     if radius < inner_radius:
-        raise ValueError(
-            "cover places the reinforcement ring inside the annulus void"
+        raise TemplateInputError(
+            "cover places the reinforcement ring inside the annulus void",
+            _ANNULUS_REINFORCEMENT_RING,
         )
     return radius
 

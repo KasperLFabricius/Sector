@@ -1,10 +1,4 @@
-"""Typed UI destinations for engine-owned input validation messages.
-
-The calculation and project boundaries intentionally continue to return plain
-strings.  This module is the narrow application-boundary adapter that gives
-those strings a safe Streamlit destination without making the numerical engine
-depend on UI state or labels.
-"""
+"""Typed UI destinations for authored input-validation messages."""
 
 from __future__ import annotations
 
@@ -12,7 +6,9 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from app import engineer_messages
 from app.manual_information_architecture import INPUT_STAGES as REGISTERED_STAGES
+from sector.engineer_message import EngineerMessage
 
 _STAGE_LABELS = {stage.key: stage.label for stage in REGISTERED_STAGES}
 ANALYSIS_SETTINGS = _STAGE_LABELS["analysis-settings"]
@@ -34,6 +30,47 @@ INPUT_STAGES = frozenset(
 )
 MATERIAL_FAMILIES = frozenset(
     {"Concrete", "Mild steel", "Prestressing steel", "Fatigue details"}
+)
+
+_CASE_FALLBACK = EngineerMessage(
+    "ACTION-CASES",
+    "Review the Plastic and Elastic case tables before calculating",
+)
+_HEIGHTENED_FALLBACK = EngineerMessage(
+    "HEIGHTENED-INPUT",
+    "Review the heightened crack-control inputs before calculating",
+)
+_SECTION_GEOMETRY_FALLBACK = EngineerMessage(
+    "SECTION-GEOMETRY",
+    "Review the concrete outline and void geometry",
+)
+_SECTION_MISSING = EngineerMessage(
+    "SECTION-MISSING",
+    "Define a section outline with at least three finite coordinate pairs",
+)
+_SECTION_VOID_FALLBACK = EngineerMessage(
+    "SECTION-VOID",
+    "Keep every void inside the outline without disconnecting the concrete",
+)
+_SECTION_REINFORCEMENT_FALLBACK = EngineerMessage(
+    "SECTION-REINFORCEMENT",
+    "Place every reinforcement element inside the concrete outline and outside voids",
+)
+_MATERIAL_ASSIGNMENT_FALLBACK = EngineerMessage(
+    "MATERIAL-ASSIGNMENT",
+    "Select a defined material for every reinforcement and member check",
+)
+_MATERIAL_DEFINITION_FALLBACK = EngineerMessage(
+    "MATERIAL-DEFINITION",
+    "Review the selected material values",
+)
+_TORSION_FACTOR_FALLBACK = EngineerMessage(
+    "TORSION-FACTOR",
+    "Enter a positive finite concrete tensile factor gamma_ct",
+)
+_MATERIAL_FALLBACK = EngineerMessage(
+    "MATERIAL-INPUT",
+    "Review the material definitions and assignments",
 )
 
 
@@ -82,22 +119,31 @@ class InputIssue:
     """One blocking message and its optional trustworthy correction target."""
 
     code: str
-    message: str
+    message: EngineerMessage
     target: InputTarget | None = None
 
 
-def _issue(code: str, message: object, target: InputTarget | None) -> InputIssue:
-    return InputIssue(code=code, message=str(message).strip(), target=target)
+def _resolved(
+    message: object,
+    *,
+    fallback: EngineerMessage,
+    context: str,
+) -> EngineerMessage:
+    return engineer_messages.resolve(
+        message,
+        fallback=fallback,
+        context=context,
+    )
 
 
-def _case_target(message: str) -> InputTarget:
-    if message.startswith("Plastic") or "Plastic case" in message:
+def _case_target(message: EngineerMessage) -> InputTarget:
+    if message.code.startswith("PLASTIC-"):
         return InputTarget(
             LOADS,
             "plastic_cases_editor",
             "Plastic and capacity cases",
         )
-    if message.startswith("Elastic") or "Elastic case" in message:
+    if message.code.startswith("ELASTIC-"):
         return InputTarget(
             LOADS,
             "elastic_cases_editor",
@@ -107,132 +153,126 @@ def _case_target(message: str) -> InputTarget:
 
 
 def case_issues(errors: Iterable[object]) -> tuple[InputIssue, ...]:
-    """Adapt existing load-case validator strings without changing them."""
+    """Adapt load-case diagnostics without granting provenance to raw values."""
 
-    return tuple(
-        _issue(f"case-{index}", message, _case_target(str(message).strip()))
-        for index, message in enumerate(errors, start=1)
-        if str(message).strip()
-    )
+    issues = []
+    for index, value in enumerate(errors, start=1):
+        message = _resolved(
+            value,
+            fallback=_CASE_FALLBACK,
+            context="load-case input issue",
+        )
+        issues.append(InputIssue(
+            code=f"case-{index}",
+            message=message,
+            target=_case_target(message),
+        ))
+    return tuple(issues)
 
 
-_HEIGHTENED_TARGETS = (
-    (
-        "Heightened crack control requires Elastic analysis",
+_HEIGHTENED_TARGETS = {
+    "HEIGHTENED-ELASTIC-MODE": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "mode",
             "Analysis mode",
-        ),
+        )
     ),
-    (
-        "Heightened crack control is available only with",
+    "HEIGHTENED-DESIGN-BASIS": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_code",
             "Crack-width design basis",
-        ),
+        )
     ),
-    (
-        "Heightened crack control requires at least one crack-enabled",
+    "HEIGHTENED-REFERENCE-REQUIRED": (
         InputTarget(
             LOADS,
             "elastic_cases_editor",
             "Elastic cases",
-        ),
+        )
     ),
-    (
-        "Select one crack-enabled Elastic case",
+    "HEIGHTENED-REFERENCE-SELECT": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_reference_case",
             "Reference crack-enabled Elastic case",
-        ),
+        )
     ),
-    (
-        "Heightened crack control must be explicitly",
+    "HEIGHTENED-ENABLED": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_on",
             "Optional DK NA heightened crack control",
-        ),
+        )
     ),
-    (
-        "Heightened reinforcement surface",
+    "HEIGHTENED-SURFACE": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_reinforcement_surface",
             "Reinforcement surface",
-        ),
+        )
     ),
-    (
-        "Effective tensile strength",
+    "HEIGHTENED-TENSILE-STRENGTH": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_effective_tensile_strength_mpa",
             "Effective tensile strength",
-        ),
+        )
     ),
-    (
-        "Heightened permitted crack width",
+    "HEIGHTENED-CRACK-LIMIT": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_permitted_crack_width_mm",
             "Heightened permitted crack width",
-        ),
+        )
     ),
-    (
-        "Fine-system effective tension area",
+    "HEIGHTENED-FINE-AREA": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_fine_effective_tension_area_mm2",
             "Fine-system effective tension area",
-        ),
+        )
     ),
-    (
-        "Coarse-system effective tension area",
+    "HEIGHTENED-COARSE-AREA": (
         InputTarget(
             ANALYSIS_SETTINGS,
             "sls_heightened_coarse_effective_tension_area_mm2",
             "Coarse-system effective tension area",
-        ),
+        )
     ),
-)
+}
 
 
 def heightened_issues(errors: Iterable[object]) -> tuple[InputIssue, ...]:
-    """Adapt heightened-check strings, falling back without fake navigation."""
+    """Adapt heightened-check messages, failing closed on untyped values."""
 
     issues = []
-    for index, message in enumerate(errors, start=1):
-        text = str(message).strip()
-        if not text:
-            continue
-        target = next(
-            (
-                candidate
-                for prefix, candidate in _HEIGHTENED_TARGETS
-                if text.startswith(prefix)
-            ),
-            None,
+    for index, value in enumerate(errors, start=1):
+        message = _resolved(
+            value,
+            fallback=_HEIGHTENED_FALLBACK,
+            context="heightened crack-control input issue",
         )
-        issues.append(_issue(f"heightened-{index}", text, target))
+        target = _HEIGHTENED_TARGETS.get(message.code)
+        issues.append(InputIssue(f"heightened-{index}", message, target))
     return tuple(issues)
 
 
-def _material_definition_target(message: str) -> InputTarget | None:
-    material_id = message.split(":", 1)[0].strip().upper()
-    if re.fullmatch(r"M[1-9][0-9]*", material_id):
+def _material_definition_target(message: EngineerMessage) -> InputTarget | None:
+    if message.code.startswith("MILD-"):
         family = "Mild steel"
-    elif re.fullmatch(r"P[1-9][0-9]*", material_id):
+    elif message.code.startswith("PRESTRESS-"):
         family = "Prestressing steel"
     else:
-        return None
+        return InputTarget(
+            MATERIAL_PARAMETERS,
+            widget_label="Material values",
+        )
     return InputTarget(
         MATERIAL_PARAMETERS,
-        widget_label=f"Material {material_id}",
+        widget_label=f"{family} values",
         material_family=family,
-        material_id=material_id,
     )
 
 
@@ -242,70 +282,61 @@ def section_issues(inp: Mapping) -> tuple[InputIssue, ...]:
     issues: list[InputIssue] = []
     geometry_error = inp.get("geometry_error")
     if geometry_error:
-        geometry_text = str(geometry_error)
-        geometry_is_hole = any(
-            token in geometry_text.lower() for token in ("hole", "void")
+        message = _resolved(
+            geometry_error,
+            fallback=_SECTION_GEOMETRY_FALLBACK,
+            context="section geometry input issue",
         )
-        issues.append(
-            _issue(
-                "section-geometry",
-                geometry_text,
-                InputTarget(
-                    SECTION,
-                    "ed_hole" if geometry_is_hole else "ed_corners",
-                    "Void geometry" if geometry_is_hole else "Section outline",
-                ),
-            )
-        )
+        issues.append(InputIssue(
+            "section-geometry",
+            message,
+            InputTarget(SECTION, widget_label="Section outline and void geometry"),
+        ))
     elif inp.get("section") is None:
-        issues.append(
-            _issue(
-                "section-missing",
-                "Define a section outline with at least three points",
-                InputTarget(SECTION, "ed_corners", "Section outline"),
-            )
-        )
+        issues.append(InputIssue(
+            "section-missing",
+            _SECTION_MISSING,
+            InputTarget(SECTION, "ed_corners", "Section outline"),
+        ))
 
     if inp.get("void_error"):
-        issues.append(
-            _issue(
-                "section-void",
+        issues.append(InputIssue(
+            "section-void",
+            _resolved(
                 inp["void_error"],
-                InputTarget(SECTION, "ed_hole", "Void geometry"),
-            )
-        )
+                fallback=_SECTION_VOID_FALLBACK,
+                context="section void input issue",
+            ),
+            InputTarget(SECTION, "ed_hole", "Void geometry"),
+        ))
     if inp.get("steel_error"):
-        text = str(inp["steel_error"])
-        lower = text.lower()
-        mentions_bars = "bar" in lower
-        mentions_tendons = "tendon" in lower
-        widget_key = (
-            "ed_bars"
-            if mentions_bars and not mentions_tendons
-            else "ed_tendons"
-            if mentions_tendons and not mentions_bars
-            else None
+        message = _resolved(
+            inp["steel_error"],
+            fallback=_SECTION_REINFORCEMENT_FALLBACK,
+            context="section reinforcement input issue",
         )
-        issues.append(
-            _issue(
-                "section-reinforcement",
-                text,
-                InputTarget(SECTION, widget_key, "Reinforcement geometry"),
-            )
-        )
+        issues.append(InputIssue(
+            "section-reinforcement",
+            message,
+            InputTarget(SECTION, widget_label="Reinforcement geometry"),
+        ))
 
     assignment_errors = tuple(inp.get("material_assignment_errors") or ())
-    for index, message in enumerate(assignment_errors, start=1):
-        text = str(message)
-        if text.startswith("Bar material"):
+    for index, value in enumerate(assignment_errors, start=1):
+        message = _resolved(
+            value,
+            fallback=_MATERIAL_ASSIGNMENT_FALLBACK,
+            context="material assignment input issue",
+        )
+        if message.code == "BAR-MATERIAL-ASSIGNMENT":
             target = InputTarget(SECTION, "ed_bars", "Bar material assignment")
-        elif text.startswith("Tendon material"):
+        elif message.code == "TENDON-MATERIAL-ASSIGNMENT":
             target = InputTarget(
                 SECTION,
                 "ed_tendons",
                 "Tendon material assignment",
             )
-        elif text.startswith("Member-check material"):
+        elif message.code == "MEMBER-MATERIAL-ASSIGNMENT":
             target = InputTarget(
                 ANALYSIS_SETTINGS,
                 "capacity_steel_material_id",
@@ -313,32 +344,46 @@ def section_issues(inp: Mapping) -> tuple[InputIssue, ...]:
             )
         else:
             target = None
-        issues.append(_issue(f"material-assignment-{index}", text, target))
+        issues.append(InputIssue(f"material-assignment-{index}", message, target))
 
-    for index, message in enumerate(
+    for index, value in enumerate(
         tuple(inp.get("material_definition_errors") or ()), start=1
     ):
-        text = str(message)
-        issues.append(
-            _issue(
+        if (
+            isinstance(value, InputIssue)
+            and value.code == "material-definition"
+        ):
+            issues.append(InputIssue(
                 f"material-definition-{index}",
-                f"Invalid material definition: {text}",
-                _material_definition_target(text),
-            )
+                value.message,
+                value.target,
+            ))
+            continue
+        message = _resolved(
+            value,
+            fallback=_MATERIAL_DEFINITION_FALLBACK,
+            context="material definition input issue",
         )
+        issues.append(InputIssue(
+            f"material-definition-{index}",
+            message,
+            _material_definition_target(message),
+        ))
 
     if inp.get("torsion_gamma_ct_error"):
-        issues.append(
-            _issue(
-                "torsion-gamma-ct",
+        issues.append(InputIssue(
+            "torsion-gamma-ct",
+            _resolved(
                 inp["torsion_gamma_ct_error"],
-                InputTarget(
-                    ANALYSIS_SETTINGS,
-                    "torsion_gamma_ct",
-                    "Concrete tensile factor gamma_ct",
-                ),
-            )
-        )
+                fallback=_TORSION_FACTOR_FALLBACK,
+                context="torsion concrete tensile factor input issue",
+            ),
+            InputTarget(
+                ANALYSIS_SETTINGS,
+                "torsion_gamma_ct",
+                "Concrete tensile factor gamma_ct",
+            ),
+        ))
 
     # Compatibility fallback for an older/custom input payload that exposes only
     # the combined engine blocker.  Unknown ownership is deliberately rendered
@@ -349,7 +394,15 @@ def section_issues(inp: Mapping) -> tuple[InputIssue, ...]:
         or inp.get("torsion_gamma_ct_error")
     )
     if inp.get("material_error") and not explicit_material_diagnostics:
-        issues.append(_issue("material-unmapped", inp["material_error"], None))
+        issues.append(InputIssue(
+            "material-unmapped",
+            _resolved(
+                inp["material_error"],
+                fallback=_MATERIAL_FALLBACK,
+                context="unmapped material input issue",
+            ),
+            None,
+        ))
 
     return tuple(issues)
 

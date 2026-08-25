@@ -1690,7 +1690,7 @@ def test_app_rejects_unsafe_active_gamma_v_before_a_shear_result(
 
     assert not at.exception
     assert any(
-        "shear_gamma_v must be a positive finite real number" in item.value
+        "gamma_V must be a positive finite real number" in item.value
         for item in at.error
     )
     assert "shear" not in at.session_state.filtered_state.get("results", {})

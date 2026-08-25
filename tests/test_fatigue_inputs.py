@@ -264,8 +264,10 @@ def test_catalogue_validation_requires_positive_curve_data_and_mandrel():
 
     errors = fi.catalog_errors(catalogue)
 
-    assert "F1: n_star must be greater than zero" in errors
-    assert any("mandrel_diameter_mm" in error for error in errors)
+    assert any(error.code == "FATIGUE-CYCLES-REFERENCE" for error in errors)
+    assert any(error.code == "FATIGUE-MANDREL" for error in errors)
+    assert all("n_star" not in error.text for error in errors)
+    assert all("mandrel_diameter_mm" not in error.text for error in errors)
 
 
 def test_tendon_bond_inputs_are_explicit_optional_catalogue_properties():

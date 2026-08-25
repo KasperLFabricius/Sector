@@ -252,12 +252,7 @@ def test_page_protocol_extracts_document_controls_and_editable_grid():
             startup._HOSTILE_SCENARIO,
             (
                 1,
-                (
-                    f"{startup._AUTOSAVE_REJECTED_PREFIX} "
-                    f"'{startup._HOSTILE_REPORT_PROFILE}' is not available in "
-                    "this version of Sector. Starting with the "
-                    "default section."
-                ),
+                startup._AUTOSAVE_REJECTED_TEXT,
             ),
         ),
     ],
@@ -425,12 +420,18 @@ def test_exact_entrypoint_recovers_legacy_or_hostile_profile_on_startup(
 
     assert not app.exception
     if persisted_profile == startup._LEGACY_REPORT_PROFILE:
-        assert startup._AUTOSAVE_RESTORED_TEXT in [item.value for item in app.success]
+        assert startup._AUTOSAVE_RESTORED_TEXT in [
+            item.value for item in app.success
+        ]
     else:
+        visible_errors = [item.value for item in app.error]
         assert any(
-            item.value.startswith(startup._AUTOSAVE_REJECTED_PREFIX)
-            and startup._HOSTILE_REPORT_PROFILE in item.value
+            item.value == startup._AUTOSAVE_REJECTED_TEXT
             for item in app.error
+        )
+        assert all(
+            startup._HOSTILE_REPORT_PROFILE not in message
+            for message in visible_errors
         )
 
     app.segmented_control(key="_main_page").set_value("Report").run()

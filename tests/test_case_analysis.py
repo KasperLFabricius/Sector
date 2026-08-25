@@ -315,8 +315,13 @@ def test_rejects_names_duplicated_across_solver_tables():
         elastic_cases=_elastic([{"name": "case-1"}]),
     )
 
-    with pytest.raises(ValueError, match="duplicated"):
+    with pytest.raises(case_analysis.EngineerValidationError) as caught:
         case_analysis.run_case_tables(inp, lambda _inp, **_kwargs: {})
+
+    assert caught.value.engineer_message.code == "CASE-NAME-UNIQUE"
+    assert caught.value.engineer_message.text == (
+        "Use a unique name for every Plastic and Elastic case"
+    )
 
 
 def test_elastic_case_maps_both_analysis_criteria_and_sources():

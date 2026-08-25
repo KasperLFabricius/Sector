@@ -664,6 +664,7 @@ def test_capacity_orchestrator_entries_do_not_swallow_topology_errors(entry):
 
 def test_empty_mutated_ring_container_keeps_canonical_solver_and_ui_diagnostic():
     import fatigue_analysis
+    from sector.engineer_message import EngineerMessage
 
     section = Section.from_polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
     section.concrete.clear()
@@ -675,7 +676,11 @@ def test_empty_mutated_ring_container_keeps_canonical_solver_and_ui_diagnostic()
         "fatigue_on": True,
         "section": section,
     })
-    assert any("Invalid section geometry" in error for error in errors)
+    assert any(
+        isinstance(error, EngineerMessage)
+        and error.code == "FATIGUE-SECTION-GEOMETRY"
+        for error in errors
+    )
 
 
 def _project_payload(outer, holes):

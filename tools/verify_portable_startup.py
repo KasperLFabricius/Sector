@@ -48,6 +48,10 @@ _AUTOSAVE_NAME = "autosave.json"
 _CURRENT_PROJECT_VERSION = 27
 _AUTOSAVE_RESTORED_TEXT = "Restored autosaved session."
 _AUTOSAVE_REJECTED_PREFIX = "Autosave not restored: the saved report type"
+_AUTOSAVE_REJECTED_TEXT = (
+    f"{_AUTOSAVE_REJECTED_PREFIX} is not available in this version of Sector. "
+    "Starting with the default section."
+)
 _MAX_WEBSOCKET_HEADERS = 16 * 1024
 _MAX_WEBSOCKET_FRAME = 16 * 1024 * 1024
 _MAX_PAGE_MESSAGES = 4096
@@ -1053,8 +1057,8 @@ def _require_autosave_notice(
             body
             for fmt, body in alerts
             if fmt == expected_format
-            and body.startswith(_AUTOSAVE_REJECTED_PREFIX)
-            and _HOSTILE_REPORT_PROFILE in body
+            and body == _AUTOSAVE_REJECTED_TEXT
+            and _HOSTILE_REPORT_PROFILE not in body
         ]
         if not matches:
             raise PortableStartupError(

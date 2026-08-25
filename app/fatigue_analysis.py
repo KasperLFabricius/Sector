@@ -20,6 +20,7 @@ import load_cases
 import material_catalog as mat_catalog
 import numpy as np
 
+from app import engineer_messages
 from sector.design_standards import (
     Capability,
     CapabilityBinding,
@@ -42,10 +43,128 @@ from sector.fatigue import (
     analyse_grouped_spectra,
 )
 from sector.geometry import GeometryTopologyError
+from sector.engineer_message import EngineerMessage
 from sector.section import Section
 
 
 STEEL_REFERENCE_MODULUS_MPA = 200_000.0
+
+_FATIGUE_INPUT_FALLBACK = EngineerMessage(
+    "FATIGUE-INPUT",
+    "Review the fatigue inputs and recalculate",
+)
+_FATIGUE_SECTION_REQUIRED = EngineerMessage(
+    "FATIGUE-SECTION-REQUIRED",
+    "A valid section is required for fatigue analysis",
+)
+_FATIGUE_SECTION_GEOMETRY = EngineerMessage(
+    "FATIGUE-SECTION-GEOMETRY",
+    "Review the section geometry before assessing fatigue",
+)
+_FATIGUE_BASIS = EngineerMessage(
+    "FATIGUE-BASIS",
+    "Select one valid fatigue design basis",
+)
+_FATIGUE_CHECK_SELECTION = EngineerMessage(
+    "FATIGUE-CHECK-SELECTION",
+    "Enable the reinforcement and/or concrete fatigue check",
+)
+_FATIGUE_REINFORCEMENT_REQUIRED = EngineerMessage(
+    "FATIGUE-REINFORCEMENT-REQUIRED",
+    "Reinforcement fatigue requires at least one bar or tendon",
+)
+_FATIGUE_LONG_TERM_RATIO = EngineerMessage(
+    "FATIGUE-LONG-TERM-RATIO",
+    "Long-term modular ratio must be a finite number greater than zero",
+)
+_FATIGUE_SHORT_TERM_RATIO = EngineerMessage(
+    "FATIGUE-SHORT-TERM-RATIO",
+    "Short-term modular ratio must be a finite number greater than zero",
+)
+_FATIGUE_GAMMA_FF = EngineerMessage(
+    "FATIGUE-GAMMA-FF",
+    "gamma_Ff must be a finite number greater than zero",
+)
+_FATIGUE_GAMMA_S = EngineerMessage(
+    "FATIGUE-GAMMA-S",
+    "gamma_s must be a finite number greater than zero",
+)
+_FATIGUE_METHOD = EngineerMessage(
+    "FATIGUE-METHOD",
+    "Select a valid concrete fatigue method",
+)
+_FATIGUE_GAMMA_C = EngineerMessage(
+    "FATIGUE-GAMMA-C",
+    "gamma_c,fat must be a finite number greater than zero",
+)
+_FATIGUE_BETA_CC = EngineerMessage(
+    "FATIGUE-BETA-CC",
+    "beta_cc(t0) must be a finite number greater than zero",
+)
+_FATIGUE_T0 = EngineerMessage(
+    "FATIGUE-T0",
+    "Concrete age t0 must be a finite number greater than zero",
+)
+_FATIGUE_CONCRETE_C = EngineerMessage(
+    "FATIGUE-CONCRETE-C",
+    "Concrete fatigue C must be a finite number greater than zero",
+)
+_FATIGUE_CONCRETE_REQUIRED = EngineerMessage(
+    "FATIGUE-CONCRETE-REQUIRED",
+    "Concrete material is required for concrete fatigue",
+)
+_FATIGUE_FCK = EngineerMessage(
+    "FATIGUE-FCK",
+    "Concrete f_ck must be a finite number greater than zero",
+)
+_FATIGUE_ALPHA_CC = EngineerMessage(
+    "FATIGUE-ALPHA-CC",
+    "Concrete alpha_cc must be a finite number greater than zero",
+)
+_FATIGUE_K1 = EngineerMessage(
+    "FATIGUE-K1",
+    "Concrete fatigue k1 must be a finite number greater than zero",
+)
+_FATIGUE_SPECTRUM = EngineerMessage(
+    "FATIGUE-SPECTRUM",
+    "Review the fatigue spectrum definitions",
+)
+_FATIGUE_ELEMENT = EngineerMessage(
+    "FATIGUE-ELEMENT",
+    "Review the reinforcement element definitions used for fatigue",
+)
+_FATIGUE_ELEMENT_GEOMETRY = EngineerMessage(
+    "FATIGUE-ELEMENT-GEOMETRY",
+    "The fatigue reinforcement geometry must match the current section",
+)
+_FATIGUE_MATERIAL = EngineerMessage(
+    "FATIGUE-MATERIAL",
+    "Review the material assignments and properties used for fatigue",
+)
+_FATIGUE_DETAIL = EngineerMessage(
+    "FATIGUE-DETAIL",
+    "Review the assigned fatigue details and their properties",
+)
+_FATIGUE_DETAIL_EDITION = EngineerMessage(
+    "FATIGUE-DETAIL-EDITION",
+    "Select fatigue details that match the selected design basis",
+)
+_FATIGUE_BOND = EngineerMessage(
+    "FATIGUE-BOND",
+    "Complete the bonded-tendon fatigue properties for the combined reinforcement",
+)
+_FATIGUE_PROJECT_RELATION = EngineerMessage(
+    "FATIGUE-PROJECT-RELATION",
+    "The project-defined concrete fatigue relation has no cited source",
+)
+_FATIGUE_DETAIL_SOURCE = EngineerMessage(
+    "FATIGUE-DETAIL-SOURCE",
+    "The source for an assigned fatigue resistance is not stated",
+)
+_FATIGUE_CUSTOM_DETAIL = EngineerMessage(
+    "FATIGUE-CUSTOM-DETAIL",
+    "A custom or imported fatigue resistance is used",
+)
 
 
 @dataclass(frozen=True)
@@ -74,33 +193,51 @@ class PreparedFatigueAnalysis:
     prestress_stress: np.ndarray | None
     t0_days: float | None
     basis: Mapping
-    warnings: tuple[str, ...]
+    warnings: tuple[EngineerMessage, ...]
     concrete_method: str | None
 
 
-def _positive(value, label: str, errors: list[str]) -> float | None:
+def _positive(
+    value,
+    label: str,
+    errors: list[object],
+    engineer_message: EngineerMessage | None = None,
+) -> float | None:
     try:
         number = float(value)
     except (TypeError, ValueError):
-        errors.append(f"{label} must be a finite number greater than zero")
+        errors.append(
+            engineer_message
+            or f"{label} must be a finite number greater than zero"
+        )
         return None
     if not math.isfinite(number) or number <= 0.0:
-        errors.append(f"{label} must be a finite number greater than zero")
+        errors.append(
+            engineer_message
+            or f"{label} must be a finite number greater than zero"
+        )
         return None
     return number
 
 
-def _finite_attribute(value, label: str, errors: list[str], *, positive=False):
+def _finite_attribute(
+    value,
+    label: str,
+    errors: list[object],
+    *,
+    positive=False,
+    engineer_message: EngineerMessage | None = None,
+):
     try:
         number = float(value)
     except (TypeError, ValueError):
-        errors.append(f"{label} must be a finite number")
+        errors.append(engineer_message or f"{label} must be a finite number")
         return None
     if not math.isfinite(number):
-        errors.append(f"{label} must be a finite number")
+        errors.append(engineer_message or f"{label} must be a finite number")
         return None
     if positive and number <= 0.0:
-        errors.append(f"{label} must be greater than zero")
+        errors.append(engineer_message or f"{label} must be greater than zero")
         return None
     return number
 
@@ -140,7 +277,7 @@ def _solver_edition(bindings: Mapping[str, CapabilityBinding]) -> str:
     editions = {binding.solver_edition for binding in bindings.values()}
     if len(editions) != 1:
         raise ValueError(
-            "selected fatigue capabilities do not share one solver edition"
+            "The selected fatigue checks do not use the same design-standard edition"
         )
     return next(iter(editions))
 
@@ -203,13 +340,10 @@ def _validate_element_geometry(
     records: Sequence[Mapping],
     solver_elements,
     label: str,
-    errors: list[str],
+    errors: list[object],
 ) -> None:
     if len(records) != len(solver_elements):
-        errors.append(
-            f"{label} element table has {len(records)} rows but the section "
-            f"contains {len(solver_elements)} elements"
-        )
+        errors.append(_FATIGUE_ELEMENT_GEOMETRY)
         return
     for index, (record, element) in enumerate(
         zip(records, solver_elements), start=1
@@ -226,47 +360,43 @@ def _validate_element_geometry(
             try:
                 actual = float(raw)
             except (TypeError, ValueError):
-                errors.append(f"{element_id}: {field} must be a finite number")
+                errors.append(_FATIGUE_ELEMENT_GEOMETRY)
                 continue
             if not math.isfinite(actual):
-                errors.append(f"{element_id}: {field} must be a finite number")
+                errors.append(_FATIGUE_ELEMENT_GEOMETRY)
             elif not math.isclose(
                 actual,
                 expected,
                 rel_tol=1.0e-9,
                 abs_tol=1.0e-9,
             ):
-                errors.append(
-                    f"{element_id}: {field} does not match the solver section"
-                )
+                errors.append(_FATIGUE_ELEMENT_GEOMETRY)
 
 
 def _validate_materials(
     records: Sequence[Mapping],
     materials: Sequence,
     label: str,
-    errors: list[str],
+    errors: list[object],
     *,
     require_strength: bool,
 ) -> None:
     if len(materials) != len(records):
-        errors.append(
-            f"{label} material mapping has {len(materials)} values for "
-            f"{len(records)} elements"
-        )
+        errors.append(_FATIGUE_MATERIAL)
         return
     for record, material in zip(records, materials):
         if not isinstance(record, Mapping):
             continue
         element_id = str(record.get("id") or label).strip()
         if material is None:
-            errors.append(f"{element_id}: assigned material is unavailable")
+            errors.append(_FATIGUE_MATERIAL)
             continue
         _finite_attribute(
             getattr(material, "Es", None),
             f"{element_id}: elastic modulus",
             errors,
             positive=True,
+            engineer_message=_FATIGUE_MATERIAL,
         )
         if require_strength:
             _finite_attribute(
@@ -274,6 +404,7 @@ def _validate_materials(
                 f"{element_id}: characteristic yield/proof stress",
                 errors,
                 positive=True,
+                engineer_message=_FATIGUE_MATERIAL,
             )
         if label == "Mild reinforcement" and require_strength:
             _finite_attribute(
@@ -281,12 +412,14 @@ def _validate_materials(
                 f"{element_id}: characteristic compression yield stress",
                 errors,
                 positive=True,
+                engineer_message=_FATIGUE_MATERIAL,
             )
         elif label == "Prestressing":
             _finite_attribute(
                 getattr(material, "IS", None),
                 f"{element_id}: initial prestress strain",
                 errors,
+                engineer_message=_FATIGUE_MATERIAL,
             )
 
 
@@ -295,7 +428,7 @@ def _proof_stresses(
     records: Sequence[Mapping],
     materials: Sequence,
     kind: str,
-    errors: list[str],
+    errors: list[object],
 ) -> list[float | None]:
     """Resolve explicit characteristic yield/proof stress per element.
 
@@ -335,6 +468,7 @@ def _proof_stresses(
             f"{element_id}: characteristic yield/proof stress",
             errors,
             positive=True,
+            engineer_message=_FATIGUE_MATERIAL,
         ))
     return output
 
@@ -363,33 +497,34 @@ def _assigned_detail_records(
     return tuple(output)
 
 
-def _detail_data(inp: Mapping, errors: list[str]) -> tuple[dict, dict]:
+def _detail_data(inp: Mapping, errors: list[object]) -> tuple[dict, dict]:
     try:
         catalog = fatigue_inputs.normalise_catalog(
             inp.get(fatigue_inputs.DETAIL_CATALOG_KEY)
         )
-    except (TypeError, ValueError) as exc:
-        errors.append(str(exc))
+    except (TypeError, ValueError):
+        errors.append(_FATIGUE_DETAIL)
         return {}, fatigue_inputs.default_catalog()
-    errors.extend(fatigue_inputs.catalog_errors(catalog))
+    if fatigue_inputs.catalog_errors(catalog):
+        errors.append(_FATIGUE_DETAIL)
     return fatigue_inputs.entry_map(catalog), catalog
 
 
-def validation_errors(inp: Mapping) -> list[str]:
+def validation_errors(inp: Mapping) -> list[object]:
     """Return deterministic errors for an enabled fatigue calculation."""
 
     if not bool(inp.get("fatigue_on")):
         return []
-    errors: list[str] = []
+    errors: list[object] = []
     section = inp.get("section")
     if not isinstance(section, Section):
-        errors.append("A valid section is required for fatigue analysis")
+        errors.append(_FATIGUE_SECTION_REQUIRED)
         section = None
     else:
         try:
             section.require_valid_geometry()
-        except GeometryTopologyError as exc:
-            errors.append(f"Invalid section geometry: {exc}")
+        except GeometryTopologyError:
+            errors.append(_FATIGUE_SECTION_GEOMETRY)
             section = None
     for key in ("geometry_error", "void_error", "steel_error", "material_error"):
         if inp.get(key):
@@ -403,8 +538,8 @@ def validation_errors(inp: Mapping) -> list[str]:
     concrete_method_valid = concrete_method in CONCRETE_METHODS
     try:
         basis_key = parse_design_basis_key(inp.get("fatigue_edition"))
-    except ValueError as exc:
-        errors.append(str(exc))
+    except ValueError:
+        errors.append(_FATIGUE_BASIS)
         basis_key = None
     solver_edition = ""
     if basis_key is not None and (
@@ -419,46 +554,81 @@ def validation_errors(inp: Mapping) -> list[str]:
                     concrete_method=concrete_method,
                 )
             )
-        except ValueError as exc:
-            errors.append(str(exc))
+        except ValueError:
+            errors.append(_FATIGUE_BASIS)
     if not check_reinforcement and not check_concrete:
-        errors.append("Enable the reinforcement and/or concrete fatigue check")
+        errors.append(_FATIGUE_CHECK_SELECTION)
     if (
         check_reinforcement
         and section is not None
         and not section.bars
         and not section.tendons
     ):
-        errors.append(
-            "Reinforcement fatigue check requires at least one bar or tendon"
-        )
+        errors.append(_FATIGUE_REINFORCEMENT_REQUIRED)
 
-    _positive(inp.get("nl"), "Long-term modular ratio", errors)
-    _positive(inp.get("ns"), "Short-term modular ratio", errors)
-    _positive(inp.get("fatigue_gamma_ff"), "gamma_Ff", errors)
+    _positive(
+        inp.get("nl"),
+        "Long-term modular ratio",
+        errors,
+        _FATIGUE_LONG_TERM_RATIO,
+    )
+    _positive(
+        inp.get("ns"),
+        "Short-term modular ratio",
+        errors,
+        _FATIGUE_SHORT_TERM_RATIO,
+    )
+    _positive(
+        inp.get("fatigue_gamma_ff"),
+        "gamma_Ff",
+        errors,
+        _FATIGUE_GAMMA_FF,
+    )
     if check_reinforcement:
-        _positive(inp.get("fatigue_gamma_s"), "gamma_s", errors)
+        _positive(
+            inp.get("fatigue_gamma_s"),
+            "gamma_s",
+            errors,
+            _FATIGUE_GAMMA_S,
+        )
     if check_concrete:
         if not concrete_method_valid:
-            errors.append("Select a valid concrete fatigue method")
-        _positive(inp.get("fatigue_gamma_c"), "gamma_c,fat", errors)
-        _positive(inp.get("fatigue_beta_cc_t0"), "beta_cc(t0)", errors)
-        _positive(inp.get("fatigue_t0_days"), "Concrete age t0", errors)
+            errors.append(_FATIGUE_METHOD)
+        _positive(
+            inp.get("fatigue_gamma_c"),
+            "gamma_c,fat",
+            errors,
+            _FATIGUE_GAMMA_C,
+        )
+        _positive(
+            inp.get("fatigue_beta_cc_t0"),
+            "beta_cc(t0)",
+            errors,
+            _FATIGUE_BETA_CC,
+        )
+        _positive(
+            inp.get("fatigue_t0_days"),
+            "Concrete age t0",
+            errors,
+            _FATIGUE_T0,
+        )
         if concrete_method in CONCRETE_MINER_METHODS:
             _positive(
                 inp.get("fatigue_concrete_c"),
                 "Concrete fatigue C",
                 errors,
+                _FATIGUE_CONCRETE_C,
             )
         concrete = inp.get("concrete")
         if concrete is None:
-            errors.append("Concrete material is required for concrete fatigue")
+            errors.append(_FATIGUE_CONCRETE_REQUIRED)
         else:
             _finite_attribute(
                 getattr(concrete, "fck", None),
                 "Concrete fck",
                 errors,
                 positive=True,
+                engineer_message=_FATIGUE_FCK,
             )
             if solver_edition and solver_edition != fatigue_inputs.EC2_2023:
                 _finite_attribute(
@@ -466,66 +636,63 @@ def validation_errors(inp: Mapping) -> list[str]:
                     "Concrete alpha_cc",
                     errors,
                     positive=True,
+                    engineer_message=_FATIGUE_ALPHA_CC,
                 )
         if solver_edition and solver_edition != fatigue_inputs.EC2_2023:
             _positive(
                 inp.get("fatigue_concrete_k1"),
                 "Concrete fatigue k1",
                 errors,
+                _FATIGUE_K1,
             )
 
     spectrum_value = inp.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
     try:
-        errors.extend(
-            fatigue_inputs.spectrum_errors(
-                spectrum_value,
-                existing_case_names=_case_names(inp),
-                require_rows=True,
-            )
+        spectrum_errors = fatigue_inputs.spectrum_errors(
+            spectrum_value,
+            existing_case_names=_case_names(inp),
+            require_rows=True,
         )
+        if spectrum_errors:
+            errors.append(_FATIGUE_SPECTRUM)
         groups = fatigue_inputs.spectrum_groups(spectrum_value)
-    except (TypeError, ValueError) as exc:
-        errors.append(str(exc))
+    except (TypeError, ValueError):
+        errors.append(_FATIGUE_SPECTRUM)
         groups = {}
 
     try:
         basis = fatigue_inputs.normalise_basis(
             inp.get(fatigue_inputs.BASIS_KEY)
         )
-    except (TypeError, ValueError) as exc:
-        errors.append(str(exc))
+    except (TypeError, ValueError):
+        errors.append(_FATIGUE_BASIS)
         basis = fatigue_inputs.default_basis()
     if fatigue_inputs.method_requires_single_bin(basis["method"]):
         for name, rows in groups.items():
             if len(rows) != 1:
-                errors.append(
-                    f"{name}: {basis['method']} requires one "
-                    "constant-amplitude bin"
-                )
+                errors.append(_FATIGUE_SPECTRUM)
 
     bars, tendons = _records(inp)
     all_records = bars + tendons
     ids: dict[str, str] = {}
     for index, record in enumerate(all_records, start=1):
         if not isinstance(record, Mapping):
-            errors.append(f"Reinforcement element {index} must be an object")
+            errors.append(_FATIGUE_ELEMENT)
             continue
         element_id = str(record.get("id") or "").strip()
         if not element_id:
-            errors.append(f"Reinforcement element {index}: ID is required")
+            errors.append(_FATIGUE_ELEMENT)
             continue
         folded = element_id.casefold()
         if folded in ids:
-            errors.append(
-                f"Reinforcement element ID '{element_id}' duplicates "
-                f"'{ids[folded]}'"
-            )
+            errors.append(_FATIGUE_ELEMENT)
         else:
             ids[folded] = element_id
         _positive(
             record.get("diameter_mm"),
             f"{element_id}: diameter",
             errors,
+            _FATIGUE_ELEMENT,
         )
 
     if section is not None:
@@ -587,21 +754,13 @@ def validation_errors(inp: Mapping) -> list[str]:
                     record.get("fatigue_detail_id") or ""
                 ).strip()
                 if not detail_id:
-                    errors.append(
-                        f"{element_id}: fatigue detail ID is required"
-                    )
+                    errors.append(_FATIGUE_DETAIL)
                     continue
                 detail = details.get(detail_id)
                 if detail is None:
-                    errors.append(
-                        f"{element_id}: fatigue detail '{detail_id}' "
-                        "is unavailable"
-                    )
+                    errors.append(_FATIGUE_DETAIL)
                 elif detail["kind"] != expected_kind:
-                    errors.append(
-                        f"{element_id}: fatigue detail '{detail_id}' "
-                        f"must be {expected_kind}"
-                    )
+                    errors.append(_FATIGUE_DETAIL)
                 else:
                     detail_edition = fatigue_inputs.preset_edition(
                         detail["preset"]
@@ -611,12 +770,7 @@ def validation_errors(inp: Mapping) -> list[str]:
                         and selected_family is not None
                         and detail_edition != selected_family
                     ):
-                        errors.append(
-                            f"{element_id}: fatigue detail '{detail_id}' uses "
-                            f"{detail_edition} resistance with {basis_label}; "
-                            "select an edition-aligned preset or identify the "
-                            "detail as Custom / imported"
-                        )
+                        errors.append(_FATIGUE_DETAIL_EDITION)
         if bars and tendons:
             for record in tendons:
                 if not isinstance(record, Mapping):
@@ -632,32 +786,25 @@ def validation_errors(inp: Mapping) -> list[str]:
                     "bond_equivalent_diameter_mm",
                 ):
                     if float(detail[field]) <= 0.0:
-                        errors.append(
-                            f"{element_id}: {field} is required when mild "
-                            "reinforcement and bonded tendons are combined"
-                        )
-    return list(dict.fromkeys(errors))
+                        errors.append(_FATIGUE_BOND)
+    # Do not compare or hash untrusted upstream objects here. ``invalid_result``
+    # resolves every item through the publication gate before de-duplication.
+    return errors
 
 
-def validation_warnings(inp: Mapping) -> list[str]:
+def validation_warnings(inp: Mapping) -> list[EngineerMessage]:
     """Return non-numerical provenance gaps for an enabled calculation."""
 
     if not bool(inp.get("fatigue_on")):
         return []
-    warnings = []
+    warnings: list[EngineerMessage] = []
     if (
         bool(inp.get("fatigue_check_concrete"))
         and inp.get("fatigue_concrete_method") == CONCRETE_PROJECT_MINER
     ):
-        warnings.append(
-            "Project-defined concrete Miner S-N relation is used (uncited)"
-        )
+        warnings.append(_FATIGUE_PROJECT_RELATION)
     try:
-        warnings.extend(
-            fatigue_inputs.basis_warnings(
-                inp.get(fatigue_inputs.BASIS_KEY)
-            )
-        )
+        fatigue_inputs.basis_warnings(inp.get(fatigue_inputs.BASIS_KEY))
     except (TypeError, ValueError):
         # The same malformed basis is a blocking validation error.
         pass
@@ -680,20 +827,15 @@ def validation_warnings(inp: Mapping) -> list[str]:
                 continue
             source = str(detail.get("source") or "").strip()
             if not source:
-                warnings.append(
-                    f"{detail_id}: fatigue resistance source is not stated"
-                )
+                warnings.append(_FATIGUE_DETAIL_SOURCE)
             if detail.get("preset") == fatigue_inputs.CUSTOM_PRESET:
-                warnings.append(
-                    f"{detail_id}: custom/imported fatigue resistance is used"
-                    + (f" (source: {source})" if source else "")
-                )
+                warnings.append(_FATIGUE_CUSTOM_DETAIL)
     return list(dict.fromkeys(warnings))
 
 
 def invalid_result(
     inp: Mapping,
-    errors: Sequence[str] | None = None,
+    errors: Sequence[object] | None = None,
 ) -> dict:
     """Return a calculation-free INVALID payload without changing ``inp``.
 
@@ -704,9 +846,12 @@ def invalid_result(
     """
 
     unique_errors = tuple(dict.fromkeys(
-        str(error).strip()
+        engineer_messages.resolve(
+            error,
+            fallback=_FATIGUE_INPUT_FALLBACK,
+            context="fatigue input validation",
+        )
         for error in (errors if errors is not None else validation_errors(inp))
-        if str(error).strip()
     ))
     try:
         basis = fatigue_inputs.normalise_basis(
@@ -864,7 +1009,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         raise ValueError("fatigue analysis is not enabled")
     errors = validation_errors(inp)
     if errors:
-        raise ValueError("; ".join(errors))
+        raise ValueError("fatigue input validation failed")
 
     section = inp["section"]
     bars, tendons = _records(inp)
@@ -882,7 +1027,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
         if check_concrete
         else None
     )
-    proof_errors: list[str] = []
+    proof_errors: list[object] = []
     bar_proof_stresses = (
         _proof_stresses(
             inp,
@@ -908,7 +1053,7 @@ def prepare(inp: Mapping) -> PreparedFatigueAnalysis:
     if proof_errors:
         # ``validation_errors`` has already checked these values. Keep this
         # defensive guard at the preparation boundary for custom integrations.
-        raise ValueError("; ".join(proof_errors))
+        raise ValueError("fatigue proof-stress validation failed")
     gamma_c = (
         float(inp["fatigue_gamma_c"]) if check_concrete else None
     )
