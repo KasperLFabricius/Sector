@@ -25,6 +25,7 @@ CATALOG_KEYS = (MILD_CATALOG_KEY, PRESTRESS_CATALOG_KEY)
 
 DEFAULT_MILD_PRESET = "DS/EN 1992-1-1:2005 + DK NA:2024"
 DEFAULT_PRESTRESS_PRESET = "EN 1992-1-1:2005"
+CUSTOM_PRESET = "Custom / imported"
 
 MILD_FIELDS = tuple(mp.MILD_FIELD_META)
 PRESTRESS_FIELDS = tuple(mp.PRESTRESS_FIELD_META)
@@ -169,7 +170,7 @@ def _normalise_entry(raw: Mapping, kind: str, material_id: str) -> dict:
     if selected not in available:
         # Preserve the numerical law but report it as custom rather than assigning
         # a different named standard to imported values.
-        selected = "Custom / imported"
+        selected = CUSTOM_PRESET
     preset_values = available.get(selected, available[default_preset(kind)])
     base = _entry_defaults(kind, selected if selected in available else None)
     curve = int(_finite(raw.get("curve", preset_values.get("curve", 3)),

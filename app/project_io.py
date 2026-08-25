@@ -38,8 +38,10 @@ from sector import (
     capacity,
     codes,
     design_standards,
+    detailing,
     geometry,
     heightened_crack_control,
+    material_presets,
 )
 from sector.build_info import source_revision
 from sector.engineer_message import EngineerMessage
@@ -98,6 +100,10 @@ _PROJECT_INCOMPATIBLE = EngineerMessage(
 _PROJECT_DAMAGED = EngineerMessage(
     "PROJECT-DAMAGED",
     "the project file is incomplete or damaged",
+)
+_PROJECT_INVALID_INPUT = EngineerMessage(
+    "PROJECT-INVALID-INPUT",
+    "the project file contains an invalid input value",
 )
 _PROJECT_CHANGED = EngineerMessage(
     "PROJECT-CHANGED",
@@ -286,6 +292,374 @@ _POSITIVE_FACTOR_KEYS = {
     "shear_gamma_v",
 }
 
+# Every persisted scalar has one explicit JSON type at the project boundary.
+# Numeric engineering inputs accept JSON integers or floats and are normalised to
+# finite floats. Counts accept an integral JSON number and are normalised to ints.
+# No Boolean/string/container truthiness or float-from-text conversion is allowed.
+_BOOLEAN_SCALAR_KEYS = frozenset({
+    "qsv_qs_cover_to_edge",
+    "mild_active_comp",
+    "pl_check_util",
+    "pl_interaction",
+    "sls_cw",
+    "sls_heightened_on",
+    "fatigue_on",
+    "fatigue_check_steel",
+    "fatigue_check_concrete",
+    "minimum_reinforcement_on",
+    "transverse_detailing_on",
+    "clear_spacing_on",
+    "detailing_include_tendons",
+    "transverse_apply_ductility_reduction",
+    "shear_on",
+    "shear_links",
+    "torsion_on",
+    "torsion_nu_v",
+    "torsion_subdivide",
+    "combined_on",
+    "combined_mv_independent",
+    "autosave_on",
+})
+
+_INTEGER_SCALAR_KEYS = frozenset({
+    "qsv_ring_n",
+    "qsv_bot_n",
+    "qsv_top_n",
+    "qsv_bot_n2",
+    "qsv_top_n2",
+    "qsv_bot_layers",
+    "qsv_top_layers",
+    "qsv_tnd_n",
+    "qsv_tnd_layers",
+    "torsion_nsub",
+    "autosave_min",
+})
+
+_TEXT_SCALAR_KEYS = frozenset({
+    "qsv_shape",
+    "qsv_t_orientation",
+    "qsv_qs_rebar_mode",
+    "conc_preset",
+    "mild_preset",
+    "pre_preset",
+    "mode",
+    "sls_bond",
+    "sls_code",
+    "sls_member",
+    "sls_heightened_reference_case",
+    "sls_heightened_reinforcement_surface",
+    "fatigue_edition",
+    "fatigue_concrete_method",
+    "detailing_edition",
+    "detailing_member_type",
+    "detailing_cut_direction",
+    "transverse_ductility_class",
+    "shear_method",
+    "shear_face_x",
+    "shear_face_y",
+    "torsion_method",
+    "combined_method",
+    "capacity_steel_material_id",
+    "rep_proj_no",
+    "rep_proj_name",
+    "rep_section",
+    "rep_rev",
+    "rep_author",
+    "rep_comments",
+})
+
+_NESTED_SCALAR_KEYS = frozenset({
+    material_catalog.MILD_CATALOG_KEY,
+    material_catalog.PRESTRESS_CATALOG_KEY,
+    fatigue_inputs.DETAIL_CATALOG_KEY,
+    fatigue_inputs.BASIS_KEY,
+})
+
+_EXACT_TEXT_OPTIONS = {
+    "qsv_shape": frozenset({
+        "Rectangle",
+        "Slab strip",
+        "Trapezoid",
+        "T-section",
+        "L-section",
+        "I-section",
+        "U-section",
+        "Box girder",
+        "Circular",
+        "Annulus",
+    }),
+    "qsv_t_orientation": frozenset({"Flange at top", "Flange at bottom"}),
+    "qsv_qs_rebar_mode": frozenset({"By number", "By spacing"}),
+    "conc_preset": frozenset(material_presets.CONCRETE_PRESETS),
+    "mild_preset": frozenset({
+        *material_catalog.presets("mild"),
+        material_catalog.CUSTOM_PRESET,
+    }),
+    "pre_preset": frozenset({
+        *material_catalog.presets("prestress"),
+        material_catalog.CUSTOM_PRESET,
+    }),
+    "mode": frozenset({"Plastic", "Elastic", "Both"}),
+    "sls_bond": frozenset({
+        "Ribbed / high bond (k1 = 0.8)",
+        "Plain round (k1 = 1.6)",
+    }),
+    "sls_member": frozenset({"Beam", "Slab"}),
+    "sls_heightened_reinforcement_surface": frozenset({"ribbed", "smooth"}),
+    "fatigue_concrete_method": frozenset({
+        "Explicit Palmgren-Miner spectrum",
+        "User-defined Miner S-N relation",
+        "Damage-equivalent stress amplitude",
+    }),
+    "detailing_edition": frozenset(detailing.EDITIONS),
+    "detailing_member_type": frozenset(detailing.MEMBER_TYPES),
+    "detailing_cut_direction": frozenset(detailing.CUT_DIRECTIONS),
+    "transverse_ductility_class": frozenset({"A", "B", "C"}),
+    "shear_face_x": frozenset(load_cases.FACE_OPTIONS),
+    "shear_face_y": frozenset(load_cases.FACE_OPTIONS),
+}
+
+_TYPED_NONREAL_SCALAR_KEYS = (
+    _BOOLEAN_SCALAR_KEYS
+    | _INTEGER_SCALAR_KEYS
+    | _TEXT_SCALAR_KEYS
+    | _NESTED_SCALAR_KEYS
+)
+_REAL_SCALAR_KEYS = frozenset(SCALAR_KEYS) - _TYPED_NONREAL_SCALAR_KEYS
+
+if len(_TYPED_NONREAL_SCALAR_KEYS) != sum(map(len, (
+    _BOOLEAN_SCALAR_KEYS,
+    _INTEGER_SCALAR_KEYS,
+    _TEXT_SCALAR_KEYS,
+    _NESTED_SCALAR_KEYS,
+))):  # pragma: no cover - import-time schema authoring guard
+    raise RuntimeError("project scalar type groups overlap")
+
+
+def _invalid_input(message: str) -> ProjectInputError:
+    """Return a typed internal diagnostic carrying authored public guidance."""
+
+    return ProjectInputError(
+        message,
+        engineer_message=_PROJECT_INVALID_INPUT,
+    )
+
+
+def _strict_finite_real(
+    value,
+    label: str,
+    *,
+    requirement: str = "must be a finite number",
+) -> float:
+    if type(value) not in {int, float} or isinstance(value, bool):
+        raise _invalid_input(f"{label} {requirement}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise _invalid_input(f"{label} {requirement}")
+    return 0.0 if number == 0.0 else number
+
+
+def _strict_integer(value, label: str) -> int:
+    if type(value) not in {int, float} or isinstance(value, bool):
+        raise _invalid_input(f"{label} must be a whole number")
+    number = float(value)
+    if not math.isfinite(number) or not number.is_integer():
+        raise _invalid_input(f"{label} must be a whole number")
+    return int(number)
+
+
+def _strict_text(value, label: str) -> str:
+    if type(value) is not str:
+        raise _invalid_input(f"{label} must be text")
+    return value
+
+
+def _validate_catalog_envelope(
+    value,
+    key: str,
+    *,
+    expected_version: int,
+) -> tuple[dict, list[dict]]:
+    if not isinstance(value, Mapping):
+        raise _invalid_input(f"{key} must be an object")
+    catalog = dict(value)
+    allowed = {"version", "next_id", "items"}
+    unknown = set(catalog) - allowed
+    if unknown:
+        raise _invalid_input(f"{key} contains unknown fields")
+    if "version" in catalog:
+        version = _strict_integer(catalog["version"], f"{key} version")
+        if version != expected_version:
+            raise _invalid_input(f"{key} version is not supported")
+        catalog["version"] = version
+    if "next_id" in catalog:
+        next_id = _strict_integer(catalog["next_id"], f"{key} next_id")
+        if next_id < 1:
+            raise _invalid_input(f"{key} next_id must be positive")
+        catalog["next_id"] = next_id
+    items = catalog.get("items")
+    if type(items) is not list:
+        raise _invalid_input(f"{key} items must be a list")
+    if any(not isinstance(item, Mapping) for item in items):
+        raise _invalid_input(f"{key} items must contain only objects")
+    return catalog, [dict(item) for item in items]
+
+
+def _validate_material_catalog(value, kind: str, key: str) -> dict:
+    catalog, items = _validate_catalog_envelope(
+        value,
+        key,
+        expected_version=material_catalog.VERSION,
+    )
+    text_fields = {"id", "name", "description", "preset"}
+    integer_fields = {"curve"}
+    boolean_fields = (
+        {"active_in_compression", "active_comp"}
+        if kind == "mild"
+        else set()
+    )
+    real_fields = set(material_catalog.fields(kind))
+    allowed = text_fields | integer_fields | boolean_fields | real_fields
+    validated = []
+    for position, item in enumerate(items, start=1):
+        label = f"{key} item {position}"
+        if set(item) - allowed:
+            raise _invalid_input(f"{label} contains unknown fields")
+        for field in text_fields.intersection(item):
+            item[field] = _strict_text(item[field], f"{label} {field}")
+        for field in integer_fields.intersection(item):
+            item[field] = _strict_integer(item[field], f"{label} {field}")
+        for field in boolean_fields.intersection(item):
+            if type(item[field]) is not bool:
+                raise _invalid_input(f"{label} {field} must be a Boolean")
+        for field in real_fields.intersection(item):
+            item[field] = _strict_finite_real(item[field], f"{label} {field}")
+        validated.append(item)
+    catalog["items"] = validated
+    return catalog
+
+
+def _validate_fatigue_catalog(value, key: str) -> dict:
+    catalog, items = _validate_catalog_envelope(
+        value,
+        key,
+        expected_version=fatigue_inputs.VERSION,
+    )
+    exemplar = fatigue_inputs.default_entry()
+    text_fields = {
+        field for field, default in exemplar.items() if type(default) is str
+    }
+    boolean_fields = {
+        field for field, default in exemplar.items() if type(default) is bool
+    }
+    real_fields = set(exemplar) - text_fields - boolean_fields
+    allowed = text_fields | boolean_fields | real_fields
+    validated = []
+    for position, item in enumerate(items, start=1):
+        label = f"{key} item {position}"
+        if set(item) - allowed:
+            raise _invalid_input(f"{label} contains unknown fields")
+        for field in text_fields.intersection(item):
+            item[field] = _strict_text(item[field], f"{label} {field}")
+        for field in boolean_fields.intersection(item):
+            if type(item[field]) is not bool:
+                raise _invalid_input(f"{label} {field} must be a Boolean")
+        for field in real_fields.intersection(item):
+            item[field] = _strict_finite_real(item[field], f"{label} {field}")
+        validated.append(item)
+    catalog["items"] = validated
+    return catalog
+
+
+def _validate_fatigue_basis(value, key: str) -> dict:
+    if not isinstance(value, Mapping):
+        raise _invalid_input(f"{key} must be an object")
+    basis = dict(value)
+    if set(basis) - {"method", "notes"}:
+        raise _invalid_input(f"{key} contains unknown fields")
+    for field in ("method", "notes"):
+        if field in basis:
+            basis[field] = _strict_text(basis[field], f"{key} {field}")
+    return basis
+
+
+def _validate_nested_scalar(value, key: str):
+    if key == material_catalog.MILD_CATALOG_KEY:
+        return _validate_material_catalog(value, "mild", key)
+    if key == material_catalog.PRESTRESS_CATALOG_KEY:
+        return _validate_material_catalog(value, "prestress", key)
+    if key == fatigue_inputs.DETAIL_CATALOG_KEY:
+        return _validate_fatigue_catalog(value, key)
+    if key == fatigue_inputs.BASIS_KEY:
+        return _validate_fatigue_basis(value, key)
+    raise RuntimeError(f"unhandled nested project scalar {key}")
+
+
+def _validated_scalar_payload(scalars: Mapping) -> dict:
+    payload = {}
+    for key in SCALAR_KEYS:
+        if key not in scalars:
+            continue
+        value = _json_value(scalars[key])
+        # These exact-choice resolvers retain their established unknown-value
+        # diagnostics. Reject non-text values at this authored input boundary
+        # before handing supported strings to those resolvers.
+        if key in {
+            "shear_method",
+            "torsion_method",
+            "combined_method",
+            "sls_code",
+            "fatigue_edition",
+        }:
+            payload[key] = _strict_text(value, key)
+            continue
+        if (
+            key == "sls_heightened_reinforcement_surface"
+            and scalars.get("sls_heightened_on") is True
+        ):
+            payload[key] = value
+            continue
+        if key in _BOOLEAN_SCALAR_KEYS:
+            if type(value) is not bool:
+                raise _invalid_input(f"{key} must be a Boolean")
+        elif key in _INTEGER_SCALAR_KEYS:
+            value = _strict_integer(value, key)
+        elif key in _TEXT_SCALAR_KEYS:
+            value = _strict_text(value, key)
+            options = _EXACT_TEXT_OPTIONS.get(key)
+            if options is not None and value not in options:
+                raise _invalid_input(f"{key} is not a supported selection")
+        elif key in _NESTED_SCALAR_KEYS:
+            value = _validate_nested_scalar(value, key)
+        elif key in _REAL_SCALAR_KEYS:
+            requirement = "must be a finite number"
+            if key in _POSITIVE_FACTOR_KEYS or key in (
+                "sls_heightened_effective_tensile_strength_mpa",
+                "sls_heightened_fine_effective_tension_area_mm2",
+                "sls_heightened_coarse_effective_tension_area_mm2",
+            ):
+                requirement = "must be a positive finite real number"
+            elif key in (
+                LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
+                SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
+            ):
+                requirement = "must be a non-negative finite real number"
+            elif key == HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY:
+                requirement = (
+                    "must be a positive finite real number"
+                    if scalars.get("sls_heightened_on") is True
+                    else "must be a non-negative finite real number"
+                )
+            value = _strict_finite_real(
+                value,
+                key,
+                requirement=requirement,
+            )
+        else:  # pragma: no cover - import-time manifest covers current keys
+            raise RuntimeError(f"untyped project scalar {key}")
+        payload[key] = value
+    return payload
+
 
 def _json_value(value):
     if hasattr(value, "item"):
@@ -382,25 +756,122 @@ def _table_to_obj(value, key: str) -> dict:
     }
 
 
-def _obj_to_table(value, key: str) -> pd.DataFrame:
+def _expected_table_columns(key: str) -> tuple[str, ...]:
+    if key in TABLE_KEYS[:2]:
+        return _GEOMETRY_COLUMNS
+    if key in REINFORCEMENT_TABLE_KEYS:
+        return tuple(rebar_table.COLUMNS)
+    if key in CASE_TABLE_KEYS:
+        return tuple(load_cases.TABLE_COLUMNS[key])
+    if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
+        return tuple(fatigue_inputs.SPECTRUM_COLUMNS)
+    raise RuntimeError(f"unhandled project table {key}")
+
+
+def _table_cell_kinds(
+    key: str,
+) -> tuple[set[str], set[str], set[str], set[str]]:
+    """Return numeric, nullable-numeric, text and Boolean columns."""
+
+    if key == "corners_base":
+        return set(_GEOMETRY_COLUMNS), set(), set(), set()
+    if key == "hole_base":
+        return set(_GEOMETRY_COLUMNS), set(_GEOMETRY_COLUMNS), set(), set()
+    if key in REINFORCEMENT_TABLE_KEYS:
+        return (
+            set(rebar_table.NUMERIC_COLUMNS),
+            set(rebar_table.NUMERIC_COLUMNS),
+            set(rebar_table.TEXT_COLUMNS),
+            set(),
+        )
+    if key in CASE_TABLE_KEYS:
+        return (
+            set(load_cases.NUMERIC_COLUMNS[key]),
+            # A wholly blank editor row is a supported transport state and is
+            # removed by the canonical action-table validation below.
+            set(load_cases.NUMERIC_COLUMNS[key]),
+            set(load_cases.TEXT_COLUMNS[key]),
+            set(load_cases.FLAG_COLUMNS[key]),
+        )
+    if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
+        return (
+            set(fatigue_inputs.SPECTRUM_NUMERIC),
+            # Same explicit blank-row allowance as the native spectrum editor.
+            set(fatigue_inputs.SPECTRUM_NUMERIC),
+            set(fatigue_inputs.SPECTRUM_TEXT),
+            set(),
+        )
+    raise RuntimeError(f"unhandled project table {key}")
+
+
+def _validated_table_rows(value, key: str) -> tuple[list[str], list[list]]:
     if not isinstance(value, Mapping):
-        raise ValueError(f"{key} is not a table object")
+        raise _invalid_input(f"{key} must be a table object")
+    unknown = set(value) - {"columns", "rows"}
+    if unknown:
+        raise _invalid_input(f"{key} table contains unknown fields")
     columns = value.get("columns")
     rows = value.get("rows")
-    if (
-        not isinstance(columns, list)
-        or not all(isinstance(column, str) for column in columns)
-        or not isinstance(rows, list)
-    ):
-        raise ValueError(f"{key} table columns/rows are malformed")
-    if (
-        key == load_cases.ELASTIC_TABLE_KEY
-        and tuple(columns) != load_cases.ELASTIC_COLUMNS
-    ):
-        raise ValueError(
-            f"{key} table columns do not match current schema {VERSION}; "
-            "the exact current Elastic action columns are required"
-        )
+    expected = list(_expected_table_columns(key))
+    if type(columns) is not list or columns != expected:
+        raise _invalid_input(f"{key} table columns do not match the current format")
+    if type(rows) is not list:
+        raise _invalid_input(f"{key} table rows must be a list")
+
+    numeric, nullable_numeric, text, boolean = _table_cell_kinds(key)
+    validated_rows = []
+    for row_number, row in enumerate(rows, start=1):
+        if type(row) is not list or len(row) != len(columns):
+            raise _invalid_input(
+                f"{key} row {row_number} does not match the table columns"
+            )
+        validated = []
+        for column, cell in zip(columns, row):
+            label = f"{key} row {row_number} {column}"
+            if column in numeric:
+                if cell is None and column in nullable_numeric:
+                    validated.append(None)
+                    continue
+                if (
+                    key in (*CASE_TABLE_KEYS, fatigue_inputs.SPECTRUM_TABLE_KEY)
+                    and (
+                        type(cell) not in {int, float}
+                        or isinstance(cell, bool)
+                        or not math.isfinite(float(cell))
+                    )
+                ):
+                    raise _invalid_input(
+                        f"{key} row {row_number}: {column} contains malformed "
+                        f"decimal input {cell!r}"
+                    )
+                validated.append(_strict_finite_real(cell, label))
+                continue
+            if column in boolean:
+                if type(cell) is not bool:
+                    raise _invalid_input(f"{label} must be a Boolean")
+                validated.append(cell)
+                continue
+            if column in text:
+                text_value = _strict_text(cell, label)
+                if (
+                    column in load_cases.PLASTIC_FACE_COLUMNS
+                    and text_value not in load_cases.FACE_OPTIONS
+                ):
+                    raise _invalid_input(f"{label} is not a supported face")
+                if (
+                    column == rebar_table.SIZE_MODE
+                    and text_value not in rebar_table.SIZE_MODES
+                ):
+                    raise _invalid_input(f"{label} is not a supported size mode")
+                validated.append(text_value)
+                continue
+            raise RuntimeError(f"untyped project table column {key}.{column}")
+        validated_rows.append(validated)
+    return columns, validated_rows
+
+
+def _obj_to_table(value, key: str) -> pd.DataFrame:
+    columns, rows = _validated_table_rows(value, key)
     try:
         frame = pd.DataFrame(rows, columns=columns)
     except (TypeError, ValueError) as exc:
@@ -513,11 +984,7 @@ def _canonical_scalars(
     *,
     migrate_gamma_v: bool = False,
 ) -> dict:
-    payload = {
-        key: _json_value(scalars[key])
-        for key in SCALAR_KEYS
-        if key in scalars
-    }
+    payload = _validated_scalar_payload(scalars)
     for key in ("shear_links", "torsion_nu_v"):
         if key not in payload:
             payload[key] = False
