@@ -38,7 +38,7 @@ Published results retain the information needed to reproduce the calculation:
 Sector version, actual inputs, selected method and equation, action identity and
 calculation state. Stale, corrupt or input-mismatched results remain rejected.
 
-Sector 0.96 is the current internal product identity and uses project schema
+Sector 0.96.1 is the current internal product identity and uses project schema
 27. Schemas 25 and 26 have bounded migrations. For schema 25, the former single
 permitted crack width is copied to the independent long-term and short-term
 ordinary inputs, and is preserved separately as the Formula 7.100 NA operand

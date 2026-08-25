@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.96.1 - 2026-08-25
+
+Sector 0.96.1 strengthens calculation prerequisites, result interpretation,
+engineer-facing validation and release evidence without changing project schema
+27.
+
+- Shear resistance with links now requires its own valid link lever arm instead
+  of substituting the plastic lever arm or effective depth. Full torsion and
+  combined resistance remain not assessed when closed links or valid wall data
+  are unavailable.
+- Plastic publications distinguish the concrete compression resultant `F_c`
+  from total compression `F_comp`, and distinguish total lever arm `L`, its
+  components, effective depth `d` and the shear lever arm `z`.
+- Validation failures throughout the application, manual and reports retain
+  concise corrective engineering guidance while unexpected software details
+  remain internal.
+- Expanded independent hand-calculation comparisons, calculation-path checks,
+  real manual/report renders and packaged-application safeguards.
+- Removed unused bridge and crack-helper modules and reduced the Windows package
+  without removing required runtime libraries.
+
+Project schema remains version 27 with the existing bounded migrations from
+schemas 25 and 26. Calculation equations and valid numerical routes are
+unchanged from Sector 0.96.
+
 ## 0.96 - 2026-08-23
 
 Sector 0.96 improves result review, report-profile purpose, manual usability,

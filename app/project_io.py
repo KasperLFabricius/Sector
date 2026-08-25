@@ -3,7 +3,7 @@
 Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
 Sector 0.94 projects used schema 25. Sector 0.95 used schema 26 to separate
-long-term, short-term and heightened permitted crack-width inputs. Sector 0.96
+long-term, short-term and heightened permitted crack-width inputs. Sector 0.96.1
 uses schema 27 to persist the user-selected DS/EN 1992-1-1:2023 shear partial
 factor.
 Schemas 25 and 26 have bounded in-memory migrations; schema 24 and future

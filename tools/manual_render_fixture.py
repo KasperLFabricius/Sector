@@ -67,7 +67,7 @@ _MANUAL_CROPS = (
         (0.09, 0.94, 0.92, 0.98),
         # The release bump changes only the visible product version in this
         # otherwise stable 71-page cover/footer crop.
-        "bd698efe6f6804ff9428958ba5d5e5848076dc4698b700b171fedbbad7fdf863",
+        "e471338cc3068e4843655202a4c7bf111f9eede90df6a3895158bb2eb8309065",
     ),
 )
 

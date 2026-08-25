@@ -38,7 +38,7 @@ def test_pr01_freezes_exact_current_main_without_bumping_product() -> None:
         "release_tag_commit": "7ab0062de37e08ebcd42330fcefcf62dd717002c",
         "current_main_qa_run": 32584442230,
     }
-    assert __version__ == "0.96"
+    assert __version__ == "0.96.1"
     acceptance = _text(ACCEPTANCE)
     assert "changes no runtime, solver, UI, report" in acceptance
     assert "Project schema retained by this PR: 26" in acceptance
@@ -46,7 +46,7 @@ def test_pr01_freezes_exact_current_main_without_bumping_product() -> None:
 
 def test_pr06_owns_bounded_schema_27_transition_without_bumping_product() -> None:
     project_io = _text(PROJECT_IO)
-    assert __version__ == "0.96"
+    assert __version__ == "0.96.1"
     assert re.search(r"^VERSION\s*=\s*27$", project_io, re.MULTILINE)
     assert re.search(r"^MIGRATABLE_VERSION\s*=\s*26$", project_io, re.MULTILINE)
     assert re.search(
