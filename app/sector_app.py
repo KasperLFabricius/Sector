@@ -3384,6 +3384,35 @@ def _apply_project_text(text: str) -> None:
     for key in _QS_WIDGET_KEYS:
         st.session_state.pop(key, None)
     _discard_clear_recovery()
+    # A preset selector is an action as well as a stored value: changing it
+    # prefills the associated editable fields. Reconstruct that action's clean
+    # state before applying explicit project fields, then commit the matching
+    # marker. This ordering preserves an explicitly loaded field even when its
+    # project file omits the selector and the owning material stage mounts during
+    # the same run (for example during startup autosave restoration).
+    preset_families = (
+        ("conc", "conc_preset", _DEFAULT_PRESET, mp.CONCRETE_PRESETS),
+        (
+            "mild",
+            "mild_preset",
+            mat_catalog.default_preset("mild"),
+            mp.MILD_PRESETS,
+        ),
+        (
+            "pre",
+            "pre_preset",
+            mat_catalog.default_preset("prestress"),
+            mp.PRESTRESS_PRESETS,
+        ),
+    )
+    for prefix, preset_key, default_preset, presets in preset_families:
+        effective_preset = scalars.get(preset_key, default_preset)
+        if effective_preset not in presets:
+            continue
+        for field, value in presets[effective_preset].items():
+            st.session_state[f"{prefix}_{field}"] = copy.deepcopy(value)
+        st.session_state[preset_key] = effective_preset
+        st.session_state[f"{prefix}_prev"] = effective_preset
     ed_for_base = {base: ed for base, ed, _ in _PROJECT_TABLES}
     for key in load_cases.CASE_TABLE_KEYS:
         if key not in tables:

@@ -23,6 +23,16 @@ _SPARSE_PROJECT = project_io.dump_project(
     {"rep_proj_no": "STATE-H02 sparse project"},
 ).encode("utf-8")
 
+_EXPLICIT_FIELDS_WITHOUT_PRESETS_PROJECT = project_io.dump_project(
+    {},
+    {
+        "rep_proj_no": "STATE-H02 explicit fields without presets",
+        "conc_fck": 41.0,
+        "mild_fytk": 615.0,
+        "pre_fytk": 1711.0,
+    },
+).encode("utf-8")
+
 _OLD_ARTIFACT_KEYS = (
     "results",
     "result_sig",
@@ -97,15 +107,24 @@ def _goto_project(at: AppTest) -> AppTest:
     return _goto_input_tab(at, "Project")
 
 
-def _upload_sparse_project(at: AppTest) -> AppTest:
+def _upload_project(
+    at: AppTest,
+    content: bytes,
+    *,
+    filename: str = "state-h02.json",
+) -> AppTest:
     _goto_project(at)
     assert len(at.file_uploader) == 1
     at.file_uploader[0].set_value(
-        ("state-h02.json", _SPARSE_PROJECT, "application/json")
+        (filename, content, "application/json")
     ).run()
     assert not at.exception
     assert any("Project loaded" in str(item.value) for item in at.success)
     return at
+
+
+def _upload_sparse_project(at: AppTest) -> AppTest:
+    return _upload_project(at, _SPARSE_PROJECT)
 
 
 def _build_history(name: str) -> AppTest:
@@ -194,6 +213,16 @@ def clean_replacement_snapshot() -> tuple[str, str]:
     return _replacement_snapshot(_upload_sparse_project(_build_history("clean")))
 
 
+@pytest.fixture(scope="module")
+def clean_explicit_fields_snapshot() -> tuple[str, str]:
+    at = _upload_project(
+        _build_history("clean"),
+        _EXPLICIT_FIELDS_WITHOUT_PRESETS_PROJECT,
+        filename="explicit-fields.json",
+    )
+    return _replacement_snapshot(at)
+
+
 @pytest.mark.parametrize(
     "history",
     (
@@ -270,6 +299,86 @@ def test_same_sparse_project_reconstructs_identically_from_every_history(
         at.run()
         assert at.selectbox(key="shape").value == "Rectangle"
         assert at.number_input(key="b_mm").value == pytest.approx(400.0)
+
+
+@pytest.mark.parametrize(
+    "history",
+    ("clean", "altered-concrete", "altered-material"),
+)
+def test_explicit_preset_fields_survive_when_selectors_are_omitted(
+    history: str,
+    clean_explicit_fields_snapshot: tuple[str, str],
+) -> None:
+    _, scalars = project_io.parse_project(
+        _EXPLICIT_FIELDS_WITHOUT_PRESETS_PROJECT.decode("utf-8")
+    )
+    assert all(
+        key not in scalars
+        for key in ("conc_preset", "mild_preset", "pre_preset")
+    )
+
+    at = _upload_project(
+        _build_history(history),
+        _EXPLICIT_FIELDS_WITHOUT_PRESETS_PROJECT,
+        filename="explicit-fields.json",
+    )
+    assert _replacement_snapshot(at) == clean_explicit_fields_snapshot
+
+    _goto_material_tab(at, "Concrete")
+    assert at.selectbox(key="conc_preset").value == (
+        "DS/EN 1992-1-1:2005 + DK NA:2024"
+    )
+    assert at.number_input(key="conc_fck").value == pytest.approx(41.0)
+
+    _goto_material_tab(at, "Mild steel")
+    assert at.selectbox(key="mild_preset").value == (
+        "DS/EN 1992-1-1:2005 + DK NA:2024"
+    )
+    assert at.number_input(key="mild_fytk").value == pytest.approx(615.0)
+
+    _goto_material_tab(at, "Prestressing steel")
+    assert at.selectbox(key="pre_preset").value == "EN 1992-1-1:2005"
+    assert at.number_input(key="pre_fytk").value == pytest.approx(1711.0)
+
+    assert at.session_state["_durable_input_scalars"]["conc_fck"] == (
+        pytest.approx(41.0)
+    )
+    assert at.session_state["_latest_inputs"]["concrete"].fck == pytest.approx(
+        41.0
+    )
+    assert at.session_state["_latest_inputs"]["mild_material_catalog"][
+        "items"
+    ][0]["fytk"] == pytest.approx(615.0)
+    assert at.session_state["_latest_inputs"]["prestress_material_catalog"][
+        "items"
+    ][0]["fytk"] == pytest.approx(1711.0)
+    assert not at.exception
+
+
+def test_initial_replacement_preserves_explicit_fields_without_presets() -> None:
+    """Exercise application before any prior-session preset marker can exist."""
+
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
+    at.session_state["_pending_project"] = (
+        _EXPLICIT_FIELDS_WITHOUT_PRESETS_PROJECT.decode("utf-8")
+    )
+    at.run()
+
+    assert not at.exception
+    assert at.number_input(key="conc_fck").value == pytest.approx(41.0)
+    assert at.session_state["conc_fck"] == pytest.approx(41.0)
+    assert at.session_state["mild_fytk"] == pytest.approx(615.0)
+    assert at.session_state["pre_fytk"] == pytest.approx(1711.0)
+    assert at.session_state["_latest_inputs"]["concrete"].fck == pytest.approx(
+        41.0
+    )
+    assert at.session_state["_latest_inputs"]["mild_material_catalog"][
+        "items"
+    ][0]["fytk"] == pytest.approx(615.0)
+    assert at.session_state["_latest_inputs"]["prestress_material_catalog"][
+        "items"
+    ][0]["fytk"] == pytest.approx(1711.0)
 
 
 def test_successful_sparse_replacement_discards_old_results_events_and_reports() -> None:
