@@ -97,6 +97,9 @@ def test_manual_dkna_combined_rule_includes_n_and_action_alone_resistances():
     assert "$N$, $M$, $V$ and $T$" in text
     assert "that action acting alone" in text
     assert "$N+M+T$ and $N+V+T$" in text
+    assert "separate M/V route as a design assumption" in text
+    assert "CONDITIONAL" in text
+    assert "reinforcement area, distribution and anchorage" in text
     assert "does **not** condition the DK NA action-alone denominators" in text
     assert "does not replace a separate member and detailing assessment" in text
     assert "Annex F" in text

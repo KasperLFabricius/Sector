@@ -2094,16 +2094,28 @@ def finalize_combined(inp, out):
         "r_t": dk_selection.r_t,
         "m_v_independent": independent_mv,
         "m_v_separation_condition": {
-            "confirmed": independent_mv,
+            "confirmed": False,
+            "declared": independent_mv,
+            "mechanically_verified": False,
+            "verification_state": (
+                "design assumption" if independent_mv else "not selected"
+            ),
             "condition": (
                 "Additional longitudinal reinforcement required for shear "
                 "beyond that required for bending is provided"
+            ),
+            "limitation": (
+                "This section calculation does not verify the additional "
+                "reinforcement capacity, distribution or anchorage"
             ),
             "source_clause": _DKNA_CLAUSE,
         },
         "dkna_sum": dk_sum,
         "dkna_valid": dk_selection.valid,
         "dkna_reason": dk_selection.reason,
+        "dkna_conditional": dk_selection.conditional,
+        "dkna_limit_satisfied": dk_selection.limit_satisfied,
+        "dkna_status": dk_selection.status,
         "dkna_ok": dk_selection.ok,
         "dkna_selection": asdict(dk_selection),
         "action_alone": {

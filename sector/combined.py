@@ -105,6 +105,9 @@ class DknaInteractionResult:
     utilisation: float | None
     valid: bool
     reason: str | None
+    conditional: bool
+    limit_satisfied: bool | None
+    status: str
     ok: bool | None
 
 
@@ -396,9 +399,10 @@ def dkna_interaction_result(
 
     ``N`` retains its tension-positive sign for evidence; every ratio uses the
     magnitude of the matching action and its resistance in that same direction.
-    The optional M/V separation is permitted only when the caller has established
-    the stated longitudinal-reinforcement condition.  It produces two complete
-    checks, ``N+M+T`` and ``N+V+T``.
+    Selecting the optional M/V separation produces the two numerical checks
+    ``N+M+T`` and ``N+V+T``.  This Boolean does not establish the required extra
+    longitudinal-reinforcement capacity, distribution or anchorage, so the selected
+    route is retained as conditional and cannot return an unconditional ``ok``.
     """
 
     if type(m_v_independent) is not bool:
@@ -434,6 +438,9 @@ def dkna_interaction_result(
             utilisation=None,
             valid=False,
             reason=reason,
+            conditional=m_v_independent,
+            limit_satisfied=None,
+            status="NOT ASSESSED",
             ok=None,
         )
 
@@ -463,6 +470,8 @@ def dkna_interaction_result(
         utilisation = all_sum
         governing = "N+M+V+T"
         inclusion_rule = "N, M, V and T summed"
+    limit_satisfied = utilisation <= 1.0 + 1e-9
+    conditional = m_v_independent
     return DknaInteractionResult(
         n=n,
         m=m,
@@ -483,7 +492,14 @@ def dkna_interaction_result(
         utilisation=utilisation,
         valid=True,
         reason=None,
-        ok=utilisation <= 1.0 + 1e-9,
+        conditional=conditional,
+        limit_satisfied=limit_satisfied,
+        status=(
+            "CONDITIONAL"
+            if conditional
+            else "PASS" if limit_satisfied else "FAIL"
+        ),
+        ok=None if conditional else limit_satisfied,
     )
 
 

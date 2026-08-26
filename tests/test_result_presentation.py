@@ -837,7 +837,9 @@ def test_combined_summary_names_independent_dkna_inclusion_route():
         "method": "DK NA",
         "dkna_valid": True,
         "dkna_sum": 0.90,
-        "dkna_ok": True,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "CONDITIONAL",
+        "dkna_ok": None,
         "m_v_independent": True,
     }
     rows = presentation.result_summary_rows(
@@ -849,8 +851,130 @@ def test_combined_summary_names_independent_dkna_inclusion_route():
         if item["check"] == "Combined M-V-T - DK NA sum"
     )
 
+    assert row["status"] == "CONDITIONAL"
     assert "DK NA screen: max(N+M+T, N+V+T)" in row["note"]
+    assert "design assumption" in row["note"]
+    assert "area, distribution and anchorage" in row["note"]
     assert "N+M+V+T" not in row["note"]
+
+
+@pytest.mark.parametrize(
+    ("verification_state", "mechanically_verified", "dkna_sum", "legacy_ok", "copy"),
+    [
+        ("adequate", True, 0.90, True, "within the numerical limit"),
+        ("inadequate", False, 1.10, False, "exceeds the numerical limit"),
+        ("unanchored", False, 0.90, True, "within the numerical limit"),
+        ("incomplete / unknown", False, 0.90, True, "within the numerical limit"),
+    ],
+    ids=["adequate", "inadequate", "unanchored", "incomplete-unknown"],
+)
+def test_separate_mv_assumption_evidence_never_promotes_a_verdict(
+    verification_state,
+    mechanically_verified,
+    dkna_sum,
+    legacy_ok,
+    copy,
+):
+    result = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": dkna_sum,
+        "dkna_ok": legacy_ok,
+        "m_v_independent": True,
+        "m_v_separation_condition": {
+            "verification_state": verification_state,
+            "mechanically_verified": mechanically_verified,
+        },
+    }
+
+    assert presentation.combined_dkna_status(result) == "CONDITIONAL"
+    note = presentation.combined_dkna_assumption_note(result)
+    assert copy in note
+    assert "Verify the reinforcement area, distribution and anchorage" in note
+
+
+@pytest.mark.parametrize(
+    ("verification_state", "longitudinal_util", "expected_physical", "overall"),
+    [
+        ("adequate", 0.75, "PASS", "CONDITIONAL"),
+        ("inadequate", 1.15, "FAIL", "FAIL"),
+        ("unanchored", 0.75, "PASS", "CONDITIONAL"),
+        ("incomplete / unknown", None, "NOT ASSESSED", "NOT ASSESSED"),
+    ],
+    ids=["adequate", "inadequate", "unanchored", "incomplete-unknown"],
+)
+def test_separate_mv_assumption_preserves_conservative_overall_state(
+    verification_state,
+    longitudinal_util,
+    expected_physical,
+    overall,
+):
+    longitudinal = (
+        None
+        if longitudinal_util is None
+        else {
+            "valid": True,
+            "util": longitudinal_util,
+            "axis": "x",
+            "biaxial": False,
+            "tension_low": True,
+        }
+    )
+    combined = {
+        "valid": True,
+        "method": "DK NA",
+        "dkna_valid": True,
+        "dkna_sum": 0.90,
+        "dkna_limit_satisfied": True,
+        "dkna_ok": True,
+        "m_v_independent": True,
+        "m_v_separation_condition": {
+            "verification_state": verification_state,
+            "mechanically_verified": verification_state == "adequate",
+        },
+        "transverse": {
+            "valid": True,
+            "cot": 1.5,
+            "u_crush": 0.60,
+            "u_stirrup": 0.70,
+            "shear_fraction": 0.30,
+            "torsion_fraction": 0.40,
+        },
+        "longitudinal": longitudinal,
+        "governing_longitudinal": longitudinal,
+        "longitudinal_all_conditional": longitudinal is not None,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "CONDITIONAL"
+    assert by_check["Combined longitudinal reinforcement"]["status"] == (
+        expected_physical
+    )
+    assert presentation.overall_summary_status(rows) == overall
+
+
+@pytest.mark.parametrize(
+    ("dkna_sum", "legacy_ok", "expected"),
+    [(0.90, True, "PASS"), (1.10, False, "FAIL")],
+)
+def test_simultaneous_dkna_route_retains_ordinary_verdict(
+    dkna_sum,
+    legacy_ok,
+    expected,
+):
+    result = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": dkna_sum,
+        "dkna_ok": legacy_ok,
+        "m_v_independent": False,
+    }
+
+    assert presentation.combined_dkna_status(result) == expected
 
 
 def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():

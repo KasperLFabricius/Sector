@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import pathlib
 import sys
@@ -114,6 +115,51 @@ def test_dkna_independent_route_keeps_n_and_t_in_both_checks():
     assert result.n_v_plus_t == pytest.approx(0.7)
     assert result.utilisation == pytest.approx(0.7)
     assert result.governing_chord == "N+V+T"
+    assert result.conditional is True
+    assert result.limit_satisfied is True
+    assert result.status == "CONDITIONAL"
+    assert result.ok is None
+
+
+def test_dkna_independent_route_over_limit_remains_conditional():
+    result = combined.dkna_interaction_result(
+        0.0,
+        None,
+        80.0,
+        100.0,
+        10.0,
+        100.0,
+        30.0,
+        100.0,
+        m_v_independent=True,
+    )
+
+    assert result.valid is True
+    assert result.utilisation == pytest.approx(1.10)
+    assert result.limit_satisfied is False
+    assert result.conditional is True
+    assert result.status == "CONDITIONAL"
+    assert result.ok is None
+
+
+def test_dkna_independent_route_with_incomplete_resistance_is_not_assessed():
+    result = combined.dkna_interaction_result(
+        0.0,
+        None,
+        10.0,
+        None,
+        0.0,
+        None,
+        0.0,
+        None,
+        m_v_independent=True,
+    )
+
+    assert result.valid is False
+    assert result.conditional is True
+    assert result.limit_satisfied is None
+    assert result.status == "NOT ASSESSED"
+    assert result.ok is None
 
 
 def test_dkna_rejects_numpy_booleans_as_actions_or_route_selection():
@@ -161,6 +207,10 @@ def test_retained_combined_results_are_compact_and_reconstruct_scalars():
     assert dk.n_m_plus_t == pytest.approx(0.6)
     assert dk.n_v_plus_t == pytest.approx(0.7)
     assert dk.governing_chord == "N+V+T"
+    assert dk.conditional is True
+    assert dk.limit_satisfied is True
+    assert dk.status == "CONDITIONAL"
+    assert dk.ok is None
     assert dk.utilisation == pytest.approx(
         combined.dkna_sum(
             0.3, 0.4, 0.2, r_n=0.1, m_v_independent=True
@@ -754,19 +804,78 @@ def test_app_combined_mv_independent_uses_max():
     at = _fresh()
     at.run()
     _enable_all(at, mv_independent=True)
+    _goto_page(at, "Inputs")
+    route = at.checkbox(key="combined_mv_independent")
+    assert route.label == r"Apply separate $M$/$V$ route as a design assumption"
+    assert "capacity, distribution and anchorage" in route.help
+    assert "result remains CONDITIONAL" in route.help
     c = at.session_state["results"]["combined"]
     assert c["dkna_sum"] == pytest.approx(
         c["r_n"] + max(c["r_m"] + c["r_t"], c["r_v"] + c["r_t"])
     )
     assert c["dkna_selection"]["governing_chord"] in {"N+M+T", "N+V+T"}
-    assert c["m_v_separation_condition"]["confirmed"] is True
+    assert c["dkna_status"] == "CONDITIONAL"
+    assert c["dkna_conditional"] is True
+    assert c["dkna_ok"] is None
+    assert c["dkna_limit_satisfied"] is (
+        c["dkna_sum"] <= 1.0 + 1e-9
+    )
+    assert c["m_v_separation_condition"]["declared"] is True
+    assert c["m_v_separation_condition"]["confirmed"] is False
+    assert c["m_v_separation_condition"]["mechanically_verified"] is False
     assert "beyond" in c["m_v_separation_condition"]["condition"]
     _select_view(at, "M-V-T Combined")
     visible = " ".join(
         str(item.value) for item in (*at.caption, *at.warning, *at.info)
     )
-    assert "additional shear longitudinal reinforcement is confirmed" in visible
+    assert "CONDITIONAL" in visible
+    assert "design assumption" in visible
+    assert "area, distribution and anchorage" in visible
+    assert "is confirmed" not in visible
     assert "N + M + T and N + V + T" in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined M-V-T - DK NA sum"
+    ].iloc[0]
+    assert row["Status"] == "CONDITIONAL"
+
+
+def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 275.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    simultaneous = copy.deepcopy(at.session_state["results"]["combined"])
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "combined_mv_independent", True),
+    )
+    separate = at.session_state["results"]["combined"]
+
+    assert simultaneous["action_alone"] == separate["action_alone"]
+    assert simultaneous["dkna_sum"] > 1.0
+    assert simultaneous["dkna_status"] == "FAIL"
+    assert simultaneous["dkna_ok"] is False
+    assert separate["dkna_sum"] < 1.0
+    assert separate["dkna_limit_satisfied"] is True
+    assert separate["dkna_status"] == "CONDITIONAL"
+    assert separate["dkna_ok"] is None
 
 
 def test_app_combined_edition_lock():

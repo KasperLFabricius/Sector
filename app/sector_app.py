@@ -6881,12 +6881,12 @@ def build_inputs(host=st):
         help="The single code edition used for the shear and torsion checks while "
              "Combined is on (their own method selectors are locked to this).")
     combined_mv_independent = _seeded_checkbox(
-        sts, r"Confirm additional shear longitudinal steel ($M$ and $V$ separate)", False,
+        sts, r"Apply separate $M$/$V$ route as a design assumption", False,
         "combined_mv_independent", disabled=not combined_on,
-        help="DK NA 6.3.2(6): confirm only when the longitudinal reinforcement "
-             "used for shear, in addition to that required for bending, is present. "
-             r"Sector then checks $N+M+T$ and $N+V+T$ independently and uses the "
-             "governing value.")
+        help="DK NA 6.3.2(6): select only after separately verifying the capacity, "
+             "distribution and anchorage of the longitudinal reinforcement used "
+             "for shear beyond that required for bending. Sector then calculates "
+             r"$N+M+T$ and $N+V+T$, but the result remains CONDITIONAL.")
     # Filled at the end of this block (once the shear/torsion toggles below are
     # known) with any missing combined-check prerequisites -- so the user sees them
     # here, right under the toggle, instead of only after Calculate.
@@ -11039,6 +11039,7 @@ def results_overview_view(inp, results, *, stale=False):
     warning_states = {
         "STALE",
         "REVIEW",
+        "CONDITIONAL",
         "NOT ASSESSED",
         "CALCULATED - NO LIMIT COMPARISON",
     }
@@ -11118,6 +11119,9 @@ def results_overview_view(inp, results, *, stale=False):
         "FAIL": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
         "INVALID": "background-color: #FDECEC; color: #9B1C1C; font-weight: 600",
         "NOT ASSESSED": (
+            "background-color: #FFF4D6; color: #7A4E00; font-weight: 600"
+        ),
+        "CONDITIONAL": (
             "background-color: #FFF4D6; color: #7A4E00; font-weight: 600"
         ),
         "NOT RUN": "background-color: #EEF2F6; color: #374151; font-weight: 600",
@@ -14357,9 +14361,7 @@ def combined_view(inp, results):
                 ),
                 f"cot {_THETA}": item.get("governing_cot"),
                 "DK NA sum status": (
-                    "NOT ASSESSED"
-                    if not item.get("valid") or not item.get("dkna_valid")
-                    else "PASS" if item.get("dkna_ok") else "FAIL"
+                    presentation.combined_dkna_status(item)
                 ),
             })
         st.dataframe(rows, hide_index=True, width="stretch")
@@ -14476,16 +14478,17 @@ def combined_view(inp, results):
             "materials and complete Plastic bending sweep, then recalculate.",
         )
     elif c["m_v_independent"]:
-        _verdict_metric(
-            d1,
-            r"$\sum(S_{Ed}/S_{Rd})$",
-            _pct(c["dkna_sum"]),
-            c["dkna_ok"],
-        )
+        d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", _pct(c["dkna_sum"]))
+        d1.caption("CONDITIONAL")
         d2.caption(
-            "The additional shear longitudinal reinforcement is confirmed: "
-            "N + M + T and N + V + T are checked independently; the governing "
-            "sum is used."
+            "The separate M/V route is selected as a design assumption. "
+            "N + M + T and N + V + T are calculated independently, and the "
+            "governing sum is shown."
+        )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            presentation.combined_dkna_assumption_note(c),
         )
     else:
         _verdict_metric(
@@ -14495,9 +14498,10 @@ def combined_view(inp, results):
             c["dkna_ok"],
         )
         d2.caption(
-            "sum = N + M + V + T, using each action-alone resistance. Confirm "
-            "the separate M/V route only when the additional longitudinal "
-            "reinforcement required for shear is present."
+            "sum = N + M + V + T, using each action-alone resistance. Select the "
+            "separate M/V route only after separately verifying the capacity, "
+            "distribution and anchorage of the additional longitudinal "
+            "reinforcement required for shear; that result remains CONDITIONAL."
         )
 
     st.markdown("**Physical resistance components**")

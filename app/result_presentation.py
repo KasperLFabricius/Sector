@@ -413,6 +413,7 @@ GOVERNING_OVERVIEW_STATUS_PRECEDENCE = (
     "STALE",
     "REVIEW",
     "NOT ASSESSED",
+    "CONDITIONAL",
     "CALCULATED - NO LIMIT COMPARISON",
     "PASS",
     "WITHIN USER-SPECIFIED LIMIT",
@@ -541,6 +542,57 @@ def combined_dkna_screen_label(result):
         "max(N+M+T, N+V+T)"
         if (result or {}).get("m_v_independent") is True
         else "N+M+V+T"
+    )
+
+
+def combined_dkna_limit_satisfied(result):
+    """Return the numerical limit comparison without promoting its authority."""
+
+    result = result or {}
+    retained = result.get("dkna_limit_satisfied")
+    if type(retained) is bool:
+        return retained
+    utilisation = _publication_metric(result.get("dkna_sum"))
+    return None if utilisation is None else viz.util_ok(utilisation)
+
+
+def combined_dkna_status(result):
+    """Return the fail-closed public state of one retained DK NA screen."""
+
+    result = result or {}
+    valid = result.get("valid") is True
+    dkna_valid = result.get("dkna_valid", valid) is True
+    if not valid or not dkna_valid:
+        return "NOT ASSESSED"
+    if result.get("m_v_independent") is True:
+        return "CONDITIONAL"
+    retained = str(result.get("dkna_status") or "").upper()
+    if retained in {"PASS", "FAIL"}:
+        return retained
+    satisfied = combined_dkna_limit_satisfied(result)
+    if satisfied is None:
+        return "NOT ASSESSED"
+    return "PASS" if satisfied else "FAIL"
+
+
+def combined_dkna_assumption_note(result):
+    """Return concise engineer guidance for the assumption-only separate route."""
+
+    if (result or {}).get("m_v_independent") is not True:
+        return ""
+    satisfied = combined_dkna_limit_satisfied(result)
+    outcome = (
+        "is within the numerical limit"
+        if satisfied is True
+        else "exceeds the numerical limit"
+        if satisfied is False
+        else "has no available numerical limit comparison"
+    )
+    return (
+        "CONDITIONAL: the separate M/V route is a design assumption that additional "
+        "shear longitudinal reinforcement beyond bending is provided. The governing sum "
+        f"{outcome} under that assumption. Verify the reinforcement area, "
+        "distribution and anchorage separately."
     )
 
 
@@ -2119,12 +2171,28 @@ def result_summary_rows(inp, results, *, stale=False):
                     continue
                 label = "Vx+T" if component == "vx" else "Vy+T"
                 util = direction.get("dkna_sum")
-                status = (
-                    "NOT ASSESSED"
-                    if not direction.get("valid")
-                    or direction.get("dkna_valid", direction.get("valid")) is not True
-                    else "PASS" if direction.get("dkna_ok") else "FAIL"
-                )
+                status = combined_dkna_status(direction)
+                if status == "NOT ASSESSED":
+                    direction_note = str(
+                        direction.get("dkna_reason")
+                        or "Action-alone resistance unavailable"
+                    )
+                else:
+                    method = str(direction.get("method") or "")
+                    direction_note = ((method + "; ") if method else "")
+                    direction_note += (
+                        "DK NA screen: "
+                        + combined_dkna_screen_label(direction)
+                        + "; "
+                    )
+                    assumption_note = combined_dkna_assumption_note(direction)
+                    if assumption_note:
+                        direction_note += assumption_note + " "
+                    direction_note += (
+                        "Internal cross-section resistance check; does not replace "
+                        "a separate Annex F member and detailing assessment where "
+                        "applicable"
+                    )
                 rows.append(_summary_row(
                     f"Combined {label} - DK NA sum",
                     "plastic",
@@ -2133,25 +2201,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     "<= 100 %",
                     util,
                     "M-V-T Combined",
-                    (
-                        (
-                            (str(direction.get("method") or "") + "; ")
-                            if direction.get("method")
-                            else ""
-                        )
-                        + (
-                            "DK NA screen: "
-                            + combined_dkna_screen_label(direction)
-                            + "; internal cross-section resistance check; does not "
-                            "replace a separate Annex F member and detailing "
-                            "assessment where applicable"
-                        )
-                        if status != "NOT ASSESSED"
-                        else str(
-                            direction.get("dkna_reason")
-                            or "Action-alone resistance unavailable"
-                        )
-                    ),
+                    direction_note,
                     inp,
                     overview_key="combined:dkna_sum",
                 ))
@@ -2201,12 +2251,15 @@ def result_summary_rows(inp, results, *, stale=False):
         ]
         if valid and dkna_valid:
             method_note = str(combined.get("method") or "")
-            combined_note = (
-                (method_note + "; ") if method_note else ""
-            ) + (
-                "DK NA screen: "
-                + combined_dkna_screen_label(combined)
-                + "; internal cross-section resistance check; does not replace a "
+            combined_note = ((method_note + "; ") if method_note else "")
+            combined_note += (
+                "DK NA screen: " + combined_dkna_screen_label(combined) + "; "
+            )
+            assumption_note = combined_dkna_assumption_note(combined)
+            if assumption_note:
+                combined_note += assumption_note + " "
+            combined_note += (
+                "Internal cross-section resistance check; does not replace a "
                 "separate Annex F member and detailing assessment where applicable"
             )
         elif valid:
@@ -2230,14 +2283,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 "combined",
                 context="combined summary result reason",
             )
-        combined_status = (
-            "NOT ASSESSED"
-            if (not valid and missing) or (valid and not dkna_valid)
-            else _util_summary_status(
-                util,
-                valid=valid and dkna_valid,
-            )
-        )
+        combined_status = combined_dkna_status(combined)
         rows.append(_summary_row(
             "Combined M-V-T - DK NA sum",
             "plastic",
@@ -2416,8 +2462,8 @@ def overall_summary_status(rows):
     """Return the most conservative state represented in a summary table."""
     states = {row.get("status") for row in rows}
     for status in (
-        "INVALID", "FAIL", "STALE", "REVIEW", "NOT ASSESSED", "NOT RUN",
-        "PASS", "CALCULATED", "NOT CALCULATED", "NOT APPLICABLE",
+        "INVALID", "FAIL", "STALE", "REVIEW", "NOT ASSESSED", "CONDITIONAL",
+        "NOT RUN", "PASS", "CALCULATED", "NOT CALCULATED", "NOT APPLICABLE",
     ):
         if status in states:
             return status

@@ -1167,9 +1167,11 @@ def manual_blocks() -> list:
     call("standard", "DK NA 6.3.2(6): $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ includes "
          "$N$, $M$, $V$ and $T$, with every $S_{Rd}$ determined for that action "
          "acting alone. If the longitudinal reinforcement used for shear, in "
-         "addition to what bending requires, is present, confirm **M & V "
-         "separate** -- Sector then checks $N+M+T$ and $N+V+T$ independently "
-         "and uses the governing value.")
+         "addition to what bending requires, has been verified separately, select "
+         "**separate M/V route as a design assumption**. Sector then calculates "
+         "$N+M+T$ and $N+V+T$ independently and uses the governing value, but marks "
+         "the result **CONDITIONAL** because reinforcement area, distribution and "
+         "anchorage are not verified by the section calculation.")
     call("limit", "This is an internal cross-section resistance check. It does "
          "not replace a separate member and detailing assessment under Annex F "
          "where that assessment applies.")
@@ -2069,6 +2071,11 @@ def manual_blocks() -> list:
          "$N+M+T$ and $N+V+T$ is taken. Torsion also needs its longitudinal steel "
          "$\\sum A_{sl}$ round the perimeter and the shear its $\\Delta F_{td}$ on "
          "the tension chord, both beyond the bending reinforcement.")
+    call("limit", "Selecting the separate $M$/$V$ route records a design assumption; "
+         "Sector does not verify the additional reinforcement area, distribution "
+         "or anchorage. The resulting DK NA sum is therefore **CONDITIONAL**, even "
+         "when its numerical value is within the limit. Verify the assumption "
+         "separately before relying on the result.")
     call("limit", "The combined result is an internal cross-section resistance "
          "check. It does not replace a separate member and detailing assessment "
          "under Annex F where that assessment applies.")

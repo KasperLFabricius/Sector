@@ -5685,8 +5685,18 @@ def _combined_out(mv_independent=False):
         "r_n": 0.0, "r_m": 0.6, "r_v": 0.4, "r_t": 0.3,
         "m_v_independent": mv_independent,
         "dkna_sum": dkna.utilisation, "dkna_valid": dkna.valid,
+        "dkna_conditional": dkna.conditional,
+        "dkna_limit_satisfied": dkna.limit_satisfied,
+        "dkna_status": dkna.status,
         "dkna_ok": dkna.ok,
         "dkna_selection": asdict(dkna),
+        "m_v_separation_condition": {
+            "declared": mv_independent,
+            "mechanically_verified": False,
+            "verification_state": (
+                "design assumption" if mv_independent else "not selected"
+            ),
+        },
         "action_alone": action_alone,
         "crushing": dict(
             valid=True, cot=1.0, theta_deg=45.0,
@@ -5955,7 +5965,38 @@ def test_report_profiles_label_independent_dkna_route_truthfully(profile):
         ).split()
     )
     assert "max(N+M+T, N+V+T)" in txt
+    assert "CONDITIONAL" in txt
+    assert "design assumption" in txt
+    assert "area, distribution and anchorage" in txt
+    assert "reinforcement is confirmed" not in txt
     assert "N+M+V+T" not in txt
+
+
+def test_report_separate_mv_over_limit_is_conditional_and_explicit():
+    out = _out()
+    combined = _combined_out(mv_independent=True)
+    combined.update(
+        dkna_sum=1.30,
+        dkna_limit_satisfied=False,
+        dkna_status="CONDITIONAL",
+        dkna_ok=None,
+    )
+    combined["dkna_selection"].update(
+        utilisation=1.30,
+        limit_satisfied=False,
+        status="CONDITIONAL",
+        ok=None,
+    )
+    out["combined"] = combined
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report({}, _inp(), out, figures=False)
+        ).split()
+    )
+
+    assert "130.0 % CONDITIONAL" in txt
+    assert "exceeds the numerical limit" in txt
+    assert "Verify the reinforcement area, distribution and anchorage" in txt
 
 
 def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
@@ -5984,6 +6025,7 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     assert "simultaneous" in txt
     assert "check is not included" in txt
     assert "requires a separate member check" in txt
+    assert txt.count("CONDITIONAL") >= 2
     assert "Governing face" in txt
     assert "left (-x)" in txt and "top (+y)" in txt
     assert "1.250" in txt and "1.750" in txt
@@ -6000,6 +6042,8 @@ def test_report_dkna_independent_route_keeps_n_and_t_in_both_branches():
     assert "rN + rM + rT" in txt
     assert "rN + rV + rT" in txt
     assert "N and T remain in both independent checks" in txt
+    assert "CONDITIONAL" in txt
+    assert "Verify the reinforcement area, distribution and anchorage" in txt
 
 
 def test_report_unavailable_action_alone_resistance_is_not_assessed():

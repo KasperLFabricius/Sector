@@ -2930,14 +2930,59 @@ def test_finalize_combined_builds_valid_payload(monkeypatch):
     assert result["dkna_sum"] == pytest.approx(0.90)
     assert result["dkna_valid"]
     assert result["dkna_ok"]
+    assert result["dkna_status"] == "PASS"
+    assert result["dkna_conditional"] is False
+    assert result["dkna_limit_satisfied"] is True
     assert result["r_n"] == pytest.approx(0.0)
     assert result["r_m"] == pytest.approx(0.20)
     assert result["r_v"] == pytest.approx(0.30)
     assert result["r_t"] == pytest.approx(0.40)
     assert result["m_v_separation_condition"]["confirmed"] is False
+    assert result["m_v_separation_condition"]["declared"] is False
+    assert result["m_v_separation_condition"]["mechanically_verified"] is False
     assert result["m_v_separation_condition"]["source_clause"].endswith(
         "6.3.2(6)"
     )
+
+
+def test_finalize_combined_separate_route_is_assumption_only(monkeypatch):
+    n = capacity._dkna_action_record("N", 0.0, None, valid=True)
+    m = capacity._dkna_action_record("M", 0.6, 1.0, valid=True)
+    v = capacity._dkna_action_record("V", 0.4, 1.0, valid=True)
+    t = capacity._dkna_action_record("T", 0.3, 1.0, valid=True)
+    inp = _member_input(
+        combined_on=True,
+        combined_mv_independent=True,
+        _dkna_nm_action_alone={"n": n, "m": m},
+    )
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", lambda _inp: v)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", lambda _inp: t)
+    out = {
+        "plastic": {"util": 0.60},
+        "shear": {"res": {"valid": True}, "util": 0.40},
+        "torsion": {
+            "valid": True,
+            "util": 0.30,
+            "interaction": None,
+            "asl_req": 125.0,
+            "asw_over_s": 0.0,
+        },
+    }
+
+    capacity.finalize_combined(inp, out)
+    result = out["combined"]
+
+    assert result["dkna_sum"] == pytest.approx(0.90)
+    assert result["dkna_valid"] is True
+    assert result["dkna_limit_satisfied"] is True
+    assert result["dkna_conditional"] is True
+    assert result["dkna_status"] == "CONDITIONAL"
+    assert result["dkna_ok"] is None
+    condition = result["m_v_separation_condition"]
+    assert condition["declared"] is True
+    assert condition["confirmed"] is False
+    assert condition["mechanically_verified"] is False
+    assert "capacity, distribution or anchorage" in condition["limitation"]
 
 
 @pytest.mark.parametrize(

@@ -1551,6 +1551,7 @@ class ReportBuilder:
             "FAIL": colors.HexColor("#FDECEC"),
             "INVALID": colors.HexColor("#FDECEC"),
             "REVIEW": colors.HexColor("#FFF4D6"),
+            "CONDITIONAL": colors.HexColor("#FFF4D6"),
             "NOT ASSESSED": colors.HexColor("#FFF4D6"),
             "NOT RUN": colors.HexColor("#EEF2F6"),
             "NOT CALCULATED": colors.HexColor("#EEF2F6"),
@@ -3118,7 +3119,7 @@ class ReportBuilder:
                 resistance_rows.extend([
                     ["Combined M-V-T", "yes"],
                     ["Combined shared method", _html_escape(str(inp.get("combined_method") or "-"))],
-                    ["Independent M and V longitudinal steel", self._brief_switch(inp.get("combined_mv_independent"))],
+                    ["Separate M/V route selected as a design assumption", self._brief_switch(inp.get("combined_mv_independent"))],
                 ])
             if shear_active:
                 resistance_rows.extend([
@@ -7436,11 +7437,7 @@ class ReportBuilder:
             self._case_heading(
                 "Combined bending + shear + torsion (M-V-T)", "plastic"
             )
-            status = (
-                "NOT ASSESSED"
-                if not aggregate.get("valid") or not aggregate.get("dkna_valid")
-                else "PASS" if aggregate.get("dkna_ok") else "FAIL"
-            )
+            status = presentation.combined_dkna_status(aggregate)
             self._table(
                 [
                     ["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
@@ -7509,11 +7506,7 @@ class ReportBuilder:
                     component, item.get("governing_face")
                 ),
                 _fmt(item.get("governing_cot"), 3),
-                (
-                    "NOT ASSESSED"
-                    if not item.get("valid") or not item.get("dkna_valid")
-                    else "PASS" if item.get("dkna_ok") else "FAIL"
-                ),
+                presentation.combined_dkna_status(item),
             ])
         self._table(
             rows,
@@ -7658,16 +7651,14 @@ class ReportBuilder:
                 "bending sweep, then recalculate. No PASS or FAIL verdict is given."
             )
         else:
-            verdict = _demand_resistance_verdict(c["dkna_ok"])
+            verdict = presentation.combined_dkna_status(c)
             if c["m_v_independent"]:
                 expr = (
                     "max(r<sub>N</sub> + r<sub>M</sub> + r<sub>T</sub>, "
                     "r<sub>N</sub> + r<sub>V</sub> + r<sub>T</sub>)"
                 )
-                note = (
-                    "The additional longitudinal reinforcement required for shear "
-                    "is confirmed; N and T remain in both independent checks."
-                )
+                note = presentation.combined_dkna_assumption_note(c)
+                note += " N and T remain in both independent checks."
                 subst = (
                     f"max({_fmt(selection['n_m_plus_t'], 4)}, "
                     f"{_fmt(selection['n_v_plus_t'], 4)})"
