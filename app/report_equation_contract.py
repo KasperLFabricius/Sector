@@ -881,9 +881,10 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("combined.dk-na.sum", None): _result(
         "sum(S<sub>Ed</sub>/S<sub>Rd</sub>)", "dimensionless",
-        ("r<sub>M</sub>", "bending utilisation with axial force folded in"),
-        ("r<sub>V</sub>", "stand-alone shear utilisation"),
-        ("r<sub>T</sub>", "stand-alone torsion utilisation"),
+        ("r<sub>N</sub>", "axial utilisation from the matching action-alone resistance"),
+        ("r<sub>M</sub>", "bending utilisation from the matching action-alone resistance"),
+        ("r<sub>V</sub>", "shear utilisation from the matching action-alone resistance"),
+        ("r<sub>T</sub>", "torsion utilisation from the matching action-alone resistance"),
         ("sum(S<sub>Ed</sub>/S<sub>Rd</sub>)", "governing DK NA interaction sum"),
         applicability_note_required=True,
     ),

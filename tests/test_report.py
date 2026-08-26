@@ -5653,17 +5653,51 @@ def test_report_torsion_shows_min_reinf_screen():
 
 def _combined_out(mv_independent=False):
     dkna = combined_core.dkna_interaction_result(
-        0.6, 0.4, 0.3, m_v_independent=mv_independent
+        0.0, None,
+        60.0, 100.0,
+        40.0, 100.0,
+        30.0, 100.0,
+        m_v_independent=mv_independent,
     )
     crushing = combined_core.crushing_interaction_result(
         40.0, 88.7, 150.0, 650.0
     )
+    action_alone = {
+        "n": {
+            "symbol": "N", "demand": 0.0, "resistance": None,
+            "valid": True, "source_clause": "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)",
+        },
+        "m": {
+            "symbol": "M", "demand": 60.0, "resistance": 100.0,
+            "valid": True, "source_clause": "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)",
+        },
+        "v": {
+            "symbol": "V", "demand": 40.0, "resistance": 100.0,
+            "valid": True, "source_clause": "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)",
+        },
+        "t": {
+            "symbol": "T", "demand": 30.0, "resistance": 100.0,
+            "valid": True, "source_clause": "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)",
+        },
+    }
     return {
         "valid": True, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
-        "r_m": 0.6, "r_v": 0.4, "r_t": 0.3,
+        "r_n": 0.0, "r_m": 0.6, "r_v": 0.4, "r_t": 0.3,
         "m_v_independent": mv_independent,
-        "dkna_sum": dkna.utilisation, "dkna_ok": dkna.ok,
+        "dkna_sum": dkna.utilisation, "dkna_valid": dkna.valid,
+        "dkna_conditional": dkna.conditional,
+        "dkna_limit_satisfied": dkna.limit_satisfied,
+        "dkna_status": dkna.status,
+        "dkna_ok": dkna.ok,
         "dkna_selection": asdict(dkna),
+        "m_v_separation_condition": {
+            "declared": mv_independent,
+            "mechanically_verified": False,
+            "verification_state": (
+                "design assumption" if mv_independent else "not selected"
+            ),
+        },
+        "action_alone": action_alone,
         "crushing": dict(
             valid=True, cot=1.0, theta_deg=45.0,
             trd_max=88.7, vrd_max=650.0, t_ed=40.0, v_ed=150.0,
@@ -5732,7 +5766,11 @@ def test_report_publishes_only_governing_transverse_family_worked_examples():
     def combined_with(r_m, r_v, r_t, component):
         item = _combined_out()
         selection = combined_core.dkna_interaction_result(
-            r_m, r_v, r_t, m_v_independent=False
+            0.0, None,
+            r_m, 1.0,
+            r_v, 1.0,
+            r_t, 1.0,
+            m_v_independent=False,
         )
         item.update(
             component=component,
@@ -5872,11 +5910,106 @@ def test_report_includes_combined_section():
     inp = _inp()
     inp.update(strut_cot_min=1.0, strut_cot_max=2.5)
     txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    flat = " ".join(txt.split())
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
     assert "FAIL" in txt                            # sum 1.3 > 1
+    assert "Axial N" in txt
+    assert "action acting alone" in flat
+    assert "entered biaxial moment direction" in flat
+    assert "does not replace a separate member and detailing assessment" in flat
+    assert "Annex F" in flat
+    assert "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)" in flat
+    assert (
+        "Source / method note: DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)"
+        in flat
+    )
     assert "Shared compression-strut cot " + chr(0x03B8) + "min" in txt
     assert "Shared compression-strut cot " + chr(0x03B8) + "max" in txt
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_share_dkna_value_and_status(profile):
+    out = _out()
+    out["combined"] = _combined_out()
+    inp = _inp()
+    inp.update(combined_on=True, shear_on=True, torsion_on=True)
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+    assert "Combined M-V-T" in txt
+    assert "DK NA sum" in txt
+    assert "130.0 %" in txt
+    assert "FAIL" in txt
+    if profile != "Brief":
+        assert "Axial N" in txt
+        assert "6.3.2(6)" in txt
+        assert "entered biaxial moment direction" in txt
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_label_independent_dkna_route_truthfully(profile):
+    out = _out()
+    out["combined"] = _combined_out(mv_independent=True)
+    inp = _inp()
+    inp.update(combined_on=True, shear_on=True, torsion_on=True)
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+    assert "max(N+M+T, N+V+T)" in txt
+    assert "CONDITIONAL" in txt
+    assert "design assumption" in txt
+    assert "area, distribution and anchorage" in txt
+    assert "reinforcement is confirmed" not in txt
+    assert "N+M+V+T" not in txt
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_separate_mv_over_limit_fails_even_under_assumption(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_mv_independent=True,
+    )
+    base_out = _out()
+    out = {"plastic": base_out["plastic"]}
+    combined = _combined_out(mv_independent=True)
+    combined.update(
+        dkna_sum=1.30,
+        dkna_limit_satisfied=False,
+        dkna_status="FAIL",
+        dkna_ok=False,
+    )
+    combined["dkna_selection"].update(
+        utilisation=1.30,
+        limit_satisfied=False,
+        status="FAIL",
+        ok=False,
+    )
+    out["combined"] = combined
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert re.search(
+        r"Combined M-V-T - DK NA sum PL-TEST FAIL 130\.0 %",
+        txt,
+    )
+    assert "exceeds the numerical limit even under the favourable" in txt
+    assert "failed numerical check governs regardless" in txt
 
 
 def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
@@ -5888,7 +6021,8 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
         governing_face="negative", governing_cot=1.25,
     )
     vy.update(
-        component="vy", r_v=0.35, dkna_sum=0.65, dkna_ok=True,
+        component="vy", r_v=0.75, dkna_sum=1.05,
+        dkna_limit_satisfied=False, dkna_status="FAIL", dkna_ok=False,
         governing_face="positive", governing_cot=1.75,
     )
     out["combined"] = dict(
@@ -5905,9 +6039,100 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     assert "simultaneous" in txt
     assert "check is not included" in txt
     assert "requires a separate member check" in txt
+    assert "CONDITIONAL" in txt
+    assert "105.0 %" in txt and "FAIL" in txt
     assert "Governing face" in txt
     assert "left (-x)" in txt and "top (+y)" in txt
     assert "1.250" in txt and "1.750" in txt
+
+
+def test_report_dkna_independent_route_keeps_n_and_t_in_both_branches():
+    out = _out()
+    out["combined"] = _combined_out(mv_independent=True)
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report({}, _inp(), out, figures=False)
+        ).split()
+    )
+    assert "rN + rM + rT" in txt
+    assert "rN + rV + rT" in txt
+    assert "N and T remain in both independent checks" in txt
+    assert "CONDITIONAL" in txt
+    assert "Verify the reinforcement area, distribution and anchorage" in txt
+
+
+def test_report_unavailable_action_alone_resistance_is_not_assessed():
+    out = _out()
+    combined = _combined_out()
+    selection = combined_core.dkna_interaction_result(
+        0.0,
+        None,
+        60.0,
+        None,
+        40.0,
+        100.0,
+        30.0,
+        100.0,
+        m_v_independent=False,
+    )
+    combined.update(
+        r_m=None,
+        dkna_sum=None,
+        dkna_valid=False,
+        dkna_ok=None,
+        dkna_reason=selection.reason,
+        dkna_selection=asdict(selection),
+    )
+    combined["action_alone"]["m"].update(
+        resistance=None,
+        valid=False,
+        reason=(
+            "An action-alone resistance could not be determined. Check the "
+            "section, materials and complete Plastic bending sweep."
+        ),
+    )
+    out["combined"] = combined
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report({}, _inp(), out, figures=False)
+        ).split()
+    )
+    assert "DK NA interaction: NOT ASSESSED" in txt
+    assert "No PASS or FAIL verdict is given" in txt
+    assert "complete Plastic bending sweep" in txt
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_unassessed_combined_retains_selected_separate_route(profile):
+    inp = _inp()
+    inp.update(
+        combined_on=True,
+        combined_mv_independent=True,
+        shear_on=True,
+        torsion_on=True,
+    )
+    out = _out()
+    out["combined"] = {
+        "valid": False,
+        "have_m": True,
+        "have_v": True,
+        "have_t": False,
+        "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "m_v_independent": True,
+        "biaxial": True,
+        "directions": {},
+    }
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "max(N+M+T, N+V+T)" in txt
+    assert "N+M+V+T" not in txt
+    assert "NOT ASSESSED" in txt
 
 
 def test_report_keeps_only_governing_biaxial_combined_worked_block():
@@ -6366,12 +6591,17 @@ def _combined_longitudinal(theta_mode):
     # and transverse are omitted so the section reduces to the longitudinal paragraph,
     # whose wording is driven purely by theta_mode.
     dkna = combined_core.dkna_interaction_result(
-        0.50, 0.60, 0.30, m_v_independent=False
+        0.0, None,
+        0.50, 1.0,
+        0.60, 1.0,
+        0.30, 1.0,
+        m_v_independent=False,
     )
     payload = {
         "method": "EN 1992-1-1:2005",
         "valid": True,
-        "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
+        "r_n": 0.0, "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
+        "dkna_valid": dkna.valid,
         "dkna_ok": dkna.ok,
         "dkna_sum": dkna.utilisation,
         "dkna_selection": asdict(dkna),

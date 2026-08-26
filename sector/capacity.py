@@ -140,6 +140,30 @@ def conditional_capacity(*args, **kwargs):
     return solve(*args, **kwargs)
 
 
+def solve_plastic(*args, **kwargs):
+    """Resolve the plastic sweep only when an action-alone check needs it."""
+
+    from .plastic import solve_plastic as solve
+
+    return solve(*args, **kwargs)
+
+
+def solve_interaction(*args, **kwargs):
+    """Resolve the axial interaction trace only when an axial check needs it."""
+
+    from .plastic import solve_interaction as solve
+
+    return solve(*args, **kwargs)
+
+
+def solve_zero_moment_axial_capacity(*args, **kwargs):
+    """Resolve the dedicated pure-axial boundary only when it is requested."""
+
+    from .plastic import solve_zero_moment_axial_capacity as solve
+
+    return solve(*args, **kwargs)
+
+
 def _is_boolean_scalar(value):
     """Recognise built-in and common library Boolean scalar types."""
     scalar_type = type(value)
@@ -1070,13 +1094,14 @@ def shear_face_candidates(face, associated_moment, *, zero_tolerance=1.0e-9):
 def assessment_key(status, utilisation):
     """Conservative ordering shared by mandatory directional candidates."""
     priority = {
-        "INVALID": 4,
-        "FAIL": 3,
-        "NOT ASSESSED": 2,
-        "NOT RUN": 2,
+        "INVALID": 5,
+        "FAIL": 4,
+        "NOT ASSESSED": 3,
+        "NOT RUN": 3,
+        "CONDITIONAL": 2,
         "PASS": 1,
         "NOT APPLICABLE": 0,
-    }.get(str(status or "").upper(), 2)
+    }.get(str(status or "").upper(), 3)
     value = float(utilisation or 0.0)
     if not math.isfinite(value):
         value = math.inf
@@ -1086,7 +1111,14 @@ def assessment_key(status, utilisation):
 def aggregate_assessment_status(statuses):
     """Return the conservative status across every required candidate."""
     values = {str(status or "").upper() for status in statuses}
-    for status in ("INVALID", "FAIL", "NOT ASSESSED", "NOT RUN", "PASS"):
+    for status in (
+        "INVALID",
+        "FAIL",
+        "NOT ASSESSED",
+        "NOT RUN",
+        "CONDITIONAL",
+        "PASS",
+    ):
         if status in values:
             return status
     return "NOT ASSESSED"
@@ -1561,11 +1593,427 @@ def build_torsion_context(inp, n_ed_comp):
     }
 
 
+_DKNA_CLAUSE = "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)"
+_DKNA_ACTION_ALONE_GUIDANCE = (
+    "An action-alone resistance could not be determined. Check the section, "
+    "materials and complete Plastic bending sweep before using the combined result."
+)
+
+
+def _dkna_action_record(
+    symbol,
+    demand,
+    resistance,
+    *,
+    valid,
+    direction=None,
+    evidence=None,
+    reason=None,
+):
+    """Return one compact retained action-alone resistance record."""
+
+    return {
+        "symbol": symbol,
+        "demand": demand,
+        "resistance": resistance,
+        "valid": bool(valid),
+        "direction": direction,
+        "evidence": evidence or {},
+        "reason": reason,
+        "source_clause": _DKNA_CLAUSE,
+    }
+
+
+def _dkna_plastic_envelope(inp, axial_solver_kn):
+    """Return one full Plastic M-M envelope at the specified solver axial force."""
+
+    plastic = _module("plastic")
+    angles = plastic.plastic_sweep_angles(
+        inp["v_min"], inp["v_max"], inp["v_inc"]
+    )
+    if not plastic.plastic_sweep_is_full_turn(angles[0], angles[-1]):
+        return None, "A complete Plastic bending sweep is required"
+    prestress = inp["prestress"] if inp.get("tendons") else None
+    points = solve_plastic(
+        inp["section"],
+        inp["concrete"],
+        inp["steel"],
+        axial_solver_kn,
+        angles[0],
+        angles[-1],
+        inp["v_inc"],
+        prestress=prestress,
+        bar_materials=inp.get("bar_materials"),
+        tendon_materials=inp.get("tendon_materials"),
+    )
+    if not points or not all(
+        _solver_flag(
+            _solver_member(point, "converged", "Plastic action-alone point"),
+            "Plastic action-alone point converged",
+        )
+        for point in points
+    ):
+        return None, "The action-alone Plastic bending sweep did not converge"
+    return points, None
+
+
+def _dkna_zero_moment_is_resisted(inp, axial_solver_kn):
+    """Return whether the action-alone M-M envelope contains the zero-moment point."""
+
+    points, reason = _dkna_plastic_envelope(inp, axial_solver_kn)
+    if points is None:
+        return False, reason
+    radial = _module("combined").radial_util_result(
+        [point.Mx for point in points],
+        [point.My for point in points],
+        0.0,
+        0.0,
+    )
+    return bool(radial.valid), (
+        None if radial.valid else "The zero-moment axial state was not resolved"
+    )
+
+
+def _dkna_axial_action_alone(inp):
+    """Determine ``NRd`` for the entered axial sign with M, V and T absent."""
+
+    n_ed = _finite_solver_result(inp.get("P_pl"), "entered axial action")
+    direction = "tension" if n_ed > 0.0 else "compression" if n_ed < 0.0 else None
+    if n_ed == 0.0:
+        return _dkna_action_record(
+            "N", n_ed, None, valid=True, direction=direction,
+            evidence={"iterations": 0},
+        )
+    prestress = inp["prestress"] if inp.get("tendons") else None
+    try:
+        boundary = solve_zero_moment_axial_capacity(
+            inp["section"],
+            inp["concrete"],
+            inp["steel"],
+            tension=n_ed > 0.0,
+            prestress=prestress,
+            bar_materials=inp.get("bar_materials"),
+            tendon_materials=inp.get("tendon_materials"),
+        )
+    except (ArithmeticError, TypeError, ValueError, OverflowError):
+        return _dkna_action_record(
+            "N", n_ed, None, valid=False, direction=direction,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    if boundary.converged is not True or boundary.axial is None:
+        return _dkna_action_record(
+            "N", n_ed, None, valid=False, direction=direction,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    accepted = _finite_solver_result(
+        boundary.axial, "zero-moment axial resistance"
+    )
+    if (n_ed > 0.0 and accepted >= 0.0) or (
+        n_ed < 0.0 and accepted <= 0.0
+    ):
+        return _dkna_action_record(
+            "N", n_ed, None, valid=False, direction=direction,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    resistance = abs(accepted)
+    if not math.isfinite(resistance) or resistance <= 0.0:
+        return _dkna_action_record(
+            "N", n_ed, None, valid=False, direction=direction,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    return _dkna_action_record(
+        "N",
+        n_ed,
+        resistance,
+        valid=True,
+        direction=direction,
+        evidence={
+            "solver_axial_kn": accepted,
+            "endpoint_axial_kn": boundary.endpoint_axial,
+            "iterations": boundary.iterations,
+            "point_evaluations": boundary.point_evaluations,
+            "neutral_axis_angle_deg": boundary.neutral_axis_angle_deg,
+            "moment_residual_knm": boundary.moment_residual_knm,
+            "moment_tolerance_knm": boundary.moment_tolerance_knm,
+            "zero_moment": True,
+        },
+    )
+
+
+def _dkna_bending_action_alone(inp):
+    """Determine ``MRd`` on the entered biaxial ray with N, V and T absent."""
+
+    mx_ed = _finite_solver_result(inp.get("Mx_pl"), "entered Mx action")
+    my_ed = _finite_solver_result(inp.get("My_pl"), "entered My action")
+    m_ed = math.hypot(mx_ed, my_ed)
+    direction_deg = (
+        math.degrees(math.atan2(my_ed, mx_ed)) % 360.0 if m_ed > 0.0 else None
+    )
+    if m_ed == 0.0:
+        return _dkna_action_record(
+            "M",
+            m_ed,
+            None,
+            valid=True,
+            direction=direction_deg,
+            evidence={"mx_ed": mx_ed, "my_ed": my_ed},
+        )
+    try:
+        points, reason = _dkna_plastic_envelope(inp, 0.0)
+    except (ArithmeticError, TypeError, ValueError, OverflowError):
+        points, reason = None, _DKNA_ACTION_ALONE_GUIDANCE
+    if points is None:
+        return _dkna_action_record(
+            "M", m_ed, None, valid=False, direction=direction_deg,
+            evidence={"mx_ed": mx_ed, "my_ed": my_ed},
+            reason=_DKNA_ACTION_ALONE_GUIDANCE if reason else reason,
+        )
+    radial = _module("combined").radial_util_result(
+        [point.Mx for point in points],
+        [point.My for point in points],
+        mx_ed,
+        my_ed,
+    )
+    if not radial.valid or radial.resistance is None:
+        return _dkna_action_record(
+            "M", m_ed, None, valid=False, direction=direction_deg,
+            evidence={"mx_ed": mx_ed, "my_ed": my_ed},
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    resistance = _positive_finite_real(radial.resistance, "action-alone MRd")
+    return _dkna_action_record(
+        "M",
+        m_ed,
+        resistance,
+        valid=True,
+        direction=direction_deg,
+        evidence={
+            "mx_ed": mx_ed,
+            "my_ed": my_ed,
+            "governing_index": radial.governing_index,
+            "axial_action_kn": 0.0,
+        },
+    )
+
+
+def dkna_normal_bending_action_alone(inp):
+    """Return reusable action-alone N and M resistance evidence."""
+
+    return {
+        "n": _dkna_axial_action_alone(inp),
+        "m": _dkna_bending_action_alone(inp),
+    }
+
+
+def _dkna_shear_action_alone(inp):
+    """Determine ``VRd`` for the selected shear direction with N, M and T absent.
+
+    An automatic tension-face selection cannot be inherited from the acting
+    bending moment because that moment is absent in this action-alone state.
+    Both physical faces are therefore required and the lower valid resistance
+    governs.  An explicitly selected face remains authoritative.
+    """
+
+    v_ed = abs(_finite_solver_result(inp.get("shear_V"), "entered shear action"))
+    if v_ed == 0.0:
+        return _dkna_action_record("V", 0.0, None, valid=True)
+    isolated = dict(
+        inp,
+        P_pl=0.0,
+        Mx_pl=0.0,
+        My_pl=0.0,
+        torsion_T=0.0,
+    )
+    axis = isolated.get("shear_axis")
+    face_key = {"x": "shear_face_y", "y": "shear_face_x"}.get(axis)
+    if face_key is not None and face_key in isolated:
+        face_mode = isolated.get(face_key)
+        try:
+            faces = shear_face_candidates(face_mode, 0.0)
+        except (TypeError, ValueError):
+            return _dkna_action_record(
+                "V", v_ed, None, valid=False,
+                reason=_DKNA_ACTION_ALONE_GUIDANCE,
+            )
+    else:
+        # Current projects always retain the directional face selector.  This
+        # compatibility path preserves the explicitly translated legacy input.
+        face_mode = "selected"
+        faces = (bool(isolated.get("shear_tension")),)
+
+    try:
+        n_prestress = prestress_axial(isolated)
+    except (ArithmeticError, TypeError, ValueError, OverflowError):
+        return _dkna_action_record(
+            "V", v_ed, None, valid=False,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+
+    candidates = []
+    for tension_low in faces:
+        face_input = dict(isolated, shear_tension=bool(tension_low))
+        try:
+            shear_payload, link_context = build_shear_context(
+                face_input, n_prestress, n_prestress
+            )
+            if (
+                shear_payload is None
+                or not (shear_payload.get("res") or {}).get("valid")
+            ):
+                raise CapacityResultError("action-alone shear face is unavailable")
+            if link_context is None:
+                resistance = (shear_payload.get("res") or {}).get("vrd_c")
+                cot = None
+                resistance_kind = "concrete shear resistance"
+            else:
+                links = link_context["build"](
+                    link_context["cot_min"], link_context["cot_max"]
+                )
+                if not links.get("valid"):
+                    raise CapacityResultError(
+                        "action-alone reinforced shear face is unavailable"
+                    )
+                resistance = links.get("vrd")
+                cot = links.get("cot")
+                resistance_kind = "reinforced shear resistance"
+            resistance_value = _positive_finite_real(
+                resistance, "action-alone VRd"
+            )
+        except (ArithmeticError, TypeError, ValueError, OverflowError):
+            return _dkna_action_record(
+                "V", v_ed, None, valid=False,
+                reason=_DKNA_ACTION_ALONE_GUIDANCE,
+            )
+        candidates.append({
+            "tension_low": bool(tension_low),
+            "resistance": resistance_value,
+            "cot": cot,
+            "resistance_kind": resistance_kind,
+        })
+
+    governing = min(candidates, key=lambda item: item["resistance"])
+    return _dkna_action_record(
+        "V",
+        v_ed,
+        governing["resistance"],
+        valid=True,
+        direction=isolated.get("shear_axis"),
+        evidence={
+            "axis": isolated.get("shear_axis"),
+            "face_mode": str(face_mode),
+            "both_faces_evaluated": len(candidates) == 2,
+            "faces_evaluated": [
+                "negative" if item["tension_low"] else "positive"
+                for item in candidates
+            ],
+            "governing_face": (
+                "negative" if governing["tension_low"] else "positive"
+            ),
+            "cot": governing["cot"],
+            "resistance_kind": governing["resistance_kind"],
+            "face_resistances": candidates,
+            "external_axial_action_kn": 0.0,
+            "external_moment_knm": 0.0,
+        },
+    )
+
+
+def _dkna_torsion_action_alone(inp):
+    """Determine ``TRd`` with external N, M and V absent."""
+
+    t_ed = abs(_finite_solver_result(inp.get("torsion_T"), "entered torsion action"))
+    if t_ed == 0.0:
+        return _dkna_action_record("T", 0.0, None, valid=True)
+    isolated = dict(
+        inp,
+        P_pl=0.0,
+        Mx_pl=0.0,
+        My_pl=0.0,
+        shear_V=0.0,
+        shear_Vx=0.0,
+        shear_Vy=0.0,
+        torsion_T=t_ed,
+    )
+    n_prestress = prestress_axial(isolated)
+    context = build_torsion_context(isolated, n_prestress)
+    if context is None:
+        return _dkna_action_record(
+            "T", t_ed, None, valid=False,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    results = [
+        tube_torsion(
+            tube,
+            torque,
+            **context["_tk"],
+        )
+        for tube, torque in zip(
+            context["subtubes"], context["ted_parts"], strict=True
+        )
+    ]
+    if not results or not all(result.get("valid") for result in results):
+        return _dkna_action_record(
+            "T", t_ed, None, valid=False,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    governing_index = max(
+        range(len(results)), key=lambda index: results[index]["util"]
+    )
+    governing_util = results[governing_index]["util"]
+    if governing_util is None or governing_util <= 0.0:
+        return _dkna_action_record(
+            "T", t_ed, None, valid=False,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    try:
+        resistance = _positive_finite_real(
+            t_ed / governing_util, "action-alone TRd"
+        )
+    except CapacityInputError:
+        return _dkna_action_record(
+            "T", t_ed, None, valid=False,
+            reason=_DKNA_ACTION_ALONE_GUIDANCE,
+        )
+    return _dkna_action_record(
+        "T",
+        t_ed,
+        resistance,
+        valid=True,
+        evidence={
+            "governing_subtube": governing_index + 1,
+            "cot": results[governing_index].get("cot"),
+            "subtube_count": len(results),
+            "external_axial_action_kn": 0.0,
+        },
+    )
+
+
 def finalize_combined(inp, out):
     """Build the final combined M-V-T payload from completed component checks."""
     if not inp.get("combined_on"):
         return
     selected_combined_code(inp.get("combined_method"))
+    independent_mv = _solver_flag(
+        inp["combined_mv_independent"],
+        "independent M/V longitudinal-reinforcement condition",
+    )
+    separation_condition = {
+        "confirmed": False,
+        "declared": independent_mv,
+        "mechanically_verified": False,
+        "verification_state": (
+            "design assumption" if independent_mv else "not selected"
+        ),
+        "condition": (
+            "Additional longitudinal reinforcement required for shear "
+            "beyond that required for bending is provided"
+        ),
+        "limitation": (
+            "This section calculation does not verify the additional "
+            "reinforcement capacity, distribution or anchorage"
+        ),
+        "source_clause": _DKNA_CLAUSE,
+    }
     plastic = out.get("plastic")
     shear_out = out.get("shear")
     torsion_out = out.get("torsion")
@@ -1597,18 +2045,34 @@ def finalize_combined(inp, out):
             "have_v": have_v,
             "have_t": have_t,
             "method": inp["combined_method"],
+            "m_v_independent": independent_mv,
+            "m_v_separation_condition": separation_condition,
         }
         if shear_reason is not None:
             payload["reason"] = shear_reason
         out["combined"] = payload
         return
 
-    r_v = links["util"] if links is not None else shear_out["util"]
-    r_t = torsion_out["util"]
-    independent_mv = bool(inp["combined_mv_independent"])
+    retained_nm = inp.get("_dkna_nm_action_alone")
+    if not isinstance(retained_nm, Mapping) or not all(
+        isinstance(retained_nm.get(key), Mapping) for key in ("n", "m")
+    ):
+        retained_nm = dkna_normal_bending_action_alone(inp)
+    n_action = dict(retained_nm["n"])
+    m_action = dict(retained_nm["m"])
+    v_action = _dkna_shear_action_alone(inp)
+    t_action = _dkna_torsion_action_alone(inp)
     combined = _module("combined")
     dk_selection = combined.dkna_interaction_result(
-        r_m, r_v, r_t, m_v_independent=independent_mv
+        n_action["demand"],
+        n_action["resistance"],
+        m_action["demand"],
+        m_action["resistance"],
+        v_action["demand"],
+        v_action["resistance"],
+        t_action["demand"],
+        t_action["resistance"],
+        m_v_independent=independent_mv,
     )
     dk_sum = dk_selection.utilisation
     outside_default_range = bool(
@@ -1618,13 +2082,27 @@ def finalize_combined(inp, out):
     payload = {
         "valid": True,
         "method": inp["combined_method"],
-        "r_m": r_m,
-        "r_v": r_v,
-        "r_t": r_t,
+        "source_clause": _DKNA_CLAUSE,
+        "r_n": dk_selection.r_n,
+        "r_m": dk_selection.r_m,
+        "r_v": dk_selection.r_v,
+        "r_t": dk_selection.r_t,
         "m_v_independent": independent_mv,
+        "m_v_separation_condition": separation_condition,
         "dkna_sum": dk_sum,
-        "dkna_ok": dk_sum <= 1.0 + 1e-9,
+        "dkna_valid": dk_selection.valid,
+        "dkna_reason": dk_selection.reason,
+        "dkna_conditional": dk_selection.conditional,
+        "dkna_limit_satisfied": dk_selection.limit_satisfied,
+        "dkna_status": dk_selection.status,
+        "dkna_ok": dk_selection.ok,
         "dkna_selection": asdict(dk_selection),
+        "action_alone": {
+            "n": n_action,
+            "m": m_action,
+            "v": v_action,
+            "t": t_action,
+        },
         "outside_default_range": outside_default_range,
         "crushing": torsion_out.get("interaction"),
         "asl_torsion": torsion_out["asl_req"],

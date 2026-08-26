@@ -17,6 +17,7 @@ import pytest
 from sector import capacity, codes, torsion
 from sector import section as section_core
 from sector.engineer_message import EngineerMessage
+from sector.materials import Concrete, MildSteel
 
 
 def _rect(b=0.3, h=0.6):
@@ -72,6 +73,73 @@ def _member_input(**overrides):
     }
     inp.update(overrides)
     return inp
+
+
+def _dkna_plastic_input(**overrides):
+    bars = [
+        (-0.10, -0.25, 500.0),
+        (0.10, -0.25, 500.0),
+        (-0.10, 0.25, 500.0),
+        (0.10, 0.25, 500.0),
+    ]
+    concrete = Concrete(fck=35.0, gamma_c=1.5, curve=2)
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=500.0,
+        futk=500.0,
+        eut=0.05,
+        gamma_y=1.15,
+        gamma_u=1.15,
+        gamma_E=1.0,
+        curve=1,
+    )
+    values = _member_input(
+        outer=[(-0.15, -0.30), (0.15, -0.30), (0.15, 0.30), (-0.15, 0.30)],
+        bars=bars,
+        section=section_core.Section.from_polygon(
+            corners=[
+                (-0.15, -0.30),
+                (0.15, -0.30),
+                (0.15, 0.30),
+                (-0.15, 0.30),
+            ],
+            bars_xy_area_mm2=bars,
+        ),
+        concrete=concrete,
+        steel=steel,
+        v_min=0.0,
+        v_max=360.0,
+        v_inc=30.0,
+    )
+    values.update(overrides)
+    return values
+
+
+def _dkna_asymmetric_plastic_input(**overrides):
+    """Irregular section used for independent zero-moment axial references."""
+
+    outer = [
+        (-0.50, -0.45), (0.55, -0.45), (0.55, -0.10), (0.18, -0.10),
+        (0.18, 0.55), (-0.08, 0.55), (-0.08, 0.20), (-0.50, 0.20),
+    ]
+    hole = [(-0.02, -0.02), (0.10, -0.02), (0.10, 0.10), (-0.02, 0.10)]
+    bars = [
+        (-0.42, -0.38, 804.0), (0.45, -0.38, 804.0),
+        (0.10, 0.47, 491.0), (-0.02, 0.47, 491.0),
+        (-0.42, 0.13, 314.0), (0.48, -0.03, 314.0),
+    ]
+    values = _dkna_plastic_input(
+        outer=outer,
+        holes=[hole],
+        bars=bars,
+        section=section_core.Section.from_polygon(
+            corners=outer,
+            holes=[hole],
+            bars_xy_area_mm2=bars,
+        ),
+    )
+    values.update(overrides)
+    return values
 
 
 def test_capacity_module_has_no_ui_dependency():
@@ -2598,7 +2666,9 @@ def test_2023_shear_links_ignore_inactive_missing_or_malformed_gamma_v():
         assert payload["res"]["gamma_v"] == pytest.approx(1.40)
 
 
-def test_gamma_v_is_isolated_from_2005_links_torsion_and_combined_routes():
+def test_gamma_v_is_isolated_from_2005_links_torsion_and_combined_routes(
+    monkeypatch,
+):
     low_2005, _ = capacity.build_shear_context(
         _member_input(shear_gamma_v=0.50), 0.0, 0.0
     )
@@ -2643,11 +2713,27 @@ def test_gamma_v_is_isolated_from_2005_links_torsion_and_combined_routes():
         },
     }
     out_high = copy.deepcopy(out_low)
+    n = capacity._dkna_action_record("N", 0.0, None, valid=True)
+    m = capacity._dkna_action_record("M", 0.2, 1.0, valid=True)
+    v = capacity._dkna_action_record("V", 0.3, 1.0, valid=True)
+    t = capacity._dkna_action_record("T", 0.4, 1.0, valid=True)
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", lambda _inp: v)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", lambda _inp: t)
     capacity.finalize_combined(
-        _member_input(combined_on=True, shear_gamma_v=0.50), out_low
+        _member_input(
+            combined_on=True,
+            shear_gamma_v=0.50,
+            _dkna_nm_action_alone={"n": n, "m": m},
+        ),
+        out_low,
     )
     capacity.finalize_combined(
-        _member_input(combined_on=True, shear_gamma_v=9.00), out_high
+        _member_input(
+            combined_on=True,
+            shear_gamma_v=9.00,
+            _dkna_nm_action_alone={"n": n, "m": m},
+        ),
+        out_high,
     )
     assert out_low["combined"] == out_high["combined"]
 
@@ -2761,6 +2847,55 @@ def test_mandatory_faces_are_governed_independently_for_shear_and_combined():
     ) == "FAIL"
 
 
+@pytest.mark.parametrize(
+    ("statuses", "expected_status", "governing_status"),
+    [
+        (("NOT ASSESSED", "CONDITIONAL"), "NOT ASSESSED", "NOT ASSESSED"),
+        (("CONDITIONAL", "CONDITIONAL"), "CONDITIONAL", "CONDITIONAL"),
+        (("FAIL", "CONDITIONAL"), "FAIL", "FAIL"),
+        (("CONDITIONAL", "PASS"), "CONDITIONAL", "CONDITIONAL"),
+    ],
+)
+def test_mandatory_face_status_order_retains_conditional_authority(
+    statuses,
+    expected_status,
+    governing_status,
+):
+    candidates = [
+        {"status": statuses[0], "util": 0.20},
+        {"status": statuses[1], "util": 0.90},
+    ]
+
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["status"], item["util"]
+        ),
+    )
+
+    assert governing["status"] == governing_status
+    assert capacity.aggregate_assessment_status(statuses) == expected_status
+
+
+def test_mandatory_all_conditional_faces_use_utilisation_as_tie_breaker():
+    candidates = [
+        {"status": "CONDITIONAL", "util": 0.72},
+        {"status": "CONDITIONAL", "util": 0.91},
+    ]
+
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["status"], item["util"]
+        ),
+    )
+
+    assert governing is candidates[1]
+    assert capacity.aggregate_assessment_status(
+        item["status"] for item in candidates
+    ) == "CONDITIONAL"
+
+
 def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     valid = _member_input(
         torsion_on=True,
@@ -2843,8 +2978,17 @@ def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_
     assert ctx["tube"]["reason"] == "compound outline requires subdivision"
 
 
-def test_finalize_combined_builds_valid_payload():
-    inp = _member_input(combined_on=True)
+def test_finalize_combined_builds_valid_payload(monkeypatch):
+    n = capacity._dkna_action_record("N", 0.0, None, valid=True)
+    m = capacity._dkna_action_record("M", 0.2, 1.0, valid=True)
+    v = capacity._dkna_action_record("V", 0.3, 1.0, valid=True)
+    t = capacity._dkna_action_record("T", 0.4, 1.0, valid=True)
+    inp = _member_input(
+        combined_on=True,
+        _dkna_nm_action_alone={"n": n, "m": m},
+    )
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", lambda _inp: v)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", lambda _inp: t)
     out = {
         "plastic": {"util": 0.20},
         "shear": {"res": {"valid": True}, "util": 0.30},
@@ -2860,14 +3004,338 @@ def test_finalize_combined_builds_valid_payload():
     result = out["combined"]
     assert result["valid"]
     assert result["dkna_sum"] == pytest.approx(0.90)
+    assert result["dkna_valid"]
     assert result["dkna_ok"]
+    assert result["dkna_status"] == "PASS"
+    assert result["dkna_conditional"] is False
+    assert result["dkna_limit_satisfied"] is True
+    assert result["r_n"] == pytest.approx(0.0)
     assert result["r_m"] == pytest.approx(0.20)
     assert result["r_v"] == pytest.approx(0.30)
     assert result["r_t"] == pytest.approx(0.40)
+    assert result["m_v_separation_condition"]["confirmed"] is False
+    assert result["m_v_separation_condition"]["declared"] is False
+    assert result["m_v_separation_condition"]["mechanically_verified"] is False
+    assert result["m_v_separation_condition"]["source_clause"].endswith(
+        "6.3.2(6)"
+    )
 
 
-def test_finalize_combined_discloses_missing_component():
-    inp = _member_input(combined_on=True)
+@pytest.mark.parametrize(
+    ("m_demand", "expected_sum", "expected_status", "expected_ok"),
+    [
+        (0.6, 0.90, "CONDITIONAL", None),
+        (0.8, 1.10, "FAIL", False),
+    ],
+    ids=["within-limit", "over-limit"],
+)
+def test_finalize_combined_separate_route_is_assumption_only(
+    monkeypatch,
+    m_demand,
+    expected_sum,
+    expected_status,
+    expected_ok,
+):
+    n = capacity._dkna_action_record("N", 0.0, None, valid=True)
+    m = capacity._dkna_action_record("M", m_demand, 1.0, valid=True)
+    v = capacity._dkna_action_record("V", 0.4, 1.0, valid=True)
+    t = capacity._dkna_action_record("T", 0.3, 1.0, valid=True)
+    inp = _member_input(
+        combined_on=True,
+        combined_mv_independent=True,
+        _dkna_nm_action_alone={"n": n, "m": m},
+    )
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", lambda _inp: v)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", lambda _inp: t)
+    out = {
+        "plastic": {"util": 0.60},
+        "shear": {"res": {"valid": True}, "util": 0.40},
+        "torsion": {
+            "valid": True,
+            "util": 0.30,
+            "interaction": None,
+            "asl_req": 125.0,
+            "asw_over_s": 0.0,
+        },
+    }
+
+    capacity.finalize_combined(inp, out)
+    result = out["combined"]
+
+    assert result["dkna_sum"] == pytest.approx(expected_sum)
+    assert result["dkna_valid"] is True
+    assert result["dkna_limit_satisfied"] is (expected_sum <= 1.0)
+    assert result["dkna_conditional"] is True
+    assert result["dkna_status"] == expected_status
+    assert result["dkna_ok"] is expected_ok
+    condition = result["m_v_separation_condition"]
+    assert condition["declared"] is True
+    assert condition["confirmed"] is False
+    assert condition["mechanically_verified"] is False
+    assert "capacity, distribution or anchorage" in condition["limitation"]
+
+
+@pytest.mark.parametrize(
+    ("n_ed", "direction"),
+    [(100.0, "tension"), (-100.0, "compression")],
+)
+def test_dkna_axial_action_alone_uses_matching_tension_or_compression_branch(
+    n_ed,
+    direction,
+):
+    action = capacity._dkna_axial_action_alone(
+        _dkna_plastic_input(P_pl=n_ed)
+    )
+    assert action["valid"]
+    assert action["demand"] == pytest.approx(n_ed)
+    assert action["direction"] == direction
+    assert action["resistance"] > abs(n_ed)
+    assert action["evidence"]["zero_moment"] is True
+    assert action["source_clause"].endswith("6.3.2(6)")
+
+
+@pytest.mark.parametrize(
+    ("n_ed", "expected_resistance", "expected_endpoint"),
+    [
+        (100.0, 600.0, -1000.0),
+        (-100.0, 700.0, 1200.0),
+    ],
+)
+def test_dkna_axial_action_alone_enforces_zero_moment_before_accepting_nrd(
+    monkeypatch,
+    n_ed,
+    expected_resistance,
+    expected_endpoint,
+):
+    solver_axial = -expected_resistance if n_ed > 0.0 else expected_resistance
+    monkeypatch.setattr(
+        capacity,
+        "solve_zero_moment_axial_capacity",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            axial=solver_axial,
+            converged=True,
+            endpoint_axial=expected_endpoint,
+            neutral_axis_angle_deg=47.0,
+            moment_residual_knm=1.0e-8,
+            moment_tolerance_knm=1.0e-6,
+            point_evaluations=17,
+            iterations=5,
+        ),
+    )
+
+    action = capacity._dkna_axial_action_alone(
+        _dkna_plastic_input(P_pl=n_ed)
+    )
+
+    assert action["valid"]
+    assert action["resistance"] == pytest.approx(
+        expected_resistance, abs=1.0e-5
+    )
+    assert action["resistance"] < abs(expected_endpoint)
+    assert action["evidence"]["endpoint_axial_kn"] == expected_endpoint
+    assert action["evidence"]["zero_moment"] is True
+    assert action["evidence"]["iterations"] == 5
+    assert action["evidence"]["point_evaluations"] == 17
+
+
+@pytest.mark.parametrize(
+    ("n_ed", "reference_resistance"),
+    [
+        # Independent former 1-degree complete-sweep/bisection references.
+        (100.0, 1283.186788295355),
+        (-100.0, 12003.2902276955),
+    ],
+    ids=("asymmetric-tension", "asymmetric-compression"),
+)
+def test_dkna_zero_moment_axial_boundary_matches_independent_fine_sweep(
+    monkeypatch,
+    n_ed,
+    reference_resistance,
+):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("complete sweep or interaction trace entered")
+
+    monkeypatch.setattr(capacity, "solve_plastic", forbidden)
+    monkeypatch.setattr(capacity, "solve_interaction", forbidden)
+
+    action = capacity._dkna_axial_action_alone(
+        _dkna_asymmetric_plastic_input(P_pl=n_ed)
+    )
+
+    assert action["valid"] is True
+    assert action["resistance"] == pytest.approx(
+        reference_resistance, rel=5.0e-4
+    )
+    assert 1 <= action["evidence"]["point_evaluations"] <= 80
+    assert action["evidence"]["moment_residual_knm"] <= (
+        action["evidence"]["moment_tolerance_knm"]
+    )
+
+
+def test_dkna_zero_moment_axial_boundary_reuses_one_prep_and_has_hard_ceiling(
+    monkeypatch,
+):
+    plastic = capacity._module("plastic")
+    original_prep = plastic._prep_section
+    original_point = plastic.plastic_capacity_at_angle
+    calls = {"prep": 0, "point": 0}
+
+    def counted_prep(*args, **kwargs):
+        calls["prep"] += 1
+        return original_prep(*args, **kwargs)
+
+    def counted_point(*args, **kwargs):
+        calls["point"] += 1
+        return original_point(*args, **kwargs)
+
+    monkeypatch.setattr(plastic, "_prep_section", counted_prep)
+    monkeypatch.setattr(plastic, "plastic_capacity_at_angle", counted_point)
+    inp = _dkna_asymmetric_plastic_input(P_pl=100.0)
+
+    result = plastic.solve_zero_moment_axial_capacity(
+        inp["section"],
+        inp["concrete"],
+        inp["steel"],
+        tension=True,
+    )
+
+    assert result.converged is True
+    assert calls == {"prep": 1, "point": result.point_evaluations}
+    assert result.point_evaluations <= 80
+    assert result.point_evaluations < 361
+
+
+def test_dkna_axial_action_alone_fails_closed_on_boundary_nonconvergence(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        capacity,
+        "solve_zero_moment_axial_capacity",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            axial=None,
+            converged=False,
+            endpoint_axial=-1000.0,
+            neutral_axis_angle_deg=None,
+            moment_residual_knm=5.0,
+            moment_tolerance_knm=1.0e-6,
+            point_evaluations=192,
+            iterations=18,
+        ),
+    )
+
+    action = capacity._dkna_axial_action_alone(
+        _dkna_plastic_input(P_pl=100.0)
+    )
+
+    assert action["valid"] is False
+    assert action["resistance"] is None
+    assert "could not be determined" in action["reason"]
+
+
+def test_dkna_bending_action_alone_follows_biaxial_direction_not_applied_n():
+    tension = capacity._dkna_bending_action_alone(
+        _dkna_plastic_input(P_pl=400.0, Mx_pl=60.0, My_pl=-30.0)
+    )
+    compression = capacity._dkna_bending_action_alone(
+        _dkna_plastic_input(P_pl=-400.0, Mx_pl=60.0, My_pl=-30.0)
+    )
+    assert tension["valid"] and compression["valid"]
+    assert tension["demand"] == pytest.approx(math.hypot(60.0, -30.0))
+    assert tension["direction"] == pytest.approx(
+        math.degrees(math.atan2(-30.0, 60.0)) % 360.0
+    )
+    assert tension["resistance"] == pytest.approx(compression["resistance"])
+    assert tension["evidence"]["mx_ed"] == pytest.approx(60.0)
+    assert tension["evidence"]["my_ed"] == pytest.approx(-30.0)
+    assert tension["evidence"]["axial_action_kn"] == pytest.approx(0.0)
+
+
+def test_dkna_shear_action_alone_auto_checks_both_faces_and_uses_lower_resistance(
+    monkeypatch,
+):
+    seen = []
+
+    def face_context(face_input, _n_prestress, _n_ed_comp):
+        tension_low = face_input["shear_tension"]
+        seen.append(tension_low)
+        resistance = 80.0 if tension_low else 60.0
+        return {"res": {"valid": True, "vrd_c": resistance}}, None
+
+    monkeypatch.setattr(capacity, "build_shear_context", face_context)
+    action = capacity._dkna_shear_action_alone(
+        _member_input(shear_axis="x", shear_face_y="auto", shear_V=30.0)
+    )
+
+    assert seen == [True, False]
+    assert action["valid"]
+    assert action["resistance"] == pytest.approx(60.0)
+    assert action["evidence"]["both_faces_evaluated"] is True
+    assert action["evidence"]["faces_evaluated"] == ["negative", "positive"]
+    assert action["evidence"]["governing_face"] == "positive"
+
+
+def test_dkna_shear_action_alone_explicit_face_checks_only_that_face(monkeypatch):
+    seen = []
+
+    def face_context(face_input, _n_prestress, _n_ed_comp):
+        seen.append(face_input["shear_tension"])
+        return {"res": {"valid": True, "vrd_c": 75.0}}, None
+
+    monkeypatch.setattr(capacity, "build_shear_context", face_context)
+    action = capacity._dkna_shear_action_alone(
+        _member_input(shear_axis="x", shear_face_y="negative", shear_V=30.0)
+    )
+
+    assert seen == [True]
+    assert action["valid"]
+    assert action["resistance"] == pytest.approx(75.0)
+    assert action["evidence"]["both_faces_evaluated"] is False
+    assert action["evidence"]["faces_evaluated"] == ["negative"]
+
+
+def test_dkna_shear_action_alone_auto_fails_closed_if_either_face_is_unavailable(
+    monkeypatch,
+):
+    seen = []
+
+    def face_context(face_input, _n_prestress, _n_ed_comp):
+        tension_low = face_input["shear_tension"]
+        seen.append(tension_low)
+        if tension_low:
+            return {"res": {"valid": True, "vrd_c": 80.0}}, None
+        return {"res": {"valid": False, "vrd_c": None}}, None
+
+    monkeypatch.setattr(capacity, "build_shear_context", face_context)
+    action = capacity._dkna_shear_action_alone(
+        _member_input(shear_axis="x", shear_face_y="auto", shear_V=30.0)
+    )
+
+    assert seen == [True, False]
+    assert not action["valid"]
+    assert action["resistance"] is None
+    assert "action-alone resistance" in action["reason"]
+
+
+def test_dkna_zero_n_and_m_do_not_enter_action_alone_plastic_solver(monkeypatch):
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("zero action must not enter the Plastic solver")
+
+    monkeypatch.setattr(capacity, "solve_plastic", unexpected)
+    monkeypatch.setattr(capacity, "solve_interaction", unexpected)
+    actions = capacity.dkna_normal_bending_action_alone(
+        _dkna_plastic_input(P_pl=0.0, Mx_pl=0.0, My_pl=0.0)
+    )
+    assert actions["n"]["valid"] and actions["m"]["valid"]
+    assert actions["n"]["resistance"] is None
+    assert actions["m"]["resistance"] is None
+
+
+@pytest.mark.parametrize("independent_mv", [False, True], ids=["simultaneous", "separate"])
+def test_finalize_combined_discloses_missing_component(independent_mv):
+    inp = _member_input(
+        combined_on=True,
+        combined_mv_independent=independent_mv,
+    )
     out = {
         "plastic": {"util": 0.20},
         "shear": {"res": {"valid": True}, "util": 0.30},
@@ -2879,6 +3347,24 @@ def test_finalize_combined_discloses_missing_component():
         "have_v": True,
         "have_t": False,
         "method": inp["combined_method"],
+        "m_v_independent": independent_mv,
+        "m_v_separation_condition": {
+            "confirmed": False,
+            "declared": independent_mv,
+            "mechanically_verified": False,
+            "verification_state": (
+                "design assumption" if independent_mv else "not selected"
+            ),
+            "condition": (
+                "Additional longitudinal reinforcement required for shear "
+                "beyond that required for bending is provided"
+            ),
+            "limitation": (
+                "This section calculation does not verify the additional "
+                "reinforcement capacity, distribution or anchorage"
+            ),
+            "source_clause": "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)",
+        },
     }
 
 
@@ -2913,8 +3399,17 @@ def test_finalize_combined_fails_closed_when_selected_links_are_not_assessed():
     assert "dkna_sum" not in out["combined"]
 
 
-def test_finalize_combined_preserves_every_longitudinal_candidate():
-    inp = _member_input(combined_on=True)
+def test_finalize_combined_preserves_every_longitudinal_candidate(monkeypatch):
+    n = capacity._dkna_action_record("N", 0.0, None, valid=True)
+    m = capacity._dkna_action_record("M", 0.2, 1.0, valid=True)
+    v = capacity._dkna_action_record("V", 0.3, 1.0, valid=True)
+    t = capacity._dkna_action_record("T", 0.4, 1.0, valid=True)
+    inp = _member_input(
+        combined_on=True,
+        _dkna_nm_action_alone={"n": n, "m": m},
+    )
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", lambda _inp: v)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", lambda _inp: t)
     fallback = {
         "valid": True, "util": 0.40, "axis": "x",
         "tension_low": True, "conditional": False,

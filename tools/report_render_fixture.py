@@ -663,12 +663,6 @@ def _results(inp: dict | None = None) -> dict:
             30.0, link_at(cot)["vrd_max"],
         ),
         lambda cot: longitudinal_at(cot)["util"],
-        lambda cot: combined.dkna_sum(
-            0.80,
-            combined.ratio(30.0, link_at(cot)["vrd"]),
-            torsion_at(cot)["util"],
-            m_v_independent=False,
-        ),
     ]
     member_cot, _ = combined.governing_strut_cot(
         angle_utilisations, 1.0, 2.5,
@@ -988,19 +982,37 @@ def _results(inp: dict | None = None) -> dict:
         theta_mode="utilisation",
     )
     dkna_selection = combined.dkna_interaction_result(
-        plastic["util"], shear_util, torsion_util,
+        0.0, None,
+        80.0, 80.0 / plastic["util"],
+        30.0, 30.0 / shear_util,
+        25.0, 25.0 / torsion_util,
         m_v_independent=False,
     )
+    action_alone = {
+        "n": capacity._dkna_action_record("N", 0.0, None, valid=True),
+        "m": capacity._dkna_action_record(
+            "M", 80.0, 80.0 / plastic["util"], valid=True
+        ),
+        "v": capacity._dkna_action_record(
+            "V", 30.0, 30.0 / shear_util, valid=True
+        ),
+        "t": capacity._dkna_action_record(
+            "T", 25.0, 25.0 / torsion_util, valid=True
+        ),
+    }
     combined_payload = {
         "valid": True,
         "method": code.label,
+        "r_n": 0.0,
         "r_m": plastic["util"],
         "r_v": shear_util,
         "r_t": torsion_util,
         "m_v_independent": False,
         "dkna_sum": dkna_selection.utilisation,
+        "dkna_valid": dkna_selection.valid,
         "dkna_ok": dkna_selection.ok,
         "dkna_selection": asdict(dkna_selection),
+        "action_alone": action_alone,
         "outside_default_range": False,
         "crushing": interaction,
         "transverse": {
@@ -1571,6 +1583,7 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         result["dkna_sum"],
         combined.dkna_sum(
             result["r_m"], result["r_v"], result["r_t"],
+            r_n=result.get("r_n", 0.0),
             m_v_independent=result["m_v_independent"],
         ),
     )
@@ -1628,12 +1641,6 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
                 shear_out["v_ed"], link_at(cot)["vrd_max"],
             ),
             longitudinal_util,
-            lambda cot: combined.dkna_sum(
-                result["r_m"],
-                combined.ratio(shear_out["v_ed"], link_at(cot)["vrd"]),
-                torsion_at(cot)["util"],
-                m_v_independent=result["m_v_independent"],
-            ),
         ],
         links["cot_min"],
         links["cot_max"],

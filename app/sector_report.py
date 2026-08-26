@@ -1551,6 +1551,7 @@ class ReportBuilder:
             "FAIL": colors.HexColor("#FDECEC"),
             "INVALID": colors.HexColor("#FDECEC"),
             "REVIEW": colors.HexColor("#FFF4D6"),
+            "CONDITIONAL": colors.HexColor("#FFF4D6"),
             "NOT ASSESSED": colors.HexColor("#FFF4D6"),
             "NOT RUN": colors.HexColor("#EEF2F6"),
             "NOT CALCULATED": colors.HexColor("#EEF2F6"),
@@ -3118,7 +3119,7 @@ class ReportBuilder:
                 resistance_rows.extend([
                     ["Combined M-V-T", "yes"],
                     ["Combined shared method", _html_escape(str(inp.get("combined_method") or "-"))],
-                    ["Independent M and V longitudinal steel", self._brief_switch(inp.get("combined_mv_independent"))],
+                    ["Separate M/V route selected as a design assumption", self._brief_switch(inp.get("combined_mv_independent"))],
                 ])
             if shear_active:
                 resistance_rows.extend([
@@ -5025,6 +5026,15 @@ class ReportBuilder:
                     and (item.get("res") or {}).get("valid")
                     and self._retained_utilisation_available(item.get("util"))
                 )
+                for item in items
+            )
+        if family == "combined":
+            directions = result.get("directions") or {}
+            items = tuple(directions.values()) or (result,)
+            return not any(
+                item.get("valid") is True
+                and item.get("dkna_valid", item.get("valid")) is True
+                and self._retained_utilisation_available(item.get("dkna_sum"))
                 for item in items
             )
         return False
@@ -7402,6 +7412,7 @@ class ReportBuilder:
 
     def _combined(self):
         aggregate = self.out["combined"]
+        screen_label = presentation.combined_dkna_screen_label(aggregate)
         combined_blocker = presentation.combined_bending_assessment_blocker(
             self.out
         )
@@ -7411,11 +7422,11 @@ class ReportBuilder:
             )
             self._table(
                 [
-                    ["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
+                    ["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
                      "r<sub>T</sub>", "DK NA sum", "Status"],
-                    ["M+V+T", "-", "-", "-", "-", "NOT ASSESSED"],
+                    [screen_label, "-", "-", "-", "-", "-", "NOT ASSESSED"],
                 ],
-                [30 * mm, 25 * mm, 25 * mm, 25 * mm, 30 * mm, 35 * mm],
+                [27 * mm, 20 * mm, 20 * mm, 20 * mm, 20 * mm, 28 * mm, 35 * mm],
             )
             self._small(combined_blocker)
             return
@@ -7426,16 +7437,14 @@ class ReportBuilder:
             self._case_heading(
                 "Combined bending + shear + torsion (M-V-T)", "plastic"
             )
-            status = (
-                "NOT ASSESSED" if not aggregate.get("valid")
-                else "PASS" if aggregate.get("dkna_ok") else "FAIL"
-            )
+            status = presentation.combined_dkna_status(aggregate)
             self._table(
                 [
-                    ["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
+                    ["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
                      "r<sub>T</sub>", "DK NA sum", "Status"],
                     [
-                        "M+V+T",
+                        screen_label,
+                        _pct(aggregate.get("r_n")),
                         _pct(aggregate.get("r_m")),
                         _pct(aggregate.get("r_v")),
                         _pct(aggregate.get("r_t")),
@@ -7443,7 +7452,7 @@ class ReportBuilder:
                         status,
                     ],
                 ],
-                [30 * mm, 25 * mm, 25 * mm, 25 * mm, 30 * mm, 35 * mm],
+                [27 * mm, 20 * mm, 20 * mm, 20 * mm, 20 * mm, 28 * mm, 35 * mm],
             )
             if aggregate.get("outside_default_range"):
                 self._small(
@@ -7451,6 +7460,12 @@ class ReportBuilder:
                     "outside the selected method's default range."
                 )
             if not critical:
+                if aggregate.get("valid") and not aggregate.get("dkna_valid"):
+                    self._h2("DK NA action-alone resistance assessment")
+                    self._combined_direction(
+                        aggregate, include_case_heading=False
+                    )
+                    return
                 self._small(
                     "The complete combined M-V-T worked example is published only "
                     "for the governing utilisation across all plastic cases."
@@ -7475,7 +7490,7 @@ class ReportBuilder:
             "V<sub>x</sub> + V<sub>y</sub> + T check is not included and requires "
             "a separate member check."
         )
-        rows = [["Screen", "r<sub>M</sub>", "r<sub>V</sub>",
+        rows = [["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
                  "r<sub>T</sub>", "DK NA sum", "Governing face",
                  "cot theta", "DK NA sum status"]]
         for component in ("vx", "vy"):
@@ -7484,21 +7499,19 @@ class ReportBuilder:
                 continue
             rows.append([
                 "Vx+T" if component == "vx" else "Vy+T",
-                _pct(item.get("r_m")), _pct(item.get("r_v")),
+                _pct(item.get("r_n")), _pct(item.get("r_m")),
+                _pct(item.get("r_v")),
                 _pct(item.get("r_t")), _pct(item.get("dkna_sum")),
                 viz.directional_face_label(
                     component, item.get("governing_face")
                 ),
                 _fmt(item.get("governing_cot"), 3),
-                (
-                    "NOT ASSESSED" if not item.get("valid")
-                    else "PASS" if item.get("dkna_ok") else "FAIL"
-                ),
+                presentation.combined_dkna_status(item),
             ])
         self._table(
             rows,
-            [20 * mm, 17 * mm, 17 * mm, 17 * mm, 23 * mm,
-             34 * mm, 18 * mm, 24 * mm],
+            [18 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 21 * mm,
+             31 * mm, 17 * mm, 22 * mm],
             font=5.8,
         )
         if any(
@@ -7579,15 +7592,41 @@ class ReportBuilder:
                 f"{viz.directional_face_label(component, c['governing_face'])}"
                 f"{angle_note}."
             )
-        self._p("The three checks tied together under the shared edition <b>"
-                + str(c["method"]) + "</b>. The bending utilisation is the plastic "
-                "M-M envelope at the applied N; the shear and torsion utilisations "
-                "are the stand-alone checks.")
-        rows = [["Action", "Utilisation"],
-                ["Bending M", _pct(c["r_m"])],
-                ["Shear V", _pct(c["r_v"])],
-                ["Torsion T", _pct(c["r_t"])]]
-        self._table(rows, [90 * mm, 60 * mm])
+        self._p(
+            "The sectional actions are tied together under the shared edition <b>"
+            + str(c["method"])
+            + "</b>. In the DK NA interaction, every denominator is the resistance "
+            "to that action acting alone; the other external sectional actions are "
+            "set to zero."
+        )
+        action_records = c.get("action_alone") or {}
+        rows = [["Action", "S<sub>Ed</sub>", "S<sub>Rd</sub>", "Ratio"]]
+        for key, label, unit in (
+            ("n", "Axial N", "kN"),
+            ("m", "Bending M", "kNm"),
+            ("v", "Shear V", "kN"),
+            ("t", "Torsion T", "kNm"),
+        ):
+            record = action_records.get(key) or {}
+            demand = record.get("demand")
+            resistance = record.get("resistance")
+            rows.append([
+                label,
+                "-" if demand is None else f"{_fmt(demand, 3)} {unit}",
+                "-" if resistance is None else f"{_fmt(resistance, 3)} {unit}",
+                _pct(c.get(f"r_{key}")),
+            ])
+        self._table(rows, [43 * mm, 43 * mm, 43 * mm, 31 * mm])
+        self._small(
+            "N retains the entered tension/compression sign. The bending resistance "
+            "is selected on the entered biaxial moment direction. Source: "
+            "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)."
+        )
+        self._small(
+            "This is an internal cross-section resistance check. It does not "
+            "replace a separate member and detailing assessment under Annex F "
+            "where that assessment applies."
+        )
         self._h2(
             "DK NA 6.3.2(6): "
             "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) &#8804; 1"
@@ -7604,35 +7643,51 @@ class ReportBuilder:
                 "before issuing the report."
             )
             return
-        verdict = _demand_resistance_verdict(c["dkna_ok"])
-        if c["m_v_independent"]:
-            expr = "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)"
-            note = ("M and V checked separately (shear longitudinal steel provided); "
-                    "N is folded into the bending utilisation.")
-            subst = (
-                f"max({_fmt(selection['m_plus_t'], 4)}, "
-                f"{_fmt(selection['v_plus_t'], 4)})"
+        if not c.get("dkna_valid") or not selection.get("valid"):
+            self._h2("DK NA interaction: NOT ASSESSED")
+            self._small(
+                "One or more matching action-alone resistances could not be "
+                "determined. Check the section, materials and complete Plastic "
+                "bending sweep, then recalculate. No PASS or FAIL verdict is given."
             )
         else:
-            expr = "r<sub>M</sub> + r<sub>V</sub> + r<sub>T</sub>"
-            note = "each action alone; N folded into the bending utilisation."
-            subst = (
-                f"{_fmt(selection['r_m'], 4)} + "
-                f"{_fmt(selection['r_v'], 4)} + "
-                f"{_fmt(selection['r_t'], 4)}"
+            verdict = presentation.combined_dkna_status(c)
+            if c["m_v_independent"]:
+                expr = (
+                    "max(r<sub>N</sub> + r<sub>M</sub> + r<sub>T</sub>, "
+                    "r<sub>N</sub> + r<sub>V</sub> + r<sub>T</sub>)"
+                )
+                note = presentation.combined_dkna_assumption_note(c)
+                note += " N and T remain in both independent checks."
+                subst = (
+                    f"max({_fmt(selection['n_m_plus_t'], 4)}, "
+                    f"{_fmt(selection['n_v_plus_t'], 4)})"
+                )
+            else:
+                expr = (
+                    "r<sub>N</sub> + r<sub>M</sub> + r<sub>V</sub> + "
+                    "r<sub>T</sub>"
+                )
+                note = "N, M, V and T each use their action-alone resistance."
+                subst = (
+                    f"{_fmt(selection['r_n'], 4)} + "
+                    f"{_fmt(selection['r_m'], 4)} + "
+                    f"{_fmt(selection['r_v'], 4)} + "
+                    f"{_fmt(selection['r_t'], 4)}"
+                )
+            self._formula(
+                expr,
+                equation_key="combined.dk-na.sum",
+                ref="DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)",
+                subst=subst,
+                note=(f"{note} Applied inclusion rule: "
+                      f"{_html_escape(selection['inclusion_rule'])}; governing "
+                      f"branch: {_html_escape(selection['governing_chord'])}."),
+                result=(
+                    "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
+                    f"{_pct(selection['utilisation'])}  ({verdict})"
+                ),
             )
-        self._formula(
-            expr,
-            equation_key="combined.dk-na.sum",
-            subst=subst,
-            note=(f"{note} Applied inclusion rule: "
-                  f"{_html_escape(selection['inclusion_rule'])}; governing chord: "
-                  f"{_html_escape(selection['governing_chord'])}."),
-            result=(
-                "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
-                f"{_pct(selection['utilisation'])}  ({verdict})"
-            ),
-        )
         self._h2("Physical resistance components")
         component_rows = [["Component", "Utilisation", "Status", "QA note"]]
         component_rows.extend([

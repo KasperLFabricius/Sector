@@ -831,6 +831,212 @@ def test_combined_summary_cannot_hide_subordinate_failure():
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
+def test_combined_summary_names_independent_dkna_inclusion_route():
+    combined = {
+        "valid": True,
+        "method": "DK NA",
+        "dkna_valid": True,
+        "dkna_sum": 0.90,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "CONDITIONAL",
+        "dkna_ok": None,
+        "m_v_independent": True,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    row = next(
+        item for item in rows
+        if item["check"] == "Combined M-V-T - DK NA sum"
+    )
+
+    assert row["status"] == "CONDITIONAL"
+    assert "DK NA screen: max(N+M+T, N+V+T)" in row["note"]
+    assert "design assumption" in row["note"]
+    assert "area, distribution and anchorage" in row["note"]
+    assert "N+M+V+T" not in row["note"]
+
+
+@pytest.mark.parametrize(
+    (
+        "verification_state",
+        "mechanically_verified",
+        "dkna_sum",
+        "legacy_ok",
+        "expected_status",
+        "copy",
+    ),
+    [
+        (
+            "adequate", True, 0.90, True, "CONDITIONAL",
+            "within the numerical limit",
+        ),
+        (
+            "inadequate", False, 1.10, False, "FAIL",
+            "exceeds the numerical limit even under the favourable",
+        ),
+        (
+            "unanchored", False, 0.90, True, "CONDITIONAL",
+            "within the numerical limit",
+        ),
+        (
+            "incomplete / unknown", False, 0.90, True, "CONDITIONAL",
+            "within the numerical limit",
+        ),
+    ],
+    ids=["adequate", "inadequate", "unanchored", "incomplete-unknown"],
+)
+def test_separate_mv_assumption_evidence_never_promotes_a_verdict(
+    verification_state,
+    mechanically_verified,
+    dkna_sum,
+    legacy_ok,
+    expected_status,
+    copy,
+):
+    result = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": dkna_sum,
+        "dkna_ok": legacy_ok,
+        "m_v_independent": True,
+        "m_v_separation_condition": {
+            "verification_state": verification_state,
+            "mechanically_verified": mechanically_verified,
+        },
+    }
+
+    assert presentation.combined_dkna_status(result) == expected_status
+    note = presentation.combined_dkna_assumption_note(result)
+    assert copy in note
+    if expected_status == "FAIL":
+        assert "failed numerical check governs regardless" in note
+    else:
+        assert "Verify the reinforcement area, distribution and anchorage" in note
+
+
+@pytest.mark.parametrize("dkna_sum", [None, float("nan"), float("inf")])
+def test_separate_mv_missing_numerical_comparison_is_not_assessed(dkna_sum):
+    result = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": dkna_sum,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "CONDITIONAL",
+        "m_v_independent": True,
+    }
+
+    assert presentation.combined_dkna_limit_satisfied(result) is None
+    assert presentation.combined_dkna_status(result) == "NOT ASSESSED"
+    note = presentation.combined_dkna_assumption_note(result)
+    assert note.startswith("NOT ASSESSED:")
+    assert "recalculate" in note
+
+
+@pytest.mark.parametrize(
+    (
+        "verification_state",
+        "longitudinal_util",
+        "dkna_sum",
+        "expected_dkna",
+        "expected_physical",
+        "overall",
+    ),
+    [
+        ("adequate", 0.75, 0.90, "CONDITIONAL", "PASS", "CONDITIONAL"),
+        ("inadequate", 1.15, 0.90, "CONDITIONAL", "FAIL", "FAIL"),
+        ("unanchored", 0.75, 0.90, "CONDITIONAL", "PASS", "CONDITIONAL"),
+        (
+            "incomplete / unknown", None, 0.90, "CONDITIONAL",
+            "NOT ASSESSED", "NOT ASSESSED",
+        ),
+        ("adequate", 0.75, 1.10, "FAIL", "PASS", "FAIL"),
+    ],
+    ids=[
+        "adequate",
+        "inadequate",
+        "unanchored",
+        "incomplete-unknown",
+        "numerical-failure",
+    ],
+)
+def test_separate_mv_assumption_preserves_conservative_overall_state(
+    verification_state,
+    longitudinal_util,
+    dkna_sum,
+    expected_dkna,
+    expected_physical,
+    overall,
+):
+    longitudinal = (
+        None
+        if longitudinal_util is None
+        else {
+            "valid": True,
+            "util": longitudinal_util,
+            "axis": "x",
+            "biaxial": False,
+            "tension_low": True,
+        }
+    )
+    combined = {
+        "valid": True,
+        "method": "DK NA",
+        "dkna_valid": True,
+        "dkna_sum": dkna_sum,
+        "dkna_limit_satisfied": dkna_sum <= 1.0,
+        "dkna_ok": False if dkna_sum > 1.0 else True,
+        "m_v_independent": True,
+        "m_v_separation_condition": {
+            "verification_state": verification_state,
+            "mechanically_verified": verification_state == "adequate",
+        },
+        "transverse": {
+            "valid": True,
+            "cot": 1.5,
+            "u_crush": 0.60,
+            "u_stirrup": 0.70,
+            "shear_fraction": 0.30,
+            "torsion_fraction": 0.40,
+        },
+        "longitudinal": longitudinal,
+        "governing_longitudinal": longitudinal,
+        "longitudinal_all_conditional": longitudinal is not None,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Combined M-V-T - DK NA sum"]["status"] == expected_dkna
+    assert by_check["Combined longitudinal reinforcement"]["status"] == (
+        expected_physical
+    )
+    assert presentation.overall_summary_status(rows) == overall
+
+
+@pytest.mark.parametrize(
+    ("dkna_sum", "legacy_ok", "expected"),
+    [(0.90, True, "PASS"), (1.10, False, "FAIL")],
+)
+def test_simultaneous_dkna_route_retains_ordinary_verdict(
+    dkna_sum,
+    legacy_ok,
+    expected,
+):
+    result = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": dkna_sum,
+        "dkna_ok": legacy_ok,
+        "m_v_independent": False,
+    }
+
+    assert presentation.combined_dkna_status(result) == expected
+
+
 def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
     combined = {
         "valid": True,
@@ -873,6 +1079,7 @@ def test_combined_summary_marks_missing_prerequisites_not_assessed():
         "have_v": False,
         "have_t": False,
         "method": "DK NA",
+        "m_v_independent": True,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -882,7 +1089,10 @@ def test_combined_summary_marks_missing_prerequisites_not_assessed():
 
     assert by_check["Combined M-V-T - DK NA sum"]["status"] == "NOT ASSESSED"
     assert by_check["Combined M-V-T - DK NA sum"]["note"] == (
-        "Missing prerequisite: V, T"
+        "DK NA screen: max(N+M+T, N+V+T); Missing prerequisite: V, T"
+    )
+    assert presentation.combined_dkna_screen_label(combined) == (
+        "max(N+M+T, N+V+T)"
     )
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
@@ -1313,6 +1523,9 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
             },
             "vy": {
                 "valid": True, "dkna_sum": 1.14, "dkna_ok": False,
+                "dkna_limit_satisfied": False,
+                "dkna_status": "CONDITIONAL",
+                "m_v_independent": True,
                 "method": "DK NA",
             },
         },
@@ -1328,6 +1541,51 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
     assert by_check["Combined Vx+T - DK NA sum"]["criterion"] == "<= 100 %"
     assert by_check["Generic Vx-Vy-T interaction"]["status"] == "NOT CALCULATED"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():
+    unavailable = {
+        "valid": True,
+        "dkna_valid": False,
+        "dkna_sum": None,
+        "dkna_reason": "Action-alone resistance unavailable",
+        "m_v_independent": True,
+    }
+    combined = {
+        "biaxial": True,
+        "m_v_independent": True,
+        "m_v_separation_condition": {
+            "declared": True,
+            "mechanically_verified": False,
+        },
+        "directions": {
+            "vx": dict(unavailable),
+            "vy": dict(unavailable),
+        },
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    directional = [
+        row for row in rows
+        if row["check"] in {
+            "Combined Vx+T - DK NA sum",
+            "Combined Vy+T - DK NA sum",
+        }
+    ]
+
+    assert presentation.combined_dkna_screen_label(combined) == (
+        "max(N+M+T, N+V+T)"
+    )
+    assert len(directional) == 2
+    assert all(row["status"] == "NOT ASSESSED" for row in directional)
+    assert all(
+        "max(N+M+T, N+V+T)" in row["note"]
+        for row in directional
+    )
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
 
 def test_legacy_plastic_invalidates_retained_combined_summary_and_selection():

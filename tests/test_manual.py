@@ -88,6 +88,26 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
+def test_manual_dkna_combined_rule_includes_n_and_action_alone_resistances():
+    text = "\n".join(
+        str(block[2] if block[0] == "callout" else block[1])
+        for block in manual.manual_blocks()
+        if block[0] in {"md", "callout"}
+    )
+    assert "$N$, $M$, $V$ and $T$" in text
+    assert "that action acting alone" in text
+    assert "$N+M+T$ and $N+V+T$" in text
+    assert "separate M/V route as a design assumption" in text
+    assert "CONDITIONAL" in text
+    assert "above the limit is **FAIL** even under" in text
+    assert "ordinary simultaneous sum cannot be smaller" in text
+    assert "reinforcement area, distribution and anchorage" in text
+    assert "does **not** condition the DK NA action-alone denominators" in text
+    assert "does not replace a separate member and detailing assessment" in text
+    assert "Annex F" in text
+    assert "N$ is folded" not in text
+
+
 def test_manual_distinguishes_slab_density_from_finite_face_spacing():
     text = "\n".join(
         block[1] for block in manual.manual_blocks() if block[0] == "md"

@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import pathlib
 import sys
 
+import numpy as np
 import pytest
 
-from sector import codes, combined
+from sector import capacity, codes, combined
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import apply_widget_changes  # noqa: E402
+import result_presentation  # noqa: E402
 
 
 # -- engine -----------------------------------------------------------------
@@ -31,9 +34,184 @@ def test_crushing_interaction():
 
 
 def test_dkna_sum_summed_vs_independent():
-    assert combined.dkna_sum(0.3, 0.4, 0.2, m_v_independent=False) == pytest.approx(0.9)
-    # independent -> max(M+T, V+T) = max(0.5, 0.6) = 0.6
-    assert combined.dkna_sum(0.3, 0.4, 0.2, m_v_independent=True) == pytest.approx(0.6)
+    assert combined.dkna_sum(
+        0.3, 0.4, 0.2, r_n=0.1, m_v_independent=False
+    ) == pytest.approx(1.0)
+    # independent -> N + max(M+T, V+T) = 0.1 + max(0.5, 0.6) = 0.7
+    assert combined.dkna_sum(
+        0.3, 0.4, 0.2, r_n=0.1, m_v_independent=True
+    ) == pytest.approx(0.7)
+
+
+def test_dkna_axial_term_is_not_folded_into_bending():
+    result = combined.dkna_interaction_result(
+        950.0,
+        1000.0,
+        0.0,
+        None,
+        5.0,
+        100.0,
+        5.0,
+        100.0,
+        m_v_independent=False,
+    )
+    assert result.valid
+    assert result.r_n == pytest.approx(0.95)
+    assert result.r_m == pytest.approx(0.0)
+    assert result.utilisation == pytest.approx(1.05)
+    assert result.ok is False
+
+
+@pytest.mark.parametrize("n_ed", [-950.0, 950.0])
+def test_dkna_retains_axial_sign_and_uses_matching_magnitude(n_ed):
+    result = combined.dkna_interaction_result(
+        n_ed,
+        1000.0,
+        0.0,
+        None,
+        0.0,
+        None,
+        0.0,
+        None,
+        m_v_independent=False,
+    )
+    assert result.valid
+    assert result.n.demand == pytest.approx(n_ed)
+    assert result.n.demand_abs == pytest.approx(950.0)
+    assert result.r_n == pytest.approx(0.95)
+
+
+def test_dkna_active_action_without_resistance_fails_closed():
+    result = combined.dkna_interaction_result(
+        0.0,
+        None,
+        10.0,
+        None,
+        0.0,
+        None,
+        0.0,
+        None,
+        m_v_independent=False,
+    )
+    assert not result.valid
+    assert result.utilisation is None
+    assert result.ok is None
+    assert result.m.active and not result.m.valid
+    assert "acting alone" in result.reason
+
+
+def test_dkna_independent_route_keeps_n_and_t_in_both_checks():
+    result = combined.dkna_interaction_result(
+        20.0,
+        100.0,
+        30.0,
+        100.0,
+        40.0,
+        100.0,
+        10.0,
+        100.0,
+        m_v_independent=True,
+    )
+    assert result.n_m_plus_t == pytest.approx(0.6)
+    assert result.n_v_plus_t == pytest.approx(0.7)
+    assert result.utilisation == pytest.approx(0.7)
+    assert result.governing_chord == "N+V+T"
+    assert result.conditional is True
+    assert result.limit_satisfied is True
+    assert result.status == "CONDITIONAL"
+    assert result.ok is None
+
+
+def test_dkna_independent_route_over_limit_fails_even_under_assumption():
+    result = combined.dkna_interaction_result(
+        0.0,
+        None,
+        80.0,
+        100.0,
+        10.0,
+        100.0,
+        30.0,
+        100.0,
+        m_v_independent=True,
+    )
+
+    assert result.valid is True
+    assert result.utilisation == pytest.approx(1.10)
+    assert result.limit_satisfied is False
+    assert result.conditional is True
+    assert result.status == "FAIL"
+    assert result.ok is False
+
+
+@pytest.mark.parametrize(
+    ("utilisation", "expected_status", "expected_ok"),
+    [
+        (1.0, "CONDITIONAL", None),
+        (math.nextafter(1.0, math.inf), "FAIL", False),
+    ],
+    ids=["at-limit", "first-representable-value-over-limit"],
+)
+def test_dkna_separate_route_limit_boundary_is_exact(
+    utilisation,
+    expected_status,
+    expected_ok,
+):
+    result = combined.dkna_interaction_result(
+        0.0,
+        None,
+        utilisation,
+        1.0,
+        0.0,
+        None,
+        0.0,
+        None,
+        m_v_independent=True,
+    )
+
+    assert result.utilisation == utilisation
+    assert result.limit_satisfied is (utilisation <= 1.0)
+    assert result.status == expected_status
+    assert result.ok is expected_ok
+
+
+def test_dkna_independent_route_with_incomplete_resistance_is_not_assessed():
+    result = combined.dkna_interaction_result(
+        0.0,
+        None,
+        10.0,
+        None,
+        0.0,
+        None,
+        0.0,
+        None,
+        m_v_independent=True,
+    )
+
+    assert result.valid is False
+    assert result.conditional is True
+    assert result.limit_satisfied is None
+    assert result.status == "NOT ASSESSED"
+    assert result.ok is None
+
+
+def test_dkna_rejects_numpy_booleans_as_actions_or_route_selection():
+    result = combined.dkna_interaction_result(
+        np.bool_(True),
+        100.0,
+        0.0,
+        None,
+        0.0,
+        None,
+        0.0,
+        None,
+        m_v_independent=False,
+    )
+    assert not result.valid
+    assert result.n.demand is None
+    with pytest.raises(TypeError, match="must be a Boolean"):
+        combined.dkna_sum(
+            0.1, 0.2, 0.3, m_v_independent=np.bool_(True)
+        )
 
 
 def test_retained_combined_results_are_compact_and_reconstruct_scalars():
@@ -46,13 +224,29 @@ def test_retained_combined_results_are_compact_and_reconstruct_scalars():
         combined.crushing_interaction(40.0, 80.0, 150.0, 600.0)
     )
     dk = combined.dkna_interaction_result(
-        0.3, 0.4, 0.2, m_v_independent=True
+        0.1,
+        1.0,
+        0.3,
+        1.0,
+        0.4,
+        1.0,
+        0.2,
+        1.0,
+        m_v_independent=True,
     )
     assert dk.m_plus_t == pytest.approx(0.5)
     assert dk.v_plus_t == pytest.approx(0.6)
-    assert dk.governing_chord == "V+T"
+    assert dk.n_m_plus_t == pytest.approx(0.6)
+    assert dk.n_v_plus_t == pytest.approx(0.7)
+    assert dk.governing_chord == "N+V+T"
+    assert dk.conditional is True
+    assert dk.limit_satisfied is True
+    assert dk.status == "CONDITIONAL"
+    assert dk.ok is None
     assert dk.utilisation == pytest.approx(
-        combined.dkna_sum(0.3, 0.4, 0.2, m_v_independent=True)
+        combined.dkna_sum(
+            0.3, 0.4, 0.2, r_n=0.1, m_v_independent=True
+        )
     )
     assert not hasattr(dk, "__dict__")
     with pytest.raises(AttributeError):
@@ -321,6 +515,49 @@ def test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim():
     assert f"cot {chr(0x03B8)}" in table.columns
 
 
+def test_biaxial_combined_reuses_one_lazy_normal_bending_action_solve(
+    monkeypatch,
+):
+    original = capacity.dkna_normal_bending_action_alone
+    calls = 0
+
+    def counted(inp):
+        nonlocal calls
+        calls += 1
+        return original(inp)
+
+    monkeypatch.setattr(
+        capacity, "dkna_normal_bending_action_alone", counted
+    )
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    assert calls == 1
+    aggregate = at.session_state["results"]["combined"]
+    assert set(aggregate["directions"]) == {"vx", "vy"}
+    assert all(
+        set(direction["action_alone"]) == {"n", "m", "v", "t"}
+        for direction in aggregate["directions"].values()
+    )
+
+
 def test_biaxial_combined_keeps_directional_failure_without_aggregate_verdict():
     at = _fresh()
     at.run()
@@ -469,12 +706,22 @@ def test_app_combined_assembles_all_three():
     assert not at.exception
     c = at.session_state["results"]["combined"]
     assert c["valid"]
-    assert c["dkna_sum"] == pytest.approx(c["r_m"] + c["r_v"] + c["r_t"])
+    assert c["dkna_valid"]
+    assert c["dkna_sum"] == pytest.approx(
+        c["r_n"] + c["r_m"] + c["r_v"] + c["r_t"]
+    )
     assert c["dkna_selection"]["utilisation"] == pytest.approx(c["dkna_sum"])
     assert c["dkna_selection"]["all_sum"] == pytest.approx(
-        c["r_m"] + c["r_v"] + c["r_t"]
+        c["r_n"] + c["r_m"] + c["r_v"] + c["r_t"]
     )
-    assert c["dkna_selection"]["governing_chord"] == "M+V+T"
+    assert c["dkna_selection"]["governing_chord"] == "N+M+V+T"
+    assert set(c["action_alone"]) == {"n", "m", "v", "t"}
+    for action in c["action_alone"].values():
+        assert action["valid"]
+        assert action["source_clause"].endswith("6.3.2(6)")
+    v_evidence = c["action_alone"]["v"]["evidence"]
+    assert v_evidence["both_faces_evaluated"] is True
+    assert v_evidence["faces_evaluated"] == ["negative", "positive"]
     assert c["member_angle_selection"]["selected_index"] >= 0
     assert c["member_angle_selection"]["samples"] == 1501
     assert c["crushing"] is not None            # shear links present -> crushing check
@@ -482,6 +729,184 @@ def test_app_combined_assembles_all_three():
         c["crushing"]["torsion_ratio"] + c["crushing"]["shear_ratio"]
     )
     assert c["asl_torsion"] > 0.0
+
+
+def test_app_dkna_publishes_signed_n_biaxial_m_and_action_alone_resistances():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_P", 100.0),
+        ("number_input", "pl_Mx", 80.0),
+        ("number_input", "pl_My", -40.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 120.0),
+        ("number_input", "torsion_T", 30.0),
+    )
+    assert not at.exception
+    c = at.session_state["results"]["combined"]
+    assert c["dkna_valid"]
+    n = c["action_alone"]["n"]
+    m = c["action_alone"]["m"]
+    assert n["demand"] == pytest.approx(100.0)
+    assert n["direction"] == "tension"
+    assert n["evidence"]["zero_moment"] is True
+    assert c["r_n"] == pytest.approx(abs(n["demand"]) / n["resistance"])
+    assert m["demand"] == pytest.approx(math.hypot(80.0, -40.0))
+    assert m["direction"] == pytest.approx(
+        math.degrees(math.atan2(-40.0, 80.0)) % 360.0
+    )
+    assert m["evidence"]["axial_action_kn"] == pytest.approx(0.0)
+    assert c["r_m"] == pytest.approx(m["demand"] / m["resistance"])
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    labels = {metric.label for metric in at.metric}
+    assert {r"Axial $N$", r"Bending $M$", r"Shear $V$", r"Torsion $T$"} <= labels
+    visible = " ".join(
+        str(item.value) for item in (*at.caption, *at.warning, *at.info)
+    ).lower()
+    assert "acting alone" in visible
+    assert "biaxial moment direction" in visible
+    assert "does not replace" in visible
+    assert "annex f" in visible
+    assert "folded" not in visible
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_P", -100.0),
+    )
+    assert not at.exception
+    compression = at.session_state["results"]["combined"]
+    compression_n = compression["action_alone"]["n"]
+    assert compression_n["demand"] == pytest.approx(-100.0)
+    assert compression_n["direction"] == "compression"
+    assert compression_n["evidence"]["zero_moment"] is True
+    assert compression["r_n"] == pytest.approx(
+        abs(compression_n["demand"]) / compression_n["resistance"]
+    )
+
+
+def test_app_dkna_unavailable_action_alone_resistance_is_not_assessed(
+    monkeypatch,
+):
+    def unavailable(_inp):
+        return {
+            "n": capacity._dkna_action_record("N", 0.0, None, valid=True),
+            "m": capacity._dkna_action_record(
+                "M",
+                100.0,
+                None,
+                valid=False,
+                reason=(
+                    "An action-alone resistance could not be determined. Check "
+                    "the section, materials and complete Plastic bending sweep."
+                ),
+            ),
+        }
+
+    monkeypatch.setattr(
+        capacity, "dkna_normal_bending_action_alone", unavailable
+    )
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+    c = at.session_state["results"]["combined"]
+    assert c["valid"]
+    assert not c["dkna_valid"]
+    assert c["dkna_sum"] is None
+    assert c["dkna_ok"] is None
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    combined_metric = next(
+        metric for metric in at.metric
+        if metric.label == r"$\sum(S_{Ed}/S_{Rd})$"
+    )
+    assert combined_metric.value == "-"
+    assert combined_metric.delta in {None, ""}
+    assert any("NOT ASSESSED" in warning.value for warning in at.warning)
+    assert {
+        "Concrete compression strut",
+        "Closed stirrup",
+        "Longitudinal reinforcement",
+    } <= {metric.label for metric in at.metric}
+
+
+def test_app_biaxial_unavailable_prerequisite_retains_selected_separate_route(
+    monkeypatch,
+):
+    def unavailable(_inp):
+        return {
+            "n": capacity._dkna_action_record("N", 0.0, None, valid=True),
+            "m": capacity._dkna_action_record(
+                "M",
+                50.0,
+                None,
+                valid=False,
+                reason=(
+                    "An action-alone resistance could not be determined. Check "
+                    "the section, materials and complete Plastic bending sweep."
+                ),
+            ),
+        }
+
+    monkeypatch.setattr(
+        capacity, "dkna_normal_bending_action_alone", unavailable
+    )
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("checkbox", "combined_mv_independent", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    aggregate = at.session_state["results"]["combined"]
+    assert aggregate["biaxial"] is True
+    assert aggregate["m_v_independent"] is True
+    assert aggregate["m_v_separation_condition"]["declared"] is True
+    assert set(aggregate["directions"]) == {"vx", "vy"}
+    assert all(
+        direction["m_v_independent"] is True
+        and direction["dkna_valid"] is False
+        for direction in aggregate["directions"].values()
+    )
+    assert result_presentation.combined_dkna_screen_label(aggregate) == (
+        "max(N+M+T, N+V+T)"
+    )
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    visible = " ".join(
+        str(item.value)
+        for family in (at.caption, at.warning, at.info)
+        for item in family
+    )
+    assert "NOT ASSESSED" in visible
+    assert "action-alone" in visible
 
 
 def test_app_combined_longitudinal_check():
@@ -521,8 +946,109 @@ def test_app_combined_mv_independent_uses_max():
     at = _fresh()
     at.run()
     _enable_all(at, mv_independent=True)
+    _goto_page(at, "Inputs")
+    route = at.checkbox(key="combined_mv_independent")
+    assert route.label == r"Apply separate $M$/$V$ route as a design assumption"
+    assert "capacity, distribution and anchorage" in route.help
+    assert "within the numerical limit is CONDITIONAL" in route.help
+    assert "above the limit is FAIL even under" in route.help
     c = at.session_state["results"]["combined"]
-    assert c["dkna_sum"] == pytest.approx(max(c["r_m"] + c["r_t"], c["r_v"] + c["r_t"]))
+    assert c["dkna_sum"] == pytest.approx(
+        c["r_n"] + max(c["r_m"] + c["r_t"], c["r_v"] + c["r_t"])
+    )
+    assert c["dkna_selection"]["governing_chord"] in {"N+M+T", "N+V+T"}
+    assert c["dkna_status"] == "CONDITIONAL"
+    assert c["dkna_conditional"] is True
+    assert c["dkna_ok"] is None
+    assert c["dkna_limit_satisfied"] is (
+        c["dkna_sum"] <= 1.0 + 1e-9
+    )
+    assert c["m_v_separation_condition"]["declared"] is True
+    assert c["m_v_separation_condition"]["confirmed"] is False
+    assert c["m_v_separation_condition"]["mechanically_verified"] is False
+    assert "beyond" in c["m_v_separation_condition"]["condition"]
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value) for item in (*at.caption, *at.warning, *at.info)
+    )
+    assert "CONDITIONAL" in visible
+    assert "design assumption" in visible
+    assert "area, distribution and anchorage" in visible
+    assert "is confirmed" not in visible
+    assert "N + M + T and N + V + T" in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined M-V-T - DK NA sum"
+    ].iloc[0]
+    assert row["Status"] == "CONDITIONAL"
+
+
+def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 275.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    simultaneous = copy.deepcopy(at.session_state["results"]["combined"])
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "combined_mv_independent", True),
+    )
+    separate = at.session_state["results"]["combined"]
+
+    assert simultaneous["action_alone"] == separate["action_alone"]
+    assert simultaneous["dkna_sum"] > 1.0
+    assert simultaneous["dkna_status"] == "FAIL"
+    assert simultaneous["dkna_ok"] is False
+    assert separate["dkna_sum"] < 1.0
+    assert separate["dkna_limit_satisfied"] is True
+    assert separate["dkna_status"] == "CONDITIONAL"
+    assert separate["dkna_ok"] is None
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 400.0),
+    )
+    over_limit = at.session_state["results"]["combined"]
+    assert over_limit["m_v_independent"] is True
+    assert over_limit["dkna_sum"] > 1.0
+    assert over_limit["dkna_limit_satisfied"] is False
+    assert over_limit["dkna_conditional"] is True
+    assert over_limit["dkna_status"] == "FAIL"
+    assert over_limit["dkna_ok"] is False
+
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value)
+        for family in (at.markdown, at.warning)
+        for item in family
+    )
+    assert "FAIL" in visible
+    assert "even under the favourable" in visible
+    assert "failed numerical check governs" in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined M-V-T - DK NA sum"
+    ].iloc[0]
+    assert row["Status"] == "FAIL"
 
 
 def test_app_combined_edition_lock():
@@ -551,7 +1077,14 @@ def test_app_combined_edition_lock():
     assert at.selectbox(key="torsion_method").disabled
 
 
-def test_app_combined_incomplete_flags_missing():
+def test_app_combined_incomplete_flags_missing(monkeypatch):
+    monkeypatch.setattr(
+        capacity,
+        "dkna_normal_bending_action_alone",
+        lambda _inp: pytest.fail(
+            "action-alone resistance entered for an incomplete combined check"
+        ),
+    )
     at = _fresh()
     at.run()
     _set_and_click(
@@ -561,6 +1094,17 @@ def test_app_combined_incomplete_flags_missing():
     assert "combined" not in at.session_state["results"]
     _select_view(at, "M-V-T Combined")
     assert any("Vx,Ed = Vy,Ed = TEd = 0" in item.value for item in at.info)
+
+    _set(at, ("checkbox", "shear_on", True))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 50.0),
+    )
+    assert not at.exception
+    assert "shear" in at.session_state["results"]
+    assert "torsion" not in at.session_state["results"]
+    assert "combined" not in at.session_state["results"]
 
 
 def test_app_combined_view_renders():
@@ -816,40 +1360,42 @@ def test_app_invalid_bending_evidence_does_not_poison_the_member_angle():
     assert cot_on == pytest.approx(cot_off)
 
 
-def test_app_combined_angle_minimises_the_dkna_governing_sum():
-    # v0.69 requirement: theta minimises the LARGEST applicable utilisation. In a
-    # combined M+V+T run the governing utilisation is the DK NA sum(SEd/SRd) (a sum of
-    # ratios, so >= every component), which has a load-dependent INTERIOR optimum.
-    # Pin the strut to fixed cots across the band and confirm the auto-selected angle
-    # beats every one of them -- i.e. the chosen cot actually minimises the governing
-    # combined utilisation, not just some component. A regression that drops the DK NA
-    # objective term would move theta off this minimum and this test would catch it.
+def test_app_dkna_action_alone_resistances_are_not_evaluated_at_common_angle():
+    # DK NA 6.3.2(6) uses each resistance for its action acting ALONE. The selected
+    # common angle remains authoritative for the physical shared-strut/stirrup/chord
+    # checks, but it must not condition the action-alone V or T denominator.
     at = _fresh()
     at.run()
 
-    def dkna(pin=None):
-        band = (pin, pin) if pin is not None else None
-        _run_member(
-            at,
-            mx=150.0,
-            v=280.0,
-            t=100.0,
-            strut_band=band,
-        )
-        r = at.session_state["results"]
-        return r["shear"]["links"]["res"]["cot"], r["combined"]["dkna_sum"]
-    cot_star, dk_star = dkna()
-    # A load-dependent interior optimum, NOT the pre-v0.69 clamp to the band edge.
-    assert 1.8 < cot_star < 2.4
-    # It beats every fixed strut angle across the band, including the resistance-max
-    # edge cot = 2.5 that the old code always returned.
-    for pin in (1.0, 1.6, 2.0, 2.4, 2.5):
-        _, dk_pin = dkna(pin=pin)
-        assert dk_star < dk_pin, f"cot*={cot_star} dkna*={dk_star} !< pin {pin}: {dk_pin}"
+    _run_member(at, mx=150.0, v=280.0, t=100.0)
+    result = at.session_state["results"]
+    c = result["combined"]
+    cot_star = result["shear"]["links"]["res"]["cot"]
+    labels = c["member_angle_selection"]["objective_labels"]
+    assert "DK NA governing interaction" not in labels
+    v_action = c["action_alone"]["v"]
+    t_action = c["action_alone"]["t"]
+    assert c["r_v"] == pytest.approx(
+        v_action["demand"] / v_action["resistance"]
+    )
+    assert c["r_t"] == pytest.approx(
+        t_action["demand"] / t_action["resistance"]
+    )
+    # The action-alone capacities optimise their own resistance within the same
+    # declared admissible band; the common physical angle remains separate.
+    assert v_action["evidence"]["cot"] != pytest.approx(cot_star)
+    assert t_action["evidence"]["cot"] != pytest.approx(cot_star)
 
 
-def test_app_combined_is_skipped_when_shear_is_zero():
+def test_app_combined_is_skipped_when_shear_is_zero(monkeypatch):
     # VEd = 0 disables the shear and dependent combined checks for this case.
+    monkeypatch.setattr(
+        capacity,
+        "dkna_normal_bending_action_alone",
+        lambda _inp: pytest.fail(
+            "action-alone resistance entered for a zero-shear combined check"
+        ),
+    )
     at = _fresh()
     at.run()
     _run_member(
