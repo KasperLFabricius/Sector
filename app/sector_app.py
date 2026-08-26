@@ -4901,7 +4901,7 @@ def _quick_section_geometry(box):
                     1.0,
                     face_spacing,
                     off_d,
-                    phase=0.75,
+                    phase=0.0,
                 )
             else:
                 inter = _qs_interleave(grp, off_d)

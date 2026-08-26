@@ -453,7 +453,7 @@ def test_unit_width_layers_preserve_each_face_area_and_allow_distinct_rows():
         -0.12, 1.0, 2, 0.04, 1.0, 0.20, 20.0
     )
     interleaved = templates.unit_width_bar_layers(
-        -0.12, 1.0, 1, 0.04, 1.0, 0.20, 16.0, phase=0.75
+        -0.12, 1.0, 1, 0.04, 1.0, 0.20, 16.0, phase=0.0
     )
 
     assert len(main) == 10
@@ -465,6 +465,9 @@ def test_unit_width_layers_preserve_each_face_area_and_allow_distinct_rows():
     )
     assert {point[0] for point in main[:5]}.isdisjoint(
         {point[0] for point in interleaved}
+    )
+    assert [point[0] for point in interleaved] == pytest.approx(
+        [-0.50, -0.30, -0.10, 0.10, 0.30]
     )
 
 

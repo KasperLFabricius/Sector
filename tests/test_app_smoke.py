@@ -2906,6 +2906,37 @@ def test_slab_t20_at_200_renders_five_equivalents_and_matches_five_entered_bars(
     )
 
 
+def test_slab_spacing_interleave_uses_periodic_midpoints_and_exact_density():
+    import reinforcement_table as rt
+    from sector.templates import bar_area
+
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        at,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_s", 200.0),
+        ("number_input", "top_s", 200.0),
+        ("number_input", "bot_off_d", 16.0),
+    )
+    _apply_qs(at)
+
+    assert not at.exception
+    bars = at.session_state["bars_base"]
+    bottom = bars[bars[rt.Y] < 0.0]
+    primary = bottom[bottom[rt.DIAMETER] == 20.0]
+    interleaved = bottom[bottom[rt.DIAMETER] == 16.0]
+    assert primary[rt.X].tolist() == pytest.approx(
+        [-400.0, -200.0, 0.0, 200.0, 400.0]
+    )
+    assert interleaved[rt.X].tolist() == pytest.approx(
+        [-500.0, -300.0, -100.0, 100.0, 300.0]
+    )
+    assert primary[rt.AREA].sum() == pytest.approx(5.0 * bar_area(20.0))
+    assert interleaved[rt.AREA].sum() == pytest.approx(5.0 * bar_area(16.0))
+    assert set(bottom[rt.SIZE_MODE]) == {rt.INDEPENDENT_MODE}
+
+
 def test_finite_face_spacing_displays_count_and_actual_spacing_at_width_boundaries():
     at = _fresh_qs()
     _set(at, ("radio", "qs_rebar_mode", "By spacing"))
