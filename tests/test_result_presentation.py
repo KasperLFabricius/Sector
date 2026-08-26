@@ -831,6 +831,28 @@ def test_combined_summary_cannot_hide_subordinate_failure():
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
+def test_combined_summary_names_independent_dkna_inclusion_route():
+    combined = {
+        "valid": True,
+        "method": "DK NA",
+        "dkna_valid": True,
+        "dkna_sum": 0.90,
+        "dkna_ok": True,
+        "m_v_independent": True,
+    }
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    row = next(
+        item for item in rows
+        if item["check"] == "Combined M-V-T - DK NA sum"
+    )
+
+    assert "DK NA screen: max(N+M+T, N+V+T)" in row["note"]
+    assert "N+M+V+T" not in row["note"]
+
+
 def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
     combined = {
         "valid": True,

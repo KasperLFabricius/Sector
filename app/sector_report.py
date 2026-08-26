@@ -7411,6 +7411,7 @@ class ReportBuilder:
 
     def _combined(self):
         aggregate = self.out["combined"]
+        screen_label = presentation.combined_dkna_screen_label(aggregate)
         combined_blocker = presentation.combined_bending_assessment_blocker(
             self.out
         )
@@ -7422,7 +7423,7 @@ class ReportBuilder:
                 [
                     ["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
                      "r<sub>T</sub>", "DK NA sum", "Status"],
-                    ["N+M+V+T", "-", "-", "-", "-", "-", "NOT ASSESSED"],
+                    [screen_label, "-", "-", "-", "-", "-", "NOT ASSESSED"],
                 ],
                 [27 * mm, 20 * mm, 20 * mm, 20 * mm, 20 * mm, 28 * mm, 35 * mm],
             )
@@ -7445,7 +7446,7 @@ class ReportBuilder:
                     ["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
                      "r<sub>T</sub>", "DK NA sum", "Status"],
                     [
-                        "N+M+V+T",
+                        screen_label,
                         _pct(aggregate.get("r_n")),
                         _pct(aggregate.get("r_m")),
                         _pct(aggregate.get("r_v")),

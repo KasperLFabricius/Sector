@@ -534,6 +534,16 @@ def combined_bending_assessment_blocker(results):
     return None
 
 
+def combined_dkna_screen_label(result):
+    """Return the public inclusion rule for one retained DK NA result."""
+
+    return (
+        "max(N+M+T, N+V+T)"
+        if (result or {}).get("m_v_independent") is True
+        else "N+M+V+T"
+    )
+
+
 def _transverse_metric(family, result):
     """Rank an already-computed shear, torsion or combined result."""
     def shear_metric(item):
@@ -2130,7 +2140,9 @@ def result_summary_rows(inp, results, *, stale=False):
                             else ""
                         )
                         + (
-                            "internal cross-section resistance check; does not "
+                            "DK NA screen: "
+                            + combined_dkna_screen_label(direction)
+                            + "; internal cross-section resistance check; does not "
                             "replace a separate Annex F member and detailing "
                             "assessment where applicable"
                         )
@@ -2192,7 +2204,9 @@ def result_summary_rows(inp, results, *, stale=False):
             combined_note = (
                 (method_note + "; ") if method_note else ""
             ) + (
-                "internal cross-section resistance check; does not replace a "
+                "DK NA screen: "
+                + combined_dkna_screen_label(combined)
+                + "; internal cross-section resistance check; does not replace a "
                 "separate Annex F member and detailing assessment where applicable"
             )
         elif valid:

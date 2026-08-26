@@ -5941,6 +5941,23 @@ def test_report_profiles_share_dkna_value_and_status(profile):
         assert "entered biaxial moment direction" in txt
 
 
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_label_independent_dkna_route_truthfully(profile):
+    out = _out()
+    out["combined"] = _combined_out(mv_independent=True)
+    inp = _inp()
+    inp.update(combined_on=True, shear_on=True, torsion_on=True)
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+    assert "max(N+M+T, N+V+T)" in txt
+    assert "N+M+V+T" not in txt
+
+
 def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
     out = _out()
     vx = _combined_out(mv_independent=True)
