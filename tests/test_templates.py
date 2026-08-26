@@ -419,6 +419,66 @@ def test_count_for_spacing():
         assert max(gaps) <= 0.15 + 1e-9, span
 
 
+def test_unit_width_t20_at_200_is_exactly_five_bar_equivalents():
+    row = templates.unit_width_bar_row(0.10, 1.0, 0.20, 20.0)
+
+    assert templates.unit_width_bar_equivalents(1.0, 0.20) == pytest.approx(5.0)
+    assert templates.count_for_unit_width(1.0, 0.20) == 5
+    assert [point[0] for point in row] == pytest.approx(
+        [-0.40, -0.20, 0.0, 0.20, 0.40]
+    )
+    assert all(point[1] == pytest.approx(0.10) for point in row)
+    assert sum(point[2] for point in row) == pytest.approx(
+        5.0 * templates.bar_area(20.0)
+    )
+    assert sum(point[2] for point in row) == pytest.approx(1570.7963267948965)
+
+
+def test_non_divisible_unit_width_keeps_exact_density_not_four_full_bars():
+    row = templates.unit_width_bar_row(-0.10, 1.0, 0.30, 20.0)
+
+    assert templates.unit_width_bar_equivalents(1.0, 0.30) == pytest.approx(10.0 / 3.0)
+    assert len(row) == 4
+    assert [point[0] for point in row] == pytest.approx(
+        [-0.375, -0.125, 0.125, 0.375]
+    )
+    assert sum(point[2] for point in row) == pytest.approx(
+        templates.bar_area(20.0) / 0.30
+    )
+    assert sum(point[2] for point in row) < 4.0 * templates.bar_area(20.0)
+
+
+def test_unit_width_layers_preserve_each_face_area_and_allow_distinct_rows():
+    main = templates.unit_width_bar_layers(
+        -0.12, 1.0, 2, 0.04, 1.0, 0.20, 20.0
+    )
+    interleaved = templates.unit_width_bar_layers(
+        -0.12, 1.0, 1, 0.04, 1.0, 0.20, 16.0, phase=0.75
+    )
+
+    assert len(main) == 10
+    assert sum(point[2] for point in main) == pytest.approx(
+        2.0 * 5.0 * templates.bar_area(20.0)
+    )
+    assert sum(point[2] for point in interleaved) == pytest.approx(
+        5.0 * templates.bar_area(16.0)
+    )
+    assert {point[0] for point in main[:5]}.isdisjoint(
+        {point[0] for point in interleaved}
+    )
+
+
+def test_unit_width_representation_stays_bounded_and_rejects_nonfinite_area():
+    dense = templates.unit_width_bar_row(0.0, 1.0, 1.0e-6, 20.0)
+
+    assert len(dense) == 1000
+    assert sum(point[2] for point in dense) == pytest.approx(
+        templates.bar_area(20.0) * 1.0e6
+    )
+    with pytest.raises(ValueError, match="reinforcement area must be finite"):
+        templates.unit_width_bar_row(0.0, 1.0, 0.20, 1.0e308)
+
+
 def test_bar_ring_on_circle():
     bars = templates.bar_ring(0.0, 0.0, 0.25, 8, 20)
     assert len(bars) == 8

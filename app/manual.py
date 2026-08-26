@@ -774,6 +774,12 @@ def manual_blocks() -> list:
        "faces take their own cover and bar diameter (entered directly in mm), a "
        "stacked upper layer can hold a different bar count than the main row, and "
        "a toggle measures the cover to the bar edge instead of its centre.")
+    md(r"For the **1 m slab strip**, a diameter and spacing define reinforcement "
+       r"area per metre: $A_s = A_{bar}\,1000/s$. Thus T20 at 200 mm gives "
+       r"$5A_{bar}=1570.796\,\mathrm{mm^2/m}$, and the bottom or top cover sets "
+       r"the layer depth. For finite sections, spacing is instead a maximum gap "
+       r"over the covered face; the builder displays the derived count and actual "
+       r"centre-to-centre spacing before Apply.")
     table(["Shape", "Produces"],
           [["Rectangle", "A solid rectangle b x h"],
            ["Slab strip", "A 1 m-wide strip of a given thickness"],

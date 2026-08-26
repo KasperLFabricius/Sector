@@ -408,6 +408,106 @@ def count_for_spacing(span: float, spacing: float) -> int:
     return max(2, int(math.ceil(span / spacing - 1e-9)) + 1)
 
 
+def unit_width_bar_equivalents(width: float, spacing: float) -> float:
+    """Return the bar-equivalent count for reinforcement specified per unit width.
+
+    Unlike :func:`count_for_spacing`, this is an area-density convention rather
+    than a finite-face placement rule.  A 1 m strip at 200 mm spacing therefore
+    contains exactly five bar-equivalents, independently of the representative
+    points used by the section model.
+    """
+
+    _positive_dimensions(unit_width=width, spacing=spacing)
+    equivalents = width / spacing
+    if not math.isfinite(equivalents) or equivalents <= 0.0:
+        raise ValueError("unit-width bar-equivalent count must be finite and positive")
+    return equivalents
+
+
+_UNIT_WIDTH_REPRESENTATIVE_POINTS = 1000
+
+
+def count_for_unit_width(width: float, spacing: float) -> int:
+    """Return a capped representative-point count for a unit-width bar row."""
+
+    equivalents = unit_width_bar_equivalents(width, spacing)
+    nearest = round(equivalents)
+    if math.isclose(equivalents, nearest, rel_tol=0.0, abs_tol=1.0e-9):
+        count = max(1, int(nearest))
+    else:
+        count = max(1, int(math.ceil(equivalents)))
+    return min(count, _UNIT_WIDTH_REPRESENTATIVE_POINTS)
+
+
+def unit_width_bar_row(
+    y: float,
+    width: float,
+    spacing: float,
+    diameter_mm: float,
+    *,
+    phase: float = 0.5,
+):
+    """Represent one per-unit-width bar layer with its exact reinforcement area.
+
+    The returned points are evenly distributed over the centred strip for section
+    analysis.  Their areas sum to ``bar_area(diameter_mm) * width / spacing``.
+    ``phase=0.5`` places points at equal tributary-width centres; another phase can
+    provide a distinct representative row for an interleaved diameter.
+    """
+
+    _positive_dimensions(
+        unit_width=width,
+        spacing=spacing,
+        bar_diameter=diameter_mm,
+    )
+    if not math.isfinite(y):
+        raise ValueError("bar-row depth must be finite")
+    if not math.isfinite(phase) or not 0.0 <= phase < 1.0:
+        raise ValueError("unit-width row phase must be finite and in [0, 1)")
+    equivalents = unit_width_bar_equivalents(width, spacing)
+    count = count_for_unit_width(width, spacing)
+    try:
+        total_area = bar_area(diameter_mm) * equivalents
+    except OverflowError:
+        total_area = math.inf
+    if not math.isfinite(total_area) or total_area <= 0.0:
+        raise ValueError("unit-width reinforcement area must be finite and positive")
+    area_each = total_area / count
+    return [
+        (-width / 2.0 + width * (index + phase) / count, y, area_each)
+        for index in range(count)
+    ]
+
+
+def unit_width_bar_layers(
+    y_face: float,
+    direction: float,
+    n_layers: int,
+    layer_spacing: float,
+    width: float,
+    spacing: float,
+    diameter_mm: float,
+    *,
+    phase: float = 0.5,
+):
+    """Stack per-unit-width bar rows while preserving each layer's exact area."""
+
+    if not all(math.isfinite(value) for value in (y_face, direction, layer_spacing)):
+        raise ValueError("unit-width layer placement must be finite")
+    rows = []
+    for index in range(max(0, int(n_layers))):
+        rows.extend(
+            unit_width_bar_row(
+                y_face + direction * index * layer_spacing,
+                width,
+                spacing,
+                diameter_mm,
+                phase=phase,
+            )
+        )
+    return rows
+
+
 def bar_row(y: float, x_start: float, x_end: float, n: int, diameter_mm: float):
     """``n`` bars of the given diameter evenly spaced from ``x_start`` to ``x_end``."""
     if n <= 0:

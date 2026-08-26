@@ -1874,9 +1874,32 @@ def _rebar_df(
     *,
     size_mode=rebar_table.AREA_MODE,
     material_id=None,
+    diameters_mm=None,
 ):
-    """Canonical stable-ID table from ``(x, y, area)`` mm/mm2 points."""
-    frame = rebar_table.table_from_points(pts, kind, size_mode=size_mode)
+    """Canonical stable-ID table from ``(x, y, area)`` mm/mm2 points.
+
+    ``diameters_mm`` keeps a physical bar diameter beside an independently
+    equivalent analysis area, as required by per-metre slab reinforcement.
+    """
+
+    if diameters_mm is None:
+        frame = rebar_table.table_from_points(pts, kind, size_mode=size_mode)
+    else:
+        diameters = [float(value) for value in diameters_mm]
+        if len(diameters) != len(pts):
+            raise ValueError("bar diameter metadata must match generated points")
+        frame = rebar_table.table_from_points(
+            pts,
+            kind,
+            size_mode=rebar_table.AREA_MODE,
+        )
+        frame[rebar_table.SIZE_MODE] = rebar_table.INDEPENDENT_MODE
+        frame[rebar_table.DIAMETER] = diameters
+        frame = rebar_table.normalise_table(
+            frame,
+            kind,
+            default_mode=rebar_table.INDEPENDENT_MODE,
+        )
     if material_id is not None and not frame.empty:
         frame[rebar_table.MATERIAL_ID] = str(material_id)
     return frame
@@ -4454,7 +4477,8 @@ def _default_quick_section():
 
 def _quick_section_geometry(box):
     """Render the shape, dimension and reinforcement inputs in ``box`` and return
-    the generated ``(outer, holes, bars, tendons)`` (metres / mm areas).
+    the generated geometry and reinforcement (metres / mm areas). Slab-density
+    rows also return their physical diameters beside the equivalent point areas.
 
     Shared by the builder viewport: the widgets keep their own keys so the last
     settings persist between openings. Reinforcement is two rows (bottom / top)
@@ -4471,6 +4495,8 @@ def _quick_section_geometry(box):
     )
     _qs_shape_prefill(shape)   # re-seed b/h on a shape change (see the prefill note)
     holes = []
+    slab_bar_diameters = None
+    slab_unit_spacing = False
     bottom_span_at = top_span_at = None
     if shape == "Rectangle":
         b = _seeded_number(box, r"Width $b$ (mm)", 50.0, 10000.0, 400.0, 10.0, "b_mm",
@@ -4635,7 +4661,7 @@ def _quick_section_geometry(box):
             "Apply creates the concrete geometry only; add bars and tendons in "
             "the point tables."
         )
-        return outer, holes, [], []
+        return outer, holes, [], [], None
     # Cover can be measured to the near edge of the bars rather than to their centres
     # -- the centre then sits a bar radius deeper. Applied to the mild bars (bottom /
     # top rows and the circular ring); tendons keep a centre cover.
@@ -4661,12 +4687,25 @@ def _quick_section_geometry(box):
         else:
             bars = []
     else:
+        spacing_help = (
+            "For a slab strip, By spacing uses diameter and spacing to calculate "
+            "reinforcement area per metre. By number places explicit bars."
+            if shape == "Slab strip"
+            else
+            "For a finite section, By spacing is the maximum centre-to-centre gap "
+            "over the covered face; the builder derives count and actual spacing."
+        )
         by_spacing = box.radio(
             "Bar placement", ["By number", "By spacing"], horizontal=True,
             key="qs_rebar_mode",
-            help="Place each row as a fixed bar count, or at a target centre-to-"
-                 "centre spacing (slab phi @ s); the count is then derived from the "
-                 "face width.") == "By spacing"
+            help=spacing_help,
+        ) == "By spacing"
+        slab_unit_spacing = shape == "Slab strip" and by_spacing
+        if slab_unit_spacing:
+            box.info(
+                "Slab-strip spacing defines reinforcement area per metre of slab "
+                "width. Bottom and top cover set the corresponding layer depth."
+            )
         c1, c2 = box.columns(2)
         c1.markdown("**Bottom**")
         c2.markdown("**Top**")
@@ -4681,18 +4720,63 @@ def _quick_section_geometry(box):
         # Bar-centre covers (add a radius when the cover is measured to the bar edge).
         bot_e, top_e = _edge(bot_cov, rd_bot), _edge(top_cov, rd_top)
         bot_w, top_w = b - 2.0 * bot_e, width_b - 2.0 * top_e
+        s_bot = s_top = None
         if by_spacing:
-            s_bot = _seeded_number(c1, "Bottom spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
-                                   "bot_s", help="Target centre-to-centre spacing.") / 1000.0
-            s_top = _seeded_number(c2, "Top spacing (mm)", 10.0, 1000.0, 150.0, 5.0,
-                                   "top_s", help="Target centre-to-centre spacing.") / 1000.0
-            nb_bot = templates.count_for_spacing(bot_w, s_bot)
-            nb_top = templates.count_for_spacing(top_w, s_top)
-            c1.caption(f"-> {nb_bot} bars")
-            c2.caption(f"-> {nb_top} bars")
+            spacing_label = (
+                "spacing" if slab_unit_spacing else "maximum spacing"
+            )
+            spacing_input_help = (
+                "Nominal centre-to-centre spacing used with the entered diameter "
+                "to calculate reinforcement area per metre of slab width."
+                if slab_unit_spacing
+                else
+                "Maximum centre-to-centre gap over the covered face. The derived "
+                "bar count can make the actual spacing smaller."
+            )
+            s_bot = _seeded_number(
+                c1, f"Bottom {spacing_label} (mm)", 10.0, 1000.0, 150.0, 5.0,
+                "bot_s", help=spacing_input_help,
+            ) / 1000.0
+            s_top = _seeded_number(
+                c2, f"Top {spacing_label} (mm)", 10.0, 1000.0, 150.0, 5.0,
+                "top_s", help=spacing_input_help,
+            ) / 1000.0
+            if slab_unit_spacing:
+                nb_bot = templates.count_for_unit_width(1.0, s_bot)
+                nb_top = templates.count_for_unit_width(1.0, s_top)
+                bot_equivalents = templates.unit_width_bar_equivalents(1.0, s_bot)
+                top_equivalents = templates.unit_width_bar_equivalents(1.0, s_top)
+                bot_area = templates.bar_area(rd_bot) * bot_equivalents
+                top_area = templates.bar_area(rd_top) * top_equivalents
+                c1.caption(
+                    f"{bot_equivalents:.3f} bar-equivalents/m per layer; "
+                    f"Aₛ = {bot_area:,.3f} mm²/m per layer."
+                )
+                c2.caption(
+                    f"{top_equivalents:.3f} bar-equivalents/m per layer; "
+                    f"Aₛ = {top_area:,.3f} mm²/m per layer."
+                )
+            else:
+                nb_bot = templates.count_for_spacing(bot_w, s_bot)
+                nb_top = templates.count_for_spacing(top_w, s_top)
+                bot_actual = bot_w / (nb_bot - 1) if nb_bot > 1 else None
+                top_actual = top_w / (nb_top - 1) if nb_top > 1 else None
+                c1.caption(
+                    f"Face row: {nb_bot} bars; actual c/c spacing = "
+                    f"{bot_actual * 1000.0:.1f} mm."
+                    if bot_actual is not None
+                    else f"Face row: {nb_bot} bar; actual spacing is not applicable."
+                )
+                c2.caption(
+                    f"Face row: {nb_top} bars; actual c/c spacing = "
+                    f"{top_actual * 1000.0:.1f} mm."
+                    if top_actual is not None
+                    else f"Face row: {nb_top} bar; actual spacing is not applicable."
+                )
 
-            # By spacing the count follows each row's own clear span, so a top row
-            # narrowed to the web keeps the target spacing instead of the flange count.
+            # For finite sections the count follows each row's own clear span, so a
+            # top row narrowed to the web keeps the maximum-spacing contract instead
+            # of inheriting the flange count. Slab strips use area density below.
             def n_at_bot(xs, xe):
                 return templates.count_for_spacing(xe - xs, s_bot)
 
@@ -4720,9 +4804,11 @@ def _quick_section_geometry(box):
         ne_top = int(top_n2) if (not by_spacing and int(nl_top) > 1) else None
         bot_has_bars = int(nb_bot) > 0 or (ne_bot is not None and ne_bot > 0)
         top_has_bars = int(nb_top) > 0 or (ne_top is not None and ne_top > 0)
-        if shape not in {"T-section", "I-section"} and bot_has_bars and bot_w < 0.0:
+        if (not slab_unit_spacing and shape not in {"T-section", "I-section"}
+                and bot_has_bars and bot_w < 0.0):
             raise engineer_messages.EngineerValidationError(_QUICK_BOTTOM_COVER)
-        if shape not in {"T-section", "I-section"} and top_has_bars and top_w < 0.0:
+        if (not slab_unit_spacing and shape not in {"T-section", "I-section"}
+                and top_has_bars and top_w < 0.0):
             raise engineer_messages.EngineerValidationError(_QUICK_TOP_COVER)
         layer_s = _seeded_number(
             box, "Layer spacing (mm)", 10.0, 1000.0, 60.0, 5.0, "layer_s",
@@ -4761,7 +4847,26 @@ def _quick_section_geometry(box):
                     )
                 return -row_width / 2 + top_e, row_width / 2 - top_e
 
-        if shape == "Box girder":
+        if slab_unit_spacing:
+            bot_group = templates.unit_width_bar_layers(
+                -h / 2 + bot_e,
+                1.0,
+                int(nl_bot),
+                layer_s,
+                1.0,
+                s_bot,
+                rd_bot,
+            )
+            top_group = templates.unit_width_bar_layers(
+                h / 2 - top_e,
+                -1.0,
+                int(nl_top),
+                layer_s,
+                1.0,
+                s_top,
+                rd_top,
+            )
+        elif shape == "Box girder":
             # A box girder's rows split into the side walls once they rise into the
             # hollow, so multi-layer reinforcement keeps its count in the webs.
             bot_group = templates.box_layers(-h / 2 + bot_e, 1.0, int(nl_bot), layer_s,
@@ -4779,19 +4884,41 @@ def _quick_section_geometry(box):
                                              -width_b / 2 + top_e, width_b / 2 - top_e,
                                              int(nb_top), rd_top, span_at=top_span_at,
                                              n_at=n_at_top, n_extra=ne_top)
-        groups = [bot_group, top_group]
-        for grp, off_d in ((bot_group, bot_off_d), (top_group, top_off_d)):
+        groups = [(bot_group, rd_bot), (top_group, rd_top)]
+        face_groups = (
+            (bot_group, bot_off_d, -h / 2 + bot_e, 1.0, int(nl_bot), s_bot),
+            (top_group, top_off_d, h / 2 - top_e, -1.0, int(nl_top), s_top),
+        )
+        for grp, off_d, y_face, direction, layers, face_spacing in face_groups:
             if off_d <= 0.0:
                 continue
-            inter = _qs_interleave(grp, off_d)
+            if slab_unit_spacing:
+                inter = templates.unit_width_bar_layers(
+                    y_face,
+                    direction,
+                    layers,
+                    layer_s,
+                    1.0,
+                    face_spacing,
+                    off_d,
+                    phase=0.75,
+                )
+            else:
+                inter = _qs_interleave(grp, off_d)
             # A row split across a void leaves a gap whose midpoint is not concrete.
             # Filter universally: it is cheap, and also guards concave outlines.
             if inter:
                 ok = geometry.points_inside_concrete(
                     [(x, y) for x, y, _a in inter], outer, holes)
                 inter = [p for p, good in zip(inter, ok) if good]
-            groups.append(inter)
-        bars = templates.merge_bars(*groups)
+            groups.append((inter, off_d))
+        bars = templates.merge_bars(*(group for group, _diameter in groups))
+        if slab_unit_spacing:
+            slab_bar_diameters = [
+                float(diameter)
+                for group, diameter in groups
+                for _point in group
+            ]
 
     box.markdown("**Prestressing tendons**")
     nt = _seeded_number(box, "Tendons", 0, 200, 0, 1, "tnd_n",
@@ -4849,7 +4976,7 @@ def _quick_section_geometry(box):
             raise engineer_messages.EngineerValidationError(
                 _QUICK_REINFORCEMENT_PLACEMENT
             )
-    return outer, (holes or []), bars, tendons
+    return outer, (holes or []), bars, tendons, slab_bar_diameters
 
 
 @st.fragment
@@ -4877,10 +5004,10 @@ def _quick_section_viewport():
 
     form, preview = st.columns([2, 3])
     generation_error = None
-    outer, holes, bars, tendons = [], [], [], []
+    outer, holes, bars, tendons, bar_diameters = [], [], [], [], None
     with form:
         try:
-            outer, holes, bars, tendons = _quick_section_geometry(st)
+            outer, holes, bars, tendons, bar_diameters = _quick_section_geometry(st)
         except Exception as exc:
             generation_error = engineer_messages.error_detail(
                 exc,
@@ -4909,8 +5036,18 @@ def _quick_section_viewport():
                                        title="Preview", show_labels=True, height=560,
                                        scale=_MM, unit="mm"),
                     width="stretch")
-                st.caption(f"{len(outer)} concrete corners, {len(holes)} void(s), "
-                           f"{len(bars)} bars, {len(tendons)} tendons.")
+                if bar_diameters is None:
+                    bar_summary = f"{len(bars)} bars"
+                else:
+                    equivalents = sum(
+                        float(point[2]) / templates.bar_area(float(diameter))
+                        for point, diameter in zip(bars, bar_diameters)
+                    )
+                    bar_summary = f"{equivalents:.3f} bar-equivalents/m"
+                st.caption(
+                    f"{len(outer)} concrete corners, {len(holes)} void(s), "
+                    f"{bar_summary}, {len(tendons)} tendons."
+                )
     finally:
         app_run_probe.stop_phase(st.session_state, preview_token)
 
@@ -4936,7 +5073,8 @@ def _quick_section_viewport():
         _reseed_table("bars_base", "ed_bars", _rebar_df(_pts_to_mm(
             [(float(p[0]), float(p[1]), float(p[2])) for p in bars]),
             "bar", size_mode=rebar_table.DIAMETER_MODE,
-            material_id=mild_material_id))
+            material_id=mild_material_id,
+            diameters_mm=bar_diameters))
         _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
             [(float(p[0]), float(p[1]), float(p[2])) for p in tendons]),
             "tendon", size_mode=rebar_table.AREA_MODE,

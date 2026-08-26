@@ -703,6 +703,12 @@ def test_shared_link_authorities_must_be_serialized_booleans(key, invalid):
             "T-section",
             {"qsv_t_orientation": "Flange at bottom"},
         ),
+        (
+            "Slab strip",
+            {"qsv_qs_rebar_mode": "By spacing", "qsv_bot_s": 200.0,
+             "qsv_top_s": 250.0, "qsv_bot_c_mm": 45.0,
+             "qsv_top_c_mm": 55.0},
+        ),
     ],
 )
 def test_expanded_quick_section_settings_round_trip(shape, settings):

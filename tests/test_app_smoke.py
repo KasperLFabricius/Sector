@@ -2795,8 +2795,11 @@ def test_quick_section_separate_upper_layer_bar_count():
 
 
 def test_quick_section_builder_places_bars_by_spacing():
-    # The builder opens full-width, places slab bars at a target spacing, and Apply
-    # writes the generated points into the tables (which then analyse).
+    # A non-divisible slab spacing uses representative points whose total area is
+    # the exact per-metre density, not seven full bars on a covered finite face.
+    import reinforcement_table as rt
+    from sector.templates import bar_area
+
     at = _fresh_qs()
     assert any(b.key == "qs_apply" for b in at.button)    # the builder is showing
     at.selectbox(key="shape").set_value("Slab strip").run()
@@ -2808,10 +2811,133 @@ def test_quick_section_builder_places_bars_by_spacing():
         ("number_input", "top_s", 150.0),
     )
     assert not at.exception
-    # 1 m slab, 50 mm cover -> a 0.9 m face at 150 mm gives 7 bars per row (14 total).
+    # Seven points represent 1000/150 bar-equivalents on each face, rather than
+    # the old 0.9 m finite-face placement of seven complete bars.
     assert len(at.session_state["bars_base"]) == 14
+    bars = at.session_state["bars_base"]
+    assert set(bars[rt.SIZE_MODE]) == {rt.INDEPENDENT_MODE}
+    assert bars[rt.DIAMETER].tolist() == pytest.approx([20.0] * 14)
+    by_face = bars.groupby(rt.Y)[rt.AREA].sum().tolist()
+    assert by_face == pytest.approx([bar_area(20.0) / 0.15] * 2)
+    assert max(by_face) < 7.0 * bar_area(20.0)
     _calculate(at)
     assert not at.exception
+
+
+def test_slab_t20_at_200_renders_five_equivalents_and_matches_five_entered_bars():
+    import reinforcement_table as rt
+    from sector.templates import bar_area
+
+    spaced = _fresh_qs()
+    spaced.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        spaced,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_s", 200.0),
+        ("number_input", "top_s", 200.0),
+        ("number_input", "bot_c_mm", 45.0),
+        ("number_input", "top_c_mm", 55.0),
+    )
+
+    placement = spaced.radio(key="qs_rebar_mode")
+    assert "reinforcement area per metre" in placement.help
+    assert spaced.number_input(key="bot_s").label == "Bottom spacing (mm)"
+    assert "calculate reinforcement area per metre" in spaced.number_input(
+        key="bot_s"
+    ).help
+    assert any(
+        "Slab-strip spacing defines reinforcement area per metre" in item.value
+        for item in spaced.info
+    )
+    density_captions = [
+        item.value for item in spaced.caption if "bar-equivalents/m" in item.value
+    ]
+    assert density_captions == [
+        "5.000 bar-equivalents/m per layer; Aₛ = 1,570.796 mm²/m per layer.",
+        "5.000 bar-equivalents/m per layer; Aₛ = 1,570.796 mm²/m per layer.",
+        "4 concrete corners, 0 void(s), 10.000 bar-equivalents/m, 0 tendons.",
+    ]
+
+    preview = next(
+        json.loads(chart.proto.spec)
+        for chart in spaced.get("plotly_chart")
+        if any(
+            trace.get("name") == "reinforcing bar"
+            for trace in json.loads(chart.proto.spec).get("data", [])
+        )
+    )
+    marker_trace = next(
+        trace for trace in preview["data"] if trace.get("name") == "reinforcing bar"
+    )
+    assert sorted(set(marker_trace["x"])) == pytest.approx(
+        [-400.0, -200.0, 0.0, 200.0, 400.0]
+    )
+    assert sorted(set(marker_trace["y"])) == pytest.approx([-105.0, 95.0])
+
+    _apply_qs(spaced)
+    assert not spaced.exception
+    spacing_bars = spaced.session_state["bars_base"]
+    assert len(spacing_bars) == 10
+    assert set(spacing_bars[rt.SIZE_MODE]) == {rt.INDEPENDENT_MODE}
+    assert spacing_bars[rt.DIAMETER].tolist() == pytest.approx([20.0] * 10)
+    spacing_areas = sorted(spacing_bars.groupby(rt.Y)[rt.AREA].sum())
+    assert spacing_areas == pytest.approx([1570.7963267948965] * 2)
+    _calculate(spaced)
+    spaced_capacity = spaced.session_state["results"]["plastic"]["max_mx"]
+
+    entered = _fresh_qs()
+    entered.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        entered,
+        ("number_input", "bot_n", 5),
+        ("number_input", "top_n", 5),
+        ("number_input", "bot_c_mm", 45.0),
+        ("number_input", "top_c_mm", 55.0),
+    )
+    _apply_qs(entered)
+    entered_bars = entered.session_state["bars_base"]
+    assert len(entered_bars) == 10
+    assert sorted(entered_bars.groupby(rt.Y)[rt.AREA].sum()) == pytest.approx(
+        [5.0 * bar_area(20.0)] * 2
+    )
+    _calculate(entered)
+    assert entered.session_state["results"]["plastic"]["max_mx"] == pytest.approx(
+        spaced_capacity
+    )
+
+
+def test_finite_face_spacing_displays_count_and_actual_spacing_at_width_boundaries():
+    at = _fresh_qs()
+    _set(at, ("radio", "qs_rebar_mode", "By spacing"))
+
+    placement = at.radio(key="qs_rebar_mode")
+    assert "maximum centre-to-centre gap" in placement.help
+    bottom_spacing = at.number_input(key="bot_s")
+    assert bottom_spacing.label == "Bottom maximum spacing (mm)"
+    assert "actual spacing smaller" in bottom_spacing.help
+    exact_captions = [
+        item.value for item in at.caption if "actual c/c spacing" in item.value
+    ]
+    assert exact_captions == [
+        "Face row: 3 bars; actual c/c spacing = 150.0 mm.",
+        "Face row: 3 bars; actual c/c spacing = 150.0 mm.",
+    ]
+
+    _set(at, ("number_input", "b_mm", 600.0))
+    non_divisible_captions = [
+        item.value for item in at.caption if "actual c/c spacing" in item.value
+    ]
+    assert non_divisible_captions == [
+        "Face row: 5 bars; actual c/c spacing = 125.0 mm.",
+        "Face row: 5 bars; actual c/c spacing = 125.0 mm.",
+    ]
+
+    _apply_qs(at)
+    bars = at.session_state["bars_base"]
+    for _y, face in bars.groupby("y (mm)"):
+        xs = sorted(float(value) for value in face["x (mm)"])
+        assert xs == pytest.approx([-250.0, -125.0, 0.0, 125.0, 250.0])
+        assert max(right - left for left, right in zip(xs, xs[1:])) <= 150.0
 
 
 def test_quick_section_builder_stacks_multiple_bar_layers():
