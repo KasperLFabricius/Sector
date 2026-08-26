@@ -34,7 +34,7 @@ MM2_TO_M2 = 1.0e-6
 def finite_action(value: object, label: str) -> float:
     """Return one finite solver action or reject it before analysis starts."""
 
-    if isinstance(value, bool):
+    if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{label} must be a finite number")
     try:
         number = float(value)

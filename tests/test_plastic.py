@@ -572,9 +572,11 @@ def test_plastic_capacity_rejects_material_for_empty_element_family(
     (
         (float("nan"), 90.0),
         (0.0, float("inf")),
+        (np.bool_(True), 90.0),
+        (0.0, np.bool_(False)),
     ),
 )
-def test_nonfinite_actions_are_rejected_before_plastic_iteration(
+def test_invalid_actions_are_rejected_before_plastic_iteration(
     monkeypatch,
     P,
     V_deg,

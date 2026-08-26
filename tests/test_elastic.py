@@ -136,9 +136,10 @@ def test_solver_converges_quickly():
         (float("nan"), 0.0, 0.0),
         (0.0, float("inf"), 0.0),
         (0.0, 0.0, -float("inf")),
+        (np.bool_(True), 0.0, 0.0),
     ),
 )
-def test_nonfinite_actions_are_rejected_before_elastic_iteration(
+def test_invalid_actions_are_rejected_before_elastic_iteration(
     monkeypatch,
     P,
     Mx,
