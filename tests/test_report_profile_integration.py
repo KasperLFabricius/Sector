@@ -1014,8 +1014,8 @@ def test_every_profile_retains_governing_statuses_and_engineering_values():
         "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
         "Crack width - Short-term EL-QA-1 "
         "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
-        "Torsion PL-QA-1 FAIL 162.7 %",
-        "Combined M-V-T - DK NA sum PL-QA-1 FAIL 266.2 %",
+        "Torsion PL-QA-1 FAIL 163.4 %",
+        "Combined M-V-T - DK NA sum PL-QA-1 FAIL 270.5 %",
         "Fatigue Road traffic PASS 46.1 %",
     )
     for profile in ("Brief", "Standard", "Audit"):

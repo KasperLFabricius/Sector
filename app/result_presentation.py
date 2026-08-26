@@ -2112,6 +2112,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 status = (
                     "NOT ASSESSED"
                     if not direction.get("valid")
+                    or direction.get("dkna_valid", direction.get("valid")) is not True
                     else "PASS" if direction.get("dkna_ok") else "FAIL"
                 )
                 rows.append(_summary_row(
@@ -2122,7 +2123,23 @@ def result_summary_rows(inp, results, *, stale=False):
                     "<= 100 %",
                     util,
                     "M-V-T Combined",
-                    str(direction.get("method") or ""),
+                    (
+                        (
+                            (str(direction.get("method") or "") + "; ")
+                            if direction.get("method")
+                            else ""
+                        )
+                        + (
+                            "internal cross-section resistance check; does not "
+                            "replace a separate Annex F member and detailing "
+                            "assessment where applicable"
+                        )
+                        if status != "NOT ASSESSED"
+                        else str(
+                            direction.get("dkna_reason")
+                            or "Action-alone resistance unavailable"
+                        )
+                    ),
                     inp,
                     overview_key="combined:dkna_sum",
                 ))
@@ -2159,6 +2176,7 @@ def result_summary_rows(inp, results, *, stale=False):
                         row["note"] = f"Last status: {previous}; inputs changed"
             return rows
         valid = bool(combined.get("valid"))
+        dkna_valid = combined.get("dkna_valid", valid) is True
         util = combined.get("dkna_sum")
         missing = [
             label
@@ -2169,8 +2187,21 @@ def result_summary_rows(inp, results, *, stale=False):
             )
             if key in combined and not combined.get(key)
         ]
-        if valid:
-            combined_note = str(combined.get("method") or "")
+        if valid and dkna_valid:
+            method_note = str(combined.get("method") or "")
+            combined_note = (
+                (method_note + "; ") if method_note else ""
+            ) + (
+                "internal cross-section resistance check; does not replace a "
+                "separate Annex F member and detailing assessment where applicable"
+            )
+        elif valid:
+            combined_note = result_reason(
+                combined.get("dkna_reason")
+                or "An action-alone resistance could not be determined",
+                "combined",
+                context="combined action-alone result reason",
+            )
         elif missing:
             combined_note = "Missing prerequisite: " + ", ".join(missing)
             if combined.get("reason"):
@@ -2187,10 +2218,10 @@ def result_summary_rows(inp, results, *, stale=False):
             )
         combined_status = (
             "NOT ASSESSED"
-            if not valid and missing
+            if (not valid and missing) or (valid and not dkna_valid)
             else _util_summary_status(
                 util,
-                valid=valid,
+                valid=valid and dkna_valid,
             )
         )
         rows.append(_summary_row(

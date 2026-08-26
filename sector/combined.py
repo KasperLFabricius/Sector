@@ -13,9 +13,7 @@ Two interaction rules are provided:
   acting sectional forces, each ``SRd`` the resistance to that force acting alone.
   When the longitudinal reinforcement provided for shear (beyond what bending needs)
   is present, ``M`` and ``V`` are not summed simultaneously; instead two independent
-  checks are made (``M`` with ``T``, and ``V`` with ``T``) and the governing one
-  taken. The axial force ``N`` is folded into the bending utilisation ``r_m`` (the
-  plastic M-M envelope is traced at the applied ``N``), so it is not summed again.
+  checks are made (``N + M + T`` and ``N + V + T``) and the governing one taken.
 """
 
 from __future__ import annotations
@@ -64,20 +62,50 @@ class GoverningStrutResult:
 
 
 @dataclass(frozen=True, slots=True)
-class DknaInteractionResult:
-    """Retained DK NA component ratios, inclusion rule and governing chord."""
+class DknaActionTerm:
+    """One retained ``SEd/SRd`` term for DK NA 6.3.2(6).
 
-    r_m: float
-    r_v: float
-    r_t: float
-    m_plus_t: float
-    v_plus_t: float
-    all_sum: float
+    ``demand`` retains the entered sign while ``demand_abs`` is the magnitude used
+    by the interaction.  An exactly zero action is inactive and therefore does not
+    require a resistance.  An acting term without a finite positive action-alone
+    resistance is retained as invalid instead of being turned into a finite ratio.
+    """
+
+    symbol: str
+    demand: float | None
+    demand_abs: float | None
+    resistance: float | None
+    ratio: float | None
+    active: bool
+    valid: bool
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class DknaInteractionResult:
+    """Retained action-alone terms, inclusion rule and governing branch."""
+
+    n: DknaActionTerm
+    m: DknaActionTerm
+    v: DknaActionTerm
+    t: DknaActionTerm
+
+    r_n: float | None
+    r_m: float | None
+    r_v: float | None
+    r_t: float | None
+    m_plus_t: float | None
+    v_plus_t: float | None
+    all_sum: float | None
+    n_m_plus_t: float | None
+    n_v_plus_t: float | None
     m_v_independent: bool
     inclusion_rule: str
-    governing_chord: str
-    utilisation: float
-    ok: bool
+    governing_chord: str | None
+    utilisation: float | None
+    valid: bool
+    reason: str | None
+    ok: bool | None
 
 
 def ratio(demand: float, resistance: float) -> float:
@@ -264,53 +292,226 @@ def longitudinal_check(
                 status="PASS" if util <= 1.0 + 1e-9 else "FAIL")
 
 
-def dkna_interaction_result(
-    r_m: float, r_v: float, r_t: float, *, m_v_independent: bool
-) -> DknaInteractionResult:
-    """Return the retained component sums and final DK NA inclusion branch."""
+def _dkna_number(value) -> float | None:
+    """Return one finite non-Boolean real, or ``None`` when it is malformed."""
 
-    m_plus_t = r_m + r_t
-    v_plus_t = r_v + r_t
-    all_sum = r_m + r_v + r_t
+    if isinstance(value, (bool, np.bool_, str, bytes)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def dkna_action_term(
+    symbol: str,
+    demand,
+    resistance,
+) -> DknaActionTerm:
+    """Build one fail-closed action-alone interaction term."""
+
+    demand_value = _dkna_number(demand)
+    if demand_value is None:
+        return DknaActionTerm(
+            symbol=symbol,
+            demand=None,
+            demand_abs=None,
+            resistance=None,
+            ratio=None,
+            active=True,
+            valid=False,
+            reason=f"{symbol}Ed is not a finite action",
+        )
+    demand_abs = abs(demand_value)
+    if demand_abs == 0.0:
+        resistance_value = _dkna_number(resistance)
+        return DknaActionTerm(
+            symbol=symbol,
+            demand=demand_value,
+            demand_abs=0.0,
+            resistance=(
+                resistance_value
+                if resistance_value is not None and resistance_value > 0.0
+                else None
+            ),
+            ratio=0.0,
+            active=False,
+            valid=True,
+            reason=None,
+        )
+    resistance_value = _dkna_number(resistance)
+    if resistance_value is None or resistance_value <= 0.0:
+        return DknaActionTerm(
+            symbol=symbol,
+            demand=demand_value,
+            demand_abs=demand_abs,
+            resistance=None,
+            ratio=None,
+            active=True,
+            valid=False,
+            reason=(
+                f"Resistance to {symbol}Ed acting alone could not be determined"
+            ),
+        )
+    ratio_value = demand_abs / resistance_value
+    if not math.isfinite(ratio_value):
+        return DknaActionTerm(
+            symbol=symbol,
+            demand=demand_value,
+            demand_abs=demand_abs,
+            resistance=resistance_value,
+            ratio=None,
+            active=True,
+            valid=False,
+            reason=(
+                f"Resistance ratio for {symbol}Ed acting alone could not be determined"
+            ),
+        )
+    return DknaActionTerm(
+        symbol=symbol,
+        demand=demand_value,
+        demand_abs=demand_abs,
+        resistance=resistance_value,
+        ratio=ratio_value,
+        active=True,
+        valid=True,
+        reason=None,
+    )
+
+
+def dkna_interaction_result(
+    n_ed,
+    n_rd,
+    m_ed,
+    m_rd,
+    v_ed,
+    v_rd,
+    t_ed,
+    t_rd,
+    *,
+    m_v_independent: bool,
+) -> DknaInteractionResult:
+    """Apply DK NA 6.3.2(6) to action-alone demands and resistances.
+
+    ``N`` retains its tension-positive sign for evidence; every ratio uses the
+    magnitude of the matching action and its resistance in that same direction.
+    The optional M/V separation is permitted only when the caller has established
+    the stated longitudinal-reinforcement condition.  It produces two complete
+    checks, ``N+M+T`` and ``N+V+T``.
+    """
+
+    if type(m_v_independent) is not bool:
+        raise TypeError("m_v_independent must be a Boolean")
+    n = dkna_action_term("N", n_ed, n_rd)
+    m = dkna_action_term("M", m_ed, m_rd)
+    v = dkna_action_term("V", v_ed, v_rd)
+    t = dkna_action_term("T", t_ed, t_rd)
+    terms = (n, m, v, t)
+    valid = all(term.valid for term in terms)
+    r_n, r_m, r_v, r_t = (term.ratio for term in terms)
+    if not valid:
+        reason = next(term.reason for term in terms if not term.valid)
+        return DknaInteractionResult(
+            n=n,
+            m=m,
+            v=v,
+            t=t,
+            r_n=r_n,
+            r_m=r_m,
+            r_v=r_v,
+            r_t=r_t,
+            m_plus_t=None,
+            v_plus_t=None,
+            all_sum=None,
+            n_m_plus_t=None,
+            n_v_plus_t=None,
+            m_v_independent=m_v_independent,
+            inclusion_rule=(
+                "N, M, V and T assessed from their action-alone resistances"
+            ),
+            governing_chord=None,
+            utilisation=None,
+            valid=False,
+            reason=reason,
+            ok=None,
+        )
+
+    # The preceding validity check proves every retained ratio is a float.
+    r_n_f, r_m_f, r_v_f, r_t_f = (
+        float(r_n),
+        float(r_m),
+        float(r_v),
+        float(r_t),
+    )
+    m_plus_t = r_m_f + r_t_f
+    v_plus_t = r_v_f + r_t_f
+    all_sum = r_n_f + r_m_f + r_v_f + r_t_f
+    n_m_plus_t = r_n_f + m_plus_t
+    n_v_plus_t = r_n_f + v_plus_t
     if m_v_independent:
-        if m_plus_t >= v_plus_t:
-            utilisation = m_plus_t
-            governing = "M+T"
+        if n_m_plus_t >= n_v_plus_t:
+            utilisation = n_m_plus_t
+            governing = "N+M+T"
         else:
-            utilisation = v_plus_t
-            governing = "V+T"
-        inclusion_rule = "M and V assessed independently; torsion included in both"
+            utilisation = n_v_plus_t
+            governing = "N+V+T"
+        inclusion_rule = (
+            "N and T included in both independent M and V assessments"
+        )
     else:
         utilisation = all_sum
-        governing = "M+V+T"
-        inclusion_rule = "M, V and T summed"
+        governing = "N+M+V+T"
+        inclusion_rule = "N, M, V and T summed"
     return DknaInteractionResult(
-        r_m=r_m,
-        r_v=r_v,
-        r_t=r_t,
+        n=n,
+        m=m,
+        v=v,
+        t=t,
+        r_n=r_n_f,
+        r_m=r_m_f,
+        r_v=r_v_f,
+        r_t=r_t_f,
         m_plus_t=m_plus_t,
         v_plus_t=v_plus_t,
         all_sum=all_sum,
+        n_m_plus_t=n_m_plus_t,
+        n_v_plus_t=n_v_plus_t,
         m_v_independent=m_v_independent,
         inclusion_rule=inclusion_rule,
         governing_chord=governing,
         utilisation=utilisation,
+        valid=True,
+        reason=None,
         ok=utilisation <= 1.0 + 1e-9,
     )
 
 
-def dkna_sum(r_m: float, r_v: float, r_t: float, *, m_v_independent: bool) -> float:
-    """DK NA:2024 6.3.2(6) ``sum(SEd/SRd)``, the governing value.
+def dkna_sum(
+    r_m: float,
+    r_v: float,
+    r_t: float,
+    *,
+    r_n: float = 0.0,
+    m_v_independent: bool,
+) -> float:
+    """Ratio-only convenience for DK NA 6.3.2(6).
 
-    ``r_m`` / ``r_v`` / ``r_t`` are the bending / shear / torsion utilisations (each
-    the demand over the resistance to that action alone; ``N`` is folded into
-    ``r_m``). With ``m_v_independent`` the bending and shear terms are not added
-    together -- the governing of ``(r_m + r_t)`` and ``(r_v + r_t)`` is returned --
-    otherwise all three are summed.
+    Production calculation uses :func:`dkna_interaction_result` so every operand
+    and action-alone resistance is retained.  This helper remains useful for
+    deterministic formula comparisons where the four validated ratios are already
+    known.
     """
-    return dkna_interaction_result(
-        r_m, r_v, r_t, m_v_independent=m_v_independent
-    ).utilisation
+
+    if type(m_v_independent) is not bool:
+        raise TypeError("m_v_independent must be a Boolean")
+    ratios = tuple(_dkna_number(value) for value in (r_n, r_m, r_v, r_t))
+    if any(value is None or value < 0.0 for value in ratios):
+        raise ValueError("DK NA component ratios must be finite and non-negative")
+    r_n_f, r_m_f, r_v_f, r_t_f = (float(value) for value in ratios)
+    if m_v_independent:
+        return r_n_f + max(r_m_f + r_t_f, r_v_f + r_t_f)
+    return r_n_f + r_m_f + r_v_f + r_t_f
 
 
 @dataclass(frozen=True, slots=True)

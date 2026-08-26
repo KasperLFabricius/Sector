@@ -6881,11 +6881,12 @@ def build_inputs(host=st):
         help="The single code edition used for the shear and torsion checks while "
              "Combined is on (their own method selectors are locked to this).")
     combined_mv_independent = _seeded_checkbox(
-        sts, r"Shear longitudinal steel provided ($M$ and $V$ separate)", False,
+        sts, r"Confirm additional shear longitudinal steel ($M$ and $V$ separate)", False,
         "combined_mv_independent", disabled=not combined_on,
-        help="DK NA 6.3.2(6): when the longitudinal steel for shear (beyond bending) "
-             r"is present, $M$ and $V$ are not summed in $\sum(S_{Ed}/S_{Rd})$; "
-             r"$M+T$ and $V+T$ are checked independently and the governing value is used.")
+        help="DK NA 6.3.2(6): confirm only when the longitudinal reinforcement "
+             "used for shear, in addition to that required for bending, is present. "
+             r"Sector then checks $N+M+T$ and $N+V+T$ independently and uses the "
+             "governing value.")
     # Filled at the end of this block (once the shear/torsion toggles below are
     # known) with any missing combined-check prerequisites -- so the user sees them
     # here, right under the toggle, instead of only after Calculate.
@@ -10000,17 +10001,6 @@ def _run_uniaxial_capacity_checks(inp, out):
                         f["m_ed"], f["m_rd"], 0.0, _ftd_t_at(c), f["z_m"]
                     )["util"],
                 )
-        if (inp.get("combined_on") and pl is not None and pl.get("util") is not None
-                and math.isfinite(pl["util"])
-                and links_valid and tors_valid and (shear_live or tors_live)):
-            _mv_ind = bool(inp["combined_mv_independent"])
-
-            def _dkna(c, r_m=pl["util"]):
-                r_v = combined.ratio(v_ed_s, _snap(c)["lk"]["vrd"])
-                r_t = max(s["util"] for s in _snap(c)["subs"])
-                return combined.dkna_sum(r_m, r_v, r_t, m_v_independent=_mv_ind)
-            _add_angle_objective("DK NA governing interaction", _dkna)
-
         cot_star = None
         member_angle_selection = None
         if band is not None and utils:
@@ -10496,18 +10486,26 @@ def _run_capacity_checks(inp, out):
     shear-torsion implementation. If both components are present, both directional
     results are retained with no aggregate cross-direction verdict.
     """
+    prepared_inp = inp
+    if inp.get("combined_on"):
+        prepared_inp = dict(
+            inp,
+            _dkna_nm_action_alone=capacity.dkna_normal_bending_action_alone(inp),
+        )
     directional_contract = (
-        "shear_Vx" in inp or "shear_Vy" in inp or "shear_components" in inp
+        "shear_Vx" in prepared_inp
+        or "shear_Vy" in prepared_inp
+        or "shear_components" in prepared_inp
     )
     if not directional_contract:
-        _run_uniaxial_capacity_checks(inp, out)
+        _run_uniaxial_capacity_checks(prepared_inp, out)
         return
 
-    specs = capacity.shear_direction_specs(inp)
+    specs = capacity.shear_direction_specs(prepared_inp)
     active = [component for component in ("vx", "vy")
-              if inp.get("shear_on") and specs[component]["v_ed"] > 0.0]
+              if prepared_inp.get("shear_on") and specs[component]["v_ed"] > 0.0]
     if not active:
-        base = dict(inp, shear_on=False, combined_on=False)
+        base = dict(prepared_inp, shear_on=False, combined_on=False)
         _run_uniaxial_capacity_checks(base, out)
         return
 
@@ -10518,7 +10516,9 @@ def _run_capacity_checks(inp, out):
         faces = capacity.shear_face_candidates(spec["face"], spec["moment"])
         candidates = []
         for tension_low in faces:
-            candidate_inp = _direction_input(inp, component, tension_low, spec)
+            candidate_inp = _direction_input(
+                prepared_inp, component, tension_low, spec
+            )
             candidate_out = {
                 key: value for key, value in out.items()
                 if key in {"plastic", "elastic"}
@@ -14347,6 +14347,7 @@ def combined_view(inp, results):
             rows.append({
                 "Directional screen": "Vx,Ed + TEd" if component == "vx"
                 else "Vy,Ed + TEd",
+                "Axial util.": item.get("r_n"),
                 "Bending util.": item.get("r_m"),
                 "Shear util.": item.get("r_v"),
                 "Torsion util.": item.get("r_t"),
@@ -14356,7 +14357,8 @@ def combined_view(inp, results):
                 ),
                 f"cot {_THETA}": item.get("governing_cot"),
                 "DK NA sum status": (
-                    "NOT ASSESSED" if not item.get("valid")
+                    "NOT ASSESSED"
+                    if not item.get("valid") or not item.get("dkna_valid")
                     else "PASS" if item.get("dkna_ok") else "FAIL"
                 ),
             })
@@ -14424,27 +14426,79 @@ def combined_view(inp, results):
             "method's default range. The actual values are used in every "
             "combined calculation.",
         )
-    m1, m2, m3 = st.columns(3)
-    m1.metric(r"Bending $M$", _pct(c["r_m"]))
-    m2.metric(r"Shear $V$", _pct(c["r_v"]))
-    m3.metric(r"Torsion $T$", _pct(c["r_t"]))
-    st.caption(r"Each is the action's utilisation acting alone ($M$ is the plastic "
-               r"$M$-$M$ envelope at the applied $N$; $V$ and $T$ are the shear "
-               "and torsion checks).")
+    action_alone = c.get("action_alone") or {}
+
+    def _action_help(key, unit):
+        action = action_alone.get(key) or {}
+        demand = action.get("demand")
+        resistance = action.get("resistance")
+        if demand is None or resistance is None:
+            return "The matching action-alone resistance is not available."
+        return (
+            f"SEd = {float(demand):.3f} {unit}; "
+            f"SRd = {float(resistance):.3f} {unit}, with the other external "
+            "section actions set to zero."
+        )
+
+    action_boxes = st.columns(4)
+    for box, label, key, unit in zip(
+        action_boxes,
+        (r"Axial $N$", r"Bending $M$", r"Shear $V$", r"Torsion $T$"),
+        ("n", "m", "v", "t"),
+        ("kN", "kNm", "kN", "kNm"),
+    ):
+        box.metric(label, _pct(c.get(f"r_{key}")), help=_action_help(key, unit))
+    st.caption(
+        "DK NA 6.3.2(6): each ratio uses the resistance to that sectional "
+        "action acting alone. N retains its entered tension/compression sign; "
+        "the M resistance follows the entered biaxial moment direction."
+    )
+    st.caption(
+        "This is an internal cross-section resistance check. It does not replace "
+        "a separate member and detailing assessment under Annex F where that "
+        "assessment applies."
+    )
 
     st.divider()
     st.markdown(r"**DK NA 6.3.2(6): $\sum(S_{Ed}/S_{Rd})\leq1$**")
-    ok = c["dkna_ok"]
     d1, d2 = st.columns([1, 2])
-    _verdict_metric(d1, r"$\sum(S_{Ed}/S_{Rd})$", _pct(c["dkna_sum"]), ok)
-    if c["m_v_independent"]:
-        d2.caption("M and V are checked separately (shear longitudinal steel "
-                   "provided): sum = max(M+T, V+T). N is folded into the bending "
-                   "utilisation.")
+    if not c.get("dkna_valid"):
+        d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", "-")
+        d1.caption("NOT ASSESSED")
+        d2.caption(
+            "No DK NA verdict is given because one or more matching action-alone "
+            "resistances could not be determined."
+        )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The DK NA combined interaction is NOT ASSESSED. Check the section, "
+            "materials and complete Plastic bending sweep, then recalculate.",
+        )
+    elif c["m_v_independent"]:
+        _verdict_metric(
+            d1,
+            r"$\sum(S_{Ed}/S_{Rd})$",
+            _pct(c["dkna_sum"]),
+            c["dkna_ok"],
+        )
+        d2.caption(
+            "The additional shear longitudinal reinforcement is confirmed: "
+            "N + M + T and N + V + T are checked independently; the governing "
+            "sum is used."
+        )
     else:
-        d2.caption("sum = M + V + T (each alone; N folded into the bending "
-                   "utilisation). Turn on 'M & V separate' if the shear longitudinal "
-                   "steel beyond bending is provided (then sum = max(M+T, V+T)).")
+        _verdict_metric(
+            d1,
+            r"$\sum(S_{Ed}/S_{Rd})$",
+            _pct(c["dkna_sum"]),
+            c["dkna_ok"],
+        )
+        d2.caption(
+            "sum = N + M + V + T, using each action-alone resistance. Confirm "
+            "the separate M/V route only when the additional longitudinal "
+            "reinforcement required for shear is present."
+        )
 
     st.markdown("**Physical resistance components**")
     component_boxes = st.columns(3)

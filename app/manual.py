@@ -1164,11 +1164,15 @@ def manual_blocks() -> list:
        "stirrup and governing longitudinal reinforcement. All three checks (Plastic, "
        "Shear, Torsion) must be enabled, and the row must have nonzero $V_{Ed}$ and "
        "$T_{Ed}$; otherwise the combined check is not applicable to that row.")
-    call("standard", "DK NA 6.3.2(6): $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ sums each "
-         "action's utilisation (the axial $N$ is folded into the bending term). If "
-         "the longitudinal steel for shear beyond bending is provided, tick **M & V "
-         "separate** -- then $M$ and $V$ are not summed together but checked in two "
-         "independent investigations, $\\max(M+T,\\,V+T)$.")
+    call("standard", "DK NA 6.3.2(6): $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ includes "
+         "$N$, $M$, $V$ and $T$, with every $S_{Rd}$ determined for that action "
+         "acting alone. If the longitudinal reinforcement used for shear, in "
+         "addition to what bending requires, is present, confirm **M & V "
+         "separate** -- Sector then checks $N+M+T$ and $N+V+T$ independently "
+         "and uses the governing value.")
+    call("limit", "This is an internal cross-section resistance check. It does "
+         "not replace a separate member and detailing assessment under Annex F "
+         "where that assessment applies.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
@@ -2053,16 +2057,21 @@ def manual_blocks() -> list:
        "checked at a common strut angle near 45 degrees. The DK NA:2024 (6.3.2(6)) "
        "adds a general rule over the acting sectional forces,\n\n"
        "$$\\sum (S_{Ed}/S_{Rd}) \\le 1,$$\n\n"
-       "each $S_{Rd}$ being the resistance to that force acting alone. Sector takes "
-       "the bending utilisation from the plastic $M$-$M$ envelope at the applied "
-       "$N$ (so $N$ is folded in), the shear from $V_{Ed}/V_{Rd}$ and the torsion "
-       "from $T_{Ed}/T_{Rd}$.")
+       "each $S_{Rd}$ being the resistance to that force acting alone. Sector "
+       "therefore determines a separate axial resistance for the entered tension "
+       "or compression sign, a zero-axial-force plastic $M$-$M$ resistance in the "
+       "entered biaxial moment direction, and shear and torsion resistances with "
+       "the other external sectional actions set to zero. Prestress remains part "
+       "of the section state.")
     call("standard", "DK NA 6.3.2(6): if the longitudinal reinforcement provided for "
          "shear (beyond bending) is present, $M$ and $V$ are **not** summed at the "
-         "same time -- two independent checks are made and the governing "
-         "$\\max(M+T,\\,V+T)$ taken. Torsion also needs its longitudinal steel "
+         "same time -- two independent checks are made and the governing of "
+         "$N+M+T$ and $N+V+T$ is taken. Torsion also needs its longitudinal steel "
          "$\\sum A_{sl}$ round the perimeter and the shear its $\\Delta F_{td}$ on "
          "the tension chord, both beyond the bending reinforcement.")
+    call("limit", "The combined result is an internal cross-section resistance "
+         "check. It does not replace a separate member and detailing assessment "
+         "under Annex F where that assessment applies.")
     md("The **longitudinal tension chord** collects all three demands: the bending "
        "tension, the shear shift $\\Delta F_{td}\\,z$ (6.18, capped per 6.2.3(7)) "
        "and half the distributed torsion force $F_{td,T}\\,z/2$ (6.28), as "
@@ -2092,9 +2101,10 @@ def manual_blocks() -> list:
          "utilisation** across every check that depends on it: as the strut "
          "flattens the stirrup demands ease while the crushing checks (6.9, 6.30) "
          "and the longitudinal-chord tension grow, so the optimum tracks the load "
-         "instead of sitting at a band edge. Each $S_{Rd}$ in DK NA 6.3.2(6) is "
-         "still the resistance to that action **acting alone** -- Sector only "
-         "reports them all at that shared angle. The user enters one admissible "
+         "instead of sitting at a band edge. That common angle governs the physical "
+         "shared-strut, stirrup and longitudinal-chord checks. It does **not** "
+         "condition the DK NA action-alone denominators, which are determined "
+         "separately. The user enters one admissible "
          "$\\cot\\theta$ range for the physical member under **Links / stirrups**. "
          "A capacity-only run with no live shear or torsion uses the resistance-"
          "optimising angle within that same range.")
