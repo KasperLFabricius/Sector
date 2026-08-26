@@ -3143,8 +3143,12 @@ def test_dkna_zero_n_and_m_do_not_enter_action_alone_plastic_solver(monkeypatch)
     assert actions["m"]["resistance"] is None
 
 
-def test_finalize_combined_discloses_missing_component():
-    inp = _member_input(combined_on=True)
+@pytest.mark.parametrize("independent_mv", [False, True], ids=["simultaneous", "separate"])
+def test_finalize_combined_discloses_missing_component(independent_mv):
+    inp = _member_input(
+        combined_on=True,
+        combined_mv_independent=independent_mv,
+    )
     out = {
         "plastic": {"util": 0.20},
         "shear": {"res": {"valid": True}, "util": 0.30},
@@ -3156,6 +3160,24 @@ def test_finalize_combined_discloses_missing_component():
         "have_v": True,
         "have_t": False,
         "method": inp["combined_method"],
+        "m_v_independent": independent_mv,
+        "m_v_separation_condition": {
+            "confirmed": False,
+            "declared": independent_mv,
+            "mechanically_verified": False,
+            "verification_state": (
+                "design assumption" if independent_mv else "not selected"
+            ),
+            "condition": (
+                "Additional longitudinal reinforcement required for shear "
+                "beyond that required for bending is provided"
+            ),
+            "limitation": (
+                "This section calculation does not verify the additional "
+                "reinforcement capacity, distribution or anchorage"
+            ),
+            "source_clause": "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)",
+        },
     }
 
 

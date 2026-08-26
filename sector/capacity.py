@@ -2017,6 +2017,27 @@ def finalize_combined(inp, out):
     if not inp.get("combined_on"):
         return
     selected_combined_code(inp.get("combined_method"))
+    independent_mv = _solver_flag(
+        inp["combined_mv_independent"],
+        "independent M/V longitudinal-reinforcement condition",
+    )
+    separation_condition = {
+        "confirmed": False,
+        "declared": independent_mv,
+        "mechanically_verified": False,
+        "verification_state": (
+            "design assumption" if independent_mv else "not selected"
+        ),
+        "condition": (
+            "Additional longitudinal reinforcement required for shear "
+            "beyond that required for bending is provided"
+        ),
+        "limitation": (
+            "This section calculation does not verify the additional "
+            "reinforcement capacity, distribution or anchorage"
+        ),
+        "source_clause": _DKNA_CLAUSE,
+    }
     plastic = out.get("plastic")
     shear_out = out.get("shear")
     torsion_out = out.get("torsion")
@@ -2048,6 +2069,8 @@ def finalize_combined(inp, out):
             "have_v": have_v,
             "have_t": have_t,
             "method": inp["combined_method"],
+            "m_v_independent": independent_mv,
+            "m_v_separation_condition": separation_condition,
         }
         if shear_reason is not None:
             payload["reason"] = shear_reason
@@ -2063,10 +2086,6 @@ def finalize_combined(inp, out):
     m_action = dict(retained_nm["m"])
     v_action = _dkna_shear_action_alone(inp)
     t_action = _dkna_torsion_action_alone(inp)
-    independent_mv = _solver_flag(
-        inp["combined_mv_independent"],
-        "independent M/V longitudinal-reinforcement condition",
-    )
     combined = _module("combined")
     dk_selection = combined.dkna_interaction_result(
         n_action["demand"],
@@ -2093,23 +2112,7 @@ def finalize_combined(inp, out):
         "r_v": dk_selection.r_v,
         "r_t": dk_selection.r_t,
         "m_v_independent": independent_mv,
-        "m_v_separation_condition": {
-            "confirmed": False,
-            "declared": independent_mv,
-            "mechanically_verified": False,
-            "verification_state": (
-                "design assumption" if independent_mv else "not selected"
-            ),
-            "condition": (
-                "Additional longitudinal reinforcement required for shear "
-                "beyond that required for bending is provided"
-            ),
-            "limitation": (
-                "This section calculation does not verify the additional "
-                "reinforcement capacity, distribution or anchorage"
-            ),
-            "source_clause": _DKNA_CLAUSE,
-        },
+        "m_v_separation_condition": separation_condition,
         "dkna_sum": dk_sum,
         "dkna_valid": dk_selection.valid,
         "dkna_reason": dk_selection.reason,

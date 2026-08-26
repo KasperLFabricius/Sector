@@ -1019,6 +1019,7 @@ def test_combined_summary_marks_missing_prerequisites_not_assessed():
         "have_v": False,
         "have_t": False,
         "method": "DK NA",
+        "m_v_independent": True,
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -1029,6 +1030,9 @@ def test_combined_summary_marks_missing_prerequisites_not_assessed():
     assert by_check["Combined M-V-T - DK NA sum"]["status"] == "NOT ASSESSED"
     assert by_check["Combined M-V-T - DK NA sum"]["note"] == (
         "Missing prerequisite: V, T"
+    )
+    assert presentation.combined_dkna_screen_label(combined) == (
+        "max(N+M+T, N+V+T)"
     )
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 

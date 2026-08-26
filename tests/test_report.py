@@ -6087,6 +6087,39 @@ def test_report_unavailable_action_alone_resistance_is_not_assessed():
     assert "complete Plastic bending sweep" in txt
 
 
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_unassessed_combined_retains_selected_separate_route(profile):
+    inp = _inp()
+    inp.update(
+        combined_on=True,
+        combined_mv_independent=True,
+        shear_on=True,
+        torsion_on=True,
+    )
+    out = _out()
+    out["combined"] = {
+        "valid": False,
+        "have_m": True,
+        "have_v": True,
+        "have_t": False,
+        "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "m_v_independent": True,
+        "biaxial": True,
+        "directions": {},
+    }
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "max(N+M+T, N+V+T)" in txt
+    assert "N+M+V+T" not in txt
+    assert "NOT ASSESSED" in txt
+
+
 def test_report_keeps_only_governing_biaxial_combined_worked_block():
     import io
 
