@@ -736,7 +736,7 @@ def _resolve_nominal_refinement_stage(
     prior_point_count = len(points)
     stage = _nominal_refinement_stage(points, radial, increment_deg)
     for window_count in range(1, _NOMINAL_MAX_REFINEMENT_WINDOWS_PER_STAGE + 1):
-        points = _refine_nominal_governing_window(
+        candidate_points = _refine_nominal_governing_window(
             section,
             concrete,
             reference,
@@ -746,6 +746,18 @@ def _resolve_nominal_refinement_stage(
             radial.governing_index,
             increment_deg,
         )
+        if len(candidate_points) > point_limit:
+            stage = _nominal_refinement_stage(points, radial, increment_deg)
+            stage["refinement_window_count"] = window_count
+            stage["resolution_achieved"] = False
+            return (
+                points,
+                radial,
+                stage,
+                "UNRESOLVED",
+                "nominal governing interval could not be refined consistently",
+            )
+        points = candidate_points
         radial = combined.radial_util_result(
             [point.Mx for point in points],
             [point.My for point in points],
@@ -764,15 +776,6 @@ def _resolve_nominal_refinement_stage(
             )
         if not radial.valid or radial.utilisation is None:
             return points, radial, stage, "INVALID", radial.reason
-        if len(points) > point_limit:
-            stage["resolution_achieved"] = False
-            return (
-                points,
-                radial,
-                stage,
-                "UNRESOLVED",
-                "nominal governing interval could not be refined consistently",
-            )
         if stage["resolution_achieved"]:
             return points, radial, stage, None, None
         if len(points) <= prior_point_count:

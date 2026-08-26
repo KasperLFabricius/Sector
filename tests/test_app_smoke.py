@@ -8026,10 +8026,10 @@ def test_core_m02_moved_direction_failure_renders_fail_closed_guidance():
             "model": "biaxial refined nominal envelope",
             "nominal_solution": {
                 "resolution_state": "UNRESOLVED",
-                "governing_increment_deg": 1.0,
-                "governing_target_increment_deg": 1.0,
+                "governing_increment_deg": 0.01,
+                "governing_target_increment_deg": 0.01,
                 "governing_interval_deg": 15.0,
-                "accepted_point_count": 24,
+                "accepted_point_count": 3080,
                 "all_points_converged": True,
                 "utilisation_lower_bound": None,
                 "utilisation_upper_bound": None,
@@ -8051,7 +8051,7 @@ def test_core_m02_moved_direction_failure_renders_fail_closed_guidance():
         for item in at.warning
     )
     assert any(
-        "achieved governing interval 15° for the 1° target" in str(item.value)
+        "achieved governing interval 15° for the 0.01° target" in str(item.value)
         and "separate assessment required" in str(item.value)
         for item in at.caption
     )
@@ -8061,6 +8061,8 @@ def test_core_m02_moved_direction_failure_renders_fail_closed_guidance():
         for item in collection
     )
     assert "4097" not in visible
+    assert "point limit" not in visible.lower()
+    assert "PLASTIC_SWEEP_MAX_POINTS" not in visible
     assert "refinement_window_count" not in visible
     assert not at.exception
 

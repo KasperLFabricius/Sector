@@ -2437,6 +2437,97 @@ def test_report_maps_unresolved_core_m02_result_to_engineering_guidance():
     assert "available angular resolution" not in text
 
 
+@pytest.mark.parametrize("profile", ("Standard", "Audit"))
+def test_report_hides_retained_angle_boundary_for_moved_direction_failure(
+    profile,
+):
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "minimum_reinforcement_on": True,
+        "detailing_edition": detailing.EC2_2023,
+        "detailing_member_type": "Beam",
+        "detailing_cut_direction": detailing.CUT_TRANSVERSE,
+    })
+    reason = "nominal governing interval could not be refined consistently"
+    minimum = {
+        "status": "NOT ASSESSED",
+        "reason": reason,
+        "edition": detailing.EC2_2023,
+        "clause": "12.2(2)(a), Formula (12.1)",
+        "member_type": "Beam",
+        "cut_direction": detailing.CUT_TRANSVERSE,
+        "checks": [{
+            "type": "bending with axial force",
+            "status": "NOT ASSESSED",
+            "utilisation": None,
+            "m_cr_knm": 800.0,
+            "mr_nom_knm": None,
+            "reason": reason,
+            "model": "biaxial refined nominal envelope",
+            "nominal_solution": {
+                "resolution_state": "UNRESOLVED",
+                "governing_increment_deg": 0.01,
+                "governing_target_increment_deg": 0.01,
+                "governing_interval_deg": 15.0,
+                "accepted_point_count": 3080,
+                "all_points_converged": True,
+                "utilisation_lower_bound": None,
+                "utilisation_upper_bound": None,
+                "refinement_history": [
+                    {"target_increment_deg": 15.0},
+                    {"target_increment_deg": 1.0},
+                    {"target_increment_deg": 0.1},
+                    {"target_increment_deg": 0.01},
+                ],
+            },
+        }],
+        "limitations": [],
+    }
+    actions = {
+        "name": "CORE-M02-MOVED",
+        "description": "Moving nominal resistance direction",
+        "n_ed_kn": 0.0,
+        "mx_ed_knm": 1.0,
+        "my_ed_knm": 0.0,
+        "vx_ed_kn": 0.0,
+        "vy_ed_kn": 0.0,
+        "vx_face": "auto",
+        "vy_face": "auto",
+        "t_ed_knm": 0.0,
+        "check_minimum_reinforcement": True,
+    }
+    inp["plastic_cases"] = [actions]
+    out = {
+        "plastic_cases": [{
+            "actions": actions,
+            "evaluated": True,
+            "results": {"minimum_reinforcement": minimum},
+        }]
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+        profile=profile,
+    )).split())
+
+    assert (
+        "NOT ASSESSED - The governing nominal resistance direction could not "
+        "be refined consistently" in text
+    )
+    assert "assess this case separately" in text
+    assert "achieved governing interval 15.000° for the 0.010° target" in text
+    assert "3080 angles retained" in text
+    assert "separate assessment required" in text
+    assert "4097" not in text
+    assert "point limit" not in text.lower()
+    assert "PLASTIC_SWEEP_MAX_POINTS" not in text
+    assert "refinement_window_count" not in text
+
+
 def test_report_publishes_canonical_direction_and_html_safe_project_alias():
     inp = _inp()
     inp.update({

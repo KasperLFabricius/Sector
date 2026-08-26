@@ -1031,6 +1031,97 @@ def test_2023_nominal_refinement_fails_closed_when_window_cannot_progress(
     assert resolution["refinement_history"][-1]["resolution_achieved"] is False
 
 
+def test_2023_nominal_refinement_bounds_moved_windows_before_radial_work(
+    monkeypatch,
+):
+    section, elements, materials = _rectangle()
+    scripted = iter([
+        (0.0, 0.99),
+        (0.0, 0.99),
+        (0.0, 1.0),
+        (180.0, 1.0),
+        (90.0, 1.0),
+        (90.0, 1.0),
+    ])
+    radial_point_counts = []
+
+    def fake_solve(*args, **_kwargs):
+        angles = detailing._module("plastic").plastic_sweep_angles(*args[4:7])
+        return [
+            _nominal_point(angle, 0.0, angle=angle)
+            for angle in angles
+        ]
+
+    def fake_radial(mx_values, _my_values, *_args, **_kwargs):
+        radial_point_counts.append(len(mx_values))
+        target_angle, utilisation = next(scripted)
+        governing_index = min(
+            range(len(mx_values)),
+            key=lambda index: abs(float(mx_values[index]) - target_angle),
+        )
+        return SimpleNamespace(
+            demand=1.0,
+            resistance=1.0 / utilisation,
+            utilisation=utilisation,
+            governing_index=governing_index,
+            valid=True,
+            reason=None,
+            origin_inside_or_on=True,
+        )
+
+    monkeypatch.setattr(detailing, "solve_plastic", fake_solve)
+    monkeypatch.setattr(
+        detailing._module("combined"), "radial_util_result", fake_radial
+    )
+    monkeypatch.setattr(
+        detailing,
+        "_cracking_action",
+        lambda *_args, **_kwargs: {
+            "valid": True,
+            "m_cr_knm": 1.0,
+            "mx_cr_knm": 1.0,
+            "my_cr_knm": 0.0,
+            "factor": 1.0,
+            "branch": "retained-angle boundary test",
+            "fctm_mpa": 2.9,
+            "governing_vertex_index": 0,
+            "governing_vertex_x_m": 0.0,
+            "governing_vertex_y_m": 0.0,
+            "governing_axial_stress_mpa": 0.0,
+            "governing_bending_stress_mpa": 2.9,
+            "axial_peak_tension_mpa": 0.0,
+        },
+    )
+
+    result = detailing.minimum_reinforcement_2023(
+        section,
+        elements,
+        materials,
+        Concrete(30.0, gamma_c=1.5),
+        fctm_mpa=2.9,
+        n_ed_tension_kn=0.0,
+        mx_ed_knm=1.0,
+        my_ed_knm=0.0,
+    )
+
+    point_limit = detailing._module("plastic").PLASTIC_SWEEP_MAX_POINTS
+    solution = result["checks"][0]["nominal_solution"]
+    history = solution["refinement_history"]
+    assert radial_point_counts == [24, 52, 72, 80, 3080]
+    assert max(radial_point_counts) <= point_limit
+    assert solution["accepted_point_count"] == 3080
+    assert solution["accepted_point_count"] <= point_limit
+    assert history[-1]["accepted_point_count"] == 3080
+    assert history[-1]["resolution_achieved"] is False
+    assert solution["resolution_state"] == "UNRESOLVED"
+    assert solution["governing_target_increment_deg"] == pytest.approx(0.01)
+    assert solution["governing_interval_deg"] == pytest.approx(15.0)
+    assert result["status"] == "NOT ASSESSED"
+    assert result["reason"] == (
+        "nominal governing interval could not be refined consistently"
+    )
+
+
 def test_2023_nominal_refinement_rejects_coarse_initial_solver_evidence(
     monkeypatch,
 ):
