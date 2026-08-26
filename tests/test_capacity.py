@@ -115,6 +115,33 @@ def _dkna_plastic_input(**overrides):
     return values
 
 
+def _dkna_asymmetric_plastic_input(**overrides):
+    """Irregular section used for independent zero-moment axial references."""
+
+    outer = [
+        (-0.50, -0.45), (0.55, -0.45), (0.55, -0.10), (0.18, -0.10),
+        (0.18, 0.55), (-0.08, 0.55), (-0.08, 0.20), (-0.50, 0.20),
+    ]
+    hole = [(-0.02, -0.02), (0.10, -0.02), (0.10, 0.10), (-0.02, 0.10)]
+    bars = [
+        (-0.42, -0.38, 804.0), (0.45, -0.38, 804.0),
+        (0.10, 0.47, 491.0), (-0.02, 0.47, 491.0),
+        (-0.42, 0.13, 314.0), (0.48, -0.03, 314.0),
+    ]
+    values = _dkna_plastic_input(
+        outer=outer,
+        holes=[hole],
+        bars=bars,
+        section=section_core.Section.from_polygon(
+            corners=outer,
+            holes=[hole],
+            bars_xy_area_mm2=bars,
+        ),
+    )
+    values.update(overrides)
+    return values
+
+
 def test_capacity_module_has_no_ui_dependency():
     """Engineering orchestration must remain importable without Streamlit."""
     source = pathlib.Path(capacity.__file__).read_text(encoding="utf-8")
@@ -2820,6 +2847,55 @@ def test_mandatory_faces_are_governed_independently_for_shear_and_combined():
     ) == "FAIL"
 
 
+@pytest.mark.parametrize(
+    ("statuses", "expected_status", "governing_status"),
+    [
+        (("NOT ASSESSED", "CONDITIONAL"), "NOT ASSESSED", "NOT ASSESSED"),
+        (("CONDITIONAL", "CONDITIONAL"), "CONDITIONAL", "CONDITIONAL"),
+        (("FAIL", "CONDITIONAL"), "FAIL", "FAIL"),
+        (("CONDITIONAL", "PASS"), "CONDITIONAL", "CONDITIONAL"),
+    ],
+)
+def test_mandatory_face_status_order_retains_conditional_authority(
+    statuses,
+    expected_status,
+    governing_status,
+):
+    candidates = [
+        {"status": statuses[0], "util": 0.20},
+        {"status": statuses[1], "util": 0.90},
+    ]
+
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["status"], item["util"]
+        ),
+    )
+
+    assert governing["status"] == governing_status
+    assert capacity.aggregate_assessment_status(statuses) == expected_status
+
+
+def test_mandatory_all_conditional_faces_use_utilisation_as_tie_breaker():
+    candidates = [
+        {"status": "CONDITIONAL", "util": 0.72},
+        {"status": "CONDITIONAL", "util": 0.91},
+    ]
+
+    governing = max(
+        candidates,
+        key=lambda item: capacity.assessment_key(
+            item["status"], item["util"]
+        ),
+    )
+
+    assert governing is candidates[1]
+    assert capacity.aggregate_assessment_status(
+        item["status"] for item in candidates
+    ) == "CONDITIONAL"
+
+
 def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
     valid = _member_input(
         torsion_on=True,
@@ -3031,18 +3107,20 @@ def test_dkna_axial_action_alone_enforces_zero_moment_before_accepting_nrd(
     expected_resistance,
     expected_endpoint,
 ):
+    solver_axial = -expected_resistance if n_ed > 0.0 else expected_resistance
     monkeypatch.setattr(
         capacity,
-        "solve_interaction",
-        lambda *_args, **_kwargs: [
-            SimpleNamespace(axial=-1000.0, converged=True),
-            SimpleNamespace(axial=1200.0, converged=True),
-        ],
-    )
-    monkeypatch.setattr(
-        capacity,
-        "_dkna_zero_moment_is_resisted",
-        lambda _inp, axial: (-600.0 <= axial <= 700.0, None),
+        "solve_zero_moment_axial_capacity",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            axial=solver_axial,
+            converged=True,
+            endpoint_axial=expected_endpoint,
+            neutral_axis_angle_deg=47.0,
+            moment_residual_knm=1.0e-8,
+            moment_tolerance_knm=1.0e-6,
+            point_evaluations=17,
+            iterations=5,
+        ),
     )
 
     action = capacity._dkna_axial_action_alone(
@@ -3056,7 +3134,102 @@ def test_dkna_axial_action_alone_enforces_zero_moment_before_accepting_nrd(
     assert action["resistance"] < abs(expected_endpoint)
     assert action["evidence"]["endpoint_axial_kn"] == expected_endpoint
     assert action["evidence"]["zero_moment"] is True
-    assert action["evidence"]["iterations"] == 32
+    assert action["evidence"]["iterations"] == 5
+    assert action["evidence"]["point_evaluations"] == 17
+
+
+@pytest.mark.parametrize(
+    ("n_ed", "reference_resistance"),
+    [
+        # Independent former 1-degree complete-sweep/bisection references.
+        (100.0, 1283.186788295355),
+        (-100.0, 12003.2902276955),
+    ],
+    ids=("asymmetric-tension", "asymmetric-compression"),
+)
+def test_dkna_zero_moment_axial_boundary_matches_independent_fine_sweep(
+    monkeypatch,
+    n_ed,
+    reference_resistance,
+):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("complete sweep or interaction trace entered")
+
+    monkeypatch.setattr(capacity, "solve_plastic", forbidden)
+    monkeypatch.setattr(capacity, "solve_interaction", forbidden)
+
+    action = capacity._dkna_axial_action_alone(
+        _dkna_asymmetric_plastic_input(P_pl=n_ed)
+    )
+
+    assert action["valid"] is True
+    assert action["resistance"] == pytest.approx(
+        reference_resistance, rel=5.0e-4
+    )
+    assert 1 <= action["evidence"]["point_evaluations"] <= 80
+    assert action["evidence"]["moment_residual_knm"] <= (
+        action["evidence"]["moment_tolerance_knm"]
+    )
+
+
+def test_dkna_zero_moment_axial_boundary_reuses_one_prep_and_has_hard_ceiling(
+    monkeypatch,
+):
+    plastic = capacity._module("plastic")
+    original_prep = plastic._prep_section
+    original_point = plastic.plastic_capacity_at_angle
+    calls = {"prep": 0, "point": 0}
+
+    def counted_prep(*args, **kwargs):
+        calls["prep"] += 1
+        return original_prep(*args, **kwargs)
+
+    def counted_point(*args, **kwargs):
+        calls["point"] += 1
+        return original_point(*args, **kwargs)
+
+    monkeypatch.setattr(plastic, "_prep_section", counted_prep)
+    monkeypatch.setattr(plastic, "plastic_capacity_at_angle", counted_point)
+    inp = _dkna_asymmetric_plastic_input(P_pl=100.0)
+
+    result = plastic.solve_zero_moment_axial_capacity(
+        inp["section"],
+        inp["concrete"],
+        inp["steel"],
+        tension=True,
+    )
+
+    assert result.converged is True
+    assert calls == {"prep": 1, "point": result.point_evaluations}
+    assert result.point_evaluations <= 80
+    assert result.point_evaluations < 361
+
+
+def test_dkna_axial_action_alone_fails_closed_on_boundary_nonconvergence(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        capacity,
+        "solve_zero_moment_axial_capacity",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            axial=None,
+            converged=False,
+            endpoint_axial=-1000.0,
+            neutral_axis_angle_deg=None,
+            moment_residual_knm=5.0,
+            moment_tolerance_knm=1.0e-6,
+            point_evaluations=192,
+            iterations=18,
+        ),
+    )
+
+    action = capacity._dkna_axial_action_alone(
+        _dkna_plastic_input(P_pl=100.0)
+    )
+
+    assert action["valid"] is False
+    assert action["resistance"] is None
+    assert "could not be determined" in action["reason"]
 
 
 def test_dkna_bending_action_alone_follows_biaxial_direction_not_applied_n():

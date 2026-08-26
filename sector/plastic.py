@@ -1123,6 +1123,293 @@ class InteractionPoint:
     converged: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ZeroMomentAxialCapacity:
+    """One bounded pure-axial boundary solve about the section origin.
+
+    ``axial`` follows the plastic solver convention (compression positive).  The
+    evaluation count covers every ultimate-capacity point used by this solve and
+    is retained so callers can prove that the axial-only check did not rebuild a
+    complete neutral-axis sweep during an outer bisection.
+    """
+
+    axial: float | None
+    converged: bool
+    endpoint_axial: float | None
+    neutral_axis_angle_deg: float | None
+    moment_residual_knm: float | None
+    moment_tolerance_knm: float | None
+    point_evaluations: int
+    iterations: int
+
+
+def solve_zero_moment_axial_capacity(
+    section: Section,
+    concrete: Concrete,
+    steel: MildSteel,
+    *,
+    tension: bool,
+    prestress: "Prestress | None" = None,
+    bar_materials: "Sequence[MildSteel] | None" = None,
+    tendon_materials: "Sequence[Prestress] | None" = None,
+    n_bands: int = 80,
+    max_evaluations: int = 192,
+    max_iterations: int = 18,
+) -> ZeroMomentAxialCapacity:
+    """Resolve the tension or compression boundary with ``Mx = My = 0``.
+
+    The previous member-check path tested each axial bisection candidate by
+    rebuilding a complete M-M sweep.  This dedicated two-variable solve instead
+    reuses one prepared section and searches the ultimate surface directly in
+    axial-force fraction and neutral-axis angle.  A strict point-evaluation
+    ceiling and residual check make failure explicit.
+    """
+
+    if type(tension) is not bool:
+        raise TypeError("tension must be a Boolean")
+    if max_evaluations < 16:
+        raise ValueError("max_evaluations must be at least 16")
+    if max_iterations < 1:
+        raise ValueError("max_iterations must be at least 1")
+
+    section.require_valid_analysis_inputs()
+    bx, by, ba = section.bar_arrays()
+    tx, ty, ta = section.tendon_arrays()
+    bar_laws = _material_sequence(steel, bar_materials, len(ba), "bar")
+    tendon_laws = _material_sequence(
+        prestress, tendon_materials, len(ta), "tendon"
+    ) if (prestress is not None or tendon_materials is not None) else ()
+    prep = _prep_section(section, bool(tendon_laws))
+    band_memo: dict = {}
+    evaluations = 0
+    iterations = 0
+
+    def _result(
+        *,
+        axial: float | None = None,
+        converged: bool = False,
+        endpoint: float | None = None,
+        angle: float | None = None,
+        residual: float | None = None,
+        tolerance: float | None = None,
+    ) -> ZeroMomentAxialCapacity:
+        return ZeroMomentAxialCapacity(
+            axial=axial,
+            converged=converged,
+            endpoint_axial=endpoint,
+            neutral_axis_angle_deg=angle,
+            moment_residual_knm=residual,
+            moment_tolerance_knm=tolerance,
+            point_evaluations=evaluations,
+            iterations=iterations,
+        )
+
+    def _cap(axial: float, angle: float) -> PlasticPoint:
+        nonlocal evaluations
+        if evaluations >= max_evaluations:
+            raise ArithmeticError("zero-moment axial evaluation limit reached")
+        evaluations += 1
+        return plastic_capacity_at_angle(
+            section,
+            concrete,
+            steel,
+            axial,
+            angle % 360.0,
+            prestress=prestress,
+            bar_materials=bar_laws,
+            tendon_materials=tendon_laws or None,
+            n_bands=n_bands,
+            prep=prep,
+            band_memo=band_memo,
+        )
+
+    # Match the established interaction-boundary endpoint construction while
+    # evaluating only the requested axial sign.  The deliberately unreachable
+    # probe returns the clamped physical endpoint in ``point.axial``.
+    area = sum(
+        _poly_moments(ring.tolist()).area
+        for ring in section.integration_rings()
+    )
+    steel_force = sum(
+        max(
+            abs(material.stress(material.eut * 0.99, design=True)),
+            abs(material.stress(-material.eut * 0.99, design=True)),
+        ) * reinforcement_area
+        for material, reinforcement_area in zip(bar_laws, ba, strict=True)
+    )
+    steel_force += sum(
+        abs(material.stress(material.rupture_strain * 0.99, design=True))
+        * reinforcement_area
+        for material, reinforcement_area in zip(
+            tendon_laws, ta, strict=True
+        )
+    )
+    probe = (
+        -1.5 * steel_force * _MN_TO_KN - 1.0
+        if tension
+        else 1.5 * (concrete.fcd * area + steel_force) * _MN_TO_KN + 1.0
+    )
+    try:
+        endpoint = float(_cap(probe, 0.0).axial)
+    except (ArithmeticError, TypeError, ValueError, OverflowError):
+        return _result()
+    if (
+        not math.isfinite(endpoint)
+        or endpoint == 0.0
+        or (tension and endpoint >= 0.0)
+        or (not tension and endpoint <= 0.0)
+    ):
+        return _result(endpoint=endpoint if math.isfinite(endpoint) else None)
+
+    extent_x = float(np.ptp(prep.verts[:, 0]))
+    extent_y = float(np.ptp(prep.verts[:, 1]))
+    lever_scale = max(extent_x, extent_y, 1.0e-3)
+    moment_tolerance = max(
+        1.0e-7,
+        1.0e-8 * max(1.0, abs(endpoint) * lever_scale),
+    )
+    cache: dict[tuple[float, float], tuple[PlasticPoint, np.ndarray] | None] = {}
+
+    def _evaluate(
+        fraction: float,
+        angle: float,
+    ) -> tuple[PlasticPoint, np.ndarray] | None:
+        fraction = min(1.0, max(1.0e-6, float(fraction)))
+        angle = float(angle) % 360.0
+        key = (round(fraction, 14), round(angle, 12))
+        if key in cache:
+            return cache[key]
+        try:
+            point = _cap(endpoint * fraction, angle)
+        except (ArithmeticError, TypeError, ValueError, OverflowError):
+            cache[key] = None
+            return None
+        values = np.asarray((point.Mx, point.My), dtype=float)
+        if not point.converged or not np.all(np.isfinite(values)):
+            cache[key] = None
+            return None
+        cache[key] = point, values
+        return cache[key]
+
+    candidates: list[tuple[float, float, float, PlasticPoint, np.ndarray]] = []
+    # A modest deterministic seed grid makes the local solve insensitive to the
+    # chosen coordinate origin without approaching a complete product sweep.
+    for fraction in (1.0, 0.9, 0.75, 0.5, 0.25):
+        for angle in range(0, 360, 45):
+            evaluated = _evaluate(fraction, float(angle))
+            if evaluated is None:
+                continue
+            point, residual = evaluated
+            norm = float(np.linalg.norm(residual))
+            candidates.append((norm, fraction, float(angle), point, residual))
+            if norm <= moment_tolerance:
+                return _result(
+                    axial=point.axial,
+                    converged=True,
+                    endpoint=endpoint,
+                    angle=point.V,
+                    residual=norm,
+                    tolerance=moment_tolerance,
+                )
+
+    if not candidates:
+        return _result(endpoint=endpoint, tolerance=moment_tolerance)
+
+    best = min(candidates, key=lambda item: item[0])
+    # Use several distinct basins when the section is strongly asymmetric.  Each
+    # local solve is still subject to the shared point-evaluation ceiling.
+    seeds: list[tuple[float, float]] = []
+    for _norm, fraction, angle, _point, _residual in sorted(candidates):
+        if all(
+            abs(fraction - old_fraction) > 0.05
+            or abs(((angle - old_angle + 180.0) % 360.0) - 180.0) > 30.0
+            for old_fraction, old_angle in seeds
+        ):
+            seeds.append((fraction, angle))
+        if len(seeds) == 4:
+            break
+
+    for seed_fraction, seed_angle in seeds:
+        fraction = seed_fraction
+        angle = seed_angle
+        evaluated = _evaluate(fraction, angle)
+        if evaluated is None:
+            continue
+        point, residual = evaluated
+        for _ in range(max_iterations):
+            iterations += 1
+            norm = float(np.linalg.norm(residual))
+            if norm < best[0]:
+                best = (norm, fraction, angle, point, residual)
+            if norm <= moment_tolerance:
+                return _result(
+                    axial=point.axial,
+                    converged=True,
+                    endpoint=endpoint,
+                    angle=point.V,
+                    residual=norm,
+                    tolerance=moment_tolerance,
+                )
+
+            fraction_step = max(1.0e-5, 1.0e-4 * fraction)
+            angle_step = 0.05
+            fraction_probe = (
+                fraction - fraction_step
+                if fraction + fraction_step > 1.0
+                else fraction + fraction_step
+            )
+            fraction_eval = _evaluate(fraction_probe, angle)
+            angle_eval = _evaluate(fraction, angle + angle_step)
+            if fraction_eval is None or angle_eval is None:
+                break
+            fraction_delta = fraction_probe - fraction
+            jacobian = np.column_stack((
+                (fraction_eval[1] - residual) / fraction_delta,
+                (angle_eval[1] - residual) / angle_step,
+            ))
+            try:
+                step = np.linalg.lstsq(jacobian, -residual, rcond=None)[0]
+            except np.linalg.LinAlgError:
+                break
+            if not np.all(np.isfinite(step)):
+                break
+            step[0] = float(np.clip(step[0], -0.20, 0.20))
+            step[1] = float(np.clip(step[1], -30.0, 30.0))
+
+            accepted = None
+            for scale in (1.0, 0.5, 0.25, 0.125):
+                next_fraction = min(
+                    1.0, max(1.0e-6, fraction + scale * step[0])
+                )
+                next_angle = (angle + scale * step[1]) % 360.0
+                if next_fraction == fraction and next_angle == angle:
+                    continue
+                trial = _evaluate(next_fraction, next_angle)
+                if trial is None:
+                    continue
+                trial_norm = float(np.linalg.norm(trial[1]))
+                if trial_norm < norm:
+                    accepted = (
+                        next_fraction,
+                        next_angle,
+                        trial[0],
+                        trial[1],
+                    )
+                    break
+            if accepted is None:
+                break
+            fraction, angle, point, residual = accepted
+
+    return _result(
+        axial=None,
+        converged=False,
+        endpoint=endpoint,
+        angle=best[3].V,
+        residual=best[0],
+        tolerance=moment_tolerance,
+    )
+
+
 def solve_interaction(
     section: Section,
     concrete: Concrete,

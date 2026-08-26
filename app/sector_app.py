@@ -10747,9 +10747,19 @@ def _run_capacity_checks(inp, out):
         directional_combined = {
             key: value["combined"] for key, value in directions.items()
         }
+        independent_mv = inp.get("combined_mv_independent") is True
+        separation_condition = next((
+            direction.get("m_v_separation_condition")
+            for direction in directional_combined.values()
+            if isinstance(direction, dict)
+            and direction.get("m_v_independent") is independent_mv
+            and isinstance(direction.get("m_v_separation_condition"), dict)
+        ), None)
         out["combined"] = dict(
             directions=directional_combined,
             biaxial=True,
+            m_v_independent=independent_mv,
+            m_v_separation_condition=separation_condition,
             note=(
                 "Independent Vx+T and Vy+T calculations are reported. Generic "
                 "Vx+Vy+T interaction is not calculated."

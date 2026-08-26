@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import apply_widget_changes  # noqa: E402
+import result_presentation  # noqa: E402
 
 
 # -- engine -----------------------------------------------------------------
@@ -796,6 +797,73 @@ def test_app_dkna_unavailable_action_alone_resistance_is_not_assessed(
         "Closed stirrup",
         "Longitudinal reinforcement",
     } <= {metric.label for metric in at.metric}
+
+
+def test_app_biaxial_unavailable_prerequisite_retains_selected_separate_route(
+    monkeypatch,
+):
+    def unavailable(_inp):
+        return {
+            "n": capacity._dkna_action_record("N", 0.0, None, valid=True),
+            "m": capacity._dkna_action_record(
+                "M",
+                50.0,
+                None,
+                valid=False,
+                reason=(
+                    "An action-alone resistance could not be determined. Check "
+                    "the section, materials and complete Plastic bending sweep."
+                ),
+            ),
+        }
+
+    monkeypatch.setattr(
+        capacity, "dkna_normal_bending_action_alone", unavailable
+    )
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("checkbox", "combined_mv_independent", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    aggregate = at.session_state["results"]["combined"]
+    assert aggregate["biaxial"] is True
+    assert aggregate["m_v_independent"] is True
+    assert aggregate["m_v_separation_condition"]["declared"] is True
+    assert set(aggregate["directions"]) == {"vx", "vy"}
+    assert all(
+        direction["m_v_independent"] is True
+        and direction["dkna_valid"] is False
+        for direction in aggregate["directions"].values()
+    )
+    assert result_presentation.combined_dkna_screen_label(aggregate) == (
+        "max(N+M+T, N+V+T)"
+    )
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    visible = " ".join(
+        str(item.value)
+        for family in (at.caption, at.warning, at.info)
+        for item in family
+    )
+    assert "NOT ASSESSED" in visible
+    assert "action-alone" in visible
 
 
 def test_app_combined_longitudinal_check():

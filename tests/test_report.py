@@ -6102,7 +6102,7 @@ def test_report_unavailable_action_alone_resistance_is_not_assessed():
     assert "complete Plastic bending sweep" in txt
 
 
-@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 def test_report_unassessed_combined_retains_selected_separate_route(profile):
     inp = _inp()
     inp.update(

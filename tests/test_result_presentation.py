@@ -1089,7 +1089,7 @@ def test_combined_summary_marks_missing_prerequisites_not_assessed():
 
     assert by_check["Combined M-V-T - DK NA sum"]["status"] == "NOT ASSESSED"
     assert by_check["Combined M-V-T - DK NA sum"]["note"] == (
-        "Missing prerequisite: V, T"
+        "DK NA screen: max(N+M+T, N+V+T); Missing prerequisite: V, T"
     )
     assert presentation.combined_dkna_screen_label(combined) == (
         "max(N+M+T, N+V+T)"
@@ -1541,6 +1541,51 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
     assert by_check["Combined Vx+T - DK NA sum"]["criterion"] == "<= 100 %"
     assert by_check["Generic Vx-Vy-T interaction"]["status"] == "NOT CALCULATED"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():
+    unavailable = {
+        "valid": True,
+        "dkna_valid": False,
+        "dkna_sum": None,
+        "dkna_reason": "Action-alone resistance unavailable",
+        "m_v_independent": True,
+    }
+    combined = {
+        "biaxial": True,
+        "m_v_independent": True,
+        "m_v_separation_condition": {
+            "declared": True,
+            "mechanically_verified": False,
+        },
+        "directions": {
+            "vx": dict(unavailable),
+            "vy": dict(unavailable),
+        },
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", combined_on=True),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    directional = [
+        row for row in rows
+        if row["check"] in {
+            "Combined Vx+T - DK NA sum",
+            "Combined Vy+T - DK NA sum",
+        }
+    ]
+
+    assert presentation.combined_dkna_screen_label(combined) == (
+        "max(N+M+T, N+V+T)"
+    )
+    assert len(directional) == 2
+    assert all(row["status"] == "NOT ASSESSED" for row in directional)
+    assert all(
+        "max(N+M+T, N+V+T)" in row["note"]
+        for row in directional
+    )
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
 
 def test_legacy_plastic_invalidates_retained_combined_summary_and_selection():

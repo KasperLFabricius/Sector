@@ -156,6 +156,14 @@ def solve_interaction(*args, **kwargs):
     return solve(*args, **kwargs)
 
 
+def solve_zero_moment_axial_capacity(*args, **kwargs):
+    """Resolve the dedicated pure-axial boundary only when it is requested."""
+
+    from .plastic import solve_zero_moment_axial_capacity as solve
+
+    return solve(*args, **kwargs)
+
+
 def _is_boolean_scalar(value):
     """Recognise built-in and common library Boolean scalar types."""
     scalar_type = type(value)
@@ -1086,13 +1094,14 @@ def shear_face_candidates(face, associated_moment, *, zero_tolerance=1.0e-9):
 def assessment_key(status, utilisation):
     """Conservative ordering shared by mandatory directional candidates."""
     priority = {
-        "INVALID": 4,
-        "FAIL": 3,
-        "NOT ASSESSED": 2,
-        "NOT RUN": 2,
+        "INVALID": 5,
+        "FAIL": 4,
+        "NOT ASSESSED": 3,
+        "NOT RUN": 3,
+        "CONDITIONAL": 2,
         "PASS": 1,
         "NOT APPLICABLE": 0,
-    }.get(str(status or "").upper(), 2)
+    }.get(str(status or "").upper(), 3)
     value = float(utilisation or 0.0)
     if not math.isfinite(value):
         value = math.inf
@@ -1102,7 +1111,14 @@ def assessment_key(status, utilisation):
 def aggregate_assessment_status(statuses):
     """Return the conservative status across every required candidate."""
     values = {str(status or "").upper() for status in statuses}
-    for status in ("INVALID", "FAIL", "NOT ASSESSED", "NOT RUN", "PASS"):
+    for status in (
+        "INVALID",
+        "FAIL",
+        "NOT ASSESSED",
+        "NOT RUN",
+        "CONDITIONAL",
+        "PASS",
+    ):
         if status in values:
             return status
     return "NOT ASSESSED"
@@ -1670,79 +1686,35 @@ def _dkna_axial_action_alone(inp):
         )
     prestress = inp["prestress"] if inp.get("tendons") else None
     try:
-        endpoints = solve_interaction(
+        boundary = solve_zero_moment_axial_capacity(
             inp["section"],
             inp["concrete"],
             inp["steel"],
-            0.0,
+            tension=n_ed > 0.0,
             prestress=prestress,
             bar_materials=inp.get("bar_materials"),
             tendon_materials=inp.get("tendon_materials"),
-            n_points=1,
         )
     except (ArithmeticError, TypeError, ValueError, OverflowError):
         return _dkna_action_record(
             "N", n_ed, None, valid=False, direction=direction,
             reason=_DKNA_ACTION_ALONE_GUIDANCE,
         )
-    if not endpoints or not all(
-        _solver_flag(
-            _solver_member(point, "converged", "axial endpoint"),
-            "axial endpoint converged",
-        )
-        for point in endpoints
-    ):
+    if boundary.converged is not True or boundary.axial is None:
         return _dkna_action_record(
             "N", n_ed, None, valid=False, direction=direction,
             reason=_DKNA_ACTION_ALONE_GUIDANCE,
         )
-    axial_limits = tuple(
-        _finite_solver_result(point.axial, "axial endpoint")
-        for point in endpoints
+    accepted = _finite_solver_result(
+        boundary.axial, "zero-moment axial resistance"
     )
-    # Plastic uses compression-positive P; the engineer-facing N is tension-positive.
-    axial_limit = min(axial_limits) if n_ed > 0.0 else max(axial_limits)
-    if (n_ed > 0.0 and axial_limit >= 0.0) or (
-        n_ed < 0.0 and axial_limit <= 0.0
+    if (n_ed > 0.0 and accepted >= 0.0) or (
+        n_ed < 0.0 and accepted <= 0.0
     ):
         return _dkna_action_record(
             "N", n_ed, None, valid=False, direction=direction,
             reason=_DKNA_ACTION_ALONE_GUIDANCE,
         )
-    try:
-        zero_valid, _zero_reason = _dkna_zero_moment_is_resisted(inp, 0.0)
-    except (ArithmeticError, TypeError, ValueError, OverflowError):
-        zero_valid = False
-    if not zero_valid:
-        return _dkna_action_record(
-            "N", n_ed, None, valid=False, direction=direction,
-            reason=_DKNA_ACTION_ALONE_GUIDANCE,
-        )
-    try:
-        limit_valid, _limit_reason = _dkna_zero_moment_is_resisted(
-            inp, axial_limit
-        )
-    except (ArithmeticError, TypeError, ValueError, OverflowError):
-        limit_valid = False
-    iterations = 0
-    accepted = axial_limit if limit_valid else 0.0
-    if not limit_valid:
-        rejected = axial_limit
-        # Retain the last verified inside state.  Thirty-two halvings give a
-        # relative action resolution below 2.4e-10 without relying on an absolute
-        # engineering-scale tolerance.
-        for iterations in range(1, 33):
-            candidate = 0.5 * (accepted + rejected)
-            try:
-                candidate_valid, _candidate_reason = (
-                    _dkna_zero_moment_is_resisted(inp, candidate)
-                )
-            except (ArithmeticError, TypeError, ValueError, OverflowError):
-                candidate_valid = False
-            if candidate_valid:
-                accepted = candidate
-            else:
-                rejected = candidate
     resistance = abs(accepted)
     if not math.isfinite(resistance) or resistance <= 0.0:
         return _dkna_action_record(
@@ -1757,8 +1729,12 @@ def _dkna_axial_action_alone(inp):
         direction=direction,
         evidence={
             "solver_axial_kn": accepted,
-            "endpoint_axial_kn": axial_limit,
-            "iterations": iterations,
+            "endpoint_axial_kn": boundary.endpoint_axial,
+            "iterations": boundary.iterations,
+            "point_evaluations": boundary.point_evaluations,
+            "neutral_axis_angle_deg": boundary.neutral_axis_angle_deg,
+            "moment_residual_knm": boundary.moment_residual_knm,
+            "moment_tolerance_knm": boundary.moment_tolerance_knm,
             "zero_moment": True,
         },
     )

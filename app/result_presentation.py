@@ -2182,9 +2182,14 @@ def result_summary_rows(inp, results, *, stale=False):
                 util = direction.get("dkna_sum")
                 status = combined_dkna_status(direction)
                 if status == "NOT ASSESSED":
-                    direction_note = str(
-                        direction.get("dkna_reason")
-                        or "Action-alone resistance unavailable"
+                    direction_note = (
+                        "DK NA screen: "
+                        + combined_dkna_screen_label(direction)
+                        + "; "
+                        + str(
+                            direction.get("dkna_reason")
+                            or "Action-alone resistance unavailable"
+                        )
                     )
                 else:
                     method = str(direction.get("method") or "")
@@ -2272,14 +2277,24 @@ def result_summary_rows(inp, results, *, stale=False):
                 "separate Annex F member and detailing assessment where applicable"
             )
         elif valid:
-            combined_note = result_reason(
-                combined.get("dkna_reason")
-                or "An action-alone resistance could not be determined",
-                "combined",
-                context="combined action-alone result reason",
+            combined_note = (
+                "DK NA screen: "
+                + combined_dkna_screen_label(combined)
+                + "; "
+                + result_reason(
+                    combined.get("dkna_reason")
+                    or "An action-alone resistance could not be determined",
+                    "combined",
+                    context="combined action-alone result reason",
+                )
             )
         elif missing:
-            combined_note = "Missing prerequisite: " + ", ".join(missing)
+            combined_note = (
+                "DK NA screen: "
+                + combined_dkna_screen_label(combined)
+                + "; Missing prerequisite: "
+                + ", ".join(missing)
+            )
             if combined.get("reason"):
                 combined_note += "; " + result_reason(
                     combined["reason"],
@@ -2287,10 +2302,15 @@ def result_summary_rows(inp, results, *, stale=False):
                     context="combined summary missing-prerequisite reason",
                 )
         else:
-            combined_note = result_reason(
-                combined.get("reason") or "Combined calculation is invalid",
-                "combined",
-                context="combined summary result reason",
+            combined_note = (
+                "DK NA screen: "
+                + combined_dkna_screen_label(combined)
+                + "; "
+                + result_reason(
+                    combined.get("reason") or "Combined calculation is invalid",
+                    "combined",
+                    context="combined summary result reason",
+                )
             )
         combined_status = combined_dkna_status(combined)
         rows.append(_summary_row(
