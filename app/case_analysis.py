@@ -10,6 +10,7 @@ unit-testable.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 
 import load_cases
@@ -25,6 +26,19 @@ _PLASTIC_RESULT_KEYS = (
     "transverse_reinforcement",
 )
 _ELASTIC_RESULT_KEYS = ("elastic",)
+
+_PLASTIC_SWEEP_VALUES = EngineerMessage(
+    "PLASTIC-SWEEP-VALUES",
+    "Enter finite start, end and increment values for the neutral-axis sweep",
+)
+_PLASTIC_SWEEP_BOUNDS = EngineerMessage(
+    "PLASTIC-SWEEP-BOUNDS",
+    "Set the neutral-axis sweep end angle equal to or greater than the start angle",
+)
+_PLASTIC_SWEEP_INCREMENT = EngineerMessage(
+    "PLASTIC-SWEEP-INCREMENT",
+    "Enter a positive maximum increment for the neutral-axis sweep",
+)
 
 
 def _case_record(row: Mapping, key: str) -> dict:
@@ -305,12 +319,33 @@ def validation_errors(inp: Mapping) -> list[EngineerMessage]:
         or bool(inp.get("transverse_detailing_on"))
     )
     elastic_required = mode in {"Elastic", "Both"}
-    return load_cases.validation_errors(
+    errors: list[EngineerMessage] = []
+    if mode in {"Plastic", "Both"}:
+        raw_values = (
+            inp.get("v_min", 0.0),
+            inp.get("v_max", 360.0),
+            inp.get("v_inc", 15.0),
+        )
+        try:
+            if any(isinstance(value, bool) for value in raw_values):
+                raise ValueError("Boolean sweep value")
+            v_min, v_max, v_inc = (float(value) for value in raw_values)
+        except (TypeError, ValueError, OverflowError):
+            errors.append(_PLASTIC_SWEEP_VALUES)
+        else:
+            if not all(math.isfinite(value) for value in (v_min, v_max, v_inc)):
+                errors.append(_PLASTIC_SWEEP_VALUES)
+            elif v_max < v_min:
+                errors.append(_PLASTIC_SWEEP_BOUNDS)
+            elif v_inc <= 0.0:
+                errors.append(_PLASTIC_SWEEP_INCREMENT)
+    errors.extend(load_cases.validation_errors(
         inp.get("plastic_cases"),
         inp.get("elastic_cases"),
         require_plastic=plastic_required,
         require_elastic=elastic_required,
-    )
+    ))
+    return errors
 
 
 def run_case_tables(

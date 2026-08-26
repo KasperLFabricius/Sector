@@ -38,6 +38,42 @@ def test_case_validator_messages_remain_separate_and_route_to_load_editors():
     assert issues[2].target.stage == input_issues.LOADS
 
 
+@pytest.mark.parametrize(
+    ("code", "widget_key", "widget_label"),
+    (
+        (
+            "PLASTIC-SWEEP-BOUNDS",
+            "v_max",
+            "Neutral-axis sweep end angle",
+        ),
+        (
+            "PLASTIC-SWEEP-INCREMENT",
+            "v_inc",
+            "Neutral-axis sweep maximum increment",
+        ),
+        (
+            "PLASTIC-SWEEP-VALUES",
+            None,
+            "Neutral-axis sweep",
+        ),
+    ),
+)
+def test_plastic_sweep_issues_route_to_analysis_settings(
+    code,
+    widget_key,
+    widget_label,
+):
+    issue = input_issues.case_issues(
+        [EngineerMessage(code, "Correct the neutral-axis sweep")]
+    )[0]
+
+    assert issue.target == input_issues.InputTarget(
+        input_issues.ANALYSIS_SETTINGS,
+        widget_key,
+        widget_label,
+    )
+
+
 def test_material_definition_routes_to_exact_family_and_unknowns_fail_safe():
     issues = input_issues.section_issues(
         {

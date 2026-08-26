@@ -23,6 +23,7 @@ from sector.plastic import (
     _band_stresses,
     _governing_curvature,
     plastic_capacity_at_angle,
+    plastic_sweep_angles,
     solve_plastic,
 )
 from sector.section import Bar, Section
@@ -305,6 +306,101 @@ def test_solve_plastic_sweep_returns_all_angles():
     assert [p.V for p in pts] == [0.0, 90.0, 180.0, 270.0, 360.0]
     # 0 and 360 degrees are the same state.
     assert pts[0].Mx == pytest.approx(pts[4].Mx, abs=1e-6)
+
+
+def test_plastic_sweep_uses_inclusive_endpoint_maximum_increment_contract():
+    angles = plastic_sweep_angles(0.0, 100.0, 30.0)
+
+    assert angles == (0.0, 25.0, 50.0, 75.0, 100.0)
+    section, concrete, steel = fundamentsbjaelke()
+    points = solve_plastic(section, concrete, steel, 0.0, 0.0, 100.0, 30.0)
+    assert tuple(point.V for point in points) == angles
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "maximum_step", "expected"),
+    (
+        (12.0, 12.0, 30.0, (12.0,)),
+        (0.0, 360.0, 90.0, (0.0, 90.0, 180.0, 270.0, 360.0)),
+        (0.1, 0.3, 0.1, (0.1, 0.2, 0.3)),
+    ),
+)
+def test_plastic_sweep_zero_span_wrap_and_decimal_boundaries(
+    start,
+    end,
+    maximum_step,
+    expected,
+):
+    angles = plastic_sweep_angles(start, end, maximum_step)
+
+    assert angles == pytest.approx(expected)
+    assert angles[0] == start
+    assert angles[-1] == end
+    assert all(
+        angles[index + 1] - angles[index] <= maximum_step
+        for index in range(len(angles) - 1)
+    )
+
+
+@pytest.mark.parametrize(
+    ("maximum_step", "expected_intervals"),
+    (
+        (math.nextafter(1.0 / 3.0, math.inf), 3),
+        (math.nextafter(1.0 / 3.0, 0.0), 4),
+    ),
+)
+def test_plastic_sweep_respects_adjacent_floating_increment_boundaries(
+    maximum_step,
+    expected_intervals,
+):
+    angles = plastic_sweep_angles(0.0, 1.0, maximum_step)
+
+    assert len(angles) == expected_intervals + 1
+    assert angles[0] == 0.0
+    assert angles[-1] == 1.0
+    assert max(
+        angles[index + 1] - angles[index]
+        for index in range(len(angles) - 1)
+    ) <= maximum_step
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "maximum_step", "message"),
+    (
+        (100.0, 0.0, 30.0, "greater than or equal"),
+        (0.0, 100.0, 0.0, "increment must be positive"),
+        (0.0, 100.0, -1.0, "increment must be positive"),
+    ),
+)
+def test_invalid_plastic_sweep_is_rejected_before_section_preparation(
+    monkeypatch,
+    start,
+    end,
+    maximum_step,
+    message,
+):
+    import sector.plastic as plastic_core
+
+    section, concrete, steel = fundamentsbjaelke()
+    calls = []
+
+    def forbidden_preparation(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("invalid sweep reached section preparation")
+
+    monkeypatch.setattr(plastic_core, "_prep_section", forbidden_preparation)
+
+    with pytest.raises(ValueError, match=message):
+        solve_plastic(
+            section,
+            concrete,
+            steel,
+            0.0,
+            start,
+            end,
+            maximum_step,
+        )
+    assert calls == []
 
 
 def test_slab_matches_eurocode_rectangular_block():

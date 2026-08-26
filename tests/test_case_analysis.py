@@ -324,6 +324,50 @@ def test_rejects_names_duplicated_across_solver_tables():
     )
 
 
+@pytest.mark.parametrize(
+    ("updates", "code", "text"),
+    (
+        (
+            {"v_min": 100.0, "v_max": 0.0, "v_inc": 30.0},
+            "PLASTIC-SWEEP-BOUNDS",
+            "Set the neutral-axis sweep end angle equal to or greater than the "
+            "start angle",
+        ),
+        (
+            {"v_min": 0.0, "v_max": 100.0, "v_inc": 0.0},
+            "PLASTIC-SWEEP-INCREMENT",
+            "Enter a positive maximum increment for the neutral-axis sweep",
+        ),
+    ),
+)
+def test_invalid_plastic_sweep_blocks_case_runner_with_authored_guidance(
+    updates,
+    code,
+    text,
+):
+    inp = _base(**updates)
+    calls = []
+
+    with pytest.raises(case_analysis.EngineerValidationError) as caught:
+        case_analysis.run_case_tables(
+            inp,
+            lambda *_args, **_kwargs: calls.append(True),
+        )
+
+    assert calls == []
+    assert caught.value.engineer_message.code == code
+    assert caught.value.engineer_message.text == text
+
+
+def test_zero_span_plastic_sweep_remains_valid_for_case_orchestration():
+    inp = _base(v_min=45.0, v_max=45.0, v_inc=30.0)
+
+    assert not any(
+        error.code.startswith("PLASTIC-SWEEP")
+        for error in case_analysis.validation_errors(inp)
+    )
+
+
 def test_elastic_case_maps_both_analysis_criteria_and_sources():
     record = case_analysis.case_records(
         {

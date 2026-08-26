@@ -1278,6 +1278,61 @@ def test_plastic_sweep_stays_within_requested_bounds():
     assert p["util"] is None
 
 
+def test_plastic_sweep_core_and_rendered_path_share_explicit_angle_set():
+    import sector_app
+    from sector.plastic import plastic_sweep_angles
+
+    expected = (0.0, 25.0, 50.0, 75.0, 100.0)
+    assert plastic_sweep_angles(0.0, 100.0, 30.0) == expected
+    assert sector_app._sweep(0.0, 100.0, 30.0) == expected
+
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "v_max", 100.0),
+        ("number_input", "v_inc", 30.0),
+    )
+
+    assert not at.exception
+    points = at.session_state["results"]["plastic"]["points"]
+    assert tuple(point["V"] for point in points) == expected
+
+
+def test_reversed_plastic_sweep_retains_prior_result_and_shows_guidance():
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    prior_results = copy.deepcopy(at.session_state["results"])
+    prior_signature = at.session_state["result_sig"]
+    prior_calculation = copy.deepcopy(at.session_state["calculation_record"])
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "v_min", 100.0),
+        ("number_input", "v_max", 0.0),
+    )
+
+    assert not at.exception
+    assert at.session_state["results"] == prior_results
+    assert at.session_state["result_sig"] == prior_signature
+    assert at.session_state["calculation_record"] == prior_calculation
+    assert at.session_state["_latest_inputs"]["v_min"] == pytest.approx(100.0)
+    assert at.session_state["_latest_inputs"]["v_max"] == pytest.approx(0.0)
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("error", "warning", "caption", "info")
+        for item in getattr(at, element_type)
+    )
+    assert (
+        "Set the neutral-axis sweep end angle equal to or greater than the "
+        "start angle"
+    ) in visible
+    assert "Inputs changed -- recalculate" in visible
+
+
 def test_full_sweep_reports_utilisation():
     at = _fresh()
     at.run()

@@ -953,6 +953,54 @@ def plastic_capacity_at_angle(
     )
 
 
+def plastic_sweep_angles(
+    v_min: float,
+    v_max: float,
+    v_inc: float,
+) -> tuple[float, ...]:
+    """Return an inclusive neutral-axis sweep with ``v_inc`` as a maximum step.
+
+    Both endpoints are retained.  When the requested maximum increment does not
+    divide the span, the span is divided into the smallest whole number of equal
+    intervals whose actual step does not exceed ``v_inc``.  A zero span therefore
+    contains one angle.  Reversed bounds and non-positive increments are invalid.
+    """
+
+    start = finite_action(v_min, "minimum neutral-axis angle")
+    end = finite_action(v_max, "maximum neutral-axis angle")
+    maximum_step = finite_action(v_inc, "neutral-axis angle increment")
+    if end < start:
+        raise ValueError(
+            "maximum neutral-axis angle must be greater than or equal to the minimum"
+        )
+    if maximum_step <= 0.0:
+        raise ValueError("neutral-axis angle increment must be positive")
+    span = end - start
+    if not math.isfinite(span):
+        raise ValueError("neutral-axis angle span must be finite")
+    if span == 0.0:
+        return (start,)
+
+    ratio = span / maximum_step
+    if not math.isfinite(ratio):
+        raise ValueError("neutral-axis angle increment is too small for the span")
+    intervals = max(1, math.ceil(ratio))
+    actual_step = span / intervals
+    # Division can round a quotient down at an exact floating-point boundary.
+    # Recheck the actual step so the maximum-increment promise is never exceeded.
+    if actual_step > maximum_step:
+        intervals += 1
+        actual_step = span / intervals
+    return tuple(
+        start
+        if index == 0
+        else end
+        if index == intervals
+        else start + index * actual_step
+        for index in range(intervals + 1)
+    )
+
+
 def solve_plastic(
     section: Section,
     concrete: Concrete,
@@ -974,9 +1022,7 @@ def solve_plastic(
     """
     section.require_valid_analysis_inputs()
     P = finite_action(P, "axial force P")
-    v_min = finite_action(v_min, "minimum neutral-axis angle")
-    v_max = finite_action(v_max, "maximum neutral-axis angle")
-    v_inc = finite_action(v_inc, "neutral-axis angle increment")
+    sweep_angles = plastic_sweep_angles(v_min, v_max, v_inc)
     n_bar = len(section.bar_arrays()[2])
     n_tendon = len(section.tendon_arrays()[2])
     bar_laws = _material_sequence(steel, bar_materials, n_bar, "bar")
@@ -986,10 +1032,7 @@ def solve_plastic(
     prep = _prep_section(section, bool(tendon_laws))   # angle-independent, built once
     band_memo: dict = {}                        # shared across all angles of the sweep
     points = []
-    # Step count from the increment, guarding against floating-point drift.
-    n = int(round((v_max - v_min) / v_inc)) if v_inc else 0
-    for i in range(n + 1):
-        v = v_min + i * v_inc
+    for v in sweep_angles:
         points.append(
             plastic_capacity_at_angle(section, concrete, steel, P, v,
                                       prestress=prestress,
