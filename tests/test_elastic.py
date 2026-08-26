@@ -160,13 +160,22 @@ def test_invalid_actions_are_rejected_before_elastic_iteration(
     assert calls == []
 
 
-def test_mutated_nonpositive_bar_area_is_rejected_before_elastic_iteration(
+@pytest.mark.parametrize(
+    "invalid_bar",
+    (
+        Bar(0.0, 0.0, -1.0e-6),
+        Bar(True, 0.0, 1.0e-6),
+        Bar(0.0, 0.0, np.bool_(True)),
+    ),
+)
+def test_mutated_invalid_bar_is_rejected_before_elastic_iteration(
     monkeypatch,
+    invalid_bar,
 ):
     import sector.elastic as elastic_core
 
     section = rectangular_section()
-    section.bars = [Bar(0.0, 0.0, -1.0e-6)]
+    section.bars = [invalid_bar]
     calls = []
 
     def forbidden_iteration(*_args, **_kwargs):
@@ -175,7 +184,7 @@ def test_mutated_nonpositive_bar_area_is_rejected_before_elastic_iteration(
 
     monkeypatch.setattr(elastic_core, "_newton_solve", forbidden_iteration)
 
-    with pytest.raises(ValueError, match="area must be positive and finite"):
+    with pytest.raises(ValueError, match="bar 1"):
         solve_elastic(section, 0.0, 0.0, 0.0, 25.0)
     assert calls == []
 

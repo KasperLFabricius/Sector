@@ -112,9 +112,19 @@ class Section:
         converted to m^2 on the way in.
         """
         rings = [corners, *holes]
-        bars = [Bar(float(x), float(y), float(a) * MM2_TO_M2) for x, y, a in bars_xy_area_mm2]
-        tendons = [Bar(float(x), float(y), float(a) * MM2_TO_M2)
-                   for x, y, a in tendons_xy_area_mm2]
+
+        def _elements(values, label):
+            return [
+                Bar(
+                    finite_action(x, f"{label} {index} x coordinate"),
+                    finite_action(y, f"{label} {index} y coordinate"),
+                    finite_action(area, f"{label} {index} area") * MM2_TO_M2,
+                )
+                for index, (x, y, area) in enumerate(values, start=1)
+            ]
+
+        bars = _elements(bars_xy_area_mm2, "bar")
+        tendons = _elements(tendons_xy_area_mm2, "tendon")
         return cls(rings, bars, tendons)
 
     # -- derived geometry ----------------------------------------------------
@@ -145,9 +155,10 @@ class Section:
             raise ValueError(f"{label} reinforcement must be a sequence") from exc
         for index, element in enumerate(retained, start=1):
             try:
-                x = float(element.x)
-                y = float(element.y)
-                area = float(element.area)
+                values = (element.x, element.y, element.area)
+                if any(isinstance(value, (bool, np.bool_)) for value in values):
+                    raise ValueError("Boolean reinforcement value")
+                x, y, area = (float(value) for value in values)
             except (AttributeError, TypeError, ValueError, OverflowError) as exc:
                 raise ValueError(
                     f"{label} {index} must have finite coordinates and a positive area"

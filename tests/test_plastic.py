@@ -602,13 +602,22 @@ def test_invalid_actions_are_rejected_before_plastic_iteration(
     assert calls == []
 
 
-def test_mutated_nonpositive_tendon_area_is_rejected_before_plastic_iteration(
+@pytest.mark.parametrize(
+    "invalid_tendon",
+    (
+        Bar(0.0, 0.0, 0.0),
+        Bar(np.bool_(True), 0.0, 1.0e-6),
+        Bar(0.0, 0.0, True),
+    ),
+)
+def test_mutated_invalid_tendon_is_rejected_before_plastic_iteration(
     monkeypatch,
+    invalid_tendon,
 ):
     import sector.plastic as plastic_core
 
     section = _rect_with_top_and_bottom_bars()
-    section.tendons = [Bar(0.0, 0.0, 0.0)]
+    section.tendons = [invalid_tendon]
     calls = []
 
     def forbidden_accumulation(*_args, **_kwargs):
@@ -617,6 +626,6 @@ def test_mutated_nonpositive_tendon_area_is_rejected_before_plastic_iteration(
 
     monkeypatch.setattr(plastic_core, "_accumulate", forbidden_accumulation)
 
-    with pytest.raises(ValueError, match="area must be positive and finite"):
+    with pytest.raises(ValueError, match="tendon 1"):
         plastic_capacity_at_angle(section, _C30, _B500, 0.0, 90.0)
     assert calls == []
