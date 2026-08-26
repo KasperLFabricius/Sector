@@ -3367,6 +3367,106 @@ def test_slab_density_tendon_uses_nominal_physical_axes_in_native_2005_check():
     assert operands["nearest_neighbour_spacing"] != pytest.approx(31.25)
 
 
+def test_slab_density_tendon_cover_ignores_artificial_strip_sides():
+    import reinforcement_table as rt
+    import sector_app
+
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        at,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_s", 600.0),
+        ("number_input", "top_s", 600.0),
+        ("number_input", "tnd_n", 1),
+        ("number_input", "tnd_c_mm", 50.0),
+    )
+    _apply_qs(at)
+
+    tendons = at.session_state["tendons_base"].copy(deep=True)
+    tendons.loc[0, rt.X] = 460.0
+    _submit_point_grid_rows(at, "tendons_base", tendons)
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("selectbox", "sls_code", _SLS_BASE),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )
+
+    diameter_mm = float(at.session_state["tendons_base"].loc[0, rt.DIAMETER])
+    x_mm = float(at.session_state["tendons_base"].loc[0, rt.X])
+    y_mm = float(at.session_state["tendons_base"].loc[0, rt.Y])
+    expected_cover_mm = min(y_mm + 150.0, 150.0 - y_mm) - diameter_mm / 2.0
+    artificial_side_cover_mm = 500.0 - abs(x_mm) - diameter_mm / 2.0
+    assert artificial_side_cover_mm < expected_cover_mm
+    for code in (_SLS_BASE, _SLS_2023):
+        if code != _SLS_BASE:
+            _set_and_click(
+                at,
+                "calculate",
+                ("selectbox", "sls_code", code),
+                ("number_input", "sls_tendon_xi", 0.5),
+            )
+        crack = at.session_state["results"]["elastic"]["crack"]
+        density_state = at.session_state["_latest_inputs"].get("slab_density")
+        assert crack is not None, (
+            code,
+            {
+                key: (value.get("calculation_state"), value.get("reason"))
+                for key, value in at.session_state["results"]["elastic"][
+                    "crack_output"
+                ].items()
+            },
+            None
+            if density_state is None
+            else (density_state.get("status"), density_state.get("reason")),
+        )
+        candidate_types = sorted(
+            {candidate["element_type"] for candidate in crack["candidates"]}
+        )
+        tendon_row = at.session_state["tendons_base"].iloc[0]
+        assert "Tendon" in candidate_types, (
+            f"{code}: candidate types={candidate_types}; "
+            f"tendon x={tendon_row[rt.X]}, y={tendon_row[rt.Y]}, "
+            f"diameter={tendon_row[rt.DIAMETER]}"
+        )
+        tendon = next(
+            candidate
+            for candidate in crack["candidates"]
+            if candidate["element_type"] == "Tendon"
+        )
+        assert tendon["cover"] == pytest.approx(expected_cover_mm)
+        assert tendon["cover"] > 40.0
+
+    tendons = at.session_state["tendons_base"].copy(deep=True)
+    tendons.loc[0, rt.Y] = -149.0
+    _submit_point_grid_rows(at, "tendons_base", tendons)
+    _calculate(at)
+
+    results = at.session_state["results"]["elastic"]
+    assert results["crack"] is None
+    assert results["crack_output"]
+    assert all(
+        output["calculation_state"] == "NOT ASSESSED"
+        and output["reason"] == sector_app._SLAB_TENDON_FACE_GUIDANCE
+        for output in results["crack_output"].values()
+    )
+    _select_view(at, "Elastic Results")
+    visible = "\n".join(
+        str(item.value)
+        for kind in ("warning", "info", "error", "caption", "markdown")
+        for item in at.get(kind)
+    )
+    assert sector_app._SLAB_TENDON_FACE_GUIDANCE in visible
+    assert not re.search(
+        r"\b(?:hash|payload|schema|contract|private|internal)\b",
+        visible,
+        flags=re.IGNORECASE,
+    )
+
+
 def test_native_density_spacing_is_reciprocal_for_off_centre_tendon_and_biaxial():
     import reinforcement_table as rt
     import sector_app

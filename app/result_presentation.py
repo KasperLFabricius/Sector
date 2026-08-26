@@ -319,6 +319,10 @@ _CRACK_REASON_MESSAGES = {
         "CRACK-ACTION-STATE-SCOPE",
         "The selected action state is outside the validated ordinary crack-width scope.",
     ),
+    "Move every tendon far enough inside the physical top and bottom slab faces to provide non-negative clear cover before relying on crack-width results.": EngineerMessage(
+        "CRACK-SLAB-TENDON-COVER",
+        "Move every tendon far enough inside the physical top and bottom slab faces to provide non-negative clear cover before relying on crack-width results.",
+    ),
     "Section uncracked; no width is available.": EngineerMessage(
         "CRACK-SECTION-UNCRACKED",
         "Section uncracked; no width is available.",

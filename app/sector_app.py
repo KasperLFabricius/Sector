@@ -4678,6 +4678,40 @@ _SLAB_DENSITY_GUIDANCE = (
     "Reapply the slab layout, or define explicit bars, before relying on "
     "crack-width or clear-spacing results."
 )
+_SLAB_TENDON_FACE_GUIDANCE = (
+    "Move every tendon far enough inside the physical top and bottom slab "
+    "faces to provide non-negative clear cover before relying on crack-width "
+    "results."
+)
+
+
+def _slab_tendon_face_clear_cover_mm(y_m, diameter_mm, outer):
+    """Clear tendon cover to a real slab face, ignoring unit-strip side cuts."""
+
+    if isinstance(y_m, (bool, np.bool_)) or isinstance(
+        diameter_mm, (bool, np.bool_)
+    ):
+        raise ValueError("slab tendon cover inputs must be numeric")
+    y_m = float(y_m)
+    diameter_mm = float(diameter_mm)
+    face_coordinates = [float(point[1]) for point in outer]
+    if (
+        not face_coordinates
+        or not math.isfinite(y_m)
+        or not math.isfinite(diameter_mm)
+        or diameter_mm <= 0.0
+        or any(not math.isfinite(value) for value in face_coordinates)
+    ):
+        raise ValueError("slab tendon cover inputs must be finite")
+    bottom_face = min(face_coordinates)
+    top_face = max(face_coordinates)
+    clear_cover_mm = (
+        min(y_m - bottom_face, top_face - y_m) * _MM
+        - diameter_mm / 2.0
+    )
+    if clear_cover_mm < -1.0e-9:
+        raise ValueError("slab tendon envelope is outside a physical face")
+    return max(clear_cover_mm, 0.0)
 
 
 def _slab_density_layout(
@@ -9043,20 +9077,24 @@ def _run_single_analysis(
                 ]
                 if inp["tendons"]:
                     rings = list(sec.integration_rings())
-                    crack_cover.extend(
-                        max(
-                            geometry.distance_to_boundary(
-                                float(item["x"]), float(item["y"]), rings
-                            ) * _MM - float(item["diameter_mm"]) / 2.0,
-                            0.0,
-                        )
-                        for item in inp.get("tendon_elements", [])
-                    )
+                    tendon_elements = list(inp.get("tendon_elements", []))
+                    try:
+                        tendon_cover = [
+                            _slab_tendon_face_clear_cover_mm(
+                                item["y"], item["diameter_mm"], rings[0]
+                            )
+                            for item in tendon_elements
+                        ]
+                    except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+                        physical_geometry_available = False
+                        physical_geometry_reason = _SLAB_TENDON_FACE_GUIDANCE
+                        tendon_cover = [0.0] * len(tendon_elements)
+                    crack_cover.extend(tendon_cover)
                     crack_spacing.extend(
-                        math.nan for _item in inp.get("tendon_elements", [])
+                        math.nan for _item in tendon_elements
                     )
                     physical_spacing_groups.extend(
-                        None for _item in inp.get("tendon_elements", [])
+                        None for _item in tendon_elements
                     )
                 physical_spacing_points = [
                     (

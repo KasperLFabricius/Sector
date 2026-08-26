@@ -60,6 +60,20 @@ def test_minimum_reinforcement_moving_direction_failure_has_authored_guidance():
     )
 
 
+def test_slab_tendon_face_failure_has_authored_crack_guidance():
+    retained = (
+        "Move every tendon far enough inside the physical top and bottom slab "
+        "faces to provide non-negative clear cover before relying on crack-width "
+        "results."
+    )
+
+    assert presentation.result_reason(
+        retained,
+        "crack",
+        context="QS-H01 public result",
+    ) == retained
+
+
 @pytest.mark.parametrize(
     ("retained", "expected_mm"),
     ((0.275, 275.0), (0.0, 0.0), (-0.0, 0.0), (np.float64(0.125), 125.0)),
