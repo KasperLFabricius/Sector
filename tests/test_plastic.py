@@ -532,6 +532,42 @@ def test_plastic_capacity_rejects_incomplete_material_assignment(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("label", "material_assignment"),
+    (
+        ("bar", {"bar_materials": [_B500]}),
+        ("tendon", {"tendon_materials": [object()]}),
+    ),
+)
+def test_plastic_capacity_rejects_material_for_empty_element_family(
+    monkeypatch,
+    label,
+    material_assignment,
+):
+    import sector.plastic as plastic_core
+
+    section = Section.from_polygon(
+        corners=[(0.0, 0.0), (0.3, 0.0), (0.3, 0.6), (0.0, 0.6)],
+    )
+    calls = []
+
+    def forbidden_accumulation(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("zero-count material mismatch reached plastic iteration")
+
+    monkeypatch.setattr(plastic_core, "_accumulate", forbidden_accumulation)
+    with pytest.raises(ValueError, match=f"need 0 {label} materials, got 1"):
+        plastic_capacity_at_angle(
+            section,
+            _C30,
+            _B500,
+            0.0,
+            90.0,
+            **material_assignment,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize(
     ("P", "V_deg"),
     (
         (float("nan"), 90.0),

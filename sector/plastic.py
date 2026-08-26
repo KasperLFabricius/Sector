@@ -222,16 +222,16 @@ class PlasticPoint:
 
 def _material_sequence(default, specific, count, label):
     """Return one material law per element while preserving the scalar API."""
+    if specific is not None:
+        laws = tuple(specific)
+        if len(laws) != count:
+            raise ValueError(f"need {count} {label} materials, got {len(laws)}")
+        return laws
     if count == 0:
         return ()
-    if specific is None:
-        if default is None:
-            raise ValueError(f"{label} material is required for {count} element(s)")
-        return (default,) * count
-    laws = tuple(specific)
-    if len(laws) != count:
-        raise ValueError(f"need {count} {label} materials, got {len(laws)}")
-    return laws
+    if default is None:
+        raise ValueError(f"{label} material is required for {count} element(s)")
+    return (default,) * count
 
 
 def _curvature_at_depth(
