@@ -25,7 +25,7 @@ from sector.plastic import (
     plastic_capacity_at_angle,
     solve_plastic,
 )
-from sector.section import Section
+from sector.section import Bar, Section
 from sector.shear import effective_depth, tension_reinforcement
 
 
@@ -513,9 +513,72 @@ def test_plastic_capacity_uses_each_bars_assigned_material():
     assert repeated.My == scalar.My
 
 
-def test_plastic_capacity_rejects_incomplete_material_assignment():
+def test_plastic_capacity_rejects_incomplete_material_assignment(monkeypatch):
+    import sector.plastic as plastic_core
+
     section = _rect_with_top_and_bottom_bars()
+    calls = []
+
+    def forbidden_accumulation(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("material-count mismatch reached plastic iteration")
+
+    monkeypatch.setattr(plastic_core, "_accumulate", forbidden_accumulation)
     with pytest.raises(ValueError, match="need 2 bar materials, got 1"):
         plastic_capacity_at_angle(
             section, _C30, _B500, 0.0, 90.0, bar_materials=[_B500]
         )
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("P", "V_deg"),
+    (
+        (float("nan"), 90.0),
+        (0.0, float("inf")),
+    ),
+)
+def test_nonfinite_actions_are_rejected_before_plastic_iteration(
+    monkeypatch,
+    P,
+    V_deg,
+):
+    import sector.plastic as plastic_core
+
+    calls = []
+
+    def forbidden_accumulation(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("invalid action reached plastic iteration")
+
+    monkeypatch.setattr(plastic_core, "_accumulate", forbidden_accumulation)
+
+    with pytest.raises(ValueError, match="finite"):
+        plastic_capacity_at_angle(
+            _rect_with_top_and_bottom_bars(),
+            _C30,
+            _B500,
+            P,
+            V_deg,
+        )
+    assert calls == []
+
+
+def test_mutated_nonpositive_tendon_area_is_rejected_before_plastic_iteration(
+    monkeypatch,
+):
+    import sector.plastic as plastic_core
+
+    section = _rect_with_top_and_bottom_bars()
+    section.tendons = [Bar(0.0, 0.0, 0.0)]
+    calls = []
+
+    def forbidden_accumulation(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("invalid tendon reached plastic iteration")
+
+    monkeypatch.setattr(plastic_core, "_accumulate", forbidden_accumulation)
+
+    with pytest.raises(ValueError, match="area must be positive and finite"):
+        plastic_capacity_at_angle(section, _C30, _B500, 0.0, 90.0)
+    assert calls == []

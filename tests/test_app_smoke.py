@@ -421,6 +421,48 @@ def test_app_empty_result_reads_not_calculated():
     assert not any("up to date" in c for c in caps)
 
 
+def test_live_negative_reinforcement_area_blocks_solver_and_result(
+    monkeypatch,
+):
+    import reinforcement_table as rebar_table
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _goto_input_tab(at, "Section")
+    bars = at.session_state["bars_base"].copy(deep=True)
+    assert not bars.empty
+    bars.loc[0, rebar_table.SIZE_MODE] = rebar_table.AREA_MODE
+    bars.loc[0, rebar_table.AREA] = -100.0
+    _replace_base_table(at, "bars_base", bars)
+
+    assert not at.exception
+    latest = at.session_state["_latest_inputs"]
+    assert latest["steel_error"] is not None
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("error", "warning", "caption", "info")
+        for item in getattr(at, element_type)
+    )
+    assert "positive area and diameter for every bar and tendon" in visible
+
+    solver_calls = []
+
+    def forbidden_solver(*_args, **_kwargs):
+        solver_calls.append(True)
+        raise AssertionError("invalid reinforcement reached a solver")
+
+    monkeypatch.setattr(sector_app, "solve_plastic", forbidden_solver)
+    monkeypatch.setattr(sector_app, "solve_elastic_combined", forbidden_solver)
+    assert sector_app.run_analysis(latest) == {}
+    assert solver_calls == []
+
+    _calculate(at)
+    assert not at.exception
+    assert "results" not in at.session_state
+    assert "result_input_snapshot" not in at.session_state
+
+
 def test_live_curve_figures_are_memoised():
     # The co-located concrete preview is rebuilt only when its material actually
     # changes; an unrelated rerun reuses the cached figure.

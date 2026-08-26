@@ -66,3 +66,32 @@ def test_bar_arrays_shapes():
     x, y, a = sec.bar_arrays()
     assert x.shape == y.shape == a.shape == (2,)
     assert a[1] == pytest.approx(200.0 * MM2_TO_M2)
+
+
+@pytest.mark.parametrize("kind", ("bar", "tendon"))
+@pytest.mark.parametrize(
+    "point",
+    (
+        (float("nan"), 0.2, 100.0),
+        (0.1, float("inf"), 100.0),
+        (0.1, 0.2, 0.0),
+        (0.1, 0.2, -100.0),
+        (0.1, 0.2, float("nan")),
+        (0.1, 0.2, float("inf")),
+    ),
+)
+def test_section_rejects_invalid_bar_and_tendon_coordinates_or_area(
+    kind,
+    point,
+):
+    reinforcement = {
+        "bars_xy_area_mm2": [point],
+        "tendons_xy_area_mm2": [point],
+    }
+    selected = {kind + "s_xy_area_mm2": reinforcement[kind + "s_xy_area_mm2"]}
+
+    with pytest.raises(ValueError):
+        Section.from_polygon(
+            corners=[(0, 0), (1, 0), (1, 1), (0, 1)],
+            **selected,
+        )

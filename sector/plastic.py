@@ -31,7 +31,7 @@ import numpy as np
 from . import kernels
 from .geometry import _clip_pts, _poly_moments
 from .materials import Concrete, MildSteel, Prestress
-from .section import Section
+from .section import Section, finite_action
 
 _MN_TO_KN = 1000.0
 
@@ -606,7 +606,7 @@ def _prep_section(section: Section, include_tendons: bool) -> _SectionPrep:
     The pure-Python ring point-lists are built only when the kernel is unavailable --
     the compiled path never reads them.
     """
-    section.require_valid_geometry()
+    section.require_valid_analysis_inputs()
     int_rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
     if include_tendons:
@@ -741,6 +741,9 @@ def plastic_capacity_at_angle(
     omitted, the scalar ``steel`` / ``prestress`` law is repeated for every
     corresponding element, preserving the original API.
     """
+    section.require_valid_analysis_inputs()
+    P = finite_action(P, "axial force P")
+    V_deg = finite_action(V_deg, "neutral-axis angle")
     V = math.radians(V_deg)
     dx, dy = math.cos(V), math.sin(V)
 
@@ -969,8 +972,18 @@ def solve_plastic(
     Returns one :class:`PlasticPoint` per angle, the biaxial capacity envelope
     for the axial force ``P``.
     """
-    include_tendons = prestress is not None or tendon_materials is not None
-    prep = _prep_section(section, include_tendons)   # angle-independent, built once
+    section.require_valid_analysis_inputs()
+    P = finite_action(P, "axial force P")
+    v_min = finite_action(v_min, "minimum neutral-axis angle")
+    v_max = finite_action(v_max, "maximum neutral-axis angle")
+    v_inc = finite_action(v_inc, "neutral-axis angle increment")
+    n_bar = len(section.bar_arrays()[2])
+    n_tendon = len(section.tendon_arrays()[2])
+    bar_laws = _material_sequence(steel, bar_materials, n_bar, "bar")
+    tendon_laws = _material_sequence(
+        prestress, tendon_materials, n_tendon, "tendon"
+    ) if (prestress is not None or tendon_materials is not None) else ()
+    prep = _prep_section(section, bool(tendon_laws))   # angle-independent, built once
     band_memo: dict = {}                        # shared across all angles of the sweep
     points = []
     # Step count from the increment, guarding against floating-point drift.
@@ -980,8 +993,8 @@ def solve_plastic(
         points.append(
             plastic_capacity_at_angle(section, concrete, steel, P, v,
                                       prestress=prestress,
-                                      bar_materials=bar_materials,
-                                      tendon_materials=tendon_materials,
+                                      bar_materials=bar_laws,
+                                      tendon_materials=tendon_laws or None,
                                       n_bands=n_bands, prep=prep,
                                       band_memo=band_memo)
         )
@@ -1021,6 +1034,8 @@ def solve_interaction(
     if n_points < 1:
         raise ValueError("n_points must be at least 1")
 
+    section.require_valid_analysis_inputs()
+    V_deg = finite_action(V_deg, "neutral-axis angle")
     bx, by, ba = section.bar_arrays()
     tx, ty, ta = section.tendon_arrays()
     bar_laws = _material_sequence(steel, bar_materials, len(ba), "bar")
@@ -1127,16 +1142,24 @@ def conditional_capacity(
     solve failed to converge where a crossing could hide, so the caller should fall
     back to the pure-axis capacity.
     """
+    section.require_valid_analysis_inputs()
+    P = finite_action(P, "axial force P")
+    m_off = finite_action(m_off, "coexisting bending moment")
+    n_bar = len(section.bar_arrays()[2])
+    n_tendon = len(section.tendon_arrays()[2])
+    bar_laws = _material_sequence(steel, bar_materials, n_bar, "bar")
+    tendon_laws = _material_sequence(
+        prestress, tendon_materials, n_tendon, "tendon"
+    ) if (prestress is not None or tendon_materials is not None) else ()
     v0 = FACE_ANGLE[(axis, tension_low)]
-    include_tendons = prestress is not None or tendon_materials is not None
-    prep = _prep_section(section, include_tendons)
+    prep = _prep_section(section, bool(tendon_laws))
     band_memo: dict = {}
 
     def _cap(v):
         return plastic_capacity_at_angle(section, concrete, steel, P, v,
                                          prestress=prestress,
-                                         bar_materials=bar_materials,
-                                         tendon_materials=tendon_materials,
+                                         bar_materials=bar_laws,
+                                         tendon_materials=tendon_laws or None,
                                          n_bands=n_bands,
                                          prep=prep, band_memo=band_memo)
 
@@ -1146,7 +1169,7 @@ def conditional_capacity(
     def _own(pt):
         return pt.Mx if axis == "x" else pt.My
 
-    target = float(m_off)
+    target = m_off
     want_positive = tension_low        # the chosen face carries own of this sign
 
     # Pure-axis probe: if the companion there already equals the target (any
