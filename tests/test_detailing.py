@@ -1044,8 +1044,10 @@ def test_2023_nominal_refinement_bounds_moved_windows_before_radial_work(
         (90.0, 1.0),
     ])
     radial_point_counts = []
+    solved_windows = []
 
     def fake_solve(*args, **_kwargs):
+        solved_windows.append(tuple(float(value) for value in args[4:7]))
         angles = detailing._module("plastic").plastic_sweep_angles(*args[4:7])
         return [
             _nominal_point(angle, 0.0, angle=angle)
@@ -1108,6 +1110,22 @@ def test_2023_nominal_refinement_bounds_moved_windows_before_radial_work(
     solution = result["checks"][0]["nominal_solution"]
     history = solution["refinement_history"]
     assert radial_point_counts == [24, 52, 72, 80, 3080]
+    expected_windows = [
+        (0.0, 345.0, 15.0),
+        (-15.0, 15.0, 1.0),
+        (-1.0, 1.0, 0.1),
+        (-1.0 / 21.0, 1.0 / 21.0, 0.01),
+        (165.0, 195.0, 0.01),
+    ]
+    assert len(solved_windows) == len(expected_windows)
+    for actual, expected in zip(solved_windows, expected_windows):
+        assert actual == pytest.approx(expected)
+    assert not any(
+        start == pytest.approx(75.0)
+        and end == pytest.approx(105.0)
+        and increment == pytest.approx(0.01)
+        for start, end, increment in solved_windows
+    )
     assert max(radial_point_counts) <= point_limit
     assert solution["accepted_point_count"] == 3080
     assert solution["accepted_point_count"] <= point_limit
@@ -1120,6 +1138,126 @@ def test_2023_nominal_refinement_bounds_moved_windows_before_radial_work(
     assert result["reason"] == (
         "nominal governing interval could not be refined consistently"
     )
+
+
+@pytest.mark.parametrize(
+    ("point_angles", "expected_count", "work_expected"),
+    (
+        ((0.0, 120.0, 240.0), 4097, True),
+        ((0.0, 120.0, 180.0, 240.0), 4098, False),
+    ),
+)
+def test_2023_nominal_refinement_preflights_exact_inclusive_point_limit(
+    monkeypatch,
+    point_angles,
+    expected_count,
+    work_expected,
+):
+    section, _elements, materials = _rectangle()
+    points = [
+        _nominal_point(angle, 0.0, angle=angle)
+        for angle in point_angles
+    ]
+    increment = (240.0 / 4095.0) * (1.0 + 1.0e-12)
+    window = detailing._nominal_refinement_window(points, 0)
+    assert window == pytest.approx((-120.0, 120.0))
+    sweep_angles = detailing._module("plastic").plastic_sweep_angles(
+        *window, increment
+    )
+    refined = [
+        _nominal_point(angle, 0.0, angle=angle)
+        for angle in sweep_angles
+    ]
+    actually_merged = detailing._merge_nominal_points(points, refined)
+    prospective_count = detailing._nominal_refined_point_count(
+        points, 0, increment
+    )
+
+    assert prospective_count == expected_count
+    assert len(actually_merged) == expected_count
+    assert len({
+        round(detailing._nominal_angle(point), 12)
+        for point in actually_merged
+    }) == expected_count
+
+    solve_calls = []
+    radial_point_counts = []
+
+    def fake_solve(*args, **_kwargs):
+        solve_calls.append(tuple(float(value) for value in args[4:7]))
+        angles = detailing._module("plastic").plastic_sweep_angles(*args[4:7])
+        return [
+            _nominal_point(angle, 0.0, angle=angle)
+            for angle in angles
+        ]
+
+    def fake_radial(mx_values, _my_values, *_args, **_kwargs):
+        radial_point_counts.append(len(mx_values))
+        return SimpleNamespace(
+            demand=1.0,
+            resistance=1.0,
+            utilisation=1.0,
+            governing_index=1,
+            valid=True,
+            reason=None,
+            origin_inside_or_on=True,
+        )
+
+    monkeypatch.setattr(detailing, "solve_plastic", fake_solve)
+    monkeypatch.setattr(
+        detailing._module("combined"), "radial_util_result", fake_radial
+    )
+    prior_radial = SimpleNamespace(
+        demand=1.0,
+        resistance=1.0 / 0.99,
+        utilisation=0.99,
+        governing_index=0,
+        valid=True,
+        reason=None,
+        origin_inside_or_on=True,
+    )
+
+    returned_points, returned_radial, stage, failure_state, reason = (
+        detailing._resolve_nominal_refinement_stage(
+            section,
+            Concrete(30.0, gamma_c=1.5),
+            materials[0],
+            materials,
+            0.0,
+            points,
+            prior_radial,
+            1.0,
+            0.0,
+            increment,
+        )
+    )
+
+    point_limit = detailing._module("plastic").PLASTIC_SWEEP_MAX_POINTS
+    assert point_limit == 4097
+    if work_expected:
+        assert len(solve_calls) == 1
+        assert radial_point_counts == [point_limit]
+        assert len(returned_points) == point_limit
+        assert returned_radial is not prior_radial
+        assert stage["accepted_point_count"] == point_limit
+        assert stage["resolution_achieved"] is True
+        assert failure_state is None
+        assert reason is None
+    else:
+        assert solve_calls == []
+        assert radial_point_counts == []
+        assert returned_points is points
+        assert returned_radial is prior_radial
+        assert stage["accepted_point_count"] == len(points)
+        assert stage["utilisation"] == pytest.approx(prior_radial.utilisation)
+        assert stage["resistance_knm"] == pytest.approx(prior_radial.resistance)
+        assert stage["governing_angle_deg"] == pytest.approx(0.0)
+        assert stage["governing_interval_deg"] == pytest.approx(120.0)
+        assert stage["resolution_achieved"] is False
+        assert failure_state == "UNRESOLVED"
+        assert reason == (
+            "nominal governing interval could not be refined consistently"
+        )
 
 
 def test_2023_nominal_refinement_rejects_coarse_initial_solver_evidence(

@@ -593,11 +593,17 @@ def _nominal_point_solution(point, *, method: str) -> dict:
     }
 
 
+def _canonical_nominal_angle(value: float) -> float:
+    """Return one angle on the canonical full-turn interval."""
+
+    angle = float(value) % 360.0
+    return 0.0 if angle == 360.0 else angle
+
+
 def _nominal_angle(point) -> float:
     """Return one neutral-axis angle on the canonical full-turn interval."""
 
-    angle = float(point.V) % 360.0
-    return 0.0 if angle == 360.0 else angle
+    return _canonical_nominal_angle(point.V)
 
 
 def _merge_nominal_points(*point_sets) -> list:
@@ -680,6 +686,52 @@ def _nominal_refinement_stage(points, radial, increment_deg: float) -> dict:
     }
 
 
+def _nominal_refinement_window(
+    points,
+    governing_index: int | None,
+) -> tuple[float, float] | None:
+    """Return the two cyclic chords beside one governing envelope point."""
+
+    if governing_index is None or len(points) < 2:
+        return None
+    if not 0 <= governing_index < len(points):
+        return None
+    angles = [_nominal_angle(point) for point in points]
+    current = angles[governing_index]
+    previous = angles[governing_index - 1]
+    following = angles[(governing_index + 1) % len(angles)]
+    if previous >= current:
+        previous -= 360.0
+    if following <= current:
+        following += 360.0
+    return previous, following
+
+
+def _nominal_refined_point_count(
+    points,
+    governing_index: int | None,
+    increment_deg: float,
+) -> int:
+    """Count the merged refinement angles before any capacity solve is run."""
+
+    window = _nominal_refinement_window(points, governing_index)
+    if window is None:
+        return len(points)
+    start, end = window
+    sweep_angles = _module("plastic").plastic_sweep_angles(
+        start, end, increment_deg
+    )
+    merged_angles = {
+        round(_nominal_angle(point), 12)
+        for point in points
+    }
+    merged_angles.update(
+        round(_canonical_nominal_angle(angle), 12)
+        for angle in sweep_angles
+    )
+    return len(merged_angles)
+
+
 def _refine_nominal_governing_window(
     section: Section,
     concrete,
@@ -692,18 +744,10 @@ def _refine_nominal_governing_window(
 ) -> list:
     """Refine both chords adjacent to the selected envelope point."""
 
-    if governing_index is None or len(points) < 2:
+    window = _nominal_refinement_window(points, governing_index)
+    if window is None:
         return list(points)
-    if not 0 <= governing_index < len(points):
-        return list(points)
-    angles = [_nominal_angle(point) for point in points]
-    current = angles[governing_index]
-    previous = angles[governing_index - 1]
-    following = angles[(governing_index + 1) % len(angles)]
-    if previous >= current:
-        previous -= 360.0
-    if following <= current:
-        following += 360.0
+    previous, following = window
     refined = solve_plastic(
         section,
         concrete,
@@ -736,6 +780,24 @@ def _resolve_nominal_refinement_stage(
     prior_point_count = len(points)
     stage = _nominal_refinement_stage(points, radial, increment_deg)
     for window_count in range(1, _NOMINAL_MAX_REFINEMENT_WINDOWS_PER_STAGE + 1):
+        if (
+            _nominal_refined_point_count(
+                points,
+                radial.governing_index,
+                increment_deg,
+            )
+            > point_limit
+        ):
+            stage = _nominal_refinement_stage(points, radial, increment_deg)
+            stage["refinement_window_count"] = window_count
+            stage["resolution_achieved"] = False
+            return (
+                points,
+                radial,
+                stage,
+                "UNRESOLVED",
+                "nominal governing interval could not be refined consistently",
+            )
         candidate_points = _refine_nominal_governing_window(
             section,
             concrete,
