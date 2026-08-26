@@ -2945,9 +2945,23 @@ def test_finalize_combined_builds_valid_payload(monkeypatch):
     )
 
 
-def test_finalize_combined_separate_route_is_assumption_only(monkeypatch):
+@pytest.mark.parametrize(
+    ("m_demand", "expected_sum", "expected_status", "expected_ok"),
+    [
+        (0.6, 0.90, "CONDITIONAL", None),
+        (0.8, 1.10, "FAIL", False),
+    ],
+    ids=["within-limit", "over-limit"],
+)
+def test_finalize_combined_separate_route_is_assumption_only(
+    monkeypatch,
+    m_demand,
+    expected_sum,
+    expected_status,
+    expected_ok,
+):
     n = capacity._dkna_action_record("N", 0.0, None, valid=True)
-    m = capacity._dkna_action_record("M", 0.6, 1.0, valid=True)
+    m = capacity._dkna_action_record("M", m_demand, 1.0, valid=True)
     v = capacity._dkna_action_record("V", 0.4, 1.0, valid=True)
     t = capacity._dkna_action_record("T", 0.3, 1.0, valid=True)
     inp = _member_input(
@@ -2972,12 +2986,12 @@ def test_finalize_combined_separate_route_is_assumption_only(monkeypatch):
     capacity.finalize_combined(inp, out)
     result = out["combined"]
 
-    assert result["dkna_sum"] == pytest.approx(0.90)
+    assert result["dkna_sum"] == pytest.approx(expected_sum)
     assert result["dkna_valid"] is True
-    assert result["dkna_limit_satisfied"] is True
+    assert result["dkna_limit_satisfied"] is (expected_sum <= 1.0)
     assert result["dkna_conditional"] is True
-    assert result["dkna_status"] == "CONDITIONAL"
-    assert result["dkna_ok"] is None
+    assert result["dkna_status"] == expected_status
+    assert result["dkna_ok"] is expected_ok
     condition = result["m_v_separation_condition"]
     assert condition["declared"] is True
     assert condition["confirmed"] is False

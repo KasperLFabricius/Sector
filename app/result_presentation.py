@@ -549,11 +549,14 @@ def combined_dkna_limit_satisfied(result):
     """Return the numerical limit comparison without promoting its authority."""
 
     result = result or {}
+    utilisation = _publication_metric(result.get("dkna_sum"))
+    if utilisation is None:
+        return None
+    calculated = viz.util_ok(utilisation)
     retained = result.get("dkna_limit_satisfied")
     if type(retained) is bool:
-        return retained
-    utilisation = _publication_metric(result.get("dkna_sum"))
-    return None if utilisation is None else viz.util_ok(utilisation)
+        return retained and calculated
+    return calculated
 
 
 def combined_dkna_status(result):
@@ -564,15 +567,15 @@ def combined_dkna_status(result):
     dkna_valid = result.get("dkna_valid", valid) is True
     if not valid or not dkna_valid:
         return "NOT ASSESSED"
-    if result.get("m_v_independent") is True:
-        return "CONDITIONAL"
-    retained = str(result.get("dkna_status") or "").upper()
-    if retained in {"PASS", "FAIL"}:
-        return retained
     satisfied = combined_dkna_limit_satisfied(result)
     if satisfied is None:
         return "NOT ASSESSED"
-    return "PASS" if satisfied else "FAIL"
+    if not satisfied:
+        return "FAIL"
+    if result.get("m_v_independent") is True:
+        return "CONDITIONAL"
+    retained = str(result.get("dkna_status") or "").upper()
+    return retained if retained in {"PASS", "FAIL"} else "PASS"
 
 
 def combined_dkna_assumption_note(result):
@@ -581,17 +584,23 @@ def combined_dkna_assumption_note(result):
     if (result or {}).get("m_v_independent") is not True:
         return ""
     satisfied = combined_dkna_limit_satisfied(result)
-    outcome = (
-        "is within the numerical limit"
-        if satisfied is True
-        else "exceeds the numerical limit"
-        if satisfied is False
-        else "has no available numerical limit comparison"
-    )
+    if satisfied is False:
+        return (
+            "FAIL: the governing sum exceeds the numerical limit even under the "
+            "favourable separate M/V design assumption. The ordinary simultaneous "
+            "sum cannot be smaller, so the failed numerical check governs regardless "
+            "of that assumption."
+        )
+    if satisfied is None:
+        return (
+            "NOT ASSESSED: no numerical limit comparison is available for the "
+            "separate M/V design assumption. Check the section, actions and "
+            "action-alone resistances, then recalculate."
+        )
     return (
         "CONDITIONAL: the separate M/V route is a design assumption that additional "
         "shear longitudinal reinforcement beyond bending is provided. The governing sum "
-        f"{outcome} under that assumption. Verify the reinforcement area, "
+        "is within the numerical limit under that assumption. Verify the reinforcement area, "
         "distribution and anchorage separately."
     )
 

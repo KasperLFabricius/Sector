@@ -6883,10 +6883,12 @@ def build_inputs(host=st):
     combined_mv_independent = _seeded_checkbox(
         sts, r"Apply separate $M$/$V$ route as a design assumption", False,
         "combined_mv_independent", disabled=not combined_on,
-        help="DK NA 6.3.2(6): select only after separately verifying the capacity, "
-             "distribution and anchorage of the longitudinal reinforcement used "
-             "for shear beyond that required for bending. Sector then calculates "
-             r"$N+M+T$ and $N+V+T$, but the result remains CONDITIONAL.")
+        help="DK NA 6.3.2(6): select after verifying the capacity, distribution "
+             "and anchorage of the longitudinal reinforcement added for shear "
+             "beyond bending. Sector then calculates "
+             r"$N+M+T$ and $N+V+T$. A value within the numerical limit is "
+             "CONDITIONAL; a value above the limit is FAIL even under the "
+             "favourable assumption.")
     # Filled at the end of this block (once the shear/torsion toggles below are
     # known) with any missing combined-check prerequisites -- so the user sees them
     # here, right under the toggle, instead of only after Calculate.
@@ -14478,8 +14480,17 @@ def combined_view(inp, results):
             "materials and complete Plastic bending sweep, then recalculate.",
         )
     elif c["m_v_independent"]:
-        d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", _pct(c["dkna_sum"]))
-        d1.caption("CONDITIONAL")
+        dkna_status = presentation.combined_dkna_status(c)
+        if dkna_status == "FAIL":
+            _verdict_metric(
+                d1,
+                r"$\sum(S_{Ed}/S_{Rd})$",
+                _pct(c["dkna_sum"]),
+                False,
+            )
+        else:
+            d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", _pct(c["dkna_sum"]))
+            d1.caption(dkna_status)
         d2.caption(
             "The separate M/V route is selected as a design assumption. "
             "N + M + T and N + V + T are calculated independently, and the "

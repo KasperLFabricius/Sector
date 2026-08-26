@@ -1170,8 +1170,10 @@ def manual_blocks() -> list:
          "addition to what bending requires, has been verified separately, select "
          "**separate M/V route as a design assumption**. Sector then calculates "
          "$N+M+T$ and $N+V+T$ independently and uses the governing value, but marks "
-         "the result **CONDITIONAL** because reinforcement area, distribution and "
-         "anchorage are not verified by the section calculation.")
+         "a value within the numerical limit **CONDITIONAL** because reinforcement "
+         "area, distribution and anchorage are not verified by the section "
+         "calculation. A governing value above the limit is **FAIL** even under "
+         "that favourable assumption.")
     call("limit", "This is an internal cross-section resistance check. It does "
          "not replace a separate member and detailing assessment under Annex F "
          "where that assessment applies.")
@@ -2073,9 +2075,11 @@ def manual_blocks() -> list:
          "the tension chord, both beyond the bending reinforcement.")
     call("limit", "Selecting the separate $M$/$V$ route records a design assumption; "
          "Sector does not verify the additional reinforcement area, distribution "
-         "or anchorage. The resulting DK NA sum is therefore **CONDITIONAL**, even "
-         "when its numerical value is within the limit. Verify the assumption "
-         "separately before relying on the result.")
+         "or anchorage. A DK NA sum within the numerical limit is therefore "
+         "**CONDITIONAL**. A sum above the limit is **FAIL** even under that "
+         "favourable assumption, because the ordinary simultaneous sum cannot be "
+         "smaller. Verify the assumption separately before relying on a conditional "
+         "result.")
     call("limit", "The combined result is an internal cross-section resistance "
          "check. It does not replace a separate member and detailing assessment "
          "under Annex F where that assessment applies.")

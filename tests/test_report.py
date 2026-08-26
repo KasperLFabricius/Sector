@@ -5972,31 +5972,44 @@ def test_report_profiles_label_independent_dkna_route_truthfully(profile):
     assert "N+M+V+T" not in txt
 
 
-def test_report_separate_mv_over_limit_is_conditional_and_explicit():
-    out = _out()
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_separate_mv_over_limit_fails_even_under_assumption(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_mv_independent=True,
+    )
+    base_out = _out()
+    out = {"plastic": base_out["plastic"]}
     combined = _combined_out(mv_independent=True)
     combined.update(
         dkna_sum=1.30,
         dkna_limit_satisfied=False,
-        dkna_status="CONDITIONAL",
-        dkna_ok=None,
+        dkna_status="FAIL",
+        dkna_ok=False,
     )
     combined["dkna_selection"].update(
         utilisation=1.30,
         limit_satisfied=False,
-        status="CONDITIONAL",
-        ok=None,
+        status="FAIL",
+        ok=False,
     )
     out["combined"] = combined
     txt = " ".join(
         _pdf_text(
-            sector_report.build_report({}, _inp(), out, figures=False)
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
         ).split()
     )
 
-    assert "130.0 % CONDITIONAL" in txt
-    assert "exceeds the numerical limit" in txt
-    assert "Verify the reinforcement area, distribution and anchorage" in txt
+    assert re.search(
+        r"Combined M-V-T - DK NA sum PL-TEST FAIL 130\.0 %",
+        txt,
+    )
+    assert "exceeds the numerical limit even under the favourable" in txt
+    assert "failed numerical check governs regardless" in txt
 
 
 def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
@@ -6008,7 +6021,8 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
         governing_face="negative", governing_cot=1.25,
     )
     vy.update(
-        component="vy", r_v=0.35, dkna_sum=0.65, dkna_ok=True,
+        component="vy", r_v=0.75, dkna_sum=1.05,
+        dkna_limit_satisfied=False, dkna_status="FAIL", dkna_ok=False,
         governing_face="positive", governing_cot=1.75,
     )
     out["combined"] = dict(
@@ -6025,7 +6039,8 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     assert "simultaneous" in txt
     assert "check is not included" in txt
     assert "requires a separate member check" in txt
-    assert txt.count("CONDITIONAL") >= 2
+    assert "CONDITIONAL" in txt
+    assert "105.0 %" in txt and "FAIL" in txt
     assert "Governing face" in txt
     assert "left (-x)" in txt and "top (+y)" in txt
     assert "1.250" in txt and "1.750" in txt

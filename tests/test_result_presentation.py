@@ -859,12 +859,31 @@ def test_combined_summary_names_independent_dkna_inclusion_route():
 
 
 @pytest.mark.parametrize(
-    ("verification_state", "mechanically_verified", "dkna_sum", "legacy_ok", "copy"),
+    (
+        "verification_state",
+        "mechanically_verified",
+        "dkna_sum",
+        "legacy_ok",
+        "expected_status",
+        "copy",
+    ),
     [
-        ("adequate", True, 0.90, True, "within the numerical limit"),
-        ("inadequate", False, 1.10, False, "exceeds the numerical limit"),
-        ("unanchored", False, 0.90, True, "within the numerical limit"),
-        ("incomplete / unknown", False, 0.90, True, "within the numerical limit"),
+        (
+            "adequate", True, 0.90, True, "CONDITIONAL",
+            "within the numerical limit",
+        ),
+        (
+            "inadequate", False, 1.10, False, "FAIL",
+            "exceeds the numerical limit even under the favourable",
+        ),
+        (
+            "unanchored", False, 0.90, True, "CONDITIONAL",
+            "within the numerical limit",
+        ),
+        (
+            "incomplete / unknown", False, 0.90, True, "CONDITIONAL",
+            "within the numerical limit",
+        ),
     ],
     ids=["adequate", "inadequate", "unanchored", "incomplete-unknown"],
 )
@@ -873,6 +892,7 @@ def test_separate_mv_assumption_evidence_never_promotes_a_verdict(
     mechanically_verified,
     dkna_sum,
     legacy_ok,
+    expected_status,
     copy,
 ):
     result = {
@@ -887,25 +907,65 @@ def test_separate_mv_assumption_evidence_never_promotes_a_verdict(
         },
     }
 
-    assert presentation.combined_dkna_status(result) == "CONDITIONAL"
+    assert presentation.combined_dkna_status(result) == expected_status
     note = presentation.combined_dkna_assumption_note(result)
     assert copy in note
-    assert "Verify the reinforcement area, distribution and anchorage" in note
+    if expected_status == "FAIL":
+        assert "failed numerical check governs regardless" in note
+    else:
+        assert "Verify the reinforcement area, distribution and anchorage" in note
+
+
+@pytest.mark.parametrize("dkna_sum", [None, float("nan"), float("inf")])
+def test_separate_mv_missing_numerical_comparison_is_not_assessed(dkna_sum):
+    result = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": dkna_sum,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "CONDITIONAL",
+        "m_v_independent": True,
+    }
+
+    assert presentation.combined_dkna_limit_satisfied(result) is None
+    assert presentation.combined_dkna_status(result) == "NOT ASSESSED"
+    note = presentation.combined_dkna_assumption_note(result)
+    assert note.startswith("NOT ASSESSED:")
+    assert "recalculate" in note
 
 
 @pytest.mark.parametrize(
-    ("verification_state", "longitudinal_util", "expected_physical", "overall"),
+    (
+        "verification_state",
+        "longitudinal_util",
+        "dkna_sum",
+        "expected_dkna",
+        "expected_physical",
+        "overall",
+    ),
     [
-        ("adequate", 0.75, "PASS", "CONDITIONAL"),
-        ("inadequate", 1.15, "FAIL", "FAIL"),
-        ("unanchored", 0.75, "PASS", "CONDITIONAL"),
-        ("incomplete / unknown", None, "NOT ASSESSED", "NOT ASSESSED"),
+        ("adequate", 0.75, 0.90, "CONDITIONAL", "PASS", "CONDITIONAL"),
+        ("inadequate", 1.15, 0.90, "CONDITIONAL", "FAIL", "FAIL"),
+        ("unanchored", 0.75, 0.90, "CONDITIONAL", "PASS", "CONDITIONAL"),
+        (
+            "incomplete / unknown", None, 0.90, "CONDITIONAL",
+            "NOT ASSESSED", "NOT ASSESSED",
+        ),
+        ("adequate", 0.75, 1.10, "FAIL", "PASS", "FAIL"),
     ],
-    ids=["adequate", "inadequate", "unanchored", "incomplete-unknown"],
+    ids=[
+        "adequate",
+        "inadequate",
+        "unanchored",
+        "incomplete-unknown",
+        "numerical-failure",
+    ],
 )
 def test_separate_mv_assumption_preserves_conservative_overall_state(
     verification_state,
     longitudinal_util,
+    dkna_sum,
+    expected_dkna,
     expected_physical,
     overall,
 ):
@@ -924,9 +984,9 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
         "valid": True,
         "method": "DK NA",
         "dkna_valid": True,
-        "dkna_sum": 0.90,
-        "dkna_limit_satisfied": True,
-        "dkna_ok": True,
+        "dkna_sum": dkna_sum,
+        "dkna_limit_satisfied": dkna_sum <= 1.0,
+        "dkna_ok": False if dkna_sum > 1.0 else True,
         "m_v_independent": True,
         "m_v_separation_condition": {
             "verification_state": verification_state,
@@ -950,7 +1010,7 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
     )
     by_check = {row["check"]: row for row in rows}
 
-    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "CONDITIONAL"
+    assert by_check["Combined M-V-T - DK NA sum"]["status"] == expected_dkna
     assert by_check["Combined longitudinal reinforcement"]["status"] == (
         expected_physical
     )
@@ -1463,6 +1523,9 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
             },
             "vy": {
                 "valid": True, "dkna_sum": 1.14, "dkna_ok": False,
+                "dkna_limit_satisfied": False,
+                "dkna_status": "CONDITIONAL",
+                "m_v_independent": True,
                 "method": "DK NA",
             },
         },

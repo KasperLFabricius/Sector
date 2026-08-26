@@ -121,7 +121,7 @@ def test_dkna_independent_route_keeps_n_and_t_in_both_checks():
     assert result.ok is None
 
 
-def test_dkna_independent_route_over_limit_remains_conditional():
+def test_dkna_independent_route_over_limit_fails_even_under_assumption():
     result = combined.dkna_interaction_result(
         0.0,
         None,
@@ -138,8 +138,39 @@ def test_dkna_independent_route_over_limit_remains_conditional():
     assert result.utilisation == pytest.approx(1.10)
     assert result.limit_satisfied is False
     assert result.conditional is True
-    assert result.status == "CONDITIONAL"
-    assert result.ok is None
+    assert result.status == "FAIL"
+    assert result.ok is False
+
+
+@pytest.mark.parametrize(
+    ("utilisation", "expected_status", "expected_ok"),
+    [
+        (1.0, "CONDITIONAL", None),
+        (math.nextafter(1.0, math.inf), "FAIL", False),
+    ],
+    ids=["at-limit", "first-representable-value-over-limit"],
+)
+def test_dkna_separate_route_limit_boundary_is_exact(
+    utilisation,
+    expected_status,
+    expected_ok,
+):
+    result = combined.dkna_interaction_result(
+        0.0,
+        None,
+        utilisation,
+        1.0,
+        0.0,
+        None,
+        0.0,
+        None,
+        m_v_independent=True,
+    )
+
+    assert result.utilisation == utilisation
+    assert result.limit_satisfied is (utilisation <= 1.0)
+    assert result.status == expected_status
+    assert result.ok is expected_ok
 
 
 def test_dkna_independent_route_with_incomplete_resistance_is_not_assessed():
@@ -808,7 +839,8 @@ def test_app_combined_mv_independent_uses_max():
     route = at.checkbox(key="combined_mv_independent")
     assert route.label == r"Apply separate $M$/$V$ route as a design assumption"
     assert "capacity, distribution and anchorage" in route.help
-    assert "result remains CONDITIONAL" in route.help
+    assert "within the numerical limit is CONDITIONAL" in route.help
+    assert "above the limit is FAIL even under" in route.help
     c = at.session_state["results"]["combined"]
     assert c["dkna_sum"] == pytest.approx(
         c["r_n"] + max(c["r_m"] + c["r_t"], c["r_v"] + c["r_t"])
@@ -876,6 +908,36 @@ def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass():
     assert separate["dkna_limit_satisfied"] is True
     assert separate["dkna_status"] == "CONDITIONAL"
     assert separate["dkna_ok"] is None
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 400.0),
+    )
+    over_limit = at.session_state["results"]["combined"]
+    assert over_limit["m_v_independent"] is True
+    assert over_limit["dkna_sum"] > 1.0
+    assert over_limit["dkna_limit_satisfied"] is False
+    assert over_limit["dkna_conditional"] is True
+    assert over_limit["dkna_status"] == "FAIL"
+    assert over_limit["dkna_ok"] is False
+
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value)
+        for family in (at.markdown, at.warning)
+        for item in family
+    )
+    assert "FAIL" in visible
+    assert "even under the favourable" in visible
+    assert "failed numerical check governs" in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined M-V-T - DK NA sum"
+    ].iloc[0]
+    assert row["Status"] == "FAIL"
 
 
 def test_app_combined_edition_lock():

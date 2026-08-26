@@ -99,6 +99,8 @@ def test_manual_dkna_combined_rule_includes_n_and_action_alone_resistances():
     assert "$N+M+T$ and $N+V+T$" in text
     assert "separate M/V route as a design assumption" in text
     assert "CONDITIONAL" in text
+    assert "above the limit is **FAIL** even under" in text
+    assert "ordinary simultaneous sum cannot be smaller" in text
     assert "reinforcement area, distribution and anchorage" in text
     assert "does **not** condition the DK NA action-alone denominators" in text
     assert "does not replace a separate member and detailing assessment" in text

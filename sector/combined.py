@@ -401,8 +401,10 @@ def dkna_interaction_result(
     magnitude of the matching action and its resistance in that same direction.
     Selecting the optional M/V separation produces the two numerical checks
     ``N+M+T`` and ``N+V+T``.  This Boolean does not establish the required extra
-    longitudinal-reinforcement capacity, distribution or anchorage, so the selected
-    route is retained as conditional and cannot return an unconditional ``ok``.
+    longitudinal-reinforcement capacity, distribution or anchorage.  A value within
+    the numerical limit is therefore retained as conditional and cannot return an
+    unconditional ``ok``.  A value above the limit is a definite failure even under
+    that favourable assumption.
     """
 
     if type(m_v_independent) is not bool:
@@ -470,8 +472,16 @@ def dkna_interaction_result(
         utilisation = all_sum
         governing = "N+M+V+T"
         inclusion_rule = "N, M, V and T summed"
-    limit_satisfied = utilisation <= 1.0 + 1e-9
+    limit_satisfied = utilisation <= 1.0
     conditional = m_v_independent
+    status = (
+        "FAIL"
+        if not limit_satisfied
+        else "CONDITIONAL"
+        if conditional
+        else "PASS"
+    )
+    ok = False if not limit_satisfied else None if conditional else True
     return DknaInteractionResult(
         n=n,
         m=m,
@@ -494,12 +504,8 @@ def dkna_interaction_result(
         reason=None,
         conditional=conditional,
         limit_satisfied=limit_satisfied,
-        status=(
-            "CONDITIONAL"
-            if conditional
-            else "PASS" if limit_satisfied else "FAIL"
-        ),
-        ok=None if conditional else limit_satisfied,
+        status=status,
+        ok=ok,
     )
 
 
