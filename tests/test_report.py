@@ -2258,6 +2258,181 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "D upper = 16.0 mm" in text or "Dupper = 16.0 mm" in text
 
 
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_publish_core_m02_refinement_evidence(profile):
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "minimum_reinforcement_on": True,
+        "detailing_edition": detailing.EC2_2023,
+        "detailing_member_type": "Beam",
+        "detailing_cut_direction": detailing.CUT_TRANSVERSE,
+    })
+    minimum = {
+        "status": "FAIL",
+        "edition": detailing.EC2_2023,
+        "clause": "12.2(2)(a), Formula (12.1)",
+        "member_type": "Beam",
+        "cut_direction": detailing.CUT_TRANSVERSE,
+        "checks": [{
+            "type": "bending with axial force",
+            "status": "FAIL",
+            "utilisation": 1.0005909664448163,
+            "m_cr_knm": 800.7222093632556,
+            "mr_nom_knm": 800.249288886036,
+            "cracking_factor": 800.7222093632556,
+            "cracking_fctm_mpa": 7.258066978469918,
+            "cracking_governing_axial_stress_mpa": 0.0,
+            "cracking_governing_bending_stress_mpa": (
+                7.258066978469918 / 800.7222093632556
+            ),
+            "model": "biaxial refined nominal envelope",
+            "nominal_axial_resistance_kn": 1609.0,
+            "axial_feasible": True,
+            "as_provided_mm2": 3218.0,
+            "bar_ids": ["R1", "R2", "R3", "R4", "R5", "R6"],
+            "nominal_solution": {
+                "resolution_state": "RESOLVED",
+                "governing_increment_deg": 0.1,
+                "accepted_point_count": 65,
+                "all_points_converged": True,
+                "utilisation_lower_bound": 1.00056,
+                "utilisation_upper_bound": 1.00062,
+                "refinement_history": [
+                    {"target_increment_deg": 15.0},
+                    {"target_increment_deg": 1.0},
+                    {"target_increment_deg": 0.1},
+                ],
+            },
+        }],
+        "limitations": [],
+    }
+    actions = {
+        "name": "CORE-M02-357",
+        "description": "Refined nominal resistance",
+        "n_ed_kn": 0.0,
+        "mx_ed_knm": 0.9986295347545738,
+        "my_ed_knm": -0.05233595624294437,
+        "vx_ed_kn": 0.0,
+        "vy_ed_kn": 0.0,
+        "vx_face": "auto",
+        "vy_face": "auto",
+        "t_ed_knm": 0.0,
+        "check_minimum_reinforcement": True,
+    }
+    inp["plastic_cases"] = [actions]
+    out = {
+        "plastic_cases": [{
+            "actions": actions,
+            "evaluated": True,
+            "results": {"minimum_reinforcement": minimum},
+        }]
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+        profile=profile,
+    )).split())
+
+    assert "FAIL" in text
+    assert "MR,nom 800.2 kNm; Mcr 800.7 kNm" in text
+    if profile == "Brief":
+        assert "CORE-M02-357" in text
+        return
+    assert "100.1 %" in text
+    assert "governing utilisation" in text
+    assert "Angular resolution: initial 15° envelope" in text
+    assert "governing interval refined to no more than 0.100°" in text
+    assert "65 angles retained; all retained angles converged; assessment resolved" in text
+    assert "utilisation interval 100.0560 to 100.0620 %" in text
+
+
+def test_report_maps_unresolved_core_m02_result_to_engineering_guidance():
+    inp = _inp()
+    inp.update({
+        "mode": "Plastic",
+        "minimum_reinforcement_on": True,
+        "detailing_edition": detailing.EC2_2023,
+        "detailing_member_type": "Beam",
+        "detailing_cut_direction": detailing.CUT_TRANSVERSE,
+    })
+    reason = (
+        "nominal resistance is too close to the cracking demand for a stable "
+        "assessment at the available angular resolution"
+    )
+    minimum = {
+        "status": "NOT ASSESSED",
+        "reason": reason,
+        "edition": detailing.EC2_2023,
+        "clause": "12.2(2)(a), Formula (12.1)",
+        "member_type": "Beam",
+        "cut_direction": detailing.CUT_TRANSVERSE,
+        "checks": [{
+            "type": "bending with axial force",
+            "status": "NOT ASSESSED",
+            "utilisation": None,
+            "m_cr_knm": 800.0,
+            "mr_nom_knm": None,
+            "reason": reason,
+            "model": "biaxial refined nominal envelope",
+            "nominal_solution": {
+                "resolution_state": "UNRESOLVED",
+                "governing_increment_deg": 0.01,
+                "accepted_point_count": 83,
+                "all_points_converged": True,
+                "utilisation_lower_bound": 0.9999995,
+                "utilisation_upper_bound": 1.0000015,
+                "refinement_history": [
+                    {"target_increment_deg": 15.0},
+                    {"target_increment_deg": 1.0},
+                    {"target_increment_deg": 0.1},
+                    {"target_increment_deg": 0.01},
+                ],
+            },
+        }],
+        "limitations": [],
+    }
+    actions = {
+        "name": "CORE-M02-LIMIT",
+        "description": "Unresolved nominal resistance",
+        "n_ed_kn": 0.0,
+        "mx_ed_knm": 1.0,
+        "my_ed_knm": 0.0,
+        "vx_ed_kn": 0.0,
+        "vy_ed_kn": 0.0,
+        "vx_face": "auto",
+        "vy_face": "auto",
+        "t_ed_knm": 0.0,
+        "check_minimum_reinforcement": True,
+    }
+    inp["plastic_cases"] = [actions]
+    out = {
+        "plastic_cases": [{
+            "actions": actions,
+            "evaluated": True,
+            "results": {"minimum_reinforcement": minimum},
+        }]
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+        profile="Standard",
+    )).split())
+
+    assert "NOT ASSESSED - The nominal resistance is too close" in text
+    assert "assess this case separately" in text
+    assert "governing interval refined to no more than 0.010°" in text
+    assert "utilisation interval 99.9999 to 100.0002 %" in text
+    assert "separate assessment required" in text
+    assert "available angular resolution" not in text
+
+
 def test_report_publishes_canonical_direction_and_html_safe_project_alias():
     inp = _inp()
     inp.update({

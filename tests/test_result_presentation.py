@@ -33,6 +33,22 @@ def test_authored_resistance_governing_states_survive_exactly(family, state):
     assert presentation.result_reason(state, family) == state
 
 
+def test_minimum_reinforcement_unresolved_refinement_has_authored_guidance():
+    retained = (
+        "nominal resistance is too close to the cracking demand for a stable "
+        "assessment at the available angular resolution"
+    )
+
+    assert presentation.result_reason(
+        retained,
+        "minimum_reinforcement",
+        context="CORE-M02 public result",
+    ) == (
+        "The nominal resistance is too close to the cracking demand for a stable "
+        "assessment; assess this case separately"
+    )
+
+
 @pytest.mark.parametrize(
     ("retained", "expected_mm"),
     ((0.275, 275.0), (0.0, 0.0), (-0.0, 0.0), (np.float64(0.125), 125.0)),

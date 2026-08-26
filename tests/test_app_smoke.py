@@ -313,6 +313,34 @@ def _replace_case_table(at, base_key, value):
     return at
 
 
+def _render_core_m02_detailing(minimum):
+    """Native Streamlit harness for one retained minimum-reinforcement result."""
+
+    import pathlib
+    import sys
+
+    sys.path.insert(0, str(pathlib.Path.cwd() / "app"))
+    import sector_app
+
+    inp = {
+        "minimum_reinforcement_on": True,
+        "transverse_detailing_on": False,
+        "clear_spacing_on": False,
+        "detailing_member_type": "Beam",
+        "detailing_cut_direction": "Transverse cut",
+        "outer": [(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        "holes": [],
+        "bars": [],
+        "tendons": [],
+        "bar_elements": [],
+        "tendon_elements": [],
+    }
+    sector_app.detailing_view(
+        inp,
+        {"minimum_reinforcement": minimum},
+    )
+
+
 def _set(at, *changes):
     """Apply changes after mounting each widget's outer owner stage."""
     changes, case_changed = apply_case_changes(at, changes)
@@ -7767,6 +7795,200 @@ def test_detailing_controls_run_selected_case_and_section_wide_spacing():
         )
         for item in at.markdown
     )
+    assert not at.exception
+
+
+def test_core_m02_real_app_calculation_retains_refinement_evidence():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [{
+        "name": "CORE-M02-LIVE",
+        "mx_ed_knm": 50.0,
+        "my_ed_knm": 25.0,
+        "check_minimum_reinforcement": True,
+    }])
+    _set(
+        at,
+        ("checkbox", "minimum_reinforcement_on", True),
+        ("selectbox", "detailing_edition", "DS/EN 1992-1-1:2023"),
+    )
+    _calculate(at)
+
+    minimum = at.session_state["results"]["plastic_cases"][0]["results"][
+        "minimum_reinforcement"
+    ]
+    check = minimum["checks"][0]
+    solution = check["nominal_solution"]
+    assert minimum["status"] in {"PASS", "FAIL"}
+    assert solution["resolution_state"] == "RESOLVED"
+    assert solution["verdict_resolved"] is True
+    assert solution["all_points_converged"] is True
+    assert [
+        stage["target_increment_deg"]
+        for stage in solution["refinement_history"]
+    ] == [15.0, 1.0, 0.1]
+    assert solution["utilisation_lower_bound"] is not None
+    assert solution["utilisation_upper_bound"] is not None
+    if minimum["status"] == "PASS":
+        assert solution["utilisation_upper_bound"] <= 1.0 + 1.0e-9
+    else:
+        assert solution["utilisation_lower_bound"] > 1.0 + 1.0e-9
+
+    _select_view(at, "Detailing")
+    captions = [str(item.value) for item in at.caption]
+    assert any(
+        "governing interval refined to no more than 0.1°" in value
+        for value in captions
+    )
+    assert any(
+        "Refinement estimate: utilisation interval" in value
+        and "all retained angles converged" in value
+        for value in captions
+    )
+    assert not at.exception
+
+
+def test_core_m02_review_case_renders_refined_engineering_verdict():
+    minimum = {
+        "status": "FAIL",
+        "edition": "DS/EN 1992-1-1:2023",
+        "clause": "12.2(2)(a), Formula (12.1)",
+        "member_type": "Beam",
+        "cut_direction": "Transverse cut",
+        "checks": [
+            {
+                "type": "bending with axial force",
+                "status": "FAIL",
+                "utilisation": 1.0005909664448163,
+                "m_cr_knm": 800.7222093632556,
+                "mr_nom_knm": 800.249288886036,
+                "model": "biaxial refined nominal envelope",
+                "nominal_axial_resistance_kn": 1609.0,
+                "axial_feasible": True,
+                "as_provided_mm2": 3218.0,
+                "bar_ids": ["R1", "R2", "R3", "R4", "R5", "R6"],
+                "nominal_solution": {
+                    "resolution_state": "RESOLVED",
+                    "governing_increment_deg": 0.1,
+                    "accepted_point_count": 65,
+                    "all_points_converged": True,
+                    "utilisation_lower_bound": 1.00056,
+                    "utilisation_upper_bound": 1.00062,
+                },
+            }
+        ],
+        "limitations": [],
+    }
+    at = AppTest.from_function(
+        _render_core_m02_detailing,
+        args=(minimum,),
+        default_timeout=90,
+    ).run()
+
+    check = minimum["checks"][0]
+    solution = check["nominal_solution"]
+    assert minimum["status"] == "FAIL"
+    assert check["utilisation"] == pytest.approx(1.0005909664448163, rel=2.0e-6)
+    assert solution["resolution_state"] == "RESOLVED"
+    assert solution["governing_increment_deg"] == pytest.approx(0.1)
+
+    visible_errors = [str(item.value) for item in at.error]
+    visible_captions = [str(item.value) for item in at.caption]
+    assert any(
+        "FAIL - governing utilisation 100.1 %" in value
+        for value in visible_errors
+    )
+    assert any(
+        "Nominal envelope: governing interval refined to no more than 0.1°"
+        in value
+        and "assessment resolved" in value
+        for value in visible_captions
+    )
+    assert any(
+        "utilisation interval 100.0560–100.0620 %" in value
+        and "all retained angles converged" in value
+        for value in visible_captions
+    )
+    details = next(
+        frame.value
+        for frame in at.dataframe
+        if "MR,nom [kNm]" in frame.value.columns
+    )
+    assert details.iloc[0]["Status"] == "FAIL"
+    assert details.iloc[0]["Utilisation [%]"] == pytest.approx(100.0591, rel=1.0e-5)
+    assert not at.exception
+
+
+def test_core_m02_unresolved_case_renders_not_assessed_guidance():
+    reason = (
+        "nominal resistance is too close to the cracking demand for a stable "
+        "assessment at the available angular resolution"
+    )
+    minimum = {
+        "status": "NOT ASSESSED",
+        "reason": reason,
+        "edition": "DS/EN 1992-1-1:2023",
+        "clause": "12.2(2)(a), Formula (12.1)",
+        "member_type": "Beam",
+        "cut_direction": "Transverse cut",
+        "checks": [
+            {
+                "type": "bending with axial force",
+                "status": "NOT ASSESSED",
+                "utilisation": None,
+                "m_cr_knm": 800.0,
+                "mr_nom_knm": None,
+                "reason": reason,
+                "model": "biaxial refined nominal envelope",
+                "nominal_axial_resistance_kn": 1609.0,
+                "axial_feasible": True,
+                "as_provided_mm2": 3218.0,
+                "bar_ids": ["R1", "R2"],
+                "nominal_solution": {
+                    "resolution_state": "UNRESOLVED",
+                    "governing_increment_deg": 0.01,
+                    "accepted_point_count": 83,
+                    "all_points_converged": True,
+                    "utilisation_lower_bound": 0.9999995,
+                    "utilisation_upper_bound": 1.0000015,
+                },
+            }
+        ],
+        "limitations": [],
+    }
+    at = AppTest.from_function(
+        _render_core_m02_detailing,
+        args=(minimum,),
+        default_timeout=90,
+    ).run()
+
+    visible_warnings = [str(item.value) for item in at.warning]
+    visible_captions = [str(item.value) for item in at.caption]
+    assert any(
+        value == (
+            "NOT ASSESSED - The nominal resistance is too close to the cracking "
+            "demand for a stable assessment; assess this case separately"
+        )
+        for value in visible_warnings
+    )
+    assert any(
+        "governing interval refined to no more than 0.01°" in value
+        and "separate assessment required" in value
+        for value in visible_captions
+    )
+    assert any(
+        "utilisation interval 99.9999–100.0002 %" in value
+        and "all retained angles converged" in value
+        for value in visible_captions
+    )
+    visible = " ".join(
+        [str(item.value) for item in at.markdown]
+        + visible_warnings
+        + visible_captions
+    )
+    assert "available angular resolution" not in visible
     assert not at.exception
 
 

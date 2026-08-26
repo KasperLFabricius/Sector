@@ -124,6 +124,14 @@ _MINIMUM_REINFORCEMENT_REASON_MESSAGES = {
         "MINIMUM-REINFORCEMENT-TENSION-ZONE",
         "No ordinary reinforcement bar lies in the tension zone.",
     ),
+    (
+        "nominal resistance is too close to the cracking demand for a stable "
+        "assessment at the available angular resolution"
+    ): EngineerMessage(
+        "MINIMUM-REINFORCEMENT-ANGULAR-RESOLUTION",
+        "The nominal resistance is too close to the cracking demand for a stable "
+        "assessment; assess this case separately",
+    ),
 }
 _TRANSVERSE_REASON_MESSAGES = {
     "minimum shear reinforcement is required for this beam": EngineerMessage(

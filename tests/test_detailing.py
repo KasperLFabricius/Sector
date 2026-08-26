@@ -39,6 +39,104 @@ def _rectangle():
     return section, elements, [_steel()] * len(bars)
 
 
+def _core_m02_review_fixture():
+    """Return the immutable asymmetric-section numerical review fixture."""
+
+    outer = [
+        (-0.50, -0.45),
+        (0.55, -0.45),
+        (0.55, -0.10),
+        (0.18, -0.10),
+        (0.18, 0.55),
+        (-0.08, 0.55),
+        (-0.08, 0.20),
+        (-0.50, 0.20),
+    ]
+    hole = [
+        (-0.02, -0.02),
+        (0.10, -0.02),
+        (0.10, 0.10),
+        (-0.02, 0.10),
+    ]
+    bars = [
+        (-0.42, -0.38, 804.0),
+        (0.45, -0.38, 804.0),
+        (0.10, 0.47, 491.0),
+        (-0.02, 0.47, 491.0),
+        (-0.42, 0.13, 314.0),
+        (0.48, -0.03, 314.0),
+    ]
+    section = Section.from_polygon(outer, bars, holes=[hole])
+    elements = [
+        {
+            "id": f"R{index}",
+            "kind": "bar",
+            "x_mm": x * 1000.0,
+            "y_mm": y * 1000.0,
+            "diameter_mm": math.sqrt(4.0 * area / math.pi),
+            "material_id": "M1",
+        }
+        for index, (x, y, area) in enumerate(bars, start=1)
+    ]
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=500.0,
+        futk=575.0,
+        eut=0.05,
+        curve=3,
+        k=0.9,
+        ey0t=0.002,
+        ey0c=0.002,
+        gamma_y=1.15,
+        gamma_u=1.15,
+        gamma_E=1.0,
+        Es=200000.0,
+        active_in_compression=True,
+    )
+    concrete = Concrete(
+        fck=70.0,
+        gamma_c=1.5,
+        alpha_cc=0.85,
+        curve=2,
+        eps_c2=0.0024,
+        eps_cu2=0.0027,
+        n=1.45,
+    )
+    return section, elements, [steel] * len(bars), concrete
+
+
+def _core_m02_full_sweep_reference(
+    section, concrete, materials, mx_cr_knm, my_cr_knm, increment_deg
+):
+    """Independently rate one complete neutral-axis sweep at fixed resolution."""
+
+    centred = detailing._recentred_without_tendons(section)
+    characteristic = [
+        detailing._characteristic_plateau(material) for material in materials
+    ]
+    endpoint = 360.0 - increment_deg
+    # Permit the historical represented 0.1-degree gaps without asking the
+    # maximum-increment guard to compensate for binary64 subtraction noise.
+    maximum_increment = increment_deg * (1.0 + 1.0e-12)
+    points = detailing.solve_plastic(
+        centred,
+        concrete,
+        characteristic[0],
+        0.0,
+        0.0,
+        endpoint,
+        maximum_increment,
+        bar_materials=characteristic,
+    )
+    radial = detailing._module("combined").radial_util_result(
+        [point.Mx for point in points],
+        [point.My for point in points],
+        mx_cr_knm,
+        my_cr_knm,
+    )
+    return points, radial
+
+
 @pytest.mark.parametrize(
     ("active_in_compression", "fyck", "expected_active"),
     (
@@ -268,7 +366,15 @@ def test_2023_rectangle_cracking_moment_is_independently_reproduced():
     )
     solution = check["nominal_solution"]
     assert solution["method"] == "plastic nominal axial-moment envelope"
-    assert solution["accepted_point_count"] == 24
+    assert solution["angle_start_deg"] == 0.0
+    assert solution["angle_end_deg"] == 345.0
+    assert solution["angle_increment_deg"] == 15.0
+    assert solution["accepted_point_count"] > 24
+    assert solution["resolution_state"] == "RESOLVED"
+    assert [
+        stage["target_increment_deg"]
+        for stage in solution["refinement_history"]
+    ] == [15.0, 1.0, 0.1]
     selected = solution["governing_point"]
     assert selected["neutral_axis_angle_deg"] == pytest.approx(90.0)
     assert selected["converged"] is True
@@ -277,6 +383,129 @@ def test_2023_rectangle_cracking_moment_is_independently_reproduced():
         selected["achieved_axial_kn"] - selected["requested_axial_kn"]
     )
     assert selected["search_depth_range_m"] is not None
+
+
+@pytest.mark.parametrize(
+    (
+        "phi_deg",
+        "fctm_mpa",
+        "expected_status",
+        "expected_cracking",
+        "fixed_references",
+    ),
+    [
+        pytest.param(
+            309.0,
+            8.9,
+            "PASS",
+            (
+                649.4598830005184,
+                408.71834754106794,
+                -504.72512520216964,
+            ),
+            (
+                (15.0, 647.5044122669113, 1.0030200114417152, 135.0),
+                (1.0, 664.8594002351513, 0.9768379341118042, 142.0),
+                (0.1, 664.8630715346253, 0.9768325401220532, 141.9),
+            ),
+            id="309-degree-false-fail",
+        ),
+        pytest.param(
+            357.0,
+            7.258066978469918,
+            "FAIL",
+            (
+                800.7222093632556,
+                799.6248474040824,
+                -41.90656251198909,
+            ),
+            (
+                (15.0, 801.1924436984497, 0.9994130819144731, 105.0),
+                (1.0, 800.2580078750917, 1.000580064783602, 113.0),
+                (0.1, 800.249288886036, 1.0005909664448163, 112.8),
+            ),
+            id="357-degree-false-pass",
+        ),
+    ],
+)
+def test_2023_review_cases_are_stable_against_independent_full_sweeps(
+    phi_deg,
+    fctm_mpa,
+    expected_status,
+    expected_cracking,
+    fixed_references,
+):
+    section, elements, materials, concrete = _core_m02_review_fixture()
+    phi = math.radians(phi_deg)
+
+    result = detailing.minimum_reinforcement_2023(
+        section,
+        elements,
+        materials,
+        concrete,
+        fctm_mpa=fctm_mpa,
+        n_ed_tension_kn=0.0,
+        mx_ed_knm=math.cos(phi),
+        my_ed_knm=math.sin(phi),
+    )
+
+    check = result["checks"][0]
+    expected_mcr, expected_mxcr, expected_mycr = expected_cracking
+    assert result["status"] == expected_status
+    assert check["m_cr_knm"] == pytest.approx(expected_mcr, rel=1.0e-11)
+    assert check["mx_cr_knm"] == pytest.approx(expected_mxcr, rel=1.0e-11)
+    assert check["my_cr_knm"] == pytest.approx(expected_mycr, rel=1.0e-11)
+    assert math.degrees(
+        math.atan2(check["my_cr_knm"], check["mx_cr_knm"])
+    ) % 360.0 == pytest.approx(phi_deg)
+
+    independent = []
+    for increment, expected_mr, expected_util, expected_edge_start in fixed_references:
+        points, radial = _core_m02_full_sweep_reference(
+            section,
+            concrete,
+            materials,
+            check["mx_cr_knm"],
+            check["my_cr_knm"],
+            increment,
+        )
+        assert len(points) == round(360.0 / increment)
+        assert all(point.converged for point in points)
+        assert radial.valid is True
+        assert radial.resistance == pytest.approx(expected_mr, rel=1.0e-10)
+        assert radial.utilisation == pytest.approx(expected_util, rel=1.0e-10)
+        assert points[radial.governing_index].V == pytest.approx(
+            expected_edge_start
+        )
+        independent.append(radial)
+
+    solution = check["nominal_solution"]
+    history = solution["refinement_history"]
+    assert solution["resolution_state"] == "RESOLVED"
+    assert solution["verdict_resolved"] is True
+    assert solution["error_control_factor"] == 2.0
+    assert solution["minimum_utilisation_error"] == pytest.approx(1.0e-6)
+    assert solution["governing_increment_deg"] == pytest.approx(0.1)
+    assert [stage["target_increment_deg"] for stage in history] == [
+        15.0,
+        1.0,
+        0.1,
+    ]
+    assert history[0]["utilisation"] == pytest.approx(
+        independent[0].utilisation
+    )
+    assert history[1]["utilisation"] == pytest.approx(
+        independent[1].utilisation
+    )
+    assert check["utilisation"] == pytest.approx(
+        independent[2].utilisation, rel=2.0e-6
+    )
+    if expected_status == "PASS":
+        assert solution["utilisation_upper_bound"] < 1.0
+    else:
+        assert solution["utilisation_lower_bound"] > 1.0
+    # phi is the applied-moment direction; V remains separate solver evidence.
+    assert history[-1]["governing_angle_deg"] != pytest.approx(phi_deg)
 
 
 @pytest.mark.parametrize(
@@ -425,7 +654,7 @@ def test_2023_tiny_real_moment_reaches_nominal_envelope():
     assert check["mx_cr_knm"] == pytest.approx(52.2, rel=1.0e-10)
     assert check["my_cr_knm"] == 0.0
     assert check["cracking_factor"] == pytest.approx(52.2e12, rel=1.0e-10)
-    assert check["model"] == "uniaxial x; 15-degree envelope"
+    assert check["model"] == "uniaxial x; refined nominal envelope"
     assert check["radial_demand_knm"] == pytest.approx(52.2, rel=1.0e-10)
     assert check["radial_resistance_knm"] == pytest.approx(
         252.72029622280888, rel=1.0e-10
@@ -433,7 +662,7 @@ def test_2023_tiny_real_moment_reaches_nominal_envelope():
     assert check["utilisation"] == pytest.approx(
         0.2065524644446375, rel=1.0e-10
     )
-    assert check["nominal_solution"]["accepted_point_count"] == 24
+    assert check["nominal_solution"]["accepted_point_count"] > 24
     assert check["nominal_solution"]["all_points_converged"] is True
 
 
@@ -553,6 +782,203 @@ def _centred_nominal_envelope(scale=1.0):
     ]
 
 
+@pytest.mark.parametrize(
+    ("utilisations", "expected_state", "expected_final_status"),
+    [
+        ((1.02, 0.99, 0.98), "RESOLVED", "PASS"),
+        ((0.98, 1.02, 1.03), "RESOLVED", "FAIL"),
+        ((0.99, 1.0005, 1.0001, 1.00005), "UNRESOLVED", None),
+        ((0.99, 1.0, 1.0, 1.0), "UNRESOLVED", None),
+    ],
+)
+def test_2023_nominal_refinement_resolves_reversals_and_withholds_near_limit(
+    monkeypatch, utilisations, expected_state, expected_final_status
+):
+    section, _elements, materials = _rectangle()
+    scripted = iter(utilisations)
+
+    def fake_solve(*args, **_kwargs):
+        angles = detailing._module("plastic").plastic_sweep_angles(*args[4:7])
+        return [
+            _nominal_point(
+                math.cos(math.radians(angle)),
+                math.sin(math.radians(angle)),
+                angle=angle,
+            )
+            for angle in angles
+        ]
+
+    def fake_radial(*_args, **_kwargs):
+        utilisation = next(scripted)
+        return SimpleNamespace(
+            demand=1.0,
+            resistance=1.0 / utilisation,
+            utilisation=utilisation,
+            governing_index=0,
+            valid=True,
+            reason=None,
+            origin_inside_or_on=True,
+        )
+
+    monkeypatch.setattr(detailing, "solve_plastic", fake_solve)
+    monkeypatch.setattr(
+        detailing._module("combined"), "radial_util_result", fake_radial
+    )
+
+    points, radial, resolution = detailing._nominal_refined_envelope(
+        section,
+        Concrete(30.0, gamma_c=1.5),
+        materials[0],
+        materials,
+        p_comp=0.0,
+        mx=1.0,
+        my=0.0,
+    )
+
+    assert points
+    assert resolution["resolution_state"] == expected_state
+    assert resolution["verdict_resolved"] is (expected_state == "RESOLVED")
+    assert [
+        stage["target_increment_deg"]
+        for stage in resolution["refinement_history"]
+    ] == (
+        [15.0, 1.0, 0.1]
+        if expected_state == "RESOLVED"
+        else [15.0, 1.0, 0.1, 0.01]
+    )
+    if expected_final_status is None:
+        assert resolution["utilisation_lower_bound"] < 1.0
+        assert resolution["utilisation_upper_bound"] > 1.0
+        assert "stable assessment" in resolution["reason"]
+    else:
+        final_status = "PASS" if radial.utilisation <= 1.0 else "FAIL"
+        assert final_status == expected_final_status
+
+
+def test_2023_nominal_refinement_retains_later_nonconvergence(monkeypatch):
+    section, _elements, materials = _rectangle()
+    solve_count = 0
+
+    def fake_solve(*args, **_kwargs):
+        nonlocal solve_count
+        solve_count += 1
+        angles = detailing._module("plastic").plastic_sweep_angles(*args[4:7])
+        return [
+            _nominal_point(
+                math.cos(math.radians(angle)),
+                math.sin(math.radians(angle)),
+                angle=angle,
+                converged=solve_count == 1,
+            )
+            for angle in angles
+        ]
+
+    def fake_radial(*_args, **_kwargs):
+        return SimpleNamespace(
+            demand=1.0,
+            resistance=2.0,
+            utilisation=0.5,
+            governing_index=0,
+            valid=True,
+            reason=None,
+            origin_inside_or_on=True,
+        )
+
+    monkeypatch.setattr(detailing, "solve_plastic", fake_solve)
+    monkeypatch.setattr(
+        detailing._module("combined"), "radial_util_result", fake_radial
+    )
+
+    _points, _radial, resolution = detailing._nominal_refined_envelope(
+        section,
+        Concrete(30.0, gamma_c=1.5),
+        materials[0],
+        materials,
+        p_comp=0.0,
+        mx=1.0,
+        my=0.0,
+    )
+
+    assert resolution["resolution_state"] == "INVALID"
+    assert resolution["verdict_resolved"] is False
+    assert resolution["reason"] == "nominal axial-moment envelope did not converge"
+    assert [
+        stage["target_increment_deg"]
+        for stage in resolution["refinement_history"]
+    ] == [15.0, 1.0]
+    assert resolution["refinement_history"][0]["all_points_converged"] is True
+    assert resolution["refinement_history"][1]["all_points_converged"] is False
+
+
+def test_2023_unresolved_nominal_refinement_is_not_assessed(monkeypatch):
+    section, elements, materials = _rectangle()
+    reason = (
+        "nominal resistance is too close to the cracking demand for a stable "
+        "assessment at the available angular resolution"
+    )
+    monkeypatch.setattr(
+        detailing,
+        "_cracking_action",
+        lambda *_args, **_kwargs: {
+            "valid": True,
+            "m_cr_knm": 1.0,
+            "mx_cr_knm": 1.0,
+            "my_cr_knm": 0.0,
+            "factor": 1.0,
+            "branch": "near-limit resolution test",
+            "fctm_mpa": 2.9,
+            "governing_vertex_index": 0,
+            "governing_vertex_x_m": 0.0,
+            "governing_vertex_y_m": 0.0,
+            "governing_axial_stress_mpa": 0.0,
+            "governing_bending_stress_mpa": 2.9,
+            "axial_peak_tension_mpa": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        detailing,
+        "_nominal_capacity_utilisation",
+        lambda *_args, **_kwargs: {
+            "valid": True,
+            "assessment_resolved": False,
+            "utilisation": None,
+            "mr_nom_knm": None,
+            "model": "uniaxial x; refined nominal envelope",
+            "nominal_axial_resistance_kn": 1000.0,
+            "nominal_reinforcement_terms": [],
+            "nominal_solution": {
+                "resolution_state": "UNRESOLVED",
+                "verdict_resolved": False,
+                "estimated_utilisation_error": 0.0001,
+                "utilisation_lower_bound": 0.99995,
+                "utilisation_upper_bound": 1.00015,
+                "governing_increment_deg": 0.01,
+                "refinement_history": [],
+            },
+            "radial_demand_knm": 1.0,
+            "radial_resistance_knm": None,
+            "reason": reason,
+        },
+    )
+
+    result = detailing.minimum_reinforcement_2023(
+        section,
+        elements,
+        materials,
+        Concrete(30.0, gamma_c=1.5),
+        fctm_mpa=2.9,
+        n_ed_tension_kn=0.0,
+        mx_ed_knm=1.0,
+        my_ed_knm=0.0,
+    )
+
+    assert result["status"] == "NOT ASSESSED"
+    assert result["reason"] == reason
+    assert result["checks"][0]["status"] == "NOT ASSESSED"
+    assert result["checks"][0]["utilisation"] is None
+    assert result["checks"][0]["mr_nom_knm"] is None
+
+
 def test_2023_zero_cracking_remote_nominal_envelope_cannot_pass(monkeypatch):
     section, elements, materials = _rectangle()
     monkeypatch.setattr(
@@ -655,10 +1081,10 @@ def test_2023_uniaxial_nominal_envelope_propagates_origin_invalid(
 @pytest.mark.parametrize(
     ("mx_cr_knm", "my_cr_knm", "model"),
     [
-        (5.0e-10, 0.0, "uniaxial x; 15-degree envelope"),
-        (-5.0e-10, 0.0, "uniaxial x; 15-degree envelope"),
-        (0.0, 5.0e-10, "uniaxial y; 15-degree envelope"),
-        (0.0, -5.0e-10, "uniaxial y; 15-degree envelope"),
+        (5.0e-10, 0.0, "uniaxial x; refined nominal envelope"),
+        (-5.0e-10, 0.0, "uniaxial x; refined nominal envelope"),
+        (0.0, 5.0e-10, "uniaxial y; refined nominal envelope"),
+        (0.0, -5.0e-10, "uniaxial y; refined nominal envelope"),
     ],
 )
 def test_2023_tiny_nonzero_cracking_moment_uses_radial_envelope(
@@ -712,7 +1138,7 @@ def test_2023_sub_tolerance_secondary_moment_remains_biaxial(monkeypatch):
     )
 
     assert result["valid"] is True
-    assert result["model"] == "biaxial 15-degree envelope"
+    assert result["model"] == "biaxial refined nominal envelope"
     assert result["radial_demand_knm"] == pytest.approx(
         math.hypot(1.0, 5.0e-10), rel=1.0e-12, abs=0.0
     )
@@ -745,7 +1171,7 @@ def test_2023_exact_zero_cracking_moment_retains_zero_demand_path(monkeypatch):
     assert result["model"] == "zero cracking moment; nominal axial-moment envelope"
 
 
-def test_2023_uniaxial_capacity_uses_one_radial_envelope(monkeypatch):
+def test_2023_uniaxial_capacity_refines_one_radial_envelope(monkeypatch):
     section, _elements, materials = _rectangle()
     points = [
         _nominal_point(4.0, 2.0, angle=0.0),
@@ -777,7 +1203,7 @@ def test_2023_uniaxial_capacity_uses_one_radial_envelope(monkeypatch):
         my_cr_knm=0.0,
     )
 
-    assert len(calls) == 1
+    assert len(calls) == 3
     args, kwargs = calls[0]
     assert args[4:7] == (0.0, 345.0, 15.0)
     assert "bar_materials" in kwargs
@@ -786,7 +1212,7 @@ def test_2023_uniaxial_capacity_uses_one_radial_envelope(monkeypatch):
     assert result["mr_nom_knm"] == pytest.approx(3.0)
     assert result["radial_resistance_knm"] == pytest.approx(3.0)
     assert result["governing"] == 0
-    assert result["model"] == "uniaxial x; 15-degree envelope"
+    assert result["model"] == "uniaxial x; refined nominal envelope"
     cardinal = next(point for point in points if point.V == 90.0)
     assert abs(cardinal.Mx) == pytest.approx(2.0)
     assert result["mr_nom_knm"] != pytest.approx(abs(cardinal.Mx))
@@ -807,10 +1233,10 @@ def test_2023_uniaxial_capacity_uses_one_radial_envelope(monkeypatch):
         "model",
     ),
     [
-        (1.0, 0.0, 13.0 / 4.0, 0, (4.0, 1.0), "uniaxial x; 15-degree envelope"),
-        (-1.0, 0.0, 11.0 / 6.0, 2, (-2.0, -1.0), "uniaxial x; 15-degree envelope"),
-        (0.0, 1.0, 21.0 / 5.0, 3, (-1.0, 5.0), "uniaxial y; 15-degree envelope"),
-        (0.0, -1.0, 7.0 / 3.0, 1, (1.0, -3.0), "uniaxial y; 15-degree envelope"),
+        (1.0, 0.0, 13.0 / 4.0, 0, (4.0, 1.0), "uniaxial x; refined nominal envelope"),
+        (-1.0, 0.0, 11.0 / 6.0, 2, (-2.0, -1.0), "uniaxial x; refined nominal envelope"),
+        (0.0, 1.0, 21.0 / 5.0, 3, (-1.0, 5.0), "uniaxial y; refined nominal envelope"),
+        (0.0, -1.0, 7.0 / 3.0, 1, (1.0, -3.0), "uniaxial y; refined nominal envelope"),
     ],
 )
 def test_2023_signed_uniaxial_axes_use_distinct_asymmetric_resistances(
@@ -846,7 +1272,7 @@ def test_2023_signed_uniaxial_axes_use_distinct_asymmetric_resistances(
         my_cr_knm=my_cr_knm,
     )
 
-    assert len(calls) == 1
+    assert len(calls) == 3
     assert result["valid"] is True
     assert result["model"] == model
     assert result["radial_demand_knm"] == 1.0
@@ -885,7 +1311,7 @@ def test_2023_uniaxial_nonconverged_envelope_is_invalid(monkeypatch):
     assert result["valid"] is False
     assert result["utilisation"] is None
     assert result["mr_nom_knm"] is None
-    assert result["model"] == "uniaxial x; 15-degree envelope"
+    assert result["model"] == "uniaxial x; refined nominal envelope"
     assert result["reason"] == "nominal axial-moment envelope did not converge"
     assert result["nominal_solution"]["all_points_converged"] is False
 
@@ -983,7 +1409,7 @@ def test_2023_public_tiny_nonzero_moment_cannot_bypass_bending(monkeypatch):
         5.0e-10, rel=1.0e-12, abs=0.0
     )
     assert cracking_calls[0]["my_centroid_knm"] == 0.0
-    assert len(envelope_calls) == 1
+    assert len(envelope_calls) == 3
     assert result["status"] == "FAIL"
     assert result["clause"] == "12.2(2)(a), Formula (12.1)"
     assert check["status"] == "FAIL"
