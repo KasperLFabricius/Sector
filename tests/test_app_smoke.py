@@ -3622,6 +3622,10 @@ def test_legacy_density_preview_is_not_treated_as_applied_provenance():
 
     assert not restored.exception
     assert sector_app._QS_APPLIED_SETTINGS_KEY not in restored.session_state
+    assert (
+        sector_app._QS_VERIFIED_DENSITY_SETTINGS_KEY
+        not in restored.session_state
+    )
     retained = restored.session_state[sector_app._QS_RETAINED_SETTINGS_KEY]
     assert retained["qsv_shape"] == "Slab strip"
     assert retained["qsv_qs_rebar_mode"] == "By spacing"
@@ -3720,6 +3724,10 @@ def test_slab_density_applied_provenance_survives_back_autosave_and_reload(
     assert restored.session_state["_latest_inputs"]["slab_density"]["status"] == (
         "VERIFIED"
     )
+    assert sector_app._QS_APPLIED_SETTINGS_KEY not in restored.session_state
+    assert restored.session_state[
+        sector_app._QS_VERIFIED_DENSITY_SETTINGS_KEY
+    ]["qsv_qs_rebar_mode"] == "By spacing"
     assert restored.session_state["results"]["clear_spacing"]["governing"][
         "centre_distance_mm"
     ] == pytest.approx(65.0)
@@ -3831,9 +3839,10 @@ def test_slab_density_physical_layout_round_trips_and_point_edit_fails_closed():
     assert not restored.exception
     latest = restored.session_state["_latest_inputs"]
     assert latest["slab_density"]["status"] == "VERIFIED"
-    assert restored.session_state[sector_app._QS_APPLIED_SETTINGS_KEY][
-        "qsv_qs_rebar_mode"
-    ] == "By spacing"
+    assert sector_app._QS_APPLIED_SETTINGS_KEY not in restored.session_state
+    assert restored.session_state[
+        sector_app._QS_VERIFIED_DENSITY_SETTINGS_KEY
+    ]["qsv_qs_rebar_mode"] == "By spacing"
     assert restored.session_state[sector_app._QS_RETAINED_SETTINGS_KEY][
         "qsv_qs_rebar_mode"
     ] == "By spacing"
@@ -3874,6 +3883,34 @@ def test_slab_density_physical_layout_round_trips_and_point_edit_fails_closed():
         visible,
         flags=re.IGNORECASE,
     )
+
+    explicit = rt.normalise_table(
+        [
+            {
+                rt.X: x,
+                rt.Y: y,
+                rt.SIZE_MODE: rt.DIAMETER_MODE,
+                rt.DIAMETER: 20.0,
+                rt.MATERIAL_ID: "M1",
+                rt.FATIGUE_DETAIL_ID: "",
+            }
+            for y in (-100.0, 100.0)
+            for x in (-200.0, 200.0)
+        ],
+        "bar",
+    )
+    _submit_point_grid_rows(restored, "bars_base", explicit)
+    _goto_input_tab(restored, "Section")
+    restored.button(key="slab_density_use_explicit").click().run()
+    assert (
+        sector_app._QS_VERIFIED_DENSITY_SETTINGS_KEY
+        not in restored.session_state
+    )
+    assert "qsv_qs_rebar_mode" not in restored.session_state[
+        sector_app._QS_APPLIED_SETTINGS_KEY
+    ]
+    assert restored.session_state["_latest_inputs"]["slab_density"] is None
+    assert restored.session_state["bars_base"].equals(explicit)
 
 
 def test_density_rows_require_explicit_conversion_before_persisting_as_bars(

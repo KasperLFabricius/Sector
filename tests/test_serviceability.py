@@ -1197,7 +1197,13 @@ def test_density_candidate_groups_without_physical_points_fail_closed():
     )
 
 
-def test_density_2023_crack_result_does_not_use_2005_physical_spacing_points():
+@pytest.mark.parametrize(
+    "irrelevant_spacing",
+    [False, 0.0, -1.0, math.inf, "not a spacing value"],
+)
+def test_density_2023_crack_result_ignores_2005_spacing_inputs(
+    irrelevant_spacing,
+):
     section = _density_slab_section()
     count = len(section.bar_arrays()[0])
     inputs = dict(
@@ -1214,6 +1220,7 @@ def test_density_2023_crack_result_does_not_use_2005_physical_spacing_points():
         400.0,
         0.0,
         6.0,
+        nominal_spacing=irrelevant_spacing,
         physical_spacing_points=[(False, math.inf, 1.5)],
         physical_spacing_groups=[False],
         **inputs,

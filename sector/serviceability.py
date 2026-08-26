@@ -1056,9 +1056,6 @@ def _crack_width(
 
     try:
         cover_arr = optional_physical_array(cover, "Clear cover", positive=False)
-        spacing_arr = optional_physical_array(
-            nominal_spacing, "Nominal spacing", positive=True
-        )
     except ValueError as exc:
         return _not_assessed(str(exc) + ".")
 
@@ -1068,6 +1065,13 @@ def _crack_width(
             k1, phi_arr, derived_phi, diameter_sources, n_mult=mult_arr,
             reinforcement_types=kinds, bond_ratio_xi=bond_ratio_xi,
         )
+
+    try:
+        spacing_arr = optional_physical_array(
+            nominal_spacing, "Nominal spacing", positive=True
+        )
+    except ValueError as exc:
+        return _not_assessed(str(exc) + ".")
 
     physical_spacing = None
     candidate_spacing_groups = None

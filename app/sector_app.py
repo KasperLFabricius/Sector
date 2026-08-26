@@ -3760,10 +3760,11 @@ def _apply_project_text(text: str) -> None:
     st.session_state[_INPUT_STATE_KEY] = durable
     # Existing schema-27 files did not distinguish the last builder preview from
     # an applied layout. Preserve those saved preferences without granting them
-    # physical provenance; the slab-density boundary promotes them only after an
+    # physical provenance; the slab-density boundary accepts them only after an
     # exact point-table reconciliation. This also prevents a previous project's
     # applied snapshot from surviving a complete replacement.
     st.session_state.pop(_QS_APPLIED_SETTINGS_KEY, None)
+    st.session_state.pop(_QS_VERIFIED_DENSITY_SETTINGS_KEY, None)
     st.session_state[_QS_RETAINED_SETTINGS_KEY] = _qs_settings_snapshot(scalars)
     report_durable = {
         key: value
@@ -4518,6 +4519,7 @@ _QS_WIDGET_KEYS = tuple(
 )
 _QS_APPLIED_SETTINGS_KEY = "_qs_applied_settings"
 _QS_RETAINED_SETTINGS_KEY = "_qs_retained_settings"
+_QS_VERIFIED_DENSITY_SETTINGS_KEY = "_qs_verified_density_settings"
 _QS_PROVENANCE_NOTICE_KEY = "_qs_provenance_notice"
 _QS_BAR_SETTING_KEYS = frozenset({
     "qsv_ring_n",
@@ -4602,13 +4604,22 @@ def _use_current_bars_as_explicit() -> None:
     """Confirm that current density rows have been replaced by physical bars."""
 
     applied = st.session_state.get(_QS_APPLIED_SETTINGS_KEY)
-    if not _applied_snapshot_is_slab_density(applied):
+    verified = st.session_state.get(_QS_VERIFIED_DENSITY_SETTINGS_KEY)
+    source = (
+        applied
+        if _applied_snapshot_is_slab_density(applied)
+        else verified
+        if _applied_snapshot_is_slab_density(verified)
+        else None
+    )
+    if source is None:
         return
     st.session_state[_QS_APPLIED_SETTINGS_KEY] = {
         key: copy.deepcopy(value)
-        for key, value in applied.items()
+        for key, value in source.items()
         if key not in _QS_BAR_SETTING_KEYS
     }
+    st.session_state.pop(_QS_VERIFIED_DENSITY_SETTINGS_KEY, None)
     st.session_state[_QS_PROVENANCE_NOTICE_KEY] = (
         "The current reinforcement rows are now treated as explicit physical bars."
     )
@@ -4947,10 +4958,15 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
 
     applied_state = state.get(_QS_APPLIED_SETTINGS_KEY)
     retained_state = state.get(_QS_RETAINED_SETTINGS_KEY)
+    verified_state = state.get(_QS_VERIFIED_DENSITY_SETTINGS_KEY)
     has_applied_provenance = isinstance(applied_state, dict)
+    has_verified_density = isinstance(verified_state, dict)
+    has_physical_provenance = has_applied_provenance or has_verified_density
     intent_state = (
         applied_state
         if has_applied_provenance
+        else verified_state
+        if has_verified_density
         else retained_state
         if isinstance(retained_state, dict)
         else state
@@ -4960,7 +4976,7 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
     except (TypeError, ValueError, OverflowError):
         return (
             {"status": "UNVERIFIED", "reason": _SLAB_DENSITY_GUIDANCE}
-            if has_applied_provenance
+            if has_physical_provenance
             else None
         )
     if layout is None:
@@ -5013,7 +5029,7 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
     except (TypeError, ValueError, OverflowError):
         bars_match = False
     if not geometry_matches or not bars_match:
-        if not has_applied_provenance:
+        if not has_physical_provenance:
             # A legacy/current-schema qsv_ block may be only a discarded preview.
             # Treat the loaded point tables as explicit rather than disabling
             # physical checks on the strength of unverified builder history.
@@ -5027,8 +5043,12 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
             # cannot be attached to unrelated section geometry.
             "can_use_explicit_bars": geometry_matches and not bars_match,
         }
-    if not has_applied_provenance:
-        state[_QS_APPLIED_SETTINGS_KEY] = copy.deepcopy(
+    if not has_physical_provenance:
+        # Reconciliation proves the slab-density bar/outline relation needed by
+        # physical checks. It does not retroactively prove every legacy builder
+        # preference (notably tendon preview settings), so keep this evidence
+        # separate from an Apply-created persistence snapshot.
+        state[_QS_VERIFIED_DENSITY_SETTINGS_KEY] = copy.deepcopy(
             retained_state
             if isinstance(retained_state, dict)
             else _qs_settings_snapshot(state)
@@ -5760,6 +5780,7 @@ def _quick_section_viewport():
         st.session_state[_QS_RETAINED_SETTINGS_KEY] = copy.deepcopy(
             applied_snapshot
         )
+        st.session_state.pop(_QS_VERIFIED_DENSITY_SETTINGS_KEY, None)
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
