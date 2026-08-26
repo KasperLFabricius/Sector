@@ -88,6 +88,26 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
+def test_manual_distinguishes_slab_density_from_finite_face_spacing():
+    text = "\n".join(
+        block[1] for block in manual.manual_blocks() if block[0] == "md"
+    )
+
+    assert "reinforcement area per metre" in text
+    assert r"A_s = A_{bar}\,1000/s" in text
+    assert r"5A_{bar}=1570.796\,\mathrm{mm^2/m}" in text
+    assert "second complete series at the true half-spacing positions" in text
+    assert "summed $A_s$ per layer and per face" in text
+    assert "symmetric equal-area integration" in text
+    assert "within 0.1% of a 200-point reference" in text
+    assert "analysis points are not treated as physical bar axes" in text
+    assert "entered nominal c/c spacing" in text
+    assert "artificial sides of the unit strip" in text
+    assert "reported as Not assessed" in text
+    assert "spacing is instead a maximum gap" in text
+    assert "derived count and actual centre-to-centre spacing" in text
+
+
 def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for removed in (

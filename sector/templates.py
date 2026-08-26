@@ -408,6 +408,212 @@ def count_for_spacing(span: float, spacing: float) -> int:
     return max(2, int(math.ceil(span / spacing - 1e-9)) + 1)
 
 
+def unit_width_bar_equivalents(width: float, spacing: float) -> float:
+    """Return the bar-equivalent count for reinforcement specified per unit width.
+
+    Unlike :func:`count_for_spacing`, this is an area-density convention rather
+    than a finite-face placement rule.  A 1 m strip at 200 mm spacing therefore
+    contains exactly five bar-equivalents, independently of the representative
+    points used by the section model.
+    """
+
+    _positive_dimensions(unit_width=width, spacing=spacing)
+    equivalents = width / spacing
+    if not math.isfinite(equivalents) or equivalents <= 0.0:
+        raise ValueError("unit-width bar-equivalent count must be finite and positive")
+    return equivalents
+
+
+_UNIT_WIDTH_QUADRATURE_POINTS = 32
+_UNIT_WIDTH_NOMINAL_POINT_LIMIT = 1000
+
+
+def count_for_unit_width(width: float, spacing: float) -> int:
+    """Return the centred nominal-axis count within a unit-width strip."""
+
+    equivalents = unit_width_bar_equivalents(width, spacing)
+    nearest = round(equivalents)
+    if math.isclose(equivalents, nearest, rel_tol=0.0, abs_tol=1.0e-9):
+        count = max(1, int(nearest))
+    else:
+        count = max(1, int(math.ceil(equivalents)))
+    if count > _UNIT_WIDTH_NOMINAL_POINT_LIMIT:
+        raise ValueError("unit-width spacing requires too many nominal positions")
+    return count
+
+
+def unit_width_bar_row(
+    y: float,
+    width: float,
+    spacing: float,
+    diameter_mm: float,
+    *,
+    staggered: bool = False,
+):
+    """Return a symmetric, converged quadrature for one density-defined layer.
+
+    The points are analysis representatives, not physical bar axes.  Primary rows
+    use equal-area midpoint quadrature.  A staggered row uses the intervening cell
+    boundaries with half-weight end points, so every interior point is a true
+    midpoint between primary representatives and both rows have zero artificial
+    first moment.  Each row retains the exact area
+    ``bar_area(diameter_mm) * width / spacing``.
+    """
+
+    _positive_dimensions(
+        unit_width=width,
+        spacing=spacing,
+        bar_diameter=diameter_mm,
+    )
+    if not math.isfinite(y):
+        raise ValueError("bar-row depth must be finite")
+    equivalents = unit_width_bar_equivalents(width, spacing)
+    try:
+        total_area = bar_area(diameter_mm) * equivalents
+    except OverflowError:
+        total_area = math.inf
+    if not math.isfinite(total_area) or total_area <= 0.0:
+        raise ValueError("unit-width reinforcement area must be finite and positive")
+    count = _UNIT_WIDTH_QUADRATURE_POINTS
+    step = width / count
+    area_unit = total_area / count
+    if not staggered:
+        return [
+            (-width / 2.0 + (index + 0.5) * step, y, area_unit)
+            for index in range(count)
+        ]
+    return [
+        (
+            -width / 2.0 + index * step,
+            y,
+            area_unit * (0.5 if index in {0, count} else 1.0),
+        )
+        for index in range(count + 1)
+    ]
+
+
+def unit_width_nominal_bar_row(
+    y: float,
+    width: float,
+    spacing: float,
+    diameter_mm: float,
+    *,
+    staggered: bool = False,
+):
+    """Return symmetric nominal bar axes with exact tributary-width area.
+
+    This physical representation is used for spacing and cover evidence.  Its
+    centre-to-centre gaps equal the entered spacing; the staggered series occupies
+    the exact half-spacing positions.  Boundary tributary weights preserve the
+    exact per-width reinforcement area without inventing a one-sided full bar.
+    """
+
+    _positive_dimensions(
+        unit_width=width,
+        spacing=spacing,
+        bar_diameter=diameter_mm,
+    )
+    if not math.isfinite(y):
+        raise ValueError("bar-row depth must be finite")
+    count = count_for_unit_width(width, spacing)
+    primary_xs = [
+        (index - (count - 1) / 2.0) * spacing for index in range(count)
+    ]
+    half_width = width / 2.0
+    if staggered:
+        xs = [
+            0.5 * (left + right)
+            for left, right in zip(primary_xs, primary_xs[1:])
+        ]
+        # When the entered spacing divides the strip exactly, the periodic
+        # interleaved series lands on both strip cuts.  Retain both axes with
+        # symmetric half tributaries; never invent one full one-sided boundary bar.
+        periodic_edges = (
+            primary_xs[0] - spacing / 2.0,
+            primary_xs[-1] + spacing / 2.0,
+        )
+        xs.extend(
+            max(-half_width, min(half_width, x))
+            for x in periodic_edges
+            if -half_width - 1.0e-12 <= x <= half_width + 1.0e-12
+        )
+        xs.sort()
+    else:
+        xs = primary_xs
+    xs = [x for x in xs if -half_width - 1.0e-12 <= x <= half_width + 1.0e-12]
+    if not xs:
+        raise ValueError("unit-width nominal positions are unavailable")
+    full_area = bar_area(diameter_mm)
+    row = []
+    for index, x in enumerate(xs):
+        left = -half_width if index == 0 else 0.5 * (xs[index - 1] + x)
+        right = half_width if index == len(xs) - 1 else 0.5 * (x + xs[index + 1])
+        tributary = right - left
+        area = full_area * tributary / spacing
+        if not math.isfinite(area) or area <= 0.0:
+            raise ValueError("unit-width nominal reinforcement area must be positive")
+        row.append((x, y, area))
+    return row
+
+
+def unit_width_bar_layers(
+    y_face: float,
+    direction: float,
+    n_layers: int,
+    layer_spacing: float,
+    width: float,
+    spacing: float,
+    diameter_mm: float,
+    *,
+    staggered: bool = False,
+):
+    """Stack per-unit-width bar rows while preserving each layer's exact area."""
+
+    if not all(math.isfinite(value) for value in (y_face, direction, layer_spacing)):
+        raise ValueError("unit-width layer placement must be finite")
+    rows = []
+    for index in range(max(0, int(n_layers))):
+        rows.extend(
+            unit_width_bar_row(
+                y_face + direction * index * layer_spacing,
+                width,
+                spacing,
+                diameter_mm,
+                staggered=staggered,
+            )
+        )
+    return rows
+
+
+def unit_width_nominal_bar_layers(
+    y_face: float,
+    direction: float,
+    n_layers: int,
+    layer_spacing: float,
+    width: float,
+    spacing: float,
+    diameter_mm: float,
+    *,
+    staggered: bool = False,
+):
+    """Stack symmetric nominal rows for physical spacing/cover evidence."""
+
+    if not all(math.isfinite(value) for value in (y_face, direction, layer_spacing)):
+        raise ValueError("unit-width layer placement must be finite")
+    rows = []
+    for index in range(max(0, int(n_layers))):
+        rows.extend(
+            unit_width_nominal_bar_row(
+                y_face + direction * index * layer_spacing,
+                width,
+                spacing,
+                diameter_mm,
+                staggered=staggered,
+            )
+        )
+    return rows
+
+
 def bar_row(y: float, x_start: float, x_end: float, n: int, diameter_mm: float):
     """``n`` bars of the given diameter evenly spaced from ``x_start`` to ``x_end``."""
     if n <= 0:

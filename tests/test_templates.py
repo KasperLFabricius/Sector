@@ -419,6 +419,355 @@ def test_count_for_spacing():
         assert max(gaps) <= 0.15 + 1e-9, span
 
 
+def test_unit_width_t20_at_200_is_exactly_five_bar_equivalents():
+    row = templates.unit_width_bar_row(0.10, 1.0, 0.20, 20.0)
+    nominal = templates.unit_width_nominal_bar_row(0.10, 1.0, 0.20, 20.0)
+
+    assert templates.unit_width_bar_equivalents(1.0, 0.20) == pytest.approx(5.0)
+    assert templates.count_for_unit_width(1.0, 0.20) == 5
+    assert len(row) == 32
+    assert [point[0] for point in nominal] == pytest.approx(
+        [-0.40, -0.20, 0.0, 0.20, 0.40]
+    )
+    assert all(point[1] == pytest.approx(0.10) for point in row)
+    assert sum(point[2] for point in row) == pytest.approx(
+        5.0 * templates.bar_area(20.0)
+    )
+    assert sum(point[2] for point in row) == pytest.approx(1570.7963267948965)
+    assert sum(point[2] for point in nominal) == pytest.approx(1570.7963267948965)
+    assert sum(point[0] * point[2] for point in row) == pytest.approx(0.0, abs=1e-12)
+    assert sum(point[0] * point[2] for point in nominal) == pytest.approx(
+        0.0, abs=1e-12
+    )
+
+
+def test_non_divisible_unit_width_keeps_exact_density_not_four_full_bars():
+    row = templates.unit_width_bar_row(-0.10, 1.0, 0.30, 20.0)
+    nominal = templates.unit_width_nominal_bar_row(-0.10, 1.0, 0.30, 20.0)
+    nominal_interleave = templates.unit_width_nominal_bar_row(
+        -0.10, 1.0, 0.30, 16.0, staggered=True
+    )
+
+    assert templates.unit_width_bar_equivalents(1.0, 0.30) == pytest.approx(10.0 / 3.0)
+    assert len(row) == 32
+    assert [point[0] for point in nominal] == pytest.approx(
+        [-0.45, -0.15, 0.15, 0.45]
+    )
+    assert [nominal[i + 1][0] - nominal[i][0] for i in range(3)] == pytest.approx(
+        [0.30, 0.30, 0.30]
+    )
+    assert sum(point[2] for point in row) == pytest.approx(
+        templates.bar_area(20.0) / 0.30
+    )
+    assert sum(point[2] for point in nominal) == pytest.approx(
+        templates.bar_area(20.0) / 0.30
+    )
+    assert sum(point[0] * point[2] for point in nominal) == pytest.approx(
+        0.0, abs=1e-12
+    )
+    assert nominal[0][2] == pytest.approx(2.0 / 3.0 * templates.bar_area(20.0))
+    assert [point[0] for point in nominal_interleave] == pytest.approx(
+        [-0.30, 0.0, 0.30]
+    )
+    assert [point[0] for point in nominal_interleave] == pytest.approx(
+        [0.5 * (nominal[index][0] + nominal[index + 1][0]) for index in range(3)]
+    )
+    assert sum(point[2] for point in nominal_interleave) == pytest.approx(
+        templates.bar_area(16.0) / 0.30
+    )
+    assert sum(
+        point[0] * point[2] for point in nominal_interleave
+    ) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_unit_width_layers_preserve_each_face_area_and_allow_distinct_rows():
+    main = templates.unit_width_bar_layers(
+        -0.12, 1.0, 2, 0.04, 1.0, 0.20, 20.0
+    )
+    interleaved = templates.unit_width_bar_layers(
+        -0.12, 1.0, 1, 0.04, 1.0, 0.20, 16.0, staggered=True
+    )
+
+    assert len(main) == 64
+    assert len(interleaved) == 33
+    assert sum(point[2] for point in main) == pytest.approx(
+        2.0 * 5.0 * templates.bar_area(20.0)
+    )
+    assert sum(point[2] for point in interleaved) == pytest.approx(
+        5.0 * templates.bar_area(16.0)
+    )
+    assert {point[0] for point in main[:32]}.isdisjoint(
+        {point[0] for point in interleaved}
+    )
+    assert [point[0] for point in interleaved[1:-1]] == pytest.approx(
+        [0.5 * (main[i][0] + main[i + 1][0]) for i in range(31)]
+    )
+    assert sum(point[0] * point[2] for point in main) == pytest.approx(0.0, abs=1e-12)
+    assert sum(point[0] * point[2] for point in interleaved) == pytest.approx(
+        0.0, abs=1e-12
+    )
+
+    nominal_main = templates.unit_width_nominal_bar_row(
+        -0.12, 1.0, 0.20, 20.0
+    )
+    nominal_interleave = templates.unit_width_nominal_bar_row(
+        -0.12, 1.0, 0.20, 16.0, staggered=True
+    )
+    assert [point[0] for point in nominal_main] == pytest.approx(
+        [-0.4, -0.2, 0.0, 0.2, 0.4]
+    )
+    assert [point[0] for point in nominal_interleave] == pytest.approx(
+        [-0.5, -0.3, -0.1, 0.1, 0.3, 0.5]
+    )
+    assert sum(point[2] for point in nominal_interleave) == pytest.approx(
+        5.0 * templates.bar_area(16.0)
+    )
+    assert sum(point[0] * point[2] for point in nominal_interleave) == pytest.approx(
+        0.0, abs=1e-12
+    )
+
+    boundary_primary = templates.unit_width_nominal_bar_row(
+        0.12, 1.0, 0.50, 20.0
+    )
+    boundary_interleave = templates.unit_width_nominal_bar_row(
+        0.12, 1.0, 0.50, 16.0, staggered=True
+    )
+    assert [point[0] for point in boundary_primary] == pytest.approx([-0.25, 0.25])
+    assert [point[0] for point in boundary_interleave] == pytest.approx(
+        [-0.50, 0.0, 0.50]
+    )
+    assert boundary_interleave[0][2] == pytest.approx(
+        0.5 * templates.bar_area(16.0)
+    )
+    assert boundary_interleave[-1][2] == pytest.approx(
+        0.5 * templates.bar_area(16.0)
+    )
+    assert sum(point[2] for point in boundary_interleave) == pytest.approx(
+        2.0 * templates.bar_area(16.0)
+    )
+    assert sum(
+        point[0] * point[2] for point in boundary_interleave
+    ) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_unit_width_representation_stays_bounded_and_rejects_nonfinite_area():
+    dense = templates.unit_width_bar_row(0.0, 1.0, 1.0e-6, 20.0)
+
+    assert len(dense) == 32
+    assert sum(point[2] for point in dense) == pytest.approx(
+        templates.bar_area(20.0) * 1.0e6
+    )
+    with pytest.raises(ValueError, match="too many nominal positions"):
+        templates.unit_width_nominal_bar_row(0.0, 1.0, 1.0e-6, 20.0)
+    with pytest.raises(ValueError, match="reinforcement area must be finite"):
+        templates.unit_width_bar_row(0.0, 1.0, 0.20, 1.0e308)
+
+
+def test_t32_at_65_retains_nominal_clear_spacing_and_passes_boundary():
+    from sector import detailing
+
+    row = templates.unit_width_nominal_bar_row(0.0, 1.0, 0.065, 32.0)
+    elements = [
+        {
+            "id": f"R{index}",
+            "kind": "bar",
+            "x_mm": x * 1000.0,
+            "y_mm": y * 1000.0,
+            "diameter_mm": 32.0,
+        }
+        for index, (x, y, _area) in enumerate(row, start=1)
+    ]
+
+    result = detailing.clear_spacing(
+        elements,
+        d_upper_mm=16.0,
+        edition=detailing.EC2_2005,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["governing"]["centre_distance_mm"] == pytest.approx(65.0)
+    assert result["governing"]["clear_mm"] == pytest.approx(33.0)
+
+
+def test_t20_at_41_uses_entered_clear_spacing_not_quadrature_gap():
+    from sector import detailing
+
+    def elements(row):
+        return [
+            {
+                "id": f"R{index}",
+                "kind": "bar",
+                "x_mm": x * 1000.0,
+                "y_mm": y * 1000.0,
+                "diameter_mm": 20.0,
+            }
+            for index, (x, y, _area) in enumerate(row, start=1)
+        ]
+
+    nominal = detailing.clear_spacing(
+        elements(templates.unit_width_nominal_bar_row(0.0, 1.0, 0.041, 20.0)),
+        d_upper_mm=16.0,
+        edition=detailing.EC2_2005,
+    )
+    represented = detailing.clear_spacing(
+        elements(templates.unit_width_bar_row(0.0, 1.0, 0.041, 20.0)),
+        d_upper_mm=16.0,
+        edition=detailing.EC2_2005,
+    )
+
+    assert nominal["status"] == "PASS"
+    assert nominal["governing"]["centre_distance_mm"] == pytest.approx(41.0)
+    assert nominal["governing"]["clear_mm"] == pytest.approx(21.0)
+    assert represented["status"] == "FAIL"
+    assert represented["governing"]["centre_distance_mm"] == pytest.approx(31.25)
+    assert represented["governing"]["clear_mm"] == pytest.approx(11.25)
+
+
+def test_interleaved_nominal_series_retains_half_spacing_for_detailing():
+    from sector import detailing
+
+    rows = []
+    for role, diameter, staggered in (
+        ("primary", 20.0, False),
+        ("interleave", 16.0, True),
+    ):
+        for index, (x, y, area) in enumerate(
+            templates.unit_width_nominal_bar_row(
+                0.0, 1.0, 0.20, diameter, staggered=staggered
+            ),
+            start=1,
+        ):
+            rows.append(
+                {
+                    "id": f"{role} {index}",
+                    "kind": "bar",
+                    "x_mm": x * 1000.0,
+                    "y_mm": y * 1000.0,
+                    "area_mm2": area,
+                    "diameter_mm": diameter,
+                }
+            )
+
+    result = detailing.clear_spacing(
+        rows,
+        d_upper_mm=16.0,
+        edition=detailing.EC2_2005,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["governing"]["centre_distance_mm"] == pytest.approx(100.0)
+    assert result["governing"]["clear_mm"] == pytest.approx(82.0)
+
+
+def test_slab_density_quadrature_controls_cross_axis_capacity_over_spacing_range():
+    from sector.materials import Concrete, MildSteel
+    from sector.plastic import solve_plastic
+    from sector.section import Section
+
+    outer = [(-0.5, -0.15), (0.5, -0.15), (0.5, 0.15), (-0.5, 0.15)]
+    concrete = Concrete(fck=35.0, gamma_c=1.5, curve=2)
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=500.0,
+        futk=500.0,
+        eut=0.05,
+        gamma_y=1.15,
+        gamma_u=1.15,
+        gamma_E=1.0,
+        curve=1,
+    )
+    full_area = templates.bar_area(20.0)
+
+    def capacities(row):
+        section = Section.from_polygon(
+            corners=outer,
+            bars_xy_area_mm2=[
+                (x, y, area)
+                for y in (-0.1, 0.1)
+                for x, _row_y, area in row
+            ],
+        )
+        points = solve_plastic(
+            section, concrete, steel, 0.0, 0.0, 270.0, 90.0
+        )
+        return (
+            max(point.Mx for point in points),
+            min(point.Mx for point in points),
+            max(point.My for point in points),
+            min(point.My for point in points),
+        )
+
+    t20_at_300 = None
+    spacing_values_mm = sorted(
+        {float(value) for value in range(10, 1001, 5)}
+        | {41.0, 333.333, 999.999}
+    )
+    for spacing in (value / 1000.0 for value in spacing_values_mm):
+        candidate = templates.unit_width_bar_row(0.0, 1.0, spacing, 20.0)
+        equivalents = 1.0 / spacing
+        reference = [
+            (
+                -0.5 + (index + 0.5) / 200.0,
+                0.0,
+                full_area * equivalents / 200.0,
+            )
+            for index in range(200)
+        ]
+        mx_max, mx_min, my_max, my_min = capacities(candidate)
+        ref_mx_max, _ref_mx_min, ref_my_max, _ref_my_min = capacities(reference)
+        assert mx_max == pytest.approx(ref_mx_max, rel=1.0e-12)
+        assert my_max == pytest.approx(ref_my_max, rel=1.0e-3)
+        assert mx_max == pytest.approx(abs(mx_min), rel=2.0e-5)
+        assert my_max == pytest.approx(abs(my_min), rel=2.0e-5)
+        if spacing == 0.30:
+            t20_at_300 = (mx_max, my_max, ref_my_max)
+
+    assert t20_at_300 == pytest.approx(
+        (115.3594814553832, 405.2314311357419, 405.2429397303871),
+        rel=1.0e-8,
+    )
+
+
+def test_interleaved_density_layers_keep_symmetric_section_capacity():
+    from sector.materials import Concrete, MildSteel
+    from sector.plastic import solve_plastic
+    from sector.section import Section
+
+    bars = []
+    for y in (-0.10, 0.10):
+        bars.extend(templates.unit_width_bar_row(y, 1.0, 0.30, 20.0))
+        bars.extend(
+            templates.unit_width_bar_row(
+                y, 1.0, 0.30, 16.0, staggered=True
+            )
+        )
+    section = Section.from_polygon(
+        corners=[(-0.5, -0.15), (0.5, -0.15), (0.5, 0.15), (-0.5, 0.15)],
+        bars_xy_area_mm2=bars,
+    )
+    concrete = Concrete(fck=35.0, gamma_c=1.5, curve=2)
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=500.0,
+        futk=500.0,
+        eut=0.05,
+        gamma_y=1.15,
+        gamma_u=1.15,
+        gamma_E=1.0,
+        curve=1,
+    )
+
+    points = solve_plastic(
+        section, concrete, steel, 0.0, 0.0, 270.0, 90.0
+    )
+    mx_values = [point.Mx for point in points]
+    my_values = [point.My for point in points]
+
+    assert max(mx_values) == pytest.approx(abs(min(mx_values)), rel=2.0e-5)
+    assert max(my_values) == pytest.approx(abs(min(my_values)), rel=2.0e-5)
+    assert sum(x * area for x, _y, area in bars) == pytest.approx(0.0, abs=1e-10)
+
+
 def test_bar_ring_on_circle():
     bars = templates.bar_ring(0.0, 0.0, 0.25, 8, 20)
     assert len(bars) == 8
