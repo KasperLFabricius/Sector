@@ -45,6 +45,11 @@ _PLASTIC_SWEEP_RESOLUTION = EngineerMessage(
     "Increase the neutral-axis sweep maximum increment; the requested sweep is "
     "too fine to calculate reliably",
 )
+_PLASTIC_SWEEP_SPAN = EngineerMessage(
+    "PLASTIC-SWEEP-SPAN",
+    "Correct the neutral-axis sweep start and end angles; their separation is "
+    "too large to calculate reliably",
+)
 
 
 def _case_record(row: Mapping, key: str) -> dict:
@@ -313,6 +318,38 @@ def _primary_results(entries: Sequence[Mapping], keys: Sequence[str]) -> dict:
     return {key: result[key] for key in keys if key in result}
 
 
+def plastic_sweep_error(inp: Mapping) -> EngineerMessage | None:
+    """Return one authored sweep error before any shared or solver work."""
+
+    mode = str(inp.get("mode") or "")
+    if mode not in {"Plastic", "Both"}:
+        return None
+    raw_values = (
+        inp.get("v_min", 0.0),
+        inp.get("v_max", 360.0),
+        inp.get("v_inc", 15.0),
+    )
+    try:
+        if any(isinstance(value, bool) for value in raw_values):
+            raise ValueError("Boolean sweep value")
+        v_min, v_max, v_inc = (float(value) for value in raw_values)
+    except (TypeError, ValueError, OverflowError):
+        return _PLASTIC_SWEEP_VALUES
+    if not all(math.isfinite(value) for value in (v_min, v_max, v_inc)):
+        return _PLASTIC_SWEEP_VALUES
+    if v_max < v_min:
+        return _PLASTIC_SWEEP_BOUNDS
+    if v_inc <= 0.0:
+        return _PLASTIC_SWEEP_INCREMENT
+    try:
+        plastic_core.plastic_sweep_angles(v_min, v_max, v_inc)
+    except plastic_core.PlasticSweepSpanError:
+        return _PLASTIC_SWEEP_SPAN
+    except plastic_core.PlasticSweepResolutionError:
+        return _PLASTIC_SWEEP_RESOLUTION
+    return None
+
+
 def validation_errors(inp: Mapping) -> list[EngineerMessage]:
     """Return table/name errors for the analyses enabled in ``inp``."""
     mode = str(inp.get("mode") or "")
@@ -326,30 +363,9 @@ def validation_errors(inp: Mapping) -> list[EngineerMessage]:
     )
     elastic_required = mode in {"Elastic", "Both"}
     errors: list[EngineerMessage] = []
-    if mode in {"Plastic", "Both"}:
-        raw_values = (
-            inp.get("v_min", 0.0),
-            inp.get("v_max", 360.0),
-            inp.get("v_inc", 15.0),
-        )
-        try:
-            if any(isinstance(value, bool) for value in raw_values):
-                raise ValueError("Boolean sweep value")
-            v_min, v_max, v_inc = (float(value) for value in raw_values)
-        except (TypeError, ValueError, OverflowError):
-            errors.append(_PLASTIC_SWEEP_VALUES)
-        else:
-            if not all(math.isfinite(value) for value in (v_min, v_max, v_inc)):
-                errors.append(_PLASTIC_SWEEP_VALUES)
-            elif v_max < v_min:
-                errors.append(_PLASTIC_SWEEP_BOUNDS)
-            elif v_inc <= 0.0:
-                errors.append(_PLASTIC_SWEEP_INCREMENT)
-            else:
-                try:
-                    plastic_core.plastic_sweep_angles(v_min, v_max, v_inc)
-                except plastic_core.PlasticSweepResolutionError:
-                    errors.append(_PLASTIC_SWEEP_RESOLUTION)
+    sweep_error = plastic_sweep_error(inp)
+    if sweep_error is not None:
+        errors.append(sweep_error)
     errors.extend(load_cases.validation_errors(
         inp.get("plastic_cases"),
         inp.get("elastic_cases"),

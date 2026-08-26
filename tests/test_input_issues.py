@@ -57,6 +57,11 @@ def test_case_validator_messages_remain_separate_and_route_to_load_editors():
             "Neutral-axis sweep maximum increment",
         ),
         (
+            "PLASTIC-SWEEP-SPAN",
+            None,
+            "Neutral-axis sweep start and end angles",
+        ),
+        (
             "PLASTIC-SWEEP-VALUES",
             None,
             "Neutral-axis sweep",

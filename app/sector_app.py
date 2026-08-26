@@ -8598,6 +8598,9 @@ def run_analysis(
     reuse_fatigue=None,
 ):
     """Run every current named action and enabled calculation."""
+    sweep_error = case_analysis.plastic_sweep_error(inp)
+    if sweep_error is not None:
+        raise engineer_messages.EngineerValidationError(sweep_error)
     heightened_errors = _heightened_crack_control_validation_errors(inp)
     if heightened_errors:
         raise engineer_messages.EngineerValidationError(heightened_errors[0])

@@ -965,6 +965,10 @@ class PlasticSweepResolutionError(ValueError):
     """A sweep cannot be represented safely at the requested resolution."""
 
 
+class PlasticSweepSpanError(PlasticSweepResolutionError):
+    """A sweep's finite endpoints have an unrepresentable separation."""
+
+
 def plastic_sweep_is_full_turn(v_min: float, v_max: float) -> bool:
     """Return whether the represented endpoints are separated by exactly 360 deg.
 
@@ -1012,7 +1016,7 @@ def plastic_sweep_angles(
         raise ValueError("neutral-axis angle increment must be positive")
     span = end - start
     if not math.isfinite(span):
-        raise PlasticSweepResolutionError(
+        raise PlasticSweepSpanError(
             "neutral-axis angle span cannot be represented safely"
         )
     if span == 0.0:

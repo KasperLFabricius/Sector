@@ -143,6 +143,11 @@ def _case_target(message: EngineerMessage) -> InputTarget:
             "v_max",
             "Neutral-axis sweep end angle",
         )
+    if message.code == "PLASTIC-SWEEP-SPAN":
+        return InputTarget(
+            ANALYSIS_SETTINGS,
+            widget_label="Neutral-axis sweep start and end angles",
+        )
     if message.code in {
         "PLASTIC-SWEEP-INCREMENT",
         "PLASTIC-SWEEP-RESOLUTION",

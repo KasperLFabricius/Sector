@@ -111,6 +111,11 @@ _PROJECT_SWEEP_RESOLUTION = EngineerMessage(
     "increase the neutral-axis sweep maximum increment; the requested sweep is "
     "too fine to calculate reliably",
 )
+_PROJECT_SWEEP_SPAN = EngineerMessage(
+    "PROJECT-SWEEP-SPAN",
+    "correct the neutral-axis sweep start and end angles; their separation is "
+    "too large to calculate reliably",
+)
 _PROJECT_CHANGED = EngineerMessage(
     "PROJECT-CHANGED",
     "the project file is damaged or was changed outside Sector",
@@ -1074,6 +1079,11 @@ def _canonical_scalars(
             payload.get("v_max", 360.0),
             payload.get("v_inc", 15.0),
         )
+    except plastic.PlasticSweepSpanError as exc:
+        raise ProjectInputError(
+            f"invalid neutral-axis sweep span: {exc}",
+            engineer_message=_PROJECT_SWEEP_SPAN,
+        ) from exc
     except plastic.PlasticSweepResolutionError as exc:
         raise ProjectInputError(
             f"invalid neutral-axis sweep resolution: {exc}",

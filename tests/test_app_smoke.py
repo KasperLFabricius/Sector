@@ -1338,6 +1338,43 @@ def test_near_full_plastic_sweep_remains_open_until_exact_360_degrees():
     assert full["util_valid"] is True
 
 
+def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
+    monkeypatch,
+):
+    import sector_app
+
+    reached = []
+
+    def forbidden(*_args, **_kwargs):
+        reached.append(True)
+        raise AssertionError("unsafe sweep reached shared or solver work")
+
+    for name in (
+        "_section_and_material_results",
+        "_elastic_solver_inputs",
+        "_warm_solver",
+        "_run_single_analysis",
+    ):
+        monkeypatch.setattr(sector_app, name, forbidden)
+
+    with pytest.raises(
+        sector_app.engineer_messages.EngineerValidationError
+    ) as caught:
+        sector_app.run_analysis({
+            "mode": "Plastic",
+            "v_min": 0.0,
+            "v_max": 1.0,
+            "v_inc": 1e-20,
+        })
+
+    assert reached == []
+    assert caught.value.engineer_message.code == "PLASTIC-SWEEP-RESOLUTION"
+    assert caught.value.engineer_message.text == (
+        "Increase the neutral-axis sweep maximum increment; the requested sweep "
+        "is too fine to calculate reliably"
+    )
+
+
 def test_reversed_plastic_sweep_retains_prior_result_and_shows_guidance():
     at = _fresh()
     at.run()

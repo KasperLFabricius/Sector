@@ -356,6 +356,12 @@ def test_rejects_names_duplicated_across_solver_tables():
             "Increase the neutral-axis sweep maximum increment; the requested "
             "sweep is too fine to calculate reliably",
         ),
+        (
+            {"v_min": -1e308, "v_max": 1e308, "v_inc": 1.0},
+            "PLASTIC-SWEEP-SPAN",
+            "Correct the neutral-axis sweep start and end angles; their separation "
+            "is too large to calculate reliably",
+        ),
     ),
 )
 def test_invalid_plastic_sweep_blocks_case_runner_with_authored_guidance(

@@ -22,6 +22,7 @@ from sector.materials import Concrete, MildSteel
 from sector.plastic import (
     PLASTIC_SWEEP_MAX_POINTS,
     PlasticSweepResolutionError,
+    PlasticSweepSpanError,
     _band_stresses,
     _governing_curvature,
     plastic_capacity_at_angle,
@@ -415,6 +416,9 @@ def test_plastic_sweep_rejects_unbounded_and_unrepresentable_requests():
 
     with pytest.raises(PlasticSweepResolutionError, match="not distinct"):
         plastic_sweep_angles(1e16, 1e16 + 2.0, 1.0)
+
+    with pytest.raises(PlasticSweepSpanError, match="represented safely"):
+        plastic_sweep_angles(-1e308, 1e308, 1.0)
 
 
 @pytest.mark.parametrize(

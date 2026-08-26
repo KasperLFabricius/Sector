@@ -1176,6 +1176,13 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
         action = table["columns"].index("n_ed_kn")
         table["rows"][0][action] = float("nan")
 
+    def unrepresentable_sweep_span(data: dict) -> None:
+        data["scalars"].update(
+            v_min=-1e308,
+            v_max=1e308,
+            v_inc=1.0,
+        )
+
     too_fine = _mutated_project(valid_a, scalar("v_inc", 1e-20))
     _upload(at, too_fine)
     assert not at.exception
@@ -1200,6 +1207,20 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
             "traceback",
         )
     )
+
+    too_wide = _mutated_project(valid_a, unrepresentable_sweep_span)
+    _upload(at, too_wide)
+    assert not at.exception
+    assert _project_signature(at) == before_project
+    assert at.session_state["_project_upload_content_identity"] == before_identity
+    assert at.session_state["v_min"] == pytest.approx(0.0)
+    assert at.session_state["v_max"] == pytest.approx(360.0)
+    _assert_result_evidence(at, before_results)
+    span_visible = "\n".join(str(item.value) for item in at.error)
+    assert "New file was not applied" in span_visible
+    assert "correct the neutral-axis sweep start and end angles" in span_visible
+    assert "separation is too large to calculate reliably" in span_visible
+    assert "increase the neutral-axis sweep maximum increment" not in span_visible
 
     hostile = (
         _mutated_project(valid_a, scalar("conc_fck", True)),
