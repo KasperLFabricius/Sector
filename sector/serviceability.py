@@ -931,13 +931,16 @@ def _crack_width(
     n: float,
     fctm: float,
     Es: Union[float, Sequence[float]],
-    cover: float,
+    cover: Optional[Union[float, Sequence[float]]],
     kt: float,
     k1: Union[float, Sequence[float]],
     k2: float,
     k3: float,
     k4: float,
     bar_diameter: Optional[Union[float, Sequence[float]]],
+    nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_geometry_available: bool = True,
+    physical_geometry_reason: Optional[str] = None,
     k3_cover_dependent: bool = False,
     include_hx_term: bool = True,
     coarse: bool = False,
@@ -950,9 +953,10 @@ def _crack_width(
 
     ``fctm`` and ``Es`` are in MPa. ``bar_diameter`` (mm) can be one override for
     every element or one value per element; otherwise diameter follows area.
-    ``cover`` (mm), when given, is used for every
-    bar; when ``None`` each bar's clear cover is taken from the geometry as the
-    distance to the nearest concrete face minus half its diameter. The effective
+    ``cover`` (mm), when given, may be one value or one value per element; ``NaN``
+    entries retain geometry-derived cover. ``nominal_spacing`` similarly overrides
+    the nearest-neighbour spacing used for the 2005 close-spacing branch. When
+    ``None`` each value is taken from the represented geometry. The effective
     tension area, height and reinforcement ratio are section quantities (defined
     for the bending direction); the crack spacing and mean strain are then formed
     per bar (its own cover, diameter and Stage II stress); candidates are sorted by
@@ -975,6 +979,11 @@ def _crack_width(
     if not bx.size:
         return _not_assessed(
             "The cracked section has no reinforcement; crack width is not assessed."
+        )
+    if not physical_geometry_available:
+        return _not_assessed(
+            physical_geometry_reason
+            or "Physical reinforcement spacing and cover are unavailable."
         )
     try:
         es_arr = np.broadcast_to(np.asarray(Es, dtype=float), (bx.size,))
@@ -1022,9 +1031,34 @@ def _crack_width(
             "equivalent-area-fallback",
         )
 
+    def optional_physical_array(value, label, *, positive):
+        if value is None:
+            return None
+        object_array = np.asarray(value, dtype=object)
+        if any(isinstance(item, (bool, np.bool_)) for item in object_array.flat):
+            raise ValueError(f"{label} values are invalid")
+        try:
+            array = np.broadcast_to(np.asarray(value, dtype=float), (bx.size,))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} values are invalid") from exc
+        finite = np.isfinite(array)
+        invalid = (finite & (array <= 0.0)) if positive else (finite & (array < 0.0))
+        if np.any(np.isinf(array)) or np.any(invalid):
+            requirement = "positive" if positive else "non-negative"
+            raise ValueError(f"{label} values must be finite {requirement} numbers")
+        return array
+
+    try:
+        cover_arr = optional_physical_array(cover, "Clear cover", positive=False)
+        spacing_arr = optional_physical_array(
+            nominal_spacing, "Nominal spacing", positive=True
+        )
+    except ValueError as exc:
+        return _not_assessed(str(exc) + ".")
+
     if edition == "2023":
         return _crack_width_2023(
-            section, cracked_state, n, fctm, es_arr, cover, kt,
+            section, cracked_state, n, fctm, es_arr, cover_arr, kt,
             k1, phi_arr, derived_phi, diameter_sources, n_mult=mult_arr,
             reinforcement_types=kinds, bond_ratio_xi=bond_ratio_xi,
         )
@@ -1174,13 +1208,15 @@ def _crack_width(
         es_i = float(es_arr[i])
         alpha_e_i = float(n) * float(mult_arr[i])
         phi = float(phi_arr[i])
-        if cover is not None:
-            c_i = float(cover)
+        if cover_arr is not None and math.isfinite(float(cover_arr[i])):
+            c_i = float(cover_arr[i])
+            cover_source = "override"
         else:
             # Clear cover to the bar surface = distance to the nearest concrete
             # face (m -> mm) minus the bar radius.
             c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
                       * 1000.0 - phi / 2.0, 0.0)
+            cover_source = "geometry"
         # EC2 (7.9): mean strain, with the 0.6 sigma_s/Es lower bound.
         concrete_tension_reduction = (
             kt * fctm / rho * (1.0 + alpha_e_i * rho)
@@ -1220,8 +1256,15 @@ def _crack_width(
         # m, cover/phi in mm.
         neigh = band_tens.copy()
         neigh[i] = False
-        nn = float(np.min(np.abs(w_bars[neigh] - w_bars[i]))) if neigh.any() else math.inf
-        nearest_spacing = nn * 1000.0
+        if spacing_arr is not None and math.isfinite(float(spacing_arr[i])):
+            nearest_spacing = float(spacing_arr[i])
+        else:
+            nn = (
+                float(np.min(np.abs(w_bars[neigh] - w_bars[i])))
+                if neigh.any()
+                else math.inf
+            )
+            nearest_spacing = nn * 1000.0
         close_spacing_limit = 5.0 * (c_i + phi / 2.0)
         spacing_7_11 = (
             k3_i * c_i + float(k1_arr[i]) * k2 * k4 * phi / rho
@@ -1263,7 +1306,7 @@ def _crack_width(
             direction_deg=direction_deg,
             equivalent_diameter=float(derived_phi[i]),
             diameter_source=str(diameter_sources[i]),
-            cover_source=("override" if cover is not None else "geometry"),
+            cover_source=cover_source,
             bond_coefficient=float(k1_arr[i]),
             modular_ratio=alpha_e_i,
             mean_strain_operands=mean_strain_operands,
@@ -1290,7 +1333,7 @@ def _crack_width_2023_direct(
     n: float,
     fctm: float,
     es_arr: np.ndarray,
-    cover: Optional[float],
+    cover: Optional[np.ndarray],
     kt: float,
     k1_arr: np.ndarray,
     phi_arr: np.ndarray,
@@ -1348,8 +1391,9 @@ def _crack_width_2023_direct(
         es_i = float(es_arr[i])
         alpha_e_i = float(n) * float(mult_arr[i])
         phi = float(phi_arr[i])
-        if cover is not None:
-            c_i = float(cover)
+        if cover is not None and math.isfinite(float(cover[i])):
+            c_i = float(cover[i])
+            cover_source = "override"
         else:
             c_i = max(
                 distance_to_boundary(float(bx[i]), float(by[i]), rings)
@@ -1357,6 +1401,7 @@ def _crack_width_2023_direct(
                 - phi / 2.0,
                 0.0,
             )
+            cover_source = "geometry"
         concrete_tension_reduction = (
             kt * fctm / rho * (1.0 + alpha_e_i * rho)
         )
@@ -1433,7 +1478,7 @@ def _crack_width_2023_direct(
                 scope=CRACK_SCOPE_DIRECT_TENSION,
                 equivalent_diameter=float(derived_phi[i]),
                 diameter_source=str(diameter_sources[i]),
-                cover_source=("override" if cover is not None else "geometry"),
+                cover_source=cover_source,
                 bond_coefficient=float(k1_arr[i]),
                 modular_ratio=alpha_e_i,
                 mean_strain_operands=mean_strain_operands,
@@ -1464,7 +1509,7 @@ def _crack_width_2023(
     n: float,
     fctm: float,
     Es: np.ndarray,
-    cover: Optional[float],
+    cover: Optional[np.ndarray],
     kt: float,
     k1: Union[float, Sequence[float]],
     bar_diameter: np.ndarray,
@@ -1666,11 +1711,13 @@ def _crack_width_2023(
         es_i = float(es_arr[i])
         alpha_e_i = float(n) * float(mult_arr[i])
         phi = _phi(i)
-        if cover is not None:
-            c_i = float(cover)
+        if cover is not None and math.isfinite(float(cover[i])):
+            c_i = float(cover[i])
+            cover_source = "override"
         else:
             c_i = max(distance_to_boundary(float(bx[i]), float(by[i]), rings)
                       * 1000.0 - phi / 2.0, 0.0)
+            cover_source = "geometry"
         # (9.11): mean strain; lower bound (1 - kt)*sigma_s/Es (was a fixed 0.6 in 2004).
         concrete_tension_reduction = (
             kt * fctm / rho * (1.0 + alpha_e_i * rho)
@@ -1739,7 +1786,7 @@ def _crack_width_2023(
             direction_deg=direction_deg,
             equivalent_diameter=float(equivalent_phi_arr[i]),
             diameter_source=str(diameter_source_arr[i]),
-            cover_source=("override" if cover is not None else "geometry"),
+            cover_source=cover_source,
             bond_coefficient=float(k1_arr[i]),
             modular_ratio=alpha_e_i,
             mean_strain_operands=mean_strain_operands,
@@ -1773,8 +1820,11 @@ def analyse_cracking(
     Es: Union[float, Sequence[float]] = 200_000.0,
     beta: float = 1.0,
     kt: float = 0.6,
-    cover: Optional[float] = None,
+    cover: Optional[Union[float, Sequence[float]]] = None,
     bar_diameter: Optional[Union[float, Sequence[float]]] = None,
+    nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_geometry_available: bool = True,
+    physical_geometry_reason: Optional[str] = None,
     k1: Union[float, Sequence[float]] = 0.8,
     k2: float = 0.5,
     k3: float = 3.4,
@@ -1807,13 +1857,19 @@ def analyse_cracking(
         Crack-width load-duration factor (EC2 7.9): ``0.6`` short-term,
         ``0.4`` long-term.
     cover:
-        Clear cover override (mm) applied to every bar. When ``None`` (default)
-        each bar's clear cover is taken from the geometry (distance to the nearest
-        concrete face minus the bar radius). Crack width is computed whenever the
-        section is cracked.
+        Clear cover override (mm), either one value or one value per element.
+        ``NaN`` entries use geometric cover. When ``None`` (default) every cover is
+        taken from the geometry.
     bar_diameter:
         One governing diameter (mm), or one diameter per element. Missing or
         non-positive entries default to the equivalent circular area diameter.
+    nominal_spacing:
+        One physical c/c spacing (mm), or one per element, for the 2005
+        close-spacing branch. ``NaN`` entries use represented geometry.
+    physical_geometry_available, physical_geometry_reason:
+        Set availability false when represented analysis points cannot supply
+        verified physical spacing or cover. The crack-width assessment then
+        returns ``NOT ASSESSED`` with the supplied engineer-facing reason.
     k1, k2, k3, k4:
         EC2 crack-spacing coefficients (recommended values by default). ``k1``
         (the bond coefficient) may be a single value or one per bar -- e.g. the
@@ -1865,6 +1921,9 @@ def analyse_cracking(
     if cracked:
         evaluation = _crack_width(
             section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter,
+            nominal_spacing=nominal_spacing,
+            physical_geometry_available=physical_geometry_available,
+            physical_geometry_reason=physical_geometry_reason,
             k3_cover_dependent=k3_cover_dependent, include_hx_term=include_hx_term,
             coarse=coarse, edition=edition, n_mult=n_mult,
             reinforcement_types=reinforcement_types,
@@ -1926,8 +1985,11 @@ def evaluate_crack_width(
     fctm: float,
     Es: Union[float, Sequence[float]] = 200_000.0,
     kt: float = 0.6,
-    cover: Optional[float] = None,
+    cover: Optional[Union[float, Sequence[float]]] = None,
     bar_diameter: Optional[Union[float, Sequence[float]]] = None,
+    nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_geometry_available: bool = True,
+    physical_geometry_reason: Optional[str] = None,
     k1: Union[float, Sequence[float]] = 0.8,
     k2: float = 0.5,
     k3: float = 3.4,
@@ -1952,6 +2014,9 @@ def evaluate_crack_width(
     section.require_valid_geometry()
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
                         k1, k2, k3, k4, bar_diameter,
+                        nominal_spacing=nominal_spacing,
+                        physical_geometry_available=physical_geometry_available,
+                        physical_geometry_reason=physical_geometry_reason,
                         k3_cover_dependent=k3_cover_dependent,
                         include_hx_term=include_hx_term, coarse=coarse,
                         edition=edition, n_mult=n_mult,
@@ -1967,8 +2032,11 @@ def crack_width(
     fctm: float,
     Es: Union[float, Sequence[float]] = 200_000.0,
     kt: float = 0.6,
-    cover: Optional[float] = None,
+    cover: Optional[Union[float, Sequence[float]]] = None,
     bar_diameter: Optional[Union[float, Sequence[float]]] = None,
+    nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_geometry_available: bool = True,
+    physical_geometry_reason: Optional[str] = None,
     k1: Union[float, Sequence[float]] = 0.8,
     k2: float = 0.5,
     k3: float = 3.4,
@@ -1992,6 +2060,9 @@ def crack_width(
         kt=kt,
         cover=cover,
         bar_diameter=bar_diameter,
+        nominal_spacing=nominal_spacing,
+        physical_geometry_available=physical_geometry_available,
+        physical_geometry_reason=physical_geometry_reason,
         k1=k1,
         k2=k2,
         k3=k3,

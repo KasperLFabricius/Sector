@@ -777,9 +777,21 @@ def manual_blocks() -> list:
     md(r"For the **1 m slab strip**, a diameter and spacing define reinforcement "
        r"area per metre: $A_s = A_{bar}\,1000/s$. Thus T20 at 200 mm gives "
        r"$5A_{bar}=1570.796\,\mathrm{mm^2/m}$, and the bottom or top cover sets "
-       r"the layer depth. For finite sections, spacing is instead a maximum gap "
+       r"the layer depth. An enabled interleaved diameter is a second complete "
+       r"series at the true half-spacing positions; the builder states each series "
+       r"and the summed $A_s$ per layer and per face. For finite sections, spacing "
+       r"is instead a maximum gap "
        r"over the covered face; the builder displays the derived count and actual "
        r"centre-to-centre spacing before Apply.")
+    md("Slab-density capacity and stress analysis uses a symmetric equal-area "
+       "integration across the 1 m strip. Its orthogonal bending resistance stays "
+       "within 0.1% of a 200-point reference over the supported 10-1000 mm spacing "
+       "range. The analysis points are not treated as physical bar axes: clear "
+       "spacing and both crack-width methods use the entered nominal c/c spacing "
+       "and the applicable face cover, excluding the artificial sides of the "
+       "unit strip. If the generated geometry or reinforcement sizes are edited "
+       "directly, reapply the slab layout or define explicit bars; until then those "
+       "physical spacing and crack checks are reported as Not assessed.")
     table(["Shape", "Produces"],
           [["Rectangle", "A solid rectangle b x h"],
            ["Slab strip", "A 1 m-wide strip of a given thickness"],

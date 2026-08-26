@@ -774,3 +774,152 @@ def test_ecm_and_fctm_table_3_1():
     assert fctm(30.0) == pytest.approx(2.896, abs=1e-3)
     assert fctm(50.0) == pytest.approx(4.072, abs=1e-3)
     assert ecm(30.0) == pytest.approx(32837.0, rel=1e-3)
+
+
+def _density_slab_section(spacing_m=0.30, diameter_mm=20.0):
+    from sector import templates
+
+    bars = []
+    for y in (-0.10, 0.10):
+        bars.extend(
+            (x, y, area)
+            for x, _row_y, area in templates.unit_width_bar_row(
+                y, 1.0, spacing_m, diameter_mm
+            )
+        )
+    return Section.from_polygon(
+        corners=[(-0.5, -0.15), (0.5, -0.15), (0.5, 0.15), (-0.5, 0.15)],
+        bars_xy_area_mm2=bars,
+    )
+
+
+def test_density_crack_2005_uses_nominal_spacing_not_quadrature_gap():
+    section = _density_slab_section()
+    count = len(section.bar_arrays()[0])
+    physical = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        cover=[45.0] * count,
+        bar_diameter=[20.0] * count,
+        nominal_spacing=[300.0] * count,
+        edition="2004",
+    )
+    represented = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        bar_diameter=[20.0] * count,
+        edition="2004",
+    )
+
+    candidate = physical.crack.candidates[0]
+    represented_candidate = represented.crack.candidates[0]
+    assert candidate.cover == pytest.approx(45.0)
+    assert candidate.spacing_operands.nearest_neighbour_spacing == pytest.approx(
+        300.0
+    )
+    assert candidate.spacing_operands.close_spacing_limit == pytest.approx(275.0)
+    assert candidate.spacing_operands.selected_candidate == "formula-7.14"
+    assert represented_candidate.spacing_operands.nearest_neighbour_spacing == (
+        pytest.approx(31.25)
+    )
+    assert represented_candidate.spacing_operands.selected_candidate == "formula-7.11"
+    assert physical.crack.wk != pytest.approx(represented.crack.wk)
+
+
+@pytest.mark.parametrize("edition", ["2004", "2023"])
+@pytest.mark.parametrize("spacing_m", [0.01, 0.05])
+def test_density_crack_uses_face_cover_not_artificial_strip_side(
+    edition, spacing_m
+):
+    section = _density_slab_section(spacing_m=spacing_m)
+    count = len(section.bar_arrays()[0])
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        cover=[40.0] * count,
+        bar_diameter=[20.0] * count,
+        nominal_spacing=[spacing_m * 1000.0] * count,
+        edition=edition,
+    )
+
+    assert result.crack_evaluation.status == "CALCULATED"
+    assert result.crack.cover == pytest.approx(40.0)
+    assert all(candidate.cover == pytest.approx(40.0)
+               for candidate in result.crack.candidates)
+    assert all(candidate.cover_source == "override"
+               for candidate in result.crack.candidates)
+
+
+def test_density_crack_fails_closed_when_physical_layout_is_unverified():
+    section = _density_slab_section()
+    count = len(section.bar_arrays()[0])
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        bar_diameter=[20.0] * count,
+        physical_geometry_available=False,
+        physical_geometry_reason=(
+            "Reapply the slab layout or define explicit bars before assessment."
+        ),
+    )
+
+    assert result.cracked
+    assert result.crack is None
+    assert result.crack_evaluation.status == "NOT ASSESSED"
+    assert result.crack_evaluation.reason == (
+        "Reapply the slab layout or define explicit bars before assessment."
+    )
+
+
+@pytest.mark.parametrize(
+    ("physical_override", "reason"),
+    [
+        ({"cover": False}, "Clear cover values are invalid."),
+        (
+            {"nominal_spacing": math.inf},
+            "Nominal spacing values must be finite positive numbers.",
+        ),
+        (
+            {"nominal_spacing": 0.0},
+            "Nominal spacing values must be finite positive numbers.",
+        ),
+    ],
+)
+def test_density_crack_rejects_invalid_physical_overrides(
+    physical_override, reason
+):
+    section = _density_slab_section()
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        bar_diameter=20.0,
+        **physical_override,
+    )
+
+    assert result.cracked
+    assert result.crack is None
+    assert result.crack_evaluation.status == "NOT ASSESSED"
+    assert result.crack_evaluation.reason == reason
