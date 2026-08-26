@@ -10489,11 +10489,6 @@ def _run_capacity_checks(inp, out):
     results are retained with no aggregate cross-direction verdict.
     """
     prepared_inp = inp
-    if inp.get("combined_on"):
-        prepared_inp = dict(
-            inp,
-            _dkna_nm_action_alone=capacity.dkna_normal_bending_action_alone(inp),
-        )
     directional_contract = (
         "shear_Vx" in prepared_inp
         or "shear_Vy" in prepared_inp
@@ -10512,6 +10507,7 @@ def _run_capacity_checks(inp, out):
         return
 
     directions = {}
+    retained_nm_action_alone = None
     for component in active:
         spec = specs[component]
         face_key = "shear_face_x" if component == "vx" else "shear_face_y"
@@ -10521,11 +10517,28 @@ def _run_capacity_checks(inp, out):
             candidate_inp = _direction_input(
                 prepared_inp, component, tension_low, spec
             )
+            if retained_nm_action_alone is not None:
+                candidate_inp["_dkna_nm_action_alone"] = (
+                    retained_nm_action_alone
+                )
             candidate_out = {
                 key: value for key, value in out.items()
                 if key in {"plastic", "elastic"}
             }
             _run_uniaxial_capacity_checks(candidate_inp, candidate_out)
+            action_alone = (
+                (candidate_out.get("combined") or {}).get("action_alone")
+                or {}
+            )
+            if (
+                retained_nm_action_alone is None
+                and isinstance(action_alone.get("n"), dict)
+                and isinstance(action_alone.get("m"), dict)
+            ):
+                retained_nm_action_alone = {
+                    "n": action_alone["n"],
+                    "m": action_alone["m"],
+                }
             shear_status, shear_metric = _shear_candidate_assessment(
                 candidate_inp, candidate_out
             )

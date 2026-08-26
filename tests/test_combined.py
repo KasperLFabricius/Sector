@@ -515,6 +515,49 @@ def test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim():
     assert f"cot {chr(0x03B8)}" in table.columns
 
 
+def test_biaxial_combined_reuses_one_lazy_normal_bending_action_solve(
+    monkeypatch,
+):
+    original = capacity.dkna_normal_bending_action_alone
+    calls = 0
+
+    def counted(inp):
+        nonlocal calls
+        calls += 1
+        return original(inp)
+
+    monkeypatch.setattr(
+        capacity, "dkna_normal_bending_action_alone", counted
+    )
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    assert calls == 1
+    aggregate = at.session_state["results"]["combined"]
+    assert set(aggregate["directions"]) == {"vx", "vy"}
+    assert all(
+        set(direction["action_alone"]) == {"n", "m", "v", "t"}
+        for direction in aggregate["directions"].values()
+    )
+
+
 def test_biaxial_combined_keeps_directional_failure_without_aggregate_verdict():
     at = _fresh()
     at.run()
@@ -1034,7 +1077,14 @@ def test_app_combined_edition_lock():
     assert at.selectbox(key="torsion_method").disabled
 
 
-def test_app_combined_incomplete_flags_missing():
+def test_app_combined_incomplete_flags_missing(monkeypatch):
+    monkeypatch.setattr(
+        capacity,
+        "dkna_normal_bending_action_alone",
+        lambda _inp: pytest.fail(
+            "action-alone resistance entered for an incomplete combined check"
+        ),
+    )
     at = _fresh()
     at.run()
     _set_and_click(
@@ -1044,6 +1094,17 @@ def test_app_combined_incomplete_flags_missing():
     assert "combined" not in at.session_state["results"]
     _select_view(at, "M-V-T Combined")
     assert any("Vx,Ed = Vy,Ed = TEd = 0" in item.value for item in at.info)
+
+    _set(at, ("checkbox", "shear_on", True))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 50.0),
+    )
+    assert not at.exception
+    assert "shear" in at.session_state["results"]
+    assert "torsion" not in at.session_state["results"]
+    assert "combined" not in at.session_state["results"]
 
 
 def test_app_combined_view_renders():
@@ -1326,8 +1387,15 @@ def test_app_dkna_action_alone_resistances_are_not_evaluated_at_common_angle():
     assert t_action["evidence"]["cot"] != pytest.approx(cot_star)
 
 
-def test_app_combined_is_skipped_when_shear_is_zero():
+def test_app_combined_is_skipped_when_shear_is_zero(monkeypatch):
     # VEd = 0 disables the shear and dependent combined checks for this case.
+    monkeypatch.setattr(
+        capacity,
+        "dkna_normal_bending_action_alone",
+        lambda _inp: pytest.fail(
+            "action-alone resistance entered for a zero-shear combined check"
+        ),
+    )
     at = _fresh()
     at.run()
     _run_member(
