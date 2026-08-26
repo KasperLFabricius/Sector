@@ -404,15 +404,22 @@ def test_late_application_failure_rolls_back_and_identical_bytes_retry(
     before_results = _completed_result_evidence(at)
     before_project = _project_signature(at)
     before_identity = at.session_state["_project_upload_content_identity"]
-    before_qs_applied = copy.deepcopy(
-        at.session_state["_qs_applied_settings"]
+    before_qs_applied_present = "_qs_applied_settings" in at.session_state
+    before_qs_applied = (
+        copy.deepcopy(at.session_state["_qs_applied_settings"])
+        if before_qs_applied_present
+        else None
     )
-    assert before_qs_applied["qsv_h_mm"] == pytest.approx(600.0)
+    before_qs_retained = copy.deepcopy(
+        at.session_state["_qs_retained_settings"]
+    )
+    assert before_qs_applied_present is False
+    assert before_qs_retained["qsv_h_mm"] == pytest.approx(600.0)
 
     original_version_label = project_io.recorded_sector_version_label
     application_failures = 0
 
-    def fail_after_applied_snapshot(value):
+    def fail_after_retained_snapshot(value):
         nonlocal application_failures
         if sys._getframe(1).f_code.co_name == "_apply_project_text":
             application_failures += 1
@@ -422,7 +429,7 @@ def test_late_application_failure_rolls_back_and_identical_bytes_retry(
     monkeypatch.setattr(
         project_io,
         "recorded_sector_version_label",
-        fail_after_applied_snapshot,
+        fail_after_retained_snapshot,
     )
     _upload(at, b)
 
@@ -430,7 +437,15 @@ def test_late_application_failure_rolls_back_and_identical_bytes_retry(
     assert not at.exception
     assert _project_signature(at) == before_project
     assert at.session_state["_project_upload_content_identity"] == before_identity
-    assert at.session_state["_qs_applied_settings"] == before_qs_applied
+    assert ("_qs_applied_settings" in at.session_state) is (
+        before_qs_applied_present
+    )
+    assert (
+        copy.deepcopy(at.session_state["_qs_applied_settings"])
+        if "_qs_applied_settings" in at.session_state
+        else None
+    ) == before_qs_applied
+    assert at.session_state["_qs_retained_settings"] == before_qs_retained
     _assert_result_evidence(at, before_results)
     errors = _visible_upload_errors(at)
     assert any("New file was not applied" in message for message in errors)

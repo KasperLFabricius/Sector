@@ -3218,18 +3218,24 @@ def _discard_clear_recovery():
 
 
 def _applied_quick_section_scalars(scalars, state):
-    """Overlay the last applied builder settings on serialised preferences."""
+    """Overlay proven or safely retained builder settings for persistence."""
 
     result = dict(scalars)
     applied = state.get(_QS_APPLIED_SETTINGS_KEY)
+    retained = state.get(_QS_RETAINED_SETTINGS_KEY)
     for key in project_io.QUICK_SECTION_SCALAR_KEYS:
         result.pop(key, None)
-    # Absence means the current point tables have no proven builder origin (for
-    # example a pre-upgrade live session). Fail closed by omitting draft qsv_
-    # preferences; verified slab-density reconciliation or a later Apply will
-    # establish a complete snapshot before persistence.
+    # Proven applied values take priority over the mutable live builder mirror.
+    # With neither provenance nor a loaded retained snapshot, draft qsv_ values
+    # are omitted from persistence.
     if isinstance(applied, dict):
         result.update(copy.deepcopy(applied))
+    elif isinstance(retained, dict):
+        # Current-schema files created before applied-layout tracking can only
+        # establish that these were the last saved builder values. Retain them
+        # across a draft/Back cycle, but never use them as physical provenance
+        # unless reconciliation independently proves the generated layout.
+        result.update(copy.deepcopy(retained))
     return result
 
 
@@ -3752,12 +3758,13 @@ def _apply_project_text(text: str) -> None:
         }
     )
     st.session_state[_INPUT_STATE_KEY] = durable
-    # The loaded qsv_ values describe the point tables that were saved, across
-    # every Quick Section shape and reinforcement mode. Keep that applied intent
-    # separate from later builder previews immediately inside the replacement
-    # transaction. An empty snapshot marks a project whose point tables are fully
-    # explicit and prevents a later preview from acquiring false provenance.
-    st.session_state[_QS_APPLIED_SETTINGS_KEY] = _qs_settings_snapshot(scalars)
+    # Existing schema-27 files did not distinguish the last builder preview from
+    # an applied layout. Preserve those saved preferences without granting them
+    # physical provenance; the slab-density boundary promotes them only after an
+    # exact point-table reconciliation. This also prevents a previous project's
+    # applied snapshot from surviving a complete replacement.
+    st.session_state.pop(_QS_APPLIED_SETTINGS_KEY, None)
+    st.session_state[_QS_RETAINED_SETTINGS_KEY] = _qs_settings_snapshot(scalars)
     report_durable = {
         key: value
         for key, value in scalars.items()
@@ -4510,6 +4517,7 @@ _QS_WIDGET_KEYS = tuple(
     key.removeprefix("qsv_") for key in project_io.QUICK_SECTION_SCALAR_KEYS
 )
 _QS_APPLIED_SETTINGS_KEY = "_qs_applied_settings"
+_QS_RETAINED_SETTINGS_KEY = "_qs_retained_settings"
 _QS_PROVENANCE_NOTICE_KEY = "_qs_provenance_notice"
 _QS_BAR_SETTING_KEYS = frozenset({
     "qsv_ring_n",
@@ -4938,11 +4946,23 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
     """Return verified physical evidence or a fail-closed density disposition."""
 
     applied_state = state.get(_QS_APPLIED_SETTINGS_KEY)
-    intent_state = applied_state if isinstance(applied_state, dict) else state
+    retained_state = state.get(_QS_RETAINED_SETTINGS_KEY)
+    has_applied_provenance = isinstance(applied_state, dict)
+    intent_state = (
+        applied_state
+        if has_applied_provenance
+        else retained_state
+        if isinstance(retained_state, dict)
+        else state
+    )
     try:
         layout = _slab_density_layout_from_state(intent_state)
     except (TypeError, ValueError, OverflowError):
-        return {"status": "UNVERIFIED", "reason": _SLAB_DENSITY_GUIDANCE}
+        return (
+            {"status": "UNVERIFIED", "reason": _SLAB_DENSITY_GUIDANCE}
+            if has_applied_provenance
+            else None
+        )
     if layout is None:
         return None
     # ``rectangle`` takes width then height; the slab strip is always exactly 1 m.
@@ -4993,6 +5013,11 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
     except (TypeError, ValueError, OverflowError):
         bars_match = False
     if not geometry_matches or not bars_match:
+        if not has_applied_provenance:
+            # A legacy/current-schema qsv_ block may be only a discarded preview.
+            # Treat the loaded point tables as explicit rather than disabling
+            # physical checks on the strength of unverified builder history.
+            return None
         return {
             "status": "UNVERIFIED",
             "reason": _SLAB_DENSITY_GUIDANCE,
@@ -5002,8 +5027,12 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
             # cannot be attached to unrelated section geometry.
             "can_use_explicit_bars": geometry_matches and not bars_match,
         }
-    if not isinstance(applied_state, dict):
-        state[_QS_APPLIED_SETTINGS_KEY] = _qs_settings_snapshot(state)
+    if not has_applied_provenance:
+        state[_QS_APPLIED_SETTINGS_KEY] = copy.deepcopy(
+            retained_state
+            if isinstance(retained_state, dict)
+            else _qs_settings_snapshot(state)
+        )
     return {**layout, "status": "VERIFIED", "reason": None}
 
 
@@ -5726,8 +5755,10 @@ def _quick_section_viewport():
             [(float(p[0]), float(p[1]), float(p[2])) for p in tendons]),
             "tendon", size_mode=rebar_table.AREA_MODE,
             material_id=prestress_material_id))
-        st.session_state[_QS_APPLIED_SETTINGS_KEY] = _qs_settings_snapshot(
-            st.session_state
+        applied_snapshot = _qs_settings_snapshot(st.session_state)
+        st.session_state[_QS_APPLIED_SETTINGS_KEY] = applied_snapshot
+        st.session_state[_QS_RETAINED_SETTINGS_KEY] = copy.deepcopy(
+            applied_snapshot
         )
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False

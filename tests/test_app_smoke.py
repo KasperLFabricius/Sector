@@ -3474,8 +3474,24 @@ def test_applied_quick_section_scalars_replace_draft_preferences_for_saving():
     )
     assert unproven == {"conc_fck": 35.0}
 
+    retained = {
+        "qsv_shape": "Rectangle",
+        "qsv_qs_rebar_mode": "By number",
+        "qsv_h_mm": 800.0,
+    }
+    saved_retained = sector_app._applied_quick_section_scalars(
+        {
+            "conc_fck": 35.0,
+            "qsv_shape": "Slab strip",
+            "qsv_qs_rebar_mode": "By spacing",
+            "qsv_h_mm": 300.0,
+        },
+        {sector_app._QS_RETAINED_SETTINGS_KEY: retained},
+    )
+    assert saved_retained == {"conc_fck": 35.0, **retained}
 
-def test_non_density_applied_snapshot_survives_reload_draft_back_and_autosave(
+
+def test_non_density_loaded_snapshot_survives_reload_draft_back_and_autosave(
     tmp_path, monkeypatch
 ):
     import project_io
@@ -3512,12 +3528,13 @@ def test_non_density_applied_snapshot_survives_reload_draft_back_and_autosave(
     results_a = copy.deepcopy(restored.session_state["results"])
     result_sig_a = restored.session_state["result_sig"]
     elastic_sig_a = restored.session_state["result_elastic_sig"]
-    applied_a = copy.deepcopy(
-        restored.session_state[sector_app._QS_APPLIED_SETTINGS_KEY]
+    retained_a = copy.deepcopy(
+        restored.session_state[sector_app._QS_RETAINED_SETTINGS_KEY]
     )
-    assert applied_a["qsv_shape"] == "Rectangle"
-    assert applied_a["qsv_qs_rebar_mode"] == "By number"
-    assert applied_a["qsv_h_mm"] == pytest.approx(800.0)
+    assert sector_app._QS_APPLIED_SETTINGS_KEY not in restored.session_state
+    assert retained_a["qsv_shape"] == "Rectangle"
+    assert retained_a["qsv_qs_rebar_mode"] == "By number"
+    assert retained_a["qsv_h_mm"] == pytest.approx(800.0)
 
     _open_qs(restored)
     _set(restored, ("number_input", "h_mm", 1000.0))
@@ -3532,7 +3549,8 @@ def test_non_density_applied_snapshot_survives_reload_draft_back_and_autosave(
     assert restored.session_state["result_elastic_sig"] == elastic_sig_a
     assert restored.session_state["_latest_inputs"]["signature"] == result_sig_a
     assert restored.session_state["_latest_inputs"]["elastic_sig"] == elastic_sig_a
-    assert restored.session_state[sector_app._QS_APPLIED_SETTINGS_KEY] == applied_a
+    assert sector_app._QS_APPLIED_SETTINGS_KEY not in restored.session_state
+    assert restored.session_state[sector_app._QS_RETAINED_SETTINGS_KEY] == retained_a
     assert restored.session_state["qsv_h_mm"] == pytest.approx(1000.0)
 
     autosave = tmp_path / "autosave.json"
@@ -3551,6 +3569,9 @@ def test_non_density_applied_snapshot_survives_reload_draft_back_and_autosave(
     assert restored.session_state[sector_app._QS_APPLIED_SETTINGS_KEY][
         "qsv_h_mm"
     ] == pytest.approx(1000.0)
+    assert restored.session_state[sector_app._QS_RETAINED_SETTINGS_KEY][
+        "qsv_h_mm"
+    ] == pytest.approx(1000.0)
     assert not restored.session_state["corners_base"].equals(
         tables_a["corners_base"]
     )
@@ -3558,6 +3579,65 @@ def test_non_density_applied_snapshot_survives_reload_draft_back_and_autosave(
     assert restored.session_state["result_elastic_sig"] == elastic_sig_a
     assert restored.session_state["_latest_inputs"]["signature"] != result_sig_a
     assert restored.session_state["_latest_inputs"]["elastic_sig"] != elastic_sig_a
+
+
+def test_legacy_density_preview_is_not_treated_as_applied_provenance():
+    import project_io
+    import sector_app
+
+    source = _fresh()
+    source.run()
+    _set_and_click(
+        source,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("checkbox", "clear_spacing_on", True),
+    )
+    tables = {
+        key: source.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in source.session_state
+    }
+    scalars = {
+        key: source.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in source.session_state
+    }
+    scalars.update({
+        "qsv_shape": "Slab strip",
+        "qsv_qs_rebar_mode": "By spacing",
+        "qsv_h_mm": 300.0,
+        "qsv_bot_d": 20.0,
+        "qsv_top_d": 20.0,
+        "qsv_bot_s": 200.0,
+        "qsv_top_s": 200.0,
+    })
+    legacy_current_schema = project_io.dump_project(tables, scalars)
+
+    restored = _fresh()
+    restored.session_state["_pending_project"] = legacy_current_schema
+    restored.run()
+
+    assert not restored.exception
+    assert sector_app._QS_APPLIED_SETTINGS_KEY not in restored.session_state
+    retained = restored.session_state[sector_app._QS_RETAINED_SETTINGS_KEY]
+    assert retained["qsv_shape"] == "Slab strip"
+    assert retained["qsv_qs_rebar_mode"] == "By spacing"
+    assert restored.session_state["_latest_inputs"]["slab_density"] is None
+    visible = "\n".join(
+        str(item.value)
+        for kind in ("warning", "info", "error", "caption", "markdown")
+        for item in restored.get(kind)
+    )
+    assert "no longer matches the current point tables" not in visible
+
+    _calculate(restored)
+    results = restored.session_state["results"]
+    assert results["elastic"]["crack"] is not None
+    assert results["clear_spacing"]["status"] in {"PASS", "FAIL"}
+    assert restored.session_state["_latest_inputs"]["slab_density"] is None
 
 
 def test_slab_density_applied_provenance_survives_back_autosave_and_reload(
@@ -3709,6 +3789,7 @@ def test_slab_density_applied_provenance_survives_back_autosave_and_reload(
 def test_slab_density_physical_layout_round_trips_and_point_edit_fails_closed():
     import project_io
     import reinforcement_table as rt
+    import sector_app
 
     source = _fresh_qs()
     source.selectbox(key="shape").set_value("Slab strip").run()
@@ -3750,6 +3831,12 @@ def test_slab_density_physical_layout_round_trips_and_point_edit_fails_closed():
     assert not restored.exception
     latest = restored.session_state["_latest_inputs"]
     assert latest["slab_density"]["status"] == "VERIFIED"
+    assert restored.session_state[sector_app._QS_APPLIED_SETTINGS_KEY][
+        "qsv_qs_rebar_mode"
+    ] == "By spacing"
+    assert restored.session_state[sector_app._QS_RETAINED_SETTINGS_KEY][
+        "qsv_qs_rebar_mode"
+    ] == "By spacing"
     spacing = restored.session_state["results"]["clear_spacing"]
     assert spacing["status"] == "PASS"
     assert spacing["governing"]["centre_distance_mm"] == pytest.approx(65.0)
