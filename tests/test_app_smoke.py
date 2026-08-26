@@ -1288,6 +1288,13 @@ def test_plastic_sweep_core_and_rendered_path_share_explicit_angle_set():
 
     at = _fresh()
     at.run()
+    _goto_input_tab(at, "Analysis settings")
+    increment = at.number_input(key="v_inc")
+    assert increment.label == (
+        r"Maximum increment $\Delta\varphi_{NA}$ ($^\circ$)"
+    )
+    assert "Equal spacing includes both sweep limits" in increment.help
+    assert "actual angular increment may be smaller" in increment.help
     _set_and_click(
         at,
         "calculate",
@@ -1298,6 +1305,37 @@ def test_plastic_sweep_core_and_rendered_path_share_explicit_angle_set():
     assert not at.exception
     points = at.session_state["results"]["plastic"]["points"]
     assert tuple(point["V"] for point in points) == expected
+
+
+def test_near_full_plastic_sweep_remains_open_until_exact_360_degrees():
+    at = _fresh()
+    at.run()
+
+    partial_end = 359.9999995
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "v_max", partial_end),
+    )
+    partial = at.session_state["results"]["plastic"]
+    partial_angles = tuple(point["V"] for point in partial["points"])
+    assert partial_angles[-1] == partial_end
+    assert partial["closed"] is False
+    assert partial["util"] is None
+    assert partial["util_valid"] is None
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "v_max", 360.0),
+    )
+    full = at.session_state["results"]["plastic"]
+    full_angles = tuple(point["V"] for point in full["points"])
+    assert full_angles[-1] == 345.0
+    assert 360.0 not in full_angles
+    assert full["closed"] is True
+    assert full["util"] is not None
+    assert full["util_valid"] is True
 
 
 def test_reversed_plastic_sweep_retains_prior_result_and_shows_guidance():

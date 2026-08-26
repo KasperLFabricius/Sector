@@ -5440,11 +5440,12 @@ def build_inputs(host=st):
         help="Last neutral-axis rotation angle of the plastic sweep.",
     )
     v_inc = _seeded_number(
-        aset, r"Increment $\Delta\varphi_{NA}$ ($^\circ$)",
+        aset, r"Maximum increment $\Delta\varphi_{NA}$ ($^\circ$)",
         1.0, 90.0, 15.0, 1.0,
         "v_inc", disabled=not plastic_on,
-        help="Angular step between swept neutral-axis angles; "
-             "a finer step gives a smoother M-M envelope.",
+        help="Equal spacing includes both sweep limits, so the actual angular "
+             "increment may be smaller. A smaller maximum increment gives a "
+             "smoother M-M envelope.",
     )
     check_util = _seeded_checkbox(
         aset, "Check utilisation against applied moment", True, "pl_check_util",
@@ -7853,7 +7854,7 @@ def _run_single_analysis(
         # the first (v_min) exactly. Sweep only up to the angle before it -- the
         # envelope closes itself -- so that duplicate point is neither computed nor
         # reported. The closed-envelope flag still reflects the full turn.
-        closed = (vhi - vlo) >= 360.0 - 1e-6
+        closed = plastic_core.plastic_sweep_is_full_turn(vlo, vhi)
         sweep_hi = sweep_angles[-2] if closed else vhi
         # Prestress enters the analysis only when the section actually has tendons.
         pre = inp["prestress"] if inp["tendons"] else None

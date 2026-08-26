@@ -338,6 +338,24 @@ def test_rejects_names_duplicated_across_solver_tables():
             "PLASTIC-SWEEP-INCREMENT",
             "Enter a positive maximum increment for the neutral-axis sweep",
         ),
+        (
+            {"v_min": 0.0, "v_max": 1.0, "v_inc": 1e-20},
+            "PLASTIC-SWEEP-RESOLUTION",
+            "Increase the neutral-axis sweep maximum increment; the requested "
+            "sweep is too fine to calculate reliably",
+        ),
+        (
+            {"v_min": 1e16, "v_max": 1e16 + 2.0, "v_inc": 1.0},
+            "PLASTIC-SWEEP-RESOLUTION",
+            "Increase the neutral-axis sweep maximum increment; the requested "
+            "sweep is too fine to calculate reliably",
+        ),
+        (
+            {"v_min": 0.0, "v_max": 1e308, "v_inc": 1e-308},
+            "PLASTIC-SWEEP-RESOLUTION",
+            "Increase the neutral-axis sweep maximum increment; the requested "
+            "sweep is too fine to calculate reliably",
+        ),
     ),
 )
 def test_invalid_plastic_sweep_blocks_case_runner_with_authored_guidance(

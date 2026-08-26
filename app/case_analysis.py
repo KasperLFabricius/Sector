@@ -20,6 +20,7 @@ from app.engineer_messages import EngineerValidationError
 from sector.engineer_message import EngineerMessage
 
 sls_core = deferred_module("sector.sls")
+plastic_core = deferred_module("sector.plastic")
 
 _PLASTIC_RESULT_KEYS = (
     "plastic", "shear", "torsion", "combined", "minimum_reinforcement",
@@ -38,6 +39,11 @@ _PLASTIC_SWEEP_BOUNDS = EngineerMessage(
 _PLASTIC_SWEEP_INCREMENT = EngineerMessage(
     "PLASTIC-SWEEP-INCREMENT",
     "Enter a positive maximum increment for the neutral-axis sweep",
+)
+_PLASTIC_SWEEP_RESOLUTION = EngineerMessage(
+    "PLASTIC-SWEEP-RESOLUTION",
+    "Increase the neutral-axis sweep maximum increment; the requested sweep is "
+    "too fine to calculate reliably",
 )
 
 
@@ -339,6 +345,11 @@ def validation_errors(inp: Mapping) -> list[EngineerMessage]:
                 errors.append(_PLASTIC_SWEEP_BOUNDS)
             elif v_inc <= 0.0:
                 errors.append(_PLASTIC_SWEEP_INCREMENT)
+            else:
+                try:
+                    plastic_core.plastic_sweep_angles(v_min, v_max, v_inc)
+                except plastic_core.PlasticSweepResolutionError:
+                    errors.append(_PLASTIC_SWEEP_RESOLUTION)
     errors.extend(load_cases.validation_errors(
         inp.get("plastic_cases"),
         inp.get("elastic_cases"),

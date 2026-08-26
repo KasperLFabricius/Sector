@@ -41,6 +41,34 @@ class _FloatOverflowError:
 
 
 @pytest.mark.parametrize(
+    "sweep",
+    (
+        {"v_min": 0.0, "v_max": 1.0, "v_inc": 1e-20},
+        {"v_min": 1e16, "v_max": 1e16 + 2.0, "v_inc": 1.0},
+    ),
+)
+def test_current_project_rejects_unsafe_plastic_sweep_with_authored_copy(sweep):
+    payload = json.loads(project_io.dump_project({}, {
+        "v_min": 0.0,
+        "v_max": 360.0,
+        "v_inc": 15.0,
+    }))
+    payload["scalars"].update(sweep)
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    with pytest.raises(project_io.ProjectInputError) as caught:
+        project_io.parse_project(json.dumps(payload))
+
+    assert project_io.engineer_error_message(caught.value) == (
+        "increase the neutral-axis sweep maximum increment; the requested sweep "
+        "is too fine to calculate reliably"
+    )
+
+
+@pytest.mark.parametrize(
     ("value", "expected"),
     [
         (0, 0.0),

@@ -20,10 +20,13 @@ import pytest
 from sector import PlasticPoint
 from sector.materials import Concrete, MildSteel
 from sector.plastic import (
+    PLASTIC_SWEEP_MAX_POINTS,
+    PlasticSweepResolutionError,
     _band_stresses,
     _governing_curvature,
     plastic_capacity_at_angle,
     plastic_sweep_angles,
+    plastic_sweep_is_full_turn,
     solve_plastic,
 )
 from sector.section import Bar, Section
@@ -365,11 +368,65 @@ def test_plastic_sweep_respects_adjacent_floating_increment_boundaries(
 
 
 @pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    (
+        (0.0, 360.0, True),
+        (10.0, 370.0, True),
+        (0.0, math.nextafter(360.0, 0.0), False),
+        (0.0, 359.9999995, False),
+        (math.nextafter(0.0, math.inf), 360.0, False),
+    ),
+)
+def test_plastic_sweep_full_turn_requires_exact_represented_span(
+    start,
+    end,
+    expected,
+):
+    assert plastic_sweep_is_full_turn(start, end) is expected
+
+
+def test_plastic_sweep_point_count_boundary_is_bounded_and_inclusive():
+    reference_angles = plastic_sweep_angles(0.0, 360.0, 0.1)
+    assert len(reference_angles) <= PLASTIC_SWEEP_MAX_POINTS
+    assert reference_angles[0] == 0.0
+    assert reference_angles[-1] == 360.0
+    assert all(
+        left < right and right - left <= 0.1
+        for left, right in zip(reference_angles, reference_angles[1:])
+    )
+
+    end = float(PLASTIC_SWEEP_MAX_POINTS - 1)
+    maximum_step = 1.0
+
+    angles = plastic_sweep_angles(0.0, end, maximum_step)
+
+    assert len(angles) == PLASTIC_SWEEP_MAX_POINTS
+    assert angles[0] == 0.0
+    assert angles[-1] == end
+    assert all(
+        left < right and right - left <= maximum_step
+        for left, right in zip(angles, angles[1:])
+    )
+
+
+def test_plastic_sweep_rejects_unbounded_and_unrepresentable_requests():
+    with pytest.raises(PlasticSweepResolutionError, match="too many angles"):
+        plastic_sweep_angles(0.0, 1.0, 1e-20)
+
+    with pytest.raises(PlasticSweepResolutionError, match="not distinct"):
+        plastic_sweep_angles(1e16, 1e16 + 2.0, 1.0)
+
+
+@pytest.mark.parametrize(
     ("start", "end", "maximum_step", "message"),
     (
         (100.0, 0.0, 30.0, "greater than or equal"),
         (0.0, 100.0, 0.0, "increment must be positive"),
         (0.0, 100.0, -1.0, "increment must be positive"),
+        (0.0, 1.0, 1e-20, "too many angles"),
+        (1e16, 1e16 + 2.0, 1.0, "not distinct"),
+        (0.0, 1e308, 1e-308, "too small for the span"),
+        (-1e308, 1e308, 1.0, "cannot be represented safely"),
     ),
 )
 def test_invalid_plastic_sweep_is_rejected_before_section_preparation(
