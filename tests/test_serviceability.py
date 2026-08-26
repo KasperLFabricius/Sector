@@ -834,6 +834,132 @@ def test_density_crack_2005_uses_nominal_spacing_not_quadrature_gap():
     assert physical.crack.wk != pytest.approx(represented.crack.wk)
 
 
+def test_density_tendon_2005_uses_nominal_tension_band_axes_not_quadrature():
+    from sector import templates
+
+    bars = []
+    physical_points = []
+    for y in (-0.10, 0.10):
+        bars.extend(templates.unit_width_bar_row(y, 1.0, 0.60, 20.0))
+        physical_points.extend(
+            (x, point_y, None)
+            for x, point_y, _area in templates.unit_width_nominal_bar_row(
+                y, 1.0, 0.60, 20.0
+            )
+        )
+    # A nominal point on the compression face shares the tendon width coordinate;
+    # it must not replace the eligible 300 mm tension-face neighbour.
+    physical_points.append((0.0, 0.10, None))
+    bars.append((0.0, -0.10, 150.0))
+    tendon_index = len(bars) - 1
+    physical_points.append((0.0, -0.10, tendon_index))
+    section = Section.from_polygon(
+        corners=[(-0.5, -0.15), (0.5, -0.15), (0.5, 0.15), (-0.5, 0.15)],
+        bars_xy_area_mm2=bars,
+    )
+    count = len(bars)
+    inputs = dict(
+        fctm=fctm(35.0),
+        cover=[40.0] * count,
+        bar_diameter=[20.0] * (count - 1) + [13.8197659789],
+        nominal_spacing=[600.0] * (count - 1) + [math.nan],
+        reinforcement_types=["mild"] * (count - 1) + ["prestress"],
+        k1=[0.8] * (count - 1) + [1.6],
+        edition="2004",
+    )
+
+    physical = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        physical_spacing_points=physical_points,
+        **inputs,
+    )
+    represented = analyse_cracking(
+        section, 0.0, 400.0, 0.0, 6.0, **inputs
+    )
+
+    tendon = next(
+        candidate
+        for candidate in physical.crack.candidates
+        if candidate.bar_index == tendon_index
+    )
+    represented_tendon = next(
+        candidate
+        for candidate in represented.crack.candidates
+        if candidate.bar_index == tendon_index
+    )
+    assert tendon.spacing_operands.nearest_neighbour_spacing == pytest.approx(300.0)
+    assert tendon.spacing_operands.selected_candidate == "formula-7.14"
+    assert tendon.wk == pytest.approx(3.7703117043182135)
+    assert represented_tendon.spacing_operands.nearest_neighbour_spacing == (
+        pytest.approx(15.625)
+    )
+    assert represented_tendon.spacing_operands.selected_candidate == "formula-7.11"
+    assert represented_tendon.wk == pytest.approx(8.270437789726365)
+
+
+@pytest.mark.parametrize(
+    "physical_points",
+    [
+        [(False, 0.0, None)],
+        [(0.0, math.inf, None)],
+        [(0.0, 0.0, True)],
+        [(0.0, 0.0, 1.5)],
+    ],
+)
+def test_density_tendon_spacing_rejects_invalid_physical_points(physical_points):
+    section = _density_slab_section()
+    count = len(section.bar_arrays()[0])
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        bar_diameter=[20.0] * count,
+        nominal_spacing=[math.nan] * count,
+        physical_spacing_points=physical_points,
+        edition="2004",
+    )
+
+    assert result.crack is None
+    assert result.crack_evaluation.status == "NOT ASSESSED"
+    assert result.crack_evaluation.reason == (
+        "Physical reinforcement spacing values are invalid."
+    )
+
+
+def test_density_2023_crack_result_does_not_use_2005_physical_spacing_points():
+    section = _density_slab_section()
+    count = len(section.bar_arrays()[0])
+    inputs = dict(
+        fctm=fctm(35.0),
+        cover=[40.0] * count,
+        bar_diameter=[20.0] * count,
+        edition="2023",
+    )
+
+    reference = analyse_cracking(section, 0.0, 400.0, 0.0, 6.0, **inputs)
+    retained = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        physical_spacing_points=[(False, math.inf, 1.5)],
+        **inputs,
+    )
+
+    assert retained.crack_evaluation.status == reference.crack_evaluation.status
+    assert retained.crack.wk == pytest.approx(reference.crack.wk)
+    assert retained.crack.sr_max == pytest.approx(reference.crack.sr_max)
+
+
 @pytest.mark.parametrize("edition", ["2004", "2023"])
 @pytest.mark.parametrize("spacing_m", [0.01, 0.05])
 def test_density_crack_uses_face_cover_not_artificial_strip_side(

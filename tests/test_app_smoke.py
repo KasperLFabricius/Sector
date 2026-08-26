@@ -3039,6 +3039,188 @@ def test_slab_density_layout_rejects_unsafe_saved_ranges(changed):
         sector_app._slab_density_layout(**inputs)
 
 
+@pytest.mark.parametrize("face", ["Bottom", "Top"])
+@pytest.mark.parametrize("interleave_diameter", [10.0, 40.0])
+@pytest.mark.parametrize("cover_to_edge", [False, True])
+def test_slab_density_mixed_diameters_retain_declared_cover_semantics(
+    face, interleave_diameter, cover_to_edge
+):
+    import sector_app
+
+    cover_m = 0.01 if cover_to_edge else 0.05
+    layout = sector_app._slab_density_layout(
+        height_m=0.30,
+        cover_to_edge=cover_to_edge,
+        bottom_diameter_mm=20.0,
+        top_diameter_mm=20.0,
+        bottom_cover_m=cover_m,
+        top_cover_m=cover_m,
+        bottom_spacing_m=0.20,
+        top_spacing_m=0.20,
+        bottom_layers=1,
+        top_layers=1,
+        layer_spacing_m=0.06,
+        bottom_interleave_diameter_mm=(
+            interleave_diameter if face == "Bottom" else 0.0
+        ),
+        top_interleave_diameter_mm=(
+            interleave_diameter if face == "Top" else 0.0
+        ),
+    )
+    face_coordinate = -150.0 if face == "Bottom" else 150.0
+    physical = [
+        item
+        for item in layout["physical_elements"]
+        if item["id"].startswith(f"{face} layer 1")
+    ]
+    by_role = {
+        role: next(item for item in physical if role.lower() in item["id"])
+        for role in ("Primary", "Interleave")
+    }
+
+    actual_cover = {
+        role: abs(item["y_mm"] - face_coordinate) - item["diameter_mm"] / 2.0
+        for role, item in by_role.items()
+    }
+    expected_interleave_cover = (
+        cover_m * 1000.0
+        if cover_to_edge
+        else cover_m * 1000.0 - interleave_diameter / 2.0
+    )
+    assert actual_cover["Primary"] == pytest.approx(
+        cover_m * 1000.0 if cover_to_edge else cover_m * 1000.0 - 10.0
+    )
+    assert actual_cover["Interleave"] == pytest.approx(
+        expected_interleave_cover
+    )
+    assert (
+        by_role["Primary"]["y_mm"] == pytest.approx(by_role["Interleave"]["y_mm"])
+    ) is (not cover_to_edge)
+
+
+def test_slab_density_edge_cover_uses_each_diameter_and_excludes_strip_sides():
+    import sector_app
+
+    layout = sector_app._slab_density_layout(
+        height_m=0.30,
+        cover_to_edge=True,
+        bottom_diameter_mm=1.0,
+        top_diameter_mm=1.0,
+        bottom_cover_m=0.0,
+        top_cover_m=0.0,
+        bottom_spacing_m=0.20,
+        top_spacing_m=0.20,
+        bottom_layers=1,
+        top_layers=1,
+        layer_spacing_m=0.06,
+        bottom_interleave_diameter_mm=100.0,
+        top_interleave_diameter_mm=100.0,
+    )
+
+    assert sorted({round(point[1], 4) for point in layout["bars"]}) == [
+        -0.1495,
+        -0.1,
+        0.1,
+        0.1495,
+    ]
+    assert all(
+        metadata["cover_mm"] == pytest.approx(0.0)
+        for metadata in layout["analysis_metadata"]
+    )
+    # Boundary-weighted nominal axes may sit on the artificial 1 m strip cuts;
+    # those cuts are not physical concrete faces and do not invalidate the layer.
+    assert any(abs(item["x_mm"]) == pytest.approx(500.0)
+               for item in layout["physical_elements"])
+
+
+@pytest.mark.parametrize("face", ["Bottom", "Top"])
+def test_slab_density_rejects_a_bar_envelope_outside_the_real_faces(face):
+    import sector_app
+
+    inputs = dict(
+        height_m=0.30,
+        cover_to_edge=False,
+        bottom_diameter_mm=1.0,
+        top_diameter_mm=1.0,
+        bottom_cover_m=0.01,
+        top_cover_m=0.01,
+        bottom_spacing_m=0.20,
+        top_spacing_m=0.20,
+        bottom_layers=1,
+        top_layers=1,
+        layer_spacing_m=0.06,
+        bottom_interleave_diameter_mm=100.0 if face == "Bottom" else 0.0,
+        top_interleave_diameter_mm=100.0 if face == "Top" else 0.0,
+    )
+    with pytest.raises(ValueError) as centre_error:
+        sector_app._slab_density_layout(**inputs)
+    assert centre_error.value.engineer_message.text == (
+        "Adjust the section size, bar diameter, cover, or layer spacing so every "
+        "bar remains within concrete"
+    )
+
+    inputs.update(
+        height_m=0.05,
+        cover_to_edge=True,
+        bottom_cover_m=0.0,
+        top_cover_m=0.0,
+    )
+    with pytest.raises(ValueError) as tight_error:
+        sector_app._slab_density_layout(**inputs)
+    assert tight_error.value.engineer_message == centre_error.value.engineer_message
+
+
+def test_quick_section_mixed_diameter_cover_is_visible_and_fail_closed():
+    accepted = _fresh_qs()
+    accepted.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        accepted,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("checkbox", "qs_cover_to_edge", True),
+        ("number_input", "bot_d", 1.0),
+        ("number_input", "top_d", 1.0),
+        ("number_input", "bot_c_mm", 0.0),
+        ("number_input", "top_c_mm", 0.0),
+        ("number_input", "bot_off_d", 100.0),
+        ("number_input", "top_off_d", 100.0),
+    )
+    cover_help = accepted.checkbox(key="qs_cover_to_edge").help
+    assert "each bar series" in cover_help
+    assert "different centre lines" in cover_help
+    _apply_qs(accepted)
+    assert not accepted.exception
+    bars = accepted.session_state["bars_base"]
+    by_diameter = bars.groupby("diameter (mm)")["y (mm)"].apply(list).to_dict()
+    assert min(by_diameter[1.0]) == pytest.approx(-149.5)
+    assert min(by_diameter[100.0]) == pytest.approx(-100.0)
+    assert max(by_diameter[1.0]) == pytest.approx(149.5)
+    assert max(by_diameter[100.0]) == pytest.approx(100.0)
+
+    rejected = _fresh_qs()
+    rejected.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        rejected,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_d", 1.0),
+        ("number_input", "top_d", 1.0),
+        ("number_input", "bot_c_mm", 10.0),
+        ("number_input", "top_c_mm", 10.0),
+        ("number_input", "bot_off_d", 100.0),
+        ("number_input", "top_off_d", 100.0),
+    )
+    assert rejected.button(key="qs_apply").disabled
+    visible = "\n".join(item.value for item in rejected.error)
+    assert "Adjust the section size, bar diameter, cover, or layer spacing" in visible
+    assert "every bar remains within concrete" in visible
+    assert "extend outside" not in visible.lower()
+    _set(
+        rejected,
+        ("number_input", "bot_off_d", 10.0),
+        ("number_input", "top_off_d", 10.0),
+    )
+    assert not rejected.button(key="qs_apply").disabled
+
+
 def test_slab_t32_at_65_uses_nominal_clear_and_crack_spacing_in_native_app():
     at = _fresh_qs()
     at.selectbox(key="shape").set_value("Slab strip").run()
@@ -3074,6 +3256,213 @@ def test_slab_t32_at_65_uses_nominal_clear_and_crack_spacing_in_native_app():
     operands = crack["governing_candidate"]["spacing_operands"]
     assert operands["nearest_neighbour_spacing"] == pytest.approx(65.0)
     assert crack["cover"] == pytest.approx(34.0)
+
+
+def test_slab_density_tendon_uses_nominal_physical_axes_in_native_2005_check():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        at,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_s", 600.0),
+        ("number_input", "top_s", 600.0),
+        ("number_input", "bot_c_mm", 40.0),
+        ("number_input", "top_c_mm", 40.0),
+        ("number_input", "tnd_n", 1),
+        ("number_input", "tnd_c_mm", 50.0),
+    )
+    _apply_qs(at)
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+    )
+
+    assert not at.exception
+    crack = at.session_state["results"]["elastic"]["crack"]
+    tendon = next(
+        candidate
+        for candidate in crack["candidates"]
+        if candidate["element_type"] == "Tendon"
+    )
+    operands = tendon["spacing_operands"]
+    assert operands["nearest_neighbour_spacing"] == pytest.approx(300.0)
+    assert operands["selected_candidate"] == "formula-7.14"
+    assert tendon["wk"] == pytest.approx(3.3989530986177257)
+    assert operands["nearest_neighbour_spacing"] != pytest.approx(15.625)
+    assert operands["nearest_neighbour_spacing"] != pytest.approx(31.25)
+
+
+def test_applied_quick_section_scalars_replace_draft_preferences_for_saving():
+    import sector_app
+
+    applied = {
+        "qsv_shape": "Slab strip",
+        "qsv_qs_rebar_mode": "By spacing",
+        "qsv_bot_s": 65.0,
+    }
+    saved = sector_app._applied_quick_section_scalars(
+        {
+            "conc_fck": 35.0,
+            "qsv_shape": "Rectangle",
+            "qsv_qs_rebar_mode": "By number",
+            "qsv_bot_s": 70.0,
+            "qsv_top_s": 70.0,
+        },
+        {sector_app._QS_APPLIED_SETTINGS_KEY: applied},
+    )
+
+    assert saved == {"conc_fck": 35.0, **applied}
+    saved["qsv_bot_s"] = 200.0
+    assert applied["qsv_bot_s"] == pytest.approx(65.0)
+
+
+def test_slab_density_applied_provenance_survives_back_autosave_and_reload(
+    tmp_path, monkeypatch
+):
+    import project_io
+    import sector_app
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    source = _fresh_qs()
+    source.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        source,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_d", 32.0),
+        ("number_input", "top_d", 32.0),
+        ("number_input", "bot_s", 65.0),
+        ("number_input", "top_s", 65.0),
+    )
+    _apply_qs(source)
+    _set(
+        source,
+        ("radio", "mode", "Both"),
+        ("number_input", "el_long_Mx", 400.0),
+        ("checkbox", "sls_cw", True),
+        ("checkbox", "clear_spacing_on", True),
+        ("number_input", "detailing_d_upper", 16.0),
+    )
+    _calculate(source)
+    bars_before = source.session_state["bars_base"].copy(deep=True)
+    result_before = copy.deepcopy(source.session_state["results"])
+    result_signature = source.session_state["result_sig"]
+    elastic_signature = source.session_state["result_elastic_sig"]
+    applied_before = copy.deepcopy(
+        source.session_state[sector_app._QS_APPLIED_SETTINGS_KEY]
+    )
+
+    _open_qs(source)
+    _set(
+        source,
+        ("number_input", "bot_s", 70.0),
+        ("number_input", "bot_d", 25.0),
+        ("selectbox", "shape", "Rectangle"),
+        ("radio", "qs_rebar_mode", "By number"),
+    )
+    source.session_state["_autosave_t"] = 0.0
+    _set_and_click(source, "qs_back")
+
+    assert not source.exception
+    assert source.session_state["bars_base"].equals(bars_before)
+    assert source.session_state["results"] == result_before
+    assert source.session_state["result_sig"] == result_signature
+    assert source.session_state["_latest_inputs"]["signature"] == result_signature
+    assert source.session_state["result_elastic_sig"] == elastic_signature
+    assert source.session_state["_latest_inputs"]["elastic_sig"] == elastic_signature
+    assert source.session_state["_latest_inputs"]["slab_density"]["status"] == (
+        "VERIFIED"
+    )
+    assert source.session_state[sector_app._QS_APPLIED_SETTINGS_KEY] == applied_before
+    assert source.session_state["qsv_shape"] == "Rectangle"
+    assert source.session_state["qsv_qs_rebar_mode"] == "By number"
+
+    saved_path = tmp_path / "autosave.json"
+    assert saved_path.exists()
+    _tables, saved_scalars = project_io.parse_project(
+        saved_path.read_text(encoding="utf-8")
+    )
+    assert saved_scalars["qsv_shape"] == "Slab strip"
+    assert saved_scalars["qsv_qs_rebar_mode"] == "By spacing"
+    assert saved_scalars["qsv_bot_d"] == pytest.approx(32.0)
+    assert saved_scalars["qsv_bot_s"] == pytest.approx(65.0)
+
+    restored = _fresh()
+    restored.session_state["_pending_project"] = saved_path.read_text(
+        encoding="utf-8"
+    )
+    restored.run()
+    _calculate(restored)
+    assert not restored.exception
+    assert restored.session_state["_latest_inputs"]["slab_density"]["status"] == (
+        "VERIFIED"
+    )
+    assert restored.session_state["results"]["clear_spacing"]["governing"][
+        "centre_distance_mm"
+    ] == pytest.approx(65.0)
+    assert restored.session_state["results"]["elastic"]["crack"][
+        "governing_candidate"
+    ]["spacing_operands"]["nearest_neighbour_spacing"] == pytest.approx(65.0)
+
+    restored_result_signature = restored.session_state["result_sig"]
+    restored_signature = restored.session_state["result_elastic_sig"]
+    _open_qs(restored)
+    _set(
+        restored,
+        ("number_input", "top_s", 75.0),
+        ("number_input", "top_d", 25.0),
+        ("selectbox", "shape", "Rectangle"),
+        ("radio", "qs_rebar_mode", "By number"),
+    )
+    _set_and_click(restored, "qs_back")
+    assert restored.session_state["_latest_inputs"]["slab_density"]["status"] == (
+        "VERIFIED"
+    )
+    assert restored.session_state["result_elastic_sig"] == restored_signature
+    assert restored.session_state["result_sig"] == restored_result_signature
+    assert restored.session_state["_latest_inputs"]["signature"] == (
+        restored_result_signature
+    )
+    assert restored.session_state["_latest_inputs"]["elastic_sig"] == (
+        restored_signature
+    )
+
+    _open_qs(restored)
+    _set(
+        restored,
+        ("selectbox", "shape", "Slab strip"),
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_s", 200.0),
+        ("number_input", "top_s", 200.0),
+        ("number_input", "bot_d", 20.0),
+        ("number_input", "top_d", 20.0),
+    )
+    _apply_qs(restored)
+    assert restored.session_state[sector_app._QS_APPLIED_SETTINGS_KEY][
+        "qsv_bot_s"
+    ] == pytest.approx(200.0)
+    assert restored.session_state["_latest_inputs"]["slab_density"]["status"] == (
+        "VERIFIED"
+    )
+    assert restored.session_state["_latest_inputs"]["elastic_sig"] != (
+        restored_signature
+    )
+    assert restored.session_state["_latest_inputs"]["signature"] != (
+        restored_result_signature
+    )
+    # The last calculation remains available only as stale evidence; it is not
+    # eligible for reuse against the newly applied 200 mm layout.
+    assert restored.session_state["result_elastic_sig"] == restored_signature
+    assert restored.session_state["result_sig"] == restored_result_signature
+    _calculate(restored)
+    assert restored.session_state["result_sig"] == restored.session_state[
+        "_latest_inputs"
+    ]["signature"]
+    assert restored.session_state["results"]["elastic"]["crack"][
+        "governing_candidate"
+    ]["spacing_operands"]["nearest_neighbour_spacing"] == pytest.approx(200.0)
 
 
 def test_slab_density_physical_layout_round_trips_and_point_edit_fails_closed():
@@ -3259,14 +3648,15 @@ def test_quick_section_box_tendon_layer_splits_into_walls():
     assert "plastic" in at.session_state["results"]
 
 
-def test_quick_section_circular_zero_cover_keeps_all_bars():
-    # At zero cover the ring radius is capped at the polygon apothem, so every bar
-    # stays inside the N-gon outline and none are dropped/rejected (Codex P2).
+def test_quick_section_circular_zero_edge_cover_keeps_bar_envelopes_inside():
+    # Zero clear cover moves each centre inward by its radius, so the full bar
+    # envelope touches the polygonal face without any bar being dropped.
     at = _fresh_qs()
     at.selectbox(key="shape").set_value("Circular").run()
     _set_and_click(
         at,
         "qs_apply",
+        ("checkbox", "qs_cover_to_edge", True),
         ("number_input", "ring_n", 10),
         ("number_input", "ring_c_mm", 0.0),
     )
@@ -3276,6 +3666,19 @@ def test_quick_section_circular_zero_cover_keeps_all_bars():
     _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
+
+    # Zero centre cover instead places the centres on the face and must not turn
+    # the resulting negative clear cover into accepted physical geometry.
+    rejected = _fresh_qs()
+    rejected.selectbox(key="shape").set_value("Circular").run()
+    _set(
+        rejected,
+        ("number_input", "ring_n", 10),
+        ("number_input", "ring_c_mm", 0.0),
+    )
+    assert rejected.button(key="qs_apply").disabled
+    visible = "\n".join(item.value for item in rejected.error)
+    assert "every bar remains within concrete" in visible
 
 
 def test_quick_section_tsection_lower_top_layer_fits_the_web():

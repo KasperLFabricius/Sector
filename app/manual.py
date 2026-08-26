@@ -779,7 +779,11 @@ def manual_blocks() -> list:
        r"$5A_{bar}=1570.796\,\mathrm{mm^2/m}$, and the bottom or top cover sets "
        r"the layer depth. An enabled interleaved diameter is a second complete "
        r"series at the true half-spacing positions; the builder states each series "
-       r"and the summed $A_s$ per layer and per face. For finite sections, spacing "
+       r"and the summed $A_s$ per layer and per face. With edge cover, each series "
+       r"uses its own diameter to retain the entered clear cover, so mixed sizes "
+       r"can have different centre lines. With centre cover, the series share the "
+       r"entered centre line and any bar envelope crossing a concrete face is "
+       r"rejected. For finite sections, spacing "
        r"is instead a maximum gap "
        r"over the covered face; the builder displays the derived count and actual "
        r"centre-to-centre spacing before Apply.")

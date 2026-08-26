@@ -939,6 +939,7 @@ def _crack_width(
     k4: float,
     bar_diameter: Optional[Union[float, Sequence[float]]],
     nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_spacing_points: Optional[Sequence[Sequence[object]]] = None,
     physical_geometry_available: bool = True,
     physical_geometry_reason: Optional[str] = None,
     k3_cover_dependent: bool = False,
@@ -955,8 +956,10 @@ def _crack_width(
     every element or one value per element; otherwise diameter follows area.
     ``cover`` (mm), when given, may be one value or one value per element; ``NaN``
     entries retain geometry-derived cover. ``nominal_spacing`` similarly overrides
-    the nearest-neighbour spacing used for the 2005 close-spacing branch. When
-    ``None`` each value is taken from the represented geometry. The effective
+    the nearest-neighbour spacing used for the 2005 close-spacing branch. When an
+    entry is ``NaN``, ``physical_spacing_points`` may provide nominal physical
+    coordinates and an optional owning analysis index; otherwise spacing is taken
+    from the represented geometry. The effective
     tension area, height and reinforcement ratio are section quantities (defined
     for the bending direction); the crack spacing and mean strain are then formed
     per bar (its own cover, diameter and Stage II stress); candidates are sorted by
@@ -1062,6 +1065,39 @@ def _crack_width(
             k1, phi_arr, derived_phi, diameter_sources, n_mult=mult_arr,
             reinforcement_types=kinds, bond_ratio_xi=bond_ratio_xi,
         )
+
+    physical_spacing = None
+    if physical_spacing_points is not None:
+        try:
+            rows = []
+            for point in physical_spacing_points:
+                if len(point) != 3:
+                    raise ValueError
+                x, y, owner = point
+                if (
+                    isinstance(x, (bool, np.bool_))
+                    or isinstance(y, (bool, np.bool_))
+                ):
+                    raise ValueError
+                x = float(x)
+                y = float(y)
+                if not math.isfinite(x) or not math.isfinite(y):
+                    raise ValueError
+                if owner is not None:
+                    if (
+                        isinstance(owner, (bool, np.bool_))
+                        or not isinstance(owner, (int, np.integer))
+                    ):
+                        raise ValueError
+                    owner = int(owner)
+                    if owner < 0 or owner >= bx.size:
+                        raise ValueError
+                rows.append((x, y, owner))
+            physical_spacing = tuple(rows)
+        except (TypeError, ValueError, OverflowError):
+            return _not_assessed(
+                "Physical reinforcement spacing values are invalid."
+            )
 
     all_tension, near_uniform = _uniform_tension_regime(section, cracked_state)
     if all_tension:
@@ -1200,6 +1236,26 @@ def _crack_width(
     # diameter and Stage II stress; the largest wk governs.
     wk_factor = 0.5 if coarse else 1.0   # DK NA coarse system halves wk (7.3.4(1))
     band_tens = in_band & (sigma > 0.0)  # tension bars that set the crack spacing
+    physical_widths = None
+    physical_tension = None
+    physical_owners = None
+    if physical_spacing is not None:
+        physical_x = np.asarray([row[0] for row in physical_spacing], dtype=float)
+        physical_y = np.asarray([row[1] for row in physical_spacing], dtype=float)
+        physical_owners = np.asarray(
+            [row[2] for row in physical_spacing], dtype=object
+        )
+        physical_widths = -gy * physical_x + gx * physical_y
+        physical_depths = gx * physical_x + gy * physical_y
+        physical_strain = (
+            cracked_state.eps0
+            + cracked_state.kx * physical_x
+            + cracked_state.ky * physical_y
+        )
+        physical_tension = (physical_depths >= c_lo) & (physical_strain > 0.0)
+        for index, owner in enumerate(physical_owners):
+            if owner is not None:
+                physical_tension[index] = bool(band_tens[int(owner)])
     candidates: list[CrackWidthCandidate] = []
     for i in range(bx.size):
         if not in_band[i] or sigma[i] <= 0.0:
@@ -1258,6 +1314,16 @@ def _crack_width(
         neigh[i] = False
         if spacing_arr is not None and math.isfinite(float(spacing_arr[i])):
             nearest_spacing = float(spacing_arr[i])
+        elif physical_spacing is not None:
+            eligible = physical_tension & np.asarray(
+                [owner != i for owner in physical_owners], dtype=bool
+            )
+            nearest_spacing = (
+                float(np.min(np.abs(physical_widths[eligible] - w_bars[i])))
+                * 1000.0
+                if np.any(eligible)
+                else math.inf
+            )
         else:
             nn = (
                 float(np.min(np.abs(w_bars[neigh] - w_bars[i])))
@@ -1823,6 +1889,7 @@ def analyse_cracking(
     cover: Optional[Union[float, Sequence[float]]] = None,
     bar_diameter: Optional[Union[float, Sequence[float]]] = None,
     nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_spacing_points: Optional[Sequence[Sequence[object]]] = None,
     physical_geometry_available: bool = True,
     physical_geometry_reason: Optional[str] = None,
     k1: Union[float, Sequence[float]] = 0.8,
@@ -1866,6 +1933,10 @@ def analyse_cracking(
     nominal_spacing:
         One physical c/c spacing (mm), or one per element, for the 2005
         close-spacing branch. ``NaN`` entries use represented geometry.
+    physical_spacing_points:
+        Nominal physical ``(x, y, owner_index)`` records used for elements whose
+        spacing override is ``NaN``. An owner index excludes only that element's
+        own physical point from the neighbour search.
     physical_geometry_available, physical_geometry_reason:
         Set availability false when represented analysis points cannot supply
         verified physical spacing or cover. The crack-width assessment then
@@ -1922,6 +1993,7 @@ def analyse_cracking(
         evaluation = _crack_width(
             section, crk, n, fctm, Es, cover, kt, k1, k2, k3, k4, bar_diameter,
             nominal_spacing=nominal_spacing,
+            physical_spacing_points=physical_spacing_points,
             physical_geometry_available=physical_geometry_available,
             physical_geometry_reason=physical_geometry_reason,
             k3_cover_dependent=k3_cover_dependent, include_hx_term=include_hx_term,
@@ -1988,6 +2060,7 @@ def evaluate_crack_width(
     cover: Optional[Union[float, Sequence[float]]] = None,
     bar_diameter: Optional[Union[float, Sequence[float]]] = None,
     nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_spacing_points: Optional[Sequence[Sequence[object]]] = None,
     physical_geometry_available: bool = True,
     physical_geometry_reason: Optional[str] = None,
     k1: Union[float, Sequence[float]] = 0.8,
@@ -2015,6 +2088,7 @@ def evaluate_crack_width(
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
                         k1, k2, k3, k4, bar_diameter,
                         nominal_spacing=nominal_spacing,
+                        physical_spacing_points=physical_spacing_points,
                         physical_geometry_available=physical_geometry_available,
                         physical_geometry_reason=physical_geometry_reason,
                         k3_cover_dependent=k3_cover_dependent,
@@ -2035,6 +2109,7 @@ def crack_width(
     cover: Optional[Union[float, Sequence[float]]] = None,
     bar_diameter: Optional[Union[float, Sequence[float]]] = None,
     nominal_spacing: Optional[Union[float, Sequence[float]]] = None,
+    physical_spacing_points: Optional[Sequence[Sequence[object]]] = None,
     physical_geometry_available: bool = True,
     physical_geometry_reason: Optional[str] = None,
     k1: Union[float, Sequence[float]] = 0.8,
@@ -2061,6 +2136,7 @@ def crack_width(
         cover=cover,
         bar_diameter=bar_diameter,
         nominal_spacing=nominal_spacing,
+        physical_spacing_points=physical_spacing_points,
         physical_geometry_available=physical_geometry_available,
         physical_geometry_reason=physical_geometry_reason,
         k1=k1,

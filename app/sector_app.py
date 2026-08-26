@@ -358,7 +358,7 @@ _QUICK_TENDON_COVER = EngineerMessage(
 )
 _QUICK_REINFORCEMENT_PLACEMENT = EngineerMessage(
     "QUICK-REINFORCEMENT-PLACEMENT",
-    "Reduce the cover, number of layers, or layer spacing so all reinforcement remains in concrete",
+    "Adjust the section size, bar diameter, cover, or layer spacing so every bar remains within concrete",
 )
 
 
@@ -3156,6 +3156,19 @@ def _discard_clear_recovery():
     st.session_state.pop("_clear_section_undo", None)
 
 
+def _applied_quick_section_scalars(scalars, state):
+    """Overlay the last applied builder settings on serialised preferences."""
+
+    result = dict(scalars)
+    applied = state.get(_QS_APPLIED_SETTINGS_KEY)
+    if not isinstance(applied, dict):
+        return result
+    for key in project_io.QUICK_SECTION_SCALAR_KEYS:
+        result.pop(key, None)
+    result.update(copy.deepcopy(applied))
+    return result
+
+
 def _project_state():
     """Return the canonical table/scalar inputs behind a project download."""
     tables = {base: _current_table(base, ed, cols)
@@ -3177,6 +3190,9 @@ def _project_state():
             scalars[key] = live_fragment_value(
                 st.session_state, durable, key
             )
+    # Builder preferences can move on after Back, but a saved project must
+    # describe the settings that produced the currently applied point tables.
+    scalars = _applied_quick_section_scalars(scalars, st.session_state)
     for key in load_cases.CASE_TABLE_KEYS:
         tables[key] = load_cases.normalise_table(
             st.session_state.get(key), key
@@ -3565,6 +3581,7 @@ def _apply_project_text(text: str) -> None:
         _TORSION_GAMMA_MANAGED_KEY,
         _INPUT_BUILD_KEY,
         _REPORT_BUILD_KEY,
+        _QS_APPLIED_SETTINGS_KEY,
     ):
         st.session_state.pop(key, None)
     for key in _QS_WIDGET_KEYS:
@@ -4422,6 +4439,17 @@ def _qs_shape_prefill(shape):
 _QS_WIDGET_KEYS = tuple(
     key.removeprefix("qsv_") for key in project_io.QUICK_SECTION_SCALAR_KEYS
 )
+_QS_APPLIED_SETTINGS_KEY = "_qs_applied_settings"
+
+
+def _qs_settings_snapshot(state):
+    """Copy only persisted Quick Section values from one complete state."""
+
+    return {
+        key: copy.deepcopy(state[key])
+        for key in project_io.QUICK_SECTION_SCALAR_KEYS
+        if key in state
+    }
 
 
 def _qs_restore_settings():
@@ -4437,11 +4465,19 @@ def _qs_restore_settings():
 
 
 def _qs_mirror_settings():
-    """Copy the builder widgets to their durable keys, so the settings survive the
-    builder being closed (and are what a saved project stores)."""
+    """Keep draft builder preferences after its widgets are unmounted.
+
+    Project serialisation overlays the separately retained applied snapshot, so a
+    draft that is left with Back does not redefine the current point tables.
+    """
+    durable = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
     for k in _QS_WIDGET_KEYS:
         if k in st.session_state:
-            st.session_state["qsv_" + k] = st.session_state[k]
+            key = "qsv_" + k
+            value = copy.deepcopy(st.session_state[k])
+            st.session_state[key] = value
+            durable[key] = value
+    st.session_state[_INPUT_STATE_KEY] = durable
 
 
 def _qs_interleave(face_group, diameter_mm):
@@ -4539,10 +4575,16 @@ def _slab_density_layout(
     def centre_cover(cover_m, diameter_mm):
         return cover_m + (diameter_mm / 2000.0 if cover_to_edge else 0.0)
 
+    def first_layer_axis(face_coordinate, direction, cover_m, diameter_mm):
+        return face_coordinate + direction * centre_cover(cover_m, diameter_mm)
+
     faces = {
         "Bottom": {
-            "y_face": -height_m / 2.0
-            + centre_cover(bottom_cover_m, bottom_diameter_mm),
+            "face_coordinate": -height_m / 2.0,
+            "cover_m": bottom_cover_m,
+            "y_face": first_layer_axis(
+                -height_m / 2.0, 1.0, bottom_cover_m, bottom_diameter_mm
+            ),
             "direction": 1.0,
             "diameter_mm": float(bottom_diameter_mm),
             "spacing_m": float(bottom_spacing_m),
@@ -4550,8 +4592,11 @@ def _slab_density_layout(
             "interleave_diameter_mm": float(bottom_interleave_diameter_mm),
         },
         "Top": {
-            "y_face": height_m / 2.0
-            - centre_cover(top_cover_m, top_diameter_mm),
+            "face_coordinate": height_m / 2.0,
+            "cover_m": top_cover_m,
+            "y_face": first_layer_axis(
+                height_m / 2.0, -1.0, top_cover_m, top_diameter_mm
+            ),
             "direction": -1.0,
             "diameter_mm": float(top_diameter_mm),
             "spacing_m": float(top_spacing_m),
@@ -4566,11 +4611,18 @@ def _slab_density_layout(
     for face in ("Bottom", "Top"):
         record = faces[face]
         if record["interleave_diameter_mm"] > 0.0:
+            interleave_diameter = record["interleave_diameter_mm"]
             specs.append({
                 **record,
                 "face": face,
                 "role": "Interleave",
-                "diameter_mm": record["interleave_diameter_mm"],
+                "diameter_mm": interleave_diameter,
+                "y_face": first_layer_axis(
+                    record["face_coordinate"],
+                    record["direction"],
+                    record["cover_m"],
+                    interleave_diameter,
+                ),
                 "staggered": True,
             })
 
@@ -4603,6 +4655,14 @@ def _slab_density_layout(
             spec["diameter_mm"],
             staggered=spec["staggered"],
         )
+        radius_m = spec["diameter_mm"] / 2000.0
+        if any(
+            abs(float(y)) + radius_m > height_m / 2.0 + 1.0e-12
+            for _x, y, _area in (*group, *nominal)
+        ):
+            raise engineer_messages.EngineerValidationError(
+                _QUICK_REINFORCEMENT_PLACEMENT
+            )
         equivalents = templates.unit_width_bar_equivalents(1.0, spec["spacing_m"])
         area_per_layer = templates.bar_area(spec["diameter_mm"]) * equivalents
         series_record = {
@@ -4630,14 +4690,15 @@ def _slab_density_layout(
         )
         for layer in range(spec["layers"]):
             centre_from_face_mm = (
-                abs(spec["y_face"] - (-height_m / 2.0 if spec["face"] == "Bottom"
-                                      else height_m / 2.0)) * _MM
+                abs(spec["y_face"] - spec["face_coordinate"]) * _MM
                 + layer * layer_spacing_m * _MM
             )
-            clear_cover_mm = max(
-                centre_from_face_mm - spec["diameter_mm"] / 2.0,
-                0.0,
-            )
+            clear_cover_mm = centre_from_face_mm - spec["diameter_mm"] / 2.0
+            if clear_cover_mm < -1.0e-9:
+                raise engineer_messages.EngineerValidationError(
+                    _QUICK_REINFORCEMENT_PLACEMENT
+                )
+            clear_cover_mm = max(clear_cover_mm, 0.0)
             analysis_metadata.extend({
                 "face": spec["face"],
                 "role": spec["role"],
@@ -4714,15 +4775,17 @@ def _slab_density_layout_from_state(state):
 def _slab_density_reconciliation(state, outer, holes, bar_frame):
     """Return verified physical evidence or a fail-closed density disposition."""
 
+    applied_state = state.get(_QS_APPLIED_SETTINGS_KEY)
+    intent_state = applied_state if isinstance(applied_state, dict) else state
     try:
-        layout = _slab_density_layout_from_state(state)
+        layout = _slab_density_layout_from_state(intent_state)
     except (TypeError, ValueError, OverflowError):
         return {"status": "UNVERIFIED", "reason": _SLAB_DENSITY_GUIDANCE}
     if layout is None:
         return None
     # ``rectangle`` takes width then height; the slab strip is always exactly 1 m.
     expected_outer = templates.rectangle(
-        1.0, float(state.get("qsv_h_mm", 300.0)) / _MM
+        1.0, float(intent_state.get("qsv_h_mm", 300.0)) / _MM
     )
 
     def points_match(left, right, *, tolerance=1.0e-9):
@@ -4769,6 +4832,8 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
         bars_match = False
     if not geometry_matches or not bars_match:
         return {"status": "UNVERIFIED", "reason": _SLAB_DENSITY_GUIDANCE}
+    if not isinstance(applied_state, dict):
+        state[_QS_APPLIED_SETTINGS_KEY] = _qs_settings_snapshot(state)
     return {**layout, "status": "VERIFIED", "reason": None}
 
 
@@ -4842,6 +4907,7 @@ def _quick_section_geometry(box):
     _qs_shape_prefill(shape)   # re-seed b/h on a shape change (see the prefill note)
     holes = []
     slab_bar_diameters = None
+    bar_envelope_diameters = []
     slab_density_layout = None
     slab_unit_spacing = False
     bottom_span_at = top_span_at = None
@@ -5014,7 +5080,11 @@ def _quick_section_geometry(box):
     # top rows and the circular ring); tendons keep a centre cover.
     cover_to_edge = _seeded_checkbox(
         box, "Cover to bar edge (else to bar centre)", False, "qs_cover_to_edge",
-        help="Measure the cover to the near surface of the bars, not their centres.")
+        help=(
+            "Measure the cover to the near surface of each bar series, not its "
+            "centre. Different interleaved diameters can therefore have different "
+            "centre lines while retaining the same clear cover."
+        ))
     _edge = lambda cov, dia_mm: cov + (dia_mm / 2000.0 if cover_to_edge else 0.0)
     if shape in {"Circular", "Annulus"}:
         nb = _seeded_number(box, "Perimeter bars", 0, 200, 8, 1, "ring_n",
@@ -5031,6 +5101,7 @@ def _quick_section_geometry(box):
                 else templates.ring_radius(dia, ring_cover)
             )
             bars = templates.bar_ring(0.0, 0.0, radius, int(nb), rd)
+            bar_envelope_diameters = [float(rd)] * len(bars)
         else:
             bars = []
     else:
@@ -5156,12 +5227,20 @@ def _quick_section_geometry(box):
         o1, o2 = box.columns(2)
         bot_off_d = _seeded_number(o1, "Bottom interleave dia (mm, 0 = off)", 0.0, 100.0,
                                    0.0, 1.0, "bot_off_d",
-                                   help="Second bar size at the midpoints of the bottom "
-                                        "row(s); 0 = off.")
+                                   help=(
+                                       "Second bar size at the midpoints of the bottom "
+                                       "row(s); 0 = off. Edge cover applies to this "
+                                       "diameter; centre cover retains the primary "
+                                       "row's centre line."
+                                   ))
         top_off_d = _seeded_number(o2, "Top interleave dia (mm, 0 = off)", 0.0, 100.0,
                                    0.0, 1.0, "top_off_d",
-                                   help="Second bar size at the midpoints of the top "
-                                        "row(s); 0 = off.")
+                                   help=(
+                                       "Second bar size at the midpoints of the top "
+                                       "row(s); 0 = off. Edge cover applies to this "
+                                       "diameter; centre cover retains the primary "
+                                       "row's centre line."
+                                   ))
         if slab_unit_spacing:
             slab_density_layout = _slab_density_layout(
                 height_m=h,
@@ -5203,6 +5282,7 @@ def _quick_section_geometry(box):
         if slab_unit_spacing:
             bars = list(slab_density_layout["bars"])
             slab_bar_diameters = list(slab_density_layout["diameters_mm"])
+            bar_envelope_diameters = slab_bar_diameters
         elif shape == "Box girder":
             # A box girder's rows split into the side walls once they rise into the
             # hollow, so multi-layer reinforcement keeps its count in the webs.
@@ -5224,13 +5304,16 @@ def _quick_section_geometry(box):
         if not slab_unit_spacing:
             groups = [(bot_group, rd_bot), (top_group, rd_top)]
             face_groups = (
-                (bot_group, bot_off_d),
-                (top_group, top_off_d),
+                (bot_group, bot_off_d, rd_bot, 1.0),
+                (top_group, top_off_d, rd_top, -1.0),
             )
-            for grp, off_d in face_groups:
+            for grp, off_d, primary_diameter, direction in face_groups:
                 if off_d <= 0.0:
                     continue
                 inter = _qs_interleave(grp, off_d)
+                if cover_to_edge:
+                    shift = direction * (off_d - primary_diameter) / 2000.0
+                    inter = [(x, y + shift, area) for x, y, area in inter]
                 # A row split across a void leaves a gap whose midpoint is not
                 # concrete. The same filter guards concave outlines.
                 if inter:
@@ -5239,6 +5322,11 @@ def _quick_section_geometry(box):
                     inter = [p for p, good in zip(inter, ok) if good]
                 groups.append((inter, off_d))
             bars = templates.merge_bars(*(group for group, _diameter in groups))
+            bar_envelope_diameters = [
+                float(diameter)
+                for group, diameter in groups
+                for _point in group
+            ]
 
     box.markdown("**Prestressing tendons**")
     nt = _seeded_number(box, "Tendons", 0, 200, 0, 1, "tnd_n",
@@ -5293,6 +5381,49 @@ def _quick_section_geometry(box):
             [(x, y) for x, y, _area in generated], outer, holes
         )
         if not all(contained):
+            raise engineer_messages.EngineerValidationError(
+                _QUICK_REINFORCEMENT_PLACEMENT
+            )
+    if bars:
+        if len(bar_envelope_diameters) != len(bars):
+            raise engineer_messages.EngineerValidationError(
+                _QUICK_REINFORCEMENT_PLACEMENT
+            )
+        if shape in {"Circular", "Annulus"}:
+            outer_radius = dia / 2.0
+            inner_radius = inner_dia / 2.0 if shape == "Annulus" else None
+            envelopes_inside = all(
+                math.hypot(float(x), float(y)) + float(diameter) / 2000.0
+                <= outer_radius + 1.0e-12
+                and (
+                    inner_radius is None
+                    or math.hypot(float(x), float(y))
+                    - float(diameter) / 2000.0
+                    >= inner_radius - 1.0e-12
+                )
+                for (x, y, _area), diameter in zip(
+                    bars, bar_envelope_diameters
+                )
+            )
+        elif slab_unit_spacing:
+            envelopes_inside = all(
+                abs(float(y)) + float(diameter) / 2000.0
+                <= h / 2.0 + 1.0e-12
+                for (_x, y, _area), diameter in zip(
+                    bars, bar_envelope_diameters
+                )
+            )
+        else:
+            rings = (outer, *(holes or []))
+            envelopes_inside = all(
+                geometry.distance_to_boundary(float(x), float(y), rings)
+                + 1.0e-12
+                >= float(diameter) / 2000.0
+                for (x, y, _area), diameter in zip(
+                    bars, bar_envelope_diameters
+                )
+            )
+        if not envelopes_inside:
             raise engineer_messages.EngineerValidationError(
                 _QUICK_REINFORCEMENT_PLACEMENT
             )
@@ -5400,6 +5531,9 @@ def _quick_section_viewport():
         app_run_probe.close_fragment_run(st.session_state)
         st.rerun()
     if apply:
+        # Only Apply advances physical provenance. Preview edits retained for the
+        # next builder opening must not redefine the point tables when Back is used.
+        _qs_mirror_settings()
         _discard_clear_recovery()
         # Quick Section can be the first surface opened in a fresh session. Seed
         # the catalogues before its generated M/P assignments exist; otherwise the
@@ -5422,6 +5556,9 @@ def _quick_section_viewport():
             [(float(p[0]), float(p[1]), float(p[2])) for p in tendons]),
             "tendon", size_mode=rebar_table.AREA_MODE,
             material_id=prestress_material_id))
+        st.session_state[_QS_APPLIED_SETTINGS_KEY] = _qs_settings_snapshot(
+            st.session_state
+        )
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
@@ -8633,6 +8770,7 @@ def _run_single_analysis(
         )
         crack_cover = None
         crack_spacing = None
+        physical_spacing_points = None
         if density is not None and density.get("status") == "VERIFIED":
             metadata = list(density.get("analysis_metadata") or [])
             if len(metadata) != len(inp["bars"]):
@@ -8657,6 +8795,24 @@ def _run_single_analysis(
                     crack_spacing.extend(
                         math.nan for _item in inp.get("tendon_elements", [])
                     )
+                physical_spacing_points = [
+                    (
+                        float(item["x_mm"]) / _MM,
+                        float(item["y_mm"]) / _MM,
+                        None,
+                    )
+                    for item in density.get("physical_elements", ())
+                ]
+                physical_spacing_points.extend(
+                    (
+                        float(item["x"]),
+                        float(item["y"]),
+                        len(inp["bars"]) + index,
+                    )
+                    for index, item in enumerate(
+                        inp.get("tendon_elements", [])
+                    )
+                )
         # Dispatch only through the immutable capability binding. Persisted labels
         # and label substrings never select an engineering route.
         ordinary_binding = design_standards.capability_binding(
@@ -8693,7 +8849,9 @@ def _run_single_analysis(
             fctm=inp["sls_fctm"], Es=[material.Es for material in all_laws],
             beta=0.5, kt=0.4,
             cover=crack_cover, bar_diameter=phi,
-            nominal_spacing=crack_spacing, k1=k1_bars,
+            nominal_spacing=crack_spacing,
+            physical_spacing_points=physical_spacing_points,
+            k1=k1_bars,
             physical_geometry_available=physical_geometry_available,
             physical_geometry_reason=physical_geometry_reason,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
@@ -8779,6 +8937,7 @@ def _run_single_analysis(
                     cover=crack_cover,
                     bar_diameter=phi,
                     nominal_spacing=crack_spacing,
+                    physical_spacing_points=physical_spacing_points,
                     physical_geometry_available=physical_geometry_available,
                     physical_geometry_reason=physical_geometry_reason,
                     k1=k1_bars,
