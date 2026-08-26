@@ -3205,6 +3205,35 @@ def test_slab_density_edge_cover_uses_each_diameter_and_excludes_strip_sides():
                for item in layout["physical_elements"])
 
 
+def test_slab_density_layers_use_the_nearest_physical_face_for_cover():
+    import sector_app
+
+    layout = sector_app._slab_density_layout(
+        height_m=0.30,
+        cover_to_edge=False,
+        bottom_diameter_mm=20.0,
+        top_diameter_mm=20.0,
+        bottom_cover_m=0.05,
+        top_cover_m=0.05,
+        bottom_spacing_m=0.20,
+        top_spacing_m=0.20,
+        bottom_layers=4,
+        top_layers=4,
+        layer_spacing_m=0.06,
+    )
+
+    by_series_layer = {}
+    for item in layout["analysis_metadata"]:
+        key = (item["face"], item["role"], item["layer"])
+        by_series_layer.setdefault(key, set()).add(item["cover_mm"])
+    for face in ("Bottom", "Top"):
+        retained = [
+            next(iter(by_series_layer[(face, "Primary", layer)]))
+            for layer in range(1, 5)
+        ]
+        assert retained == pytest.approx([40.0, 100.0, 120.0, 60.0])
+
+
 @pytest.mark.parametrize("face", ["Bottom", "Top"])
 def test_slab_density_rejects_a_bar_envelope_outside_the_real_faces(face):
     import sector_app
@@ -3365,6 +3394,61 @@ def test_slab_density_tendon_uses_nominal_physical_axes_in_native_2005_check():
     assert tendon["wk"] == pytest.approx(3.3989530986177257)
     assert operands["nearest_neighbour_spacing"] != pytest.approx(15.625)
     assert operands["nearest_neighbour_spacing"] != pytest.approx(31.25)
+
+
+def test_slab_density_crossed_layers_publish_nearest_face_cover_in_native_crack():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    _set(
+        at,
+        ("radio", "qs_rebar_mode", "By spacing"),
+        ("number_input", "bot_s", 200.0),
+        ("number_input", "top_s", 200.0),
+        ("number_input", "bot_layers", 4),
+        ("number_input", "top_layers", 4),
+        ("number_input", "layer_s", 70.0),
+    )
+    _apply_qs(at)
+
+    inputs = at.session_state["_latest_inputs"]
+    density = inputs["slab_density"]
+    metadata = list(density["analysis_metadata"])
+    bar_elements = list(inputs["bar_elements"])
+    target_ids = {
+        bar_elements[index]["id"]
+        for index, item in enumerate(metadata)
+        if item["face"] == "Bottom" and item["layer"] == 4
+    }
+    assert target_ids
+    target_covers = [
+        item["cover_mm"]
+        for item in metadata
+        if item["face"] == "Bottom" and item["layer"] == 4
+    ]
+    assert target_covers == pytest.approx([30.0] * len(target_covers))
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Elastic"),
+        ("selectbox", "sls_code", _SLS_BASE),
+        ("number_input", "el_long_P", 0.0),
+        ("number_input", "el_long_Mx", -400.0),
+        ("checkbox", "sls_cw", True),
+    )
+    for code in (_SLS_BASE, _SLS_2023):
+        if code != _SLS_BASE:
+            _set_and_click(at, "calculate", ("selectbox", "sls_code", code))
+        crack = at.session_state["results"]["elastic"]["crack"]
+        assert crack is not None
+        targets = [
+            candidate
+            for candidate in crack["candidates"]
+            if candidate["element_id"] in target_ids
+        ]
+        assert targets, code
+        assert all(candidate["cover"] == pytest.approx(30.0) for candidate in targets)
+        assert all(candidate["cover"] != pytest.approx(250.0) for candidate in targets)
 
 
 def test_slab_density_tendon_cover_ignores_artificial_strip_sides():

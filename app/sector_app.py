@@ -4685,33 +4685,45 @@ _SLAB_TENDON_FACE_GUIDANCE = (
 )
 
 
-def _slab_tendon_face_clear_cover_mm(y_m, diameter_mm, outer):
-    """Clear tendon cover to a real slab face, ignoring unit-strip side cuts."""
+def _slab_face_clear_cover_mm(y_m, diameter_mm, bottom_face_m, top_face_m):
+    """Clear cover to the nearest real horizontal slab face."""
 
-    if isinstance(y_m, (bool, np.bool_)) or isinstance(
-        diameter_mm, (bool, np.bool_)
-    ):
-        raise ValueError("slab tendon cover inputs must be numeric")
+    values = (y_m, diameter_mm, bottom_face_m, top_face_m)
+    if any(isinstance(value, (bool, np.bool_)) for value in values):
+        raise ValueError("slab face cover inputs must be numeric")
     y_m = float(y_m)
     diameter_mm = float(diameter_mm)
-    face_coordinates = [float(point[1]) for point in outer]
+    bottom_face_m = float(bottom_face_m)
+    top_face_m = float(top_face_m)
     if (
-        not face_coordinates
-        or not math.isfinite(y_m)
-        or not math.isfinite(diameter_mm)
+        any(not math.isfinite(value) for value in (
+            y_m, diameter_mm, bottom_face_m, top_face_m
+        ))
         or diameter_mm <= 0.0
-        or any(not math.isfinite(value) for value in face_coordinates)
+        or bottom_face_m >= top_face_m
     ):
-        raise ValueError("slab tendon cover inputs must be finite")
-    bottom_face = min(face_coordinates)
-    top_face = max(face_coordinates)
+        raise ValueError("slab face cover inputs must be finite")
     clear_cover_mm = (
-        min(y_m - bottom_face, top_face - y_m) * _MM
+        min(y_m - bottom_face_m, top_face_m - y_m) * _MM
         - diameter_mm / 2.0
     )
     if clear_cover_mm < -1.0e-9:
-        raise ValueError("slab tendon envelope is outside a physical face")
+        raise ValueError("reinforcement envelope is outside a physical slab face")
     return max(clear_cover_mm, 0.0)
+
+
+def _slab_tendon_face_clear_cover_mm(y_m, diameter_mm, outer):
+    """Clear tendon cover to a real slab face, ignoring unit-strip side cuts."""
+
+    face_coordinates = [float(point[1]) for point in outer]
+    if not face_coordinates:
+        raise ValueError("slab face cover inputs must be finite")
+    return _slab_face_clear_cover_mm(
+        y_m,
+        diameter_mm,
+        min(face_coordinates),
+        max(face_coordinates),
+    )
 
 
 def _slab_density_layout(
@@ -4902,16 +4914,16 @@ def _slab_density_layout(
             0.5 if face_has_interleave[spec["face"]] else 1.0
         )
         for layer in range(spec["layers"]):
-            centre_from_face_mm = (
-                abs(spec["y_face"] - spec["face_coordinate"]) * _MM
-                + layer * layer_spacing_m * _MM
+            layer_y = (
+                spec["y_face"]
+                + spec["direction"] * layer * layer_spacing_m
             )
-            clear_cover_mm = centre_from_face_mm - spec["diameter_mm"] / 2.0
-            if clear_cover_mm < -1.0e-9:
-                raise engineer_messages.EngineerValidationError(
-                    _QUICK_REINFORCEMENT_PLACEMENT
-                )
-            clear_cover_mm = max(clear_cover_mm, 0.0)
+            clear_cover_mm = _slab_face_clear_cover_mm(
+                layer_y,
+                spec["diameter_mm"],
+                -height_m / 2.0,
+                height_m / 2.0,
+            )
             analysis_metadata.extend({
                 "face": spec["face"],
                 "role": spec["role"],
