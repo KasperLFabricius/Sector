@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 
 from sector import capacity, codes, torsion
-from sector.materials import Concrete, MildSteel
 from sector import section as section_core
 from sector.engineer_message import EngineerMessage
+from sector.materials import Concrete, MildSteel
 
 
 def _rect(b=0.3, h=0.6):
