@@ -880,6 +880,8 @@ def _table_object_with_row(key: str) -> dict:
             row.append("")
         else:  # pragma: no cover - the production manifest owns every column
             raise AssertionError((key, column, nullable))
+    if key in project_io.REINFORCEMENT_TABLE_KEYS:
+        row[columns.index(rebar_table.AREA)] = 100.0
     return {"columns": columns, "rows": [row]}
 
 
@@ -921,6 +923,61 @@ def test_nested_table_cells_reject_hostile_types_before_dataframe_coercion(
 
     with pytest.raises(project_io.ProjectInputError) as exc_info:
         project_io._obj_to_table(value, key)
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+@pytest.mark.parametrize("key", ("bars_base", "tendons_base"))
+@pytest.mark.parametrize(
+    ("column", "invalid"),
+    (
+        (rebar_table.X, float("nan")),
+        (rebar_table.Y, float("inf")),
+        (rebar_table.AREA, 0.0),
+        (rebar_table.AREA, -100.0),
+        (rebar_table.AREA, float("nan")),
+    ),
+)
+def test_project_reinforcement_rows_require_finite_coordinates_and_positive_area(
+    key: str,
+    column: str,
+    invalid,
+) -> None:
+    value = _table_object_with_row(key)
+    value["rows"][0][value["columns"].index(column)] = invalid
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._obj_to_table(value, key)
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+def test_project_dump_rejects_a_negative_reinforcement_area() -> None:
+    bars = rebar_table.normalise_table(
+        [{rebar_table.X: 0.0, rebar_table.Y: 0.0, rebar_table.AREA: -100.0}],
+        "bar",
+    )
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io.dump_project({"bars_base": bars}, {})
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+def test_nonstandard_json_nan_action_uses_authored_project_guidance() -> None:
+    data = json.loads(project_io.dump_project(load_cases.default_tables(), {}))
+    table = data["tables"][load_cases.PLASTIC_TABLE_KEY]
+    action = table["columns"].index("n_ed_kn")
+    table["rows"][0][action] = float("nan")
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io.parse_project(json.dumps(data, allow_nan=True))
 
     assert project_io.engineer_error_message(exc_info.value) == (
         "the project file contains an invalid input value"
@@ -1105,6 +1162,20 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
             {"name": "wrong container"}
         ]
 
+    def negative_bar_area(data: dict) -> None:
+        table = data["tables"]["bars_base"]
+        assert table["rows"]
+        mode = table["columns"].index(rebar_table.SIZE_MODE)
+        area = table["columns"].index(rebar_table.AREA)
+        table["rows"][0][mode] = rebar_table.AREA_MODE
+        table["rows"][0][area] = -100.0
+
+    def nan_plastic_action(data: dict) -> None:
+        table = data["tables"][load_cases.PLASTIC_TABLE_KEY]
+        assert table["rows"]
+        action = table["columns"].index("n_ed_kn")
+        table["rows"][0][action] = float("nan")
+
     hostile = (
         _mutated_project(valid_a, scalar("conc_fck", True)),
         _mutated_project(valid_a, scalar("qsv_b_mm", "400")),
@@ -1112,6 +1183,8 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
         _mutated_project(valid_a, scalar("shear_method", True)),
         _mutated_project(valid_a, scalar("sls_code", {})),
         _mutated_project(valid_a, wrong_rows),
+        _mutated_project(valid_a, negative_bar_area),
+        _mutated_project(valid_a, nan_plastic_action, rehash=False),
         _mutated_project(
             valid_a,
             scalar("conc_fck", float("nan")),
@@ -1125,6 +1198,8 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
         "shear_method",
         "sls_code",
         "plastic_cases_base",
+        "bars_base",
+        "area (mm2)",
         "Boolean",
         "finite number",
         "NaN",
@@ -1524,5 +1599,5 @@ def test_nonfinite_json_tokens_are_rejected_before_any_numeric_fallback() -> Non
         with pytest.raises(project_io.ProjectInputError) as exc_info:
             project_io.parse_project(hostile)
         public = project_io.engineer_error_message(exc_info.value)
-        assert public == "the project file is incomplete or damaged"
+        assert public == "the project file contains an invalid input value"
         assert not math.isfinite(token)

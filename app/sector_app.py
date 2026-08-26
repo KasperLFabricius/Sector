@@ -338,7 +338,7 @@ _REINFORCEMENT_OUTSIDE = EngineerMessage(
 )
 _REINFORCEMENT_ROW_INPUT = EngineerMessage(
     "REINFORCEMENT-ROW-INPUT",
-    "Complete each reinforcement row with finite coordinates, area, and diameter",
+    "Enter finite coordinates and a positive area and diameter for every bar and tendon",
 )
 _QUICK_SECTION_DISPLAY = EngineerMessage(
     "QUICK-SECTION",
@@ -2145,7 +2145,7 @@ def _reinforcement_editor(box, base_key, ed_key):
         (item["x_mm"], item["y_mm"], item["area_mm2"])
         for item in elements
     ]
-    return frame, elements, points_mm
+    return frame, elements, points_mm, tuple(issues)
 
 
 def _reinforcement_bulk_assignment(
@@ -6547,7 +6547,7 @@ def build_inputs(host=st):
     holes = [_pts_to_m(ring) for ring in holes_mm]
     sec.markdown("_Reinforcing bars_")
     _table_field_guide(sec, table_fields.BARS_TABLE_KEY)
-    _bar_frame, bar_elements, bars_mm = _reinforcement_editor(
+    _bar_frame, bar_elements, bars_mm, bar_row_issues = _reinforcement_editor(
         sec, "bars_base", "ed_bars",
     )
     bars = _pts_to_m(bars_mm)
@@ -6559,8 +6559,10 @@ def build_inputs(host=st):
     # at least one is present (a section with no tendons is simply not prestressed).
     sec.markdown("_Tendons_")
     _table_field_guide(sec, table_fields.TENDONS_TABLE_KEY)
-    _tendon_frame, tendon_elements, tendons_mm = _reinforcement_editor(
-        sec, "tendons_base", "ed_tendons",
+    _tendon_frame, tendon_elements, tendons_mm, tendon_row_issues = (
+        _reinforcement_editor(
+            sec, "tendons_base", "ed_tendons",
+        )
     )
     tendons = _pts_to_m(tendons_mm)
     tendon_elements = [
@@ -6922,8 +6924,12 @@ def build_inputs(host=st):
     # Every reinforcing bar and tendon must sit in the concrete: outside the outline
     # or inside a void it carries no force, so the section is ill-defined. Checked
     # only once the outline itself is valid (a void error is the more basic fault).
-    steel_error = None
-    if section is not None and not void_error:
+    steel_error = (
+        _REINFORCEMENT_ROW_INPUT
+        if bar_row_issues or tendon_row_issues
+        else None
+    )
+    if section is not None and not void_error and steel_error is None:
         steel_pts = list(bars) + list(tendons)
         if steel_pts:
             ok = geometry.points_inside_concrete(steel_pts, outer, holes)
@@ -6953,9 +6959,10 @@ def build_inputs(host=st):
         return tuple(tuple(item.get(key) for key in keys) for item in elements)
 
     geom_sig = (tuple(outer), tuple(bars), tuple(tendons),
-                tuple(tuple(r) for r in holes),
-                _element_signature(bar_elements),
-                _element_signature(tendon_elements))
+                 tuple(tuple(r) for r in holes),
+                 _element_signature(bar_elements),
+                 _element_signature(tendon_elements),
+                 tuple(bar_row_issues), tuple(tendon_row_issues))
     # Table actions live in their canonical frames, while the shared calculation
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.

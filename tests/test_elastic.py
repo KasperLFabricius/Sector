@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from sector.elastic import solve_elastic
-from sector.section import Section
+from sector.section import Bar, Section
 
 
 def rectangular_section() -> Section:
@@ -128,3 +128,95 @@ def test_solver_converges_quickly():
     res = solve_elastic(rectangular_section(), 1000.0, 200.0, 200.0, 25.0)
     assert res.converged
     assert res.iterations <= 12
+
+
+@pytest.mark.parametrize(
+    ("P", "Mx", "My"),
+    (
+        (float("nan"), 0.0, 0.0),
+        (0.0, float("inf"), 0.0),
+        (0.0, 0.0, -float("inf")),
+        (np.bool_(True), 0.0, 0.0),
+    ),
+)
+def test_invalid_actions_are_rejected_before_elastic_iteration(
+    monkeypatch,
+    P,
+    Mx,
+    My,
+):
+    import sector.elastic as elastic_core
+
+    calls = []
+
+    def forbidden_iteration(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("invalid action reached elastic iteration")
+
+    monkeypatch.setattr(elastic_core, "_newton_solve", forbidden_iteration)
+
+    with pytest.raises(ValueError, match="finite"):
+        solve_elastic(rectangular_section(), P, Mx, My, 25.0)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "invalid_bar",
+    (
+        Bar(0.0, 0.0, -1.0e-6),
+        Bar(True, 0.0, 1.0e-6),
+        Bar(0.0, 0.0, np.bool_(True)),
+    ),
+)
+def test_mutated_invalid_bar_is_rejected_before_elastic_iteration(
+    monkeypatch,
+    invalid_bar,
+):
+    import sector.elastic as elastic_core
+
+    section = rectangular_section()
+    section.bars = [invalid_bar]
+    calls = []
+
+    def forbidden_iteration(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("invalid reinforcement reached elastic iteration")
+
+    monkeypatch.setattr(elastic_core, "_newton_solve", forbidden_iteration)
+
+    with pytest.raises(ValueError, match="bar 1"):
+        solve_elastic(section, 0.0, 0.0, 0.0, 25.0)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "element_data",
+    (
+        {"n_mult": np.ones(3)},
+        {"prestress_stress": np.zeros(3)},
+    ),
+)
+def test_per_element_array_count_mismatch_is_rejected_before_iteration(
+    monkeypatch,
+    element_data,
+):
+    import sector.elastic as elastic_core
+
+    calls = []
+
+    def forbidden_iteration(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("mismatched element data reached elastic iteration")
+
+    monkeypatch.setattr(elastic_core, "_newton_solve", forbidden_iteration)
+
+    with pytest.raises(ValueError, match="must contain 4 values, got 3"):
+        solve_elastic(
+            rectangular_section(),
+            0.0,
+            0.0,
+            0.0,
+            25.0,
+            **element_data,
+        )
+    assert calls == []

@@ -808,6 +808,15 @@ def _validate_canonical_table(frame: pd.DataFrame, key: str) -> None:
         load_cases.table_records(frame, key)
     elif key == fatigue_inputs.SPECTRUM_TABLE_KEY:
         fatigue_inputs.spectrum_records(frame)
+    elif key in REINFORCEMENT_TABLE_KEYS:
+        issues = rebar_table.row_issues(
+            frame, REINFORCEMENT_TABLE_KEYS[key]
+        )
+        if issues:
+            element_id, reason = issues[0]
+            raise _invalid_input(
+                f"{key} {element_id} has invalid reinforcement {reason}"
+            )
 
 
 def _table_to_obj(value, key: str) -> dict:
@@ -1723,9 +1732,25 @@ def dump_project(
     return json.dumps(payload, indent=2, ensure_ascii=True, allow_nan=False)
 
 
+class _NonFiniteJsonConstant(ValueError):
+    """One non-standard NaN/infinity token encountered during JSON decoding."""
+
+
+def _reject_nonfinite_json_constant(value: str) -> None:
+    raise _NonFiniteJsonConstant(value)
+
+
 def _decode(text: str) -> dict:
     try:
-        data = json.loads(text)
+        data = json.loads(
+            text,
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except _NonFiniteJsonConstant as exc:
+        raise ProjectInputError(
+            "project contains a non-finite numeric value",
+            engineer_message=_PROJECT_INVALID_INPUT,
+        ) from exc
     except (json.JSONDecodeError, TypeError) as exc:
         raise ProjectInputError(
             "not valid JSON",

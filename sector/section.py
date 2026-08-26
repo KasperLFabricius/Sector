@@ -14,6 +14,7 @@ out of the solid automatically.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -28,6 +29,20 @@ from .geometry import (
 )
 
 MM2_TO_M2 = 1.0e-6
+
+
+def finite_action(value: object, label: str) -> float:
+    """Return one finite solver action or reject it before analysis starts."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{label} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be a finite number")
+    return number
 
 
 @dataclass(frozen=True)
@@ -77,6 +92,7 @@ class Section:
             raise ValueError("a section needs at least one concrete ring")
         validate_section_topology(rings[0], rings[1:]).require_valid()
         self.concrete = [np.array(r, dtype=float, copy=True) for r in rings]
+        self.require_valid_reinforcement()
 
     # -- construction helpers ------------------------------------------------
 
@@ -96,9 +112,19 @@ class Section:
         converted to m^2 on the way in.
         """
         rings = [corners, *holes]
-        bars = [Bar(float(x), float(y), float(a) * MM2_TO_M2) for x, y, a in bars_xy_area_mm2]
-        tendons = [Bar(float(x), float(y), float(a) * MM2_TO_M2)
-                   for x, y, a in tendons_xy_area_mm2]
+
+        def _elements(values, label):
+            return [
+                Bar(
+                    finite_action(x, f"{label} {index} x coordinate"),
+                    finite_action(y, f"{label} {index} y coordinate"),
+                    finite_action(area, f"{label} {index} area") * MM2_TO_M2,
+                )
+                for index, (x, y, area) in enumerate(values, start=1)
+            ]
+
+        bars = _elements(bars_xy_area_mm2, "bar")
+        tendons = _elements(tendons_xy_area_mm2, "tendon")
         return cls(rings, bars, tendons)
 
     # -- derived geometry ----------------------------------------------------
@@ -120,6 +146,39 @@ class Section:
         and a caller can replace a ring after creating the section.
         """
         self.validate_geometry().require_valid()
+
+    @staticmethod
+    def _require_valid_elements(elements: Sequence[Bar], label: str) -> None:
+        try:
+            retained = tuple(elements)
+        except TypeError as exc:
+            raise ValueError(f"{label} reinforcement must be a sequence") from exc
+        for index, element in enumerate(retained, start=1):
+            try:
+                values = (element.x, element.y, element.area)
+                if any(isinstance(value, (bool, np.bool_)) for value in values):
+                    raise ValueError("Boolean reinforcement value")
+                x, y, area = (float(value) for value in values)
+            except (AttributeError, TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    f"{label} {index} must have finite coordinates and a positive area"
+                ) from exc
+            if not math.isfinite(x) or not math.isfinite(y):
+                raise ValueError(f"{label} {index} coordinates must be finite")
+            if not math.isfinite(area) or area <= 0.0:
+                raise ValueError(f"{label} {index} area must be positive and finite")
+
+    def require_valid_reinforcement(self) -> None:
+        """Reject invalid bar/tendon geometry before a solver can consume it."""
+
+        self._require_valid_elements(self.bars, "bar")
+        self._require_valid_elements(self.tendons, "tendon")
+
+    def require_valid_analysis_inputs(self) -> None:
+        """Defensively recheck all mutable section data at solver entry."""
+
+        self.require_valid_geometry()
+        self.require_valid_reinforcement()
 
     def integration_rings(self) -> list[np.ndarray]:
         """Rings oriented for signed integration: outer CCW, holes CW.

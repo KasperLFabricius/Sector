@@ -66,3 +66,74 @@ def test_bar_arrays_shapes():
     x, y, a = sec.bar_arrays()
     assert x.shape == y.shape == a.shape == (2,)
     assert a[1] == pytest.approx(200.0 * MM2_TO_M2)
+
+
+@pytest.mark.parametrize("kind", ("bar", "tendon"))
+@pytest.mark.parametrize(
+    "point",
+    (
+        (float("nan"), 0.2, 100.0),
+        (0.1, float("inf"), 100.0),
+        (0.1, 0.2, 0.0),
+        (0.1, 0.2, -100.0),
+        (0.1, 0.2, float("nan")),
+        (0.1, 0.2, float("inf")),
+    ),
+)
+def test_section_rejects_invalid_bar_and_tendon_coordinates_or_area(
+    kind,
+    point,
+):
+    reinforcement = {
+        "bars_xy_area_mm2": [point],
+        "tendons_xy_area_mm2": [point],
+    }
+    selected = {kind + "s_xy_area_mm2": reinforcement[kind + "s_xy_area_mm2"]}
+
+    with pytest.raises(ValueError):
+        Section.from_polygon(
+            corners=[(0, 0), (1, 0), (1, 1), (0, 1)],
+            **selected,
+        )
+
+
+@pytest.mark.parametrize("kind", ("bar", "tendon"))
+@pytest.mark.parametrize(
+    "point",
+    (
+        (True, 0.2, 100.0),
+        (np.bool_(True), 0.2, 100.0),
+        (0.1, False, 100.0),
+        (0.1, 0.2, True),
+        (0.1, 0.2, np.bool_(True)),
+    ),
+)
+def test_section_factory_rejects_boolean_reinforcement_fields(kind, point):
+    selected = {kind + "s_xy_area_mm2": [point]}
+
+    with pytest.raises(ValueError, match="finite number"):
+        Section.from_polygon(
+            corners=[(0, 0), (1, 0), (1, 1), (0, 1)],
+            **selected,
+        )
+
+
+@pytest.mark.parametrize("kind", ("bar", "tendon"))
+@pytest.mark.parametrize(
+    "element",
+    (
+        Bar(True, 0.2, 100.0e-6),
+        Bar(np.bool_(True), 0.2, 100.0e-6),
+        Bar(0.1, False, 100.0e-6),
+        Bar(0.1, 0.2, True),
+        Bar(0.1, 0.2, np.bool_(True)),
+    ),
+)
+def test_direct_section_rejects_boolean_reinforcement_fields(kind, element):
+    reinforcement = {kind + "s": [element]}
+
+    with pytest.raises(ValueError, match="finite coordinates and a positive area"):
+        Section(
+            concrete=[np.array([(0, 0), (1, 0), (1, 1), (0, 1)])],
+            **reinforcement,
+        )

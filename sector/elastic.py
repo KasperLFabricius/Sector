@@ -42,11 +42,31 @@ from dataclasses import dataclass
 import numpy as np
 
 from .geometry import AreaMoments, area_moments, clip_halfplane
-from .section import Section
+from .section import Section, finite_action
 
 # Treat |value| below this (in the load-consistent stress*area sense) as zero
 # when deciding convergence of the resultant residual.
 _DEFAULT_TOL = 1.0e-9
+
+
+def _validated_element_array(
+    value: np.ndarray | None,
+    count: int,
+    label: str,
+) -> np.ndarray | None:
+    """Return one finite per-element vector with exact section cardinality."""
+
+    if value is None:
+        return None
+    try:
+        array = np.asarray(value, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must contain {count} finite values") from exc
+    if array.ndim != 1 or array.size != count:
+        raise ValueError(f"{label} must contain {count} values, got {array.size}")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{label} must contain only finite values")
+    return array
 
 
 @dataclass(frozen=True, slots=True)
@@ -513,16 +533,25 @@ def solve_elastic(
         Strain plane, per-bar stresses, the maximum concrete compression and
         its location, the neutral-axis intercepts, and convergence info.
     """
-    section.require_valid_geometry()
+    section.require_valid_analysis_inputs()
+    P = finite_action(P, "axial force P")
+    Mx = finite_action(Mx, "bending moment Mx")
+    My = finite_action(My, "bending moment My")
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
+    n_mult = _validated_element_array(
+        n_mult, len(ba), "modular-ratio multipliers"
+    )
+    prestress_stress = _validated_element_array(
+        prestress_stress, len(ba), "locked-in prestress stresses"
+    )
 
     # Target resultants in the tension-positive convention. A compressive P maps
     # to a negative axial resultant; the applied moments enter with the sign
     # that places the compression zone consistently with the moments. A locked-in
     # tendon prestress adds a constant resultant, so it is subtracted from the
     # target (the passive section then carries external load minus prestress).
-    target = np.array([-float(P), -float(Mx), -float(My)], dtype=float)
+    target = np.array([-P, -Mx, -My], dtype=float)
     target = target - _prestress_resultant(prestress_stress, bx, by, ba)
     u, converged, iterations, internal, matrix = _newton_solve(
         rings, bx, by, ba, target, n, displace_concrete, max_iter, tol, n_mult=n_mult
@@ -563,10 +592,19 @@ def solve_elastic_uncracked(
     the cracked solver); the ``(n - 1)`` displaced-concrete refinement is not
     applied, a sub-percent effect on the cracking load.
     """
-    section.require_valid_geometry()
+    section.require_valid_analysis_inputs()
+    P = finite_action(P, "axial force P")
+    Mx = finite_action(Mx, "bending moment Mx")
+    My = finite_action(My, "bending moment My")
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
-    target = np.array([-float(P), -float(Mx), -float(My)], dtype=float)
+    n_mult = _validated_element_array(
+        n_mult, len(ba), "modular-ratio multipliers"
+    )
+    prestress_stress = _validated_element_array(
+        prestress_stress, len(ba), "locked-in prestress stresses"
+    )
+    target = np.array([-P, -Mx, -My], dtype=float)
     target = target - _prestress_resultant(prestress_stress, bx, by, ba)
     _, J = _resultants_and_jacobian(
         rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False,
@@ -631,9 +669,12 @@ def transformed_properties(
     at ``n*A`` in both cases, or ``n*n_mult*A`` per bar when ``n_mult`` is given
     (e.g. ``Ep/Es`` for prestressing tendons folded into the bar set).
     """
-    section.require_valid_geometry()
+    section.require_valid_analysis_inputs()
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
+    n_mult = _validated_element_array(
+        n_mult, len(ba), "modular-ratio multipliers"
+    )
     cm = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     for ring in rings:
         active = clip_halfplane(ring, -kx, -ky, -eps0) if cracked else ring
@@ -743,13 +784,25 @@ def solve_elastic_combined(
     added to the reported tendon stresses. Being locked-in, it does not creep, so
     it is kept out of the ``s2`` neutralising step.
     """
-    section.require_valid_geometry()
+    section.require_valid_analysis_inputs()
+    P_long = finite_action(P_long, "sustained axial force P")
+    Mx_long = finite_action(Mx_long, "sustained bending moment Mx")
+    My_long = finite_action(My_long, "sustained bending moment My")
+    P_short = finite_action(P_short, "short-term axial-force increment")
+    Mx_short = finite_action(Mx_short, "short-term Mx increment")
+    My_short = finite_action(My_short, "short-term My increment")
     rings = section.integration_rings()
     bx, by, ba = section.bar_arrays()
+    n_mult = _validated_element_array(
+        n_mult, len(ba), "modular-ratio multipliers"
+    )
+    prestress_stress = _validated_element_array(
+        prestress_stress, len(ba), "locked-in prestress stresses"
+    )
     pre = _prestress_resultant(prestress_stress, bx, by, ba)   # constant tendon force
 
     # 1. Long-term state at nl (passive bar stresses; prestress applied via target).
-    t_long = np.array([-float(P_long), -float(Mx_long), -float(My_long)]) - pre
+    t_long = np.array([-P_long, -Mx_long, -My_long]) - pre
     u_long, c1, i1, int_long, matrix_long = _newton_solve(
         rings,
         bx,
@@ -782,9 +835,9 @@ def solve_elastic_combined(
 
     # 3. Instantaneous state: combined load minus the neutralising force, at ns.
     t_comb = np.array(
-        [-(float(P_long) + float(P_short)),
-         -(float(Mx_long) + float(Mx_short)),
-         -(float(My_long) + float(My_short))]
+        [-(P_long + P_short),
+         -(Mx_long + Mx_short),
+         -(My_long + My_short)]
     ) - pre
     instantaneous_target = t_comb - neu
     u_st, c2, i2, int_st, matrix_st = _newton_solve(
