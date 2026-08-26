@@ -14,6 +14,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 
 import load_cases
+import numpy as np
 from deferred_import import deferred_module
 
 from app.engineer_messages import EngineerValidationError
@@ -330,7 +331,7 @@ def plastic_sweep_error(inp: Mapping) -> EngineerMessage | None:
         inp.get("v_inc", 15.0),
     )
     try:
-        if any(isinstance(value, bool) for value in raw_values):
+        if any(isinstance(value, (bool, np.bool_)) for value in raw_values):
             raise ValueError("Boolean sweep value")
         v_min, v_max, v_inc = (float(value) for value in raw_values)
     except (TypeError, ValueError, OverflowError):

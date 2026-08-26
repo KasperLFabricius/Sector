@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -332,6 +333,12 @@ def test_rejects_names_duplicated_across_solver_tables():
             "PLASTIC-SWEEP-BOUNDS",
             "Set the neutral-axis sweep end angle equal to or greater than the "
             "start angle",
+        ),
+        (
+            {"v_min": np.bool_(True), "v_max": 100.0, "v_inc": 30.0},
+            "PLASTIC-SWEEP-VALUES",
+            "Enter finite start, end and increment values for the neutral-axis "
+            "sweep",
         ),
         (
             {"v_min": 0.0, "v_max": 100.0, "v_inc": 0.0},

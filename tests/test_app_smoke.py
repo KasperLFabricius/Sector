@@ -16,6 +16,7 @@ import sys
 import time
 import types
 
+import numpy as np
 import pytest
 
 from streamlit.testing.v1 import AppTest
@@ -1372,6 +1373,40 @@ def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
     assert caught.value.engineer_message.text == (
         "Increase the neutral-axis sweep maximum increment; the requested sweep "
         "is too fine to calculate reliably"
+    )
+
+
+def test_run_analysis_rejects_numpy_boolean_sweep_before_any_work(monkeypatch):
+    import sector_app
+
+    reached = []
+
+    def forbidden(*_args, **_kwargs):
+        reached.append(True)
+        raise AssertionError("Boolean sweep reached shared or solver work")
+
+    for name in (
+        "_section_and_material_results",
+        "_elastic_solver_inputs",
+        "_warm_solver",
+        "_run_single_analysis",
+    ):
+        monkeypatch.setattr(sector_app, name, forbidden)
+
+    with pytest.raises(
+        sector_app.engineer_messages.EngineerValidationError
+    ) as caught:
+        sector_app.run_analysis({
+            "mode": "Plastic",
+            "v_min": np.bool_(True),
+            "v_max": 360.0,
+            "v_inc": 15.0,
+        })
+
+    assert reached == []
+    assert caught.value.engineer_message.code == "PLASTIC-SWEEP-VALUES"
+    assert caught.value.engineer_message.text == (
+        "Enter finite start, end and increment values for the neutral-axis sweep"
     )
 
 
