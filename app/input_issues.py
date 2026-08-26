@@ -137,6 +137,31 @@ def _resolved(
 
 
 def _case_target(message: EngineerMessage) -> InputTarget:
+    if message.code == "PLASTIC-SWEEP-BOUNDS":
+        return InputTarget(
+            ANALYSIS_SETTINGS,
+            "v_max",
+            "Neutral-axis sweep end angle",
+        )
+    if message.code == "PLASTIC-SWEEP-SPAN":
+        return InputTarget(
+            ANALYSIS_SETTINGS,
+            widget_label="Neutral-axis sweep start and end angles",
+        )
+    if message.code in {
+        "PLASTIC-SWEEP-INCREMENT",
+        "PLASTIC-SWEEP-RESOLUTION",
+    }:
+        return InputTarget(
+            ANALYSIS_SETTINGS,
+            "v_inc",
+            "Neutral-axis sweep maximum increment",
+        )
+    if message.code == "PLASTIC-SWEEP-VALUES":
+        return InputTarget(
+            ANALYSIS_SETTINGS,
+            widget_label="Neutral-axis sweep",
+        )
     if message.code.startswith("PLASTIC-"):
         return InputTarget(
             LOADS,

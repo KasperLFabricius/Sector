@@ -10,21 +10,47 @@ unit-testable.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 
 import load_cases
+import numpy as np
 from deferred_import import deferred_module
 
 from app.engineer_messages import EngineerValidationError
 from sector.engineer_message import EngineerMessage
 
 sls_core = deferred_module("sector.sls")
+plastic_core = deferred_module("sector.plastic")
 
 _PLASTIC_RESULT_KEYS = (
     "plastic", "shear", "torsion", "combined", "minimum_reinforcement",
     "transverse_reinforcement",
 )
 _ELASTIC_RESULT_KEYS = ("elastic",)
+
+_PLASTIC_SWEEP_VALUES = EngineerMessage(
+    "PLASTIC-SWEEP-VALUES",
+    "Enter finite start, end and increment values for the neutral-axis sweep",
+)
+_PLASTIC_SWEEP_BOUNDS = EngineerMessage(
+    "PLASTIC-SWEEP-BOUNDS",
+    "Set the neutral-axis sweep end angle equal to or greater than the start angle",
+)
+_PLASTIC_SWEEP_INCREMENT = EngineerMessage(
+    "PLASTIC-SWEEP-INCREMENT",
+    "Enter a positive maximum increment for the neutral-axis sweep",
+)
+_PLASTIC_SWEEP_RESOLUTION = EngineerMessage(
+    "PLASTIC-SWEEP-RESOLUTION",
+    "Increase the neutral-axis sweep maximum increment; the requested sweep is "
+    "too fine to calculate reliably",
+)
+_PLASTIC_SWEEP_SPAN = EngineerMessage(
+    "PLASTIC-SWEEP-SPAN",
+    "Correct the neutral-axis sweep start and end angles; their separation is "
+    "too large to calculate reliably",
+)
 
 
 def _case_record(row: Mapping, key: str) -> dict:
@@ -293,6 +319,38 @@ def _primary_results(entries: Sequence[Mapping], keys: Sequence[str]) -> dict:
     return {key: result[key] for key in keys if key in result}
 
 
+def plastic_sweep_error(inp: Mapping) -> EngineerMessage | None:
+    """Return one authored sweep error before any shared or solver work."""
+
+    mode = str(inp.get("mode") or "")
+    if mode not in {"Plastic", "Both"}:
+        return None
+    raw_values = (
+        inp.get("v_min", 0.0),
+        inp.get("v_max", 360.0),
+        inp.get("v_inc", 15.0),
+    )
+    try:
+        if any(isinstance(value, (bool, np.bool_)) for value in raw_values):
+            raise ValueError("Boolean sweep value")
+        v_min, v_max, v_inc = (float(value) for value in raw_values)
+    except (TypeError, ValueError, OverflowError):
+        return _PLASTIC_SWEEP_VALUES
+    if not all(math.isfinite(value) for value in (v_min, v_max, v_inc)):
+        return _PLASTIC_SWEEP_VALUES
+    if v_max < v_min:
+        return _PLASTIC_SWEEP_BOUNDS
+    if v_inc <= 0.0:
+        return _PLASTIC_SWEEP_INCREMENT
+    try:
+        plastic_core.plastic_sweep_angles(v_min, v_max, v_inc)
+    except plastic_core.PlasticSweepSpanError:
+        return _PLASTIC_SWEEP_SPAN
+    except plastic_core.PlasticSweepResolutionError:
+        return _PLASTIC_SWEEP_RESOLUTION
+    return None
+
+
 def validation_errors(inp: Mapping) -> list[EngineerMessage]:
     """Return table/name errors for the analyses enabled in ``inp``."""
     mode = str(inp.get("mode") or "")
@@ -305,12 +363,17 @@ def validation_errors(inp: Mapping) -> list[EngineerMessage]:
         or bool(inp.get("transverse_detailing_on"))
     )
     elastic_required = mode in {"Elastic", "Both"}
-    return load_cases.validation_errors(
+    errors: list[EngineerMessage] = []
+    sweep_error = plastic_sweep_error(inp)
+    if sweep_error is not None:
+        errors.append(sweep_error)
+    errors.extend(load_cases.validation_errors(
         inp.get("plastic_cases"),
         inp.get("elastic_cases"),
         require_plastic=plastic_required,
         require_elastic=elastic_required,
-    )
+    ))
+    return errors
 
 
 def run_case_tables(

@@ -20,9 +20,14 @@ import pytest
 from sector import PlasticPoint
 from sector.materials import Concrete, MildSteel
 from sector.plastic import (
+    PLASTIC_SWEEP_MAX_POINTS,
+    PlasticSweepResolutionError,
+    PlasticSweepSpanError,
     _band_stresses,
     _governing_curvature,
     plastic_capacity_at_angle,
+    plastic_sweep_angles,
+    plastic_sweep_is_full_turn,
     solve_plastic,
 )
 from sector.section import Bar, Section
@@ -305,6 +310,158 @@ def test_solve_plastic_sweep_returns_all_angles():
     assert [p.V for p in pts] == [0.0, 90.0, 180.0, 270.0, 360.0]
     # 0 and 360 degrees are the same state.
     assert pts[0].Mx == pytest.approx(pts[4].Mx, abs=1e-6)
+
+
+def test_plastic_sweep_uses_inclusive_endpoint_maximum_increment_contract():
+    angles = plastic_sweep_angles(0.0, 100.0, 30.0)
+
+    assert angles == (0.0, 25.0, 50.0, 75.0, 100.0)
+    section, concrete, steel = fundamentsbjaelke()
+    points = solve_plastic(section, concrete, steel, 0.0, 0.0, 100.0, 30.0)
+    assert tuple(point.V for point in points) == angles
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "maximum_step", "expected"),
+    (
+        (12.0, 12.0, 30.0, (12.0,)),
+        (0.0, 360.0, 90.0, (0.0, 90.0, 180.0, 270.0, 360.0)),
+        (0.1, 0.3, 0.1, (0.1, 0.2, 0.3)),
+    ),
+)
+def test_plastic_sweep_zero_span_wrap_and_decimal_boundaries(
+    start,
+    end,
+    maximum_step,
+    expected,
+):
+    angles = plastic_sweep_angles(start, end, maximum_step)
+
+    assert angles == pytest.approx(expected)
+    assert angles[0] == start
+    assert angles[-1] == end
+    assert all(
+        angles[index + 1] - angles[index] <= maximum_step
+        for index in range(len(angles) - 1)
+    )
+
+
+@pytest.mark.parametrize(
+    ("maximum_step", "expected_intervals"),
+    (
+        (math.nextafter(1.0 / 3.0, math.inf), 3),
+        (math.nextafter(1.0 / 3.0, 0.0), 4),
+    ),
+)
+def test_plastic_sweep_respects_adjacent_floating_increment_boundaries(
+    maximum_step,
+    expected_intervals,
+):
+    angles = plastic_sweep_angles(0.0, 1.0, maximum_step)
+
+    assert len(angles) == expected_intervals + 1
+    assert angles[0] == 0.0
+    assert angles[-1] == 1.0
+    assert max(
+        angles[index + 1] - angles[index]
+        for index in range(len(angles) - 1)
+    ) <= maximum_step
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    (
+        (0.0, 360.0, True),
+        (10.0, 370.0, True),
+        (0.0, math.nextafter(360.0, 0.0), False),
+        (0.0, 359.9999995, False),
+        (math.nextafter(0.0, math.inf), 360.0, False),
+    ),
+)
+def test_plastic_sweep_full_turn_requires_exact_represented_span(
+    start,
+    end,
+    expected,
+):
+    assert plastic_sweep_is_full_turn(start, end) is expected
+
+
+def test_plastic_sweep_point_count_boundary_is_bounded_and_inclusive():
+    reference_angles = plastic_sweep_angles(0.0, 360.0, 0.1)
+    assert len(reference_angles) <= PLASTIC_SWEEP_MAX_POINTS
+    assert reference_angles[0] == 0.0
+    assert reference_angles[-1] == 360.0
+    assert all(
+        left < right and right - left <= 0.1
+        for left, right in zip(reference_angles, reference_angles[1:])
+    )
+
+    end = float(PLASTIC_SWEEP_MAX_POINTS - 1)
+    maximum_step = 1.0
+
+    angles = plastic_sweep_angles(0.0, end, maximum_step)
+
+    assert len(angles) == PLASTIC_SWEEP_MAX_POINTS
+    assert angles[0] == 0.0
+    assert angles[-1] == end
+    assert all(
+        left < right and right - left <= maximum_step
+        for left, right in zip(angles, angles[1:])
+    )
+
+
+def test_plastic_sweep_rejects_unbounded_and_unrepresentable_requests():
+    with pytest.raises(PlasticSweepResolutionError, match="too many angles"):
+        plastic_sweep_angles(0.0, 1.0, 1e-20)
+
+    with pytest.raises(PlasticSweepResolutionError, match="not distinct"):
+        plastic_sweep_angles(1e16, 1e16 + 2.0, 1.0)
+
+    with pytest.raises(PlasticSweepSpanError, match="represented safely"):
+        plastic_sweep_angles(-1e308, 1e308, 1.0)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "maximum_step", "message"),
+    (
+        (100.0, 0.0, 30.0, "greater than or equal"),
+        (0.0, 100.0, 0.0, "increment must be positive"),
+        (0.0, 100.0, -1.0, "increment must be positive"),
+        (0.0, 1.0, 1e-20, "too many angles"),
+        (1e16, 1e16 + 2.0, 1.0, "not distinct"),
+        (0.0, 1e308, 1e-308, "too small for the span"),
+        (-1e308, 1e308, 1.0, "cannot be represented safely"),
+    ),
+)
+def test_invalid_plastic_sweep_is_rejected_before_section_preparation(
+    monkeypatch,
+    start,
+    end,
+    maximum_step,
+    message,
+):
+    import sector.plastic as plastic_core
+
+    section, concrete, steel = fundamentsbjaelke()
+    calls = []
+
+    def forbidden_preparation(*_args, **_kwargs):
+        calls.append(True)
+        raise AssertionError("invalid sweep reached section preparation")
+
+    monkeypatch.setattr(plastic_core, "_prep_section", forbidden_preparation)
+
+    with pytest.raises(ValueError, match=message):
+        solve_plastic(
+            section,
+            concrete,
+            steel,
+            0.0,
+            start,
+            end,
+            maximum_step,
+        )
+    assert calls == []
 
 
 def test_slab_matches_eurocode_rectangular_block():

@@ -42,6 +42,7 @@ from sector import (
     geometry,
     heightened_crack_control,
     material_presets,
+    plastic,
 )
 from sector.build_info import source_revision
 from sector.engineer_message import EngineerMessage
@@ -104,6 +105,16 @@ _PROJECT_DAMAGED = EngineerMessage(
 _PROJECT_INVALID_INPUT = EngineerMessage(
     "PROJECT-INVALID-INPUT",
     "the project file contains an invalid input value",
+)
+_PROJECT_SWEEP_RESOLUTION = EngineerMessage(
+    "PROJECT-SWEEP-RESOLUTION",
+    "increase the neutral-axis sweep maximum increment; the requested sweep is "
+    "too fine to calculate reliably",
+)
+_PROJECT_SWEEP_SPAN = EngineerMessage(
+    "PROJECT-SWEEP-SPAN",
+    "correct the neutral-axis sweep start and end angles; their separation is "
+    "too large to calculate reliably",
 )
 _PROJECT_CHANGED = EngineerMessage(
     "PROJECT-CHANGED",
@@ -1062,6 +1073,24 @@ def _canonical_scalars(
     migrate_gamma_v: bool = False,
 ) -> dict:
     payload = _validated_scalar_payload(scalars)
+    try:
+        plastic.plastic_sweep_angles(
+            payload.get("v_min", 0.0),
+            payload.get("v_max", 360.0),
+            payload.get("v_inc", 15.0),
+        )
+    except plastic.PlasticSweepSpanError as exc:
+        raise ProjectInputError(
+            f"invalid neutral-axis sweep span: {exc}",
+            engineer_message=_PROJECT_SWEEP_SPAN,
+        ) from exc
+    except plastic.PlasticSweepResolutionError as exc:
+        raise ProjectInputError(
+            f"invalid neutral-axis sweep resolution: {exc}",
+            engineer_message=_PROJECT_SWEEP_RESOLUTION,
+        ) from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise _invalid_input(f"invalid neutral-axis sweep: {exc}") from exc
     _validate_material_aliases(payload)
     for key in ("shear_links", "torsion_nu_v"):
         if key not in payload:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -321,6 +322,80 @@ def test_rejects_names_duplicated_across_solver_tables():
     assert caught.value.engineer_message.code == "CASE-NAME-UNIQUE"
     assert caught.value.engineer_message.text == (
         "Use a unique name for every Plastic and Elastic case"
+    )
+
+
+@pytest.mark.parametrize(
+    ("updates", "code", "text"),
+    (
+        (
+            {"v_min": 100.0, "v_max": 0.0, "v_inc": 30.0},
+            "PLASTIC-SWEEP-BOUNDS",
+            "Set the neutral-axis sweep end angle equal to or greater than the "
+            "start angle",
+        ),
+        (
+            {"v_min": np.bool_(True), "v_max": 100.0, "v_inc": 30.0},
+            "PLASTIC-SWEEP-VALUES",
+            "Enter finite start, end and increment values for the neutral-axis "
+            "sweep",
+        ),
+        (
+            {"v_min": 0.0, "v_max": 100.0, "v_inc": 0.0},
+            "PLASTIC-SWEEP-INCREMENT",
+            "Enter a positive maximum increment for the neutral-axis sweep",
+        ),
+        (
+            {"v_min": 0.0, "v_max": 1.0, "v_inc": 1e-20},
+            "PLASTIC-SWEEP-RESOLUTION",
+            "Increase the neutral-axis sweep maximum increment; the requested "
+            "sweep is too fine to calculate reliably",
+        ),
+        (
+            {"v_min": 1e16, "v_max": 1e16 + 2.0, "v_inc": 1.0},
+            "PLASTIC-SWEEP-RESOLUTION",
+            "Increase the neutral-axis sweep maximum increment; the requested "
+            "sweep is too fine to calculate reliably",
+        ),
+        (
+            {"v_min": 0.0, "v_max": 1e308, "v_inc": 1e-308},
+            "PLASTIC-SWEEP-RESOLUTION",
+            "Increase the neutral-axis sweep maximum increment; the requested "
+            "sweep is too fine to calculate reliably",
+        ),
+        (
+            {"v_min": -1e308, "v_max": 1e308, "v_inc": 1.0},
+            "PLASTIC-SWEEP-SPAN",
+            "Correct the neutral-axis sweep start and end angles; their separation "
+            "is too large to calculate reliably",
+        ),
+    ),
+)
+def test_invalid_plastic_sweep_blocks_case_runner_with_authored_guidance(
+    updates,
+    code,
+    text,
+):
+    inp = _base(**updates)
+    calls = []
+
+    with pytest.raises(case_analysis.EngineerValidationError) as caught:
+        case_analysis.run_case_tables(
+            inp,
+            lambda *_args, **_kwargs: calls.append(True),
+        )
+
+    assert calls == []
+    assert caught.value.engineer_message.code == code
+    assert caught.value.engineer_message.text == text
+
+
+def test_zero_span_plastic_sweep_remains_valid_for_case_orchestration():
+    inp = _base(v_min=45.0, v_max=45.0, v_inc=30.0)
+
+    assert not any(
+        error.code.startswith("PLASTIC-SWEEP")
+        for error in case_analysis.validation_errors(inp)
     )
 
 

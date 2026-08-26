@@ -5440,11 +5440,12 @@ def build_inputs(host=st):
         help="Last neutral-axis rotation angle of the plastic sweep.",
     )
     v_inc = _seeded_number(
-        aset, r"Increment $\Delta\varphi_{NA}$ ($^\circ$)",
+        aset, r"Maximum increment $\Delta\varphi_{NA}$ ($^\circ$)",
         1.0, 90.0, 15.0, 1.0,
         "v_inc", disabled=not plastic_on,
-        help="Angular step between swept neutral-axis angles; "
-             "a finer step gives a smoother M-M envelope.",
+        help="Equal spacing includes both sweep limits, so the actual angular "
+             "increment may be smaller. A smaller maximum increment gives a "
+             "smoother M-M envelope.",
     )
     check_util = _seeded_checkbox(
         aset, "Check utilisation against applied moment", True, "pl_check_util",
@@ -7296,19 +7297,9 @@ def _input_workspace() -> None:
 # ---------------------------------------------------------------------------
 
 def _sweep(v_min, v_max, v_inc):
-    """Normalise a (min, max, increment) sweep so it lands exactly on both ends.
+    """Use the core inclusive-endpoint/max-increment sweep contract."""
 
-    The solver steps ``v_min + i*inc`` for a step count, which could overshoot or
-    miss ``v_max`` when the increment does not divide the span. ``v_inc`` is a
-    *maximum* increment: a ceiling interval count keeps the step at or below the
-    requested resolution while landing exactly on ``v_max`` (no angle outside
-    [v_min, v_max]).
-    """
-    span = max(v_max, v_min) - v_min   # >= 0 (guards a reversed range)
-    if span < 1e-9 or v_inc <= 0.0:
-        return v_min, v_min, max(v_inc, 1.0)   # a single angle
-    n = max(1, math.ceil(span / v_inc))
-    return v_min, v_min + span, span / n
+    return plastic_core.plastic_sweep_angles(v_min, v_max, v_inc)
 
 
 def _props_dict(p):
@@ -7857,19 +7848,20 @@ def _run_single_analysis(
         out["plastic"] = reuse_plastic
     elif inp["mode"] in ("Plastic", "Both"):
         _warm_solver()
-        vlo, vhi, vstep = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
+        sweep_angles = _sweep(inp["v_min"], inp["v_max"], inp["v_inc"])
+        vlo, vhi = sweep_angles[0], sweep_angles[-1]
         # A full 360 deg turn returns to the start, so the last angle (v_max) repeats
         # the first (v_min) exactly. Sweep only up to the angle before it -- the
         # envelope closes itself -- so that duplicate point is neither computed nor
         # reported. The closed-envelope flag still reflects the full turn.
-        closed = (vhi - vlo) >= 360.0 - 1e-6
-        sweep_hi = vhi - vstep if closed else vhi
+        closed = plastic_core.plastic_sweep_is_full_turn(vlo, vhi)
+        sweep_hi = sweep_angles[-2] if closed else vhi
         # Prestress enters the analysis only when the section actually has tendons.
         pre = inp["prestress"] if inp["tendons"] else None
         # The user enters N tension-positive; the solver is compression-positive, so
         # negate at the boundary (the engine and its verification are unchanged).
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
-                            -inp["P_pl"], vlo, sweep_hi, vstep, prestress=pre,
+                            -inp["P_pl"], vlo, sweep_hi, inp["v_inc"], prestress=pre,
                             bar_materials=inp.get("bar_materials"),
                             tendon_materials=inp.get("tendon_materials"))
         mx = [p.Mx for p in pts]
@@ -8606,6 +8598,9 @@ def run_analysis(
     reuse_fatigue=None,
 ):
     """Run every current named action and enabled calculation."""
+    sweep_error = case_analysis.plastic_sweep_error(inp)
+    if sweep_error is not None:
+        raise engineer_messages.EngineerValidationError(sweep_error)
     heightened_errors = _heightened_crack_control_validation_errors(inp)
     if heightened_errors:
         raise engineer_messages.EngineerValidationError(heightened_errors[0])
