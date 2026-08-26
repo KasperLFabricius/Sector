@@ -2294,6 +2294,8 @@ def test_report_profiles_publish_core_m02_refinement_evidence(profile):
             "nominal_solution": {
                 "resolution_state": "RESOLVED",
                 "governing_increment_deg": 0.1,
+                "governing_target_increment_deg": 0.1,
+                "governing_interval_deg": 0.083,
                 "accepted_point_count": 65,
                 "all_points_converged": True,
                 "utilisation_lower_bound": 1.00056,
@@ -2345,7 +2347,7 @@ def test_report_profiles_publish_core_m02_refinement_evidence(profile):
     assert "100.1 %" in text
     assert "governing utilisation" in text
     assert "Angular resolution: initial 15° envelope" in text
-    assert "governing interval refined to no more than 0.100°" in text
+    assert "achieved governing interval 0.083° for the 0.100° target" in text
     assert "65 angles retained; all retained angles converged; assessment resolved" in text
     assert "utilisation interval 100.0560 to 100.0620 %" in text
 
@@ -2381,6 +2383,8 @@ def test_report_maps_unresolved_core_m02_result_to_engineering_guidance():
             "nominal_solution": {
                 "resolution_state": "UNRESOLVED",
                 "governing_increment_deg": 0.01,
+                "governing_target_increment_deg": 0.01,
+                "governing_interval_deg": 0.0095,
                 "accepted_point_count": 83,
                 "all_points_converged": True,
                 "utilisation_lower_bound": 0.9999995,
@@ -2427,7 +2431,7 @@ def test_report_maps_unresolved_core_m02_result_to_engineering_guidance():
 
     assert "NOT ASSESSED - The nominal resistance is too close" in text
     assert "assess this case separately" in text
-    assert "governing interval refined to no more than 0.010°" in text
+    assert "achieved governing interval 0.009° for the 0.010° target" in text
     assert "utilisation interval 99.9999 to 100.0002 %" in text
     assert "separate assessment required" in text
     assert "available angular resolution" not in text

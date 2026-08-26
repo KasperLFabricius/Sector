@@ -7829,6 +7829,15 @@ def test_core_m02_real_app_calculation_retains_refinement_evidence():
         stage["target_increment_deg"]
         for stage in solution["refinement_history"]
     ] == [15.0, 1.0, 0.1]
+    assert all(
+        stage["resolution_achieved"]
+        and stage["governing_interval_deg"]
+        <= stage["target_increment_deg"] + 1.0e-12
+        for stage in solution["refinement_history"]
+    )
+    achieved = solution["governing_interval_deg"]
+    target = solution["governing_target_increment_deg"]
+    assert achieved <= target + 1.0e-12
     assert solution["utilisation_lower_bound"] is not None
     assert solution["utilisation_upper_bound"] is not None
     if minimum["status"] == "PASS":
@@ -7839,7 +7848,8 @@ def test_core_m02_real_app_calculation_retains_refinement_evidence():
     _select_view(at, "Detailing")
     captions = [str(item.value) for item in at.caption]
     assert any(
-        "governing interval refined to no more than 0.1°" in value
+        f"achieved governing interval {achieved:g}° for the {target:g}° target"
+        in value
         for value in captions
     )
     assert any(
@@ -7872,6 +7882,8 @@ def test_core_m02_review_case_renders_refined_engineering_verdict():
                 "nominal_solution": {
                     "resolution_state": "RESOLVED",
                     "governing_increment_deg": 0.1,
+                    "governing_target_increment_deg": 0.1,
+                    "governing_interval_deg": 0.083,
                     "accepted_point_count": 65,
                     "all_points_converged": True,
                     "utilisation_lower_bound": 1.00056,
@@ -7893,6 +7905,7 @@ def test_core_m02_review_case_renders_refined_engineering_verdict():
     assert check["utilisation"] == pytest.approx(1.0005909664448163, rel=2.0e-6)
     assert solution["resolution_state"] == "RESOLVED"
     assert solution["governing_increment_deg"] == pytest.approx(0.1)
+    assert solution["governing_interval_deg"] == pytest.approx(0.083)
 
     visible_errors = [str(item.value) for item in at.error]
     visible_captions = [str(item.value) for item in at.caption]
@@ -7901,7 +7914,7 @@ def test_core_m02_review_case_renders_refined_engineering_verdict():
         for value in visible_errors
     )
     assert any(
-        "Nominal envelope: governing interval refined to no more than 0.1°"
+        "Nominal envelope: achieved governing interval 0.083° for the 0.1° target"
         in value
         and "assessment resolved" in value
         for value in visible_captions
@@ -7949,6 +7962,8 @@ def test_core_m02_unresolved_case_renders_not_assessed_guidance():
                 "nominal_solution": {
                     "resolution_state": "UNRESOLVED",
                     "governing_increment_deg": 0.01,
+                    "governing_target_increment_deg": 0.01,
+                    "governing_interval_deg": 0.0095,
                     "accepted_point_count": 83,
                     "all_points_converged": True,
                     "utilisation_lower_bound": 0.9999995,
@@ -7974,7 +7989,7 @@ def test_core_m02_unresolved_case_renders_not_assessed_guidance():
         for value in visible_warnings
     )
     assert any(
-        "governing interval refined to no more than 0.01°" in value
+        "achieved governing interval 0.0095° for the 0.01° target" in value
         and "separate assessment required" in value
         for value in visible_captions
     )
@@ -7989,6 +8004,64 @@ def test_core_m02_unresolved_case_renders_not_assessed_guidance():
         + visible_captions
     )
     assert "available angular resolution" not in visible
+    assert not at.exception
+
+
+def test_core_m02_moved_direction_failure_renders_fail_closed_guidance():
+    reason = "nominal governing interval could not be refined consistently"
+    minimum = {
+        "status": "NOT ASSESSED",
+        "reason": reason,
+        "edition": "DS/EN 1992-1-1:2023",
+        "clause": "12.2(2)(a), Formula (12.1)",
+        "member_type": "Beam",
+        "cut_direction": "Transverse cut",
+        "checks": [{
+            "type": "bending with axial force",
+            "status": "NOT ASSESSED",
+            "utilisation": None,
+            "m_cr_knm": 800.0,
+            "mr_nom_knm": None,
+            "reason": reason,
+            "model": "biaxial refined nominal envelope",
+            "nominal_solution": {
+                "resolution_state": "UNRESOLVED",
+                "governing_increment_deg": 1.0,
+                "governing_target_increment_deg": 1.0,
+                "governing_interval_deg": 15.0,
+                "accepted_point_count": 24,
+                "all_points_converged": True,
+                "utilisation_lower_bound": None,
+                "utilisation_upper_bound": None,
+            },
+        }],
+        "limitations": [],
+    }
+    at = AppTest.from_function(
+        _render_core_m02_detailing,
+        args=(minimum,),
+        default_timeout=90,
+    ).run()
+
+    assert any(
+        str(item.value) == (
+            "NOT ASSESSED - The governing nominal resistance direction could not "
+            "be refined consistently; assess this case separately"
+        )
+        for item in at.warning
+    )
+    assert any(
+        "achieved governing interval 15° for the 1° target" in str(item.value)
+        and "separate assessment required" in str(item.value)
+        for item in at.caption
+    )
+    visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "4097" not in visible
+    assert "refinement_window_count" not in visible
     assert not at.exception
 
 

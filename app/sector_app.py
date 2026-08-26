@@ -10164,22 +10164,30 @@ def detailing_view(inp, results, *, global_results=None):
                 if check.get("nominal_solution")
             ), None)
             if nominal_solution:
-                increment = nominal_solution.get("governing_increment_deg")
+                target = nominal_solution.get("governing_target_increment_deg")
+                if "governing_target_increment_deg" not in nominal_solution:
+                    target = nominal_solution.get("governing_increment_deg")
+                achieved = nominal_solution.get("governing_interval_deg")
                 retained = nominal_solution.get("accepted_point_count")
                 resolution = str(
                     nominal_solution.get("resolution_state") or ""
                 ).upper()
-                if increment is not None and retained is not None:
+                if achieved is not None and retained is not None:
                     outcome = (
                         "assessment resolved"
                         if resolution == "RESOLVED"
                         else "separate assessment required"
                     )
                     st.caption(
-                        "Nominal envelope: governing interval refined to "
-                        f"no more than {float(increment):g}°; "
-                        f"{int(retained)} angles retained; "
-                        f"{outcome}."
+                        "Nominal envelope: achieved governing interval "
+                        f"{float(achieved):g}°"
+                        + (
+                            f" for the {float(target):g}° target; "
+                            if target is not None
+                            else "; "
+                        )
+                        + f"{int(retained)} angles retained; "
+                        + f"{outcome}."
                     )
                     lower = nominal_solution.get("utilisation_lower_bound")
                     upper = nominal_solution.get("utilisation_upper_bound")

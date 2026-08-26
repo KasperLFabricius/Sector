@@ -76,6 +76,8 @@ _NOMINAL_INITIAL_INCREMENT_DEG = 15.0
 _NOMINAL_REFINEMENT_INCREMENTS_DEG = (1.0, 0.1, 0.01)
 _NOMINAL_ERROR_FACTOR = 2.0
 _NOMINAL_MIN_UTILISATION_ERROR = 1.0e-6
+_NOMINAL_INTERVAL_TOLERANCE_DEG = 1.0e-12
+_NOMINAL_MAX_REFINEMENT_WINDOWS_PER_STAGE = 32
 
 
 def _status(statuses: Sequence[str]) -> str:
@@ -633,8 +635,30 @@ def _nominal_governing_interval(points, governing_index: int | None) -> float | 
     return max(current - previous, following - current)
 
 
+def _nominal_interval_achieved(
+    interval_deg: float | None,
+    target_increment_deg: float,
+) -> bool:
+    """Return whether the represented governing interval meets one stage target."""
+
+    if interval_deg is None:
+        return False
+    interval = float(interval_deg)
+    target = float(target_increment_deg)
+    if not math.isfinite(interval) or not math.isfinite(target) or target <= 0.0:
+        return False
+    tolerance = max(
+        _NOMINAL_INTERVAL_TOLERANCE_DEG,
+        16.0 * math.ulp(target),
+    )
+    return interval <= target + tolerance
+
+
 def _nominal_refinement_stage(points, radial, increment_deg: float) -> dict:
     utilisation = radial.utilisation if radial.valid else None
+    governing_interval = _nominal_governing_interval(
+        points, radial.governing_index
+    )
     return {
         "target_increment_deg": float(increment_deg),
         "accepted_point_count": len(points),
@@ -649,8 +673,9 @@ def _nominal_refinement_stage(points, radial, increment_deg: float) -> dict:
         "governing_angle_deg": _nominal_governing_angle(
             points, radial.governing_index
         ),
-        "governing_interval_deg": _nominal_governing_interval(
-            points, radial.governing_index
+        "governing_interval_deg": governing_interval,
+        "resolution_achieved": _nominal_interval_achieved(
+            governing_interval, increment_deg
         ),
     }
 
@@ -692,6 +717,97 @@ def _refine_nominal_governing_window(
     return _merge_nominal_points(points, refined)
 
 
+def _resolve_nominal_refinement_stage(
+    section: Section,
+    concrete,
+    reference: MildSteel,
+    characteristic: Sequence[MildSteel],
+    p_comp: float,
+    points,
+    radial,
+    mx: float,
+    my: float,
+    increment_deg: float,
+) -> tuple[list, object, dict, str | None, str | None]:
+    """Follow a moving governing chord until one stage resolution is achieved."""
+
+    combined = _module("combined")
+    point_limit = int(_module("plastic").PLASTIC_SWEEP_MAX_POINTS)
+    prior_point_count = len(points)
+    stage = _nominal_refinement_stage(points, radial, increment_deg)
+    for window_count in range(1, _NOMINAL_MAX_REFINEMENT_WINDOWS_PER_STAGE + 1):
+        points = _refine_nominal_governing_window(
+            section,
+            concrete,
+            reference,
+            characteristic,
+            p_comp,
+            points,
+            radial.governing_index,
+            increment_deg,
+        )
+        radial = combined.radial_util_result(
+            [point.Mx for point in points],
+            [point.My for point in points],
+            mx,
+            my,
+        )
+        stage = _nominal_refinement_stage(points, radial, increment_deg)
+        stage["refinement_window_count"] = window_count
+        if not stage["all_points_converged"]:
+            return (
+                points,
+                radial,
+                stage,
+                "INVALID",
+                "nominal axial-moment envelope did not converge",
+            )
+        if not radial.valid or radial.utilisation is None:
+            return points, radial, stage, "INVALID", radial.reason
+        if len(points) > point_limit:
+            stage["resolution_achieved"] = False
+            return (
+                points,
+                radial,
+                stage,
+                "UNRESOLVED",
+                "nominal governing interval could not be refined consistently",
+            )
+        if stage["resolution_achieved"]:
+            return points, radial, stage, None, None
+        if len(points) <= prior_point_count:
+            return (
+                points,
+                radial,
+                stage,
+                "UNRESOLVED",
+                "nominal governing interval could not be refined consistently",
+            )
+        prior_point_count = len(points)
+
+    stage["resolution_achieved"] = False
+    return (
+        points,
+        radial,
+        stage,
+        "UNRESOLVED",
+        "nominal governing interval could not be refined consistently",
+    )
+
+
+def _nominal_resolution_evidence(stage: Mapping) -> dict:
+    """Retain requested and achieved angular resolution as separate evidence."""
+
+    target = stage.get("target_increment_deg")
+    return {
+        # Retained for current consumers; the explicit target field removes the
+        # former ambiguity between a requested increment and an achieved interval.
+        "governing_increment_deg": target,
+        "governing_target_increment_deg": target,
+        "governing_interval_deg": stage.get("governing_interval_deg"),
+    }
+
+
 def _nominal_refined_envelope(
     section: Section,
     concrete,
@@ -731,6 +847,7 @@ def _nominal_refined_envelope(
             "resolution_state": "INVALID",
             "verdict_resolved": False,
             "refinement_history": history,
+            **_nominal_resolution_evidence(history[-1]),
             "reason": "nominal axial-moment envelope did not converge",
         }
     if mx == 0.0 and my == 0.0:
@@ -739,6 +856,7 @@ def _nominal_refined_envelope(
                 "resolution_state": "INVALID",
                 "verdict_resolved": False,
                 "refinement_history": history,
+                **_nominal_resolution_evidence(history[-1]),
                 "reason": radial.reason,
             }
         return points, radial, {
@@ -750,7 +868,7 @@ def _nominal_refined_envelope(
             "minimum_utilisation_error": _NOMINAL_MIN_UTILISATION_ERROR,
             "utilisation_lower_bound": 0.0,
             "utilisation_upper_bound": 0.0,
-            "governing_increment_deg": _NOMINAL_INITIAL_INCREMENT_DEG,
+            **_nominal_resolution_evidence(history[-1]),
             "reason": None,
         }
     if not radial.valid:
@@ -758,48 +876,65 @@ def _nominal_refined_envelope(
             "resolution_state": "INVALID",
             "verdict_resolved": False,
             "refinement_history": history,
+            **_nominal_resolution_evidence(history[-1]),
             "reason": radial.reason,
+        }
+    if not history[-1]["resolution_achieved"]:
+        return points, radial, {
+            "resolution_state": "UNRESOLVED",
+            "verdict_resolved": False,
+            "refinement_history": history,
+            **_nominal_resolution_evidence(history[-1]),
+            "reason": "nominal governing interval could not be refined consistently",
         }
 
     prior = radial
+    prior_stage = history[-1]
     error_estimate = None
     lower_bound = None
     upper_bound = None
     threshold = 1.0 + _TOL
     for increment in _NOMINAL_REFINEMENT_INCREMENTS_DEG:
-        points = _refine_nominal_governing_window(
-            section,
-            concrete,
-            reference,
-            characteristic,
-            p_comp,
-            points,
-            prior.governing_index,
-            increment,
+        points, radial, stage, failure_state, failure_reason = (
+            _resolve_nominal_refinement_stage(
+                section,
+                concrete,
+                reference,
+                characteristic,
+                p_comp,
+                points,
+                prior,
+                mx,
+                my,
+                increment,
+            )
         )
-        radial = combined.radial_util_result(
-            [point.Mx for point in points],
-            [point.My for point in points],
-            mx,
-            my,
-        )
-        stage = _nominal_refinement_stage(points, radial, increment)
         history.append(stage)
-        if not stage["all_points_converged"]:
+        if failure_state == "INVALID":
             return points, radial, {
                 "resolution_state": "INVALID",
                 "verdict_resolved": False,
                 "refinement_history": history,
-                "reason": "nominal axial-moment envelope did not converge",
+                **_nominal_resolution_evidence(stage),
+                "reason": failure_reason,
             }
-        if not radial.valid or radial.utilisation is None:
+        if failure_state == "UNRESOLVED":
             return points, radial, {
-                "resolution_state": "INVALID",
+                "resolution_state": "UNRESOLVED",
                 "verdict_resolved": False,
                 "refinement_history": history,
-                "reason": radial.reason,
+                "estimated_utilisation_error": None,
+                "utilisation_lower_bound": None,
+                "utilisation_upper_bound": None,
+                **_nominal_resolution_evidence(stage),
+                "reason": failure_reason,
             }
-        if increment < 1.0 and prior.utilisation is not None:
+        if (
+            increment < 1.0
+            and prior.utilisation is not None
+            and prior_stage["resolution_achieved"]
+            and stage["resolution_achieved"]
+        ):
             current_utilisation = float(radial.utilisation)
             prior_utilisation = float(prior.utilisation)
             # Twice the observed inter-stage change is retained as the local
@@ -834,10 +969,11 @@ def _nominal_refined_envelope(
                     ),
                     "utilisation_lower_bound": lower_bound,
                     "utilisation_upper_bound": upper_bound,
-                    "governing_increment_deg": increment,
+                    **_nominal_resolution_evidence(stage),
                     "reason": None,
                 }
         prior = radial
+        prior_stage = stage
 
     return points, radial, {
         "resolution_state": "UNRESOLVED",
@@ -848,7 +984,7 @@ def _nominal_refined_envelope(
         "minimum_utilisation_error": _NOMINAL_MIN_UTILISATION_ERROR,
         "utilisation_lower_bound": lower_bound,
         "utilisation_upper_bound": upper_bound,
-        "governing_increment_deg": _NOMINAL_REFINEMENT_INCREMENTS_DEG[-1],
+        **_nominal_resolution_evidence(history[-1]),
         "reason": (
             "nominal resistance is too close to the cracking demand for a stable "
             "assessment at the available angular resolution"

@@ -5543,7 +5543,10 @@ class ReportBuilder:
                 solution = check.get("nominal_solution") or {}
                 history = solution.get("refinement_history") or []
                 if history:
-                    increment = solution.get("governing_increment_deg")
+                    target = solution.get("governing_target_increment_deg")
+                    if "governing_target_increment_deg" not in solution:
+                        target = solution.get("governing_increment_deg")
+                    achieved = solution.get("governing_interval_deg")
                     retained = solution.get("accepted_point_count")
                     resolution = str(
                         solution.get("resolution_state") or ""
@@ -5558,13 +5561,19 @@ class ReportBuilder:
                         if solution.get("all_points_converged")
                         else "one or more retained angles did not converge"
                     )
-                    self._small(
-                        "<b>Angular resolution:</b> initial 15&#176; envelope; "
-                        "governing interval refined to "
-                        "no more than "
-                        f"{_fmt(increment, 3)}&#176;; {retained} angles retained; "
-                        f"{convergence}; {outcome}."
-                    )
+                    if achieved is not None:
+                        self._small(
+                            "<b>Angular resolution:</b> initial 15&#176; envelope; "
+                            "achieved governing interval "
+                            f"{_fmt(achieved, 3)}&#176;"
+                            + (
+                                f" for the {_fmt(target, 3)}&#176; target; "
+                                if target is not None
+                                else "; "
+                            )
+                            + f"{retained} angles retained; "
+                            + f"{convergence}; {outcome}."
+                        )
                     lower = solution.get("utilisation_lower_bound")
                     upper = solution.get("utilisation_upper_bound")
                     if lower is not None and upper is not None:

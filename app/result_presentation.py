@@ -132,6 +132,11 @@ _MINIMUM_REINFORCEMENT_REASON_MESSAGES = {
         "The nominal resistance is too close to the cracking demand for a stable "
         "assessment; assess this case separately",
     ),
+    "nominal governing interval could not be refined consistently": EngineerMessage(
+        "MINIMUM-REINFORCEMENT-GOVERNING-DIRECTION",
+        "The governing nominal resistance direction could not be refined "
+        "consistently; assess this case separately",
+    ),
 }
 _TRANSVERSE_REASON_MESSAGES = {
     "minimum shear reinforcement is required for this beam": EngineerMessage(

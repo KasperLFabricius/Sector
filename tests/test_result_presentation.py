@@ -49,6 +49,17 @@ def test_minimum_reinforcement_unresolved_refinement_has_authored_guidance():
     )
 
 
+def test_minimum_reinforcement_moving_direction_failure_has_authored_guidance():
+    assert presentation.result_reason(
+        "nominal governing interval could not be refined consistently",
+        "minimum_reinforcement",
+        context="CORE-M02 public result",
+    ) == (
+        "The governing nominal resistance direction could not be refined "
+        "consistently; assess this case separately"
+    )
+
+
 @pytest.mark.parametrize(
     ("retained", "expected_mm"),
     ((0.275, 275.0), (0.0, 0.0), (-0.0, 0.0), (np.float64(0.125), 125.0)),

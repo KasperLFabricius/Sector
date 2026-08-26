@@ -375,6 +375,16 @@ def test_2023_rectangle_cracking_moment_is_independently_reproduced():
         stage["target_increment_deg"]
         for stage in solution["refinement_history"]
     ] == [15.0, 1.0, 0.1]
+    assert all(
+        stage["resolution_achieved"]
+        and stage["governing_interval_deg"]
+        <= stage["target_increment_deg"] + 1.0e-12
+        for stage in solution["refinement_history"]
+    )
+    assert solution["governing_target_increment_deg"] == pytest.approx(0.1)
+    assert solution["governing_interval_deg"] == pytest.approx(
+        solution["refinement_history"][-1]["governing_interval_deg"]
+    )
     selected = solution["governing_point"]
     assert selected["neutral_axis_angle_deg"] == pytest.approx(90.0)
     assert selected["converged"] is True
@@ -486,11 +496,19 @@ def test_2023_review_cases_are_stable_against_independent_full_sweeps(
     assert solution["error_control_factor"] == 2.0
     assert solution["minimum_utilisation_error"] == pytest.approx(1.0e-6)
     assert solution["governing_increment_deg"] == pytest.approx(0.1)
+    assert solution["governing_target_increment_deg"] == pytest.approx(0.1)
+    assert solution["governing_interval_deg"] <= 0.1 + 1.0e-12
     assert [stage["target_increment_deg"] for stage in history] == [
         15.0,
         1.0,
         0.1,
     ]
+    assert all(stage["resolution_achieved"] for stage in history)
+    assert all(
+        stage["governing_interval_deg"]
+        <= stage["target_increment_deg"] + 1.0e-12
+        for stage in history
+    )
     assert history[0]["utilisation"] == pytest.approx(
         independent[0].utilisation
     )
@@ -782,6 +800,16 @@ def _centred_nominal_envelope(scale=1.0):
     ]
 
 
+def _accept_synthetic_four_point_resolution(monkeypatch):
+    """Keep four-point radial-isolation fixtures outside angular-resolution QA."""
+
+    monkeypatch.setattr(
+        detailing,
+        "_nominal_interval_achieved",
+        lambda *_args, **_kwargs: True,
+    )
+
+
 @pytest.mark.parametrize(
     ("utilisations", "expected_state", "expected_final_status"),
     [
@@ -853,6 +881,181 @@ def test_2023_nominal_refinement_resolves_reversals_and_withholds_near_limit(
     else:
         final_status = "PASS" if radial.utilisation <= 1.0 else "FAIL"
         assert final_status == expected_final_status
+
+
+def test_2023_nominal_refinement_follows_moved_window_across_wrap_before_verdict(
+    monkeypatch,
+):
+    section, _elements, materials = _rectangle()
+    scripted = iter([
+        (0.0, 0.99),
+        (180.0, 0.99),
+        (180.0, 0.99),
+        (90.0, 0.99),
+        (90.0, 1.01),
+        (0.0, 1.01),
+        (0.0, 1.011),
+    ])
+    solved_windows = []
+
+    def fake_solve(*args, **_kwargs):
+        start, end, increment = (float(value) for value in args[4:7])
+        solved_windows.append((start, end, increment))
+        angles = detailing._module("plastic").plastic_sweep_angles(
+            start, end, increment
+        )
+        return [
+            _nominal_point(angle, 0.0, angle=angle)
+            for angle in angles
+        ]
+
+    def fake_radial(mx_values, _my_values, *_args, **_kwargs):
+        target_angle, utilisation = next(scripted)
+        governing_index = min(
+            range(len(mx_values)),
+            key=lambda index: abs(float(mx_values[index]) - target_angle),
+        )
+        return SimpleNamespace(
+            demand=1.0,
+            resistance=1.0 / utilisation,
+            utilisation=utilisation,
+            governing_index=governing_index,
+            valid=True,
+            reason=None,
+            origin_inside_or_on=True,
+        )
+
+    monkeypatch.setattr(detailing, "solve_plastic", fake_solve)
+    monkeypatch.setattr(
+        detailing._module("combined"), "radial_util_result", fake_radial
+    )
+
+    _points, radial, resolution = detailing._nominal_refined_envelope(
+        section,
+        Concrete(30.0, gamma_c=1.5),
+        materials[0],
+        materials,
+        p_comp=0.0,
+        mx=1.0,
+        my=0.0,
+    )
+
+    history = resolution["refinement_history"]
+    assert resolution["resolution_state"] == "RESOLVED"
+    assert radial.utilisation == pytest.approx(1.011)
+    assert [stage["target_increment_deg"] for stage in history] == [
+        15.0,
+        1.0,
+        0.1,
+        0.01,
+    ]
+    assert [stage.get("refinement_window_count", 0) for stage in history] == [
+        0,
+        2,
+        2,
+        2,
+    ]
+    assert all(stage["resolution_achieved"] for stage in history)
+    assert all(
+        stage["governing_interval_deg"]
+        <= stage["target_increment_deg"] + 1.0e-12
+        for stage in history
+    )
+    assert resolution["governing_target_increment_deg"] == pytest.approx(0.01)
+    assert resolution["governing_interval_deg"] <= 0.01 + 1.0e-12
+    assert any(
+        start < 0.0 < end and increment == pytest.approx(0.01)
+        for start, end, increment in solved_windows
+    )
+
+
+def test_2023_nominal_refinement_fails_closed_when_window_cannot_progress(
+    monkeypatch,
+):
+    section, _elements, materials = _rectangle()
+    scripted = iter(((0, 0.99), (12, 0.99)))
+
+    def fake_solve(*args, **_kwargs):
+        angles = detailing._module("plastic").plastic_sweep_angles(*args[4:7])
+        return [
+            _nominal_point(
+                math.cos(math.radians(angle)),
+                math.sin(math.radians(angle)),
+                angle=angle,
+            )
+            for angle in angles
+        ]
+
+    def fake_radial(mx_values, _my_values, *_args, **_kwargs):
+        governing_index, utilisation = next(scripted)
+        assert governing_index < len(mx_values)
+        return SimpleNamespace(
+            demand=1.0,
+            resistance=1.0 / utilisation,
+            utilisation=utilisation,
+            governing_index=governing_index,
+            valid=True,
+            reason=None,
+            origin_inside_or_on=True,
+        )
+
+    monkeypatch.setattr(detailing, "solve_plastic", fake_solve)
+    monkeypatch.setattr(
+        detailing,
+        "_refine_nominal_governing_window",
+        lambda *_args, **_kwargs: list(_args[5]),
+    )
+    monkeypatch.setattr(
+        detailing._module("combined"), "radial_util_result", fake_radial
+    )
+
+    _points, _radial, resolution = detailing._nominal_refined_envelope(
+        section,
+        Concrete(30.0, gamma_c=1.5),
+        materials[0],
+        materials,
+        p_comp=0.0,
+        mx=1.0,
+        my=0.0,
+    )
+
+    assert resolution["resolution_state"] == "UNRESOLVED"
+    assert resolution["verdict_resolved"] is False
+    assert resolution["reason"] == (
+        "nominal governing interval could not be refined consistently"
+    )
+    assert resolution["governing_target_increment_deg"] == pytest.approx(1.0)
+    assert resolution["governing_interval_deg"] == pytest.approx(15.0)
+    assert resolution["utilisation_lower_bound"] is None
+    assert resolution["utilisation_upper_bound"] is None
+    assert resolution["refinement_history"][-1]["resolution_achieved"] is False
+
+
+def test_2023_nominal_refinement_rejects_coarse_initial_solver_evidence(
+    monkeypatch,
+):
+    section, _elements, materials = _rectangle()
+    monkeypatch.setattr(
+        detailing,
+        "solve_plastic",
+        lambda *_args, **_kwargs: _centred_nominal_envelope(),
+    )
+
+    _points, _radial, resolution = detailing._nominal_refined_envelope(
+        section,
+        Concrete(30.0, gamma_c=1.5),
+        materials[0],
+        materials,
+        p_comp=0.0,
+        mx=1.0,
+        my=0.0,
+    )
+
+    assert resolution["resolution_state"] == "UNRESOLVED"
+    assert resolution["verdict_resolved"] is False
+    assert resolution["governing_target_increment_deg"] == pytest.approx(15.0)
+    assert resolution["governing_interval_deg"] == pytest.approx(90.0)
+    assert resolution["refinement_history"][0]["resolution_achieved"] is False
 
 
 def test_2023_nominal_refinement_retains_later_nonconvergence(monkeypatch):
@@ -1091,6 +1294,7 @@ def test_2023_tiny_nonzero_cracking_moment_uses_radial_envelope(
     monkeypatch, mx_cr_knm, my_cr_knm, model
 ):
     section, _elements, materials = _rectangle()
+    _accept_synthetic_four_point_resolution(monkeypatch)
     monkeypatch.setattr(
         detailing,
         "solve_plastic",
@@ -1173,6 +1377,7 @@ def test_2023_exact_zero_cracking_moment_retains_zero_demand_path(monkeypatch):
 
 def test_2023_uniaxial_capacity_refines_one_radial_envelope(monkeypatch):
     section, _elements, materials = _rectangle()
+    _accept_synthetic_four_point_resolution(monkeypatch)
     points = [
         _nominal_point(4.0, 2.0, angle=0.0),
         _nominal_point(2.0, -2.0, angle=90.0),
@@ -1249,6 +1454,7 @@ def test_2023_signed_uniaxial_axes_use_distinct_asymmetric_resistances(
     model,
 ):
     section, _elements, materials = _rectangle()
+    _accept_synthetic_four_point_resolution(monkeypatch)
     points = [
         _nominal_point(4.0, 1.0, angle=0.0),
         _nominal_point(1.0, -3.0, angle=90.0),
@@ -1364,6 +1570,7 @@ def test_2023_public_uniaxial_check_propagates_remote_origin_invalid(monkeypatch
 
 def test_2023_public_tiny_nonzero_moment_cannot_bypass_bending(monkeypatch):
     section, elements, materials = _rectangle()
+    _accept_synthetic_four_point_resolution(monkeypatch)
     cracking_calls = []
     envelope_calls = []
 
