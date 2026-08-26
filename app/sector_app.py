@@ -2060,6 +2060,49 @@ def _point_data_version(_base_key, table_version):
     return table_version
 
 
+def _point_table_geometry_frame(value, base_key, cols):
+    """Return only the point fields governed by Quick Section placement."""
+
+    if not isinstance(value, pd.DataFrame):
+        return None
+    kind = _reinforcement_kind(base_key)
+    if kind:
+        frame = rebar_table.normalise_table(value, kind)
+        geometry_columns = (
+            rebar_table.X,
+            rebar_table.Y,
+            rebar_table.SIZE_MODE,
+            rebar_table.AREA,
+            rebar_table.DIAMETER,
+        )
+    else:
+        frame = value.reindex(columns=cols).copy(deep=True)
+        geometry_columns = tuple(cols)
+    return frame.reindex(columns=geometry_columns).reset_index(drop=True)
+
+
+def _record_point_table_event(base_key, ed_key, cols) -> None:
+    """Journal a grid event and retire only stale builder provenance.
+
+    Catalogue-option refreshes can emit the unchanged component payload, so the
+    applied Quick Section snapshot advances only when placement fields actually
+    differ from the last stable table. Slab-density bar/outline edits remain
+    fail-closed until the engineer explicitly confirms that the rows are physical
+    bars; ordinary layouts and explicit tendon edits can be reconciled directly.
+    """
+
+    previous = _point_table_geometry_frame(
+        st.session_state.get(base_key), base_key, cols
+    )
+    current = _point_table_geometry_frame(
+        _current_table(base_key, ed_key, cols), base_key, cols
+    )
+    _record_input_event(ed_key)
+    if previous is None or current is None or previous.equals(current):
+        return
+    _prune_applied_quick_section_settings(base_key)
+
+
 def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     """Draw the editable grid and return its current contents as a DataFrame.
 
@@ -2077,6 +2120,9 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
             if kind else base.reindex(columns=cols).copy(deep=True)
         )
 
+    previous_geometry = _point_table_geometry_frame(
+        st.session_state.get(base_key), base_key, cols
+    )
     version = st.session_state.get(ed_key + "_ver", 0)
     data_version = _point_data_version(base_key, version)
     kind = _reinforcement_kind(base_key)
@@ -2111,7 +2157,12 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
             ),
             column_specs=specs,
             component_options=options,
-            on_change=functools.partial(_record_input_event, ed_key),
+            on_change=functools.partial(
+                _record_point_table_event,
+                base_key,
+                ed_key,
+                tuple(cols),
+            ),
         )
     # Keep a durable, non-widget mirror after every frontend report.  Catalogue
     # buttons, Calculate, navigation and project saving can then all consume the
@@ -2121,6 +2172,16 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
         if kind
         else edited.reindex(columns=cols).copy(deep=True)
     )
+    current_geometry = _point_table_geometry_frame(stable, base_key, cols)
+    if (
+        previous_geometry is not None
+        and current_geometry is not None
+        and not previous_geometry.equals(current_geometry)
+    ):
+        # Keep the provenance boundary correct even when a component host reports
+        # its new payload without replaying the optional callback (for example
+        # after a browser/session restoration).
+        _prune_applied_quick_section_settings(base_key)
     st.session_state[base_key] = stable.copy(deep=True)
     return stable
 
@@ -3161,11 +3222,14 @@ def _applied_quick_section_scalars(scalars, state):
 
     result = dict(scalars)
     applied = state.get(_QS_APPLIED_SETTINGS_KEY)
-    if not isinstance(applied, dict):
-        return result
     for key in project_io.QUICK_SECTION_SCALAR_KEYS:
         result.pop(key, None)
-    result.update(copy.deepcopy(applied))
+    # Absence means the current point tables have no proven builder origin (for
+    # example a pre-upgrade live session). Fail closed by omitting draft qsv_
+    # preferences; verified slab-density reconciliation or a later Apply will
+    # establish a complete snapshot before persistence.
+    if isinstance(applied, dict):
+        result.update(copy.deepcopy(applied))
     return result
 
 
@@ -3688,6 +3752,12 @@ def _apply_project_text(text: str) -> None:
         }
     )
     st.session_state[_INPUT_STATE_KEY] = durable
+    # The loaded qsv_ values describe the point tables that were saved, across
+    # every Quick Section shape and reinforcement mode. Keep that applied intent
+    # separate from later builder previews immediately inside the replacement
+    # transaction. An empty snapshot marks a project whose point tables are fully
+    # explicit and prevents a later preview from acquiring false provenance.
+    st.session_state[_QS_APPLIED_SETTINGS_KEY] = _qs_settings_snapshot(scalars)
     report_durable = {
         key: value
         for key, value in scalars.items()
@@ -4440,6 +4510,36 @@ _QS_WIDGET_KEYS = tuple(
     key.removeprefix("qsv_") for key in project_io.QUICK_SECTION_SCALAR_KEYS
 )
 _QS_APPLIED_SETTINGS_KEY = "_qs_applied_settings"
+_QS_PROVENANCE_NOTICE_KEY = "_qs_provenance_notice"
+_QS_BAR_SETTING_KEYS = frozenset({
+    "qsv_ring_n",
+    "qsv_ring_d",
+    "qsv_ring_c_mm",
+    "qsv_qs_rebar_mode",
+    "qsv_qs_cover_to_edge",
+    "qsv_bot_n",
+    "qsv_bot_d",
+    "qsv_bot_s",
+    "qsv_top_n",
+    "qsv_top_d",
+    "qsv_top_s",
+    "qsv_bot_c_mm",
+    "qsv_top_c_mm",
+    "qsv_bot_n2",
+    "qsv_top_n2",
+    "qsv_bot_layers",
+    "qsv_top_layers",
+    "qsv_layer_s",
+    "qsv_bot_off_d",
+    "qsv_top_off_d",
+})
+_QS_TENDON_SETTING_KEYS = frozenset({
+    "qsv_tnd_n",
+    "qsv_tnd_a",
+    "qsv_tnd_c_mm",
+    "qsv_tnd_layers",
+    "qsv_tnd_layer_s",
+})
 
 
 def _qs_settings_snapshot(state):
@@ -4450,6 +4550,60 @@ def _qs_settings_snapshot(state):
         for key in project_io.QUICK_SECTION_SCALAR_KEYS
         if key in state
     }
+
+
+def _applied_snapshot_is_slab_density(applied) -> bool:
+    return (
+        isinstance(applied, dict)
+        and applied.get("qsv_shape") == "Slab strip"
+        and applied.get("qsv_qs_rebar_mode") == "By spacing"
+    )
+
+
+def _prune_applied_quick_section_settings(base_key) -> None:
+    """Retire applied builder fields superseded by a real point-table edit."""
+
+    applied = st.session_state.get(_QS_APPLIED_SETTINGS_KEY)
+    if not isinstance(applied, dict) or not applied:
+        return
+    if base_key == "tendons_base":
+        retired = _QS_TENDON_SETTING_KEYS
+    elif _applied_snapshot_is_slab_density(applied):
+        # Density rows are integration representatives, not physical bars. Keep
+        # their applied intent so a partial point edit remains visibly fail-closed;
+        # the engineer can explicitly convert only after entering physical bars.
+        return
+    elif base_key == "bars_base":
+        retired = _QS_BAR_SETTING_KEYS
+    else:
+        retired = frozenset(applied)
+    updated = {
+        key: copy.deepcopy(value)
+        for key, value in applied.items()
+        if key not in retired
+    }
+    if updated == applied:
+        return
+    st.session_state[_QS_APPLIED_SETTINGS_KEY] = updated
+    st.session_state[_QS_PROVENANCE_NOTICE_KEY] = (
+        "The edited point-table geometry is now retained as explicit input."
+    )
+
+
+def _use_current_bars_as_explicit() -> None:
+    """Confirm that current density rows have been replaced by physical bars."""
+
+    applied = st.session_state.get(_QS_APPLIED_SETTINGS_KEY)
+    if not _applied_snapshot_is_slab_density(applied):
+        return
+    st.session_state[_QS_APPLIED_SETTINGS_KEY] = {
+        key: copy.deepcopy(value)
+        for key, value in applied.items()
+        if key not in _QS_BAR_SETTING_KEYS
+    }
+    st.session_state[_QS_PROVENANCE_NOTICE_KEY] = (
+        "The current reinforcement rows are now treated as explicit physical bars."
+    )
 
 
 def _qs_restore_settings():
@@ -4630,6 +4784,7 @@ def _slab_density_layout(
     series = []
     analysis_metadata = []
     physical_elements = []
+    next_spacing_group = 0
     face_has_interleave = {
         face: faces[face]["interleave_diameter_mm"] > 0.0
         for face in faces
@@ -4675,6 +4830,11 @@ def _slab_density_layout(
             "area_per_layer_mm2_per_m": area_per_layer,
             "total_area_mm2_per_m": area_per_layer * spec["layers"],
         }
+        layer_spacing_groups = tuple(
+            range(next_spacing_group, next_spacing_group + spec["layers"])
+        )
+        next_spacing_group += spec["layers"]
+        series_record["spacing_groups"] = layer_spacing_groups
         groups.append((group, spec["diameter_mm"], series_record))
         series.append(series_record)
 
@@ -4703,6 +4863,7 @@ def _slab_density_layout(
                 "face": spec["face"],
                 "role": spec["role"],
                 "layer": layer + 1,
+                "spacing_group": layer_spacing_groups[layer],
                 "cover_mm": clear_cover_mm,
                 "nominal_spacing_mm": nearest_spacing_mm,
             } for _index in range(row_count))
@@ -4722,6 +4883,7 @@ def _slab_density_layout(
                         f"{spec['role'].lower()} {index}"
                     ),
                     "kind": "bar",
+                    "spacing_group": layer_spacing_groups[layer],
                     "x_mm": x * _MM,
                     "y_mm": point_y * _MM,
                     "area_mm2": area,
@@ -4831,7 +4993,15 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
     except (TypeError, ValueError, OverflowError):
         bars_match = False
     if not geometry_matches or not bars_match:
-        return {"status": "UNVERIFIED", "reason": _SLAB_DENSITY_GUIDANCE}
+        return {
+            "status": "UNVERIFIED",
+            "reason": _SLAB_DENSITY_GUIDANCE,
+            # Only a bar-table replacement inside the unchanged applied slab
+            # outline can be confirmed as an explicit physical layout. An outline
+            # or void edit still requires a fresh Apply so stale shape dimensions
+            # cannot be attached to unrelated section geometry.
+            "can_use_explicit_bars": geometry_matches and not bars_match,
+        }
     if not isinstance(applied_state, dict):
         state[_QS_APPLIED_SETTINGS_KEY] = _qs_settings_snapshot(state)
     return {**layout, "status": "VERIFIED", "reason": None}
@@ -7037,6 +7207,7 @@ def build_inputs(host=st):
         _reseed_table("tendons_base", "ed_tendons", _rebar_df(_pts_to_mm(
             [(float(p[0]), float(p[1]), float(p[2])) for p in d_tendons]),
             "tendon", size_mode=rebar_table.AREA_MODE))
+        st.session_state[_QS_APPLIED_SETTINGS_KEY] = {}
         st.session_state["pts_init"] = True
     # Migrate a session that predates the void table (or the ID-column tables): seed
     # hole_base, and coerce any stored table to the current data-only schema.
@@ -7100,8 +7271,20 @@ def build_inputs(host=st):
                 "Cancel", key="cancel_clear_pts", width="stretch",
             )
         if confirm_clear:
-            st.session_state["_clear_section_undo"] = _section_table_snapshot()
+            st.session_state["_clear_section_undo"] = {
+                "tables": _section_table_snapshot(),
+                "applied_quick_section_present": (
+                    _QS_APPLIED_SETTINGS_KEY in st.session_state
+                ),
+                "applied_quick_section": copy.deepcopy(
+                    st.session_state.get(_QS_APPLIED_SETTINGS_KEY)
+                ),
+            }
             _clear_section_tables()
+            # An empty section is explicit source-of-truth geometry. Strip every
+            # former builder value from save/autosave until Undo or Apply restores
+            # a layout that those values actually describe.
+            st.session_state[_QS_APPLIED_SETTINGS_KEY] = {}
             st.session_state.pop("_clear_section_confirm", None)
             confirm_slot.empty()
         elif cancel_clear:
@@ -7119,11 +7302,20 @@ def build_inputs(host=st):
         if undo_slot.button("Undo clear", key="undo_clear_pts", width="stretch",
                             help="Restore the four point tables removed by the "
                                  "last clear."):
-            _reseed_section_tables(undo_snapshot)
+            _reseed_section_tables(undo_snapshot["tables"])
+            if undo_snapshot["applied_quick_section_present"]:
+                st.session_state[_QS_APPLIED_SETTINGS_KEY] = copy.deepcopy(
+                    undo_snapshot["applied_quick_section"]
+                )
+            else:
+                st.session_state.pop(_QS_APPLIED_SETTINGS_KEY, None)
             st.session_state.pop("_clear_section_undo", None)
             undo_slot.empty()
 
     sec.markdown("**Cross-section points** (the analysis uses these)")
+    provenance_notice = st.session_state.pop(_QS_PROVENANCE_NOTICE_KEY, None)
+    if provenance_notice:
+        sec.success(provenance_notice)
     sec.caption("Concrete corners define the outline; voids are optional inner "
                 "rings. Reinforcement IDs remain fixed. Choose Area, Diameter or "
                 "Independent; derived cells are shaded. Paste x/y/area or all "
@@ -7162,6 +7354,7 @@ def build_inputs(host=st):
                   disabled=n_voids == 0, help="Drop the last void from the table."):
         groups = _void_groups(void_now, _CORNER_COLS)
         _reseed_table("hole_base", "ed_hole", _void_table_from_groups(groups[:-1]))
+        _prune_applied_quick_section_settings("hole_base")
     holes_mm = _void_editor(sec, "hole_base", "ed_hole", len(outer) + 1)
     holes = [_pts_to_m(ring) for ring in holes_mm]
     sec.markdown("_Reinforcing bars_")
@@ -7197,9 +7390,20 @@ def build_inputs(host=st):
     if (
         slab_density is not None
         and slab_density.get("status") == "UNVERIFIED"
-        and (sls_cw or clear_spacing_on)
     ):
-        sec.warning(slab_density["reason"])
+        (sec.warning if (sls_cw or clear_spacing_on) else sec.info)(
+            slab_density["reason"]
+        )
+        if slab_density.get("can_use_explicit_bars"):
+            sec.button(
+                "Use current bars as explicit layout",
+                key="slab_density_use_explicit",
+                on_click=_use_current_bars_as_explicit,
+                help=(
+                    "Choose this only after replacing the generated slab-density "
+                    "analysis rows with the physical bars to be checked."
+                ),
+            )
 
     def assigned_material_ids(frame):
         # Include incomplete rows too. Their geometry is not solver-ready yet, but
@@ -8771,6 +8975,7 @@ def _run_single_analysis(
         crack_cover = None
         crack_spacing = None
         physical_spacing_points = None
+        physical_spacing_groups = None
         if density is not None and density.get("status") == "VERIFIED":
             metadata = list(density.get("analysis_metadata") or [])
             if len(metadata) != len(inp["bars"]):
@@ -8780,6 +8985,9 @@ def _run_single_analysis(
                 crack_cover = [float(item["cover_mm"]) for item in metadata]
                 crack_spacing = [
                     float(item["nominal_spacing_mm"]) for item in metadata
+                ]
+                physical_spacing_groups = [
+                    item.get("spacing_group") for item in metadata
                 ]
                 if inp["tendons"]:
                     rings = list(sec.integration_rings())
@@ -8795,11 +9003,15 @@ def _run_single_analysis(
                     crack_spacing.extend(
                         math.nan for _item in inp.get("tendon_elements", [])
                     )
+                    physical_spacing_groups.extend(
+                        None for _item in inp.get("tendon_elements", [])
+                    )
                 physical_spacing_points = [
                     (
                         float(item["x_mm"]) / _MM,
                         float(item["y_mm"]) / _MM,
                         None,
+                        item.get("spacing_group"),
                     )
                     for item in density.get("physical_elements", ())
                 ]
@@ -8851,6 +9063,7 @@ def _run_single_analysis(
             cover=crack_cover, bar_diameter=phi,
             nominal_spacing=crack_spacing,
             physical_spacing_points=physical_spacing_points,
+            physical_spacing_groups=physical_spacing_groups,
             k1=k1_bars,
             physical_geometry_available=physical_geometry_available,
             physical_geometry_reason=physical_geometry_reason,
@@ -8938,6 +9151,7 @@ def _run_single_analysis(
                     bar_diameter=phi,
                     nominal_spacing=crack_spacing,
                     physical_spacing_points=physical_spacing_points,
+                    physical_spacing_groups=physical_spacing_groups,
                     physical_geometry_available=physical_geometry_available,
                     physical_geometry_reason=physical_geometry_reason,
                     k1=k1_bars,

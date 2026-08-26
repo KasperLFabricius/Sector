@@ -793,6 +793,62 @@ def _density_slab_section(spacing_m=0.30, diameter_mm=20.0):
     )
 
 
+def _density_slab_with_tendons(
+    tendon_x_coordinates,
+    *,
+    tendon_area_mm2=1.0,
+    spacing_m=0.60,
+):
+    from sector import templates
+
+    bars = []
+    physical_points = []
+    spacing_groups = []
+    for group, y in enumerate((-0.10, 0.10)):
+        represented = templates.unit_width_bar_row(y, 1.0, spacing_m, 20.0)
+        bars.extend(represented)
+        spacing_groups.extend([group] * len(represented))
+        physical_points.extend(
+            (x, point_y, None, group)
+            for x, point_y, _area in templates.unit_width_nominal_bar_row(
+                y, 1.0, spacing_m, 20.0
+            )
+        )
+    for x in tendon_x_coordinates:
+        owner = len(bars)
+        bars.append((float(x), -0.10, float(tendon_area_mm2)))
+        spacing_groups.append(None)
+        physical_points.append((float(x), -0.10, owner))
+    section = Section.from_polygon(
+        corners=[(-0.5, -0.15), (0.5, -0.15), (0.5, 0.15), (-0.5, 0.15)],
+        bars_xy_area_mm2=bars,
+    )
+    count = len(bars)
+    tendon_count = len(tendon_x_coordinates)
+    tendon_diameter = math.sqrt(4.0 * tendon_area_mm2 / math.pi)
+    inputs = {
+        "fctm": fctm(35.0),
+        "cover": [40.0] * count,
+        "bar_diameter": (
+            [20.0] * (count - tendon_count)
+            + [tendon_diameter] * tendon_count
+        ),
+        "nominal_spacing": (
+            [spacing_m * 1000.0] * (count - tendon_count)
+            + [math.nan] * tendon_count
+        ),
+        "physical_spacing_points": physical_points,
+        "physical_spacing_groups": spacing_groups,
+        "reinforcement_types": (
+            ["mild"] * (count - tendon_count)
+            + ["prestress"] * tendon_count
+        ),
+        "k1": [0.8] * (count - tendon_count) + [1.6] * tendon_count,
+        "edition": "2004",
+    }
+    return section, inputs
+
+
 def test_density_crack_2005_uses_nominal_spacing_not_quadrature_gap():
     section = _density_slab_section()
     count = len(section.bar_arrays()[0])
@@ -832,6 +888,134 @@ def test_density_crack_2005_uses_nominal_spacing_not_quadrature_gap():
     )
     assert represented_candidate.spacing_operands.selected_candidate == "formula-7.11"
     assert physical.crack.wk != pytest.approx(represented.crack.wk)
+
+
+@pytest.mark.parametrize(
+    ("tendon_x_coordinates", "expected_wk"),
+    [
+        ((0.25,), 10.012461824530261),
+        ((-0.25, 0.25), 9.978210),
+    ],
+)
+def test_density_mild_spacing_reciprocally_includes_actual_tendons(
+    tendon_x_coordinates,
+    expected_wk,
+):
+    section, inputs = _density_slab_with_tendons(tendon_x_coordinates)
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        **inputs,
+    )
+
+    assert result.crack_evaluation.status == "CALCULATED"
+    governing = next(
+        candidate
+        for candidate in result.crack.candidates
+        if candidate.bar_index == result.crack.gov_bar
+    )
+    assert governing.reinforcement_type == "mild"
+    assert governing.spacing_operands.nearest_neighbour_spacing == (
+        pytest.approx(50.0)
+    )
+    assert governing.spacing_operands.selected_candidate == "formula-7.11"
+    assert result.crack.wk == pytest.approx(expected_wk, rel=2.0e-6)
+
+
+@pytest.mark.parametrize("spacing_m", [0.60, 1.0])
+def test_density_no_tendon_group_mapping_retains_nominal_2005_result(spacing_m):
+    section, mapped_inputs = _density_slab_with_tendons(
+        (), spacing_m=spacing_m
+    )
+    mapped = analyse_cracking(
+        section, 0.0, 400.0, 0.0, 6.0, **mapped_inputs
+    )
+    nominal_inputs = {
+        key: value
+        for key, value in mapped_inputs.items()
+        if key not in {"physical_spacing_points", "physical_spacing_groups"}
+    }
+    nominal = analyse_cracking(
+        section, 0.0, 400.0, 0.0, 6.0, **nominal_inputs
+    )
+
+    assert mapped.crack.wk == pytest.approx(nominal.crack.wk)
+    assert mapped.crack.sr_max == pytest.approx(nominal.crack.sr_max)
+    mapped_governing = next(
+        candidate
+        for candidate in mapped.crack.candidates
+        if candidate.bar_index == mapped.crack.gov_bar
+    )
+    assert mapped_governing.spacing_operands.nearest_neighbour_spacing == (
+        pytest.approx(spacing_m * 1000.0)
+    )
+
+
+def test_density_tendon_candidate_uses_the_same_reciprocal_physical_axes():
+    section, inputs = _density_slab_with_tendons(
+        (0.25,), tendon_area_mm2=150.0
+    )
+
+    result = analyse_cracking(
+        section, 0.0, 400.0, 0.0, 6.0, **inputs
+    )
+
+    governing = next(
+        candidate
+        for candidate in result.crack.candidates
+        if candidate.bar_index == result.crack.gov_bar
+    )
+    assert governing.reinforcement_type == "prestress"
+    assert governing.spacing_operands.nearest_neighbour_spacing == (
+        pytest.approx(49.99662552615003)
+    )
+    assert governing.spacing_operands.selected_candidate == "formula-7.11"
+
+
+def test_density_reciprocal_spacing_uses_the_biaxial_tension_band():
+    section, inputs = _density_slab_with_tendons((-0.25, 0.25))
+
+    result = analyse_cracking(
+        section, 0.0, 300.0, 200.0, 6.0, **inputs
+    )
+
+    assert result.crack_evaluation.status == "CALCULATED"
+    governing = next(
+        candidate
+        for candidate in result.crack.candidates
+        if candidate.bar_index == result.crack.gov_bar
+    )
+    assert governing.reinforcement_type == "mild"
+    assert governing.spacing_operands.nearest_neighbour_spacing == (
+        pytest.approx(49.977803675125664)
+    )
+    assert governing.spacing_operands.selected_candidate == "formula-7.11"
+    assert governing.spacing_operands.nearest_neighbour_spacing != (
+        pytest.approx(15.625)
+    )
+
+
+def test_density_missing_candidate_group_mapping_fails_closed():
+    section, inputs = _density_slab_with_tendons((0.25,))
+    inputs["physical_spacing_groups"] = [
+        99 if group is not None else None
+        for group in inputs["physical_spacing_groups"]
+    ]
+
+    result = analyse_cracking(
+        section, 0.0, 400.0, 0.0, 6.0, **inputs
+    )
+
+    assert result.crack is None
+    assert result.crack_evaluation.status == "NOT ASSESSED"
+    assert result.crack_evaluation.reason == (
+        "Physical reinforcement spacing could not be related to the calculated "
+        "tension zone."
+    )
 
 
 def test_density_tendon_2005_uses_nominal_tension_band_axes_not_quadrature():
@@ -908,6 +1092,10 @@ def test_density_tendon_2005_uses_nominal_tension_band_axes_not_quadrature():
         [(0.0, math.inf, None)],
         [(0.0, 0.0, True)],
         [(0.0, 0.0, 1.5)],
+        [(0.0, 0.0, None, True)],
+        [(0.0, 0.0, None, 1.5)],
+        [(0.0, 0.0, None, -1)],
+        [(0.0, 0.0, 0, 0)],
     ],
 )
 def test_density_tendon_spacing_rejects_invalid_physical_points(physical_points):
@@ -924,6 +1112,81 @@ def test_density_tendon_spacing_rejects_invalid_physical_points(physical_points)
         bar_diameter=[20.0] * count,
         nominal_spacing=[math.nan] * count,
         physical_spacing_points=physical_points,
+        edition="2004",
+    )
+
+    assert result.crack is None
+    assert result.crack_evaluation.status == "NOT ASSESSED"
+    assert result.crack_evaluation.reason == (
+        "Physical reinforcement spacing values are invalid."
+    )
+
+
+@pytest.mark.parametrize("group_value", [True, 1.5, -1])
+def test_density_spacing_rejects_invalid_candidate_groups(group_value):
+    section = _density_slab_section()
+    count = len(section.bar_arrays()[0])
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        bar_diameter=[20.0] * count,
+        nominal_spacing=[300.0] * count,
+        physical_spacing_points=[(-0.3, -0.1, None, 0)],
+        physical_spacing_groups=[group_value] * count,
+        edition="2004",
+    )
+
+    assert result.crack is None
+    assert result.crack_evaluation.status == "NOT ASSESSED"
+    assert result.crack_evaluation.reason == (
+        "Physical reinforcement spacing values are invalid."
+    )
+
+
+def test_density_spacing_rejects_candidate_group_cardinality_mismatch():
+    section = _density_slab_section()
+    count = len(section.bar_arrays()[0])
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        bar_diameter=[20.0] * count,
+        nominal_spacing=[300.0] * count,
+        physical_spacing_points=[(-0.3, -0.1, None, 0)],
+        physical_spacing_groups=[None],
+        edition="2004",
+    )
+
+    assert result.crack is None
+    assert result.crack_evaluation.status == "NOT ASSESSED"
+    assert result.crack_evaluation.reason == (
+        "Physical reinforcement spacing values are invalid."
+    )
+
+
+def test_density_candidate_groups_without_physical_points_fail_closed():
+    section = _density_slab_section()
+    count = len(section.bar_arrays()[0])
+
+    result = analyse_cracking(
+        section,
+        0.0,
+        400.0,
+        0.0,
+        6.0,
+        fctm=fctm(35.0),
+        bar_diameter=[20.0] * count,
+        nominal_spacing=[300.0] * count,
+        physical_spacing_groups=[0] * count,
         edition="2004",
     )
 
@@ -952,6 +1215,7 @@ def test_density_2023_crack_result_does_not_use_2005_physical_spacing_points():
         0.0,
         6.0,
         physical_spacing_points=[(False, math.inf, 1.5)],
+        physical_spacing_groups=[False],
         **inputs,
     )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import pathlib
 import sys
@@ -386,6 +387,13 @@ def test_late_application_failure_rolls_back_and_identical_bytes_retry(
 ) -> None:
     at = _fresh()
     a = _replacement_bytes(at, 41.0)
+    a_tables, a_scalars = project_io.parse_project(a.decode("utf-8"))
+    a_scalars.update({
+        "qsv_shape": "Rectangle",
+        "qsv_qs_rebar_mode": "By number",
+        "qsv_h_mm": 600.0,
+    })
+    a = project_io.dump_project(a_tables, a_scalars).encode("utf-8")
     _goto_project(at)
     _upload(at, a)
     assert at.session_state["_project_upload_content_identity"] == (
@@ -396,21 +404,25 @@ def test_late_application_failure_rolls_back_and_identical_bytes_retry(
     before_results = _completed_result_evidence(at)
     before_project = _project_signature(at)
     before_identity = at.session_state["_project_upload_content_identity"]
+    before_qs_applied = copy.deepcopy(
+        at.session_state["_qs_applied_settings"]
+    )
+    assert before_qs_applied["qsv_h_mm"] == pytest.approx(600.0)
 
-    original_normalise = fatigue_inputs.normalise_spectrum_table
+    original_version_label = project_io.recorded_sector_version_label
     application_failures = 0
 
-    def fail_during_application(value):
+    def fail_after_applied_snapshot(value):
         nonlocal application_failures
         if sys._getframe(1).f_code.co_name == "_apply_project_text":
             application_failures += 1
             raise RuntimeError("private forced application diagnostic")
-        return original_normalise(value)
+        return original_version_label(value)
 
     monkeypatch.setattr(
-        fatigue_inputs,
-        "normalise_spectrum_table",
-        fail_during_application,
+        project_io,
+        "recorded_sector_version_label",
+        fail_after_applied_snapshot,
     )
     _upload(at, b)
 
@@ -418,15 +430,16 @@ def test_late_application_failure_rolls_back_and_identical_bytes_retry(
     assert not at.exception
     assert _project_signature(at) == before_project
     assert at.session_state["_project_upload_content_identity"] == before_identity
+    assert at.session_state["_qs_applied_settings"] == before_qs_applied
     _assert_result_evidence(at, before_results)
     errors = _visible_upload_errors(at)
     assert any("New file was not applied" in message for message in errors)
     assert all("private forced" not in message for message in errors)
 
     monkeypatch.setattr(
-        fatigue_inputs,
-        "normalise_spectrum_table",
-        original_normalise,
+        project_io,
+        "recorded_sector_version_label",
+        original_version_label,
     )
     _upload(at, b)
 
