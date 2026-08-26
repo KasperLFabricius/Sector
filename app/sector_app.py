@@ -10158,6 +10158,50 @@ def detailing_view(inp, results, *, global_results=None):
                 f"{minimum.get('cut_direction', inp.get('detailing_cut_direction', '-'))} | "
                 f"{minimum.get('edition', '-')} | {minimum.get('clause', '-')}"
             )
+            nominal_solution = next((
+                check.get("nominal_solution")
+                for check in checks
+                if check.get("nominal_solution")
+            ), None)
+            if nominal_solution:
+                target = nominal_solution.get("governing_target_increment_deg")
+                if "governing_target_increment_deg" not in nominal_solution:
+                    target = nominal_solution.get("governing_increment_deg")
+                achieved = nominal_solution.get("governing_interval_deg")
+                retained = nominal_solution.get("accepted_point_count")
+                resolution = str(
+                    nominal_solution.get("resolution_state") or ""
+                ).upper()
+                if achieved is not None and retained is not None:
+                    outcome = (
+                        "assessment resolved"
+                        if resolution == "RESOLVED"
+                        else "separate assessment required"
+                    )
+                    st.caption(
+                        "Nominal envelope: achieved governing interval "
+                        f"{float(achieved):g}°"
+                        + (
+                            f" for the {float(target):g}° target; "
+                            if target is not None
+                            else "; "
+                        )
+                        + f"{int(retained)} angles retained; "
+                        + f"{outcome}."
+                    )
+                    lower = nominal_solution.get("utilisation_lower_bound")
+                    upper = nominal_solution.get("utilisation_upper_bound")
+                    if lower is not None and upper is not None:
+                        convergence = (
+                            "all retained angles converged"
+                            if nominal_solution.get("all_points_converged")
+                            else "one or more retained angles did not converge"
+                        )
+                        st.caption(
+                            "Refinement estimate: utilisation interval "
+                            f"{100.0 * float(lower):.4f}–"
+                            f"{100.0 * float(upper):.4f} %; {convergence}."
+                        )
 
     with transverse_card.container(border=True):
         st.markdown("**Shear/torsion link detailing**")

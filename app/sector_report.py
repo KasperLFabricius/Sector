@@ -5540,6 +5540,48 @@ class ReportBuilder:
                     + _html_escape(check.get("model") or "-")
                     + f"; cracking factor {_fmt(check.get('cracking_factor'), 4)}."
                 )
+                solution = check.get("nominal_solution") or {}
+                history = solution.get("refinement_history") or []
+                if history:
+                    target = solution.get("governing_target_increment_deg")
+                    if "governing_target_increment_deg" not in solution:
+                        target = solution.get("governing_increment_deg")
+                    achieved = solution.get("governing_interval_deg")
+                    retained = solution.get("accepted_point_count")
+                    resolution = str(
+                        solution.get("resolution_state") or ""
+                    ).upper()
+                    outcome = (
+                        "assessment resolved"
+                        if resolution == "RESOLVED"
+                        else "separate assessment required"
+                    )
+                    convergence = (
+                        "all retained angles converged"
+                        if solution.get("all_points_converged")
+                        else "one or more retained angles did not converge"
+                    )
+                    if achieved is not None:
+                        self._small(
+                            "<b>Angular resolution:</b> initial 15&#176; envelope; "
+                            "achieved governing interval "
+                            f"{_fmt(achieved, 3)}&#176;"
+                            + (
+                                f" for the {_fmt(target, 3)}&#176; target; "
+                                if target is not None
+                                else "; "
+                            )
+                            + f"{retained} angles retained; "
+                            + f"{convergence}; {outcome}."
+                        )
+                    lower = solution.get("utilisation_lower_bound")
+                    upper = solution.get("utilisation_upper_bound")
+                    if lower is not None and upper is not None:
+                        self._small(
+                            "<b>Refinement estimate:</b> utilisation interval "
+                            f"{_fmt(100.0 * float(lower), 4)} to "
+                            f"{_fmt(100.0 * float(upper), 4)} %."
+                        )
         elif result.get("reason"):
             self._small(_html_escape(_result_reason(
                 result["reason"],
