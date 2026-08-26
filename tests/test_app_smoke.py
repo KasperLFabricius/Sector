@@ -5008,13 +5008,13 @@ def test_material_builder_boundary_hides_hostile_exception_text():
         box,
         builder,
         2,
-        {"fytk": 0.0, "futk": 0.0},
+        {"IS": 0.0, "gamma_y": 1.1, "Es": 195.0},
     )
 
-    assert result["fytk"] == 1.0
-    assert result["futk"] == 1.0
+    assert result is None
+    assert calls == 1
     assert box.messages == [
-        "Adjusted for this curve: Review the material values for the selected curve"
+        "Material unavailable: Review the selected material values"
     ]
     assert hostile not in " ".join(box.messages)
 
@@ -5044,7 +5044,7 @@ def test_material_panel_persistent_builder_failure_is_fail_closed(
         for item in getattr(at, element_type)
     )
     assert not at.exception
-    assert "Material unavailable: Review the material values" in visible
+    assert "Material unavailable: Review the selected material values" in visible
     assert "Material diagram unavailable until the values are corrected" in visible
     assert hostile not in visible
     assert hostile in caplog.text
@@ -5062,7 +5062,7 @@ def test_material_panel_persistent_builder_failure_is_fail_closed(
     assert "result_input_snapshot" not in at.session_state
 
 
-def test_material_builder_keeps_field_specific_rupture_stress_correction():
+def test_material_builder_fails_closed_with_field_specific_rupture_guidance():
     import sector_app
     from sector import material_presets
 
@@ -5085,9 +5085,10 @@ def test_material_builder_keeps_field_specific_rupture_stress_correction():
         values,
     )
 
-    assert result.futk == pytest.approx(1.0)
+    assert result is None
+    assert values["futk"] == pytest.approx(0.0)
     assert box.messages == [
-        "Adjusted for this curve: Enter a positive ultimate tensile strength "
+        "Material unavailable: Enter a positive ultimate tensile strength "
         "for the selected mild-steel curve"
     ]
 
@@ -5102,7 +5103,13 @@ def test_material_builder_keeps_field_specific_rupture_stress_correction():
                 "gamma_u": 1.15,
                 "gamma_E": 1.0,
                 "curve": 3,
+                "fytk": 550.0,
+                "fyck": 550.0,
                 "futk": 550.0,
+                "eut": 50.0,
+                "k": 1.0,
+                "ey0t": 0.0,
+                "ey0c": 0.0,
             },
             "mild",
             "Enter a positive finite reinforcement modulus for the selected curve",
@@ -5114,11 +5121,52 @@ def test_material_builder_keeps_field_specific_rupture_stress_correction():
                 "gamma_u": 1.15,
                 "gamma_E": 1.0,
                 "curve": 7,
+                "IS": 5.9,
                 "fytk": 0.0,
                 "futk": 1860.0,
+                "eut": 35.0,
+                "k": 1.0,
+                "ey0t": 0.0,
             },
             "prestress",
             "Enter positive proof and ultimate strengths for the selected prestressing curve",
+        ),
+        (
+            {
+                "Es": 200.0,
+                "gamma_y": 1.0,
+                "gamma_u": 2.0,
+                "gamma_E": 1.0,
+                "curve": 3,
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 550.0,
+                "eut": 50.0,
+                "k": 1.0,
+                "ey0t": 0.0,
+                "ey0c": 0.0,
+            },
+            "mild",
+            "Enter strengths and partial factors so the design ultimate strength "
+            "is not less than every active design yield or proof strength",
+        ),
+        (
+            {
+                "Es": 195.0,
+                "gamma_y": 1.0,
+                "gamma_u": 2.0,
+                "gamma_E": 1.0,
+                "curve": 7,
+                "IS": 5.9,
+                "fytk": 1600.0,
+                "futk": 1800.0,
+                "eut": 35.0,
+                "k": 1.0,
+                "ey0t": 0.0,
+            },
+            "prestress",
+            "Enter strengths and partial factors so the design ultimate strength "
+            "is not less than every active design yield or proof strength",
         ),
     ),
 )
@@ -5130,6 +5178,326 @@ def test_material_catalogue_keeps_finite_field_specific_corrections(
     import sector_app
 
     assert sector_app._material_definition_message(item, kind).text == expected
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 1.0e308,
+                "gamma_y": 1.0,
+                "gamma_u": 1.0e-308,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 1.0e-308,
+                "fyck": 1.0e-308,
+                "futk": 1.0e-308,
+                "gamma_y": 1.0e308,
+                "gamma_u": 1.0e308,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "fytk": 1600.0,
+                "futk": 1.0e308,
+                "gamma_y": 1.0,
+                "gamma_u": 1.0e-308,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "fytk": 1.0e-308,
+                "futk": 1.0e-308,
+                "gamma_y": 1.0e308,
+                "gamma_u": 1.0e308,
+            },
+        ),
+    ),
+)
+def test_material_classifier_rejects_nonfinite_derived_design_ordinates(
+    kind,
+    curve,
+    updates,
+):
+    import material_catalog
+    import sector_app
+
+    entry = material_catalog.default_entry(kind)
+    entry.update(curve=curve, **updates)
+
+    message = sector_app._material_definition_message(entry, kind).text
+
+    assert message == (
+        "Enter strengths and partial factors so the design ultimate strength "
+        "is not less than every active design yield or proof strength"
+    )
+
+
+@pytest.mark.parametrize("curve", (1, 2, 3, 4, 5))
+def test_material_classifier_rejects_nonfinite_builtin_prestress_design_stress(
+    curve,
+):
+    import material_catalog
+    import sector_app
+
+    entry = material_catalog.default_entry("prestress")
+    entry.update(curve=curve, gamma_y=1.0e-308)
+
+    assert sector_app._material_definition_message(
+        entry, "prestress"
+    ).text == (
+        "Enter a prestressing partial factor that gives a finite positive "
+        "design stress"
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve"),
+    (("mild", 1), ("mild", 3), ("prestress", 6), ("prestress", 7)),
+)
+def test_material_classifier_strength_order_is_scale_independent(kind, curve):
+    import material_catalog
+    import sector_app
+
+    entry = material_catalog.default_entry(kind)
+    entry.update(
+        curve=curve,
+        fytk=1.0e-308,
+        futk=2.0e-308,
+        eut=50.0,
+        gamma_y=1.0,
+        gamma_u=2.0,
+        gamma_E=1.0,
+        Es=1.0e-309,
+    )
+    if kind == "mild":
+        entry.update(fyck=0.0, active_in_compression=False)
+    if curve in (3, 7):
+        entry.update(k=1.0, ey0t=0.0)
+    if curve == 3:
+        entry["ey0c"] = -10.0
+
+    assert sector_app._material_definition_message(
+        entry, kind
+    ).text == "Review the selected material values"
+
+    entry["futk"] = 1.0e-308
+    assert sector_app._material_definition_message(entry, kind).text == (
+        "Enter strengths and partial factors so the design ultimate strength "
+        "is not less than every active design yield or proof strength"
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 1.0e308,
+                "fyck": 0.0,
+                "futk": 1.0e308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e307,
+                "gamma_u": 1.0e307,
+                "gamma_E": 1.0e308,
+                "Es": 1.0e305,
+                "active_in_compression": False,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 1.0e-308,
+                "fyck": 0.0,
+                "futk": 1.0e-308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e-308,
+                "gamma_u": 1.0e-308,
+                "gamma_E": 1.0e-306,
+                "Es": 1.0e-310,
+                "active_in_compression": False,
+                "k": 1.0,
+                "ey0t": 0.0,
+                "ey0c": 0.0,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "IS": 0.0,
+                "fytk": 1.0e308,
+                "futk": 1.0e308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e307,
+                "gamma_u": 1.0e307,
+                "gamma_E": 1.0e308,
+                "Es": 1.0e305,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "IS": 0.0,
+                "fytk": 1.0e-308,
+                "futk": 1.0e-308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e-308,
+                "gamma_u": 1.0e-308,
+                "gamma_E": 1.0e-306,
+                "Es": 1.0e-310,
+                "k": 1.0,
+                "ey0t": 0.0,
+            },
+        ),
+    ),
+)
+def test_material_classifier_rejects_factored_yield_nan_escape(
+    kind,
+    curve,
+    updates,
+):
+    import material_catalog
+    import sector_app
+
+    entry = material_catalog.default_entry(kind)
+    entry.update(curve=curve, **updates)
+
+    message = sector_app._material_definition_message(entry, kind).text
+
+    assert message == (
+        "Enter a positive rupture strain above every active yield point"
+    )
+
+
+def test_material_nonfinite_design_ordinate_is_blocked_before_solver(
+    monkeypatch,
+):
+    import sector_app
+    from sector import material_presets
+
+    class Box:
+        def __init__(self):
+            self.messages = []
+
+        def warning(self, message):
+            self.messages.append(message)
+
+    values = dict(
+        material_presets.MILD_PRESETS["Curve 1 (bilinear hardening)"]
+    )
+    values.update(
+        fytk=500.0,
+        fyck=500.0,
+        futk=1.0e308,
+        gamma_y=1.0,
+        gamma_u=1.0e-308,
+    )
+    values.pop("curve")
+    box = Box()
+
+    material = sector_app._safe_build(
+        box,
+        material_presets.build_mild,
+        1,
+        values,
+    )
+
+    assert material is None
+    assert box.messages == [
+        "Material unavailable: Enter strengths and partial factors so the "
+        "design ultimate strength is not less than every active design yield "
+        "or proof strength"
+    ]
+
+    solver_calls = []
+
+    def forbidden_solver(*_args, **_kwargs):
+        solver_calls.append(True)
+        raise AssertionError("invalid material reached a solver")
+
+    monkeypatch.setattr(
+        sector_app, "_section_and_material_results", forbidden_solver
+    )
+    assert sector_app.run_analysis(
+        {"section": object(), "material_error": box.messages[0]}
+    ) == {}
+    assert solver_calls == []
+
+
+def test_material_factored_yield_nan_escape_is_blocked_before_solver(
+    monkeypatch,
+):
+    import sector_app
+    from sector import material_presets
+
+    class Box:
+        def __init__(self):
+            self.messages = []
+
+        def warning(self, message):
+            self.messages.append(message)
+
+    values = dict(
+        material_presets.MILD_PRESETS["Curve 1 (bilinear hardening)"]
+    )
+    values.update(
+        fytk=1.0e308,
+        fyck=0.0,
+        futk=1.0e308,
+        eut=2000.0,
+        gamma_y=1.0e307,
+        gamma_u=1.0e307,
+        gamma_E=1.0e308,
+        Es=1.0e305,
+    )
+    values.pop("curve")
+    box = Box()
+
+    material = sector_app._safe_build(
+        box,
+        material_presets.build_mild,
+        1,
+        values,
+        active_in_compression=False,
+    )
+
+    assert material is None
+    assert box.messages == [
+        "Material unavailable: Enter a positive rupture strain above every "
+        "active yield point"
+    ]
+
+    solver_calls = []
+
+    def forbidden_solver(*_args, **_kwargs):
+        solver_calls.append(True)
+        raise AssertionError("invalid material reached a solver")
+
+    monkeypatch.setattr(
+        sector_app, "_section_and_material_results", forbidden_solver
+    )
+    assert sector_app.run_analysis(
+        {"section": object(), "material_error": box.messages[0]}
+    ) == {}
+    assert solver_calls == []
 
 
 def test_heightened_reference_boundary_hides_hostile_exception_text(
@@ -6091,7 +6459,9 @@ def test_two_yield_fields_live_under_default_preset():
 
 def test_mild_fyck_zero_is_allowed_and_calculates():
     # The old 100 MPa floor on fyck is gone; zero compression yield must be a
-    # valid input and still compute.
+    # valid input and still compute.  With no compression capacity, retaining
+    # the explicit compression toggle cannot create a hidden rupture limit or
+    # change the calculated envelope.
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
@@ -6100,6 +6470,31 @@ def test_mild_fyck_zero_is_allowed_and_calculates():
     _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]
+
+    sentinel_points = copy.deepcopy(
+        at.session_state["results"]["plastic"]["points"]
+    )
+    assert sentinel_points
+    assert all(
+        candidate["mode"] != "bar_compression_rupture"
+        for point in sentinel_points
+        for candidate in point["curvature_candidates"]
+    )
+
+    _set(at, ("checkbox", "mild_active_comp", False))
+    _calculate(at)
+    assert not at.exception
+    tension_only_points = at.session_state["results"]["plastic"]["points"]
+
+    assert len(tension_only_points) == len(sentinel_points)
+    for sentinel, tension_only in zip(
+        sentinel_points, tension_only_points, strict=True
+    ):
+        for key in ("Mx", "My", "kappa", "comp_force", "lever"):
+            assert sentinel[key] == pytest.approx(tension_only[key])
+        assert sentinel["curvature_selection"]["mode"] == (
+            tension_only["curvature_selection"]["mode"]
+        )
 
 
 def test_material_fields_are_flat_regardless_of_preset():
@@ -6241,6 +6636,111 @@ def test_active_in_compression_toggle_changes_plastic_capacity():
     assert at.session_state["results"]["plastic"]["max_mx"] < base
 
 
+def test_tension_only_ignores_compression_strength_and_offset_relations():
+    at = _fresh()
+    at.run()
+    _goto_material_tab(at, "Mild steel")
+    at.selectbox(key="mild_preset").set_value(
+        "Curve 1 (bilinear hardening)"
+    ).run()
+    at.number_input(key="mild_fyck").set_value(700.0).run()
+    at.number_input(key="mild_ey0c").set_value(1000.0).run()
+
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    visible = " ".join(str(item.value) for item in at.warning)
+    assert "not less than every active design yield" in visible
+
+    at.checkbox(key="mild_active_comp").set_value(False).run()
+
+    assert not at.exception
+    assert at.number_input(key="mild_fyck").disabled is True
+    assert at.number_input(key="mild_ey0c").disabled is True
+    steel = at.session_state["_latest_inputs"]["steel"]
+    assert steel is not None
+    assert steel.active_in_compression is False
+    assert steel.stress(-0.02) == 0.0
+
+    _calculate(at)
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_rendered_tension_only_material_omits_compression_labels_and_calculates():
+    import material_catalog
+
+    catalogue = material_catalog.default_catalog("mild")
+    catalogue["items"][0].update(
+        active_in_compression=False,
+        fytk=500.0,
+        fyck=700.0,
+        futk=600.0,
+        eut=50.0,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        k=0.9,
+        ey0t=2.0,
+        ey0c=-10.0,
+        Es=200.0,
+    )
+    material_stage = f"3 {chr(0x00B7)} Material parameters"
+    at = _fresh()
+    at.session_state[material_catalog.MILD_CATALOG_KEY] = catalogue
+    at.session_state["_input_tab"] = material_stage
+    at.session_state["_material_tab"] = "Mild steel"
+    at.session_state["_material_tab_preference"] = "Mild steel"
+    at.run()
+
+    assert not at.exception
+    assert at.checkbox(key="mild_active_comp").value is False
+    assert at.number_input(key="mild_ey0c").disabled is True
+    assert at.number_input(key="mild_ey0c").value == pytest.approx(-10.0)
+    steel = at.session_state["_latest_inputs"]["steel"]
+    assert steel is not None
+    assert steel.active_in_compression is False
+    assert steel.ey0c == pytest.approx(-0.01)
+
+    spec = next(
+        json.loads(chart.proto.spec)
+        for chart in at.get("plotly_chart")
+        if (
+            json.loads(chart.proto.spec)
+            .get("layout", {})
+            .get("xaxis", {})
+            .get("title", {})
+            .get("text", "")
+            .startswith("Strain")
+        )
+    )
+    annotations = " ".join(
+        str(item.get("text", ""))
+        for item in spec.get("layout", {}).get("annotations", [])
+    )
+    assert "f<sub>yck</sub>" not in annotations
+    assert chr(0x03B5) + "<sub>0c</sub>" not in annotations
+    marker = next(
+        trace for trace in spec["data"] if trace.get("mode") == "markers"
+    )
+    assert all(value >= 0.0 for value in marker["x"])
+    assert all(value >= 0.0 for value in marker["y"])
+
+    # Re-enabling compression exposes the active-branch requirements without
+    # crashing or sending the invalid law onward. Restoring tension-only makes
+    # the same retained finite values usable again.
+    at.checkbox(key="mild_active_comp").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    visible = " ".join(str(item.value) for item in at.warning)
+    assert "Material unavailable" in visible
+    assert "design ultimate strength" in visible
+    at.checkbox(key="mild_active_comp").set_value(False).run()
+    assert at.session_state["_latest_inputs"]["steel"] is not None
+
+    _calculate(at)
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
 def test_elastic_calculates_with_locked_materials():
     # Locking the laws must not break the elastic run.
     at = _fresh()
@@ -6251,17 +6751,138 @@ def test_elastic_calculates_with_locked_materials():
     assert "elastic" in at.session_state["results"]
 
 
-def test_degenerate_rupture_stress_does_not_crash():
-    # A zero rupture stress on a hardening curve is degenerate; the app must warn
-    # and still render rather than raise.
+def test_material_factored_ultimate_equality_is_live_and_calculates():
+    at = _fresh()
+    at.run()
+
+    _goto_material_tab(at, "Mild steel")
+    at.selectbox(key="mild_preset").set_value(
+        "Curve 3 (two yield points)"
+    ).run()
+    at.number_input(key="mild_fytk").set_value(500.0).run()
+    at.number_input(key="mild_fyck").set_value(500.0).run()
+    at.number_input(key="mild_futk").set_value(550.0).run()
+    at.number_input(key="mild_gamma_y").set_value(1.0).run()
+    at.number_input(key="mild_gamma_u").set_value(1.1).run()
+
+    steel = at.session_state["_latest_inputs"]["steel"]
+    assert steel is not None
+    assert steel.futk / steel.gamma_u == pytest.approx(
+        steel.fytk / steel.gamma_y
+    )
+    assert steel.futk / steel.gamma_u == pytest.approx(
+        steel.fyck / steel.gamma_y
+    )
+
+    at.number_input(key="mild_futk").set_value(549.999999).run()
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    visible = " ".join(str(item.value) for item in at.warning)
+    assert "design ultimate strength" in visible
+    at.number_input(key="mild_futk").set_value(550.0).run()
+    assert at.session_state["_latest_inputs"]["steel"] is not None
+
+    _goto_material_tab(at, "Prestressing steel")
+    at.selectbox(key="pre_preset").set_value(
+        "Curve 7 (two yield)"
+    ).run()
+    at.number_input(key="pre_fytk").set_value(1600.0).run()
+    at.number_input(key="pre_gamma_y").set_value(1.0).run()
+    at.number_input(key="pre_gamma_u").set_value(1.1).run()
+    at.number_input(key="pre_futk").set_value(1760.0).run()
+
+    prestress = at.session_state["_latest_inputs"]["prestress"]
+    assert prestress is not None
+    assert prestress.futk / prestress.gamma_u == pytest.approx(
+        prestress.fytk / prestress.gamma_y
+    )
+
+    at.number_input(key="pre_futk").set_value(1759.99999).run()
+    assert at.session_state["_latest_inputs"]["prestress"] is None
+    visible = " ".join(str(item.value) for item in at.warning)
+    assert "design ultimate strength" in visible
+    at.number_input(key="pre_futk").set_value(1760.0).run()
+    assert at.session_state["_latest_inputs"]["prestress"] is not None
+
+    _calculate(at)
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
+
+
+def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
+    monkeypatch,
+):
+    import sector_app
+
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
     at.selectbox(key="mild_preset").set_value("Curve 1 (bilinear hardening)").run()
     at.number_input(key="mild_futk").set_value(0.0).run()
+
     assert not at.exception
+    assert at.number_input(key="mild_futk").value == pytest.approx(0.0)
+    mild_entry = at.session_state["mild_material_catalog"]["items"][0]
+    assert mild_entry["futk"] == pytest.approx(0.0)
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    assert at.session_state["_latest_inputs"]["material_error"] is not None
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("error", "warning", "caption", "info")
+        for item in getattr(at, element_type)
+    )
+    assert (
+        "Material unavailable: Enter a positive ultimate tensile strength"
+        in visible
+    )
+
+    # Correct the strength, then enter a rupture strain below yield. The rendered
+    # widget and durable catalogue retain the entered 1.0 per-mille value; no
+    # hidden clamp changes the law used for the preview or calculation.
+    at.number_input(key="mild_futk").set_value(600.0).run()
+    at.number_input(key="mild_eut").set_value(1.0).run()
+    assert at.number_input(key="mild_eut").value == pytest.approx(1.0)
+    mild_entry = at.session_state["mild_material_catalog"]["items"][0]
+    assert mild_entry["eut"] == pytest.approx(1.0)
+    assert at.session_state["_latest_inputs"]["steel"] is None
+
+    # Restore the mild law and exercise the same rendered boundary for the
+    # prestressing proof/ultimate-strength ordering.
+    at.number_input(key="mild_eut").set_value(50.0).run()
+    at.number_input(key="mild_gamma_u").set_value(2.0).run()
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    visible = " ".join(str(item.value) for item in at.warning)
+    assert "design ultimate strength" in visible
+    at.number_input(key="mild_gamma_u").set_value(1.0).run()
+    _goto_material_tab(at, "Prestressing steel")
+    at.number_input(key="pre_gamma_u").set_value(2.0).run()
+    assert at.session_state["_latest_inputs"]["prestress"] is None
+    visible = " ".join(str(item.value) for item in at.warning)
+    assert "design ultimate strength" in visible
+    at.number_input(key="pre_gamma_u").set_value(1.15).run()
+    at.number_input(key="pre_futk").set_value(1600.0).run()
+    assert at.number_input(key="pre_futk").value == pytest.approx(1600.0)
+    prestress_entry = at.session_state["prestress_material_catalog"]["items"][0]
+    assert prestress_entry["futk"] == pytest.approx(1600.0)
+    latest = at.session_state["_latest_inputs"]
+    assert latest["prestress"] is None
+    assert latest["material_error"] is not None
+
+    solver_calls = []
+
+    def forbidden_solver(*_args, **_kwargs):
+        solver_calls.append(True)
+        raise AssertionError("invalid material reached a solver")
+
+    monkeypatch.setattr(sector_app, "solve_plastic", forbidden_solver)
+    monkeypatch.setattr(sector_app, "solve_elastic_combined", forbidden_solver)
+    monkeypatch.setattr(sector_app, "_run_fatigue_or_invalid", forbidden_solver)
+    assert sector_app.run_analysis(latest) == {}
+    assert solver_calls == []
+
     _calculate(at)
     assert not at.exception
+    assert "results" not in at.session_state
+    assert "result_input_snapshot" not in at.session_state
 
 
 def test_creep_help_follows_concrete_preset_without_changing_phi():

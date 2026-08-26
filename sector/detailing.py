@@ -419,9 +419,12 @@ def _recentred_without_tendons(section: Section) -> Section:
 
 def _characteristic_plateau(material: MildSteel) -> MildSteel:
     """Characteristic-yield plateau used by EN 1992-1-1:2023, 12.2(2)."""
+    compression_active = (
+        material.active_in_compression and material.fyck > 0.0
+    )
     return MildSteel(
         fytk=float(material.fytk),
-        fyck=float(material.fytk),
+        fyck=float(material.fytk) if compression_active else 0.0,
         eut=1.0,
         futk=0.0,
         gamma_y=1.0,
@@ -429,7 +432,7 @@ def _characteristic_plateau(material: MildSteel) -> MildSteel:
         gamma_E=1.0,
         curve=2,
         Es=float(material.Es),
-        active_in_compression=bool(material.active_in_compression),
+        active_in_compression=bool(compression_active),
     )
 
 

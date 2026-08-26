@@ -22,14 +22,196 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from numbers import Integral, Real
 
 # Characteristic modulus of elasticity of reinforcement, MPa (Ek in the manual).
 ES = 2.0e5
 
+_STRENGTH_ORDER_REL_TOL = 1.0e-12
 
-def _require_positive_finite(value: float, label: str) -> None:
-    if not math.isfinite(float(value)) or float(value) <= 0.0:
+
+def _positive_finite_quotient(
+    numerator: float,
+    denominator: float,
+) -> float | None:
+    """Return a positive finite quotient, or ``None`` at the numeric boundary."""
+
+    try:
+        quotient = numerator / denominator
+    except (OverflowError, ZeroDivisionError):
+        return None
+    return quotient if math.isfinite(quotient) and quotient > 0.0 else None
+
+
+def design_ordinate_is_positive_finite(
+    characteristic_strength: float,
+    partial_factor: float,
+) -> bool:
+    """Return whether one derived design-stress ordinate is usable."""
+
+    return (
+        _positive_finite_quotient(characteristic_strength, partial_factor)
+        is not None
+    )
+
+
+def _factored_yield_strain(
+    characteristic_strength: float,
+    strength_factor: float,
+    elastic_modulus: float,
+    modulus_factor: float,
+) -> float | None:
+    """Return a usable yield strain from separately factored ordinates."""
+
+    design_strength = _positive_finite_quotient(
+        characteristic_strength, strength_factor
+    )
+    design_slope = _positive_finite_quotient(
+        elastic_modulus, modulus_factor
+    )
+    if design_strength is None or design_slope is None:
+        return None
+    return _positive_finite_quotient(design_strength, design_slope)
+
+
+def governing_yield_strain(
+    characteristic_strength: float,
+    strength_factor: float,
+    elastic_modulus: float,
+    modulus_factor: float,
+) -> float | None:
+    """Return the greater usable characteristic/design yield strain."""
+
+    characteristic_yield = _positive_finite_quotient(
+        characteristic_strength, elastic_modulus
+    )
+    design_yield = _factored_yield_strain(
+        characteristic_strength,
+        strength_factor,
+        elastic_modulus,
+        modulus_factor,
+    )
+    if characteristic_yield is None or design_yield is None:
+        return None
+    return max(characteristic_yield, design_yield)
+
+
+def design_ultimate_not_below_yield(
+    ultimate_strength: float,
+    ultimate_factor: float,
+    yield_strength: float,
+    yield_factor: float,
+) -> bool:
+    """Return whether the factored ultimate ordinate is non-descending.
+
+    Decimal engineering inputs can produce adjacent binary results when two
+    divisions are mathematically equal. Accept only a tight relative round-off
+    band: an absolute tolerance would incorrectly accept a materially descending
+    branch merely because its stresses are small.
+    """
+
+    design_ultimate = _positive_finite_quotient(
+        ultimate_strength, ultimate_factor
+    )
+    design_yield = _positive_finite_quotient(yield_strength, yield_factor)
+    if design_ultimate is None or design_yield is None:
+        return False
+    return design_ultimate >= design_yield or math.isclose(
+        design_ultimate,
+        design_yield,
+        rel_tol=_STRENGTH_ORDER_REL_TOL,
+        abs_tol=0.0,
+    )
+
+
+def _linear_branch_value(
+    coordinate: float,
+    start_coordinate: float,
+    end_coordinate: float,
+    start_value: float,
+    end_value: float,
+) -> float:
+    """Interpolate one non-descending branch without product-before-division.
+
+    Material constructors establish finite ordered endpoints and a positive
+    coordinate span. Returning the endpoints explicitly and forming the bounded
+    interpolation fraction first keeps every accepted branch finite at extreme
+    but representable input scales.
+    """
+
+    if coordinate <= start_coordinate:
+        return start_value
+    if coordinate >= end_coordinate:
+        return end_value
+    fraction = (coordinate - start_coordinate) / (
+        end_coordinate - start_coordinate
+    )
+    return start_value + (end_value - start_value) * fraction
+
+
+def _finite_value(value: float, label: str) -> float:
+    """Return one finite material value with an owning-field diagnostic."""
+
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{label} must be a finite value")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must be a finite value") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be a finite value")
+    return number
+
+
+def _require_positive_finite(value: float, label: str) -> float:
+    try:
+        number = _finite_value(value, label)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a positive finite value") from exc
+    if number <= 0.0:
         raise ValueError(f"{label} must be a positive finite value")
+    return number
+
+
+def _require_nonnegative_finite(value: float, label: str) -> float:
+    try:
+        number = _finite_value(value, label)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a non-negative finite value") from exc
+    if number < 0.0:
+        raise ValueError(f"{label} must be a non-negative finite value")
+    return number
+
+
+def _require_governing_yield_strain(
+    characteristic_strength: float,
+    strength_factor: float,
+    elastic_modulus: float,
+    modulus_factor: float,
+    label: str,
+) -> float:
+    yield_strain = governing_yield_strain(
+        characteristic_strength,
+        strength_factor,
+        elastic_modulus,
+        modulus_factor,
+    )
+    if yield_strain is None:
+        raise ValueError(f"{label} must be a positive finite value")
+    return yield_strain
+
+
+def _require_yield_before_rupture(
+    yield_strain: float,
+    rupture_strain: float,
+    label: str,
+) -> None:
+    """Reject a law whose active yield point reaches or exceeds rupture."""
+
+    if not math.isfinite(yield_strain) or yield_strain <= 0.0:
+        raise ValueError(f"{label} must be a positive finite value")
+    if yield_strain >= rupture_strain:
+        raise ValueError(f"{label} must be below the rupture strain eut")
 
 
 def _trilinear_tension(eps, slope, f1, f2, fu, ey0t, eut):
@@ -51,10 +233,10 @@ def _trilinear_tension(eps, slope, f1, f2, fu, ey0t, eut):
         return slope * eps
     e2 = ey0t + f2 / slope
     if eps <= e2:
-        return f1 + (f2 - f1) * (eps - e1) / (e2 - e1)
+        return _linear_branch_value(eps, e1, e2, f1, f2)
     if eut <= e2:
         return f2  # degenerate: no room for a hardening branch
-    return f2 + (fu - f2) * (eps - e2) / (eut - e2)
+    return _linear_branch_value(eps, e2, eut, f2, fu)
 
 
 # Concrete strain limits (compression, magnitude): peak at 0.2 %, ultimate 0.35 %.
@@ -223,12 +405,141 @@ class MildSteel:
     active_in_compression: bool = True   # False -> tension-only (no compression)
 
     def __post_init__(self) -> None:
-        if self.curve not in (1, 2, 3):
+        if (
+            isinstance(self.curve, bool)
+            or not isinstance(self.curve, Integral)
+            or self.curve not in (1, 2, 3)
+        ):
             raise ValueError("mild steel curve must be 1, 2 or 3")
-        for label in ("gamma_y", "gamma_u", "gamma_E", "Es"):
-            _require_positive_finite(getattr(self, label), label)
-        if self.curve in (1, 3) and self.futk <= 0:
-            raise ValueError("types 1 and 3 need a rupture stress futk > 0")
+        if type(self.active_in_compression) is not bool:
+            raise ValueError("active_in_compression must be a Boolean")
+        fytk = _require_positive_finite(self.fytk, "fytk")
+        # A zero compression yield is the established tension-only sentinel.  It
+        # remains a finite material input, but it owns no compression branch and
+        # therefore no compression yield/rupture relation.
+        fyck = _require_nonnegative_finite(self.fyck, "fyck")
+        eut = _require_positive_finite(self.eut, "eut")
+        gamma_y = _require_positive_finite(self.gamma_y, "gamma_y")
+        Es = _require_positive_finite(self.Es, "Es")
+        if not design_ordinate_is_positive_finite(fytk, gamma_y):
+            raise ValueError("fytk/gamma_y must be a positive finite value")
+        if (
+            self.active_in_compression
+            and fyck > 0.0
+            and not design_ordinate_is_positive_finite(fyck, gamma_y)
+        ):
+            raise ValueError("fyck/gamma_y must be a positive finite value")
+
+        if self.curve == 2:
+            tension_yield = _require_governing_yield_strain(
+                fytk, gamma_y, Es, gamma_y, "tensile yield strain"
+            )
+            _require_yield_before_rupture(
+                tension_yield,
+                eut,
+                "tensile yield strain",
+            )
+            if self.active_in_compression and fyck > 0.0:
+                compression_yield = _require_governing_yield_strain(
+                    fyck,
+                    gamma_y,
+                    Es,
+                    gamma_y,
+                    "compressive yield strain",
+                )
+                _require_yield_before_rupture(
+                    compression_yield,
+                    eut,
+                    "compressive yield strain",
+                )
+            return
+
+        gamma_u = _require_positive_finite(self.gamma_u, "gamma_u")
+        gamma_E = _require_positive_finite(self.gamma_E, "gamma_E")
+        futk = _require_positive_finite(self.futk, "futk")
+        if futk < fytk:
+            raise ValueError("futk must be greater than or equal to fytk")
+        if (
+            self.curve == 3
+            and self.active_in_compression
+            and fyck > 0.0
+            and futk < fyck
+        ):
+            raise ValueError(
+                "futk must be greater than or equal to active fyck"
+            )
+        if not design_ultimate_not_below_yield(
+            futk, gamma_u, fytk, gamma_y
+        ):
+            raise ValueError(
+                "futk/gamma_u must be greater than or equal to fytk/gamma_y"
+            )
+        if (
+            self.curve == 3
+            and self.active_in_compression
+            and fyck > 0.0
+            and not design_ultimate_not_below_yield(
+                futk, gamma_u, fyck, gamma_y
+            )
+        ):
+            raise ValueError(
+                "futk/gamma_u must be greater than or equal to active "
+                "fyck/gamma_y"
+            )
+
+        tension_yield = _require_governing_yield_strain(
+            fytk,
+            gamma_y,
+            Es,
+            gamma_E,
+            "tensile yield strain",
+        )
+        if self.curve == 1:
+            _require_yield_before_rupture(
+                tension_yield,
+                eut,
+                "tensile yield strain",
+            )
+            if self.active_in_compression and fyck > 0.0:
+                compression_yield = _require_governing_yield_strain(
+                    fyck,
+                    gamma_y,
+                    Es,
+                    gamma_E,
+                    "compressive yield strain",
+                )
+                _require_yield_before_rupture(
+                    compression_yield,
+                    eut,
+                    "compressive yield strain",
+                )
+            return
+
+        k = _finite_value(self.k, "k")
+        if not 0.0 < k <= 1.0:
+            raise ValueError("k must satisfy 0 < k <= 1")
+        ey0t = _require_nonnegative_finite(self.ey0t, "ey0t")
+        _require_yield_before_rupture(
+            ey0t + tension_yield,
+            eut,
+            "second tensile yield strain ey0t + fytk/Es",
+        )
+        ey0c = _finite_value(self.ey0c, "ey0c")
+        if self.active_in_compression and fyck > 0.0:
+            if ey0c < 0.0:
+                raise ValueError("ey0c must be a non-negative finite value")
+            compression_yield = _require_governing_yield_strain(
+                fyck,
+                gamma_y,
+                Es,
+                gamma_E,
+                "compressive yield strain",
+            )
+            _require_yield_before_rupture(
+                ey0c + compression_yield,
+                eut,
+                "second compressive yield strain ey0c + fyck/Es",
+            )
 
     def stress(self, eps: float, *, design: bool = True) -> float:
         """Stress (MPa, tension positive) at tension-positive strain ``eps``."""
@@ -276,9 +587,15 @@ class MildSteel:
                 return -slope * a
             if a <= e2c:
                 span = e2c - e1
-                return -(f1c + (fyc - f1c) * (a - e1) / span) if span > 0 else -fyc
+                return -(
+                    _linear_branch_value(a, e1, e2c, f1c, fyc)
+                    if span > 0
+                    else fyc
+                )
             if e2c < a < self.eut and self.eut > e2c:
-                return -(fyc + (fu - fyc) * (a - e2c) / (self.eut - e2c))
+                return -_linear_branch_value(
+                    a, e2c, self.eut, fyc, fu
+                )
             return -fu
 
         # type 1: hardening in tension, plateau in compression; rupture is symmetric
@@ -291,7 +608,9 @@ class MildSteel:
                 return slope * eps
             fu = self.futk / gu
             # Hardening branch, reaching the design rupture stress at eut.
-            return fyt + (fu - fyt) * (eps - eps_y) / (self.eut - eps_y)
+            return _linear_branch_value(
+                eps, eps_y, self.eut, fyt, fu
+            )
         if -eps > self.eut:
             return 0.0  # rupture is symmetric: also fractures in compression
         eps_yc = -fyc / slope
@@ -312,16 +631,16 @@ class MildSteel:
         return self.Es / (g if design else 1.0)
 
     def diagram_markers(self, *, design: bool = True):
-        """Labelled points of interest; the compression-side markers are dropped
-        when the bar is tension-only (``active_in_compression`` is False)."""
+        """Labelled points of interest for branches the law actually carries."""
         pts = self._markers(design=design)
-        # The law ruptures symmetrically, so mark the compression rupture at -eut
-        # too (parity with the tension-side eut marker); the stress there is the
-        # compression value just before the drop. Filtered out below when the bar
-        # is tension-only.
-        pts = pts + [(-self.eut, self.stress(-self.eut, design=design), "eut", None)]
-        if not self.active_in_compression:
-            pts = [m for m in pts if m[0] >= 0.0]
+        # A positive fyck and the explicit compression toggle jointly own the
+        # compression branch.  Inactive offsets are retained as project inputs,
+        # but cannot create a plotted yield or rupture point by changing the sign
+        # of a derived coordinate.
+        if self.active_in_compression and self.fyck > 0.0:
+            pts = pts + [
+                (-self.eut, self.stress(-self.eut, design=design), "eut", None)
+            ]
         return pts
 
     def _markers(self, *, design: bool = True):
@@ -339,37 +658,99 @@ class MildSteel:
         gu = self.gamma_u if design else 1.0
         fyt = self.fytk / gy
         fyc = self.fyck / gy
+        compression_active = self.active_in_compression and self.fyck > 0.0
 
         if self.curve == 2:
             slope = self.Es / gy
             # Perfectly plastic: the ultimate stress equals the yield stress.
-            return [(fyt / slope, fyt, None, "fytk"),
-                    (self.eut, fyt, "eut", "fytk"),
-                    (-fyc / slope, -fyc, None, "fyck")]
+            pts = [(fyt / slope, fyt, None, "fytk"),
+                   (self.eut, fyt, "eut", "fytk")]
+            if compression_active:
+                pts.append((-fyc / slope, -fyc, None, "fyck"))
+            return pts
 
         slope = self.Es / gE
         fu = self.futk / gu
         if self.curve == 1:
-            return [(fyt / slope, fyt, None, "fytk"),
-                    (self.eut, fu, "eut", "futk"),
-                    (-fyc / slope, -fyc, None, "fyck")]
+            pts = [(fyt / slope, fyt, None, "fytk"),
+                   (self.eut, fu, "eut", "futk")]
+            if compression_active:
+                pts.append((-fyc / slope, -fyc, None, "fyck"))
+            return pts
 
         # curve 3: general two-yield law -- tension uses fytk, compression fyck.
         pts = [(self.ey0t + fyt / slope, fyt,
                 "ey0t" if self.ey0t > 0.0 else None, "fytk"),
-               (self.eut, fu, "eut", "futk"),
-               (-(self.ey0c + fyc / slope), -fyc,
-                "ey0c" if self.ey0c > 0.0 else None, "fyck")]
+               (self.eut, fu, "eut", "futk")]
+        if compression_active:
+            pts.append((-(self.ey0c + fyc / slope), -fyc,
+                        "ey0c" if self.ey0c > 0.0 else None, "fyck"))
         if self.k < 1.0:                      # distinct first yield -> reveals k
             pts.append((self.k * fyt / slope, self.k * fyt, None, "k_fytk"))
-            pts.append((-self.k * fyc / slope, -self.k * fyc, None, "k_fyck"))
-        else:                                 # k = 1: mark fyck at the yield corner
+            if compression_active:
+                pts.append(
+                    (-self.k * fyc / slope, -self.k * fyc, None, "k_fyck")
+                )
+        elif compression_active:              # mark fyck at the yield corner
             pts.append((-fyc / slope, -fyc, None, "fyck"))
         return pts
 
 
 # Rupture strain of the built-in prestressing curves (fraction): 3.5 %.
 EPS_P_RES = 0.035
+
+
+def _builtin_prestress_characteristic(curve: int, e: float) -> float:
+    """Characteristic stress (MPa) of a built-in curve at strain ``e`` (%)."""
+
+    if curve == 1:
+        if e < 0.6:
+            return 2000.0 * e
+        if e < 1.0:
+            return -2500.0 * e ** 2 + 5000.0 * e - 900.0
+        if e < 1.75:
+            return 60.0 * e + 1540.0
+        return 1645.0
+    if curve == 2:
+        if e < 0.7:
+            return 1850.0 * e
+        if e < 1.0:
+            return 2743.0 * e ** 3 - 9932.0 * e ** 2 + 11724.0 * e - 2986.0
+        return 1462.0 + 86.0 * e
+    if curve == 3:
+        if e < 0.7:
+            return 1850.0 * e
+        if e < 1.0:
+            return 2037.0 * e ** 3 - 8137.0 * e ** 2 + 10247.0 * e - 2590.0
+        return 1473.0 + 85.0 * e
+    if curve == 4:
+        if e < 0.6:
+            return 1950.0 * e
+        if e < 1.0:
+            return 2286.0 * e ** 3 - 7783.0 * e ** 2 + 8825.0 * e - 1816.0
+        return 1403.0 + 105.0 * e
+    # curve == 5
+    if e < 0.6:
+        return 1950.0 * e
+    if e < 1.0:
+        return 2378.0 * e ** 3 - 8014.0 * e ** 2 + 8998.0 * e - 1857.0
+    return 1399.0 + 106.0 * e
+
+
+def builtin_prestress_design_ordinate_is_positive_finite(
+    curve: int,
+    partial_factor: float,
+) -> bool:
+    """Return whether a fixed prestress law has a usable design ordinate."""
+
+    if isinstance(curve, bool) or not isinstance(curve, Integral):
+        return False
+    if curve not in (1, 2, 3, 4, 5):
+        return False
+    characteristic = _builtin_prestress_characteristic(
+        curve, EPS_P_RES * 100.0
+    )
+    return design_ordinate_is_positive_finite(characteristic, partial_factor)
 
 
 @dataclass(frozen=True)
@@ -424,12 +805,72 @@ class Prestress:
     Es: float = ES   # elastic (strain) modulus, MPa
 
     def __post_init__(self) -> None:
-        if self.curve not in (1, 2, 3, 4, 5, 6, 7):
+        if (
+            isinstance(self.curve, bool)
+            or not isinstance(self.curve, Integral)
+            or self.curve not in (1, 2, 3, 4, 5, 6, 7)
+        ):
             raise ValueError("prestress curve must be 1-7")
-        for label in ("gamma_y", "gamma_u", "gamma_E", "Es"):
-            _require_positive_finite(getattr(self, label), label)
-        if self.curve in (6, 7) and (self.fytk <= 0 or self.futk <= 0):
-            raise ValueError("types 6 and 7 need fytk and futk > 0")
+        initial_strain = _require_nonnegative_finite(self.IS, "IS")
+        gamma_y = _require_positive_finite(self.gamma_y, "gamma_y")
+        Es = _require_positive_finite(self.Es, "Es")
+
+        if self.curve in (1, 2, 3, 4, 5):
+            if initial_strain >= EPS_P_RES:
+                raise ValueError("IS must be below the fixed rupture strain")
+            if not builtin_prestress_design_ordinate_is_positive_finite(
+                self.curve, gamma_y
+            ):
+                raise ValueError(
+                    "fixed prestress design stress must be a positive finite value"
+                )
+            return
+
+        gamma_u = _require_positive_finite(self.gamma_u, "gamma_u")
+        gamma_E = _require_positive_finite(self.gamma_E, "gamma_E")
+        fytk = _require_positive_finite(self.fytk, "fp0.1k")
+        futk = _require_positive_finite(self.futk, "fpk")
+        eut = _require_positive_finite(self.eut, "eut")
+        if not design_ordinate_is_positive_finite(fytk, gamma_y):
+            raise ValueError(
+                "fp0.1k/gamma_y must be a positive finite value"
+            )
+        if futk < fytk:
+            raise ValueError("fpk must be greater than or equal to fp0.1k")
+        if not design_ultimate_not_below_yield(
+            futk, gamma_u, fytk, gamma_y
+        ):
+            raise ValueError(
+                "fpk/gamma_u must be greater than or equal to "
+                "fp0.1k/gamma_y"
+            )
+        if initial_strain >= eut:
+            raise ValueError("IS must be below the rupture strain eut")
+
+        proof_strain = _require_governing_yield_strain(
+            fytk,
+            gamma_y,
+            Es,
+            gamma_E,
+            "proof strain fp0.1k/Ep",
+        )
+        if self.curve == 6:
+            _require_yield_before_rupture(
+                proof_strain,
+                eut,
+                "proof strain fp0.1k/Ep",
+            )
+            return
+
+        k = _finite_value(self.k, "k")
+        if not 0.0 < k <= 1.0:
+            raise ValueError("k must satisfy 0 < k <= 1")
+        ey0t = _require_nonnegative_finite(self.ey0t, "ey0t")
+        _require_yield_before_rupture(
+            ey0t + proof_strain,
+            eut,
+            "proof strain ey0t + fp0.1k/Ep",
+        )
 
     @property
     def rupture_strain(self) -> float:
@@ -443,38 +884,7 @@ class Prestress:
     @staticmethod
     def _builtin_char(curve: int, e: float) -> float:
         """Characteristic stress (MPa) of a built-in curve at strain ``e`` (%)."""
-        if curve == 1:
-            if e < 0.6:
-                return 2000.0 * e
-            if e < 1.0:
-                return -2500.0 * e ** 2 + 5000.0 * e - 900.0
-            if e < 1.75:
-                return 60.0 * e + 1540.0
-            return 1645.0
-        if curve == 2:
-            if e < 0.7:
-                return 1850.0 * e
-            if e < 1.0:
-                return 2743.0 * e ** 3 - 9932.0 * e ** 2 + 11724.0 * e - 2986.0
-            return 1462.0 + 86.0 * e
-        if curve == 3:
-            if e < 0.7:
-                return 1850.0 * e
-            if e < 1.0:
-                return 2037.0 * e ** 3 - 8137.0 * e ** 2 + 10247.0 * e - 2590.0
-            return 1473.0 + 85.0 * e
-        if curve == 4:
-            if e < 0.6:
-                return 1950.0 * e
-            if e < 1.0:
-                return 2286.0 * e ** 3 - 7783.0 * e ** 2 + 8825.0 * e - 1816.0
-            return 1403.0 + 105.0 * e
-        # curve == 5
-        if e < 0.6:
-            return 1950.0 * e
-        if e < 1.0:
-            return 2378.0 * e ** 3 - 8014.0 * e ** 2 + 8998.0 * e - 1857.0
-        return 1399.0 + 106.0 * e
+        return _builtin_prestress_characteristic(curve, e)
 
     def stress(self, eps: float, *, design: bool = True) -> float:
         """Stress (MPa, tension positive) at *total* tendon strain ``eps``.
@@ -496,7 +906,9 @@ class Prestress:
             if eps <= eps_y:
                 return slope * eps
             fu = self.futk / gu
-            return fyt + (fu - fyt) * (eps - eps_y) / (self.eut - eps_y)
+            return _linear_branch_value(
+                eps, eps_y, self.eut, fyt, fu
+            )
 
         if self.curve == 7:
             gy = self.gamma_y if design else 1.0

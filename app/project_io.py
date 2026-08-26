@@ -534,9 +534,77 @@ def _validate_material_catalog(value, kind: str, key: str) -> dict:
                 raise _invalid_input(f"{label} {field} must be a Boolean")
         for field in real_fields.intersection(item):
             item[field] = _strict_finite_real(item[field], f"{label} {field}")
+        try:
+            material_catalog.validate_material_definition(item, kind)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise _invalid_input(f"{label}: {exc}") from exc
         validated.append(item)
     catalog["items"] = validated
     return catalog
+
+
+def _validate_material_aliases(payload: Mapping) -> None:
+    """Validate persisted live-panel aliases against their owning material law.
+
+    Current projects normally carry complete catalogues, while deliberately
+    sparse projects may carry only the historical M1/P1 widget aliases. Rebuild
+    the same family definition the live panel will own and reject an invalid
+    active domain before any project state is applied. When a present catalogue
+    no longer contains M1/P1, its old aliases are orphaned and cannot recreate or
+    override a material. Inactive curve fields are left out by
+    ``validate_material_definition``.
+    """
+
+    for kind, prefix, preset_key, alias_id in (
+        ("mild", "mild", "mild_preset", "M1"),
+        ("prestress", "pre", "pre_preset", "P1"),
+    ):
+        alias_keys = {
+            f"{prefix}_{field}": field
+            for field in material_catalog.fields(kind)
+        }
+        relevant_keys = set(alias_keys) | {preset_key}
+        if kind == "mild":
+            relevant_keys.add("mild_active_comp")
+        if not relevant_keys.intersection(payload):
+            continue
+
+        entry = None
+        catalog_key = material_catalog.catalog_key(kind)
+        catalog_is_present = catalog_key in payload
+        catalog = payload.get(catalog_key)
+        if isinstance(catalog, Mapping):
+            items = catalog.get("items")
+            if isinstance(items, list):
+                entry = next(
+                    (
+                        dict(item)
+                        for item in items
+                        if isinstance(item, Mapping)
+                        and item.get("id") == alias_id
+                    ),
+                    None,
+                )
+        if entry is None and catalog_is_present:
+            continue
+        if entry is None:
+            selected = payload.get(preset_key)
+            available = material_catalog.presets(kind)
+            entry = material_catalog.default_entry(
+                kind,
+                preset=selected if selected in available else None,
+            )
+
+        for key, field in alias_keys.items():
+            if key in payload:
+                entry[field] = payload[key]
+        if kind == "mild" and "mild_active_comp" in payload:
+            entry["active_in_compression"] = payload["mild_active_comp"]
+        try:
+            material_catalog.validate_material_definition(entry, kind)
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            family = "mild-steel" if kind == "mild" else "prestressing-steel"
+            raise _invalid_input(f"invalid {family} material values: {exc}") from exc
 
 
 def _validate_fatigue_catalog(value, key: str) -> dict:
@@ -985,6 +1053,7 @@ def _canonical_scalars(
     migrate_gamma_v: bool = False,
 ) -> dict:
     payload = _validated_scalar_payload(scalars)
+    _validate_material_aliases(payload)
     for key in ("shear_links", "torsion_nu_v"):
         if key not in payload:
             payload[key] = False

@@ -1,4 +1,4 @@
-"""STATE-M01 project scalar, nested-table and real upload validation."""
+"""Project scalar, material-domain, nested-table and real upload validation."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
+import viz  # noqa: E402
 
 
 _RESULT_KEYS = (
@@ -295,6 +296,567 @@ def test_nested_catalogue_and_basis_fields_reject_hostile_types(
 ) -> None:
     with pytest.raises(project_io.ProjectInputError) as exc_info:
         project_io._canonical_scalars({key: value}, {})
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value"),
+    (
+        ("mild", "fytk", float("nan")),
+        ("mild", "futk", -1.0),
+        ("mild", "futk", 500.0),
+        ("mild", "k", 1.1),
+        ("mild", "eut", 1.0),
+        ("prestress", "IS", float("inf")),
+        ("prestress", "eut", -1.0),
+        ("prestress", "futk", 1600.0),
+        ("prestress", "ey0t", 40.0),
+    ),
+)
+def test_project_material_catalogues_reject_invalid_active_domains(
+    kind: str,
+    field: str,
+    value,
+) -> None:
+    key = material_catalog.catalog_key(kind)
+    catalog = material_catalog.default_catalog(kind)
+    catalog["items"][0][field] = value
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars({key: catalog}, {})
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+def test_project_catalogue_rejects_ultimate_below_active_compression_yield() -> None:
+    catalog = material_catalog.default_catalog("mild")
+    catalog["items"][0].update(fytk=500.0, fyck=700.0, futk=600.0)
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars(
+            {material_catalog.MILD_CATALOG_KEY: catalog},
+            {},
+        )
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "updates"),
+    (
+        (
+            "mild",
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 550.0,
+                "gamma_y": 1.0,
+                "gamma_u": 2.0,
+            },
+        ),
+        (
+            "prestress",
+            {
+                "fytk": 1600.0,
+                "futk": 1800.0,
+                "gamma_y": 1.0,
+                "gamma_u": 2.0,
+            },
+        ),
+    ),
+)
+def test_project_catalogue_rejects_descending_factored_ultimate_branch(
+    kind: str,
+    updates: dict,
+) -> None:
+    key = material_catalog.catalog_key(kind)
+    catalog = material_catalog.default_catalog(kind)
+    catalog["items"][0].update(updates)
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars({key: catalog}, {})
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 550.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 550.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "fytk": 1600.0,
+                "futk": 1760.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "fytk": 1600.0,
+                "futk": 1760.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+    ),
+)
+def test_project_catalogue_accepts_mathematically_equal_factored_ultimate(
+    kind: str,
+    curve: int,
+    updates: dict,
+) -> None:
+    key = material_catalog.catalog_key(kind)
+    catalog = material_catalog.default_catalog(kind)
+    catalog["items"][0].update(curve=curve, **updates)
+
+    loaded = project_io._canonical_scalars({key: catalog}, {})
+    material = material_catalog.build_material(
+        loaded[key]["items"][0], kind
+    )
+
+    assert material.curve == curve
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 1.0e308,
+                "gamma_y": 1.0,
+                "gamma_u": 1.0e-308,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 1.0e-308,
+                "fyck": 1.0e-308,
+                "futk": 1.0e-308,
+                "gamma_y": 1.0e308,
+                "gamma_u": 1.0e308,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "fytk": 1600.0,
+                "futk": 1.0e308,
+                "gamma_y": 1.0,
+                "gamma_u": 1.0e-308,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "fytk": 1.0e-308,
+                "futk": 1.0e-308,
+                "gamma_y": 1.0e308,
+                "gamma_u": 1.0e308,
+            },
+        ),
+    ),
+)
+def test_project_catalogue_rejects_nonfinite_derived_design_ordinate(
+    kind: str,
+    curve: int,
+    updates: dict,
+) -> None:
+    key = material_catalog.catalog_key(kind)
+    catalog = material_catalog.default_catalog(kind)
+    catalog["items"][0].update(curve=curve, **updates)
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars({key: catalog}, {})
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 1.0e308,
+                "fyck": 0.0,
+                "futk": 1.0e308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e307,
+                "gamma_u": 1.0e307,
+                "gamma_E": 1.0e308,
+                "Es": 1.0e305,
+                "active_in_compression": False,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 1.0e-308,
+                "fyck": 0.0,
+                "futk": 1.0e-308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e-308,
+                "gamma_u": 1.0e-308,
+                "gamma_E": 1.0e-306,
+                "Es": 1.0e-310,
+                "active_in_compression": False,
+                "k": 1.0,
+                "ey0t": 0.0,
+                "ey0c": 0.0,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "IS": 0.0,
+                "fytk": 1.0e308,
+                "futk": 1.0e308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e307,
+                "gamma_u": 1.0e307,
+                "gamma_E": 1.0e308,
+                "Es": 1.0e305,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "IS": 0.0,
+                "fytk": 1.0e-308,
+                "futk": 1.0e-308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e-308,
+                "gamma_u": 1.0e-308,
+                "gamma_E": 1.0e-306,
+                "Es": 1.0e-310,
+                "k": 1.0,
+                "ey0t": 0.0,
+            },
+        ),
+    ),
+)
+def test_project_catalogue_rejects_factored_yield_nan_escape(
+    kind: str,
+    curve: int,
+    updates: dict,
+) -> None:
+    key = material_catalog.catalog_key(kind)
+    catalog = material_catalog.default_catalog(kind)
+    catalog["items"][0].update(curve=curve, **updates)
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars({key: catalog}, {})
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+def test_project_catalogue_accepts_tension_only_compression_relations() -> None:
+    catalog = material_catalog.default_catalog("mild")
+    catalog["items"][0].update(
+        active_in_compression=False,
+        fytk=500.0,
+        fyck=700.0,
+        futk=600.0,
+        ey0c=-10.0,
+    )
+
+    loaded = project_io._canonical_scalars(
+        {material_catalog.MILD_CATALOG_KEY: catalog},
+        {},
+    )
+    item = loaded[material_catalog.MILD_CATALOG_KEY]["items"][0]
+    steel = material_catalog.build_material(item, "mild")
+
+    assert steel.active_in_compression is False
+    assert steel.ey0c == pytest.approx(-0.01)
+    assert steel.stress(-0.02) == 0.0
+    assert not any(
+        stress < 0.0 or strain < 0.0
+        for strain, stress, *_ in steel.diagram_markers(design=False)
+    )
+    figure = viz.steel_curve_figure(steel)
+    annotations = " ".join(
+        str(item.text) for item in figure.layout.annotations
+    )
+    assert "f<sub>yck</sub>" not in annotations
+    assert chr(0x03B5) + "<sub>0c</sub>" not in annotations
+    marker = next(trace for trace in figure.data if trace.mode == "markers")
+    assert all(value >= 0.0 for value in marker.x)
+    assert all(value >= 0.0 for value in marker.y)
+
+
+def test_sparse_project_aliases_accept_tension_only_compression_relations() -> None:
+    loaded = project_io._canonical_scalars(
+        {
+            "mild_active_comp": False,
+            "mild_fytk": 500.0,
+            "mild_fyck": 700.0,
+            "mild_futk": 600.0,
+            "mild_ey0c": -1.0,
+        },
+        {},
+    )
+
+    assert loaded["mild_active_comp"] is False
+    assert loaded["mild_fyck"] == pytest.approx(700.0)
+    assert loaded["mild_ey0c"] == pytest.approx(-1.0)
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "missing"),
+    (
+        ("mild", 3, "futk"),
+        ("mild", 2, "gamma_y"),
+        ("prestress", 7, "ey0t"),
+        ("prestress", 1, "IS"),
+    ),
+)
+def test_project_material_catalogues_reject_curve_specific_omissions(
+    kind: str,
+    curve: int,
+    missing: str,
+) -> None:
+    key = material_catalog.catalog_key(kind)
+    catalog = material_catalog.default_catalog(kind)
+    catalog["items"][0]["curve"] = curve
+    catalog["items"][0].pop(missing)
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars({key: catalog}, {})
+
+    assert missing in str(exc_info.value)
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+@pytest.mark.parametrize(
+    "scalars",
+    (
+        {"mild_futk": 500.0},
+        {"mild_eut": 1.0},
+        {"pre_futk": 1600.0},
+        {"pre_ey0t": 40.0},
+    ),
+)
+def test_sparse_project_material_aliases_reject_invalid_active_domains(
+    scalars: dict,
+) -> None:
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars(scalars, {})
+
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
+def test_project_alias_validation_preserves_curve_applicability() -> None:
+    mild = material_catalog.default_catalog("mild")
+    mild["items"][0]["curve"] = 2
+    prestress = material_catalog.default_catalog("prestress")
+    prestress["items"][0]["curve"] = 1
+
+    loaded = project_io._canonical_scalars(
+        {
+            material_catalog.MILD_CATALOG_KEY: mild,
+            material_catalog.PRESTRESS_CATALOG_KEY: prestress,
+            "mild_futk": -1.0,
+            "mild_k": 1.1,
+            "pre_fytk": -1.0,
+            "pre_futk": -1.0,
+            "pre_ey0t": -1.0,
+        },
+        {},
+    )
+
+    assert loaded["mild_futk"] == pytest.approx(-1.0)
+    assert loaded["pre_fytk"] == pytest.approx(-1.0)
+
+
+def test_present_catalogues_ignore_orphaned_m1_p1_aliases() -> None:
+    mild = {
+        "version": material_catalog.VERSION,
+        "next_id": 3,
+        "items": [
+            material_catalog.default_entry("mild", material_id="M2")
+        ],
+    }
+    prestress = {
+        "version": material_catalog.VERSION,
+        "next_id": 3,
+        "items": [
+            material_catalog.default_entry("prestress", material_id="P2")
+        ],
+    }
+
+    loaded = project_io._canonical_scalars(
+        {
+            material_catalog.MILD_CATALOG_KEY: mild,
+            material_catalog.PRESTRESS_CATALOG_KEY: prestress,
+            "mild_fytk": 500.0,
+            "mild_fyck": 700.0,
+            "mild_futk": 600.0,
+            "pre_fytk": 1600.0,
+            "pre_futk": 1500.0,
+        },
+        {},
+    )
+
+    assert [
+        item["id"]
+        for item in loaded[material_catalog.MILD_CATALOG_KEY]["items"]
+    ] == ["M2"]
+    assert [
+        item["id"]
+        for item in loaded[material_catalog.PRESTRESS_CATALOG_KEY]["items"]
+    ] == ["P2"]
+    assert loaded["mild_fyck"] == pytest.approx(700.0)
+    assert loaded["pre_futk"] == pytest.approx(1500.0)
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve"),
+    (("mild", 1), ("mild", 3), ("prestress", 6), ("prestress", 7)),
+)
+def test_project_catalogue_strength_order_is_scale_independent(kind, curve):
+    catalog = material_catalog.default_catalog(kind)
+    entry = catalog["items"][0]
+    entry.update(
+        curve=curve,
+        fytk=1.0e-308,
+        futk=2.0e-308,
+        eut=50.0,
+        gamma_y=1.0,
+        gamma_u=2.0,
+        gamma_E=1.0,
+        Es=1.0e-309,
+    )
+    if kind == "mild":
+        entry.update(fyck=0.0, active_in_compression=False)
+    if curve in (3, 7):
+        entry.update(k=1.0, ey0t=0.0)
+    if curve == 3:
+        entry["ey0c"] = -10.0
+
+    loaded = project_io._canonical_scalars(
+        {material_catalog.catalog_key(kind): catalog},
+        {},
+    )
+    assert loaded[material_catalog.catalog_key(kind)]["items"][0][
+        "futk"
+    ] == pytest.approx(2.0e-308, rel=1.0e-12, abs=0.0)
+
+    entry["futk"] = 1.0e-308
+    with pytest.raises(project_io.ProjectInputError):
+        project_io._canonical_scalars(
+            {material_catalog.catalog_key(kind): catalog},
+            {},
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve"),
+    (("mild", 1), ("mild", 3), ("prestress", 6), ("prestress", 7)),
+)
+def test_project_catalogue_extreme_hardening_law_has_finite_stress(kind, curve):
+    catalog = material_catalog.default_catalog(kind)
+    entry = catalog["items"][0]
+    entry.update(
+        curve=curve,
+        fytk=1.0,
+        futk=1.0e308,
+        eut=1.0e308,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        Es=200.0,
+    )
+    if kind == "mild":
+        entry.update(fyck=0.0, active_in_compression=False)
+    if curve in (3, 7):
+        entry.update(k=0.9, ey0t=0.0)
+    if curve == 3:
+        entry["ey0c"] = -10.0
+
+    loaded = project_io._canonical_scalars(
+        {material_catalog.catalog_key(kind): catalog},
+        {},
+    )
+    material = material_catalog.build_material(
+        loaded[material_catalog.catalog_key(kind)]["items"][0],
+        kind,
+    )
+
+    assert material.stress(material.eut) == 1.0e308
+    assert all(
+        math.isfinite(material.stress(strain))
+        for strain in (0.0035, material.eut / 2.0, material.eut)
+    )
+
+
+@pytest.mark.parametrize("curve", (1, 2, 3, 4, 5))
+def test_project_catalogue_builtin_prestress_rejects_nonfinite_design_stress(
+    curve,
+):
+    catalog = material_catalog.default_catalog("prestress")
+    catalog["items"][0].update(curve=curve, gamma_y=1.0e-308)
+
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io._canonical_scalars(
+            {material_catalog.PRESTRESS_CATALOG_KEY: catalog},
+            {},
+        )
 
     assert project_io.engineer_error_message(exc_info.value) == (
         "the project file contains an invalid input value"
@@ -605,6 +1167,352 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
     assert not at.exception
     for key in _RESULT_KEYS:
         assert key not in at.session_state
+
+
+def test_real_upload_rejects_invalid_material_domain_transactionally() -> None:
+    at = _fresh().run()
+    valid_a = _replacement_bytes(at, 41.0)
+    _goto_project(at)
+    _upload(at, valid_a)
+    assert at.session_state["conc_fck"] == pytest.approx(41.0)
+
+    before_results = _completed_result_evidence(at)
+    before_project = _project_signature(at)
+    before_identity = at.session_state["_project_upload_content_identity"]
+
+    def reverse_mild_strengths(data: dict) -> None:
+        item = data["scalars"][material_catalog.MILD_CATALOG_KEY]["items"][0]
+        item.update(fytk=500.0, fyck=700.0, futk=600.0)
+
+    def overflow_mild_design_ultimate(data: dict) -> None:
+        item = data["scalars"][material_catalog.MILD_CATALOG_KEY]["items"][0]
+        item.update(
+            curve=1,
+            fytk=500.0,
+            fyck=500.0,
+            futk=1.0e308,
+            gamma_y=1.0,
+            gamma_u=1.0e-308,
+        )
+
+    def underflow_prestress_design_ordinates(data: dict) -> None:
+        item = data["scalars"][
+            material_catalog.PRESTRESS_CATALOG_KEY
+        ]["items"][0]
+        item.update(
+            curve=7,
+            fytk=1.0e-308,
+            futk=1.0e-308,
+            gamma_y=1.0e308,
+            gamma_u=1.0e308,
+        )
+
+    def overflow_mild_factored_yield_strain(data: dict) -> None:
+        item = data["scalars"][material_catalog.MILD_CATALOG_KEY]["items"][0]
+        item.update(
+            curve=1,
+            active_in_compression=False,
+            fytk=1.0e308,
+            fyck=0.0,
+            futk=1.0e308,
+            eut=2000.0,
+            gamma_y=1.0e307,
+            gamma_u=1.0e307,
+            gamma_E=1.0e308,
+            Es=1.0e305,
+        )
+
+    def underflow_prestress_factored_yield_strain(data: dict) -> None:
+        item = data["scalars"][
+            material_catalog.PRESTRESS_CATALOG_KEY
+        ]["items"][0]
+        item.update(
+            curve=7,
+            IS=0.0,
+            fytk=1.0e-308,
+            futk=1.0e-308,
+            eut=2000.0,
+            gamma_y=1.0e-308,
+            gamma_u=1.0e-308,
+            gamma_E=1.0e-306,
+            Es=1.0e-310,
+            k=1.0,
+            ey0t=0.0,
+        )
+
+    def overflow_builtin_prestress_design_stress(data: dict) -> None:
+        item = data["scalars"][
+            material_catalog.PRESTRESS_CATALOG_KEY
+        ]["items"][0]
+        item.update(curve=1, IS=0.0, gamma_y=1.0e-308)
+
+    def tiny_descending_mild_design_branch(data: dict) -> None:
+        item = data["scalars"][material_catalog.MILD_CATALOG_KEY]["items"][0]
+        item.update(
+            curve=1,
+            active_in_compression=False,
+            fytk=1.0e-308,
+            fyck=0.0,
+            futk=1.0e-308,
+            eut=50.0,
+            gamma_y=1.0,
+            gamma_u=2.0,
+            gamma_E=1.0,
+            Es=1.0e-309,
+        )
+
+    for mutation in (
+        reverse_mild_strengths,
+        overflow_mild_design_ultimate,
+        underflow_prestress_design_ordinates,
+        overflow_mild_factored_yield_strain,
+        underflow_prestress_factored_yield_strain,
+        overflow_builtin_prestress_design_stress,
+        tiny_descending_mild_design_branch,
+    ):
+        invalid = _mutated_project(valid_a, mutation)
+        _upload(at, invalid)
+
+        assert not at.exception
+        assert _project_signature(at) == before_project
+        assert at.session_state["_project_upload_content_identity"] == (
+            before_identity
+        )
+        assert at.session_state["conc_fck"] == pytest.approx(41.0)
+        _assert_result_evidence(at, before_results)
+        visible = "\n".join(str(item.value) for item in at.error)
+        assert "New file was not applied" in visible
+        assert "Select an intact, compatible Sector project file" in visible
+        assert not any(
+            token in visible
+            for token in (
+                "futk",
+                "gamma_u",
+                "gamma_E",
+                "infinity",
+                "nan",
+                "payload",
+                "schema",
+                "contract",
+                "hash",
+                "traceback",
+            )
+        )
+
+    def corrected_project(data: dict) -> None:
+        scalars = data["scalars"]
+        scalars.update(
+            conc_fck=42.0,
+            mild_fytk=500.0,
+            mild_fyck=500.0,
+            mild_futk=550.0,
+            mild_gamma_y=1.0,
+            mild_gamma_u=1.1,
+            mild_gamma_E=1.0,
+            pre_fytk=1600.0,
+            pre_futk=1760.0,
+            pre_gamma_y=1.0,
+            pre_gamma_u=1.1,
+            pre_gamma_E=1.0,
+        )
+        mild = scalars[material_catalog.MILD_CATALOG_KEY]["items"][0]
+        mild.update(
+            curve=3,
+            fytk=500.0,
+            fyck=500.0,
+            futk=550.0,
+            gamma_y=1.0,
+            gamma_u=1.1,
+            gamma_E=1.0,
+        )
+        prestress = scalars[material_catalog.PRESTRESS_CATALOG_KEY]["items"][0]
+        prestress.update(
+            curve=7,
+            fytk=1600.0,
+            futk=1760.0,
+            gamma_y=1.0,
+            gamma_u=1.1,
+            gamma_E=1.0,
+        )
+
+    valid_b = _mutated_project(valid_a, corrected_project)
+    _upload(at, valid_b)
+
+    assert not at.exception
+    assert at.session_state["conc_fck"] == pytest.approx(42.0)
+    assert any("Project loaded" in str(item.value) for item in at.success)
+    for key in _RESULT_KEYS:
+        assert key not in at.session_state
+
+    _calculate(at)
+    snapshot = at.session_state["result_input_snapshot"]
+    assert snapshot["steel"].futk / snapshot["steel"].gamma_u == (
+        pytest.approx(snapshot["steel"].fytk / snapshot["steel"].gamma_y)
+    )
+    assert snapshot["prestress"].futk / snapshot["prestress"].gamma_u == (
+        pytest.approx(
+            snapshot["prestress"].fytk / snapshot["prestress"].gamma_y
+        )
+    )
+
+
+def test_real_upload_accepts_extreme_finite_hardening_laws_and_calculates() -> None:
+    at = _fresh().run()
+    source = _replacement_bytes(at, 41.0)
+
+    def extreme_finite_laws(data: dict) -> None:
+        scalars = data["scalars"]
+        mild = scalars[material_catalog.MILD_CATALOG_KEY]["items"][0]
+        mild.update(
+            preset=material_catalog.CUSTOM_PRESET,
+            curve=1,
+            active_in_compression=False,
+            fytk=1.0,
+            fyck=0.0,
+            futk=1.0e308,
+            eut=1.0e308,
+            gamma_y=1.0,
+            gamma_u=1.0,
+            gamma_E=1.0,
+            Es=200.0,
+        )
+        prestress = scalars[
+            material_catalog.PRESTRESS_CATALOG_KEY
+        ]["items"][0]
+        prestress.update(
+            preset=material_catalog.CUSTOM_PRESET,
+            curve=6,
+            IS=0.0,
+            fytk=1.0,
+            futk=1.0e308,
+            eut=1.0e308,
+            gamma_y=1.0,
+            gamma_u=1.0,
+            gamma_E=1.0,
+            Es=200.0,
+        )
+        scalars.update(
+            mild_preset=material_catalog.CUSTOM_PRESET,
+            mild_active_comp=False,
+            mild_fytk=1.0,
+            mild_fyck=0.0,
+            mild_futk=1.0e308,
+            mild_eut=1.0e308,
+            mild_gamma_y=1.0,
+            mild_gamma_u=1.0,
+            mild_gamma_E=1.0,
+            mild_Es=200.0,
+            pre_preset=material_catalog.CUSTOM_PRESET,
+            pre_IS=0.0,
+            pre_fytk=1.0,
+            pre_futk=1.0e308,
+            pre_eut=1.0e308,
+            pre_gamma_y=1.0,
+            pre_gamma_u=1.0,
+            pre_gamma_E=1.0,
+            pre_Es=200.0,
+        )
+
+    _goto_project(at)
+    _upload(at, _mutated_project(source, extreme_finite_laws))
+
+    assert not at.exception
+    assert any("Project loaded" in str(item.value) for item in at.success)
+    _calculate(at)
+    snapshot = at.session_state["result_input_snapshot"]
+    for material, representative_strain in (
+        (snapshot["steel"], 0.0035),
+        (snapshot["prestress"], 0.0059),
+    ):
+        assert math.isfinite(material.stress(representative_strain))
+        assert math.isfinite(material.stress(material.eut))
+    assert not at.exception
+
+
+def test_real_upload_uses_catalogues_without_recreating_orphaned_aliases() -> None:
+    at = _fresh().run()
+    source = _replacement_bytes(at, 41.0)
+
+    def catalogues_without_alias_ids(data: dict) -> None:
+        scalars = data["scalars"]
+        scalars[material_catalog.MILD_CATALOG_KEY] = {
+            "version": material_catalog.VERSION,
+            "next_id": 3,
+            "items": [
+                material_catalog.default_entry("mild", material_id="M2")
+            ],
+        }
+        scalars[material_catalog.PRESTRESS_CATALOG_KEY] = {
+            "version": material_catalog.VERSION,
+            "next_id": 3,
+            "items": [
+                material_catalog.default_entry(
+                    "prestress", material_id="P2"
+                )
+            ],
+        }
+        scalars.update(
+            mild_fytk=500.0,
+            mild_fyck=700.0,
+            mild_futk=600.0,
+            pre_fytk=1600.0,
+            pre_futk=1500.0,
+            capacity_steel_material_id="M2",
+        )
+        for table_key, old_id, new_id in (
+            ("bars_base", "M1", "M2"),
+            ("tendons_base", "P1", "P2"),
+        ):
+            table = data["tables"][table_key]
+            material_column = table["columns"].index(rebar_table.MATERIAL_ID)
+            for row in table["rows"]:
+                if row[material_column] == old_id:
+                    row[material_column] = new_id
+
+    _goto_project(at)
+    _upload(at, _mutated_project(source, catalogues_without_alias_ids))
+
+    assert not at.exception
+    assert any("Project loaded" in str(item.value) for item in at.success)
+    assert [
+        item["id"]
+        for item in at.session_state[
+            material_catalog.MILD_CATALOG_KEY
+        ]["items"]
+    ] == ["M2"]
+    assert [
+        item["id"]
+        for item in at.session_state[
+            material_catalog.PRESTRESS_CATALOG_KEY
+        ]["items"]
+    ] == ["P2"]
+
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS
+        if key in at.session_state
+    }
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS
+        if key in at.session_state
+    }
+    saved = project_io.dump_project(tables, scalars)
+    _, reloaded = project_io.parse_project(saved)
+    assert [
+        item["id"]
+        for item in reloaded[material_catalog.MILD_CATALOG_KEY]["items"]
+    ] == ["M2"]
+    assert [
+        item["id"]
+        for item in reloaded[material_catalog.PRESTRESS_CATALOG_KEY]["items"]
+    ] == ["P2"]
+
+    _calculate(at)
+    snapshot = at.session_state["result_input_snapshot"]
+    assert set(snapshot["mild_materials"]) == {"M2"}
+    assert set(snapshot["prestress_materials"]) == {"P2"}
+    assert not at.exception
 
 
 def test_nonfinite_json_tokens_are_rejected_before_any_numeric_fallback() -> None:

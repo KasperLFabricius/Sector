@@ -48,7 +48,13 @@ from sector import __version__ as sector_version  # noqa: E402
 from sector import codes, design_standards  # noqa: E402
 from sector.build_info import source_revision  # noqa: E402
 from sector.engineer_message import EngineerMessage  # noqa: E402
-from sector.materials import ES as STEEL_REFERENCE_MODULUS  # noqa: E402
+from sector.materials import (  # noqa: E402
+    ES as STEEL_REFERENCE_MODULUS,
+    builtin_prestress_design_ordinate_is_positive_finite,
+    design_ordinate_is_positive_finite,
+    design_ultimate_not_below_yield,
+    governing_yield_strain,
+)
 from sector.sls_identity import (  # noqa: E402
     HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
     LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
@@ -204,10 +210,6 @@ _REPORT_GENERATION_FAILED = EngineerMessage(
     "REPORT-GENERATION",
     "Report generation failed. Review the current inputs, recalculate, and try again",
 )
-_MATERIAL_CURVE_DISPLAY = EngineerMessage(
-    "MATERIAL-CURVE",
-    "Review the material values for the selected curve",
-)
 _MILD_RUPTURE_STRESS = EngineerMessage(
     "MILD-RUPTURE-STRESS",
     "Enter a positive ultimate tensile strength for the selected mild-steel curve",
@@ -215,6 +217,34 @@ _MILD_RUPTURE_STRESS = EngineerMessage(
 _PRESTRESS_STRENGTHS = EngineerMessage(
     "PRESTRESS-STRENGTHS",
     "Enter positive proof and ultimate strengths for the selected prestressing curve",
+)
+_MILD_YIELD_STRENGTHS = EngineerMessage(
+    "MILD-YIELD-STRENGTHS",
+    "Enter a positive tensile yield strength and a non-negative compression yield strength",
+)
+_MATERIAL_RUPTURE_STRAIN = EngineerMessage(
+    "MATERIAL-RUPTURE-STRAIN",
+    "Enter a positive rupture strain above every active yield point",
+)
+_MATERIAL_STRENGTH_ORDER = EngineerMessage(
+    "MATERIAL-STRENGTH-ORDER",
+    "Enter strengths and partial factors so the design ultimate strength is not less than every active design yield or proof strength",
+)
+_MATERIAL_K_RANGE = EngineerMessage(
+    "MATERIAL-K-RANGE",
+    "Enter k greater than zero and not greater than 1",
+)
+_MATERIAL_YIELD_OFFSETS = EngineerMessage(
+    "MATERIAL-YIELD-OFFSETS",
+    "Enter non-negative yield offsets that keep each yield point below rupture",
+)
+_PRESTRESS_PRESTRAIN = EngineerMessage(
+    "PRESTRESS-PRESTRAIN",
+    "Enter a finite non-negative prestrain below the rupture strain",
+)
+_PRESTRESS_DESIGN_STRESS = EngineerMessage(
+    "PRESTRESS-DESIGN-STRESS",
+    "Enter a prestressing partial factor that gives a finite positive design stress",
 )
 _MATERIAL_PARTIAL_FACTORS = EngineerMessage(
     "MATERIAL-PARTIAL-FACTORS",
@@ -550,111 +580,188 @@ def _seed_torsion_gamma_ct(method):
 
 
 def _safe_build(box, builder, curve, vals, **extra):
-    """Build a material from the flat parameter set, surviving degenerate input.
+    """Build a material once and fail closed without changing entered values."""
 
-    A flat form lets the user enter values the active curve cannot accept (e.g. a
-    zero rupture stress on a hardening curve). Rather than break the whole app,
-    show a notice and retry with the offending stresses nudged just above zero.
-    A persistent failure returns no material so the surrounding input boundary can
-    remain usable while calculation is blocked. ``extra`` carries non-field options
-    (e.g. ``active_in_compression``) straight through to the builder.
-    """
     try:
         return builder(curve=curve, **vals, **extra)
     except Exception as exc:
-        if vals.get("Es", 1.0) <= 0.0:
-            fallback = _MATERIAL_MODULUS
-        elif any(vals.get(key, 1.0) <= 0.0 for key in ("gamma_y", "gamma_u", "gamma_E")):
-            fallback = _MATERIAL_PARTIAL_FACTORS
-        elif builder is mp.build_mild and curve in (1, 3) and vals.get("futk", 0.0) <= 0.0:
-            fallback = _MILD_RUPTURE_STRESS
-        elif (
-            builder is mp.build_prestress
-            and curve in (6, 7)
-            and (vals.get("fytk", 0.0) <= 0.0 or vals.get("futk", 0.0) <= 0.0)
-        ):
-            fallback = _PRESTRESS_STRENGTHS
-        else:
-            fallback = _MATERIAL_CURVE_DISPLAY
+        kind = "mild" if builder is mp.build_mild else "prestress"
+        fallback = _material_definition_message(
+            {"curve": curve, **vals, **extra}, kind
+        )
         detail = engineer_messages.error_detail(
             exc,
             fallback=fallback,
             context="material curve construction",
         )
-        v = dict(vals)
-        for f in ("fytk", "futk"):
-            if v.get(f, 1.0) <= 0.0:
-                v[f] = 1.0
-        try:
-            material = builder(curve=curve, **v, **extra)
-        except Exception as retry_exc:
-            retry_detail = engineer_messages.error_detail(
-                retry_exc,
-                fallback=fallback,
-                context="material curve adjusted retry",
-            )
-            _manual_warning(
-                box,
-                "input-invalid",
-                f"Material unavailable: {retry_detail}",
-            )
-            return None
         _manual_warning(
-            box, "input-invalid", f"Adjusted for this curve: {detail}"
+            box,
+            "input-invalid",
+            f"Material unavailable: {detail}",
         )
-        return material
+        return None
 
 
 def _material_definition_message(item, kind):
-    """Return field-specific authored guidance for a finite material category."""
+    """Return field-specific authored guidance for one active material curve."""
 
-    def positive(field):
+    def number(field):
         value = item.get(field)
         if isinstance(value, bool):
-            return False
+            return None
         try:
-            number = float(value)
+            parsed = float(value)
         except (TypeError, ValueError, OverflowError):
-            return False
-        return math.isfinite(number) and number > 0.0
+            return None
+        return parsed if math.isfinite(parsed) else None
 
-    if not positive("Es"):
-        return _MATERIAL_MODULUS
-    if any(not positive(field) for field in ("gamma_y", "gamma_u", "gamma_E")):
-        return _MATERIAL_PARTIAL_FACTORS
+    def positive(field):
+        value = number(field)
+        return value is not None and value > 0.0
+
+    def nonnegative(field):
+        value = number(field)
+        return value is not None and value >= 0.0
+
     try:
         curve = int(item.get("curve"))
-    except (TypeError, ValueError, OverflowError):
+        owned = set(
+            mp.MILD_FIELDS_BY_CURVE[curve]
+            if kind == "mild"
+            else mp.PRESTRESS_FIELDS_BY_CURVE[curve]
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
         return _MATERIAL_DEFINITION_DISPLAY
-    if kind == "mild" and curve in (1, 3) and not positive("futk"):
-        return _MILD_RUPTURE_STRESS
-    if kind == "prestress" and curve in (6, 7) and (
-        not positive("fytk") or not positive("futk")
-    ):
-        return _PRESTRESS_STRENGTHS
-    return _MATERIAL_DEFINITION_DISPLAY
 
+    if "Es" in owned and not positive("Es"):
+        return _MATERIAL_MODULUS
+    factors = owned.intersection(("gamma_y", "gamma_u", "gamma_E"))
+    if any(not positive(field) for field in factors):
+        return _MATERIAL_PARTIAL_FACTORS
 
-def _clamp_eut(box, vals, fields):
-    """Keep the rupture strain at or above the (second) yield strain -- a
-    meaningful, not arbitrary, limit: a curve cannot rupture before it has
-    reached its yield/ultimate branch. For the two-yield laws the yield is the
-    second yield, reached at ``ey0t + fytk/Es``. Only applies when the active
-    curve uses ``fytk`` and ``eut``. Strain fields here are in per-mille."""
-    if "eut" in fields and "fytk" in fields and vals.get("Es", 0.0) > 0.0:
-        # Es is in GPa here (the panel unit), so fytk[MPa] / Es[GPa] is already the
-        # yield strain in per-mille (= fytk[MPa] / Es[MPa] * 1000).
-        ey = vals["fytk"] / vals["Es"]
-        if "ey0t" in fields:
-            ey += vals.get("ey0t", 0.0)           # second-yield (total) strain
-        if vals["eut"] < ey:
-            _manual_warning(
-                box,
-                "input-invalid",
-                "eut must be at least the yield strain (ey0t + fytk/Es); "
-                "using that value for the diagram and analysis.",
+    Es = number("Es")
+    gamma_y = number("gamma_y")
+    gamma_u = number("gamma_u") if "gamma_u" in owned else gamma_y
+    gamma_E = number("gamma_E") if "gamma_E" in owned else gamma_y
+
+    if kind == "mild":
+        if not positive("fytk") or not nonnegative("fyck"):
+            return _MILD_YIELD_STRENGTHS
+        if not positive("eut"):
+            return _MATERIAL_RUPTURE_STRAIN
+        compression_active = (
+            item.get("active_in_compression", item.get("active_comp", True))
+            and number("fyck") > 0.0
+        )
+        if (
+            not design_ordinate_is_positive_finite(
+                number("fytk"), gamma_y
             )
-            vals["eut"] = ey
+            or (
+                compression_active
+                and not design_ordinate_is_positive_finite(
+                    number("fyck"), gamma_y
+                )
+            )
+        ):
+            return _MATERIAL_STRENGTH_ORDER
+        if "futk" in owned:
+            if not positive("futk"):
+                return _MILD_RUPTURE_STRESS
+            if (
+                number("futk") < number("fytk")
+                or not design_ultimate_not_below_yield(
+                    number("futk"), gamma_u, number("fytk"), gamma_y
+                )
+                or (
+                    curve == 3
+                    and compression_active
+                    and (
+                        number("futk") < number("fyck")
+                        or not design_ultimate_not_below_yield(
+                            number("futk"), gamma_u, number("fyck"), gamma_y
+                        )
+                    )
+                )
+            ):
+                return _MATERIAL_STRENGTH_ORDER
+        if "k" in owned and not (
+            number("k") is not None and 0.0 < number("k") <= 1.0
+        ):
+            return _MATERIAL_K_RANGE
+        if "ey0t" in owned and not nonnegative("ey0t"):
+            return _MATERIAL_YIELD_OFFSETS
+        if (
+            "ey0c" in owned
+            and compression_active
+            and not nonnegative("ey0c")
+        ):
+            return _MATERIAL_YIELD_OFFSETS
+
+        modulus_factor = gamma_E if "gamma_E" in owned else gamma_y
+        tension_yield = governing_yield_strain(
+            number("fytk"), gamma_y, Es, modulus_factor
+        )
+        if tension_yield is None:
+            return _MATERIAL_RUPTURE_STRAIN
+        tension_yield += number("ey0t") if "ey0t" in owned else 0.0
+        if not math.isfinite(tension_yield) or tension_yield >= number("eut"):
+            return _MATERIAL_RUPTURE_STRAIN
+        if compression_active:
+            compression_yield = governing_yield_strain(
+                number("fyck"), gamma_y, Es, modulus_factor
+            )
+            if compression_yield is None:
+                return _MATERIAL_RUPTURE_STRAIN
+            compression_yield += (
+                number("ey0c") if "ey0c" in owned else 0.0
+            )
+            if (
+                not math.isfinite(compression_yield)
+                or compression_yield >= number("eut")
+            ):
+                return _MATERIAL_RUPTURE_STRAIN
+        return _MATERIAL_DEFINITION_DISPLAY
+
+    if not nonnegative("IS"):
+        return _PRESTRESS_PRESTRAIN
+    rupture = 35.0 if curve in (1, 2, 3, 4, 5) else number("eut")
+    if rupture is None or rupture <= 0.0:
+        return _MATERIAL_RUPTURE_STRAIN
+    if number("IS") >= rupture:
+        return _PRESTRESS_PRESTRAIN
+    if curve in (1, 2, 3, 4, 5) and not (
+        builtin_prestress_design_ordinate_is_positive_finite(curve, gamma_y)
+    ):
+        return _PRESTRESS_DESIGN_STRESS
+    if curve in (6, 7):
+        if not positive("fytk") or not positive("futk"):
+            return _PRESTRESS_STRENGTHS
+        if (
+            not design_ordinate_is_positive_finite(
+                number("fytk"), gamma_y
+            )
+            or number("futk") < number("fytk")
+            or not design_ultimate_not_below_yield(
+                number("futk"), gamma_u, number("fytk"), gamma_y
+            )
+        ):
+            return _MATERIAL_STRENGTH_ORDER
+        if "k" in owned and not (
+            number("k") is not None and 0.0 < number("k") <= 1.0
+        ):
+            return _MATERIAL_K_RANGE
+        if "ey0t" in owned and not nonnegative("ey0t"):
+            return _MATERIAL_YIELD_OFFSETS
+        proof_strain = governing_yield_strain(
+            number("fytk"), gamma_y, Es, gamma_E
+        )
+        if proof_strain is None:
+            return _MATERIAL_RUPTURE_STRAIN
+        proof_strain += number("ey0t") if "ey0t" in owned else 0.0
+        if not math.isfinite(proof_strain) or proof_strain >= rupture:
+            return _MATERIAL_RUPTURE_STRAIN
+    return _MATERIAL_DEFINITION_DISPLAY
 
 
 def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
@@ -944,11 +1051,29 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     )
     # The compression-side inputs only matter when compression is active.
     comp_only = {"fyck", "ey0c"}
-    vals = {f: _number(box, prefix, f, mp.MILD_FIELD_META, mp.MILD_HELP,
+    mild_field_meta = mp.MILD_FIELD_META
+    saved_ey0c = st.session_state.get(f"{prefix}_ey0c")
+    try:
+        saved_ey0c = float(saved_ey0c)
+    except (TypeError, ValueError, OverflowError):
+        saved_ey0c = None
+    if saved_ey0c is not None and math.isfinite(saved_ey0c):
+        # A finite offset remains valid project data while compression is
+        # inactive, even if its sign would be invalid for an active branch.
+        # Keep that value renderable in the disabled field; constructor
+        # validation still blocks it if compression is enabled later.
+        mild_field_meta = dict(mp.MILD_FIELD_META)
+        label, lo, hi, step = mild_field_meta["ey0c"]
+        mild_field_meta["ey0c"] = (
+            label,
+            min(float(lo), saved_ey0c),
+            max(float(hi), saved_ey0c),
+            step,
+        )
+    vals = {f: _number(box, prefix, f, mild_field_meta, mp.MILD_HELP,
                        disabled=(locked and f != "Es")
                        or (f in comp_only and not active_comp))
             for f in mp.MILD_FIELD_META}
-    _clamp_eut(box, vals, mp.MILD_FIELDS_BY_CURVE[curve])
     steel = _safe_build(box, mp.build_mild, curve, vals,
                         active_in_compression=active_comp)
     comp = "active" if active_comp else "tension-only"
@@ -1012,7 +1137,6 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     vals = {f: _number(box, prefix, f, mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP,
                        disabled=locked and f not in ("IS", "Es"))
             for f in mp.PRESTRESS_FIELD_META}
-    _clamp_eut(box, vals, mp.PRESTRESS_FIELDS_BY_CURVE[curve])
     pre = _safe_build(box, mp.build_prestress, curve, vals)
     if curve in (1, 2, 3, 4, 5):
         box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "

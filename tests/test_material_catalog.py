@@ -183,6 +183,489 @@ def test_invalid_curve_keeps_a_recognised_preset_internally_consistent():
     assert out["items"][0]["curve"] == 4
 
 
+@pytest.mark.parametrize(
+    ("kind", "curve", "missing"),
+    (
+        ("mild", 3, "futk"),
+        ("mild", 2, "gamma_y"),
+        ("prestress", 7, "ey0t"),
+        ("prestress", 1, "IS"),
+    ),
+)
+def test_catalogue_build_rejects_curve_specific_omissions(kind, curve, missing):
+    entry = mc.default_entry(kind)
+    entry["curve"] = curve
+    entry.pop(missing)
+
+    with pytest.raises(ValueError, match=missing):
+        mc.build_material(entry, kind)
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value", "match"),
+    (
+        ("mild", "fytk", float("nan"), "fytk"),
+        ("mild", "futk", -1.0, "futk"),
+        ("mild", "futk", 500.0, "futk"),
+        ("mild", "k", 1.1, "k"),
+        ("mild", "eut", 1.0, "yield strain"),
+        ("prestress", "IS", float("inf"), "IS"),
+        ("prestress", "eut", -1.0, "eut"),
+        ("prestress", "futk", 1600.0, "fpk"),
+        ("prestress", "ey0t", 40.0, "proof strain"),
+    ),
+)
+def test_catalogue_build_rejects_invalid_active_material_domains(
+    kind,
+    field,
+    value,
+    match,
+):
+    entry = mc.default_entry(kind)
+    entry[field] = value
+
+    with pytest.raises(ValueError, match=match):
+        mc.build_material(entry, kind)
+
+
+def test_catalogue_build_accepts_inapplicable_tension_only_compression_relations():
+    entry = mc.default_entry("mild")
+    entry.update(
+        active_in_compression=False,
+        fytk=500.0,
+        fyck=700.0,
+        futk=600.0,
+        ey0c=-1.0,
+    )
+
+    steel = mc.build_material(entry, "mild")
+
+    assert steel.active_in_compression is False
+    assert steel.stress(-0.02) == 0.0
+
+
+@pytest.mark.parametrize(
+    "ey0c",
+    (float("nan"), float("inf"), -float("inf"), "not-a-number"),
+)
+def test_catalogue_rejects_nonfinite_inactive_compression_offset(ey0c):
+    entry = mc.default_entry("mild")
+    entry.update(active_in_compression=False, ey0c=ey0c)
+
+    with pytest.raises(ValueError, match="ey0c"):
+        mc.build_material(entry, "mild")
+
+
+def test_catalogue_build_rejects_ultimate_below_active_compression_yield():
+    entry = mc.default_entry("mild")
+    entry.update(fytk=500.0, fyck=700.0, futk=600.0)
+
+    with pytest.raises(ValueError, match="active fyck"):
+        mc.build_material(entry, "mild")
+
+
+@pytest.mark.parametrize(
+    ("kind", "updates"),
+    (
+        (
+            "mild",
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 550.0,
+                "gamma_y": 1.0,
+                "gamma_u": 2.0,
+            },
+        ),
+        (
+            "prestress",
+            {
+                "fytk": 1600.0,
+                "futk": 1800.0,
+                "gamma_y": 1.0,
+                "gamma_u": 2.0,
+            },
+        ),
+    ),
+)
+def test_catalogue_build_rejects_descending_factored_ultimate_branch(
+    kind,
+    updates,
+):
+    entry = mc.default_entry(kind)
+    entry.update(updates)
+
+    with pytest.raises(ValueError, match="gamma_u"):
+        mc.build_material(entry, kind)
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 550.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 550.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "fytk": 1600.0,
+                "futk": 1760.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "fytk": 1600.0,
+                "futk": 1760.0,
+                "gamma_y": 1.0,
+                "gamma_u": 1.1,
+            },
+        ),
+    ),
+)
+def test_catalogue_build_accepts_mathematically_equal_factored_ultimate(
+    kind,
+    curve,
+    updates,
+):
+    entry = mc.default_entry(kind)
+    entry.update(curve=curve, **updates)
+
+    material = mc.build_material(entry, kind)
+
+    assert material.curve == curve
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve"),
+    (("mild", 1), ("mild", 3), ("prestress", 6), ("prestress", 7)),
+)
+def test_catalogue_factored_strength_order_is_scale_independent(kind, curve):
+    entry = mc.default_entry(kind)
+    entry.update(
+        curve=curve,
+        fytk=1.0e-308,
+        futk=2.0e-308,
+        eut=50.0,
+        gamma_y=1.0,
+        gamma_u=2.0,
+        gamma_E=1.0,
+        Es=1.0e-309,
+    )
+    if kind == "mild":
+        entry.update(fyck=0.0, active_in_compression=False)
+    if curve in (3, 7):
+        entry.update(k=1.0, ey0t=0.0)
+    if curve == 3:
+        entry["ey0c"] = -10.0
+
+    equal = mc.build_material(entry, kind)
+    assert equal.stress(equal.eut) == equal.futk / equal.gamma_u
+
+    entry["futk"] = 1.0e-308
+    with pytest.raises(ValueError, match="gamma_u"):
+        mc.build_material(entry, kind)
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve"),
+    (("mild", 1), ("mild", 3), ("prestress", 6), ("prestress", 7)),
+)
+def test_catalogue_extreme_finite_hardening_law_stays_finite(kind, curve):
+    entry = mc.default_entry(kind)
+    entry.update(
+        curve=curve,
+        fytk=1.0,
+        futk=1.0e308,
+        eut=1.0e308,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        Es=200.0,
+    )
+    if kind == "mild":
+        entry.update(fyck=0.0, active_in_compression=False)
+    if curve in (3, 7):
+        entry.update(k=0.9, ey0t=0.0)
+    if curve == 3:
+        entry["ey0c"] = -10.0
+
+    material = mc.build_material(entry, kind)
+
+    assert material.eut == pytest.approx(1.0e305)
+    assert material.stress(material.eut) == 1.0e308
+    assert all(
+        math.isfinite(material.stress(strain))
+        for strain in (0.0035, material.eut / 2.0, material.eut)
+    )
+
+
+@pytest.mark.parametrize("curve", (1, 2, 3, 4, 5))
+def test_catalogue_builtin_prestress_rejects_nonfinite_design_stress(curve):
+    entry = mc.default_entry("prestress")
+    entry.update(curve=curve, gamma_y=1.0e-308)
+
+    with pytest.raises(ValueError, match="design stress"):
+        mc.build_material(entry, "prestress")
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 500.0,
+                "fyck": 500.0,
+                "futk": 1.0e308,
+                "gamma_y": 1.0,
+                "gamma_u": 1.0e-308,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 1.0e-308,
+                "fyck": 1.0e-308,
+                "futk": 1.0e-308,
+                "gamma_y": 1.0e308,
+                "gamma_u": 1.0e308,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "fytk": 1600.0,
+                "futk": 1.0e308,
+                "gamma_y": 1.0,
+                "gamma_u": 1.0e-308,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "fytk": 1.0e-308,
+                "futk": 1.0e-308,
+                "gamma_y": 1.0e308,
+                "gamma_u": 1.0e308,
+            },
+        ),
+    ),
+)
+def test_catalogue_build_rejects_nonfinite_derived_design_ordinate(
+    kind,
+    curve,
+    updates,
+):
+    entry = mc.default_entry(kind)
+    entry.update(curve=curve, **updates)
+
+    with pytest.raises(ValueError, match="positive finite|gamma_u"):
+        mc.build_material(entry, kind)
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 1.0e308,
+                "fyck": 0.0,
+                "futk": 1.0e308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e307,
+                "gamma_u": 1.0e307,
+                "gamma_E": 1.0e308,
+                "Es": 1.0e305,
+                "active_in_compression": False,
+            },
+        ),
+        (
+            "mild",
+            3,
+            {
+                "fytk": 1.0e-308,
+                "fyck": 0.0,
+                "futk": 1.0e-308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e-308,
+                "gamma_u": 1.0e-308,
+                "gamma_E": 1.0e-306,
+                "Es": 1.0e-310,
+                "active_in_compression": False,
+                "k": 1.0,
+                "ey0t": 0.0,
+                "ey0c": 0.0,
+            },
+        ),
+        (
+            "prestress",
+            6,
+            {
+                "IS": 0.0,
+                "fytk": 1.0e308,
+                "futk": 1.0e308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e307,
+                "gamma_u": 1.0e307,
+                "gamma_E": 1.0e308,
+                "Es": 1.0e305,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "IS": 0.0,
+                "fytk": 1.0e-308,
+                "futk": 1.0e-308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e-308,
+                "gamma_u": 1.0e-308,
+                "gamma_E": 1.0e-306,
+                "Es": 1.0e-310,
+                "k": 1.0,
+                "ey0t": 0.0,
+            },
+        ),
+    ),
+)
+def test_catalogue_build_rejects_factored_yield_nan_escape(
+    kind,
+    curve,
+    updates,
+):
+    entry = mc.default_entry(kind)
+    entry.update(curve=curve, **updates)
+
+    with pytest.raises(ValueError, match="yield strain|proof strain"):
+        mc.build_material(entry, kind)
+
+
+@pytest.mark.parametrize(
+    ("kind", "curve", "updates"),
+    (
+        (
+            "mild",
+            1,
+            {
+                "fytk": 1.0e307,
+                "fyck": 0.0,
+                "futk": 1.0e307,
+                "eut": 2000.0,
+                "gamma_y": 1.0e307,
+                "gamma_u": 1.0e307,
+                "gamma_E": 1.0e307,
+                "Es": 1.0e305,
+                "active_in_compression": False,
+            },
+        ),
+        (
+            "prestress",
+            7,
+            {
+                "IS": 0.0,
+                "fytk": 1.0e-308,
+                "futk": 1.0e-308,
+                "eut": 2000.0,
+                "gamma_y": 1.0e-308,
+                "gamma_u": 1.0e-308,
+                "gamma_E": 1.0e-308,
+                "Es": 1.0e-310,
+                "k": 1.0,
+                "ey0t": 0.0,
+            },
+        ),
+    ),
+)
+def test_catalogue_build_accepts_finite_factored_yield_after_cancellation(
+    kind,
+    curve,
+    updates,
+):
+    entry = mc.default_entry(kind)
+    entry.update(curve=curve, **updates)
+
+    material = mc.build_material(entry, kind)
+
+    assert math.isfinite(material.stress(0.05))
+    assert math.isfinite(material.stress(material.eut))
+
+
+def test_catalogue_build_ignores_fields_outside_the_selected_curve():
+    mild = mc.default_entry("mild")
+    mild.update(
+        curve=2,
+        futk=float("nan"),
+        gamma_u=float("nan"),
+        gamma_E=float("nan"),
+        k=1.1,
+        ey0t=float("inf"),
+        ey0c=-1.0,
+    )
+    assert mc.build_material(mild, "mild").curve == 2
+
+    prestress = mc.default_entry("prestress")
+    prestress.update(
+        curve=1,
+        fytk=float("nan"),
+        futk=-1.0,
+        eut=-1.0,
+        gamma_u=float("nan"),
+        gamma_E=float("nan"),
+        k=1.1,
+        ey0t=-1.0,
+    )
+    assert mc.build_material(prestress, "prestress").curve == 1
+
+
+def test_catalogue_normalisation_never_repairs_engineering_values():
+    entry = mc.default_entry("mild")
+    entry["fytk"] = float("nan")
+    normalised = mc.normalise_catalog({"items": [entry]}, "mild")
+
+    assert math.isnan(normalised["items"][0]["fytk"])
+    with pytest.raises(ValueError, match="fytk"):
+        mc.build_material(normalised["items"][0], "mild")
+
+    entry = mc.default_entry("prestress")
+    entry["futk"] = 1600.0
+    normalised = mc.normalise_catalog({"items": [entry]}, "prestress")
+
+    assert normalised["items"][0]["futk"] == pytest.approx(1600.0)
+    with pytest.raises(ValueError, match="fpk"):
+        mc.build_material(normalised["items"][0], "prestress")
+
+
 def test_missing_current_catalogue_initialises_current_default():
     out = mc.ensure_catalog({"mild_fytk": 412.0}, "mild")
     assert mc.material_ids(out, "mild") == ["M1"]

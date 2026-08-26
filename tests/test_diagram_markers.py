@@ -57,8 +57,51 @@ def test_mild_curve3_labels_inputs_and_independent_fyck():
     # The compression yield uses fyck (= -400), independent of fytk.
     comp = [sig for _, sig, _, sk in pts if sk == "fyck"]
     assert any(sig == pytest.approx(-400.0) for sig in comp)
+    assert any(
+        strain == pytest.approx(-s.eut)
+        and stress < 0.0
+        and eps_key == "eut"
+        for strain, stress, eps_key, _ in pts
+    )
     # No derived/design labels.
     assert not ({"f1", "f2", "fud", "fyd"} & skeys)
+
+
+@pytest.mark.parametrize(
+    ("active_in_compression", "fyck", "ey0c"),
+    (
+        (False, 700.0, -0.01),
+        (True, 0.0, -0.001),
+    ),
+)
+def test_mild_curve3_without_compression_capacity_omits_compression_markers(
+    active_in_compression,
+    fyck,
+    ey0c,
+):
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=fyck,
+        futk=600.0,
+        eut=0.05,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        k=0.9,
+        ey0t=0.002,
+        ey0c=ey0c,
+        curve=3,
+        active_in_compression=active_in_compression,
+    )
+
+    points = steel.diagram_markers(design=False)
+    stress_keys = {stress_key for *_, stress_key in points}
+    strain_keys = {strain_key for _, _, strain_key, _ in points}
+
+    assert not ({"fyck", "k_fyck"} & stress_keys)
+    assert "ey0c" not in strain_keys
+    assert all(strain >= 0.0 for strain, *_ in points)
+    assert all(stress >= 0.0 for _, stress, *_ in points)
 
 
 def test_prestress_proof_point_lies_on_the_curve():

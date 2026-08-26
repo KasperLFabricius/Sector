@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from sector.materials import (
@@ -235,16 +237,16 @@ def test_mild_type1_hardens_to_rupture_stress():
 
 
 def test_mild_type1_design_factors_applied():
-    s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, futk=540.0,
+    s = MildSteel(fytk=500.0, fyck=500.0, eut=0.05, futk=550.0,
                   gamma_y=1.15, gamma_u=1.25, gamma_E=1.0, curve=1)
     fyd = 500.0 / 1.15
-    fud = 540.0 / 1.25
+    fud = 550.0 / 1.25
     # Each ordinate is divided by its own partial factor.
     eps_y = fyd / ES
     assert s.stress(eps_y) == pytest.approx(fyd)
     assert s.stress(0.05) == pytest.approx(fud)
     # Between yield and rupture the stress interpolates linearly between the two
-    # design ordinates (here fud < fyd, so the branch decreases).
+    # valid design ordinates without a descending ultimate branch.
     mid = 0.5 * (eps_y + 0.05)
     assert s.stress(mid) == pytest.approx(0.5 * (fyd + fud), rel=1e-6)
 
@@ -409,14 +411,563 @@ def test_mild_type3_ey0c_is_a_plastic_offset():
     assert -s.stress(-(500.0 / ES + 1.0e-4)) < 500.0
 
 
-def test_mild_type3_fyck_zero_has_no_compression():
-    # fyck = 0 means no compression capacity: compression stays zero rather than
-    # hardening toward fu (Codex review).
-    s = MildSteel(fytk=500.0, fyck=0.0, futk=600.0, eut=0.05, curve=3,
-                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, k=0.9, ey0t=0.0, ey0c=0.0)
-    assert s.stress(-0.001) == 0.0
-    assert s.stress(-0.02) == 0.0
-    assert s.stress(0.001) == pytest.approx(ES * 0.001)   # tension unaffected
+def test_mild_zero_fyck_has_no_compression_capacity():
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=0.0,
+        futk=600.0,
+        eut=0.05,
+        curve=3,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        k=0.9,
+        ey0t=0.0,
+        # The compression offset is inapplicable when there is no compression
+        # yield; its position relative to rupture must not invalidate tension.
+        ey0c=-1.0,
+    )
+
+    assert steel.stress(-0.02) == 0.0
+    assert steel.stress(0.001) == pytest.approx(ES * 0.001)
+
+
+def test_mild_tension_only_ignores_compression_strength_and_offset_relations():
+    steel = MildSteel(
+        fytk=500.0,
+        fyck=700.0,
+        futk=600.0,
+        eut=0.05,
+        curve=3,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        k=0.9,
+        ey0t=0.0,
+        ey0c=-1.0,
+        active_in_compression=False,
+    )
+
+    assert steel.stress(-0.02) == 0.0
+    assert steel.stress(0.001) == pytest.approx(ES * 0.001)
+
+
+@pytest.mark.parametrize(
+    "ey0c",
+    (float("nan"), float("inf"), -float("inf"), "not-a-number"),
+)
+def test_mild_tension_only_requires_a_finite_compression_offset(ey0c):
+    with pytest.raises(ValueError, match="ey0c"):
+        MildSteel(
+            fytk=500.0,
+            fyck=700.0,
+            futk=600.0,
+            eut=0.05,
+            curve=3,
+            gamma_y=1.0,
+            gamma_u=1.0,
+            gamma_E=1.0,
+            k=0.9,
+            ey0t=0.0,
+            ey0c=ey0c,
+            active_in_compression=False,
+        )
+
+
+def test_mild_curve3_active_compression_requires_futk_not_below_fyck():
+    with pytest.raises(ValueError, match="active fyck"):
+        MildSteel(
+            fytk=500.0,
+            fyck=700.0,
+            futk=600.0,
+            eut=0.05,
+            curve=3,
+            gamma_y=1.0,
+            gamma_u=1.0,
+            gamma_E=1.0,
+            k=0.9,
+            ey0t=0.0,
+            ey0c=0.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "values",
+    (
+        {
+            "curve": 1,
+            "fytk": 500.0,
+            "fyck": 500.0,
+            "futk": 550.0,
+            "eut": 0.05,
+            "gamma_y": 1.0,
+            "gamma_u": 2.0,
+            "gamma_E": 1.0,
+        },
+        {
+            "curve": 3,
+            "fytk": 200.0,
+            "fyck": 500.0,
+            "futk": 550.0,
+            "eut": 0.05,
+            "gamma_y": 1.0,
+            "gamma_u": 2.0,
+            "gamma_E": 1.0,
+            "k": 1.0,
+            "ey0t": 0.0,
+            "ey0c": 0.0,
+        },
+    ),
+)
+def test_mild_active_design_ultimate_must_not_fall_below_design_yield(values):
+    with pytest.raises(ValueError, match="gamma_u"):
+        MildSteel(**values)
+
+
+def test_prestress_design_ultimate_must_not_fall_below_design_proof():
+    with pytest.raises(ValueError, match="gamma_u"):
+        Prestress(
+            curve=7,
+            IS=0.006,
+            fytk=1600.0,
+            futk=1800.0,
+            eut=0.035,
+            gamma_y=1.0,
+            gamma_u=2.0,
+            gamma_E=1.0,
+            k=1.0,
+            ey0t=0.0,
+            Es=195000.0,
+        )
+
+
+@pytest.mark.parametrize("curve", (1, 3))
+def test_mild_accepts_mathematically_equal_factored_ultimate(curve):
+    values = dict(
+        curve=curve,
+        fytk=500.0,
+        fyck=500.0,
+        futk=550.0,
+        eut=0.05,
+        gamma_y=1.0,
+        gamma_u=1.1,
+        gamma_E=1.0,
+    )
+    if curve == 3:
+        values.update(k=1.0, ey0t=0.0, ey0c=0.0)
+
+    steel = MildSteel(**values)
+
+    assert steel.stress(steel.eut) == pytest.approx(500.0)
+    if curve == 3:
+        assert steel.stress(-steel.eut) == pytest.approx(-500.0)
+    assert all(
+        math.isfinite(steel.stress(strain))
+        for strain in (-steel.eut, -0.001, 0.0, 0.001, steel.eut)
+    )
+
+
+@pytest.mark.parametrize("curve", (1, 3))
+def test_mild_rejects_nearby_descending_factored_ultimate(curve):
+    values = dict(
+        curve=curve,
+        fytk=500.0,
+        fyck=500.0,
+        futk=549.999999,
+        eut=0.05,
+        gamma_y=1.0,
+        gamma_u=1.1,
+        gamma_E=1.0,
+    )
+    if curve == 3:
+        values.update(k=1.0, ey0t=0.0, ey0c=0.0)
+
+    with pytest.raises(ValueError, match="gamma_u"):
+        MildSteel(**values)
+
+
+@pytest.mark.parametrize("curve", (6, 7))
+def test_prestress_accepts_mathematically_equal_factored_ultimate(curve):
+    values = dict(
+        curve=curve,
+        IS=0.0,
+        fytk=1600.0,
+        futk=1760.0,
+        eut=0.035,
+        gamma_y=1.0,
+        gamma_u=1.1,
+        gamma_E=1.0,
+        Es=195000.0,
+    )
+    if curve == 7:
+        values.update(k=1.0, ey0t=0.0)
+
+    prestress = Prestress(**values)
+
+    assert prestress.stress(prestress.eut) == pytest.approx(1600.0)
+    assert all(
+        math.isfinite(prestress.stress(strain))
+        for strain in (0.0, 0.001, 0.01, prestress.eut)
+    )
+
+
+@pytest.mark.parametrize("curve", (6, 7))
+def test_prestress_rejects_nearby_descending_factored_ultimate(curve):
+    values = dict(
+        curve=curve,
+        IS=0.0,
+        fytk=1600.0,
+        futk=1759.99999,
+        eut=0.035,
+        gamma_y=1.0,
+        gamma_u=1.1,
+        gamma_E=1.0,
+        Es=195000.0,
+    )
+    if curve == 7:
+        values.update(k=1.0, ey0t=0.0)
+
+    with pytest.raises(ValueError, match="gamma_u"):
+        Prestress(**values)
+
+
+@pytest.mark.parametrize("curve", (1, 3))
+def test_mild_factored_strength_order_is_scale_independent(curve):
+    values = dict(
+        curve=curve,
+        fytk=1.0e-308,
+        fyck=0.0,
+        futk=2.0e-308,
+        eut=0.05,
+        gamma_y=1.0,
+        gamma_u=2.0,
+        gamma_E=1.0,
+        Es=1.0e-306,
+        active_in_compression=False,
+    )
+    if curve == 3:
+        values.update(k=1.0, ey0t=0.0, ey0c=-0.01)
+
+    equal = MildSteel(**values)
+    assert equal.stress(equal.eut) == equal.futk / equal.gamma_u
+
+    values["futk"] = 1.0e-308
+    with pytest.raises(ValueError, match="gamma_u"):
+        MildSteel(**values)
+
+
+@pytest.mark.parametrize("curve", (6, 7))
+def test_prestress_factored_strength_order_is_scale_independent(curve):
+    values = dict(
+        curve=curve,
+        IS=0.0,
+        fytk=1.0e-308,
+        futk=2.0e-308,
+        eut=0.05,
+        gamma_y=1.0,
+        gamma_u=2.0,
+        gamma_E=1.0,
+        Es=1.0e-306,
+    )
+    if curve == 7:
+        values.update(k=1.0, ey0t=0.0)
+
+    equal = Prestress(**values)
+    assert equal.stress(equal.eut) == equal.futk / equal.gamma_u
+
+    values["futk"] = 1.0e-308
+    with pytest.raises(ValueError, match="gamma_u"):
+        Prestress(**values)
+
+
+@pytest.mark.parametrize("curve", (1, 3))
+def test_mild_extreme_finite_hardening_branch_never_overflows(curve):
+    values = dict(
+        curve=curve,
+        fytk=1.0,
+        fyck=0.0,
+        futk=1.0e308,
+        eut=1.0e305,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        Es=200_000.0,
+        active_in_compression=False,
+    )
+    if curve == 3:
+        values.update(k=0.9, ey0t=0.0, ey0c=-0.01)
+
+    steel = MildSteel(**values)
+
+    assert steel.stress(steel.eut) == 1.0e308
+    assert all(
+        math.isfinite(steel.stress(strain))
+        for strain in (0.0035, steel.eut / 2.0, steel.eut)
+    )
+
+
+@pytest.mark.parametrize("curve", (6, 7))
+def test_prestress_extreme_finite_hardening_branch_never_overflows(curve):
+    values = dict(
+        curve=curve,
+        IS=0.0,
+        fytk=1.0,
+        futk=1.0e308,
+        eut=1.0e305,
+        gamma_y=1.0,
+        gamma_u=1.0,
+        gamma_E=1.0,
+        Es=200_000.0,
+    )
+    if curve == 7:
+        values.update(k=0.9, ey0t=0.0)
+
+    prestress = Prestress(**values)
+
+    assert prestress.stress(prestress.eut) == 1.0e308
+    assert all(
+        math.isfinite(prestress.stress(strain))
+        for strain in (0.0059, prestress.eut / 2.0, prestress.eut)
+    )
+
+
+@pytest.mark.parametrize("curve", (1, 2, 3, 4, 5))
+def test_builtin_prestress_rejects_nonfinite_design_stress(curve):
+    with pytest.raises(ValueError, match="design stress"):
+        Prestress(curve=curve, IS=0.0, gamma_y=1.0e-308)
+
+    valid = Prestress(curve=curve, IS=0.0, gamma_y=1.0)
+    assert math.isfinite(valid.stress(valid.rupture_strain))
+    assert valid.stress(valid.rupture_strain) > 0.0
+
+
+@pytest.mark.parametrize("curve", (1, 3))
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {
+            "fytk": 500.0,
+            "fyck": 500.0,
+            "futk": 1.0e308,
+            "gamma_y": 1.0,
+            "gamma_u": 1.0e-308,
+        },
+        {
+            "fytk": 1.0e-308,
+            "fyck": 1.0e-308,
+            "futk": 1.0e-308,
+            "gamma_y": 1.0e308,
+            "gamma_u": 1.0e308,
+        },
+    ),
+)
+def test_mild_rejects_nonfinite_derived_design_ordinates(curve, updates):
+    values = dict(
+        curve=curve,
+        eut=0.05,
+        gamma_E=1.0,
+        **updates,
+    )
+    if curve == 3:
+        values.update(k=1.0, ey0t=0.0, ey0c=0.0)
+
+    with pytest.raises(ValueError, match="positive finite|gamma_u"):
+        MildSteel(**values)
+
+
+@pytest.mark.parametrize("curve", (6, 7))
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {
+            "fytk": 1600.0,
+            "futk": 1.0e308,
+            "gamma_y": 1.0,
+            "gamma_u": 1.0e-308,
+        },
+        {
+            "fytk": 1.0e-308,
+            "futk": 1.0e-308,
+            "gamma_y": 1.0e308,
+            "gamma_u": 1.0e308,
+        },
+    ),
+)
+def test_prestress_rejects_nonfinite_derived_design_ordinates(
+    curve,
+    updates,
+):
+    values = dict(
+        curve=curve,
+        IS=0.0,
+        eut=0.035,
+        gamma_E=1.0,
+        Es=195000.0,
+        **updates,
+    )
+    if curve == 7:
+        values.update(k=1.0, ey0t=0.0)
+
+    with pytest.raises(ValueError, match="positive finite|gamma_u"):
+        Prestress(**values)
+
+
+@pytest.mark.parametrize("curve", (1, 3))
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {
+            "fytk": 1.0e308,
+            "futk": 1.0e308,
+            "gamma_y": 1.0e307,
+            "gamma_u": 1.0e307,
+            "gamma_E": 1.0e308,
+            "Es": 1.0e308,
+        },
+        {
+            "fytk": 1.0e-308,
+            "futk": 1.0e-308,
+            "gamma_y": 1.0e-308,
+            "gamma_u": 1.0e-308,
+            "gamma_E": 1.0e-306,
+            "Es": 1.0e-307,
+        },
+    ),
+)
+def test_mild_rejects_factored_yield_beyond_rupture_without_nan_escape(
+    curve,
+    updates,
+):
+    values = dict(
+        curve=curve,
+        fyck=0.0,
+        eut=2.0,
+        active_in_compression=False,
+        **updates,
+    )
+    if curve == 3:
+        values.update(k=1.0, ey0t=0.0, ey0c=0.0)
+
+    with pytest.raises(ValueError, match="tensile yield strain"):
+        MildSteel(**values)
+
+
+@pytest.mark.parametrize("curve", (6, 7))
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {
+            "fytk": 1.0e308,
+            "futk": 1.0e308,
+            "gamma_y": 1.0e307,
+            "gamma_u": 1.0e307,
+            "gamma_E": 1.0e308,
+            "Es": 1.0e308,
+        },
+        {
+            "fytk": 1.0e-308,
+            "futk": 1.0e-308,
+            "gamma_y": 1.0e-308,
+            "gamma_u": 1.0e-308,
+            "gamma_E": 1.0e-306,
+            "Es": 1.0e-307,
+        },
+    ),
+)
+def test_prestress_rejects_factored_yield_beyond_rupture_without_nan_escape(
+    curve,
+    updates,
+):
+    values = dict(curve=curve, IS=0.0, eut=2.0, **updates)
+    if curve == 7:
+        values.update(k=1.0, ey0t=0.0)
+
+    with pytest.raises(ValueError, match="proof strain"):
+        Prestress(**values)
+
+
+@pytest.mark.parametrize("curve", (1, 3))
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {
+            "fytk": 1.0e307,
+            "futk": 1.0e307,
+            "gamma_y": 1.0e307,
+            "gamma_u": 1.0e307,
+            "gamma_E": 1.0e307,
+            "Es": 1.0e308,
+        },
+        {
+            "fytk": 1.0e-308,
+            "futk": 1.0e-308,
+            "gamma_y": 1.0e-308,
+            "gamma_u": 1.0e-308,
+            "gamma_E": 1.0e-308,
+            "Es": 1.0e-307,
+        },
+    ),
+)
+def test_mild_accepts_finite_factored_yield_after_product_cancellation(
+    curve,
+    updates,
+):
+    values = dict(
+        curve=curve,
+        fyck=0.0,
+        eut=2.0,
+        active_in_compression=False,
+        **updates,
+    )
+    if curve == 3:
+        values.update(k=1.0, ey0t=0.0, ey0c=0.0)
+
+    steel = MildSteel(**values)
+
+    assert all(
+        math.isfinite(steel.stress(strain, design=design))
+        for design in (False, True)
+        for strain in (-0.05, 0.0, 0.05, 0.1, 1.0, steel.eut)
+    )
+
+
+@pytest.mark.parametrize("curve", (6, 7))
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {
+            "fytk": 1.0e307,
+            "futk": 1.0e307,
+            "gamma_y": 1.0e307,
+            "gamma_u": 1.0e307,
+            "gamma_E": 1.0e307,
+            "Es": 1.0e308,
+        },
+        {
+            "fytk": 1.0e-308,
+            "futk": 1.0e-308,
+            "gamma_y": 1.0e-308,
+            "gamma_u": 1.0e-308,
+            "gamma_E": 1.0e-308,
+            "Es": 1.0e-307,
+        },
+    ),
+)
+def test_prestress_accepts_finite_factored_yield_after_product_cancellation(
+    curve,
+    updates,
+):
+    values = dict(curve=curve, IS=0.0, eut=2.0, **updates)
+    if curve == 7:
+        values.update(k=1.0, ey0t=0.0)
+
+    prestress = Prestress(**values)
+
+    assert all(
+        math.isfinite(prestress.stress(strain, design=design))
+        for design in (False, True)
+        for strain in (0.0, 0.05, 0.1, 1.0, prestress.eut)
+    )
 
 
 def test_mild_type3_design_scaling():
@@ -469,13 +1020,15 @@ def test_prestress_Es_sets_the_elastic_slope():
 
 
 def test_curve3_reproduces_bilinear_curve1():
-    # The general law (curve 3) with k=1, ey0t=0 and a flat compression (large
-    # ey0c) reproduces the bilinear curve 1 in tension and compression.
+    # The general law (curve 3) with k=1 and ey0t=0 reproduces the bilinear
+    # curve-1 tension branch. Compression is disabled explicitly rather than by
+    # placing a hidden yield point beyond rupture.
     common = dict(fytk=550.0, fyck=550.0, futk=620.0, eut=0.05,
-                  gamma_y=1.1, gamma_u=1.15, gamma_E=1.0)
+                  gamma_y=1.1, gamma_u=1.15, gamma_E=1.0,
+                  active_in_compression=False)
     c1 = MildSteel(curve=1, **common)
-    c3 = MildSteel(curve=3, k=1.0, ey0t=0.0, ey0c=1.0, **common)
-    for e in (-0.02, -0.003, -0.001, 0.0, 0.001, 0.003, 0.02, 0.05):
+    c3 = MildSteel(curve=3, k=1.0, ey0t=0.0, ey0c=0.0, **common)
+    for e in (0.0, 0.001, 0.003, 0.02, 0.05):
         assert c3.stress(e, design=True) == pytest.approx(
             c1.stress(e, design=True), abs=1e-6), e
 
@@ -485,7 +1038,7 @@ def test_curve3_reproduces_epp_curve2():
     c2 = MildSteel(curve=2, fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.15)
     c3 = MildSteel(curve=3, fytk=500.0, fyck=500.0, futk=500.0, eut=0.05,
                    gamma_y=1.15, gamma_u=1.15, gamma_E=1.15,
-                   k=1.0, ey0t=0.0, ey0c=1.0)
+                   k=1.0, ey0t=0.0, ey0c=0.0)
     for e in (-0.02, -0.001, 0.0, 0.001, 0.02, 0.05):
         assert c3.stress(e, design=True) == pytest.approx(
             c2.stress(e, design=True), abs=1e-6), e
@@ -495,6 +1048,180 @@ def test_curve3_compression_uses_fyck_independently():
     # The general law's compression yield is fyck, not fytk: setting them apart
     # gives different tension and compression magnitudes.
     s = MildSteel(curve=3, fytk=500.0, fyck=300.0, futk=550.0, eut=0.05,
-                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, k=1.0, ey0t=0.0, ey0c=1.0)
-    assert s.stress(0.02, design=True) > 500.0            # tension hardens past fytk
-    assert -s.stress(-0.02, design=True) == pytest.approx(300.0)  # compression = fyck
+                  gamma_y=1.0, gamma_u=1.0, gamma_E=1.0, k=1.0,
+                  ey0t=0.0, ey0c=0.0)
+    assert s.stress(500.0 / ES, design=True) == pytest.approx(500.0)
+    assert -s.stress(-(300.0 / ES), design=True) == pytest.approx(300.0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    (
+        ("fytk", float("nan"), "fytk"),
+        ("fyck", -1.0, "fyck"),
+        ("futk", float("inf"), "futk"),
+        ("eut", -0.01, "eut"),
+        ("Es", 0.0, "Es"),
+        ("k", 0.0, "k"),
+        ("k", 1.1, "k"),
+        ("ey0t", -0.001, "ey0t"),
+        ("ey0c", float("inf"), "ey0c"),
+        ("futk", 450.0, "futk"),
+        ("ey0t", 0.05, "yield strain"),
+        ("ey0c", 0.05, "yield strain"),
+    ),
+)
+def test_mild_curve3_rejects_invalid_active_domains(field, value, match):
+    values = dict(
+        fytk=500.0,
+        fyck=500.0,
+        eut=0.05,
+        futk=550.0,
+        gamma_y=1.15,
+        gamma_u=1.15,
+        gamma_E=1.0,
+        curve=3,
+        k=0.9,
+        ey0t=0.002,
+        ey0c=0.002,
+        Es=200000.0,
+    )
+    values[field] = value
+    with pytest.raises(ValueError, match=match):
+        MildSteel(**values)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    (
+        ("IS", float("inf"), "IS"),
+        ("IS", -0.001, "IS"),
+        ("fytk", float("nan"), "fp0.1k"),
+        ("futk", -1.0, "fpk"),
+        ("eut", -0.01, "eut"),
+        ("Es", 0.0, "Es"),
+        ("k", 0.0, "k"),
+        ("k", 1.1, "k"),
+        ("ey0t", -0.001, "ey0t"),
+        ("futk", 1600.0, "fpk"),
+        ("ey0t", 0.04, "proof strain"),
+    ),
+)
+def test_prestress_curve7_rejects_invalid_active_domains(field, value, match):
+    values = dict(
+        curve=7,
+        IS=0.007,
+        gamma_y=1.15,
+        gamma_u=1.15,
+        gamma_E=1.0,
+        fytk=1640.0,
+        eut=0.035,
+        futk=1860.0,
+        k=0.9,
+        ey0t=0.002,
+        Es=195000.0,
+    )
+    values[field] = value
+    with pytest.raises(ValueError, match=match):
+        Prestress(**values)
+
+
+def test_inactive_curve_fields_do_not_change_applicability():
+    mild = MildSteel(
+        curve=2,
+        fytk=500.0,
+        fyck=500.0,
+        eut=0.05,
+        futk=float("nan"),
+        gamma_y=1.15,
+        gamma_u=float("nan"),
+        gamma_E=float("nan"),
+        k=1.1,
+        ey0t=float("inf"),
+        ey0c=-1.0,
+    )
+    assert mild.stress(0.01) == pytest.approx(500.0 / 1.15)
+
+    prestress = Prestress(
+        curve=1,
+        IS=0.006,
+        gamma_y=1.1,
+        fytk=float("nan"),
+        futk=-1.0,
+        eut=-1.0,
+        gamma_u=float("nan"),
+        gamma_E=float("nan"),
+        k=1.1,
+        ey0t=-1.0,
+    )
+    assert prestress.stress(0.01) == pytest.approx(1600.0 / 1.1)
+
+
+def test_every_parametric_curve_requires_yield_before_rupture():
+    with pytest.raises(ValueError, match="tensile yield strain"):
+        MildSteel(
+            curve=1,
+            fytk=500.0,
+            fyck=500.0,
+            futk=550.0,
+            eut=0.002,
+        )
+    with pytest.raises(ValueError, match="tensile yield strain"):
+        MildSteel(
+            curve=2,
+            fytk=500.0,
+            fyck=500.0,
+            eut=0.002,
+        )
+    with pytest.raises(ValueError, match="proof strain"):
+        Prestress(
+            curve=6,
+            IS=0.0,
+            fytk=1640.0,
+            futk=1860.0,
+            eut=0.007,
+            Es=195000.0,
+        )
+
+
+def test_active_compression_yield_must_precede_rupture():
+    values = dict(
+        curve=3,
+        fytk=500.0,
+        fyck=800.0,
+        futk=850.0,
+        eut=0.003,
+        k=1.0,
+        ey0t=0.0,
+        ey0c=0.0,
+    )
+    with pytest.raises(ValueError, match="compressive yield strain"):
+        MildSteel(**values)
+
+    tension_only = MildSteel(**values, active_in_compression=False)
+    assert tension_only.stress(-0.001) == 0.0
+
+
+def test_bilinear_hardening_curves_reject_reversed_strengths():
+    with pytest.raises(ValueError, match="futk"):
+        MildSteel(
+            curve=1,
+            fytk=500.0,
+            fyck=500.0,
+            futk=450.0,
+            eut=0.05,
+        )
+    with pytest.raises(ValueError, match="fpk"):
+        Prestress(
+            curve=6,
+            IS=0.0,
+            fytk=1640.0,
+            futk=1600.0,
+            eut=0.035,
+            Es=195000.0,
+        )
+
+
+def test_builtin_prestress_prestrain_must_precede_fixed_rupture():
+    with pytest.raises(ValueError, match="IS"):
+        Prestress(curve=1, IS=EPS_P_RES, gamma_y=1.1)

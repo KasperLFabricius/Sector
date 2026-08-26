@@ -62,7 +62,7 @@ def test_build_mild_converts_gpa_modulus_to_mpa():
 
 def test_build_mild_uses_only_fields_for_the_curve():
     # Curve 2 ignores the hardening/second-yield fields even if supplied.
-    s = mp.build_mild(curve=2, fytk=500.0, fyck=500.0, eut=0.05, gamma_y=1.15,
+    s = mp.build_mild(curve=2, fytk=500.0, fyck=500.0, eut=50.0, gamma_y=1.15,
                       futk=999.0, k=0.5, ey0t=0.01)
     assert s.curve == 2
     assert s.futk == 0.0  # not passed through for curve 2
@@ -147,6 +147,46 @@ def test_every_field_has_help_text():
                            (mp.PRESTRESS_FIELD_META, mp.PRESTRESS_HELP)):
         for f in meta:
             assert help_map.get(f), f
+
+
+def test_valid_preset_reference_stresses_are_numerically_unchanged():
+    mild_expected = {
+        "Curve 1 (bilinear hardening)": (200.0, 557.6719576719577, -557.6719576719577),
+        "Curve 2 (elastic-perfectly-plastic)": (200.0, 500.0, -500.0),
+        "Curve 3 (two yield points)": (200.0, 555.8011049723757, -555.5555555555555),
+        "DS/EN 1992-1-1:2005 + DK NA:2024": (200.0, 458.33333333333337, -458.33333333333337),
+        "DS/EN 1992-1-1:2023": (200.0, 434.7826086956522, -434.7826086956522),
+        "EN 1992-1-1:2005": (200.0, 434.7826086956522, -434.7826086956522),
+    }
+    for name, expected in mild_expected.items():
+        law = mp.build_mild(**mp.MILD_PRESETS[name])
+        actual = (
+            law.stress(0.001, design=False),
+            law.stress(0.01, design=True),
+            law.stress(-0.01, design=True),
+        )
+        assert actual == pytest.approx(expected, rel=1e-12, abs=1e-12)
+
+    prestress_expected = {
+        "Curve 1 (built-in)": (1200.0, 1495.4545454545453, 1495.4545454545453),
+        "Curve 2 (built-in)": (1110.0, 1485.4545454545453, 1602.7272727272725),
+        "Curve 3 (built-in)": (1110.0, 1493.6363636363635, 1609.5454545454545),
+        "Curve 4 (built-in)": (1170.8959999999997, 1466.3636363636363, 1609.5454545454545),
+        "Curve 5 (built-in)": (1170.4080000000004, 1464.5454545454545, 1609.090909090909),
+        "Curve 6 (bilinear)": (1200.0, 1563.0402384500744, 1690.9090909090908),
+        "Curve 7 (two yield)": (1200.0, 1553.0999036299388, 1690.9090909090908),
+        "DS/EN 1992-1-1:2005 + DK NA:2024": (1170.0, 1451.7557251908397, 1550.0),
+        "DS/EN 1992-1-1:2023": (1200.0, 1514.4271857830836, 1617.3913043478262),
+        "EN 1992-1-1:2005": (1170.0, 1513.7472536129762, 1617.3913043478262),
+    }
+    for name, expected in prestress_expected.items():
+        law = mp.build_prestress(**mp.PRESTRESS_PRESETS[name])
+        actual = (
+            law.stress(0.006, design=False),
+            law.stress(0.02, design=True),
+            law.stress(0.035, design=True),
+        )
+        assert actual == pytest.approx(expected, rel=1e-12, abs=1e-12)
 
 
 def test_field_metadata_matches_fields():
