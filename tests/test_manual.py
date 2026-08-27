@@ -430,7 +430,10 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     assert "one compression-strut range" in text
     assert "three physical component checks" in text
     assert "shared-link selection establishes link presence" in text
-    assert "Full $T_{Rd}$, utilisation and status require current links" in text
+    assert "transverse/strut resistance and its utilisation require current links" in text
+    assert "every side of every torsion tube" in text
+    assert "A shortfall is **FAIL**" in text
+    assert "remains **NOT ASSESSED**" in text
     assert "one leg of the same closed, anchored loop" in text
     assert "applied only when current closed links are present" in text
     assert "bands not overlap" not in text

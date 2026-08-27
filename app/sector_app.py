@@ -6961,15 +6961,18 @@ def build_inputs(host=st):
     )
     sts.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
     sts.caption(
-        "EN 1992-1-1 section 6.3 thin-walled-tube resistance. Full capacity "
-        "requires current closed links; otherwise concrete resistance and "
-        "reinforcement demand are reported as context."
+        "EN 1992-1-1 section 6.3 thin-walled-tube calculation. Current closed "
+        "links establish the transverse/strut resistance component. Overall "
+        "torsion also requires Formula (6.28) longitudinal steel, perimeter "
+        "distribution and member anchorage."
     )
     torsion_on = _seeded_checkbox(
         sts, "Check torsion capacity", False, "torsion_on",
-        help=r"With current closed links, calculates $T_{Rd}$, utilisation and "
-             "the combined shear-torsion crushing check. Without links, reports "
-             "concrete resistance and reinforcement demand only.")
+        help=r"With current closed links, calculates the $T_{Rd,s}$ / "
+             r"$T_{Rd,max}$ resistance component, utilisation and the combined "
+             "shear-torsion crushing check. The overall status also considers "
+             "longitudinal reinforcement. Without links, only concrete resistance "
+             "and reinforcement demand are reported.")
     torsion_method = _seeded_selectbox(
         sts, "Torsion method", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label,
@@ -7058,7 +7061,9 @@ def build_inputs(host=st):
         ),
         help="DK NA Figure 5.100 NA: for closed peripheral stirrups and uniformly "
              "distributed longitudinal steel on both wall faces, use the pure-"
-             "shear nu_v. Requires current shared links and the DK NA edition.")
+             "shear nu_v. This is a selected detailing condition, not verification "
+             "of the modelled bars or member anchorage. Requires current shared "
+             "links and the DK NA edition.")
     torsion_subdivide = _seeded_checkbox(
         sts, "Subdivide into sub-tubes (T / compound section)", False,
         "torsion_subdivide", disabled=not _tors,
@@ -10045,10 +10050,10 @@ def _run_uniaxial_capacity_checks(inp, out):
                     (r["x_mm"], r["y_mm"],
                      r["b_mm"], r["h_mm"]) = dims
                 tube_valid = all(r["tube_valid"] for r in sub_res)
-                full_resistance_assessed = all(
-                    r["full_resistance_assessed"] for r in sub_res
+                transverse_resistance_assessed = all(
+                    r["transverse_resistance_assessed"] for r in sub_res
                 )
-                valid = bool(tube_valid and full_resistance_assessed)
+                valid = bool(tube_valid and transverse_resistance_assessed)
                 trd = sum(r["trd"] for r in sub_res) if valid else None
                 asl_req = sum(r["asl_req"] for r in sub_res)
                 primary = sub_res[0]
@@ -10069,20 +10074,55 @@ def _run_uniaxial_capacity_checks(inp, out):
                 trd, asl_req = primary["trd"], primary["asl_req"]
                 tube_main = tors_ctx["tube"]
                 tube_valid = primary["tube_valid"]
-                full_resistance_assessed = primary[
-                    "full_resistance_assessed"
+                transverse_resistance_assessed = primary[
+                    "transverse_resistance_assessed"
                 ]
-                valid = bool(tube_valid and full_resistance_assessed)
+                valid = bool(tube_valid and transverse_resistance_assessed)
                 util_t = primary["util"] if valid else None
             assessment_reason = (
                 None
-                if full_resistance_assessed
+                if transverse_resistance_assessed
                 else primary["assessment_reason"]
             )
             reason = (
                 tube_main.get("reason")
                 if not tube_valid
                 else assessment_reason
+            )
+            required_by_tube = tuple(
+                item["asl_req"] for item in (sub_res or [primary])
+            )
+            longitudinal_assessment = (
+                capacity.torsion_longitudinal_assessment(
+                    inp,
+                    required_by_tube,
+                    resistance_assessed=valid,
+                )
+            )
+            resistance_status = (
+                "NOT ASSESSED"
+                if not valid or util_t is None
+                else "PASS"
+                if math.isfinite(util_t) and util_t <= 1.0
+                else "FAIL"
+            )
+            overall_status = capacity.aggregate_assessment_status((
+                resistance_status,
+                longitudinal_assessment["status"],
+            ))
+            overall_ok = (
+                True
+                if overall_status == "PASS"
+                else False
+                if overall_status == "FAIL"
+                else None
+            )
+            overall_reason = (
+                reason
+                if not valid
+                else capacity.TORSION_RESISTANCE_EXCEEDED
+                if resistance_status == "FAIL"
+                else longitudinal_assessment["reason"]
             )
             tcode = tors_ctx["tcode"]
             tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
@@ -10108,8 +10148,17 @@ def _run_uniaxial_capacity_checks(inp, out):
                 governs=primary["governs"], valid=valid,
                 tube_valid=tube_valid,
                 closed_links_present=tors_ctx["closed_links_present"],
-                full_resistance_assessed=full_resistance_assessed,
+                transverse_resistance_assessed=(
+                    transverse_resistance_assessed
+                ),
+                # Compatibility alias for retained schema-27 result consumers.
+                full_resistance_assessed=transverse_resistance_assessed,
                 assessment_reason=assessment_reason,
+                resistance_status=resistance_status,
+                longitudinal_assessment=longitudinal_assessment,
+                assessment_status=overall_status,
+                assessment_ok=overall_ok,
+                overall_reason=overall_reason,
                 resistance_selection=primary["resistance_selection"],
                 reason=reason, cot_limit_lo=lo_t, cot_limit_hi=hi_t,
                 out_of_limits=torsion_out_of_limits,
@@ -10121,10 +10170,10 @@ def _run_uniaxial_capacity_checks(inp, out):
                 subdivision_reason=tors_ctx["subdivision_reason"],
                 theta_mode=(
                     theta_mode_str
-                    if full_resistance_assessed and tors_live
+                    if transverse_resistance_assessed and tors_live
                     else (
                         "resistance"
-                        if full_resistance_assessed
+                        if transverse_resistance_assessed
                         else "transparency"
                     )
                 ),
@@ -13898,14 +13947,16 @@ def torsion_view(inp, results):
         if "tube_valid" in t
         else t.get("valid") is True
     )
-    full_resistance_assessed = (
-        t.get("full_resistance_assessed") is True
+    transverse_resistance_assessed = (
+        t.get("transverse_resistance_assessed") is True
+        if "transverse_resistance_assessed" in t
+        else t.get("full_resistance_assessed") is True
         if "full_resistance_assessed" in t
         else t.get("valid") is True
     )
-    full_resistance_available = bool(
+    transverse_resistance_available = bool(
         tube_valid
-        and full_resistance_assessed
+        and transverse_resistance_assessed
         and (
             t.get("closed_links_present") is True
             if "closed_links_present" in t
@@ -13914,7 +13965,7 @@ def torsion_view(inp, results):
         and t.get("valid") is True
     )
     directional_interactions = t.get("directional_interactions") or {}
-    if directional_interactions and full_resistance_available:
+    if directional_interactions and transverse_resistance_available:
         st.info(
             "Generic Vx,Ed + Vy,Ed + TEd interaction is not calculated. The table "
             "shows independent Vx+T and Vy+T calculations; the torsion result below "
@@ -13971,7 +14022,7 @@ def torsion_view(inp, results):
                 "verdict."
             )
             st.dataframe(min_reinf_rows, hide_index=True, width="stretch")
-    if tube_valid and not full_resistance_assessed:
+    if tube_valid and not transverse_resistance_assessed:
         raw_reason = (
             t.get("assessment_reason")
             or t.get("reason")
@@ -13995,9 +14046,10 @@ def torsion_view(inp, results):
         _manual_warning(
             st,
             "calculation-warning",
-            "Full torsion resistance is NOT ASSESSED. "
+            "The torsion transverse/strut resistance is NOT ASSESSED. "
             + detail
-            + " Select current closed links for TRd and utilisation; the values "
+            + " Select current closed links for the resistance component and "
+            "utilisation; the values "
             "below show concrete resistance and reinforcement demand only.",
         )
         m1, m2, m3 = st.columns(3)
@@ -14005,13 +14057,13 @@ def torsion_view(inp, results):
         m2.metric(
             r"Concrete cap $T_{Rd,max}$",
             f"{t['trd_max']:.3f} kNm",
-            help="Concrete-strut cap; full TRd requires current closed links.",
+            help="Concrete-strut cap; the transverse resistance component requires current closed links.",
         )
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
         st.caption(
             f"Displayed cap angle: theta = {t['theta_deg']:.1f} deg, "
             f"cot theta = {t['cot']:.3f}. It supports the concrete cap and "
-            "Formula 6.28 reinforcement demand; full resistance requires links."
+            "Formula 6.28 reinforcement demand; the resistance component requires links."
         )
         if t.get("subdivided"):
             subs = t.get("subtubes") or []
@@ -14037,7 +14089,7 @@ def torsion_view(inp, results):
                 width="stretch",
             )
             st.caption(
-                "Geometry and demand remain visible; full capacity sum, governing "
+                "Geometry and demand remain visible; the component-resistance sum, governing "
                 "sub-tube and utilisation require current closed links."
             )
             st.plotly_chart(viz.subtube_figure(subs), width="stretch")
@@ -14123,24 +14175,68 @@ def torsion_view(inp, results):
             "torsion and interaction calculations.",
         )
     util = t["util"]
-    ok = viz.util_ok(util)
     util_txt = _pct(util)
+    resistance_status = str(t.get("resistance_status") or (
+        "PASS" if viz.util_ok(util) else "FAIL"
+    ))
     if t.get("subdivided"):
         m1, m2, m3 = st.columns(3)
         m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
         m2.metric(r"$\sum T_{Rd,i}$", f"{t['trd']:.3f} kNm",
-                  help="Capacity sum for reference under 6.3.1(3); maximum "
-                       "sub-tube utilisation controls.")
-        _verdict_metric(
-            m3, r"Governing utilisation $\max(T_{Ed,i}/T_{Rd,i})$", util_txt, ok,
+                  help="Resistance-component sum for reference under 6.3.1(3); "
+                       "maximum sub-tube utilisation controls.")
+        m3.metric(
+            r"Transverse/strut component $\max(T_{Ed,i}/T_{Rd,i})$",
+            util_txt,
         )
+        m3.caption(resistance_status)
     else:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
-        m2.metric(r"$T_{Rd}=\min$", f"{t['trd']:.3f} kNm",
+        m2.metric(r"$T_{Rd}$ component $=\min$", f"{t['trd']:.3f} kNm",
                   help=f"governed by {t['governs']}")
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
-        _verdict_metric(m4, r"Utilisation $T_{Ed}/T_{Rd}$", util_txt, ok)
+        m4.metric(r"Transverse/strut utilisation $T_{Ed}/T_{Rd}$", util_txt)
+        m4.caption(resistance_status)
+
+    overall_status = presentation.torsion_assessment_status(t)
+    overall_note = presentation.torsion_assessment_note(t)
+    if overall_status != "PASS":
+        _manual_warning(
+            st,
+            "calculation-warning",
+            f"Overall torsion assessment: {overall_status}. {overall_note}.",
+        )
+    longitudinal = t.get("longitudinal_assessment") or {}
+    if longitudinal:
+        def _area_text(value):
+            return "-" if value is None else f"{float(value):.0f} mm2"
+
+        st.markdown("**Longitudinal torsion reinforcement (Formula 6.28)**")
+        st.dataframe(
+            {
+                "Quantity": [
+                    "Required longitudinal area",
+                    "All modelled passive bars - gross area",
+                    "All modelled passive bars - equivalent area at selected fyd",
+                    "Longitudinal assessment",
+                ],
+                "Value": [
+                    _area_text(longitudinal.get("required_asl_mm2")),
+                    _area_text(longitudinal.get("provided_gross_area_mm2")),
+                    _area_text(longitudinal.get("provided_equivalent_area_mm2")),
+                    str(longitudinal.get("status") or "NOT ASSESSED"),
+                ],
+            },
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "The modelled passive-bar total is an upper bound. Sector does not "
+            "credit it as usable torsion reinforcement unless reserve beyond "
+            "bending, distribution around every torsion-tube side and member "
+            "anchorage are established."
+        )
 
     st.caption(
         "Torsional cracking inputs: "
@@ -14160,12 +14256,13 @@ def torsion_view(inp, results):
         else:
             angle_clause = ("each sub-tube is at its OWN resistance-optimum strut angle "
                             "(no single member angle applies -- see the cot column)")
-        st.caption(f"Compound section (6.3.1(3)): TRd = {chr(0x03A3)} of the sub-tube "
-                   f"capacities; TEd is split by uncracked torsional stiffness "
+        st.caption(f"Compound section (6.3.1(3)): the TRd component is "
+                   f"{chr(0x03A3)} of the sub-tube resistance components; TEd is "
+                   "split by uncracked torsional stiffness "
                    r"$C = \beta\,h\,b^3$ (6.3.1(4)). The first row (web) carries the "
                    f"shear in the combined V+T checks; {angle_clause}. "
                    f"Method: {t['method']}.")
-        st.markdown("**Sub-tubes (TRd = " + chr(0x03A3) + " TRd,i)**")
+        st.markdown("**Sub-tube resistance components and Formula 6.28 demand**")
         st.dataframe(
             {"Sub-tube": [("web" if i == 0 else f"part {i + 1}")
                           for i in range(len(subs))],
@@ -14180,16 +14277,19 @@ def torsion_view(inp, results):
              "TEd,i (kNm)": [f"{s['t_ed']:.3f}" for s in subs],
              "TRd,i (kNm)": [f"{s['trd']:.3f}" for s in subs],
              "TEd/TRd,i": [_pct(s["util"]) for s in subs],
+             "Asl,req,i (mm2)": [f"{s['asl_req']:.0f}" for s in subs],
              "Governs": [s["governs"] for s in subs]},
             hide_index=True, width="stretch")
         g = t.get("governing_sub")
         gov_lbl = (("web" if g == 0 else f"part {g + 1}") if g is not None else "-")
-        st.caption(f"Governing sub-tube: {gov_lbl}; max(TEd,i/TRd,i) = {util_txt} "
-                   "controls the section result, so every sub-tube must pass.")
+        st.caption(f"Governing sub-tube resistance component: {gov_lbl}; "
+                   f"max(TEd,i/TRd,i) = {util_txt}, so every sub-tube resistance "
+                   "component must pass.")
         st.caption("Applied torque is distributed by uncracked torsional stiffness. "
                    f"Required longitudinal steel {chr(0x03A3)}Asl = "
-                   f"{t['asl_req']:.0f} mm2 is the sum for all sub-tubes and is added "
-                   "to the bending steel. The figure shows the validated partition "
+                   f"{t['asl_req']:.0f} mm2 is the sum for all sub-tubes. Its "
+                   "allocation around every sub-tube and reserve beyond bending "
+                   "must be verified. The figure shows the validated partition "
                    "used by the calculation.")
         st.plotly_chart(viz.subtube_figure(subs), width="stretch")
     else:
@@ -14225,7 +14325,8 @@ def torsion_view(inp, results):
             r"$T_{Rd,s}$ follows the torsional wall shear flow (6.27) and "
             r"transverse equilibrium (6.8); $T_{Rd,max}$ follows (6.30). "
             r"Required $\sum A_{sl}=T_{Ed}u_k\cot\theta/(2A_kf_{yd})$ (6.28) "
-            "is additional to bending reinforcement on the tension side; "
+            "must remain available beyond bending demand and be distributed and "
+            "anchored for torsion; "
             r"$T_{Rd,c}$ uses $f_{ctd}$."
         )
         st.plotly_chart(viz.tube_figure(inp["outer"], inp.get("holes"), tube["tef"],
@@ -14237,7 +14338,8 @@ def torsion_view(inp, results):
     if t.get("nu_v_detailing"):
         st.caption(f"{_NU} = {_NU}v (raised from {_NU}t) under DK NA Figur 5.100 NA: "
                    "closed stirrups round the periphery + distributed longitudinal "
-                   "steel on both faces.")
+                   "steel on both faces. This selected detailing condition remains "
+                   "subject to the overall longitudinal verification above.")
 
     # A biaxial run reports Eq. 6.31 per shear direction above. The standalone
     # torsion payload deliberately has no shear companion and must not replace it.
@@ -14489,7 +14591,38 @@ def combined_view(inp, results):
     st.divider()
     st.markdown(r"**DK NA 6.3.2(6): $\sum(S_{Ed}/S_{Rd})\leq1$**")
     d1, d2 = st.columns([1, 2])
-    if not c.get("dkna_valid"):
+    torsion_assessment_note = (
+        presentation.combined_torsion_assessment_note(c)
+    )
+    dkna_failed = bool(
+        c.get("dkna_valid")
+        and presentation.combined_dkna_limit_satisfied(c) is False
+    )
+    if dkna_failed:
+        _verdict_metric(
+            d1,
+            r"$\sum(S_{Ed}/S_{Rd})$",
+            _pct(c.get("dkna_sum")),
+            False,
+        )
+        d2.caption(
+            "The DK NA action-alone sum exceeds its numerical limit. This is a "
+            "definite combined failure even where another torsion prerequisite "
+            "also remains unverified."
+        )
+        if c.get("m_v_independent"):
+            _manual_warning(
+                st,
+                "calculation-warning",
+                presentation.combined_dkna_assumption_note(c),
+            )
+        if torsion_assessment_note:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                torsion_assessment_note,
+            )
+    elif not c.get("dkna_valid"):
         d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", "-")
         d1.caption("NOT ASSESSED")
         d2.caption(
@@ -14501,6 +14634,42 @@ def combined_view(inp, results):
             "calculation-warning",
             "The DK NA combined interaction is NOT ASSESSED. Check the section, "
             "materials and complete Plastic bending sweep, then recalculate.",
+        )
+        if torsion_assessment_note:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                torsion_assessment_note,
+            )
+    elif torsion_assessment_note:
+        d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", _pct(c.get("dkna_sum")))
+        dkna_component_status = str(
+            c.get("dkna_status") or "NOT ASSESSED"
+        )
+        d1.caption(f"{dkna_component_status} numerical component")
+        if c.get("m_v_independent"):
+            d2.caption(
+                "The separate M/V route is selected as a design assumption. "
+                "N + M + T and N + V + T are calculated independently, and "
+                "the governing sum is retained as numerical component evidence. "
+                "It is not an overall M-V-T verdict while the torsion "
+                "longitudinal-reinforcement requirement governs."
+            )
+            _manual_warning(
+                st,
+                "calculation-warning",
+                presentation.combined_dkna_assumption_note(c),
+            )
+        else:
+            d2.caption(
+                "The DK NA action-alone sum is retained as numerical component "
+                "evidence. It is not an overall M-V-T verdict while the torsion "
+                "longitudinal-reinforcement requirement governs."
+            )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            torsion_assessment_note,
         )
     elif c["m_v_independent"]:
         dkna_status = presentation.combined_dkna_status(c)

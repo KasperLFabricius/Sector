@@ -550,6 +550,7 @@ class _PaginatedReportTable(Table):
             "_sector_data_start",
             "_sector_context_count",
             "_sector_context_labels",
+            "_sector_results_overview",
             "_sector_force_page_break_between_fragments",
         )
         already_continued = bool(
@@ -587,6 +588,78 @@ class _PaginatedReportTable(Table):
                 separated.append(fragment)
             return separated
         return fragments
+
+
+class _ResultsOverviewTable(_PaginatedReportTable):
+    """Keep the governing note with the final overview-table fragment."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sector_trailing_note = None
+        self._sector_trailing_note_gap = 2.0
+        self._sector_trailing_note_height = 0.0
+
+    def _measure_trailing_note(self, availWidth, availHeight):
+        note = self._sector_trailing_note
+        if note is None:
+            self._sector_trailing_note_height = 0.0
+            return 0.0, 0.0
+        width, height = note.wrap(availWidth, availHeight)
+        self._sector_trailing_note_height = height
+        return width, height
+
+    def wrap(self, availWidth, availHeight):
+        table_width, table_height = super().wrap(availWidth, availHeight)
+        note_width, note_height = self._measure_trailing_note(
+            availWidth, availHeight
+        )
+        if self._sector_trailing_note is None:
+            return table_width, table_height
+        return (
+            max(table_width, note_width),
+            table_height + self._sector_trailing_note_gap + note_height,
+        )
+
+    def split(self, availWidth, availHeight):
+        note = self._sector_trailing_note
+        if note is None:
+            return super().split(availWidth, availHeight)
+
+        fragments = super().split(availWidth, availHeight)
+        if len(fragments) <= 1:
+            _note_width, note_height = self._measure_trailing_note(
+                availWidth, availHeight
+            )
+            reserved_height = self._sector_trailing_note_gap + note_height
+            fragments = super().split(
+                availWidth,
+                max(0.0, availHeight - reserved_height),
+            )
+        if len(fragments) <= 1:
+            return []
+
+        for fragment in fragments:
+            fragment._sector_trailing_note = None
+        fragments[-1]._sector_trailing_note = note
+        fragments[-1]._sector_trailing_note_gap = (
+            self._sector_trailing_note_gap
+        )
+        return fragments
+
+    def draw(self):
+        note = self._sector_trailing_note
+        if note is None:
+            return super().draw()
+        note_height = self._sector_trailing_note_height
+        self.canv.saveState()
+        try:
+            self.canv.translate(
+                0, note_height + self._sector_trailing_note_gap
+            )
+            super().draw()
+        finally:
+            self.canv.restoreState()
+        note.drawOn(self.canv, 0, 0)
 
 
 def ensure_image_server(timeout=None):
@@ -1505,7 +1578,7 @@ class ReportBuilder:
         context_count = len(context_rows)
         formatted = caption_row + context_rows + formatted
         header_row = 1 + context_count
-        table = _PaginatedReportTable(
+        table = _ResultsOverviewTable(
             formatted,
             colWidths=[
                 36 * mm, 22 * mm, 25 * mm,
@@ -1581,8 +1654,7 @@ class ReportBuilder:
         table._sector_overview_groups = tuple(
             label for _index, label in group_rows
         )
-        table.keepWithNext = 1
-        self.flow.append(table)
+        table.keepWithNext = 0
         if self.profile.key == "Brief":
             governing_note = (
                 "The table shows one governing row per engineering check type."
@@ -1591,7 +1663,10 @@ class ReportBuilder:
             governing_note = (
                 "The table shows one governing row for each engineering check type."
             )
-        self._small(governing_note)
+        table._sector_trailing_note = Paragraph(
+            _greek(governing_note), self.s["small"]
+        )
+        self.flow.append(table)
         if information_rows:
             self._small("<b>Scope and calculation state</b>")
             for row in information_rows:
@@ -7454,6 +7529,11 @@ class ReportBuilder:
                 ],
                 [27 * mm, 20 * mm, 20 * mm, 20 * mm, 20 * mm, 28 * mm, 35 * mm],
             )
+            torsion_note = presentation.combined_torsion_governing_note(
+                aggregate
+            )
+            if torsion_note:
+                self._small(_html_escape(torsion_note))
             if aggregate.get("outside_default_range"):
                 self._small(
                     "Warning: the selected shared compression-strut bounds are "
@@ -7514,6 +7594,13 @@ class ReportBuilder:
              31 * mm, 17 * mm, 22 * mm],
             font=5.8,
         )
+        torsion_notes = {
+            presentation.combined_torsion_governing_note(item)
+            for item in directions.values()
+            if presentation.combined_torsion_governing_note(item)
+        }
+        for note in sorted(torsion_notes):
+            self._small(_html_escape(note))
         if any(
             item.get("outside_default_range")
             for item in directions.values()
@@ -7599,6 +7686,14 @@ class ReportBuilder:
             "to that action acting alone; the other external sectional actions are "
             "set to zero."
         )
+        torsion_assessment_note = (
+            presentation.combined_torsion_governing_note(c)
+        )
+        if torsion_assessment_note:
+            self._small(
+                "<b>Overall M-V-T:</b> "
+                + _html_escape(torsion_assessment_note)
+            )
         action_records = c.get("action_alone") or {}
         rows = [["Action", "S<sub>Ed</sub>", "S<sub>Rd</sub>", "Ratio"]]
         for key, label, unit in (
@@ -7685,7 +7780,16 @@ class ReportBuilder:
                       f"branch: {_html_escape(selection['governing_chord'])}."),
                 result=(
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = "
-                    f"{_pct(selection['utilisation'])}  ({verdict})"
+                    + (
+                        f"{_pct(selection['utilisation'])}  "
+                        "(numerical component only)"
+                        if (
+                            torsion_assessment_note
+                            and presentation.combined_dkna_limit_satisfied(c)
+                            is not False
+                        )
+                        else f"{_pct(selection['utilisation'])}  ({verdict})"
+                    )
                 ),
             )
         self._h2("Physical resistance components")
@@ -7945,7 +8049,8 @@ class ReportBuilder:
             )
             return
         self._p("Compound section: modelled as component rectangles, each an equivalent "
-                "thin-walled tube. T<sub>Rd</sub> is the SUM of the sub-tube capacities "
+                "thin-walled tube. The T<sub>Rd</sub> component is the sum of the "
+                "sub-tube resistance components "
                 "(6.3.1(3)) and the applied T<sub>Ed</sub> is split by uncracked "
                 "torsional stiffness C = beta h b<sup>3</sup> (6.3.1(4)). The first "
                 "rectangle (web) carries the shear in the combined V+T checks. Its "
@@ -7953,7 +8058,8 @@ class ReportBuilder:
                 "outline and voids before these results are issued.")
         rows = [["Sub-tube", "centre x, y<br/>b x h (mm)", "t<sub>ef</sub>",
                  "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
-                 "T<sub>Rd,i</sub>", "util", "governs"]]
+                 "T<sub>Rd,i</sub>", "util", "A<sub>sl,req</sub>",
+                 "governs"]]
         for i, s in enumerate(subs):
             share = shares[i]
             role = "web" if i == 0 else f"part {i + 1}"
@@ -7965,14 +8071,15 @@ class ReportBuilder:
                          _fmt(s["tube"]["tef"], 1), _fmt(s["tube"]["Ak"] * 1e6, 0),
                          _pct(share.get("fraction")),
                          _fmt(share.get("torque"), 2),
-                         _fmt(s["trd"], 2), ut, s["governs"]])
-        self._table(rows, [16 * mm, 24 * mm, 14 * mm, 18 * mm, 13 * mm, 16 * mm,
-                           16 * mm, 12 * mm, 25 * mm])
+                         _fmt(s["trd"], 2), ut, _fmt(s.get("asl_req"), 0),
+                         s["governs"]])
+        self._table(rows, [15 * mm, 23 * mm, 13 * mm, 17 * mm, 12 * mm, 15 * mm,
+                           15 * mm, 11 * mm, 15 * mm, 24 * mm], font=6.4)
         # The torque is split by STIFFNESS, not capacity, so the governing check is the
         # WORST sub-tube (max util), not TEd / sum(TRd_i).
         util = t["util"]
         util_txt = _pct(util)
-        verdict = _demand_resistance_verdict(viz.util_ok(util))
+        component_verdict = _demand_resistance_verdict(viz.util_ok(util))
         g = t.get("governing_sub")
         gov = ("web" if g == 0 else f"part {g + 1}") if g is not None else "-"
         if not isinstance(g, int) or not 0 <= g < len(subs):
@@ -8061,16 +8168,21 @@ class ReportBuilder:
             ref=f"worst sub-tube: {gov}",
             subst=(f"{_fmt(governing['t_ed'], 3)} / "
                    f"{_fmt(governing['trd'], 3)}"),
-            result=f"{util_txt}  ({verdict})")
-        self._small("The section result is governed by the maximum "
-                    "T<sub>Ed,i</sub>/T<sub>Rd,i</sub>, so every sub-tube must pass. "
+            result=(f"{util_txt}  (transverse/strut component "
+                    f"{component_verdict})"))
+        self._small("The resistance component is governed by the maximum "
+                    "T<sub>Ed,i</sub>/T<sub>Rd,i</sub>, so every sub-tube resistance "
+                    "component must pass. "
                     "Applied torque is distributed by uncracked torsional stiffness; "
                     "&#8721;T<sub>Rd,i</sub> = " + f"{_fmt(t['trd'], 2)}"
-                    + " kN&#183;m is the capacity sum, not the verdict denominator. "
+                    + " kN&#183;m is the resistance-component sum, not the verdict "
+                    "denominator. "
                     "Required longitudinal steel &#8721;A<sub>sl</sub> = "
                     + f"{_fmt(t['asl_req'], 0)}" +
-                    " mm<sup>2</sup> is added to the bending steel. The combined V+T "
-                    "crushing check pairs shear with the web sub-tube.")
+                    " mm<sup>2</sup> is summed across all sub-tubes. Its allocation "
+                    "around each sub-tube, reserve beyond bending and member anchorage "
+                    "are not verified. The combined V+T crushing check pairs shear "
+                    "with the web sub-tube.")
         self._fig(viz.subtube_figure(subs), 150, 90)
 
     def _selected_torsion_subcheck(self, key):
@@ -8229,14 +8341,16 @@ class ReportBuilder:
             if "tube_valid" in t
             else t.get("valid") is True
         )
-        full_resistance_assessed = (
-            t.get("full_resistance_assessed") is True
+        transverse_resistance_assessed = (
+            t.get("transverse_resistance_assessed") is True
+            if "transverse_resistance_assessed" in t
+            else t.get("full_resistance_assessed") is True
             if "full_resistance_assessed" in t
             else t.get("valid") is True
         )
-        full_resistance_available = bool(
+        transverse_resistance_available = bool(
             tube_valid
-            and full_resistance_assessed
+            and transverse_resistance_assessed
             and (
                 t.get("closed_links_present") is True
                 if "closed_links_present" in t
@@ -8245,10 +8359,11 @@ class ReportBuilder:
             and t.get("valid") is True
         )
         self._case_heading("Torsion (thin-walled tube)", "plastic")
-        if full_resistance_available:
+        if transverse_resistance_available:
             self._p(
-                "Full torsion resistance is assessed with the EN 1992-1-1 "
-                "section 6.3 closed-tube model, method <b>"
+                "The transverse-steel and concrete-strut resistance components "
+                "are calculated with the EN 1992-1-1 section 6.3 closed-tube "
+                "model, method <b>"
                 + str(t["method"])
                 + "</b>. "
                 + (
@@ -8257,9 +8372,10 @@ class ReportBuilder:
                     else "The strut angle maximises torsion resistance."
                 )
             )
-        elif tube_valid and not full_resistance_assessed:
+        elif tube_valid and not transverse_resistance_assessed:
             self._p(
-                "<b>NOT ASSESSED:</b> full torsion resistance under method <b>"
+                "<b>NOT ASSESSED:</b> the torsion transverse/strut resistance "
+                "under method <b>"
                 + str(t["method"])
                 + "</b> requires current shared links / closed stirrups. Concrete "
                 "resistance and reinforcement demand remain as context."
@@ -8269,20 +8385,17 @@ class ReportBuilder:
                 "<b>NOT ASSESSED:</b> the thin-walled tube geometry is invalid. "
                 "Review the reason below."
             )
-        status = (
-            "NOT ASSESSED"
-            if not full_resistance_available
-            else _demand_resistance_verdict(viz.util_ok(t.get("util")))
-        )
-        reported_trd = t.get("trd") if full_resistance_available else None
-        reported_util = t.get("util") if full_resistance_available else None
+        status = presentation.torsion_assessment_status(t)
+        reported_trd = t.get("trd") if transverse_resistance_available else None
+        reported_util = t.get("util") if transverse_resistance_available else None
         reported_governing = (
-            t.get("governs") if full_resistance_available else None
+            t.get("governs") if transverse_resistance_available else None
         )
         self._table(
             [
-                ["T<sub>Ed</sub>", "T<sub>Rd</sub>", "Utilisation",
-                 "Governing resistance", "Status"],
+                ["T<sub>Ed</sub>", "T<sub>Rd</sub> component",
+                 "Component utilisation", "Governing component",
+                 "Overall status"],
                 [
                     f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
                     (
@@ -8297,8 +8410,16 @@ class ReportBuilder:
             ],
             [31 * mm, 31 * mm, 31 * mm, 46 * mm, 31 * mm],
         )
+        if transverse_resistance_available:
+            self._small(
+                "<b>Overall "
+                + status
+                + ":</b> "
+                + _html_escape(presentation.torsion_assessment_note(t))
+                + "."
+            )
         directional = t.get("directional_interactions") or {}
-        if directional and full_resistance_available:
+        if directional and transverse_resistance_available:
             self._small(
                 "Standalone torsion, Vx+T and Vy+T are reported separately. A "
                 "simultaneous Vx+Vy+T check is not included and requires a "
@@ -8364,7 +8485,7 @@ class ReportBuilder:
                     "reinforcement is sufficient; it is not an overall resistance "
                     "verdict."
                 )
-        if tube_valid and not full_resistance_assessed:
+        if tube_valid and not transverse_resistance_assessed:
             reason = _result_reason(
                 t.get("assessment_reason")
                 or t.get("reason")
@@ -8375,8 +8496,9 @@ class ReportBuilder:
             self._small(
                 "Reason: " + _html_escape(reason) + ". "
                 "T<sub>Rd,max</sub> is the concrete-strut cap and "
-                "T<sub>Rd,c</sub> the cracking resistance. Full T<sub>Rd</sub>, "
-                "utilisation and status require current closed links."
+                "T<sub>Rd,c</sub> the cracking resistance. The transverse/strut "
+                "resistance component and its utilisation require current closed "
+                "links."
             )
             self._table(
                 [
@@ -8384,15 +8506,16 @@ class ReportBuilder:
                     ["T<sub>Ed</sub>", f"{_fmt(t.get('t_ed'), 3)} kN&#183;m", "Applied action"],
                     ["T<sub>Rd,max</sub>", f"{_fmt(t.get('trd_max'), 3)} kN&#183;m", "Concrete cap only"],
                     ["T<sub>Rd,c</sub>", f"{_fmt(t.get('trd_c'), 3)} kN&#183;m", "Cracking transparency"],
-                    ["Required longitudinal steel", f"{_fmt(t.get('asl_req'), 0)} mm<sup>2</sup>", "Informational requirement"],
+                    ["Required longitudinal steel", f"{_fmt(t.get('asl_req'), 0)} mm<sup>2</sup>", "Formula (6.28) demand"],
                 ],
                 [55 * mm, 45 * mm, 80 * mm],
             )
             self._small(
                 "Displayed cap angle: theta = "
                 f"{_fmt(t.get('theta_deg'), 1)}&#176;, cot theta = "
-                f"{_fmt(t.get('cot'), 3)}. This is not a resistance "
-                "angle while full resistance is not assessed."
+                f"{_fmt(t.get('cot'), 3)}. This supports the concrete cap and "
+                "reinforcement demand; the transverse resistance component is "
+                "not assessed."
             )
             return
         if not t["valid"]:
@@ -8430,6 +8553,38 @@ class ReportBuilder:
                         "outside the selected method's default range 1..2.5 "
                         "(6.7N / 6.7a NA). The entered values are used in the "
                         "torsion and dependent interaction calculations.")
+        longitudinal_assessment = t.get("longitudinal_assessment") or {}
+        if longitudinal_assessment:
+            self._h2("Longitudinal torsion reinforcement (Formula 6.28)")
+            self._table(
+                [
+                    ["Quantity", "Value", "Assessment"],
+                    [
+                        "Required longitudinal area",
+                        f"{_fmt(longitudinal_assessment.get('required_asl_mm2'), 0)} mm<sup>2</sup>",
+                        "Formula (6.28)",
+                    ],
+                    [
+                        "All modelled passive bars - gross area",
+                        f"{_fmt(longitudinal_assessment.get('provided_gross_area_mm2'), 0)} mm<sup>2</sup>",
+                        "Upper bound before bending demand",
+                    ],
+                    [
+                        "All modelled passive bars - equivalent area at selected f<sub>yd</sub>",
+                        f"{_fmt(longitudinal_assessment.get('provided_equivalent_area_mm2'), 0)} mm<sup>2</sup>",
+                        str(longitudinal_assessment.get("status") or "NOT ASSESSED"),
+                    ],
+                ],
+                [75 * mm, 45 * mm, 60 * mm],
+                font=7.0,
+            )
+            self._small(
+                _html_escape(presentation.torsion_assessment_note(t))
+                + ". The modelled passive-bar total is not credited as usable "
+                "torsion reinforcement until reserve beyond bending, distribution "
+                "around every torsion-tube side and anchorage along the member are "
+                "established."
+            )
         if not critical:
             self._small(
                 "The complete torsion worked example is published only for the "
@@ -8524,7 +8679,9 @@ class ReportBuilder:
         if t.get("nu_v_detailing"):
             self._small("nu = nu<sub>v</sub> (raised from nu<sub>t</sub>) under DK NA "
                         "Figur 5.100 NA: closed stirrups round the periphery and "
-                        "distributed longitudinal steel on both faces.")
+                        "distributed longitudinal steel on both faces. This selected "
+                        "detailing condition remains subject to the overall "
+                        "longitudinal verification above.")
         self._h2("Resistances", reserve=240)
         self._formula(
             "T<sub>Rd,s</sub> = (A<sub>sw</sub>/s) 2 A<sub>k</sub> f<sub>ywd</sub> "
@@ -8573,12 +8730,13 @@ class ReportBuilder:
             result=f"T<sub>Rd,c</sub> = {_fmt(cracking['trd_c'], 3)} kN&#183;m")
         util = t["util"]
         util_txt = _pct(util)
-        verdict = _demand_resistance_verdict(viz.util_ok(util))
-        self._h2("Utilisation and longitudinal steel")
+        component_verdict = _demand_resistance_verdict(viz.util_ok(util))
+        self._h2("Resistance-component utilisation and longitudinal steel")
         self._formula("T<sub>Ed</sub> / T<sub>Rd</sub>",
                       equation_key="torsion.utilisation",
                       subst=f"{_fmt(t['t_ed'], 3)} / {_fmt(t['trd'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
+                      result=(f"{util_txt}  (transverse/strut component "
+                              f"{component_verdict})"))
         self._formula(
             "&#8721;A<sub>sl</sub> = T<sub>Ed</sub> u<sub>k</sub> cot theta / "
             "(2 A<sub>k</sub> f<sub>yd</sub>)",
@@ -8588,7 +8746,14 @@ class ReportBuilder:
                   f"{_fmt(longitudinal['denominator'], 6)} &#183; 1000",
             result=f"&#8721;A<sub>sl</sub> = "
                    f"{_fmt(longitudinal['asl_required_mm2'], 0)} mm<sup>2</sup> "
-                   "(in addition to the bending steel)")
+                   "(required beyond bending demand)")
+        self._small(
+            "Overall torsion status: <b>"
+            + presentation.torsion_assessment_status(t)
+            + "</b>. "
+            + _html_escape(presentation.torsion_assessment_note(t))
+            + "."
+        )
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "
                     "MN&#183;m to kN&#183;m (resistances) and m<sup>2</sup> "
                     "to mm<sup>2</sup> "

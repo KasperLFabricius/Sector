@@ -982,7 +982,7 @@ def test_app_combined_mv_independent_uses_max():
     row = overview.loc[
         overview["Check"] == "Combined M-V-T - DK NA sum"
     ].iloc[0]
-    assert row["Status"] == "CONDITIONAL"
+    assert row["Status"] == "NOT ASSESSED"
 
 
 def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass():
@@ -1175,7 +1175,22 @@ def test_app_combined_out_of_default_range_warns_and_retains_verdicts():
         if m.label in verdict_labels
     ]
     assert verdict_metrics
-    assert all(metric.delta in {"PASS", "FAIL"} for metric in verdict_metrics)
+    dkna_sum_metrics = [
+        metric for metric in verdict_metrics
+        if metric.label == r"$\sum(S_{Ed}/S_{Rd})$"
+    ]
+    assert dkna_sum_metrics
+    assert all(not metric.delta for metric in dkna_sum_metrics)
+    for component_label in ("Sum", "Closed-stirrup utilisation"):
+        component_metrics = [
+            metric for metric in verdict_metrics
+            if metric.label == component_label
+        ]
+        assert component_metrics
+        assert all(
+            metric.delta in {"PASS", "FAIL"}
+            for metric in component_metrics
+        )
 
 
 def test_app_strut_angle_responds_to_loads():

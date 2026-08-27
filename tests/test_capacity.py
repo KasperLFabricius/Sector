@@ -2101,6 +2101,120 @@ def test_shear_face_mrd_rejects_missing_pure_axis_members(
         capacity.shear_face_mrd(_member_input(), "x", True, 25.0)
 
 
+def test_torsion_longitudinal_shortfall_is_a_definite_failure():
+    inp = _member_input(
+        bars=[(0.0, 0.0, 1000.0)],
+        bar_materials=[SimpleNamespace(fytk=500.0, gamma_y=1.0)],
+        steel=SimpleNamespace(fytk=500.0, gamma_y=1.0),
+    )
+
+    result = capacity.torsion_longitudinal_assessment(
+        inp,
+        (1176.68,),
+        resistance_assessed=True,
+    )
+
+    assert result["status"] == "FAIL"
+    assert result["ok"] is False
+    assert result["required_asl_mm2"] == pytest.approx(1176.68)
+    assert result["provided_gross_area_mm2"] == pytest.approx(1000.0)
+    assert result["provided_equivalent_area_mm2"] == pytest.approx(1000.0)
+    assert result["demand_ratio"] == pytest.approx(1.17668)
+    assert result["area_sufficient"] is False
+    assert result["reason"] == (
+        "longitudinal_torsion_reinforcement_insufficient"
+    )
+
+
+def test_torsion_longitudinal_apparent_area_remains_not_assessed():
+    inp = _member_input(
+        bars=[(-0.1, -0.2, 900.0), (0.1, 0.2, 900.0)],
+        bar_materials=[
+            SimpleNamespace(fytk=500.0, gamma_y=1.0),
+            SimpleNamespace(fytk=600.0, gamma_y=1.2),
+        ],
+        steel=SimpleNamespace(fytk=500.0, gamma_y=1.0),
+    )
+
+    result = capacity.torsion_longitudinal_assessment(
+        inp,
+        (400.0, 800.0),
+        resistance_assessed=True,
+    )
+
+    assert result["required_by_tube_mm2"] == pytest.approx((400.0, 800.0))
+    assert result["required_asl_mm2"] == pytest.approx(1200.0)
+    assert result["provided_gross_area_mm2"] == pytest.approx(1800.0)
+    assert result["provided_design_force_kn"] == pytest.approx(900.0)
+    assert result["provided_equivalent_area_mm2"] == pytest.approx(1800.0)
+    assert result["area_sufficient"] is True
+    assert result["status"] == "NOT ASSESSED"
+    assert result["ok"] is None
+    assert result["distribution_verified"] is False
+    assert result["all_perimeter_sides_verified"] is False
+    assert result["bending_reserve_verified"] is False
+    assert result["anchorage_verified"] is False
+    assert result["tube_allocation_verified"] is False
+
+
+def test_torsion_longitudinal_uses_each_modelled_bar_design_strength():
+    inp = _member_input(
+        bars=[(-0.1, 0.0, 500.0), (0.1, 0.0, 500.0)],
+        bar_materials=[
+            SimpleNamespace(fytk=500.0, gamma_y=1.0),
+            SimpleNamespace(fytk=600.0, gamma_y=1.0),
+        ],
+        steel=SimpleNamespace(fytk=500.0, gamma_y=1.0),
+    )
+
+    result = capacity.torsion_longitudinal_assessment(
+        inp,
+        (1050.0,),
+        resistance_assessed=True,
+    )
+
+    assert result["provided_gross_area_mm2"] == pytest.approx(1000.0)
+    assert result["provided_design_force_kn"] == pytest.approx(550.0)
+    assert result["provided_equivalent_area_mm2"] == pytest.approx(1100.0)
+    assert result["area_sufficient"] is True
+    assert result["status"] == "NOT ASSESSED"
+
+
+def test_torsion_longitudinal_zero_demand_passes_without_inventing_detailing():
+    result = capacity.torsion_longitudinal_assessment(
+        _member_input(bars=[], bar_materials=[]),
+        (0.0,),
+        resistance_assessed=True,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["ok"] is True
+    assert result["demand_ratio"] == 0.0
+    assert result["distribution_verified"] is False
+    assert result["anchorage_verified"] is False
+
+
+def test_torsion_longitudinal_missing_component_or_material_evidence_fails_closed():
+    missing_component = capacity.torsion_longitudinal_assessment(
+        _member_input(),
+        (100.0,),
+        resistance_assessed=False,
+    )
+    mismatched_materials = capacity.torsion_longitudinal_assessment(
+        _member_input(bar_materials=[]),
+        (100.0,),
+        resistance_assessed=True,
+    )
+
+    for result in (missing_component, mismatched_materials):
+        assert result["status"] == "NOT ASSESSED"
+        assert result["ok"] is None
+        assert result["area_sufficient"] is None
+        assert result["reason"] == (
+            "longitudinal_torsion_reinforcement_evidence_unavailable"
+        )
+
+
 def _torsion_cracking_result(method, gamma_ct, demand=28.0):
     ctx = capacity.build_torsion_context(
         _member_input(
@@ -3073,6 +3187,63 @@ def test_finalize_combined_separate_route_is_assumption_only(
     assert condition["confirmed"] is False
     assert condition["mechanically_verified"] is False
     assert "capacity, distribution or anchorage" in condition["limitation"]
+
+
+@pytest.mark.parametrize(
+    "torsion_status",
+    ["NOT ASSESSED", "FAIL"],
+)
+def test_finalize_combined_retains_governing_longitudinal_torsion_state(
+    monkeypatch,
+    torsion_status,
+):
+    n = capacity._dkna_action_record("N", 0.0, None, valid=True)
+    m = capacity._dkna_action_record("M", 0.2, 1.0, valid=True)
+    v = capacity._dkna_action_record("V", 0.3, 1.0, valid=True)
+    t = capacity._dkna_action_record("T", 0.4, 1.0, valid=True)
+    inp = _member_input(
+        combined_on=True,
+        _dkna_nm_action_alone={"n": n, "m": m},
+    )
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", lambda _inp: v)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", lambda _inp: t)
+    reason = (
+        "longitudinal_torsion_reinforcement_insufficient"
+        if torsion_status == "FAIL"
+        else "longitudinal_torsion_reinforcement_not_verified"
+    )
+    longitudinal = {
+        "status": torsion_status,
+        "reason": reason,
+        "required_asl_mm2": 1176.672,
+        "provided_equivalent_area_mm2": 1000.0,
+        "demand_ratio": 1.176672,
+    }
+    out = {
+        "plastic": {"util": 0.20},
+        "shear": {"res": {"valid": True}, "util": 0.30},
+        "torsion": {
+            "valid": True,
+            "util": 0.40,
+            "interaction": None,
+            "asl_req": 1176.672,
+            "asw_over_s": 0.0,
+            "assessment_status": torsion_status,
+            "overall_reason": reason,
+            "longitudinal_assessment": longitudinal,
+        },
+    }
+
+    capacity.finalize_combined(inp, out)
+    result = out["combined"]
+
+    assert result["valid"] is True
+    assert result["dkna_sum"] == pytest.approx(0.90)
+    assert result["dkna_status"] == "PASS"
+    assert result["torsion_assessment_status"] == torsion_status
+    assert result["torsion_assessment_reason"] == reason
+    assert result["torsion_longitudinal_assessment"] == longitudinal
+    assert result["assessment_status"] == torsion_status
 
 
 @pytest.mark.parametrize(

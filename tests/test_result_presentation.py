@@ -1398,17 +1398,169 @@ def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
     assert torsion_row["criterion"] == "-"
     assert torsion_row["util"] is None
     assert torsion_row["note"] == (
-        "Closed torsion links are required before full torsion resistance can "
-        "be assessed"
+        "Closed torsion links are required before the transverse/strut "
+        "resistance component can be assessed"
     )
 
     combined_row = by_check["Combined M-V-T"]
     assert combined_row["status"] == "NOT ASSESSED"
     assert combined_row["util"] is None
     assert combined_row["note"] == (
-        "Closed torsion links are required before full torsion resistance can "
-        "be assessed"
+        "Closed torsion links are required before the transverse/strut "
+        "resistance component can be assessed"
     )
+
+
+def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
+    reason = (
+        "longitudinal_torsion_reinforcement_insufficient"
+        if status == "FAIL"
+        else "longitudinal_torsion_reinforcement_not_verified"
+    )
+    return {
+        "tube_valid": True,
+        "closed_links_present": True,
+        "transverse_resistance_assessed": True,
+        "full_resistance_assessed": True,
+        "valid": True,
+        "t_ed": 40.0,
+        "trd": 76.402,
+        "util": 0.523548,
+        "governs": "stirrups (TRd,s)",
+        "resistance_status": "PASS",
+        "assessment_status": status,
+        "overall_reason": reason,
+        "longitudinal_assessment": {
+            "status": status,
+            "reason": reason,
+            "required_asl_mm2": 1176.672,
+            "provided_gross_area_mm2": 1000.0 if status == "FAIL" else 2513.274,
+            "provided_equivalent_area_mm2": (
+                1000.0 if status == "FAIL" else 2513.274
+            ),
+            "demand_ratio": ratio,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "ratio"),
+    [("NOT ASSESSED", 0.468), ("FAIL", 1.176672)],
+)
+def test_torsion_summary_separates_component_and_longitudinal_status(
+    status,
+    ratio,
+):
+    torsion = _torsion_longitudinal_result(status=status, ratio=ratio)
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", torsion_on=True, shear_links=True),
+        {"plastic": _plastic(), "torsion": torsion},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Torsion"]["status"] == status
+    assert by_check["Torsion"]["util"] is None
+    assert (
+        by_check["Torsion transverse/strut resistance"]["status"]
+        == "PASS"
+    )
+    assert by_check["Torsion transverse/strut resistance"]["util"] == (
+        pytest.approx(0.523548)
+    )
+    longitudinal = by_check["Torsion longitudinal reinforcement"]
+    assert longitudinal["status"] == status
+    assert longitudinal["util"] == pytest.approx(ratio)
+    assert "1177 /" in longitudinal["result"]
+    assert presentation.overall_summary_status(rows) == status
+
+
+@pytest.mark.parametrize("status", ["NOT ASSESSED", "FAIL"])
+def test_combined_summary_cannot_promote_torsion_longitudinal_state(status):
+    torsion = _torsion_longitudinal_result(status=status)
+    combined = {
+        "valid": True,
+        "method": "DK NA",
+        "dkna_valid": True,
+        "dkna_sum": 0.80,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "PASS",
+        "dkna_ok": True,
+        "m_v_independent": False,
+        "torsion_assessment_status": status,
+        "torsion_assessment_reason": torsion["overall_reason"],
+        "torsion_longitudinal_assessment": torsion[
+            "longitudinal_assessment"
+        ],
+    }
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=True,
+        ),
+        {"plastic": _plastic(), "torsion": torsion, "combined": combined},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    combined_row = by_check["Combined M-V-T - DK NA sum"]
+    assert combined_row["status"] == status
+    assert "numerical component evidence" in combined_row["note"]
+    assert presentation.combined_dkna_status(combined) == status
+
+
+def test_definite_dkna_failure_outranks_unverified_torsion_note():
+    combined = {
+        "valid": True,
+        "method": "DK NA",
+        "dkna_valid": True,
+        "dkna_sum": 1.10,
+        "dkna_limit_satisfied": False,
+        "dkna_status": "FAIL",
+        "dkna_ok": False,
+        "m_v_independent": True,
+        "torsion_assessment_status": "NOT ASSESSED",
+        "torsion_assessment_reason": (
+            "longitudinal_torsion_reinforcement_not_verified"
+        ),
+    }
+
+    assert presentation.combined_dkna_status(combined) == "FAIL"
+    note = presentation.combined_torsion_governing_note(combined)
+    assert "definite combined failure governs" in note
+    assert "not an overall M-V-T verdict" not in note
+
+
+def test_combined_longitudinal_component_publishes_governing_ratio():
+    combined = {
+        "longitudinal": {
+            "valid": True,
+            "util": 1.25,
+            "axis": "x",
+            "tension_low": True,
+        },
+        "governing_longitudinal": {
+            "valid": True,
+            "util": 1.25,
+            "axis": "x",
+            "tension_low": True,
+        },
+        "longitudinal_all_conditional": True,
+        "torsion_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "demand_ratio": 0.50,
+        },
+    }
+
+    component = next(
+        item
+        for item in presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
+    )
+
+    assert component["status"] == "FAIL"
+    assert component["util"] == pytest.approx(1.25)
 
 
 def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
@@ -1433,7 +1585,7 @@ def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
     blocker = presentation.combined_bending_assessment_blocker(results)
     assert blocker == (
         "Torsion prerequisite is not assessed: Closed torsion links are required "
-        "before full torsion resistance can be assessed"
+        "before the transverse/strut resistance component can be assessed"
     )
 
     rows = presentation.result_summary_rows(
@@ -1742,6 +1894,7 @@ def test_governing_overview_freezes_complete_status_precedence():
         "STALE",
         "REVIEW",
         "NOT ASSESSED",
+        "CONDITIONAL",
         "CALCULATED - NO LIMIT COMPARISON",
         "PASS",
         "WITHIN USER-SPECIFIED LIMIT",

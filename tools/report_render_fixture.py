@@ -90,13 +90,13 @@ _REPORT_CROPS = (
         "report contents",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "545c834d6ed7521f5fdd466f8a1c553601cb262abc1a5bf770a0c2d1ead6181c",
+        "10e61a0cac207e491fa7a6580bde34160fc23e250a91cbf9e7cdaf11a42b7b12",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "2e5e2d2d981b01ffae017521838d0120eae4beb144eec512056aa06ff0447ea9",
+        "52dc1559fd301851ef89944fe7a1c7684887a0354f10e2a59401265d6e22e5bc",
     ),
 )
 
@@ -1982,6 +1982,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         "The table shows one governing row per engineering check type.",
         "The table shows one governing row for each engineering check type.",
     )
+    final_row_tokens = ("Fatigue", "Road traffic", "20.8 %")
     normalized_pages = [" ".join(page_text.split()) for page_text in page_texts]
     overview_indexes = [
         index
@@ -2009,6 +2010,27 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
     if note_indexes != [final_index]:
         raise AssertionError(
             "the results-overview governing note left its final page"
+        )
+    final_page_text = normalized_pages[final_index]
+    note_position = min(
+        final_page_text.index(note)
+        for note in notes
+        if note in final_page_text
+    )
+    missing_final_row_tokens = [
+        token for token in final_row_tokens if token not in final_page_text
+    ]
+    if missing_final_row_tokens:
+        raise AssertionError(
+            "the results-overview final row left its continuation page: "
+            + ", ".join(missing_final_row_tokens)
+        )
+    final_row_position = max(
+        final_page_text.index(token) for token in final_row_tokens
+    )
+    if not final_page_text.index(caption) < final_row_position < note_position:
+        raise AssertionError(
+            "the results-overview final row and governing note are out of reading order"
         )
 
     overview_text = " ".join(

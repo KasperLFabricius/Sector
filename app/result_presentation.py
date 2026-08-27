@@ -221,7 +221,7 @@ _TORSION_REASON_MESSAGES = {
     ),
     "closed_links_not_present": EngineerMessage(
         "TORSION-CLOSED-LINKS",
-        "Closed torsion links are required before full torsion resistance can be assessed",
+        "Closed torsion links are required before the transverse/strut resistance component can be assessed",
     ),
     "closed_link_reinforcement_not_positive": EngineerMessage(
         "TORSION-LINK-AREA",
@@ -229,7 +229,7 @@ _TORSION_REASON_MESSAGES = {
     ),
     "full torsion resistance not assessed": EngineerMessage(
         "TORSION-NOT-ASSESSED",
-        "Full torsion resistance has not been assessed",
+        "The torsion transverse/strut resistance component has not been assessed",
     ),
     "torsion tube evidence is invalid": EngineerMessage(
         "TORSION-TUBE-INVALID",
@@ -238,6 +238,26 @@ _TORSION_REASON_MESSAGES = {
     "torsion result is invalid": EngineerMessage(
         "TORSION-RESULT-INVALID",
         "The torsion result is invalid; review the section geometry and torsion inputs",
+    ),
+    "torsion_resistance_exceeded": EngineerMessage(
+        "TORSION-RESISTANCE-EXCEEDED",
+        "The applied torsion exceeds the calculated transverse-steel or concrete-strut resistance",
+    ),
+    "longitudinal_torsion_reinforcement_evidence_unavailable": EngineerMessage(
+        "TORSION-LONGITUDINAL-EVIDENCE",
+        "Complete the torsion resistance calculation and the passive-bar material assignments before assessing the longitudinal reinforcement",
+    ),
+    "longitudinal_torsion_reinforcement_insufficient": EngineerMessage(
+        "TORSION-LONGITUDINAL-INSUFFICIENT",
+        "The total design tensile resistance of the modelled passive bars is below the Formula (6.28) longitudinal torsion demand",
+    ),
+    "longitudinal_torsion_reinforcement_not_verified": EngineerMessage(
+        "TORSION-LONGITUDINAL-NOT-VERIFIED",
+        "Verify that sufficient passive reinforcement remains beyond bending demand, is distributed around every torsion-tube side and is anchored along the member",
+    ),
+    "no_longitudinal_torsion_demand": EngineerMessage(
+        "TORSION-LONGITUDINAL-ZERO",
+        "No longitudinal torsion reinforcement is required for this zero-torsion result",
     ),
     "multi-cell (2+ voids)": EngineerMessage(
         "TORSION-MULTI-CELL",
@@ -563,6 +583,11 @@ def combined_dkna_status(result):
     """Return the fail-closed public state of one retained DK NA screen."""
 
     result = result or {}
+    torsion_status = str(
+        result.get("torsion_assessment_status") or ""
+    ).upper()
+    if torsion_status == "FAIL":
+        return "FAIL"
     valid = result.get("valid") is True
     dkna_valid = result.get("dkna_valid", valid) is True
     if not valid or not dkna_valid:
@@ -572,10 +597,47 @@ def combined_dkna_status(result):
         return "NOT ASSESSED"
     if not satisfied:
         return "FAIL"
+    if torsion_status and torsion_status != "PASS":
+        return "NOT ASSESSED"
     if result.get("m_v_independent") is True:
         return "CONDITIONAL"
     retained = str(result.get("dkna_status") or "").upper()
     return retained if retained in {"PASS", "FAIL"} else "PASS"
+
+
+def combined_torsion_assessment_note(result):
+    """Explain a torsion prerequisite that governs the combined result."""
+
+    result = result or {}
+    status = str(result.get("torsion_assessment_status") or "").upper()
+    if status not in {"FAIL", "NOT ASSESSED"}:
+        return ""
+    reason = result_reason(
+        result.get("torsion_assessment_reason")
+        or "longitudinal_torsion_reinforcement_not_verified",
+        "torsion",
+        context="combined torsion prerequisite reason",
+    )
+    return f"{status}: {reason}."
+
+
+def combined_torsion_governing_note(result):
+    """Explain how the torsion prerequisite and DK NA limit govern together."""
+
+    torsion_note = combined_torsion_assessment_note(result)
+    if not torsion_note:
+        return ""
+    if combined_dkna_limit_satisfied(result) is False:
+        return (
+            "FAIL: The DK NA action-alone sum exceeds its numerical limit; "
+            "this definite combined failure governs. "
+            + torsion_note
+        )
+    return (
+        torsion_note
+        + " The DK NA action-alone sum remains numerical component evidence; "
+          "it is not an overall M-V-T verdict."
+    )
 
 
 def combined_dkna_assumption_note(result):
@@ -1290,6 +1352,37 @@ def _util_summary_status(util, *, valid=True):
     return "PASS" if viz.util_ok(util) else "FAIL"
 
 
+def torsion_assessment_status(torsion):
+    """Return the canonical overall torsion state, including Formula (6.28)."""
+
+    torsion = torsion or {}
+    retained = str(torsion.get("assessment_status") or "").upper()
+    if retained in {"PASS", "FAIL", "NOT ASSESSED"}:
+        return retained
+    if torsion.get("valid") is not True:
+        return "NOT ASSESSED"
+    # Older retained results have no longitudinal-verification state. They must
+    # not regain an overall PASS merely because the resistance component exists.
+    t_ed = _publication_metric(torsion.get("t_ed"))
+    if t_ed is None or t_ed != 0.0:
+        return "NOT ASSESSED"
+    return _util_summary_status(torsion.get("util"), valid=True)
+
+
+def torsion_assessment_note(torsion):
+    """Return authored engineer guidance for the canonical torsion state."""
+
+    torsion = torsion or {}
+    return result_reason(
+        torsion.get("overall_reason")
+        or torsion.get("assessment_reason")
+        or torsion.get("reason")
+        or "longitudinal_torsion_reinforcement_not_verified",
+        "torsion",
+        context="torsion overall assessment reason",
+    )
+
+
 def _map_assessment_status(status):
     return {
         "OK": "PASS",
@@ -1464,6 +1557,50 @@ def combined_physical_components(combined):
         "governing": governing,
         "coverage": coverage,
     }
+    torsion_longitudinal = combined.get("torsion_longitudinal_assessment")
+    if isinstance(torsion_longitudinal, Mapping):
+        torsion_status = str(
+            torsion_longitudinal.get("status") or "NOT ASSESSED"
+        ).upper()
+        torsion_ratio = _publication_metric(
+            torsion_longitudinal.get("demand_ratio"),
+            allow_positive_infinity=True,
+        )
+        if "FAIL" in {long_status, torsion_status}:
+            longitudinal_component["status"] = "FAIL"
+        elif "NOT ASSESSED" in {long_status, torsion_status}:
+            longitudinal_component["status"] = "NOT ASSESSED"
+        elif long_status == torsion_status == "PASS":
+            longitudinal_component["status"] = "PASS"
+        else:
+            longitudinal_component["status"] = "NOT ASSESSED"
+        if torsion_ratio is not None:
+            retained_ratio = _publication_metric(
+                longitudinal_component.get("util"),
+                allow_positive_infinity=True,
+            )
+            longitudinal_component["util"] = (
+                torsion_ratio
+                if retained_ratio is None
+                else (
+                    torsion_ratio
+                    if torsion_ratio >= retained_ratio
+                    else retained_ratio
+                )
+            )
+        torsion_note = result_reason(
+            torsion_longitudinal.get("reason")
+            or "longitudinal_torsion_reinforcement_not_verified",
+            "torsion",
+            context="combined longitudinal torsion assessment reason",
+        )
+        if long_status == "FAIL" and torsion_status != "FAIL":
+            longitudinal_component["note"] = (
+                long_note + "; " + torsion_note
+            )
+        else:
+            longitudinal_component["note"] = torsion_note
+        longitudinal_component["torsion_assessment"] = torsion_longitudinal
     return [concrete, stirrup, longitudinal_component]
 
 
@@ -2060,7 +2197,7 @@ def result_summary_rows(inp, results, *, stale=False):
 
     torsion = results.get("torsion")
     torsion_tube_valid = False
-    torsion_full_resistance_assessed = False
+    torsion_transverse_resistance_assessed = False
     if torsion is None and inp.get("torsion_on"):
         rows.append(_summary_row(
             "Torsion", "plastic", "NOT RUN",
@@ -2073,8 +2210,10 @@ def result_summary_rows(inp, results, *, stale=False):
             if "tube_valid" in torsion
             else torsion.get("valid") is True
         )
-        torsion_full_resistance_assessed = (
-            torsion.get("full_resistance_assessed") is True
+        torsion_transverse_resistance_assessed = (
+            torsion.get("transverse_resistance_assessed") is True
+            if "transverse_resistance_assessed" in torsion
+            else torsion.get("full_resistance_assessed") is True
             if "full_resistance_assessed" in torsion
             else torsion.get("valid") is True
         )
@@ -2082,11 +2221,25 @@ def result_summary_rows(inp, results, *, stale=False):
             "closed_links_present" in torsion
             and torsion.get("closed_links_present") is not True
         ):
-            torsion_full_resistance_assessed = False
-        if (
-            torsion_tube_valid
-            and not torsion_full_resistance_assessed
-        ):
+            torsion_transverse_resistance_assessed = False
+        if not torsion_tube_valid:
+            rows.append(_summary_row(
+                "Torsion",
+                "plastic",
+                "INVALID",
+                "-",
+                "-",
+                None,
+                "Torsion",
+                result_reason(
+                    torsion.get("reason") or "torsion tube evidence is invalid",
+                    "torsion",
+                    context="torsion summary geometry reason",
+                ),
+                inp,
+                overview_key="torsion",
+            ))
+        elif not torsion_transverse_resistance_assessed:
             rows.append(_summary_row(
                 "Torsion",
                 "plastic",
@@ -2106,13 +2259,26 @@ def result_summary_rows(inp, results, *, stale=False):
                 overview_key="torsion",
             ))
         else:
+            overall_status = torsion_assessment_status(torsion)
             rows.append(_summary_row(
                 "Torsion",
                 "plastic",
-                _util_summary_status(
+                overall_status,
+                overall_status,
+                "Resistance, longitudinal steel and detailing",
+                None,
+                "Torsion",
+                torsion_assessment_note(torsion),
+                inp,
+                overview_key="torsion",
+            ))
+            rows.append(_summary_row(
+                "Torsion transverse/strut resistance",
+                "plastic",
+                str(torsion.get("resistance_status") or _util_summary_status(
                     torsion.get("util"),
                     valid=torsion.get("valid") is True,
-                ),
+                )),
                 _percent(torsion.get("util")),
                 "<= 100 %",
                 torsion.get("util"),
@@ -2122,18 +2288,46 @@ def result_summary_rows(inp, results, *, stale=False):
                     or torsion.get("reason")
                     or "torsion result is invalid",
                     "torsion",
-                    context="torsion summary result reason",
+                    context="torsion resistance-component summary reason",
                 ),
                 inp,
-                overview_key="torsion",
+                overview_key="torsion:resistance",
+                overview_parent="torsion",
             ))
+            longitudinal = torsion.get("longitudinal_assessment")
+            if isinstance(longitudinal, Mapping):
+                required = longitudinal.get("required_asl_mm2")
+                provided = longitudinal.get("provided_equivalent_area_mm2")
+                result_text = (
+                    f"{required:.0f} / {provided:.0f} mm2"
+                    if required is not None and provided is not None
+                    else "-"
+                )
+                rows.append(_summary_row(
+                    "Torsion longitudinal reinforcement",
+                    "plastic",
+                    str(longitudinal.get("status") or "NOT ASSESSED"),
+                    result_text,
+                    "Required / modelled upper bound",
+                    longitudinal.get("demand_ratio"),
+                    "Torsion",
+                    result_reason(
+                        longitudinal.get("reason")
+                        or "longitudinal_torsion_reinforcement_not_verified",
+                        "torsion",
+                        context="torsion longitudinal summary reason",
+                    ),
+                    inp,
+                    overview_key="torsion:longitudinal",
+                    overview_parent="torsion",
+                ))
 
     combined = results.get("combined")
     if combined is None and inp.get("combined_on"):
         torsion_not_assessed = (
             torsion is not None
             and torsion_tube_valid
-            and not torsion_full_resistance_assessed
+            and not torsion_transverse_resistance_assessed
         )
         rows.append(_summary_row(
             "Combined M-V-T",
@@ -2181,7 +2375,10 @@ def result_summary_rows(inp, results, *, stale=False):
                 label = "Vx+T" if component == "vx" else "Vy+T"
                 util = direction.get("dkna_sum")
                 status = combined_dkna_status(direction)
-                if status == "NOT ASSESSED":
+                torsion_note = combined_torsion_governing_note(direction)
+                if torsion_note:
+                    direction_note = torsion_note
+                elif status == "NOT ASSESSED":
                     direction_note = (
                         "DK NA screen: "
                         + combined_dkna_screen_label(direction)
@@ -2313,6 +2510,9 @@ def result_summary_rows(inp, results, *, stale=False):
                 )
             )
         combined_status = combined_dkna_status(combined)
+        torsion_note = combined_torsion_governing_note(combined)
+        if torsion_note:
+            combined_note = torsion_note
         rows.append(_summary_row(
             "Combined M-V-T - DK NA sum",
             "plastic",

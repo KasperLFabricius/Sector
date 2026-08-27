@@ -1120,7 +1120,8 @@ def manual_blocks() -> list:
     md("Enable **Check torsion capacity** to use the section 6.3 thin-walled "
        "closed-tube model. With current closed links, Sector reports "
        "$T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd,c}$, $T_{Ed}/T_{Rd}$ and the required "
-       "longitudinal steel $\\sum A_{sl}$.")
+       "longitudinal steel $\\sum A_{sl}$. The utilisation is the transverse/strut "
+       "resistance component, not by itself an overall torsion verdict.")
     md("**Actions and tube geometry.** Enter signed $T_{Ed}$ in each "
        "Plastic/capacity row; zero skips torsion for that row. Sector derives "
        "$A$, $u$, $t_{ef}$, $A_k$ and $u_k$ from the outline. A positive "
@@ -1136,13 +1137,23 @@ def manual_blocks() -> list:
        "shared-link selection establishes link presence.")
     call("concept", "When current closed links are absent, the result states "
          "$T_{Rd,max}$ as the concrete-strut cap, $T_{Rd,c}$ as cracking "
-         "resistance and $\\sum A_{sl}$ as reinforcement demand. Full $T_{Rd}$, "
-         "utilisation and status require current links.")
+         "resistance and $\\sum A_{sl}$ as reinforcement demand. The "
+         "transverse/strut resistance and its utilisation require current links.")
+    call("limit", "For non-zero torsion, the overall result also requires enough "
+         "longitudinal reinforcement beyond bending demand, distributed around "
+         "every side of every torsion tube and anchored along the member. Sector "
+         "compares Formula (6.28) with the total design tensile resistance of the "
+         "modelled passive bars. A shortfall is **FAIL**. An apparently sufficient "
+         "total remains **NOT ASSESSED** because the section-plane calculation does "
+         "not establish bending reserve, perimeter/sub-tube allocation or member "
+         "anchorage.")
     call("standard", "$T_{Rd,max}$ uses the code torsion strut factor: recommended "
          "$\\nu = 0.6(1 - f_{ck}/250)$, or the DK NA:2024 pure-torsion "
          "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). The favourable "
          "$\\nu_t=\\nu_v$ detailing option is applied only when current closed "
-         "links are present. When the shared links are current, the combined "
+         "links are present. The selection records the detailing condition but does "
+         "not verify the modelled longitudinal bars or member anchorage. When the "
+         "shared links are current, the combined "
          "concrete-crushing check "
          "$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\leq 1$ (6.29) is added.")
     call("limit", "A T, L, I or flanged outline requires **Subdivide into "
@@ -1307,16 +1318,21 @@ def manual_blocks() -> list:
        "used. The web width shows whether it was entered or derived.")
     h2("Torsion results")
     md("The **Torsion** view reports $T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd}$, the "
-       "cracking $T_{Rd,c}$ and the utilisation, plus the derived tube ($A$, $u$, "
-       "$t_{ef}$, $A_k$, $u_k$) and the required $\\sum A_{sl}$. When shear links "
-       "are also defined it adds the combined shear+torsion crushing check.")
+       "cracking $T_{Rd,c}$ and the transverse/strut utilisation, plus the derived "
+       "tube ($A$, $u$, $t_{ef}$, $A_k$, $u_k$), required $\\sum A_{sl}$, modelled "
+       "passive-bar upper bound and the separate overall status. When shear links "
+       "are also defined it adds the combined shear+torsion crushing check. A "
+       "resistance-component PASS never overrides an insufficient or unverified "
+       "longitudinal-reinforcement assessment.")
     h2("M-V-T Combined results")
     md("The **M-V-T Combined** view shows the $M$, $V$ and $T$ utilisations, the "
        "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
        "$V$-$T$ envelope diagram, and three explicit physical component results: "
        "concrete compression strut, shared closed stirrup and governing longitudinal "
        "reinforcement. The detailed blocks show each contribution and the selected "
-       "member strut angle.")
+       "member strut angle. A torsion longitudinal FAIL governs the combined result; "
+       "an unverified longitudinal torsion requirement makes the combined result "
+       "NOT ASSESSED while retaining the numerical component evidence.")
     h2("PDF report")
     md("Choose **Brief**, **Standard** or **Audit** in the Report workspace. Standard "
        "is the default. The profile changes presentation depth only: "
