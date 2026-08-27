@@ -966,7 +966,8 @@ def test_legacy_bending_blocks_combined_evidence_in_both_face_shear_view():
     assert current_candidates["Combined status"].tolist() == [
         candidate["combined_status"] for candidate in shear["face_candidates"]
     ]
-    assert set(current_candidates["Combined status"]).issubset({"PASS", "FAIL"})
+    assert set(current_candidates["Combined status"]) == {"NOT ASSESSED"}
+    assert selected["combined"]["torsion_assessment_status"] == "NOT ASSESSED"
     current_component_rows = current_governing.loc[
         current_governing["Check"].isin(["Shear", "V+T (6.29)"])
     ].reset_index(drop=True)

@@ -14622,6 +14622,25 @@ def combined_view(inp, results):
                 "calculation-warning",
                 torsion_assessment_note,
             )
+    elif not c.get("dkna_valid"):
+        d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", "-")
+        d1.caption("NOT ASSESSED")
+        d2.caption(
+            "No DK NA verdict is given because one or more matching action-alone "
+            "resistances could not be determined."
+        )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The DK NA combined interaction is NOT ASSESSED. Check the section, "
+            "materials and complete Plastic bending sweep, then recalculate.",
+        )
+        if torsion_assessment_note:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                torsion_assessment_note,
+            )
     elif torsion_assessment_note:
         d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", _pct(c.get("dkna_sum")))
         dkna_component_status = str(
@@ -14651,19 +14670,6 @@ def combined_view(inp, results):
             st,
             "calculation-warning",
             torsion_assessment_note,
-        )
-    elif not c.get("dkna_valid"):
-        d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", "-")
-        d1.caption("NOT ASSESSED")
-        d2.caption(
-            "No DK NA verdict is given because one or more matching action-alone "
-            "resistances could not be determined."
-        )
-        _manual_warning(
-            st,
-            "calculation-warning",
-            "The DK NA combined interaction is NOT ASSESSED. Check the section, "
-            "materials and complete Plastic bending sweep, then recalculate.",
         )
     elif c["m_v_independent"]:
         dkna_status = presentation.combined_dkna_status(c)

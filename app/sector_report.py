@@ -1485,6 +1485,18 @@ class ReportBuilder:
             formatted.append([
                 Paragraph(_greek(str(cell)), style) for cell in row
             ])
+        if self.profile.key == "Brief":
+            governing_note = (
+                "The table shows one governing row per engineering check type."
+            )
+        else:
+            governing_note = (
+                "The table shows one governing row for each engineering check type."
+            )
+        note_data_index = len(data)
+        formatted.append([
+            Paragraph(_greek(governing_note), body)
+        ] + [""] * (len(formatted[0]) - 1))
         table_item = self._publication_counter.issue(
             "Table", "Results overview across calculated checks"
         )
@@ -1566,6 +1578,12 @@ class ReportBuilder:
             fill = fills.get(status)
             if fill is not None:
                 style.append(("BACKGROUND", (2, row_index), (2, row_index), fill))
+        note_row_index = header_row + note_data_index
+        style.extend([
+            ("SPAN", (0, note_row_index), (-1, note_row_index)),
+            ("TOPPADDING", (0, note_row_index), (-1, note_row_index), 3),
+            ("BOTTOMPADDING", (0, note_row_index), (-1, note_row_index), 3),
+        ])
         table.setStyle(TableStyle(style))
         table._sector_context_labels = context_labels
         table._sector_context_count = context_count
@@ -1583,15 +1601,6 @@ class ReportBuilder:
         )
         table.keepWithNext = 1
         self.flow.append(table)
-        if self.profile.key == "Brief":
-            governing_note = (
-                "The table shows one governing row per engineering check type."
-            )
-        else:
-            governing_note = (
-                "The table shows one governing row for each engineering check type."
-            )
-        self._small(governing_note)
         if information_rows:
             self._small("<b>Scope and calculation state</b>")
             for row in information_rows:
