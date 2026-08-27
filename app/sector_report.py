@@ -651,7 +651,6 @@ class _ResultsOverviewTable(_PaginatedReportTable):
         if note is None:
             return super().draw()
         note_height = self._sector_trailing_note_height
-        note.drawOn(self.canv, 0, 0)
         self.canv.saveState()
         try:
             self.canv.translate(
@@ -660,6 +659,7 @@ class _ResultsOverviewTable(_PaginatedReportTable):
             super().draw()
         finally:
             self.canv.restoreState()
+        note.drawOn(self.canv, 0, 0)
 
 
 def ensure_image_server(timeout=None):

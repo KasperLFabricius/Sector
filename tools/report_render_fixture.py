@@ -2010,6 +2010,16 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         raise AssertionError(
             "the results-overview governing note left its final page"
         )
+    final_page_text = normalized_pages[final_index]
+    note_position = min(
+        final_page_text.index(note)
+        for note in notes
+        if note in final_page_text
+    )
+    if note_position <= final_page_text.index(caption):
+        raise AssertionError(
+            "the results-overview governing note precedes its table in reading order"
+        )
 
     overview_text = " ".join(
         " ".join(page_texts[index].split()) for index in overview_indexes
