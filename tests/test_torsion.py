@@ -694,6 +694,23 @@ def _apply_box_section(at, b=600.0, h=600.0, wall=100.0):
     return at
 
 
+def _apply_rectangle(at, *, b=300.0, h=600.0, bar_dia=20.0):
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("selectbox", "shape", "Rectangle"),
+        ("number_input", "b_mm", b),
+        ("number_input", "h_mm", h),
+        ("number_input", "bot_d", bar_dia),
+        ("number_input", "top_d", bar_dia),
+        ("number_input", "bot_n", 6),
+        ("number_input", "top_n", 2),
+    )
+    return at
+
+
 def _enable_shared_links(at):
     _set(at, ("checkbox", "shear_links", True))
     return at
@@ -769,6 +786,74 @@ def test_app_torsion_produces_a_resistance_with_current_closed_links():
     assert t["asl_req"] > 0.0                       # torsion needs longitudinal steel
 
 
+def test_app_reference_torsion_never_promotes_component_pass_to_overall_pass():
+    at = _fresh()
+    at.run()
+    _apply_rectangle(at, bar_dia=20.0)
+    _set(
+        at,
+        ("number_input", "mild_fytk", 500.0),
+        ("number_input", "mild_gamma_y", 1.2),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_fywk", 500.0),
+        ("number_input", "shear_link_dia", 10.0),
+        ("number_input", "shear_link_s", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    _calculate(at)
+
+    assert not at.exception
+    t = at.session_state["results"]["torsion"]
+    assert t["tube"]["A"] == pytest.approx(0.18)
+    assert t["tube"]["Ak"] == pytest.approx(0.10)
+    assert t["util"] == pytest.approx(0.5235479567)
+    assert t["asl_req"] == pytest.approx(1176.672)
+    assert t["resistance_status"] == "PASS"
+    assert t["assessment_status"] == "NOT ASSESSED"
+    longitudinal = t["longitudinal_assessment"]
+    assert longitudinal["required_asl_mm2"] == pytest.approx(1176.672)
+    assert longitudinal["provided_equivalent_area_mm2"] > 1176.672
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert longitudinal["distribution_verified"] is False
+    assert longitudinal["bending_reserve_verified"] is False
+    assert longitudinal["anchorage_verified"] is False
+
+    _select_view(at, "Torsion")
+    warnings = " ".join(item.value for item in at.warning)
+    captions = " ".join(item.value for item in at.caption)
+    assert "Overall torsion assessment: NOT ASSESSED" in warnings
+    assert "beyond bending demand" in warnings
+    assert "every torsion-tube side" in warnings
+    assert "anchored along the member" in warnings
+    assert "upper bound" in captions
+    assert any(
+        "Transverse/strut utilisation" in metric.label
+        for metric in at.metric
+    )
+
+    # Keep the same tube, links, material and action, but reduce only the
+    # modelled passive bars. The resistance component stays below unity while
+    # the longitudinal upper bound becomes a definite failure.
+    _apply_rectangle(at, bar_dia=8.0)
+    _calculate(at)
+    assert not at.exception
+    insufficient = at.session_state["results"]["torsion"]
+    assert insufficient["util"] == pytest.approx(t["util"])
+    assert insufficient["asl_req"] == pytest.approx(1176.672)
+    assert insufficient["resistance_status"] == "PASS"
+    assert insufficient["assessment_status"] == "FAIL"
+    assert (
+        insufficient["longitudinal_assessment"]["provided_equivalent_area_mm2"]
+        < insufficient["asl_req"]
+    )
+    assert insufficient["longitudinal_assessment"]["status"] == "FAIL"
+    _select_view(at, "Torsion")
+    warnings = " ".join(item.value for item in at.warning)
+    assert "Overall torsion assessment: FAIL" in warnings
+    assert "below the Formula (6.28) longitudinal torsion demand" in warnings
+
+
 def test_app_combined_without_links_withholds_torsion_dependent_verdicts():
     at = _fresh()
     at.run()
@@ -799,6 +884,10 @@ def test_app_combined_without_links_withholds_torsion_dependent_verdicts():
         "component",
         "governing_face",
         "governing_cot",
+        "m_v_independent",
+        "m_v_separation_condition",
+        "torsion_assessment_status",
+        "torsion_assessment_reason",
     }
     assert combined_result["valid"] is False
     assert combined_result["have_m"] is True
@@ -1002,8 +1091,12 @@ def test_app_torsion_view_renders():
     _select_view(at, "Torsion")
     assert not at.exception
     labels = [m.label for m in at.metric]
-    assert any("Utilisation" in lbl for lbl in labels)
+    assert any("Transverse/strut utilisation" in lbl for lbl in labels)
     assert any("T_{Rd" in lbl for lbl in labels)
+    assert any(
+        "Overall torsion assessment: NOT ASSESSED" in item.value
+        for item in at.warning
+    )
     captions = " ".join(item.value for item in at.caption)
     assert "actual direct gamma_ct input is used" in captions
     assert "1.700" in captions
@@ -1047,6 +1140,15 @@ def test_app_torsion_subdivided_sums_capacities():
     assert t["governing_sub"] == max(range(len(t["subtubes"])),
                                      key=lambda i: t["subtubes"][i]["util"])
     assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
+    longitudinal = t["longitudinal_assessment"]
+    required_by_tube = tuple(item["asl_req"] for item in t["subtubes"])
+    assert longitudinal["required_by_tube_mm2"] == pytest.approx(
+        required_by_tube
+    )
+    assert longitudinal["required_asl_mm2"] == pytest.approx(
+        sum(required_by_tube)
+    )
+    assert longitudinal["tube_allocation_verified"] is False
 
 
 def test_app_torsion_subdivided_without_links_withholds_capacity_sum():
@@ -1087,7 +1189,7 @@ def test_app_torsion_subdivided_without_links_withholds_capacity_sum():
     assert any("NOT ASSESSED" in item.value for item in at.warning)
     assert not any("Utilisation" in metric.label for metric in at.metric)
     assert any(
-        "full capacity sum" in item.value
+        "component-resistance sum" in item.value
         and "require current closed links" in item.value
         for item in at.caption
     )
@@ -1211,6 +1313,15 @@ def test_app_torsion_subdivided_view_renders():
     assert not at.exception
     labels = [m.label for m in at.metric]
     assert any("T_{Rd" in lbl for lbl in labels)
+    table = next(
+        frame.value for frame in at.dataframe
+        if "Asl,req,i (mm2)" in frame.value.columns
+    )
+    required = [
+        f"{item['asl_req']:.0f}"
+        for item in at.session_state["results"]["torsion"]["subtubes"]
+    ]
+    assert list(table["Asl,req,i (mm2)"]) == required
 
 
 def test_app_torsion_subdivided_uses_the_shared_member_angle():
@@ -1661,6 +1772,7 @@ def test_app_torsion_out_of_default_range_warns_and_retains_verdict():
     )
     util_metric = next(
         m for m in at.metric
-        if m.label == r"Utilisation $T_{Ed}/T_{Rd}$"
+        if m.label == r"Transverse/strut utilisation $T_{Ed}/T_{Rd}$"
     )
-    assert util_metric.delta in {"PASS", "FAIL"}
+    assert util_metric.value == f"{t['util'] * 100:.1f} %"
+    assert not util_metric.delta

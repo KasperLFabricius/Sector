@@ -5400,6 +5400,32 @@ def _torsion_out(interaction=False):
            "cot_max": 2.5, "method": "DS/EN 1992-1-1:2005 + DK NA:2024",
            "governs": resistance.governs, "valid": True, "cot_limit_lo": 1.0,
            "cot_limit_hi": 2.5, "out_of_limits": False,
+           "tube_valid": True, "closed_links_present": True,
+           "transverse_resistance_assessed": True,
+           "full_resistance_assessed": True,
+           "resistance_status": "PASS",
+           "assessment_status": "NOT ASSESSED", "assessment_ok": None,
+           "overall_reason": "longitudinal_torsion_reinforcement_not_verified",
+           "longitudinal_assessment": {
+               "status": "NOT ASSESSED",
+               "reason": "longitudinal_torsion_reinforcement_not_verified",
+               "required_asl_mm2": longitudinal.asl_required_mm2,
+               "required_by_tube_mm2": (longitudinal.asl_required_mm2,),
+               "required_design_force_kn": (
+                   longitudinal.asl_required_mm2 * 416.67 / 1000.0
+               ),
+               "provided_gross_area_mm2": 2513.274,
+               "provided_design_force_kn": 1047.198,
+               "provided_equivalent_area_mm2": 2513.274,
+               "reference_fyd_mpa": 416.67,
+               "demand_ratio": longitudinal.asl_required_mm2 / 2513.274,
+               "area_sufficient": True,
+               "distribution_verified": False,
+               "all_perimeter_sides_verified": False,
+               "bending_reserve_verified": False,
+               "anchorage_verified": False,
+               "tube_allocation_verified": False,
+           },
            "angle_selection": asdict(angle),
            "steel_resistance": asdict(steel),
            "strut_resistance": asdict(strut),
@@ -5434,6 +5460,10 @@ def test_report_includes_torsion_section():
     assert "fctd = fctk,0.05 /" in txt
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1177" in txt                            # required Asl
+    assert "NOT ASSESSED" in txt                    # overall, not component PASS
+    assert "All modelled passive bars" in txt
+    assert "every torsion-tube side" in txt
+    assert "anchorage along the member" in txt
     assert chr(0x2211) in txt                       # summation operator
     assert chr(0x00B7) in txt                       # centred multiplication/unit dot
     assert chr(0x00B0) in txt                       # degree symbol
@@ -5442,12 +5472,74 @@ def test_report_includes_torsion_section():
     )
 
 
+@pytest.mark.parametrize(
+    ("profile", "status", "provided"),
+    [
+        ("Brief", "NOT ASSESSED", 2513.274),
+        ("Standard", "NOT ASSESSED", 2513.274),
+        ("Audit", "NOT ASSESSED", 2513.274),
+        ("Brief", "FAIL", 1000.0),
+        ("Standard", "FAIL", 1000.0),
+        ("Audit", "FAIL", 1000.0),
+    ],
+)
+def test_report_profiles_share_longitudinal_torsion_status(
+    profile,
+    status,
+    provided,
+):
+    out = _out()
+    t = _torsion_out()
+    reason = (
+        "longitudinal_torsion_reinforcement_insufficient"
+        if status == "FAIL"
+        else "longitudinal_torsion_reinforcement_not_verified"
+    )
+    t.update(
+        assessment_status=status,
+        assessment_ok=False if status == "FAIL" else None,
+        overall_reason=reason,
+    )
+    t["longitudinal_assessment"].update(
+        status=status,
+        reason=reason,
+        provided_gross_area_mm2=provided,
+        provided_design_force_kn=provided * 416.67 / 1000.0,
+        provided_equivalent_area_mm2=provided,
+        demand_ratio=t["asl_req"] / provided,
+        area_sufficient=status != "FAIL",
+    )
+    out["torsion"] = t
+    inp = _inp()
+    inp.update(torsion_on=True, shear_links=True)
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Torsion" in text
+    assert status in text
+    assert "1177" in text
+    assert f"{provided:.0f}" in text
+    assert "Required / modelled upper bound" in text or profile != "Brief"
+    if status == "FAIL":
+        assert "below the Formula (6.28) longitudinal torsion demand" in text
+    else:
+        assert "every torsion-tube side" in text
+        assert "anchored along the member" in text
+
+
 def test_report_withholds_full_torsion_verdict_without_current_closed_links():
     torsion = _torsion_out()
     stale_full_resistance = 999.123
     torsion.update(
         tube_valid=True,
         closed_links_present=False,
+        transverse_resistance_assessed=False,
         full_resistance_assessed=False,
         assessment_reason="closed_links_not_present",
         valid=False,
@@ -5493,13 +5585,13 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
         assert "STALE DIRECTIONAL PASS" not in text
         if profile == "Brief":
             continue
-        assert "full torsion resistance" in text
+        assert "torsion transverse/strut resistance" in text
         assert "requires current shared links / closed stirrups" in text
         assert "Concrete cap only" in text
         assert "Cracking transparency" in text
-        assert "Informational requirement" in text
-        assert "not a resistance angle" in text
-        assert "utilisation and status require current closed links" in text
+        assert "Formula (6.28) demand" in text
+        assert "supports the concrete cap and reinforcement demand" in text
+        assert "its utilisation require current closed links" in text
         assert "Torsion resistance from the thin-walled closed-tube" not in text
         assert "T Rd = min" not in text
 
@@ -5587,7 +5679,15 @@ def test_report_torsion_subdivided():
     # P1: governing = the worst sub-tube (part 2 here), not the pooled TEd/sum(TRd).
     t["util"] = max(s["util"] for s in subs)
     t["governing_sub"] = max(range(len(subs)), key=lambda index: subs[index]["util"])
+    subs[0]["asl_req"] = 850.0
+    subs[1]["asl_req"] = 550.0
     t["asl_req"] = 1400.0
+    t["longitudinal_assessment"].update(
+        required_asl_mm2=1400.0,
+        required_by_tube_mm2=(850.0, 550.0),
+        required_design_force_kn=1400.0 * 416.67 / 1000.0,
+        demand_ratio=1400.0 / 2513.274,
+    )
     stiffness_sum = sum(s["stiffness"] for s in subs)
     t["torque_distribution"] = {
         "applied_torque": 40.0,
@@ -5609,6 +5709,7 @@ def test_report_torsion_subdivided():
     assert "web" in txt
     assert "governing" in txt                        # P1: governing (max) utilisation
     assert "6.29" in txt                             # P2: crushing printed in sub-report
+    assert "850" in txt and "550" in txt            # Formula 6.28 per sub-tube
 
 
 def test_report_invalid_subtube_partition_withholds_verdict():
@@ -5949,6 +6050,130 @@ def test_report_profiles_share_dkna_value_and_status(profile):
         assert "Axial N" in txt
         assert "6.3.2(6)" in txt
         assert "entered biaxial moment direction" in txt
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize("torsion_status", ["NOT ASSESSED", "FAIL"])
+def test_report_combined_status_retains_longitudinal_torsion_gate(
+    profile,
+    torsion_status,
+):
+    out = _out()
+    torsion = _torsion_out()
+    reason = (
+        "longitudinal_torsion_reinforcement_insufficient"
+        if torsion_status == "FAIL"
+        else "longitudinal_torsion_reinforcement_not_verified"
+    )
+    torsion.update(
+        assessment_status=torsion_status,
+        overall_reason=reason,
+    )
+    torsion["longitudinal_assessment"].update(
+        status=torsion_status,
+        reason=reason,
+    )
+    out["torsion"] = torsion
+
+    selection = combined_core.dkna_interaction_result(
+        0.0,
+        None,
+        0.2,
+        1.0,
+        0.2,
+        1.0,
+        0.2,
+        1.0,
+        m_v_independent=False,
+    )
+    combined = _combined_out()
+    combined.update(
+        r_m=0.2,
+        r_v=0.2,
+        r_t=0.2,
+        dkna_sum=selection.utilisation,
+        dkna_valid=selection.valid,
+        dkna_limit_satisfied=selection.limit_satisfied,
+        dkna_status=selection.status,
+        dkna_ok=selection.ok,
+        dkna_selection=asdict(selection),
+        assessment_status=torsion_status,
+        torsion_assessment_status=torsion_status,
+        torsion_assessment_reason=reason,
+        torsion_longitudinal_assessment=torsion[
+            "longitudinal_assessment"
+        ],
+    )
+    out["combined"] = combined
+    inp = _inp()
+    inp.update(
+        combined_on=True,
+        shear_on=True,
+        torsion_on=True,
+        shear_links=True,
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert torsion_status in text
+    assert "60.0 %" in text
+    assert "numerical component evidence" in text
+    assert "not an overall M-V-T verdict" in text
+    assert f"Overall {torsion_status}: {torsion_status}" not in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_definite_dkna_failure_outranks_unverified_torsion(profile):
+    out = _out()
+    torsion = _torsion_out()
+    out["torsion"] = torsion
+    combined = _combined_out(mv_independent=True)
+    combined.update(
+        dkna_sum=1.10,
+        dkna_limit_satisfied=False,
+        dkna_status="FAIL",
+        dkna_ok=False,
+        torsion_assessment_status="NOT ASSESSED",
+        torsion_assessment_reason=(
+            "longitudinal_torsion_reinforcement_not_verified"
+        ),
+        torsion_longitudinal_assessment=torsion[
+            "longitudinal_assessment"
+        ],
+    )
+    combined["dkna_selection"].update(
+        utilisation=1.10,
+        limit_satisfied=False,
+        status="FAIL",
+        ok=False,
+    )
+    out["combined"] = combined
+    inp = _inp()
+    inp.update(
+        combined_on=True,
+        combined_mv_independent=True,
+        shear_on=True,
+        torsion_on=True,
+        shear_links=True,
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "FAIL" in text
+    assert "definite combined failure governs" in text
+    assert "not an overall M-V-T verdict" not in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])

@@ -19,6 +19,7 @@ from .engineer_message import EngineerMessage
 
 SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
+TORSION_RESISTANCE_EXCEEDED = "torsion_resistance_exceeded"
 _MISSING = object()
 _TORSION_GAMMA_CT_INPUT = EngineerMessage(
     "TORSION-GAMMA-CT",
@@ -777,6 +778,149 @@ def design_yield(material):
     return material.fytk / gamma_y if gamma_y > 0.0 else material.fytk
 
 
+def torsion_longitudinal_assessment(
+    inp,
+    required_by_tube_mm2,
+    *,
+    resistance_assessed,
+):
+    """Compare Formula (6.28) demand with modelled passive reinforcement.
+
+    The section model can establish a conservative upper bound on the available
+    longitudinal tensile resistance by summing every modelled passive bar.  It
+    cannot establish how much remains after bending, whether it is distributed
+    around every torsion-tube side, or whether it is anchored along the member.
+    Consequently, a shortfall is a definite failure, while an apparently
+    sufficient total remains not assessed for non-zero torsion.
+    """
+
+    requirements = tuple(float(value) for value in required_by_tube_mm2)
+    requirement_valid = bool(
+        requirements
+        and all(math.isfinite(value) and value >= 0.0 for value in requirements)
+    )
+    required_asl = math.fsum(requirements) if requirement_valid else None
+
+    bars = tuple(inp.get("bars") or ())
+    materials = inp.get("bar_materials")
+    if materials is None:
+        materials = (inp.get("steel"),) * len(bars)
+    else:
+        materials = tuple(materials)
+    assignments_valid = len(materials) == len(bars)
+
+    provided_area = 0.0
+    provided_force = 0.0
+    if assignments_valid:
+        for bar, material in zip(bars, materials):
+            if (
+                type(bar) not in (tuple, list)
+                or len(bar) != 3
+                or material is None
+            ):
+                assignments_valid = False
+                break
+            try:
+                area = float(bar[2])
+                fyd = float(design_yield(material))
+            except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+                assignments_valid = False
+                break
+            if (
+                not math.isfinite(area)
+                or area <= 0.0
+                or not math.isfinite(fyd)
+                or fyd <= 0.0
+            ):
+                assignments_valid = False
+                break
+            provided_area += area
+            provided_force += area * fyd / 1000.0
+
+    try:
+        reference_fyd = float(design_yield(inp.get("steel")))
+    except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+        reference_fyd = math.nan
+    reference_valid = math.isfinite(reference_fyd) and reference_fyd > 0.0
+    evidence_valid = bool(
+        resistance_assessed is True
+        and requirement_valid
+        and assignments_valid
+        and reference_valid
+        and math.isfinite(provided_area)
+        and math.isfinite(provided_force)
+    )
+
+    required_force = (
+        required_asl * reference_fyd / 1000.0
+        if evidence_valid and required_asl is not None
+        else None
+    )
+    equivalent_area = (
+        provided_force * 1000.0 / reference_fyd
+        if evidence_valid
+        else None
+    )
+    demand_ratio = None
+    area_sufficient = None
+    if evidence_valid and required_force is not None:
+        demand_ratio = (
+            required_force / provided_force
+            if provided_force > 0.0
+            else (0.0 if required_force == 0.0 else math.inf)
+        )
+        area_sufficient = bool(
+            provided_force >= required_force
+            or math.isclose(
+                provided_force,
+                required_force,
+                rel_tol=1.0e-12,
+                abs_tol=0.0,
+            )
+        )
+
+    if not evidence_valid:
+        status = "NOT ASSESSED"
+        ok = None
+        reason = "longitudinal_torsion_reinforcement_evidence_unavailable"
+    elif required_force == 0.0:
+        status = "PASS"
+        ok = True
+        reason = "no_longitudinal_torsion_demand"
+    elif area_sufficient is not True:
+        status = "FAIL"
+        ok = False
+        reason = "longitudinal_torsion_reinforcement_insufficient"
+    else:
+        status = "NOT ASSESSED"
+        ok = None
+        reason = "longitudinal_torsion_reinforcement_not_verified"
+
+    return {
+        "status": status,
+        "ok": ok,
+        "reason": reason,
+        "required_asl_mm2": required_asl,
+        "required_by_tube_mm2": requirements,
+        "required_design_force_kn": required_force,
+        "provided_gross_area_mm2": (
+            provided_area if assignments_valid else None
+        ),
+        "provided_design_force_kn": (
+            provided_force if assignments_valid else None
+        ),
+        "provided_equivalent_area_mm2": equivalent_area,
+        "reference_fyd_mpa": reference_fyd if reference_valid else None,
+        "demand_ratio": demand_ratio,
+        "area_sufficient": area_sufficient,
+        "distribution_verified": False,
+        "all_perimeter_sides_verified": False,
+        "bending_reserve_verified": False,
+        "anchorage_verified": False,
+        "tube_allocation_verified": False,
+    }
+
+
 def _tendon_element_id(elements: object, index: int) -> str:
     """Return retained UI identity without making it a solver prerequisite."""
 
@@ -1032,13 +1176,13 @@ def tube_torsion(
         t_ed, tube["uk"], tube["Ak"], fyd_long, cot
     )
     tube_valid = bool(tube["valid"])
-    full_resistance_assessed = bool(
+    transverse_resistance_assessed = bool(
         selection.full_resistance_assessed
     )
-    valid = bool(tube_valid and full_resistance_assessed)
+    valid = bool(tube_valid and transverse_resistance_assessed)
     assessment_reason = (
         None
-        if full_resistance_assessed
+        if transverse_resistance_assessed
         else selection.reason
     )
     return {
@@ -1057,7 +1201,10 @@ def tube_torsion(
         "valid": valid,
         "tube_valid": tube_valid,
         "closed_links_present": selection.closed_links_present,
-        "full_resistance_assessed": full_resistance_assessed,
+        "transverse_resistance_assessed": transverse_resistance_assessed,
+        # Retained for current project/result consumers; this field now means
+        # only that the transverse-steel/concrete-strut component is available.
+        "full_resistance_assessed": transverse_resistance_assessed,
         "assessment_reason": assessment_reason,
         "angle_selection": angle_selection,
         "steel_resistance": asdict(steel),
@@ -2017,6 +2164,17 @@ def finalize_combined(inp, out):
     plastic = out.get("plastic")
     shear_out = out.get("shear")
     torsion_out = out.get("torsion")
+    torsion_assessment_status = None
+    torsion_assessment_reason = None
+    if torsion_out is not None:
+        torsion_assessment_status = str(
+            torsion_out.get("assessment_status", "NOT ASSESSED")
+        ).upper()
+        if torsion_assessment_status not in {
+            "PASS", "FAIL", "NOT ASSESSED"
+        }:
+            torsion_assessment_status = "NOT ASSESSED"
+        torsion_assessment_reason = torsion_out.get("overall_reason")
     r_m = plastic.get("util") if plastic else None
     have_m = r_m is not None
     links = shear_out.get("links") if shear_out is not None else None
@@ -2048,6 +2206,9 @@ def finalize_combined(inp, out):
             "m_v_independent": independent_mv,
             "m_v_separation_condition": separation_condition,
         }
+        if torsion_assessment_status is not None:
+            payload["torsion_assessment_status"] = torsion_assessment_status
+            payload["torsion_assessment_reason"] = torsion_assessment_reason
         if shear_reason is not None:
             payload["reason"] = shear_reason
         out["combined"] = payload
@@ -2096,6 +2257,17 @@ def finalize_combined(inp, out):
         "dkna_limit_satisfied": dk_selection.limit_satisfied,
         "dkna_status": dk_selection.status,
         "dkna_ok": dk_selection.ok,
+        "assessment_status": aggregate_assessment_status((
+            torsion_assessment_status or "NOT ASSESSED",
+            dk_selection.status,
+        )),
+        "torsion_assessment_status": (
+            torsion_assessment_status or "NOT ASSESSED"
+        ),
+        "torsion_assessment_reason": torsion_assessment_reason,
+        "torsion_longitudinal_assessment": torsion_out.get(
+            "longitudinal_assessment"
+        ),
         "dkna_selection": asdict(dk_selection),
         "action_alone": {
             "n": n_action,
