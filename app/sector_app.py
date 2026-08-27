@@ -9836,13 +9836,50 @@ def _run_uniaxial_capacity_checks(inp, out):
             # section with asymmetric steel). The tension face keeps the legacy
             # fallback (pure-axis then sweep extremum) so a failed conditional solve
             # still reports; the torsion-only face is only used on an honest solve.
-            shear_faces = [(tlow, True)]
-            if tors_live:
-                shear_faces.append((not tlow, False))
+            model_2023 = bool(link_ctx.get("model_2023"))
+            if model_2023:
+                # Formulae (8.51) and (8.52) require both physical flexural
+                # chords. The applied moment sign establishes which face is the
+                # flexural tension chord; at zero moment the already selected
+                # shear face supplies the otherwise indeterminate designation.
+                flexural_tension_low = (
+                    True if m_signed > 0.0
+                    else False if m_signed < 0.0
+                    else tlow
+                )
+                shear_faces = [
+                    (flexural_tension_low, True),
+                    (not flexural_tension_low, True),
+                ]
+            else:
+                flexural_tension_low = tlow
+                shear_faces = [(tlow, True)]
+                if tors_live:
+                    shear_faces.append((not tlow, False))
             for f_tlow, gets_shift in shear_faces:
                 m_ed_f = combined.chord_applied_moment(m_signed, f_tlow)
                 m_rd_f, cond_f = _shear_face_mrd(inp, l_axis, f_tlow, m_off=off_signed)
-                if gets_shift:
+                if model_2023:
+                    # Both 2023 chord equations require the honest face-specific
+                    # conditional resistance. A pure-axis substitute cannot close
+                    # the required opposite-face check.
+                    if not cond_f:
+                        continue
+                    if f_tlow is tlow:
+                        z_f_mm, z_f_src = link_ctx["z_mm"], link_ctx["z_src"]
+                    else:
+                        _, s_cg = shear.tension_reinforcement(
+                            inp["bars"], l_axis, f_tlow, s_centroid
+                        )
+                        d_f = shear.effective_depth(
+                            inp["outer"], l_axis, f_tlow, s_cg
+                        )
+                        z_f_mm, z_f_src = _shear_lever_arm(
+                            inp, l_axis, f_tlow, d_f
+                        )
+                    if z_f_mm is None or z_f_mm <= 0.0:
+                        continue
+                elif gets_shift:
                     if not cond_f and m_rd_f <= 0.0:
                         max_m = pl["max_mx"] if l_axis == "x" else pl["max_my"]
                         min_m = pl.get("min_mx" if l_axis == "x" else "min_my", -max_m)
@@ -9863,7 +9900,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                     dict(m_ed=m_ed_f, m_rd=m_rd_f, z_m=z_f_mm / 1000.0,
                          z_src=z_f_src, axis=l_axis, tension_low=f_tlow,
                          off_util=off_util, m_off=off_signed, conditional=cond_f,
-                         gets_shift=gets_shift))
+                         gets_shift=gets_shift,
+                         m_ed_signed=m_signed,
+                         flexural_tension_low=flexural_tension_low))
             # Off-axis chord(s): with torsion live, the OTHER axis' tension chords
             # carry their bending tension plus a share of the distributed torsion
             # longitudinal force. The torsion force is tensile round the whole tube
@@ -9987,14 +10026,24 @@ def _run_uniaxial_capacity_checks(inp, out):
             # condition in (8.53).
             if _cf["m_rd"] > 0.0 and (shear_live or tors_live):
                 face = "negative" if _cf["tension_low"] else "positive"
-                _add_angle_objective(
-                    f"{_cf['axis']}-axis {face} longitudinal chord",
-                    lambda c, f=_cf: combined.longitudinal_check(
+                if links_model_2023:
+                    evaluator = lambda c, f=_cf: combined.longitudinal_chord_check_2023(
+                        f["m_ed_signed"], f["m_rd"], _ftd_v_at(c),
+                        _ftd_t_at(c), f["z_m"],
+                        tension_low=f["tension_low"],
+                        flexural_tension_low=f["flexural_tension_low"],
+                        n_ed=inp["P_pl"],
+                    )["util"]
+                else:
+                    evaluator = lambda c, f=_cf: combined.longitudinal_check(
                         f["m_ed"], f["m_rd"],
                         _ftd_v_at(c) if f["gets_shift"] else 0.0,
                         _ftd_t_at(c), f["z_m"],
-                        cap_shear_force=not links_model_2023,
-                    )["util"],
+                        cap_shear_force=True,
+                    )["util"]
+                _add_angle_objective(
+                    f"{_cf['axis']}-axis {face} longitudinal chord",
+                    evaluator,
                 )
         for _ocf in chord_off_faces:
             # Each off-axis face depends on the angle only through Ftd,T; both join
@@ -10245,15 +10294,25 @@ def _run_uniaxial_capacity_checks(inp, out):
                     off_not_evaluated = "not_solved"
                 else:
                     off_not_evaluated = None
-                # Report the GOVERNING shear-axis face (highest utilisation at the
-                # member angle): the flexural tension face (bending + dFtd + torsion)
-                # or, under torsion, the compression face (torsion share only).
+                # Report the GOVERNING shear-axis face. The 2023 route retains both
+                # flexural chords under Formulae (8.51) and (8.52); the 2005-family
+                # route retains its existing tension-face shear shift.
                 for _cf in chord_faces:
-                    fchk = combined.longitudinal_check(
-                        _cf["m_ed"], _cf["m_rd"],
-                        longitudinal_shear_force if _cf["gets_shift"] else 0.0,
-                        ftd_t_star, _cf["z_m"],
-                        cap_shear_force=not link_ctx.get("model_2023"))
+                    if links_model_2023:
+                        fchk = combined.longitudinal_chord_check_2023(
+                            _cf["m_ed_signed"], _cf["m_rd"],
+                            longitudinal_shear_force, ftd_t_star, _cf["z_m"],
+                            tension_low=_cf["tension_low"],
+                            flexural_tension_low=_cf["flexural_tension_low"],
+                            n_ed=inp["P_pl"],
+                        )
+                    else:
+                        fchk = combined.longitudinal_check(
+                            _cf["m_ed"], _cf["m_rd"],
+                            longitudinal_shear_force if _cf["gets_shift"] else 0.0,
+                            ftd_t_star, _cf["z_m"],
+                            cap_shear_force=True,
+                        )
                     fchk.update(valid=True, role="shear_axis",
                                 axis=_cf["axis"],
                                 tension_low=_cf["tension_low"],
@@ -10264,7 +10323,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                                 has_torsion=tors_live,
                                 gets_shift=_cf["gets_shift"],
                                 off_not_evaluated=off_not_evaluated,
-                                theta_mode=theta_mode_str)
+                                theta_mode=theta_mode_str,
+                                z_src=_cf.get("z_src"))
                     lchecks.append(fchk)
                     if lchk is None or fchk["util"] > lchk["util"]:
                         lchk = fchk
@@ -10298,48 +10358,82 @@ def _run_uniaxial_capacity_checks(inp, out):
                 ),
                 None,
             )
+            links_payload = dict(
+                res=lk, util=util_l, asw=link_ctx["asw"],
+                asw_over_s=link_ctx["asw_over_s"],
+                legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
+                s=inp["shear_link_s"], fywk=inp["shear_fywk"],
+                cot_min=link_ctx["cot_min"], cot_max=link_ctx["cot_max"],
+                delta_ftd=delta_ftd,
+                longitudinal_shear_force=longitudinal_shear_force,
+                longitudinal_shear_symbol=(
+                    "NVd" if link_ctx.get("model_2023") else "delta_Ftd"
+                ),
+                longitudinal_shear_clause=(
+                    "8.2.3(8), Formula (8.50)"
+                    if link_ctx.get("model_2023")
+                    else "6.2.3(7), Formula (6.18)"
+                ),
+                cot_limit_lo=lo, cot_limit_hi=hi,
+                angle_limits=angle_limits,
+                model_2023=link_ctx.get("model_2023", False),
+                z_source=link_ctx["z_src"],
+                z_component=link_ctx["z_component"],
+                z_source_angle_deg=link_ctx["z_source_angle_deg"],
+                z_source_case=link_ctx["z_source_case"],
+                z_source_axial_kn=link_ctx["z_source_axial_kn"],
+                assessment_reason=(
+                    link_ctx["z_src"]
+                    if link_ctx.get("z_mm") is None
+                    else lk.get("reason")
+                ),
+                out_of_limits=links_out_of_limits,
+                required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
+                chord_off=ochk,
+                chord_candidates=required_chords,
+                governing_longitudinal=governing_longitudinal,
+                longitudinal_fallback=longitudinal_fallback,
+                longitudinal_all_conditional=(
+                    bool(required_chords) and longitudinal_fallback is None
+                ),
+                theta_mode=(theta_mode_str if shear_live else "resistance"),
+                member_angle_selection=member_angle_selection,
+            )
+            links_payload["longitudinal_assessment"] = (
+                capacity.longitudinal_chord_assessment(
+                    links_payload,
+                    shear_axis=link_ctx["axis"],
+                    shear_tension_low=link_ctx["tension_low"],
+                    shear_live=shear_live,
+                    torsion_live=tors_live,
+                    torsion_subdivided=bool(
+                        tors_ctx is not None and tors_ctx.get("subdivide", False)
+                    ),
+                )
+            )
+            link_resistance_status = (
+                "NOT ASSESSED"
+                if util_l is None
+                else "PASS"
+                if math.isfinite(float(util_l)) and float(util_l) <= 1.0 + 1.0e-9
+                else "FAIL"
+            )
+            shear_assessment_status = capacity.aggregate_assessment_status((
+                link_resistance_status,
+                links_payload["longitudinal_assessment"]["status"],
+            ))
             out["shear"].update(
-                links=dict(res=lk, util=util_l, asw=link_ctx["asw"],
-                           asw_over_s=link_ctx["asw_over_s"],
-                           legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
-                           s=inp["shear_link_s"], fywk=inp["shear_fywk"],
-                           cot_min=link_ctx["cot_min"], cot_max=link_ctx["cot_max"],
-                           delta_ftd=delta_ftd,
-                           longitudinal_shear_force=longitudinal_shear_force,
-                           longitudinal_shear_symbol=(
-                               "NVd" if link_ctx.get("model_2023") else "delta_Ftd"
-                           ),
-                           longitudinal_shear_clause=(
-                               "8.2.3(8), Formula (8.50)"
-                               if link_ctx.get("model_2023")
-                               else "6.2.3(7), Formula (6.18)"
-                           ),
-                           cot_limit_lo=lo, cot_limit_hi=hi,
-                           angle_limits=angle_limits,
-                           model_2023=link_ctx.get("model_2023", False),
-                           z_source=link_ctx["z_src"],
-                           z_component=link_ctx["z_component"],
-                           z_source_angle_deg=link_ctx["z_source_angle_deg"],
-                           z_source_case=link_ctx["z_source_case"],
-                           z_source_axial_kn=link_ctx["z_source_axial_kn"],
-                           assessment_reason=(
-                               link_ctx["z_src"]
-                               if link_ctx.get("z_mm") is None
-                               else lk.get("reason")
-                           ),
-                           out_of_limits=links_out_of_limits,
-                           required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
-                           chord_off=ochk,
-                           chord_candidates=required_chords,
-                           governing_longitudinal=governing_longitudinal,
-                           longitudinal_fallback=longitudinal_fallback,
-                           longitudinal_all_conditional=(
-                               bool(required_chords)
-                               and longitudinal_fallback is None
-                           ),
-                           theta_mode=(theta_mode_str if shear_live
-                                       else "resistance"),
-                           member_angle_selection=member_angle_selection))
+                links=links_payload,
+                resistance_status=link_resistance_status,
+                assessment_status=shear_assessment_status,
+                assessment_ok=(
+                    True
+                    if shear_assessment_status == "PASS"
+                    else False
+                    if shear_assessment_status == "FAIL"
+                    else None
+                ),
+            )
 
         # ---- checks that pair shear and torsion, at the member angle ----
         if tors_ctx is not None:
@@ -10429,11 +10523,22 @@ def _directional_shear_status(inp, shear_out):
         if links is None or not (links.get("res") or {}).get("valid"):
             return "NOT ASSESSED"
         util = links.get("util")
+        chord_assessment = links.get("longitudinal_assessment")
     else:
         util = shear_out.get("util")
+        chord_assessment = None
     if util is None or not math.isfinite(float(util)):
         return "INVALID"
-    return "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
+    retained_status = str(shear_out.get("assessment_status") or "").upper()
+    if retained_status in {"PASS", "FAIL", "NOT ASSESSED"}:
+        return retained_status
+    resistance_status = "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
+    if isinstance(chord_assessment, dict):
+        return capacity.aggregate_assessment_status((
+            resistance_status,
+            chord_assessment.get("status", "NOT ASSESSED"),
+        ))
+    return resistance_status
 
 
 def _shear_candidate_assessment(inp, candidate_out):
@@ -10443,7 +10548,8 @@ def _shear_candidate_assessment(inp, candidate_out):
     links = shear_out.get("links") or {}
     # VRd,c remains useful context when links are present, but it is no longer the
     # acceptance resistance. Rank faces/components by the same applicable metric
-    # used by _directional_shear_status so presentation and verdicts cannot diverge.
+    # used by the shear-resistance row. The assessment status separately carries
+    # any required longitudinal-chord failure or incomplete coverage.
     metric = float(
         (
             links.get("util")
@@ -13745,6 +13851,30 @@ def shear_view(inp, results):
                   help=f"governed by {lk['governs']}")
         ul_txt = _pct(util_l)
         _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l)
+        chord_assessment = links.get("longitudinal_assessment")
+        if isinstance(chord_assessment, dict):
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            chord_note = presentation.result_reason(
+                chord_assessment.get("reason"),
+                "shear",
+                context="shear longitudinal chord assessment",
+            )
+            if chord_status == "FAIL":
+                _manual_warning(
+                    st,
+                    "calculation-warning",
+                    "Overall reinforced shear assessment: FAIL. " + chord_note + ".",
+                )
+            elif chord_status == "NOT ASSESSED":
+                _manual_warning(
+                    st,
+                    "calculation-warning",
+                    "Overall reinforced shear assessment: NOT ASSESSED. "
+                    + chord_note
+                    + ".",
+                )
         if links.get("model_2023"):
             st.dataframe(
                 {
@@ -13822,9 +13952,9 @@ def shear_view(inp, results):
                 r"$\sigma_{cd}=\tau_{Ed}(\cot\theta+\tan\theta)"
                 r"\leq\nu f_{cd}$ (8.44), with $\nu=0.5$. "
                 + theta_txt
-                + r" $N_{Vd}=|V_{Ed}|\cot\theta$ (8.50) is added to the "
-                "longitudinal tension chord without the support-specific (8.53) "
-                "relief."
+                + r" $N_{Vd}=|V_{Ed}|\cot\theta$ (8.50) is applied to both "
+                "flexural chords using Formulae (8.51) and (8.52), without the "
+                "support-specific (8.53) relief."
             )
         else:
             st.caption(
@@ -13846,10 +13976,21 @@ def shear_view(inp, results):
                 ch.get("tension_low", True), ch.get("axis")
             )
             gets_shift = ch.get("gets_shift", True)
-            face_desc = (f"the shear tension face ({face_lbl})" if gets_shift else
-                         f"the shear COMPRESSION face ({face_lbl}) -- the torsion "
-                         "tension governs here, with no shear shift and the bending "
-                         "relieving rather than adding")
+            if links.get("model_2023"):
+                face_desc = (
+                    f"the flexural tension chord ({face_lbl}), Formula (8.51)"
+                    if ch.get("chord_role") == "flexural_tension"
+                    else f"the flexural compression chord ({face_lbl}), Formula "
+                         "(8.52); bending compression relieves the shear-induced "
+                         "tension before any reversal is checked"
+                )
+            else:
+                face_desc = (
+                    f"the shear tension face ({face_lbl})"
+                    if gets_shift
+                    else f"the shear compression face ({face_lbl}); torsion tension "
+                         "governs here, with no shear shift and bending relief"
+                )
             g1, g2, g3 = st.columns(3)
             g1.metric(fr"$M_{{Ed}}$ (about {ch['axis']})", f"{ch['m_ed']:.1f} kNm")
             g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{ch['m_total']:.1f} kNm",
@@ -13858,25 +13999,17 @@ def shear_view(inp, results):
             coverage = ch.get("off_not_evaluated")
             fallback = presentation.required_chord_fallback(links)
             fell_back = fallback is not None
-            if coverage:
+            assessment_status = str(
+                (chord_assessment or {}).get("status") or ""
+            ).upper()
+            assessment_complete = assessment_status in {"PASS", "FAIL"}
+            if not assessment_complete:
                 g3.metric(
                     r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
                     _pct(ch["util"]),
                     help=(
                         "NOT ASSESSED: longitudinal chord coverage is incomplete; "
                         "see the warning below."
-                    ),
-                )
-            elif fell_back:
-                g3.metric(
-                    r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-                    _pct(ch["util"]),
-                    help=(
-                        "NOT ASSESSED: the displayed capacity is a pure-axis "
-                        "substitute; see the warning below."
-                        if not ch.get("conditional", True)
-                        else "NOT ASSESSED: another required chord face uses a "
-                             "pure-axis substitute; see the warning below."
                     ),
                 )
             else:
@@ -13894,17 +14027,63 @@ def shear_view(inp, results):
                 r"N_{Vd}\,z" if links.get("model_2023")
                 else r"\Delta F_{td}\,z"
             )
-            st.caption(
-                f"Governing chord: {face_desc}. "
-                rf"$M_{{Ed,total}}$ includes {shear_term} and half the perimeter "
-                r"torsion share: "
-                f"{ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
-                f"{ch['m_total']:.1f} kNm versus $M_{{Rd}} = "
-                f"{ch['m_rd']:.1f}$ kNm "
-                + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
-                                      ch.get("conditional", True))
-                + f"; $z = {ch['z']:.3f}$ m." + obj_note
-            )
+            if links.get("model_2023"):
+                st.caption(
+                    f"Governing chord: {face_desc}. The signed face bending term "
+                    rf"is {ch.get('face_m_ed_signed', 0.0):.1f} kNm; "
+                    rf"$M_{{Ed,total}}=\max(M_{{face}}+N_{{Vd}}z,0)"
+                    rf"+F_{{td,T}}z/2=\max({ch.get('face_m_ed_signed', 0.0):.1f}"
+                    rf"+{ch['mv']:.1f},0)+{ch['mt']:.1f}="
+                    f"{ch['m_total']:.1f} kNm versus $M_{{Rd}} = "
+                    f"{ch['m_rd']:.1f}$ kNm "
+                    + viz.chord_mrd_label(
+                        ch["axis"], ch.get("m_off", 0.0),
+                        ch.get("conditional", True)
+                    )
+                    + f"; $z = {ch['z']:.3f}$ m. "
+                    + "The acting axial force is included in that conditional "
+                      "bending resistance."
+                    + obj_note
+                )
+                chord_rows = []
+                for candidate in links.get("chord_candidates") or ():
+                    if candidate.get("role") != "shear_axis":
+                        continue
+                    candidate_face = viz.tension_face_label(
+                        candidate.get("tension_low", True), candidate.get("axis")
+                    )
+                    chord_rows.append({
+                        "Face": candidate_face,
+                        "Chord": (
+                            "Flexural tension"
+                            if candidate.get("chord_role") == "flexural_tension"
+                            else "Flexural compression"
+                        ),
+                        "Formula": f"({candidate.get('chord_formula', '-')})",
+                        "Signed Mface": (
+                            f"{candidate.get('face_m_ed_signed', 0.0):.1f} kNm"
+                        ),
+                        "NVd z": f"{candidate.get('mv', 0.0):.1f} kNm",
+                        "MEd,total": f"{candidate.get('m_total', 0.0):.1f} kNm",
+                        "MRd": f"{candidate.get('m_rd', 0.0):.1f} kNm",
+                        "Utilisation": _pct(candidate.get("util")),
+                        "Status": candidate.get("status", "NOT ASSESSED"),
+                    })
+                if chord_rows:
+                    st.markdown("**Required 2023 longitudinal chord faces**")
+                    st.dataframe(chord_rows, hide_index=True, width="stretch")
+            else:
+                st.caption(
+                    f"Governing chord: {face_desc}. "
+                    rf"$M_{{Ed,total}}$ includes {shear_term} and half the perimeter "
+                    r"torsion share: "
+                    f"{ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
+                    f"{ch['m_total']:.1f} kNm versus $M_{{Rd}} = "
+                    f"{ch['m_rd']:.1f}$ kNm "
+                    + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
+                                          ch.get("conditional", True))
+                    + f"; $z = {ch['z']:.3f}$ m." + obj_note
+                )
             if ch.get("capped"):
                 st.caption(
                     "Shear shift is capped at section MRd under 6.2.3(7); the "
@@ -13941,7 +14120,7 @@ def shear_view(inp, results):
                            "utilisation already covers.")
             _render_chord_off(
                 links.get("chord_off"),
-                assessment_complete=not bool(coverage) and not fell_back,
+                assessment_complete=assessment_complete,
             )
         st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                          links["dia"], links["s"]), width="stretch")
@@ -14695,6 +14874,9 @@ def combined_view(inp, results):
     torsion_assessment_note = (
         presentation.combined_torsion_assessment_note(c)
     )
+    chord_assessment_note = (
+        presentation.combined_longitudinal_chord_assessment_note(c)
+    )
     dkna_failed = bool(
         c.get("dkna_valid")
         and presentation.combined_dkna_limit_satisfied(c) is False
@@ -14723,6 +14905,12 @@ def combined_view(inp, results):
                 "calculation-warning",
                 torsion_assessment_note,
             )
+        if chord_assessment_note:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                chord_assessment_note,
+            )
     elif not c.get("dkna_valid"):
         d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", "-")
         d1.caption("NOT ASSESSED")
@@ -14741,6 +14929,12 @@ def combined_view(inp, results):
                 st,
                 "calculation-warning",
                 torsion_assessment_note,
+            )
+        if chord_assessment_note:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                chord_assessment_note,
             )
     elif torsion_assessment_note:
         d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", _pct(c.get("dkna_sum")))
@@ -14771,6 +14965,34 @@ def combined_view(inp, results):
             st,
             "calculation-warning",
             torsion_assessment_note,
+        )
+        if chord_assessment_note:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                chord_assessment_note,
+            )
+    elif chord_assessment_note:
+        d1.metric(r"$\sum(S_{Ed}/S_{Rd})$", _pct(c.get("dkna_sum")))
+        dkna_component_status = str(
+            c.get("dkna_status") or "NOT ASSESSED"
+        )
+        d1.caption(f"{dkna_component_status} numerical component")
+        d2.caption(
+            "The DK NA action-alone sum is retained as numerical component "
+            "evidence. It is not an overall M-V-T verdict while the required "
+            "longitudinal chord assessment governs."
+        )
+        if c.get("m_v_independent"):
+            _manual_warning(
+                st,
+                "calculation-warning",
+                presentation.combined_dkna_assumption_note(c),
+            )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            chord_assessment_note,
         )
     elif c["m_v_independent"]:
         dkna_status = presentation.combined_dkna_status(c)

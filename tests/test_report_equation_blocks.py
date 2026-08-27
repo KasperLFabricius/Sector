@@ -174,8 +174,8 @@ def test_every_contract_identity_passes_semantic_vector_and_raster_qa():
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     page_texts = [page.extract_text() or "" for page in reader.pages]
 
-    assert len(equations) == 144
-    assert sum(text.count("Mathematical expression:") for text in page_texts) == 416
+    assert len(equations) == 145
+    assert sum(text.count("Mathematical expression:") for text in page_texts) == 419
     for equation in equations:
         math = _math_flowable(equation)
         identity_pages = [

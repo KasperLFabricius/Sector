@@ -209,6 +209,22 @@ _SHEAR_REASON_MESSAGES = {
         "SHEAR-LINK-DEGENERATE",
         "The face-aligned tension-compression resultant arm is zero or degenerate, so the link lever arm is unavailable",
     ),
+    "required_longitudinal_chord_failed": EngineerMessage(
+        "SHEAR-LONGITUDINAL-CHORD-FAIL",
+        "One or more required longitudinal chords exceed the calculated conditional bending resistance",
+    ),
+    "required_longitudinal_chord_coverage_incomplete": EngineerMessage(
+        "SHEAR-LONGITUDINAL-CHORD-COVERAGE",
+        "Complete both required longitudinal chord checks before relying on the shear assessment",
+    ),
+    "required_longitudinal_chords_satisfied": EngineerMessage(
+        "SHEAR-LONGITUDINAL-CHORD-PASS",
+        "The required longitudinal chords are within the calculated conditional bending resistances",
+    ),
+    "no_longitudinal_chord_action": EngineerMessage(
+        "SHEAR-LONGITUDINAL-CHORD-NO-ACTION",
+        "No longitudinal chord action requires assessment",
+    ),
 }
 _TORSION_REASON_MESSAGES = {
     "stirrups (TRd,s)": EngineerMessage(
@@ -586,7 +602,15 @@ def combined_dkna_status(result):
     torsion_status = str(
         result.get("torsion_assessment_status") or ""
     ).upper()
+    chord_assessment = result.get("longitudinal_assessment")
+    chord_status = (
+        str(chord_assessment.get("status") or "").upper()
+        if isinstance(chord_assessment, Mapping)
+        else ""
+    )
     if torsion_status == "FAIL":
+        return "FAIL"
+    if chord_status == "FAIL":
         return "FAIL"
     valid = result.get("valid") is True
     dkna_valid = result.get("dkna_valid", valid) is True
@@ -598,6 +622,8 @@ def combined_dkna_status(result):
     if not satisfied:
         return "FAIL"
     if torsion_status and torsion_status != "PASS":
+        return "NOT ASSESSED"
+    if chord_status and chord_status != "PASS":
         return "NOT ASSESSED"
     if result.get("m_v_independent") is True:
         return "CONDITIONAL"
@@ -635,6 +661,47 @@ def combined_torsion_governing_note(result):
         )
     return (
         torsion_note
+        + " The DK NA action-alone sum remains numerical component evidence; "
+          "it is not an overall M-V-T verdict."
+    )
+
+
+def combined_longitudinal_chord_assessment_note(result):
+    """Explain a required longitudinal-chord state governing M-V-T."""
+
+    assessment = (result or {}).get("longitudinal_assessment")
+    if not isinstance(assessment, Mapping):
+        return ""
+    status = str(assessment.get("status") or "").upper()
+    if status not in {"FAIL", "NOT ASSESSED"}:
+        return ""
+    reason = result_reason(
+        assessment.get("reason")
+        or "required_longitudinal_chord_coverage_incomplete",
+        "shear",
+        context="combined longitudinal chord prerequisite reason",
+    )
+    return f"{status}: {reason}."
+
+
+def combined_governing_assessment_note(result):
+    """Explain every physical prerequisite that governs the M-V-T status."""
+
+    torsion_note = combined_torsion_assessment_note(result)
+    chord_note = combined_longitudinal_chord_assessment_note(result)
+    if torsion_note and not chord_note:
+        return combined_torsion_governing_note(result)
+    notes = " ".join(filter(None, (torsion_note, chord_note)))
+    if not notes:
+        return ""
+    if combined_dkna_limit_satisfied(result) is False:
+        return (
+            "FAIL: The DK NA action-alone sum exceeds its numerical limit; "
+            "this definite combined failure governs. "
+            + notes
+        )
+    return (
+        notes
         + " The DK NA action-alone sum remains numerical component evidence; "
           "it is not an overall M-V-T verdict."
     )
@@ -1672,6 +1739,34 @@ def combined_physical_components(combined):
         "governing": governing,
         "coverage": coverage,
     }
+    retained_chord_assessment = combined.get("longitudinal_assessment")
+    retained_chord_note = None
+    if isinstance(retained_chord_assessment, Mapping):
+        retained_status = str(
+            retained_chord_assessment.get("status") or "NOT ASSESSED"
+        ).upper()
+        retained_util = _publication_metric(
+            retained_chord_assessment.get("util"),
+            allow_positive_infinity=True,
+        )
+        retained_chord_note = result_reason(
+            retained_chord_assessment.get("reason"),
+            "shear",
+            context="combined longitudinal chord assessment",
+        )
+        longitudinal_component.update(
+            status=retained_status,
+            util=retained_util,
+            valid=retained_status in {"PASS", "FAIL"},
+            note=retained_chord_note,
+            governing=retained_chord_assessment.get("governing"),
+            coverage=(
+                None
+                if retained_chord_assessment.get("coverage_complete") is True
+                else "incomplete"
+            ),
+        )
+        long_status = retained_status
     torsion_longitudinal = combined.get("torsion_longitudinal_assessment")
     if isinstance(torsion_longitudinal, Mapping):
         torsion_status = str(
@@ -1709,10 +1804,14 @@ def combined_physical_components(combined):
             "torsion",
             context="combined longitudinal torsion assessment reason",
         )
-        if long_status == "FAIL" and torsion_status != "FAIL":
+        if retained_chord_note and long_status != "PASS":
             longitudinal_component["note"] = (
-                long_note + "; " + torsion_note
+                retained_chord_note
+                if torsion_status == "PASS"
+                else retained_chord_note + "; " + torsion_note
             )
+        elif long_status == "FAIL" and torsion_status != "FAIL":
+            longitudinal_component["note"] = long_note + "; " + torsion_note
         else:
             longitudinal_component["note"] = torsion_note
         longitudinal_component["torsion_assessment"] = torsion_longitudinal
@@ -2262,33 +2361,77 @@ def result_summary_rows(inp, results, *, stale=False):
             else:
                 link_result = links.get("res") or {}
                 calculation_state = link_result.get("calculation_state")
+                link_status = (
+                    str(calculation_state)
+                    if calculation_state
+                    else _util_summary_status(
+                        links.get("util"),
+                        valid=bool(link_result.get("valid")),
+                    )
+                )
+                link_util = links.get("util")
+                overall_status = link_status
+                overall_util = link_util
+                overall_note = result_reason(
+                    links.get("assessment_reason")
+                    or link_result.get("reason")
+                    or link_result.get("governs")
+                    or "the calculated face-aligned arm is unavailable",
+                    "shear",
+                    context="shear summary link reason",
+                )
+                chord_assessment = links.get("longitudinal_assessment")
+                if isinstance(chord_assessment, dict):
+                    chord_status = str(
+                        chord_assessment.get("status") or "NOT ASSESSED"
+                    ).upper()
+                    chord_util = chord_assessment.get("util")
+                    overall_status = overall_summary_status((
+                        {"status": link_status},
+                        {"status": chord_status},
+                    ))
+                    if chord_util is not None and (
+                        overall_util is None
+                        or float(chord_util) >= float(overall_util)
+                    ):
+                        overall_util = chord_util
+                    if chord_status != "PASS":
+                        overall_note = result_reason(
+                            chord_assessment.get("reason"),
+                            "shear",
+                            context="overall reinforced shear assessment",
+                        )
                 rows.append(_summary_row(
                     f"Shear{suffix} with links",
                     "plastic",
-                    (
-                        str(calculation_state)
-                        if calculation_state
-                        else _util_summary_status(
-                            links.get("util"),
-                            valid=bool(link_result.get("valid")),
-                        )
-                    ),
-                    _percent(links.get("util")),
+                    overall_status,
+                    _percent(overall_util),
                     "<= 100 %",
-                    links.get("util"),
+                    overall_util,
                     "Shear",
-                    result_reason(
-                        links.get("assessment_reason")
-                        or link_result.get("reason")
-                        or link_result.get("governs")
-                        or "the calculated face-aligned arm is unavailable",
-                        "shear",
-                        context="shear summary link reason",
-                    ),
+                    overall_note,
                     inp,
                     overview_key="shear:with_links",
                     overview_parent="shear",
                 ))
+                if isinstance(chord_assessment, dict):
+                    rows.append(_summary_row(
+                        f"Shear{suffix} longitudinal chords",
+                        "plastic",
+                        chord_status,
+                        _percent(chord_util),
+                        "<= 100 %",
+                        chord_util,
+                        "Shear",
+                        result_reason(
+                            chord_assessment.get("reason"),
+                            "shear",
+                            context="shear longitudinal chord assessment",
+                        ),
+                        inp,
+                        overview_key="shear:longitudinal_chords",
+                        overview_parent="shear",
+                    ))
 
         directions = shear.get("directions") or {}
         if directions:
@@ -2569,9 +2712,9 @@ def result_summary_rows(inp, results, *, stale=False):
                 label = "Vx+T" if component == "vx" else "Vy+T"
                 util = direction.get("dkna_sum")
                 status = combined_dkna_status(direction)
-                torsion_note = combined_torsion_governing_note(direction)
-                if torsion_note:
-                    direction_note = torsion_note
+                governing_note = combined_governing_assessment_note(direction)
+                if governing_note:
+                    direction_note = governing_note
                 elif status == "NOT ASSESSED":
                     direction_note = (
                         "DK NA screen: "
@@ -2704,9 +2847,9 @@ def result_summary_rows(inp, results, *, stale=False):
                 )
             )
         combined_status = combined_dkna_status(combined)
-        torsion_note = combined_torsion_governing_note(combined)
-        if torsion_note:
-            combined_note = torsion_note
+        governing_note = combined_governing_assessment_note(combined)
+        if governing_note:
+            combined_note = governing_note
         rows.append(_summary_row(
             "Combined M-V-T - DK NA sum",
             "plastic",

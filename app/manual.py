@@ -2001,7 +2001,21 @@ def manual_blocks() -> list:
        "where $\\rho_w=A_{sw}/(b_ws)$ and $\\nu=0.5$. Sector reports both stresses "
        "and the equivalent $V_{Rd,s}$ / $V_{Rd,max}$ resistances. The longitudinal "
        "addition is $N_{Vd}=|V_{Ed}|\\cot\\theta$ (8.50), applied without the "
-       "support/load-specific relief in (8.53).")
+       "support/load-specific relief in (8.53). It is applied to both flexural "
+       "chords: $F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2$ (8.51) and "
+       "$F_{cd}=M_{Ed}/z-N_{Vd}+N_{Ed}/2$ (8.52). "
+       "Positive $F_{cd}$ is compression; if Formula (8.52) becomes negative, "
+       "the flexural compression chord is instead in tension. Sector checks both "
+       "physical faces with their correct bending signs against face-specific "
+       "bending capacities conditional on the acting axial force and orthogonal "
+       "moment. Because the axial action is already included in those capacities, "
+       "it is not added a second time to the equivalent-moment comparison.")
+    md("**2023 chord example:** $M_{Ed}=90$ kNm, $M_{Rd}=100$ kNm, "
+       "$N_{Vd}=250$ kN and $z=0.5$ m give "
+       "$M_{Ed,total}=90+250\\cdot0.5=215$ kNm and utilisation "
+       "$215/100=2.15$: **FAIL**. The opposite chord is assessed separately with "
+       "Formula (8.52); unavailable face-specific resistance leaves the complete "
+       "longitudinal chord assessment not assessed, never passed.")
     call("concept", "For reinforced-shear checks, Sector calculates the internal "
          "lever arm $z$ at the exact face-aligned Plastic state and action-set axial "
          "force. The compression and tension resultants each include the sign-split "

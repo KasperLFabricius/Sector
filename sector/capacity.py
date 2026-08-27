@@ -351,6 +351,9 @@ def combined_longitudinal_chord_evidence_is_valid(
         return False
     if not isinstance(links, Mapping):
         return False
+    model_2023 = links.get("model_2023", False)
+    if type(model_2023) is not bool:
+        return False
 
     candidates = links.get("chord_candidates", _MISSING)
     if not isinstance(candidates, (list, tuple)) or not candidates:
@@ -404,11 +407,51 @@ def combined_longitudinal_chord_evidence_is_valid(
                 or type(candidate.get("gets_shift", _MISSING)) is not bool
             ):
                 return False
+            if model_2023 and (
+                candidate.get("chord_role")
+                not in {"flexural_tension", "flexural_compression"}
+                or candidate.get("chord_formula") not in {"8.51", "8.52"}
+                or type(candidate.get("flexural_tension_low", _MISSING))
+                is not bool
+                or (
+                    candidate.get("chord_role") == "flexural_tension"
+                )
+                is not (
+                    tension_low is candidate.get("flexural_tension_low")
+                )
+                or (
+                    candidate.get("chord_role") == "flexural_tension"
+                    and candidate.get("chord_formula") != "8.51"
+                )
+                or (
+                    candidate.get("chord_role") == "flexural_compression"
+                    and candidate.get("chord_formula") != "8.52"
+                )
+            ):
+                return False
             shear_candidates.append(candidate)
         else:
             off_candidates.append(candidate)
 
     if not torsion_live:
+        if model_2023:
+            return bool(
+                shear_live
+                and len(candidates) == 2
+                and len(shear_candidates) == 2
+                and not off_candidates
+                and {item["axis"] for item in shear_candidates} == {shear_axis}
+                and {item["tension_low"] for item in shear_candidates}
+                == {True, False}
+                and all(item["gets_shift"] is True for item in shear_candidates)
+                and {item["chord_role"] for item in shear_candidates}
+                == {"flexural_tension", "flexural_compression"}
+                and {item["chord_formula"] for item in shear_candidates}
+                == {"8.51", "8.52"}
+                and len({
+                    item["flexural_tension_low"] for item in shear_candidates
+                }) == 1
+            )
         return bool(
             shear_live
             and len(candidates) == 1
@@ -419,24 +462,134 @@ def combined_longitudinal_chord_evidence_is_valid(
             and shear_candidates[0]["gets_shift"] is True
         )
 
-    shifted_candidates = [
-        item for item in shear_candidates if item["gets_shift"] is True
-    ]
+    shifted_candidates = [item for item in shear_candidates if item["gets_shift"]]
     if (
         len(candidates) != 4
         or len(shear_candidates) != 2
         or len(off_candidates) != 2
-        or len(shifted_candidates) != 1
+        or len(shifted_candidates) != (2 if model_2023 else 1)
     ):
         return False
     off_axis = "y" if shear_axis == "x" else "x"
     return bool(
         {item["axis"] for item in shear_candidates} == {shear_axis}
         and {item["axis"] for item in off_candidates} == {off_axis}
-        and shifted_candidates[0]["tension_low"] is shear_tension_low
+        and (
+            model_2023
+            or shifted_candidates[0]["tension_low"] is shear_tension_low
+        )
         and {item["tension_low"] for item in shear_candidates} == {True, False}
         and {item["tension_low"] for item in off_candidates} == {True, False}
+        and (
+            not model_2023
+            or {item["chord_role"] for item in shear_candidates}
+            == {"flexural_tension", "flexural_compression"}
+        )
+        and (
+            not model_2023
+            or {item["chord_formula"] for item in shear_candidates}
+            == {"8.51", "8.52"}
+        )
+        and (
+            not model_2023
+            or len({
+                item["flexural_tension_low"] for item in shear_candidates
+            }) == 1
+        )
     )
+
+
+def longitudinal_chord_assessment(
+    links: object,
+    *,
+    shear_axis: str,
+    shear_tension_low: bool,
+    shear_live: bool,
+    torsion_live: bool,
+    torsion_subdivided: bool,
+) -> dict[str, Any]:
+    """Return one conservative status for every required chord face.
+
+    A valid failed conditional face is a definite failure even if another required
+    face is unavailable. Otherwise incomplete or substitute-only coverage remains
+    not assessed. This retained object is shared by the standalone shear and M-V-T
+    publication paths so they cannot assign different verdicts to the same chords.
+    """
+
+    if not shear_live and not torsion_live:
+        return {
+            "status": "NOT APPLICABLE",
+            "ok": None,
+            "util": None,
+            "reason": "no_longitudinal_chord_action",
+            "coverage_complete": True,
+            "governing": None,
+        }
+
+    candidates = (
+        links.get("chord_candidates")
+        if isinstance(links, Mapping)
+        else None
+    )
+    retained: list[tuple[float, Mapping[str, Any]]] = []
+    if isinstance(candidates, (list, tuple)):
+        for candidate in candidates:
+            if (
+                not isinstance(candidate, Mapping)
+                or candidate.get("valid") is not True
+                or candidate.get("conditional") is not True
+            ):
+                continue
+            utilisation = candidate.get("util")
+            if _is_boolean_scalar(utilisation) or isinstance(
+                utilisation, (str, bytes)
+            ):
+                continue
+            try:
+                value = float(utilisation)
+            except (OverflowError, TypeError, ValueError):
+                continue
+            if math.isnan(value) or value < 0.0:
+                continue
+            retained.append((value, candidate))
+
+    governing_pair = max(retained, key=lambda item: item[0]) if retained else None
+    governing = governing_pair[1] if governing_pair is not None else None
+    utilisation = governing_pair[0] if governing_pair is not None else None
+    complete = combined_longitudinal_chord_evidence_is_valid(
+        links,
+        shear_axis=shear_axis,
+        shear_tension_low=shear_tension_low,
+        shear_live=shear_live,
+        torsion_live=torsion_live,
+        torsion_subdivided=torsion_subdivided,
+    )
+    if any(value > 1.0 + 1.0e-9 for value, _candidate in retained):
+        return {
+            "status": "FAIL",
+            "ok": False,
+            "util": utilisation,
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": complete,
+            "governing": governing,
+        }
+    if not complete:
+        return {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": utilisation,
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": governing,
+        }
+    return {
+        "status": "PASS",
+        "ok": True,
+        "util": utilisation,
+        "reason": "required_longitudinal_chords_satisfied",
+        "coverage_complete": True,
+        "governing": governing,
+    }
 
 
 def _rings_are_equivalent(left: object, right: object) -> bool:
@@ -2186,6 +2339,11 @@ def finalize_combined(inp, out):
     links_valid = bool(
         links is not None and (links.get("res") or {}).get("valid")
     )
+    chord_assessment = (
+        links.get("longitudinal_assessment")
+        if isinstance(links, Mapping)
+        else None
+    )
     have_v = concrete_shear_valid and (
         not links_selected or links_valid
     )
@@ -2241,6 +2399,14 @@ def finalize_combined(inp, out):
         torsion_out.get("out_of_limits")
         or (links is not None and links.get("out_of_limits"))
     )
+    combined_statuses = [
+        torsion_assessment_status or "NOT ASSESSED",
+        dk_selection.status,
+    ]
+    if isinstance(chord_assessment, Mapping):
+        combined_statuses.append(
+            str(chord_assessment.get("status") or "NOT ASSESSED").upper()
+        )
     payload = {
         "valid": True,
         "method": inp["combined_method"],
@@ -2258,10 +2424,7 @@ def finalize_combined(inp, out):
         "dkna_limit_satisfied": dk_selection.limit_satisfied,
         "dkna_status": dk_selection.status,
         "dkna_ok": dk_selection.ok,
-        "assessment_status": aggregate_assessment_status((
-            torsion_assessment_status or "NOT ASSESSED",
-            dk_selection.status,
-        )),
+        "assessment_status": aggregate_assessment_status(combined_statuses),
         "torsion_assessment_status": (
             torsion_assessment_status or "NOT ASSESSED"
         ),
@@ -2300,6 +2463,7 @@ def finalize_combined(inp, out):
             "governing_longitudinal",
             "longitudinal_fallback",
             "longitudinal_all_conditional",
+            "longitudinal_assessment",
         ):
             if retained_key in links:
                 payload[retained_key] = links[retained_key]

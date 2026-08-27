@@ -502,6 +502,20 @@ def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     assert "per action" not in text                       # stale pre-v0.69 wording
 
 
+def test_manual_documents_both_2023_chords_and_the_exact_failed_fixture():
+    text = "\n".join(
+        block[1] for block in manual.manual_blocks() if block[0] == "md"
+    )
+
+    assert r"N_{Vd}=|V_{Ed}|\cot\theta" in text
+    assert r"F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2" in text
+    assert r"F_{cd}=M_{Ed}/z-N_{Vd}+N_{Ed}/2" in text
+    assert "checks both physical faces with their correct bending signs" in text
+    assert r"M_{Ed,total}=90+250\cdot0.5=215" in text
+    assert "$215/100=2.15$: **FAIL**" in text
+    assert "not assessed, never passed" in text
+
+
 def test_manual_describes_solvers_without_assigning_limit_states():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "Record the project limit-state classification" in text

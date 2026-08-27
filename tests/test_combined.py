@@ -575,6 +575,134 @@ def test_longitudinal_check_2023_shear_force_is_not_peak_moment_capped():
     assert r["util"] == pytest.approx(200.0 / 120.0)
 
 
+def test_longitudinal_chord_2023_exact_two_face_review_fixture():
+    tension = combined.longitudinal_chord_check_2023(
+        90.0,
+        100.0,
+        250.0,
+        0.0,
+        0.5,
+        tension_low=True,
+        flexural_tension_low=True,
+    )
+    assert tension["chord_formula"] == "8.51"
+    assert tension["chord_role"] == "flexural_tension"
+    assert tension["face_m_ed_signed"] == pytest.approx(90.0)
+    assert tension["mv"] == pytest.approx(125.0)
+    assert tension["m_total"] == pytest.approx(215.0)
+    assert tension["util"] == pytest.approx(2.15)
+    assert tension["status"] == "FAIL"
+    assert tension["chord_force_kn"] == pytest.approx(430.0)
+
+    compression = combined.longitudinal_chord_check_2023(
+        90.0,
+        100.0,
+        250.0,
+        0.0,
+        0.5,
+        tension_low=False,
+        flexural_tension_low=True,
+    )
+    assert compression["chord_formula"] == "8.52"
+    assert compression["chord_role"] == "flexural_compression"
+    assert compression["face_m_ed_signed"] == pytest.approx(-90.0)
+    assert compression["mv"] == pytest.approx(125.0)
+    assert compression["m_total"] == pytest.approx(35.0)
+    assert compression["util"] == pytest.approx(0.35)
+    assert compression["chord_force_kn"] == pytest.approx(-70.0)
+    assert compression["chord_force_sign"] == "tension"
+
+
+@pytest.mark.parametrize(
+    ("moment", "flexural_tension_low"),
+    ((90.0, True), (-90.0, False)),
+)
+def test_longitudinal_chord_2023_signed_moment_swaps_physical_faces(
+    moment,
+    flexural_tension_low,
+):
+    faces = {
+        tension_low: combined.longitudinal_chord_check_2023(
+            moment,
+            100.0,
+            250.0,
+            0.0,
+            0.5,
+            tension_low=tension_low,
+            flexural_tension_low=flexural_tension_low,
+        )
+        for tension_low in (True, False)
+    }
+    assert faces[flexural_tension_low]["m_total"] == pytest.approx(215.0)
+    assert faces[flexural_tension_low]["chord_formula"] == "8.51"
+    assert faces[not flexural_tension_low]["m_total"] == pytest.approx(35.0)
+    assert faces[not flexural_tension_low]["chord_formula"] == "8.52"
+
+
+def test_longitudinal_chord_2023_retains_axial_operand_without_double_counting():
+    compression = combined.longitudinal_chord_check_2023(
+        90.0,
+        100.0,
+        250.0,
+        0.0,
+        0.5,
+        tension_low=False,
+        flexural_tension_low=True,
+        n_ed=-60.0,
+    )
+    tension = combined.longitudinal_chord_check_2023(
+        90.0,
+        100.0,
+        250.0,
+        0.0,
+        0.5,
+        tension_low=False,
+        flexural_tension_low=True,
+        n_ed=60.0,
+    )
+    assert compression["n_ed"] == pytest.approx(-60.0)
+    assert tension["n_ed"] == pytest.approx(60.0)
+    assert compression["chord_force_kn"] == pytest.approx(-100.0)
+    assert tension["chord_force_kn"] == pytest.approx(-40.0)
+    assert compression["m_total"] == pytest.approx(tension["m_total"])
+    assert compression["util"] == pytest.approx(tension["util"])
+    assert compression["axial_force_conditioned_in_m_rd"] is True
+    reversed_tension_chord = combined.longitudinal_chord_check_2023(
+        10.0,
+        100.0,
+        5.0,
+        0.0,
+        0.5,
+        tension_low=True,
+        flexural_tension_low=True,
+        n_ed=-100.0,
+    )
+    assert reversed_tension_chord["chord_formula"] == "8.51"
+    assert reversed_tension_chord["chord_force_kn"] == pytest.approx(-25.0)
+    assert reversed_tension_chord["chord_force_sign"] == "compression"
+
+
+@pytest.mark.parametrize(
+    ("args", "kwargs"),
+    (
+        ((math.nan, 100.0, 250.0, 0.0, 0.5), {}),
+        ((90.0, math.inf, 250.0, 0.0, 0.5), {}),
+        ((90.0, 100.0, -1.0, 0.0, 0.5), {}),
+        ((90.0, 100.0, 250.0, 0.0, 0.0), {}),
+        ((90.0, 100.0, 250.0, 0.0, 0.5), {"n_ed": True}),
+        (
+            (90.0, 100.0, 250.0, 0.0, 0.5),
+            {"flexural_tension_low": np.bool_(True)},
+        ),
+    ),
+)
+def test_longitudinal_chord_2023_rejects_invalid_operands(args, kwargs):
+    options = {"tension_low": True, "flexural_tension_low": True}
+    options.update(kwargs)
+    with pytest.raises(ValueError, match="finite|positive|non-negative|Boolean"):
+        combined.longitudinal_chord_check_2023(*args, **options)
+
+
 def test_longitudinal_check_torsion_uses_half_lever_and_no_cap():
     # Torsion is not subject to the shear cap and acts on z/2 (distributed steel).
     r = combined.longitudinal_check(50.0, 300.0, 0.0, 80.0, 0.6)
@@ -839,7 +967,9 @@ def test_biaxial_combined_keeps_directional_failure_without_aggregate_verdict():
     assert not at.exception
     results = at.session_state["results"]
     assert all(
-        direction["status"] == "PASS"
+        direction["resistance_status"] == "PASS"
+        and direction["status"] == "FAIL"
+        and direction["links"]["longitudinal_assessment"]["status"] == "FAIL"
         for direction in results["shear"]["directions"].values()
     )
     combined = results["combined"]
@@ -1519,6 +1649,426 @@ def test_app_chord_check_in_shear_payload_without_torsion():
     assert "shear" not in at.session_state["results"]
     _select_view(at, "Shear")
     assert any("Vx,Ed = Vy,Ed = 0" in item.value for item in at.info)
+
+
+@pytest.mark.parametrize(
+    ("moment", "flexural_tension_low"),
+    ((100.0, True), (-100.0, False)),
+)
+def test_app_2023_shear_retains_both_signed_longitudinal_chords(
+    moment,
+    flexural_tension_low,
+):
+    at = _fresh().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "pl_Mx", moment),
+    )
+
+    assert not at.exception
+    links = at.session_state["results"]["shear"]["links"]
+    assert links["model_2023"] is True
+    candidates = [
+        candidate
+        for candidate in links["chord_candidates"]
+        if candidate["role"] == "shear_axis"
+    ]
+    assert len(candidates) == 2
+    assert {candidate["tension_low"] for candidate in candidates} == {True, False}
+    assert {candidate["chord_formula"] for candidate in candidates} == {
+        "8.51",
+        "8.52",
+    }
+    assert all(candidate["gets_shift"] is True for candidate in candidates)
+    assert all(candidate["conditional"] is True for candidate in candidates)
+    by_role = {candidate["chord_role"]: candidate for candidate in candidates}
+    assert by_role["flexural_tension"]["tension_low"] is flexural_tension_low
+    assert by_role["flexural_tension"]["face_m_ed_signed"] > 0.0
+    assert by_role["flexural_compression"]["tension_low"] is not flexural_tension_low
+    assert by_role["flexural_compression"]["face_m_ed_signed"] < 0.0
+    assert links["longitudinal_assessment"]["coverage_complete"] is True
+    assert links["longitudinal_assessment"]["status"] in {"PASS", "FAIL"}
+
+
+def test_app_2023_shear_with_torsion_retains_complete_shifted_chords():
+    at = _fresh().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "pl_Mx", 90.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+
+    assert not at.exception
+    links = at.session_state["results"]["shear"]["links"]
+    shear_faces = [
+        candidate
+        for candidate in links["chord_candidates"]
+        if candidate["role"] == "shear_axis"
+    ]
+    off_axis_faces = [
+        candidate
+        for candidate in links["chord_candidates"]
+        if candidate["role"] == "off_axis"
+    ]
+    assert len(shear_faces) == 2
+    assert len(off_axis_faces) == 2
+    assert {candidate["chord_formula"] for candidate in shear_faces} == {
+        "8.51",
+        "8.52",
+    }
+    assert all(candidate["gets_shift"] is True for candidate in shear_faces)
+    assert all(candidate["ftd_t"] > 0.0 for candidate in shear_faces)
+    assert links["longitudinal_assessment"]["coverage_complete"] is True
+    assert links["longitudinal_assessment"]["status"] in {"PASS", "FAIL"}
+
+
+def _install_exact_2023_chord_review_fixture(monkeypatch):
+    original = combined.longitudinal_chord_check_2023
+
+    def controlled_review_fixture(
+        _m_ed_signed,
+        _m_rd,
+        _n_vd,
+        _ftd_t,
+        _z,
+        *,
+        tension_low,
+        flexural_tension_low,
+        n_ed=0.0,
+    ):
+        return original(
+            90.0,
+            100.0,
+            250.0,
+            0.0,
+            0.5,
+            tension_low=tension_low,
+            flexural_tension_low=flexural_tension_low,
+            n_ed=n_ed,
+        )
+
+    monkeypatch.setattr(
+        combined,
+        "longitudinal_chord_check_2023",
+        controlled_review_fixture,
+    )
+
+
+def _app_with_failed_2023_chord(monkeypatch):
+    _install_exact_2023_chord_review_fixture(monkeypatch)
+    at = _fresh().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "pl_Mx", 90.0),
+    )
+    return at
+
+
+def test_app_2023_failed_required_chord_propagates_to_shear_and_overview(
+    monkeypatch,
+):
+    at = _app_with_failed_2023_chord(monkeypatch)
+
+    assert not at.exception
+    links = at.session_state["results"]["shear"]["links"]
+    assessment = links["longitudinal_assessment"]
+    assert at.session_state["results"]["shear"]["assessment_status"] == "FAIL"
+    assert at.session_state["results"]["shear"]["assessment_ok"] is False
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["coverage_complete"] is True
+    assert assessment["util"] == pytest.approx(2.15)
+    assert assessment["governing"]["m_total"] == pytest.approx(215.0)
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        str(item.value) for item in (*at.warning, *at.caption, *at.markdown)
+    )
+    assert "Overall reinforced shear assessment: FAIL" in visible
+    assert "required longitudinal chords exceed" in visible
+    face_table = next(
+        frame.value
+        for frame in at.dataframe
+        if "Formula" in frame.value.columns
+        and "Signed Mface" in frame.value.columns
+    )
+    assert set(face_table["Formula"]) == {"(8.51)", "(8.52)"}
+    assert set(face_table["Status"]) == {"FAIL", "PASS"}
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Shear longitudinal chords"
+    ].iloc[0]
+    assert row["Status"] == "FAIL"
+    assert row["Result"] == "215.0 %"
+    overall_row = overview.loc[
+        overview["Check"] == "Shear with links"
+    ].iloc[0]
+    assert overall_row["Status"] == "FAIL"
+    assert overall_row["Result"] == "215.0 %"
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_failed_2023_chord_reaches_every_report_profile(monkeypatch, profile):
+    import io
+
+    import pypdf
+
+    import sector_report
+
+    at = _app_with_failed_2023_chord(monkeypatch)
+    assert not at.exception
+    inputs = at.session_state["_latest_inputs"]
+    results = at.session_state["results"]
+    results["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inputs, results)
+    )
+    pdf = sector_report.build_report(
+        {},
+        inputs,
+        results,
+        figures=False,
+        profile=profile,
+    )
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in reader.pages
+    )
+
+    assert "Shear longitudinal chords" in text
+    assert "215.0 %" in text
+    assert "FAIL" in text
+    assert "required longitudinal chords exceed" in text
+    assert "SHEAR-LONGITUDINAL" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Required 2023 longitudinal chord faces" in text
+        assert "(8.51)" in text and "(8.52)" in text
+        assert "215.0 kNm" in text
+
+
+def _app_with_incomplete_2023_chord(monkeypatch):
+    original = capacity.shear_face_mrd
+
+    def one_face_unavailable(inp, axis, tension_low, m_off=0.0):
+        if tension_low is False:
+            return 0.0, False
+        return original(inp, axis, tension_low, m_off=m_off)
+
+    monkeypatch.setattr(capacity, "shear_face_mrd", one_face_unavailable)
+    at = _fresh().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "pl_Mx", 90.0),
+    )
+    return at
+
+
+def test_app_2023_incomplete_chord_coverage_is_not_assessed(monkeypatch):
+    at = _app_with_incomplete_2023_chord(monkeypatch)
+    assert not at.exception
+    shear = at.session_state["results"]["shear"]
+    assessment = shear["links"]["longitudinal_assessment"]
+    assert len(shear["links"]["chord_candidates"]) == 1
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["coverage_complete"] is False
+    assert shear["assessment_status"] == "NOT ASSESSED"
+    assert shear["assessment_ok"] is None
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        str(item.value) for item in (*at.warning, *at.caption, *at.markdown)
+    )
+    assert "Overall reinforced shear assessment: NOT ASSESSED" in visible
+    assert "Complete both required longitudinal chord checks" in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    for check in ("Shear with links", "Shear longitudinal chords"):
+        row = overview.loc[overview["Check"] == check].iloc[0]
+        assert row["Status"] == "NOT ASSESSED"
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_incomplete_2023_chord_is_not_assessed_in_every_report_profile(
+    monkeypatch,
+    profile,
+):
+    import io
+
+    import pypdf
+
+    import sector_report
+
+    at = _app_with_incomplete_2023_chord(monkeypatch)
+    assert not at.exception
+    inputs = at.session_state["_latest_inputs"]
+    results = at.session_state["results"]
+    results["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inputs, results)
+    )
+    pdf = sector_report.build_report(
+        {}, inputs, results, figures=False, profile=profile
+    )
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in reader.pages
+    )
+
+    assert "Shear longitudinal chords" in text
+    assert "NOT ASSESSED" in text
+    assert "Complete both required longitudinal chord checks" in text
+    assert "SHEAR-LONGITUDINAL" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Required 2023 longitudinal chord faces" in text
+        assert "(8.51)" in text
+        assert "Flexural tension" in text
+
+
+def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():
+    assessment = {
+        "status": "FAIL",
+        "ok": False,
+        "util": 2.15,
+        "reason": "required_longitudinal_chord_failed",
+        "coverage_complete": True,
+        "governing": {"valid": True, "util": 2.15},
+    }
+    combined_result = {
+        "valid": True,
+        "method": codes.EC2_2005_DKNA.label,
+        "dkna_valid": True,
+        "dkna_sum": 0.60,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "PASS",
+        "dkna_ok": True,
+        "torsion_assessment_status": "PASS",
+        "torsion_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "demand_ratio": 0.40,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+        },
+        "longitudinal_assessment": assessment,
+        "transverse": {
+            "valid": True,
+            "u_crush": 0.40,
+            "u_stirrup": 0.50,
+            "cot": 1.5,
+            "shear_fraction": 0.25,
+            "torsion_fraction": 0.25,
+        },
+    }
+
+    assert result_presentation.combined_dkna_status(combined_result) == "FAIL"
+    note = result_presentation.combined_governing_assessment_note(
+        combined_result
+    )
+    assert "required longitudinal chords exceed" in note
+    assert "not an overall M-V-T verdict" in note
+    components = {
+        item["key"]: item
+        for item in result_presentation.combined_physical_components(
+            combined_result
+        )
+    }
+    assert components["longitudinal"]["status"] == "FAIL"
+    assert components["longitudinal"]["util"] == pytest.approx(2.15)
+    assert "required longitudinal chords exceed" in (
+        components["longitudinal"]["note"]
+    )
+    assert "distributed around every torsion-tube side" in (
+        components["longitudinal"]["note"]
+    )
+
+    rows = result_presentation.result_summary_rows(
+        {"combined_on": True},
+        {"combined": combined_result},
+    )
+    by_check = {row["check"]: row for row in rows}
+    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "FAIL"
+    longitudinal = by_check["Combined longitudinal reinforcement"]
+    assert longitudinal["status"] == "FAIL"
+    assert longitudinal["result"] == "215.0 %"
+
+
+def test_incomplete_2023_chord_keeps_retained_mvt_not_assessed():
+    combined_result = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": 0.60,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "PASS",
+        "dkna_ok": True,
+        "torsion_assessment_status": "PASS",
+        "torsion_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "demand_ratio": 0.40,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+        },
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": 0.50,
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": {"valid": True, "util": 0.50},
+        },
+    }
+
+    assert (
+        result_presentation.combined_dkna_status(combined_result)
+        == "NOT ASSESSED"
+    )
+    components = {
+        item["key"]: item
+        for item in result_presentation.combined_physical_components(
+            combined_result
+        )
+    }
+    assert components["longitudinal"]["status"] == "NOT ASSESSED"
+    assert components["longitudinal"]["coverage"] == "incomplete"
+    assert "Complete both required longitudinal chord checks" in (
+        components["longitudinal"]["note"]
+    )
+    assert "distributed around every torsion-tube side" in (
+        components["longitudinal"]["note"]
+    )
 
 
 def test_app_invalid_tube_does_not_poison_the_member_angle():
