@@ -1982,6 +1982,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         "The table shows one governing row per engineering check type.",
         "The table shows one governing row for each engineering check type.",
     )
+    final_row_tokens = ("Fatigue", "Road traffic", "20.8 %")
     normalized_pages = [" ".join(page_text.split()) for page_text in page_texts]
     overview_indexes = [
         index
@@ -2016,9 +2017,20 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         for note in notes
         if note in final_page_text
     )
-    if note_position <= final_page_text.index(caption):
+    missing_final_row_tokens = [
+        token for token in final_row_tokens if token not in final_page_text
+    ]
+    if missing_final_row_tokens:
         raise AssertionError(
-            "the results-overview governing note precedes its table in reading order"
+            "the results-overview final row left its continuation page: "
+            + ", ".join(missing_final_row_tokens)
+        )
+    final_row_position = max(
+        final_page_text.index(token) for token in final_row_tokens
+    )
+    if not final_page_text.index(caption) < final_row_position < note_position:
+        raise AssertionError(
+            "the results-overview final row and governing note are out of reading order"
         )
 
     overview_text = " ".join(
