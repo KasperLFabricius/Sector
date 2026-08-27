@@ -5553,6 +5553,18 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
                 "directional_governing_cot": 1.5,
                 "util": 0.10,
                 "interaction": {"value": 0.10},
+                "directional_min_reinf_governing_face": "positive",
+                "min_reinf": {
+                    "applicable": True,
+                    "status": "PASS",
+                    "scope_key": "applicable_first_generation_rectangle",
+                    "value": 0.52,
+                    "ok": True,
+                    "t_ed": 15.0,
+                    "trd_c": 60.0,
+                    "v_ed": 27.0,
+                    "vrd_c": 100.0,
+                },
             },
         },
     )
@@ -5583,8 +5595,12 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
         assert sector_report._fmt(stale_full_resistance, 3) not in text
         assert "STALE FULL RESISTANCE" not in text
         assert "STALE DIRECTIONAL PASS" not in text
+        assert "6.31" in text
+        assert "minimum reinforcement suffices" in text.casefold()
         if profile == "Brief":
             continue
+        assert "Directional minimum-reinforcement screens" in text
+        assert "approximately solid rectangular section" in text
         assert "torsion transverse/strut resistance" in text
         assert "requires current shared links / closed stirrups" in text
         assert "Concrete cap only" in text

@@ -13968,34 +13968,30 @@ def torsion_view(inp, results):
         and t.get("valid") is True
     )
     directional_interactions = t.get("directional_interactions") or {}
-    if directional_interactions and transverse_resistance_available:
-        st.info(
-            "Generic Vx,Ed + Vy,Ed + TEd interaction is not calculated. The table "
-            "shows independent Vx+T and Vy+T calculations; the torsion result below "
-            "is standalone."
-        )
+    if directional_interactions:
         rows = []
         min_reinf_rows = []
         for component in ("vx", "vy"):
             item = directional_interactions.get(component)
             if not item:
                 continue
-            interaction = item.get("interaction") or {}
-            value = interaction.get("value")
-            status = item.get("directional_interaction_status") or (
-                presentation.interaction_assessment_status(interaction)
-            )
-            rows.append({
-                "Directional screen": "Vx,Ed + TEd" if component == "vx"
-                else "Vy,Ed + TEd",
-                "TEd/TRd": item.get("util"),
-                "6.29 V+T": value,
-                "Status": status,
-                "Governing face": viz.directional_face_label(
-                    component, item.get("directional_governing_face")
-                ),
-                f"cot {_THETA}": item.get("directional_governing_cot"),
-            })
+            if transverse_resistance_available:
+                interaction = item.get("interaction") or {}
+                value = interaction.get("value")
+                status = item.get("directional_interaction_status") or (
+                    presentation.interaction_assessment_status(interaction)
+                )
+                rows.append({
+                    "Directional screen": "Vx,Ed + TEd" if component == "vx"
+                    else "Vy,Ed + TEd",
+                    "TEd/TRd": item.get("util"),
+                    "6.29 V+T": value,
+                    "Status": status,
+                    "Governing face": viz.directional_face_label(
+                        component, item.get("directional_governing_face")
+                    ),
+                    f"cot {_THETA}": item.get("directional_governing_cot"),
+                })
             min_reinf = item.get("min_reinf") or {}
             if min_reinf:
                 min_reinf_status = (
@@ -14024,7 +14020,13 @@ def torsion_view(inp, results):
                         presentation.minimum_reinforcement_screen_note(min_reinf)
                     ),
                 })
-        st.dataframe(rows, hide_index=True, width="stretch")
+        if rows:
+            st.info(
+                "Generic Vx,Ed + Vy,Ed + TEd interaction is not calculated. The "
+                "table shows independent Vx+T and Vy+T calculations; the torsion "
+                "result below is standalone."
+            )
+            st.dataframe(rows, hide_index=True, width="stretch")
         if min_reinf_rows:
             st.caption(
                 "Within its stated scope, Formula (6.31) screens whether minimum "

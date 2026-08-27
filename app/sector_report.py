@@ -8455,12 +8455,7 @@ class ReportBuilder:
         directional = t.get("directional_interactions") or {}
         if not directional and isinstance(t.get("min_reinf"), dict):
             self._torsion_minimum_reinforcement_summary(t["min_reinf"])
-        if directional and transverse_resistance_available:
-            self._small(
-                "Standalone torsion, Vx+T and Vy+T are reported separately. A "
-                "simultaneous Vx+Vy+T check is not included and requires a "
-                "separate member check."
-            )
+        if directional:
             rows = [["Screen", "T<sub>Ed</sub>/T<sub>Rd</sub>",
                      "6.29 V+T", "Governing face", "cot theta", "Status"]]
             min_reinf_rows = [[
@@ -8471,21 +8466,22 @@ class ReportBuilder:
                 item = directional.get(component)
                 if not item:
                     continue
-                interaction = item.get("interaction") or {}
-                value = interaction.get("value")
-                rows.append([
-                    "Vx+T" if component == "vx" else "Vy+T",
-                    _pct(item.get("util")),
-                    ("-" if value is None else _pct(value)),
-                    viz.directional_face_label(
-                        component,
-                        item.get("directional_governing_face"),
-                    ),
-                    _fmt(item.get("directional_governing_cot"), 3),
-                    item.get("directional_interaction_status") or (
-                        presentation.interaction_assessment_status(interaction)
-                    ),
-                ])
+                if transverse_resistance_available:
+                    interaction = item.get("interaction") or {}
+                    value = interaction.get("value")
+                    rows.append([
+                        "Vx+T" if component == "vx" else "Vy+T",
+                        _pct(item.get("util")),
+                        ("-" if value is None else _pct(value)),
+                        viz.directional_face_label(
+                            component,
+                            item.get("directional_governing_face"),
+                        ),
+                        _fmt(item.get("directional_governing_cot"), 3),
+                        item.get("directional_interaction_status") or (
+                            presentation.interaction_assessment_status(interaction)
+                        ),
+                    ])
                 min_reinf = item.get("min_reinf") or {}
                 if min_reinf:
                     min_reinf_status = (
@@ -8518,11 +8514,17 @@ class ReportBuilder:
                             min_reinf
                         ),
                     ))
-            self._table(
-                rows,
-                [27 * mm, 28 * mm, 25 * mm, 38 * mm, 20 * mm, 32 * mm],
-                font=6.5,
-            )
+            if len(rows) > 1:
+                self._small(
+                    "Standalone torsion, Vx+T and Vy+T are reported separately. A "
+                    "simultaneous Vx+Vy+T check is not included and requires a "
+                    "separate member check."
+                )
+                self._table(
+                    rows,
+                    [27 * mm, 28 * mm, 25 * mm, 38 * mm, 20 * mm, 32 * mm],
+                    font=6.5,
+                )
             if len(min_reinf_rows) > 1:
                 self._h2("Directional minimum-reinforcement screens (Eq. 6.31)")
                 self._table(

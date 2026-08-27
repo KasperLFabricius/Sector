@@ -1840,6 +1840,45 @@ def test_biaxial_torsion_retains_and_presents_directional_631_screens():
     )
 
 
+def test_biaxial_formula_631_screens_remain_visible_without_shared_links():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_Vx", 20.0),
+        ("number_input", "shear_Vy", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    torsion = at.session_state["results"]["torsion"]
+    assert torsion["closed_links_present"] is False
+    assert torsion["transverse_resistance_assessed"] is False
+    directional = torsion["directional_interactions"]
+    assert set(directional) == {"vx", "vy"}
+    assert all(item["min_reinf"]["applicable"] for item in directional.values())
+
+    _select_view(at, "Torsion")
+    table = next(
+        frame.value for frame in at.dataframe
+        if "Directional 6.31 screen" in frame.value.columns
+    )
+    assert set(table["Directional 6.31 screen"]) == {
+        "Vx,Ed + TEd", "Vy,Ed + TEd"
+    }
+    assert set(table["Status"]) <= {"PASS", "FAIL"}
+    assert all(
+        "approximately solid rectangular section" in value
+        for value in table["Scope / guidance"]
+    )
+
+
 def test_app_torsion_is_saved_and_restored():
     import project_io
     at = _fresh()
