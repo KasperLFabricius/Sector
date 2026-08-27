@@ -1409,6 +1409,30 @@ _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
     "positive_resistance_unavailable": (
         "A positive T_Rd,c and V_Rd,c are required to evaluate Formula (6.31)"
     ),
+    "dkna_combined_normal_or_moment": (
+        "With acting N_Ed or M_Ed under the Danish National Annex, use the "
+        "DK NA 6.3.2(6) combined N-M-V-T check; Formula (6.31) is not used as "
+        "the combined verdict"
+    ),
+}
+
+_MINIMUM_REINFORCEMENT_DETAILING_NOTES = {
+    "separate_detailing_passed": (
+        "The overall link minimum ratio and spacing checks pass; arrangement, "
+        "anchorage and construction detailing remain separate engineering checks"
+    ),
+    "separate_detailing_failed": (
+        "The overall link-detailing checks fail; revise the entered minimum "
+        "ratio, spacing or link provision"
+    ),
+    "separate_detailing_not_run": (
+        "The overall link-detailing check was not selected; Formula (6.31) does "
+        "not verify minimum ratio, spacing, arrangement or anchorage"
+    ),
+    "separate_detailing_incomplete": (
+        "The overall link-detailing check is incomplete; minimum ratio, spacing, "
+        "arrangement and anchorage are not fully assessed"
+    ),
 }
 
 
@@ -1438,6 +1462,38 @@ def minimum_reinforcement_screen_note(check):
             "Formula (6.31) requires an approximately solid rectangular section "
             "and a first-generation V_Rd,c shear result"
         ),
+    )
+
+
+def minimum_reinforcement_screen_outcome(check):
+    """Return the limited low-action outcome without implying detailing adequacy."""
+
+    status = minimum_reinforcement_screen_status(check)
+    if status == "PASS":
+        return "low-action condition satisfied"
+    if status == "FAIL":
+        return "low-action condition not satisfied"
+    return status
+
+
+def minimum_reinforcement_detailing_status(check):
+    """Return the independent minimum/link-detailing assessment state."""
+
+    retained = str((check or {}).get("detailing_status") or "").upper()
+    if retained in {"PASS", "FAIL", "NOT RUN", "NOT ASSESSED"}:
+        return retained
+    return "NOT RUN"
+
+
+def minimum_reinforcement_detailing_note(check):
+    """Return engineer guidance for the independent detailing state."""
+
+    key = str((check or {}).get("detailing_scope_key") or "").strip()
+    if not key:
+        key = "separate_detailing_not_run"
+    return _MINIMUM_REINFORCEMENT_DETAILING_NOTES.get(
+        key,
+        _MINIMUM_REINFORCEMENT_DETAILING_NOTES["separate_detailing_incomplete"],
     )
 
 
@@ -2393,11 +2449,16 @@ def result_summary_rows(inp, results, *, stale=False):
             scope_note = minimum_reinforcement_screen_note(minimum)
             if status == "PASS":
                 note = (
-                    "Minimum reinforcement suffices within this screen; "
+                    "Low-action condition satisfied; designed shear-and-torsion "
+                    "reinforcement beyond the minimum is not required by Formula "
+                    "(6.31). This does not verify the required minimum detailing; "
                     + scope_note
                 )
             elif status == "FAIL":
-                note = "Designed reinforcement is required; " + scope_note
+                note = (
+                    "Low-action condition not satisfied; designed "
+                    "shear-and-torsion reinforcement is required; " + scope_note
+                )
             else:
                 note = scope_note
             row = _summary_row(
@@ -2422,6 +2483,22 @@ def result_summary_rows(inp, results, *, stale=False):
             # it to a status-only calculation-state line.
             row["overview_scope_in_result_table"] = True
             rows.append(row)
+            detailing_status = minimum_reinforcement_detailing_status(minimum)
+            detailing_row = _summary_row(
+                label + " - separate link detailing",
+                "plastic",
+                detailing_status,
+                detailing_status,
+                "Minimum ratio and spacing",
+                None,
+                "Detailing",
+                minimum_reinforcement_detailing_note(minimum),
+                inp,
+                overview_key=overview_key + ":detailing",
+                overview_parent="torsion",
+            )
+            detailing_row["overview_scope_in_result_table"] = True
+            rows.append(detailing_row)
 
         directional_screens = torsion.get("directional_interactions") or {}
         if directional_screens:

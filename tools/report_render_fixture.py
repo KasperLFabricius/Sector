@@ -1151,6 +1151,19 @@ def _results(inp: dict | None = None) -> dict:
             "minimum_dimension_mm": tube["minimum_dimension_mm"],
         }],
     )
+    retained_detailing_status = str(transverse_detailing.get("status") or "")
+    if retained_detailing_status not in {"PASS", "FAIL"}:
+        retained_detailing_status = "NOT ASSESSED"
+    torsion_payload["min_reinf"].update(
+        detailing_status=retained_detailing_status,
+        detailing_scope_key=(
+            "separate_detailing_passed"
+            if retained_detailing_status == "PASS"
+            else "separate_detailing_failed"
+            if retained_detailing_status == "FAIL"
+            else "separate_detailing_incomplete"
+        ),
+    )
     inputs = _inputs()
     plastic_rows = case_analysis.case_records(inputs, "plastic")
     elastic_rows = case_analysis.case_records(inputs, "elastic")
@@ -2051,6 +2064,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         "Calculated outputs",
         "Scope and calculation state",
         "Plastic bending",
+        "Formula (6.31) minimum-reinforcement screen - separate link detailing",
         "DK heightened crack-control minimum",
         "Fatigue",
     ):

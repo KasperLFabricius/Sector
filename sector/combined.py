@@ -57,6 +57,15 @@ class MinimumReinforcementScreenResult:
     governs: str | None
     solid: bool
     model_2023: bool
+    dk_na: bool
+    shear_method: str
+    torsion_method: str
+    n_ed: float
+    mx_ed: float
+    my_ed: float
+    normal_or_moment_active: bool
+    detailing_status: str
+    detailing_scope_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,15 +177,27 @@ def minimum_reinforcement_screen_result(
     subdivided: bool,
     model_2023: bool,
     shear_available: bool,
+    dk_na: bool = False,
+    shear_method: str = "",
+    torsion_method: str = "",
+    n_ed: float = 0.0,
+    mx_ed: float = 0.0,
+    my_ed: float = 0.0,
 ) -> MinimumReinforcementScreenResult:
     """Return the bounded Formula (6.31) scope and numerical screen.
 
     Formula (6.31) is retained only for an approximately solid rectangular
     section using the first-generation ``V_Rd,c`` route. Other geometry and the
     2023 method keep their complete shear-and-torsion results without receiving
-    this minimum-reinforcement verdict.
+    this low-action condition result.
     """
 
+    n_ed = float(n_ed)
+    mx_ed = float(mx_ed)
+    my_ed = float(my_ed)
+    normal_or_moment_active = any(
+        value != 0.0 for value in (n_ed, mx_ed, my_ed)
+    )
     common = dict(
         value=None,
         ok=None,
@@ -189,6 +210,15 @@ def minimum_reinforcement_screen_result(
         governs=None,
         solid=bool(solid_rectangle),
         model_2023=bool(model_2023),
+        dk_na=bool(dk_na),
+        shear_method=str(shear_method or ""),
+        torsion_method=str(torsion_method or ""),
+        n_ed=n_ed,
+        mx_ed=mx_ed,
+        my_ed=my_ed,
+        normal_or_moment_active=normal_or_moment_active,
+        detailing_status="NOT RUN",
+        detailing_scope_key="separate_detailing_not_run",
     )
     if model_2023:
         return MinimumReinforcementScreenResult(
@@ -209,6 +239,13 @@ def minimum_reinforcement_screen_result(
             applicable=False,
             status="NOT APPLICABLE",
             scope_key="section_geometry",
+            **common,
+        )
+    if dk_na and normal_or_moment_active:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT APPLICABLE",
+            scope_key="dkna_combined_normal_or_moment",
             **common,
         )
     if not shear_available or v_ed is None or vrd_c is None:
@@ -245,6 +282,15 @@ def minimum_reinforcement_screen_result(
         governs="torsion" if torsion_ratio >= shear_ratio else "shear",
         solid=True,
         model_2023=False,
+        dk_na=bool(dk_na),
+        shear_method=str(shear_method or ""),
+        torsion_method=str(torsion_method or ""),
+        n_ed=n_ed,
+        mx_ed=mx_ed,
+        my_ed=my_ed,
+        normal_or_moment_active=normal_or_moment_active,
+        detailing_status="NOT RUN",
+        detailing_scope_key="separate_detailing_not_run",
     )
 
 

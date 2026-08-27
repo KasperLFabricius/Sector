@@ -9405,6 +9405,7 @@ def _run_single_analysis(
     _run_capacity_checks(inp, out)
     if inp.get("transverse_detailing_on"):
         out["transverse_reinforcement"] = _transverse_detailing_result(inp, out)
+    _attach_formula_631_detailing_state(inp, out)
     return out
 
 
@@ -10351,6 +10352,14 @@ def _run_uniaxial_capacity_checks(inp, out):
             sh_ms = out.get("shear")
             _trdc = primary["trd_c"]
             sh_res = (sh_ms or {}).get("res") or {}
+            selected_shear_method = str(inp.get("shear_method") or "")
+            selected_torsion_method = str(inp.get("torsion_method") or "")
+            selected_shear_code = capacity.selected_shear_code(
+                selected_shear_method
+            )
+            selected_model_2023 = (
+                getattr(selected_shear_code, "shear_model", "2005") == "2023"
+            )
             out["torsion"]["min_reinf"] = dataclasses.asdict(
                 combined.minimum_reinforcement_screen_result(
                     t_ed,
@@ -10363,8 +10372,17 @@ def _run_uniaxial_capacity_checks(inp, out):
                         )
                     ),
                     subdivided=bool(tors_ctx["subdivide"]),
-                    model_2023=bool((sh_ms or {}).get("model_2023")),
+                    model_2023=selected_model_2023,
                     shear_available=bool(sh_ms is not None and sh_res.get("valid")),
+                    dk_na=(
+                        codes.EC2_2005_DKNA.label
+                        in {selected_shear_method, selected_torsion_method}
+                    ),
+                    shear_method=selected_shear_method,
+                    torsion_method=selected_torsion_method,
+                    n_ed=inp.get("P_pl", 0.0),
+                    mx_ed=inp.get("Mx_pl", 0.0),
+                    my_ed=inp.get("My_pl", 0.0),
                 )
             )
             # Combined shear+torsion concrete crushing (6.29) at the member angle,
@@ -10941,6 +10959,54 @@ def _transverse_detailing_result(inp, out):
             "detailing_member_type", detailing.MEMBER_BEAM
         ),
     )
+
+
+def _formula_631_detailing_state(inp, out):
+    """Return the separate retained link-detailing assessment state."""
+
+    if not inp.get("transverse_detailing_on"):
+        return "NOT RUN", "separate_detailing_not_run"
+    transverse = out.get("transverse_reinforcement")
+    if not isinstance(transverse, dict):
+        return "NOT RUN", "separate_detailing_not_run"
+    status = str(transverse.get("status") or "").upper()
+    if status == "PASS":
+        return "PASS", "separate_detailing_passed"
+    if status == "FAIL":
+        return "FAIL", "separate_detailing_failed"
+    return "NOT ASSESSED", "separate_detailing_incomplete"
+
+
+def _attach_formula_631_detailing_state(inp, out):
+    """Attach one independent detailing state to every retained 6.31 screen."""
+
+    status, scope_key = _formula_631_detailing_state(inp, out)
+
+    def attach(minimum):
+        if isinstance(minimum, dict):
+            minimum["detailing_status"] = status
+            minimum["detailing_scope_key"] = scope_key
+
+    torsion = out.get("torsion") or {}
+    attach(torsion.get("min_reinf"))
+    for item in (torsion.get("directional_interactions") or {}).values():
+        if isinstance(item, dict):
+            attach(item.get("min_reinf"))
+
+    shear = out.get("shear") or {}
+    directions = list((shear.get("directions") or {}).values())
+    if not directions:
+        directions = [shear]
+    for direction in directions:
+        if not isinstance(direction, dict):
+            continue
+        minimum_domain = (direction.get("governing_domains") or {}).get(
+            "minimum_reinforcement"
+        )
+        attach(minimum_domain)
+        for candidate in direction.get("face_candidates") or ():
+            candidate_torsion = (candidate or {}).get("torsion") or {}
+            attach(candidate_torsion.get("min_reinf"))
 
 
 # ---------------------------------------------------------------------------
@@ -13540,16 +13606,17 @@ def shear_view(inp, results):
                 continue
             status = domain.get("status")
             if key == "minimum_reinforcement":
-                status = {
-                    "PASS": "minimum sufficient",
-                    "FAIL": "designed reinforcement required",
-                }.get(status, str(status or "NOT ASSESSED").lower())
+                status = presentation.minimum_reinforcement_screen_outcome(domain)
             governing_rows.append({
                 "Check": domain_labels[key],
                 "Governing face": viz.directional_face_label(component, domain["face"]),
                 f"cot {_THETA}": domain.get("cot"),
                 "Value / utilisation": domain.get("util"),
                 "Status / outcome": status,
+                "Separate detailing": (
+                    presentation.minimum_reinforcement_detailing_status(domain)
+                    if key == "minimum_reinforcement" else "-"
+                ),
             })
         st.markdown("**Independent governing selections**")
         st.dataframe(governing_rows, hide_index=True, width="stretch")
@@ -13997,12 +14064,9 @@ def torsion_view(inp, results):
                 min_reinf_status = (
                     presentation.minimum_reinforcement_screen_status(min_reinf)
                 )
-                if min_reinf_status == "PASS":
-                    outcome = "minimum sufficient"
-                elif min_reinf_status == "FAIL":
-                    outcome = "designed reinforcement required"
-                else:
-                    outcome = min_reinf_status
+                outcome = presentation.minimum_reinforcement_screen_outcome(
+                    min_reinf
+                )
                 min_reinf_rows.append({
                     "Directional 6.31 screen": (
                         "Vx,Ed + TEd" if component == "vx" else "Vy,Ed + TEd"
@@ -14010,6 +14074,11 @@ def torsion_view(inp, results):
                     "6.31 sum": min_reinf.get("value"),
                     "Status": min_reinf_status,
                     "Outcome": outcome,
+                    "Separate detailing": (
+                        presentation.minimum_reinforcement_detailing_status(
+                            min_reinf
+                        )
+                    ),
                     "Governing face": viz.directional_face_label(
                         component,
                         item.get(
@@ -14018,6 +14087,11 @@ def torsion_view(inp, results):
                     ),
                     "Scope / guidance": (
                         presentation.minimum_reinforcement_screen_note(min_reinf)
+                    ),
+                    "Detailing guidance": (
+                        presentation.minimum_reinforcement_detailing_note(
+                            min_reinf
+                        )
                     ),
                 })
         if rows:
@@ -14029,9 +14103,10 @@ def torsion_view(inp, results):
             st.dataframe(rows, hide_index=True, width="stretch")
         if min_reinf_rows:
             st.caption(
-                "Within its stated scope, Formula (6.31) screens whether minimum "
-                "shear-and-torsion reinforcement is sufficient. The complete "
-                "resistance checks remain separate."
+                "Within its stated scope, Formula (6.31) indicates whether "
+                "designed shear-and-torsion reinforcement beyond the required "
+                "minimum is needed. The complete resistance and detailing checks "
+                "remain separate."
             )
             st.dataframe(min_reinf_rows, hide_index=True, width="stretch")
 
@@ -14063,14 +14138,23 @@ def torsion_view(inp, results):
                 f"{mr['v_ed'] / mr['vrd_c'] * 100:.1f} %",
             )
             s3.metric(r"Sum ($\leq100\%$)", f"{val * 100:.1f} %",
-                      delta=("minimum reinf. suffices" if ok_mr
-                             else "designed reinf. required"),
+                      delta=("low-action condition satisfied" if ok_mr
+                             else "low-action condition not satisfied"),
                       delta_color=("normal" if ok_mr else "inverse"))
             st.caption("TEd/TRd,c + VEd/VRd,c <= 1 (6.3.2(5), Eq 6.31): if satisfied, "
-                       "only minimum shear + torsion reinforcement is required -- no "
-                       "designed stirrups for these actions. "
+                       "designed shear-and-torsion reinforcement beyond the minimum "
+                       "is not required. This condition does not verify minimum "
+                       "ratio, spacing, arrangement or anchorage. "
                        + presentation.minimum_reinforcement_screen_note(mr)
                        + ".")
+        detailing_status = (
+            presentation.minimum_reinforcement_detailing_status(mr)
+        )
+        st.caption(
+            f"Separate link detailing - {detailing_status}: "
+            + presentation.minimum_reinforcement_detailing_note(mr)
+            + "."
+        )
     if tube_valid and not transverse_resistance_assessed:
         raw_reason = (
             t.get("assessment_reason")

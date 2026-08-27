@@ -88,7 +88,7 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
-def test_manual_limits_formula_631_sufficiency_to_supported_scope():
+def test_manual_limits_formula_631_condition_and_separates_detailing():
     text = "\n".join(
         str(block[2] if block[0] == "callout" else block[1])
         for block in manual.manual_blocks()
@@ -99,7 +99,15 @@ def test_manual_limits_formula_631_sufficiency_to_supported_scope():
     assert "first-generation $V_{Rd,c}$ route" in text
     assert "Hollow, circular, triangular, flanged or compound sections" in text
     assert "2023 shear route do not" in text
+    assert "low-action screen" in text
+    assert "does not verify the minimum ratio, spacing" in text
+    assert "PASS, FAIL, NOT RUN or NOT ASSESSED" in text
+    assert "arrangement and anchorage remain separate engineering checks" in text
+    assert "Formula (6.31) condition result" in text
     assert "use their complete shear-and-torsion checks" in text
+    assert "DK NA 6.3.2(6) combined N-M-V-T check" in text
+    assert "Formula (6.31) is not used as the combined verdict" in text
+    assert "sufficiency verdict" not in text
 
 
 def test_manual_dkna_combined_rule_includes_n_and_action_alone_resistances():

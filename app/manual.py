@@ -1061,12 +1061,22 @@ def manual_blocks() -> list:
          "calculated separately. Simultaneous Vx+Vy or Vx+Vy+T interaction requires "
          "a separate member check.")
     md("Where torsion is active, the report also shows the directional Formula "
-       "(6.31) minimum-reinforcement screen for Vx+T and Vy+T. A sufficiency "
-       "verdict is calculated only for approximately solid rectangular sections "
+       "(6.31) low-action screen for Vx+T and Vy+T. The screen states only "
+       "whether designed shear-and-torsion reinforcement beyond the required "
+       "minimum is needed; it does not verify the minimum ratio, spacing, "
+       "arrangement or anchorage. The separate calculated overall link "
+       "minimum-ratio and spacing state is reported as PASS, FAIL, NOT RUN or "
+       "NOT ASSESSED; "
+       "arrangement and anchorage remain separate engineering checks. The "
+       "low-action condition is "
+       "calculated only for approximately solid rectangular sections "
        "using the first-generation $V_{Rd,c}$ route. Hollow, circular, "
        "triangular, flanged or compound sections and the 2023 shear route do not "
-       "receive that verdict; use their complete shear-and-torsion checks. The "
-       "resistance checks remain separate.")
+       "receive a Formula (6.31) condition result; use their complete "
+       "shear-and-torsion checks. The "
+       "resistance checks remain separate. When N_Ed or M_Ed acts under the "
+       "Danish National Annex, use the DK NA 6.3.2(6) combined N-M-V-T check; "
+       "Formula (6.31) is not used as the combined verdict.")
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],

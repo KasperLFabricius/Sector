@@ -5596,7 +5596,9 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
         assert "STALE FULL RESISTANCE" not in text
         assert "STALE DIRECTIONAL PASS" not in text
         assert "6.31" in text
-        assert "minimum reinforcement suffices" in text.casefold()
+        assert "low-action condition satisfied" in text.casefold()
+        assert "separate link detailing" in text.casefold()
+        assert "NOT RUN" in text
         if profile == "Brief":
             continue
         assert "Directional minimum-reinforcement screens" in text
@@ -5643,7 +5645,8 @@ def test_report_directional_vt_table_retains_actual_verdict_outside_default_rang
         # row; keep the probe inside this compact interaction table.
         assert "PASS" in text[start:start + 520]
     assert "Directional minimum-reinforcement screens" in text
-    assert "minimum sufficient" in text
+    assert "low-action condition satisfied" in text
+    assert "Separate detailing" in text
     assert "left (-x)" in text and "bottom (-y)" in text
 
 
@@ -5775,6 +5778,8 @@ def test_report_torsion_shows_min_reinf_screen(profile):
         governs="torsion",
         solid=True,
         model_2023=False,
+        detailing_status="PASS",
+        detailing_scope_key="separate_detailing_passed",
     )
     out["torsion"] = t
     inp = _inp()
@@ -5787,8 +5792,202 @@ def test_report_torsion_shows_min_reinf_screen(profile):
         ).split()
     )
     assert "6.31" in txt                            # the screen clause
-    assert "minimum reinforcement suffices" in txt.casefold()  # verdict wording
+    assert "low-action condition satisfied" in txt.casefold()
+    assert "separate link detailing" in txt.casefold()
+    assert "PASS" in txt
     assert "approximately solid rectangular section" in txt
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    ("condition_status", "value", "condition_text"),
+    (
+        ("PASS", 0.80, "low-action condition satisfied"),
+        ("FAIL", 1.20, "low-action condition not satisfied"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("detailing_status", "detailing_scope_key", "detailing_text"),
+    (
+        ("PASS", "separate_detailing_passed", "minimum ratio and spacing"),
+        ("FAIL", "separate_detailing_failed", "checks fail"),
+        ("NOT RUN", "separate_detailing_not_run", "was not selected"),
+    ),
+)
+def test_report_profiles_separate_formula_631_condition_from_detailing(
+    profile,
+    condition_status,
+    value,
+    condition_text,
+    detailing_status,
+    detailing_scope_key,
+    detailing_text,
+):
+    out = _out()
+    torsion = _torsion_out()
+    torsion["min_reinf"] = dict(
+        applicable=True,
+        status=condition_status,
+        scope_key="applicable_first_generation_rectangle",
+        value=value,
+        ok=condition_status == "PASS",
+        t_ed=40.0,
+        trd_c=100.0,
+        v_ed=30.0,
+        vrd_c=75.0 if condition_status == "FAIL" else 250.0,
+        torsion_ratio=0.4,
+        shear_ratio=value - 0.4,
+        governs="torsion" if condition_status == "PASS" else "shear",
+        solid=True,
+        model_2023=False,
+        detailing_status=detailing_status,
+        detailing_scope_key=detailing_scope_key,
+    )
+    out["torsion"] = torsion
+    inp = _inp()
+    inp.update(torsion_on=True, shear_on=True)
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert condition_text in text.casefold()
+    assert "separate link detailing" in text.casefold()
+    assert re.search(
+        r"separate link detailing.{0,240}\b"
+        + re.escape(detailing_status.casefold())
+        + r"\b",
+        text.casefold(),
+    )
+    assert detailing_text in text
+    assert "minimum reinforcement suffices" not in text.casefold()
+    assert "minimum sufficient" not in text.casefold()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_use_selected_2023_scope_when_shear_is_disabled(profile):
+    out = _out()
+    torsion = _torsion_out()
+    torsion["min_reinf"] = dict(
+        applicable=False,
+        status="NOT APPLICABLE",
+        scope_key="selected_2023_route",
+        value=None,
+        ok=None,
+        t_ed=15.0,
+        trd_c=26.435,
+        v_ed=None,
+        vrd_c=None,
+        torsion_ratio=None,
+        shear_ratio=None,
+        governs=None,
+        solid=True,
+        model_2023=True,
+        shear_method=codes.EC2_2023.label,
+        detailing_status="NOT RUN",
+        detailing_scope_key="separate_detailing_not_run",
+    )
+    out["torsion"] = torsion
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        shear_on=False,
+        shear_method=codes.EC2_2023.label,
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "use the selected 2023 shear-and-torsion checks" in text
+    assert "Calculate the first-generation V_Rd,c" not in text
+    assert "low-action condition satisfied" not in text.casefold()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    ("n_ed", "mx_ed", "my_ed", "applicable"),
+    (
+        (0.0, 0.0, 0.0, True),
+        (-20.0, 0.0, 0.0, False),
+        (20.0, 0.0, 0.0, False),
+        (0.0, -15.0, 0.0, False),
+        (0.0, 15.0, 0.0, False),
+        (0.0, 0.0, -10.0, False),
+        (0.0, 0.0, 10.0, False),
+    ),
+)
+def test_report_profiles_retain_dkna_formula_631_normal_and_moment_scope(
+    profile,
+    n_ed,
+    mx_ed,
+    my_ed,
+    applicable,
+):
+    out = _out()
+    torsion = _torsion_out()
+    torsion["min_reinf"] = dict(
+        applicable=applicable,
+        status="PASS" if applicable else "NOT APPLICABLE",
+        scope_key=(
+            "applicable_first_generation_rectangle"
+            if applicable else "dkna_combined_normal_or_moment"
+        ),
+        value=0.65 if applicable else None,
+        ok=True if applicable else None,
+        t_ed=15.0,
+        trd_c=50.0,
+        v_ed=35.0,
+        vrd_c=100.0,
+        torsion_ratio=0.3 if applicable else None,
+        shear_ratio=0.35 if applicable else None,
+        governs="shear" if applicable else None,
+        solid=True,
+        model_2023=False,
+        dk_na=True,
+        shear_method=codes.EC2_2005_DKNA.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
+        n_ed=n_ed,
+        mx_ed=mx_ed,
+        my_ed=my_ed,
+        normal_or_moment_active=not applicable,
+        detailing_status="NOT RUN",
+        detailing_scope_key="separate_detailing_not_run",
+    )
+    out["torsion"] = torsion
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        shear_on=True,
+        shear_method=codes.EC2_2005_DKNA.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
+        P_pl=n_ed,
+        Mx_pl=mx_ed,
+        My_pl=my_ed,
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    if applicable:
+        assert "low-action condition satisfied" in text.casefold()
+    else:
+        assert "With acting N_Ed or M_Ed under the Danish National Annex" in text
+        assert "DK NA 6.3.2(6) combined N-M-V-T check" in text
+        assert "low-action condition satisfied" not in text.casefold()
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
@@ -5857,7 +6056,7 @@ def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
     assert "minimum-reinforcement screen" in txt.casefold()
     assert status in txt
     assert note in txt
-    assert "minimum reinforcement suffices" not in txt
+    assert "low-action condition satisfied" not in txt.casefold()
 
 
 def _combined_out(mv_independent=False):

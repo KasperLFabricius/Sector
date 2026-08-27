@@ -7044,33 +7044,39 @@ class ReportBuilder:
                 "combined": "Combined",
             }
             governing_rows = [["Check", "Governing face", "cot theta",
-                               "Value / util.", "Status / outcome"]]
+                               "Value / util.", "Status / outcome",
+                               "Separate detailing"]]
             for key in ("shear", "vt", "minimum_reinforcement", "combined"):
                 domain = governing_domains.get(key)
                 if not domain:
                     continue
                 if key == "combined" and combined_blocked:
                     governing_rows.append([
-                        labels[key], "-", "-", "-", "NOT ASSESSED",
+                        labels[key], "-", "-", "-", "NOT ASSESSED", "-",
                     ])
                     continue
                 status = domain.get("status")
                 if key == "minimum_reinforcement":
-                    status = {
-                        "PASS": "minimum sufficient",
-                        "FAIL": "designed reinforcement required",
-                    }.get(status, str(status or "NOT ASSESSED").lower())
+                    status = presentation.minimum_reinforcement_screen_outcome(
+                        domain
+                    )
                 governing_rows.append([
                     labels[key],
                     viz.directional_face_label(component, domain.get("face")),
                     _fmt(domain.get("cot"), 3),
                     _pct(domain.get("util")),
                     status,
+                    (
+                        presentation.minimum_reinforcement_detailing_status(
+                            domain
+                        )
+                        if key == "minimum_reinforcement" else "-"
+                    ),
                 ])
             self._h2("Independent governing selections")
             self._table(
                 governing_rows,
-                [35 * mm, 38 * mm, 24 * mm, 31 * mm, 42 * mm],
+                [29 * mm, 30 * mm, 20 * mm, 25 * mm, 43 * mm, 33 * mm],
                 font=6.5,
             )
             if combined_blocked:
@@ -8270,9 +8276,11 @@ class ReportBuilder:
             f"plastic cases and directions{direction}."
         )
         self._h2("Minimum-reinforcement screen (6.3.2(5), Eq 6.31)")
-        outcome = (
-            "minimum reinforcement suffices"
-            if minimum["ok"] else "designed reinforcement required"
+        condition_status = (
+            presentation.minimum_reinforcement_screen_status(minimum)
+        )
+        detailing_status = (
+            presentation.minimum_reinforcement_detailing_status(minimum)
         )
         self._formula(
             "T<sub>Ed</sub>/T<sub>Rd,c</sub> + "
@@ -8283,15 +8291,10 @@ class ReportBuilder:
                 f"{_fmt(minimum['t_ed'], 3)}/{_fmt(minimum['trd_c'], 3)} + "
                 f"{_fmt(minimum['v_ed'], 3)}/{_fmt(minimum['vrd_c'], 3)}"
             ),
-            result=f"{_fmt(minimum['value'], 3)}  ({outcome})",
-        )
-        self._small(
-            "If &#8804; 1, only minimum shear + torsion reinforcement is required "
-            "(no designed stirrups for these actions). "
-            + _html_escape(
-                presentation.minimum_reinforcement_screen_note(minimum)
-            )
-            + "."
+            result=(
+                f"{_fmt(minimum['value'], 3)}  (low-action {condition_status}; "
+                f"link detailing {detailing_status})"
+            ),
         )
 
     def _torsion_minimum_reinforcement_summary(self, minimum):
@@ -8300,16 +8303,15 @@ class ReportBuilder:
         if not isinstance(minimum, dict):
             return
         status = presentation.minimum_reinforcement_screen_status(minimum)
-        if status == "PASS":
-            outcome = "minimum reinforcement suffices"
-        elif status == "FAIL":
-            outcome = "designed reinforcement required"
-        else:
-            outcome = status
+        outcome = presentation.minimum_reinforcement_screen_outcome(minimum)
+        detailing_status = (
+            presentation.minimum_reinforcement_detailing_status(minimum)
+        )
         self._h2("Minimum-reinforcement screen (Formula 6.31)")
         self._table(
             [
-                ["Status", "6.31 sum", "Outcome"],
+                ["Condition status", "6.31 sum", "Low-action outcome",
+                 "Separate detailing"],
                 [
                     status,
                     (
@@ -8318,9 +8320,10 @@ class ReportBuilder:
                         else "-"
                     ),
                     outcome,
+                    detailing_status,
                 ],
             ],
-            [40 * mm, 40 * mm, 100 * mm],
+            [32 * mm, 28 * mm, 72 * mm, 48 * mm],
         )
         self._small(
             _html_escape(
@@ -8328,6 +8331,13 @@ class ReportBuilder:
             )
             + ". The complete shear-and-torsion resistance checks remain "
             "separate."
+        )
+        self._small(
+            "<b>Separate link detailing - " + detailing_status + ":</b> "
+            + _html_escape(
+                presentation.minimum_reinforcement_detailing_note(minimum)
+            )
+            + "."
         )
 
     def _crushing_interaction(self, t):
@@ -8459,7 +8469,8 @@ class ReportBuilder:
             rows = [["Screen", "T<sub>Ed</sub>/T<sub>Rd</sub>",
                      "6.29 V+T", "Governing face", "cot theta", "Status"]]
             min_reinf_rows = [[
-                "Screen", "6.31 sum", "Governing face", "Status", "Outcome"
+                "Screen", "6.31 sum", "Governing face", "Condition status",
+                "Low-action outcome", "Separate detailing"
             ]]
             min_reinf_notes = []
             for component in ("vx", "vy"):
@@ -8489,12 +8500,16 @@ class ReportBuilder:
                             min_reinf
                         )
                     )
-                    if min_reinf_status == "PASS":
-                        outcome = "minimum sufficient"
-                    elif min_reinf_status == "FAIL":
-                        outcome = "designed reinforcement required"
-                    else:
-                        outcome = min_reinf_status
+                    outcome = (
+                        presentation.minimum_reinforcement_screen_outcome(
+                            min_reinf
+                        )
+                    )
+                    detailing_status = (
+                        presentation.minimum_reinforcement_detailing_status(
+                            min_reinf
+                        )
+                    )
                     min_reinf_rows.append([
                         "Vx+T" if component == "vx" else "Vy+T",
                         (_fmt(min_reinf.get("value"), 3)
@@ -8507,10 +8522,15 @@ class ReportBuilder:
                         ),
                         min_reinf_status,
                         outcome,
+                        detailing_status,
                     ])
                     min_reinf_notes.append((
                         min_reinf_status,
                         presentation.minimum_reinforcement_screen_note(
+                            min_reinf
+                        ),
+                        detailing_status,
+                        presentation.minimum_reinforcement_detailing_note(
                             min_reinf
                         ),
                     ))
@@ -8529,18 +8549,31 @@ class ReportBuilder:
                 self._h2("Directional minimum-reinforcement screens (Eq. 6.31)")
                 self._table(
                     min_reinf_rows,
-                    [25 * mm, 22 * mm, 32 * mm, 29 * mm, 72 * mm],
+                    [20 * mm, 19 * mm, 25 * mm, 25 * mm, 50 * mm, 41 * mm],
                     font=6.5,
                 )
                 self._small(
-                    "Within its stated scope, Formula 6.31 screens whether "
-                    "minimum shear-and-torsion reinforcement is sufficient. The "
-                    "complete resistance checks remain separate."
+                    "Within its stated scope, Formula 6.31 indicates whether "
+                    "designed shear-and-torsion reinforcement beyond the required "
+                    "minimum is needed. The complete resistance and detailing "
+                    "checks remain separate."
                 )
-                for min_reinf_status, note in dict.fromkeys(min_reinf_notes):
+                for (
+                    min_reinf_status,
+                    note,
+                    detailing_status,
+                    detailing_note,
+                ) in dict.fromkeys(min_reinf_notes):
                     self._small(
                         "<b>" + min_reinf_status + ":</b> "
                         + _html_escape(note) + "."
+                    )
+                    self._small(
+                        "<b>Separate link detailing - "
+                        + detailing_status
+                        + ":</b> "
+                        + _html_escape(detailing_note)
+                        + "."
                     )
         if tube_valid and not transverse_resistance_assessed:
             reason = _result_reason(

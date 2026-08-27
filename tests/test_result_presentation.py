@@ -301,6 +301,71 @@ def test_formula_631_scope_row_remains_in_the_governing_overview():
     assert screen not in information_rows
 
 
+@pytest.mark.parametrize("condition_status", ("PASS", "FAIL"))
+@pytest.mark.parametrize(
+    ("detailing_status", "detailing_scope_key"),
+    (
+        ("PASS", "separate_detailing_passed"),
+        ("FAIL", "separate_detailing_failed"),
+        ("NOT RUN", "separate_detailing_not_run"),
+    ),
+)
+def test_formula_631_condition_and_detailing_matrix_remain_separate(
+    condition_status,
+    detailing_status,
+    detailing_scope_key,
+):
+    value = 0.8 if condition_status == "PASS" else 1.2
+    minimum = {
+        "applicable": True,
+        "status": condition_status,
+        "scope_key": "applicable_first_generation_rectangle",
+        "value": value,
+        "ok": condition_status == "PASS",
+        "detailing_status": detailing_status,
+        "detailing_scope_key": detailing_scope_key,
+    }
+    inp = {
+        "mode": "",
+        "torsion_on": True,
+        "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
+    }
+    torsion = {
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "closed_links_present": True,
+        "assessment_status": "NOT ASSESSED",
+        "min_reinf": minimum,
+    }
+
+    rows = presentation.result_summary_rows(inp, {"torsion": torsion})
+    condition = next(
+        row for row in rows
+        if row.get("overview_key") == "torsion:minimum_reinforcement"
+    )
+    detailing = next(
+        row for row in rows
+        if row.get("overview_key")
+        == "torsion:minimum_reinforcement:detailing"
+    )
+
+    assert condition["status"] == condition_status
+    assert presentation.minimum_reinforcement_screen_outcome(minimum) in {
+        "low-action condition satisfied",
+        "low-action condition not satisfied",
+    }
+    assert "suffices" not in condition["note"].casefold()
+    assert detailing["status"] == detailing_status
+    assert detailing["overview_scope_in_result_table"] is True
+    if detailing_status == "PASS":
+        assert "ratio and spacing" in detailing["note"]
+    elif detailing_status == "FAIL":
+        assert "checks fail" in detailing["note"]
+    else:
+        assert "was not selected" in detailing["note"]
+
+
 def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():
     out = {
         "elastic_cases": [
