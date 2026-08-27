@@ -90,13 +90,13 @@ _REPORT_CROPS = (
         "report contents",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "10e61a0cac207e491fa7a6580bde34160fc23e250a91cbf9e7cdaf11a42b7b12",
+        "2c9a641d5a3deaa164b02cd5f2ec12db9bf1a587cbf63043906e1c5ea5ed12b0",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "52dc1559fd301851ef89944fe7a1c7684887a0354f10e2a59401265d6e22e5bc",
+        "3da20f127a5fb3dfe813b76ca5780b8caf98f22db3f6766e9b34b64bcd6f5c0d",
     ),
 )
 
@@ -935,12 +935,22 @@ def _results(inp: dict | None = None) -> dict:
         "interaction": interaction,
         "min_reinf": {
             "applicable": True,
+            "status": "PASS" if minimum_interaction <= 1.0 else "FAIL",
+            "scope_key": "applicable_first_generation_rectangle",
             "value": minimum_interaction,
             "ok": bool(minimum_interaction <= 1.0),
             "t_ed": 25.0,
             "trd_c": primary_torsion["trd_c"],
             "v_ed": 30.0,
             "vrd_c": shear_res["vrd_c"],
+            "torsion_ratio": 25.0 / primary_torsion["trd_c"],
+            "shear_ratio": 30.0 / shear_res["vrd_c"],
+            "governs": (
+                "torsion"
+                if 25.0 / primary_torsion["trd_c"]
+                >= 30.0 / shear_res["vrd_c"]
+                else "shear"
+            ),
             "solid": True,
             "model_2023": False,
         },
@@ -1140,6 +1150,19 @@ def _results(inp: dict | None = None) -> dict:
             "uk_mm": tube["uk"] * 1000.0,
             "minimum_dimension_mm": tube["minimum_dimension_mm"],
         }],
+    )
+    retained_detailing_status = str(transverse_detailing.get("status") or "")
+    if retained_detailing_status not in {"PASS", "FAIL"}:
+        retained_detailing_status = "NOT ASSESSED"
+    torsion_payload["min_reinf"].update(
+        detailing_status=retained_detailing_status,
+        detailing_scope_key=(
+            "separate_detailing_passed"
+            if retained_detailing_status == "PASS"
+            else "separate_detailing_failed"
+            if retained_detailing_status == "FAIL"
+            else "separate_detailing_incomplete"
+        ),
     )
     inputs = _inputs()
     plastic_rows = case_analysis.case_records(inputs, "plastic")
@@ -2041,6 +2064,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         "Calculated outputs",
         "Scope and calculation state",
         "Plastic bending",
+        "Formula (6.31) minimum-reinforcement screen - separate link detailing",
         "DK heightened crack-control minimum",
         "Fatigue",
     ):

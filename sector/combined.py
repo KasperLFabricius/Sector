@@ -40,6 +40,35 @@ class CrushingInteractionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class MinimumReinforcementScreenResult:
+    """Applicability, operands and verdict for EN 1992-1-1 Formula (6.31)."""
+
+    applicable: bool
+    status: str
+    scope_key: str
+    value: float | None
+    ok: bool | None
+    t_ed: float
+    trd_c: float | None
+    v_ed: float | None
+    vrd_c: float | None
+    torsion_ratio: float | None
+    shear_ratio: float | None
+    governs: str | None
+    solid: bool
+    model_2023: bool
+    dk_na: bool
+    shear_method: str
+    torsion_method: str
+    n_ed: float
+    mx_ed: float
+    my_ed: float
+    normal_or_moment_active: bool
+    detailing_status: str
+    detailing_scope_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class GoverningStrutResult:
     """Compact accepted state of the existing common-angle minimax scan.
 
@@ -135,6 +164,133 @@ def crushing_interaction_result(
         shear_ratio=shear_ratio,
         utilisation=utilisation,
         ok=utilisation <= 1.0 + 1e-9,
+    )
+
+
+def minimum_reinforcement_screen_result(
+    t_ed: float,
+    trd_c: float | None,
+    v_ed: float | None,
+    vrd_c: float | None,
+    *,
+    solid_rectangle: bool,
+    subdivided: bool,
+    model_2023: bool,
+    shear_available: bool,
+    dk_na: bool = False,
+    shear_method: str = "",
+    torsion_method: str = "",
+    n_ed: float = 0.0,
+    mx_ed: float = 0.0,
+    my_ed: float = 0.0,
+) -> MinimumReinforcementScreenResult:
+    """Return the bounded Formula (6.31) scope and numerical screen.
+
+    Formula (6.31) is retained only for an approximately solid rectangular
+    section using the first-generation ``V_Rd,c`` route. Other geometry and the
+    2023 method keep their complete shear-and-torsion results without receiving
+    this low-action condition result.
+    """
+
+    n_ed = float(n_ed)
+    mx_ed = float(mx_ed)
+    my_ed = float(my_ed)
+    normal_or_moment_active = any(
+        value != 0.0 for value in (n_ed, mx_ed, my_ed)
+    )
+    common = dict(
+        value=None,
+        ok=None,
+        t_ed=float(t_ed),
+        trd_c=None if trd_c is None else float(trd_c),
+        v_ed=None if v_ed is None else float(v_ed),
+        vrd_c=None if vrd_c is None else float(vrd_c),
+        torsion_ratio=None,
+        shear_ratio=None,
+        governs=None,
+        solid=bool(solid_rectangle),
+        model_2023=bool(model_2023),
+        dk_na=bool(dk_na),
+        shear_method=str(shear_method or ""),
+        torsion_method=str(torsion_method or ""),
+        n_ed=n_ed,
+        mx_ed=mx_ed,
+        my_ed=my_ed,
+        normal_or_moment_active=normal_or_moment_active,
+        detailing_status="NOT RUN",
+        detailing_scope_key="separate_detailing_not_run",
+    )
+    if dk_na and normal_or_moment_active:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT APPLICABLE",
+            scope_key="dkna_combined_normal_or_moment",
+            **common,
+        )
+    if model_2023:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT APPLICABLE",
+            scope_key="selected_2023_route",
+            **common,
+        )
+    if subdivided:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT APPLICABLE",
+            scope_key="subdivided_section",
+            **common,
+        )
+    if not solid_rectangle:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT APPLICABLE",
+            scope_key="section_geometry",
+            **common,
+        )
+    if not shear_available or v_ed is None or vrd_c is None:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT ASSESSED",
+            scope_key="shear_resistance_unavailable",
+            **common,
+        )
+    if trd_c is None or trd_c <= 0.0 or vrd_c <= 0.0:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT ASSESSED",
+            scope_key="positive_resistance_unavailable",
+            **common,
+        )
+
+    torsion_ratio = float(t_ed) / float(trd_c)
+    shear_ratio = float(v_ed) / float(vrd_c)
+    value = torsion_ratio + shear_ratio
+    ok = bool(value <= 1.0 + 1.0e-9)
+    return MinimumReinforcementScreenResult(
+        applicable=True,
+        status="PASS" if ok else "FAIL",
+        scope_key="applicable_first_generation_rectangle",
+        value=value,
+        ok=ok,
+        t_ed=float(t_ed),
+        trd_c=float(trd_c),
+        v_ed=float(v_ed),
+        vrd_c=float(vrd_c),
+        torsion_ratio=torsion_ratio,
+        shear_ratio=shear_ratio,
+        governs="torsion" if torsion_ratio >= shear_ratio else "shear",
+        solid=True,
+        model_2023=False,
+        dk_na=bool(dk_na),
+        shear_method=str(shear_method or ""),
+        torsion_method=str(torsion_method or ""),
+        n_ed=n_ed,
+        mx_ed=mx_ed,
+        my_ed=my_ed,
+        normal_or_moment_active=normal_or_moment_active,
+        detailing_status="NOT RUN",
+        detailing_scope_key="separate_detailing_not_run",
     )
 
 

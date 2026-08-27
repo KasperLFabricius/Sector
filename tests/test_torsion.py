@@ -1140,6 +1140,10 @@ def test_app_torsion_subdivided_sums_capacities():
     assert t["governing_sub"] == max(range(len(t["subtubes"])),
                                      key=lambda i: t["subtubes"][i]["util"])
     assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
+    assert t["min_reinf"]["status"] == "NOT APPLICABLE"
+    assert t["min_reinf"]["scope_key"] == "subdivided_section"
+    assert t["min_reinf"]["value"] is None
+    assert t["min_reinf"]["ok"] is None
     longitudinal = t["longitudinal_assessment"]
     required_by_tube = tuple(item["asl_req"] for item in t["subtubes"])
     assert longitudinal["required_by_tube_mm2"] == pytest.approx(
@@ -1322,6 +1326,9 @@ def test_app_torsion_subdivided_view_renders():
         for item in at.session_state["results"]["torsion"]["subtubes"]
     ]
     assert list(table["Asl,req,i (mm2)"]) == required
+    captions = " ".join(item.value for item in at.caption)
+    assert "For a subdivided compound section" in captions
+    assert "minimum reinf. suffices" not in captions
 
 
 def test_app_torsion_subdivided_uses_the_shared_member_angle():
@@ -1609,8 +1616,19 @@ def test_app_min_reinf_screen_evaluated():
                                         + mr["v_ed"] / mr["vrd_c"])
     assert mr["ok"] is (mr["value"] <= 1.0 + 1e-9)
     assert mr["solid"] is True                          # default section has no void
+    assert mr["status"] in {"PASS", "FAIL"}
+    assert mr["scope_key"] == "applicable_first_generation_rectangle"
     _select_view(at, "Torsion")
     assert not at.exception
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    screen = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    assert screen["Status"] == mr["status"]
 
 
 def test_app_min_reinf_screen_needs_shear():
@@ -1621,8 +1639,194 @@ def test_app_min_reinf_screen_needs_shear():
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 15.0))
     mr = at.session_state["results"]["torsion"]["min_reinf"]
     assert mr["applicable"] is False
+    assert mr["status"] == "NOT ASSESSED"
+    assert mr["scope_key"] == "shear_resistance_unavailable"
     _select_view(at, "Torsion")
     assert not at.exception
+    assert any(
+        "Calculate the first-generation V_Rd,c shear result" in item.value
+        for item in at.caption
+    )
+
+
+def test_app_2023_shear_route_never_receives_formula_631_verdict():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    assert mr["status"] == "NOT APPLICABLE"
+    assert mr["scope_key"] == "selected_2023_route"
+    assert mr["value"] is None and mr["ok"] is None
+    assert mr["shear_method"] == codes.EC2_2023.label
+    assert mr["torsion_method"] == codes.EC2_2005_DKNA.label
+
+    _select_view(at, "Torsion")
+    captions = " ".join(item.value for item in at.caption)
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
+    assert "2023 shear-and-torsion" not in captions
+    assert "minimum reinf. suffices" not in captions
+
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    screen = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    assert screen["Status"] == "NOT APPLICABLE"
+    captions = " ".join(item.value for item in at.caption)
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
+    assert "2023 shear-and-torsion" not in captions
+
+
+def test_app_selected_2023_route_without_shear_stays_not_applicable():
+    at = _fresh()
+    at.run()
+    _set(at, ("checkbox", "shear_on", True))
+    _set(at, ("selectbox", "shear_method", codes.EC2_2023.label))
+    _set(
+        at,
+        ("checkbox", "shear_on", False),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    assert mr["status"] == "NOT APPLICABLE"
+    assert mr["scope_key"] == "selected_2023_route"
+    assert mr["model_2023"] is True
+    assert mr["shear_method"] == codes.EC2_2023.label
+    assert mr["torsion_method"] == codes.EC2_2005_DKNA.label
+
+    _select_view(at, "Torsion")
+    captions = " ".join(item.value for item in at.caption)
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
+    assert "2023 shear-and-torsion" not in captions
+    assert "Calculate the first-generation V_Rd,c" not in captions
+
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    screen = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    assert screen["Status"] == "NOT APPLICABLE"
+    captions = " ".join(item.value for item in at.caption)
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
+    assert "2023 shear-and-torsion" not in captions
+    assert "Calculate the first-generation V_Rd,c" not in captions
+
+
+def test_app_hollow_section_never_receives_formula_631_verdict():
+    at = _fresh()
+    at.run()
+    _apply_box_section(at)
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    assert mr["status"] == "NOT APPLICABLE"
+    assert mr["scope_key"] == "section_geometry"
+    assert mr["solid"] is False
+    assert mr["value"] is None and mr["ok"] is None
+
+    _select_view(at, "Torsion")
+    captions = " ".join(item.value for item in at.caption)
+    assert "For this section geometry" in captions
+    assert "complete shear-and-torsion checks" in captions
+    assert "minimum reinf. suffices" not in captions
+
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    screen = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    assert screen["Status"] == "NOT APPLICABLE"
+    captions = " ".join(item.value for item in at.caption)
+    assert "For this section geometry" in captions
+
+
+@pytest.mark.parametrize("shape", ("Circular", "Trapezoid", "T-section"))
+def test_app_nonrectangular_sections_never_receive_formula_631_verdict(shape):
+    at = _fresh()
+    at.run()
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set(at, ("selectbox", "shape", shape))
+    _set_and_click(at, "qs_apply")
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    assert mr["status"] == "NOT APPLICABLE"
+    assert mr["scope_key"] == "section_geometry"
+    assert mr["value"] is None and mr["ok"] is None
+
+    _select_view(at, "Torsion")
+    captions = " ".join(item.value for item in at.caption)
+    assert "For this section geometry" in captions
+    assert "complete shear-and-torsion checks" in captions
+    assert "minimum reinf. suffices" not in captions
 
 
 def test_app_min_reinf_screen_over_limit():
@@ -1644,6 +1848,227 @@ def test_app_min_reinf_screen_over_limit():
     assert mr["applicable"] is True
     assert mr["value"] > 1.0
     assert mr["ok"] is False
+
+
+@pytest.mark.parametrize("condition_status", ("PASS", "FAIL"))
+@pytest.mark.parametrize(
+    ("detailing_status", "detailing_on", "links_present"),
+    (
+        ("PASS", True, True),
+        ("FAIL", True, False),
+        ("NOT RUN", False, False),
+    ),
+)
+def test_app_formula_631_condition_and_detailing_matrix(
+    condition_status,
+    detailing_status,
+    detailing_on,
+    links_present,
+):
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "transverse_detailing_on", detailing_on),
+        ("checkbox", "shear_links", links_present),
+    )
+    changes = [
+        (
+            "number_input",
+            "shear_V",
+            5.0 if condition_status == "PASS" else 200.0,
+        ),
+        (
+            "number_input",
+            "torsion_T",
+            1.0 if condition_status == "PASS" else 60.0,
+        ),
+    ]
+    if links_present:
+        changes.extend((
+            ("number_input", "shear_link_dia", 16.0),
+            ("number_input", "shear_link_s", 100.0),
+        ))
+    _set_and_click(at, "calculate", *changes)
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["status"] == condition_status
+    assert mr["detailing_status"] == detailing_status
+
+    _select_view(at, "Torsion")
+    sum_metric = next(metric for metric in at.metric if "Sum" in metric.label)
+    assert sum_metric.delta == (
+        "low-action condition satisfied"
+        if condition_status == "PASS"
+        else "low-action condition not satisfied"
+    )
+    captions = " ".join(item.value for item in at.caption)
+    assert f"Separate link detailing - {detailing_status}" in captions
+    assert "minimum reinf. suffices" not in captions
+
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    condition = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    separate = overview.loc[
+        overview["Check"]
+        == "Formula (6.31) minimum-reinforcement screen - separate link detailing"
+    ].iloc[0]
+    assert condition["Status"] == condition_status
+    assert separate["Status"] == detailing_status
+
+
+def test_app_dkna_formula_631_scope_tracks_zero_and_signed_normal_actions():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set(
+        at,
+        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+        ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
+    )
+    action_sets = (
+        (0.0, 0.0, 0.0, True),
+        (-20.0, 0.0, 0.0, False),
+        (20.0, 0.0, 0.0, False),
+        (0.0, -15.0, 0.0, False),
+        (0.0, 15.0, 0.0, False),
+        (0.0, 0.0, -10.0, False),
+        (0.0, 0.0, 10.0, False),
+    )
+    for n_ed, mx_ed, my_ed, expected_applicable in action_sets:
+        _set_and_click(
+            at,
+            "calculate",
+            ("number_input", "pl_P", n_ed),
+            ("number_input", "pl_Mx", mx_ed),
+            ("number_input", "pl_My", my_ed),
+            ("number_input", "shear_V", 5.0),
+            ("number_input", "torsion_T", 1.0),
+        )
+        assert not at.exception
+        mr = at.session_state["results"]["torsion"]["min_reinf"]
+        assert mr["applicable"] is expected_applicable
+        assert mr["n_ed"] == pytest.approx(n_ed)
+        assert mr["mx_ed"] == pytest.approx(mx_ed)
+        assert mr["my_ed"] == pytest.approx(my_ed)
+        assert mr["dk_na"] is True
+        assert mr["shear_method"] == codes.EC2_2005_DKNA.label
+        assert mr["torsion_method"] == codes.EC2_2005_DKNA.label
+        assert mr["normal_or_moment_active"] is (not expected_applicable)
+        if expected_applicable:
+            assert mr["scope_key"] == "applicable_first_generation_rectangle"
+            continue
+        assert mr["status"] == "NOT APPLICABLE"
+        assert mr["scope_key"] == "dkna_combined_normal_or_moment"
+        _select_view(at, "Torsion")
+        captions = " ".join(item.value for item in at.caption)
+        assert "DK NA 6.3.2(6) combined N-M-V-T check" in captions
+        assert "low-action condition satisfied" not in captions
+
+
+@pytest.mark.parametrize(
+    "scope_context",
+    (
+        "nonrectangular",
+        "hollow",
+        "subdivided",
+        "unavailable-shear",
+        "selected-2023",
+    ),
+)
+def test_app_dkna_formula_631_requirement_outranks_other_scope_limits(
+    scope_context,
+):
+    at = _fresh()
+    at.run()
+    if scope_context == "nonrectangular":
+        at.session_state["_qs_open"] = True
+        at.run()
+        _set(at, ("selectbox", "shape", "Circular"))
+        _set_and_click(at, "qs_apply")
+    elif scope_context == "hollow":
+        _apply_box_section(at)
+    elif scope_context == "subdivided":
+        _subdivided(at, T=1.0)
+
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    shear_method = (
+        codes.EC2_2023.label
+        if scope_context == "selected-2023"
+        else codes.EC2_2005_DKNA.label
+    )
+    _set(
+        at,
+        ("selectbox", "shear_method", shear_method),
+        ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
+    )
+    if scope_context == "unavailable-shear":
+        _set(at, ("checkbox", "shear_on", False))
+    action_sets = (
+        (-20.0, 0.0, 0.0),
+        (20.0, 0.0, 0.0),
+        (0.0, -15.0, 0.0),
+        (0.0, 15.0, 0.0),
+        (0.0, 0.0, -10.0),
+        (0.0, 0.0, 10.0),
+    )
+    for n_ed, mx_ed, my_ed in action_sets:
+        changes = [
+            ("number_input", "pl_P", n_ed),
+            ("number_input", "pl_Mx", mx_ed),
+            ("number_input", "pl_My", my_ed),
+            ("number_input", "torsion_T", 1.0),
+        ]
+        if scope_context != "unavailable-shear":
+            changes.append(("number_input", "shear_V", 5.0))
+        _set_and_click(at, "calculate", *changes)
+
+        assert not at.exception
+        minimum = at.session_state["results"]["torsion"]["min_reinf"]
+        assert minimum["applicable"] is False
+        assert minimum["status"] == "NOT APPLICABLE"
+        assert minimum["scope_key"] == "dkna_combined_normal_or_moment"
+        assert minimum["normal_or_moment_active"] is True
+        assert minimum["value"] is None and minimum["ok"] is None
+        if scope_context == "selected-2023":
+            assert minimum["model_2023"] is True
+            assert minimum["shear_method"] == codes.EC2_2023.label
+            assert minimum["torsion_method"] == codes.EC2_2005_DKNA.label
+
+        _select_view(at, "Torsion")
+        captions = " ".join(item.value for item in at.caption)
+        assert "DK NA 6.3.2(6) combined N-M-V-T check" in captions
+        assert "low-action condition satisfied" not in captions
+
+        _select_view(at, "Results Overview")
+        overview = next(
+            table.value for table in at.table
+            if "Check" in table.value.columns
+        )
+        screen = overview.loc[
+            overview["Check"]
+            == "Formula (6.31) minimum-reinforcement screen"
+        ].iloc[0]
+        assert screen["Status"] == "NOT APPLICABLE"
+        captions = " ".join(item.value for item in at.caption)
+        assert "DK NA 6.3.2(6) combined N-M-V-T check" in captions
+        assert "low-action condition satisfied" not in captions
 
 
 def test_biaxial_torsion_retains_and_presents_directional_631_screens():
@@ -1674,6 +2099,7 @@ def test_biaxial_torsion_retains_and_presents_directional_631_screens():
         assert mr["value"] == pytest.approx(
             mr["t_ed"] / mr["trd_c"] + mr["v_ed"] / mr["vrd_c"]
         )
+        assert mr["status"] in {"PASS", "FAIL"}
         assert item["directional_min_reinf_governing_face"] in {
             "negative", "positive"
         }
@@ -1687,8 +2113,54 @@ def test_biaxial_torsion_retains_and_presents_directional_631_screens():
         "Vx,Ed + TEd", "Vy,Ed + TEd"
     }
     assert set(table["Outcome"]) <= {
-        "minimum sufficient", "designed reinforcement required"
+        "low-action condition satisfied",
+        "low-action condition not satisfied",
     }
+    assert set(table["Separate detailing"]) == {"NOT RUN"}
+    assert set(table["Status"]) <= {"PASS", "FAIL"}
+    assert all(
+        "approximately solid rectangular section" in value
+        for value in table["Scope / guidance"]
+    )
+
+
+def test_biaxial_formula_631_screens_remain_visible_without_shared_links():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_Vx", 20.0),
+        ("number_input", "shear_Vy", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    torsion = at.session_state["results"]["torsion"]
+    assert torsion["closed_links_present"] is False
+    assert torsion["transverse_resistance_assessed"] is False
+    directional = torsion["directional_interactions"]
+    assert set(directional) == {"vx", "vy"}
+    assert all(item["min_reinf"]["applicable"] for item in directional.values())
+
+    _select_view(at, "Torsion")
+    table = next(
+        frame.value for frame in at.dataframe
+        if "Directional 6.31 screen" in frame.value.columns
+    )
+    assert set(table["Directional 6.31 screen"]) == {
+        "Vx,Ed + TEd", "Vy,Ed + TEd"
+    }
+    assert set(table["Status"]) <= {"PASS", "FAIL"}
+    assert all(
+        "approximately solid rectangular section" in value
+        for value in table["Scope / guidance"]
+    )
 
 
 def test_app_torsion_is_saved_and_restored():

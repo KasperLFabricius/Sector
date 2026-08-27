@@ -7,6 +7,7 @@ import math
 import inspect
 import pathlib
 import sys
+from dataclasses import asdict
 
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from app import modelled_direction  # noqa: E402
+from sector import combined as combined_core  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 
 
@@ -219,6 +221,250 @@ def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
     assert selected["minimum_reinforcement"] == {
         "case_id": "PL-INF", "component": "vx",
     }
+
+
+@pytest.mark.parametrize(
+    ("check", "status", "note"),
+    [
+        (
+            {
+                "applicable": True,
+                "status": "PASS",
+                "scope_key": "applicable_first_generation_rectangle",
+                "value": 0.8,
+                "ok": True,
+            },
+            "PASS",
+            "approximately solid rectangular section",
+        ),
+        (
+            {
+                "applicable": False,
+                "status": "NOT APPLICABLE",
+                "scope_key": "section_geometry",
+                "value": None,
+                "ok": None,
+            },
+            "NOT APPLICABLE",
+            "complete shear-and-torsion checks",
+        ),
+        (
+            {
+                "applicable": False,
+                "status": "NOT ASSESSED",
+                "scope_key": "shear_resistance_unavailable",
+                "value": None,
+                "ok": None,
+            },
+            "NOT ASSESSED",
+            "Calculate the first-generation V_Rd,c shear result",
+        ),
+    ],
+)
+def test_formula_631_status_and_engineer_guidance_are_retained(
+    check,
+    status,
+    note,
+):
+    assert presentation.minimum_reinforcement_screen_status(check) == status
+    assert note in presentation.minimum_reinforcement_screen_note(check)
+
+
+def test_formula_631_scope_row_remains_in_the_governing_overview():
+    inp = {
+        "mode": "",
+        "torsion_on": True,
+        "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
+    }
+    torsion = {
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "closed_links_present": True,
+        "assessment_status": "NOT ASSESSED",
+        "min_reinf": {
+            "applicable": False,
+            "status": "NOT APPLICABLE",
+            "scope_key": "selected_2023_route",
+            "value": None,
+            "ok": None,
+        },
+    }
+
+    selected = presentation.governing_summary_rows(
+        presentation.result_summary_rows(inp, {"torsion": torsion})
+    )
+    result_rows = presentation.governing_result_rows(selected)
+    information_rows = presentation.governing_information_rows(selected)
+    screen = next(row for row in result_rows if "6.31" in row["check"])
+
+    assert screen["status"] == "NOT APPLICABLE"
+    assert "selected 2023 shear method" in screen["note"]
+    assert "Assess shear using the 2023 check" in screen["note"]
+    assert "assess torsion and interaction using their selected methods" in screen["note"]
+    assert "reported 2023 shear check" not in screen["note"]
+    assert "2023 shear-and-torsion" not in screen["note"]
+    assert screen not in information_rows
+
+
+@pytest.mark.parametrize(
+    ("scope_context", "scope_overrides"),
+    (
+        ("nonrectangular", {"solid_rectangle": False}),
+        ("hollow", {"solid_rectangle": False}),
+        (
+            "subdivided",
+            {"solid_rectangle": False, "subdivided": True},
+        ),
+        (
+            "unavailable-shear",
+            {"shear_available": False, "v_ed": None, "vrd_c": None},
+        ),
+        (
+            "selected-2023",
+            {
+                "model_2023": True,
+                "shear_method": "DS/EN 1992-1-1:2023",
+                "torsion_method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+            },
+        ),
+    ),
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+@pytest.mark.parametrize(
+    ("action", "value"),
+    (
+        ("n_ed", -20.0),
+        ("n_ed", 20.0),
+        ("mx_ed", -15.0),
+        ("mx_ed", 15.0),
+        ("my_ed", -10.0),
+        ("my_ed", 10.0),
+    ),
+)
+def test_formula_631_overview_keeps_dkna_combined_requirement(
+    scope_context,
+    scope_overrides,
+    action,
+    value,
+):
+    inputs = dict(
+        t_ed=15.0,
+        trd_c=60.0,
+        v_ed=30.0,
+        vrd_c=120.0,
+        solid_rectangle=True,
+        subdivided=False,
+        model_2023=False,
+        shear_available=True,
+        dk_na=True,
+        shear_method="DS/EN 1992-1-1:2005 + DK NA:2024",
+        torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
+        n_ed=0.0,
+        mx_ed=0.0,
+        my_ed=0.0,
+    )
+    inputs.update(scope_overrides)
+    inputs[action] = value
+    minimum = asdict(
+        combined_core.minimum_reinforcement_screen_result(**inputs)
+    )
+    inp = {
+        "mode": "",
+        "torsion_on": True,
+        "plastic_case": {"id": "PL-DK", "type": "ULS", "source": "C1"},
+    }
+    torsion = {
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "closed_links_present": True,
+        "assessment_status": "NOT ASSESSED",
+        "min_reinf": minimum,
+    }
+
+    rows = presentation.result_summary_rows(inp, {"torsion": torsion})
+    screen = next(
+        row for row in rows
+        if row["check"] == "Formula (6.31) minimum-reinforcement screen"
+    )
+
+    assert screen["status"] == "NOT APPLICABLE"
+    assert scope_context in {
+        "nonrectangular", "hollow", "subdivided", "unavailable-shear",
+        "selected-2023",
+    }
+    if scope_context == "selected-2023":
+        assert minimum["model_2023"] is True
+        assert minimum["shear_method"] == "DS/EN 1992-1-1:2023"
+        assert minimum["torsion_method"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
+    assert "DK NA 6.3.2(6) combined N-M-V-T check" in screen["note"]
+    assert "low-action condition satisfied" not in screen["note"].casefold()
+
+
+@pytest.mark.parametrize("condition_status", ("PASS", "FAIL"))
+@pytest.mark.parametrize(
+    ("detailing_status", "detailing_scope_key"),
+    (
+        ("PASS", "separate_detailing_passed"),
+        ("FAIL", "separate_detailing_failed"),
+        ("NOT RUN", "separate_detailing_not_run"),
+    ),
+)
+def test_formula_631_condition_and_detailing_matrix_remain_separate(
+    condition_status,
+    detailing_status,
+    detailing_scope_key,
+):
+    value = 0.8 if condition_status == "PASS" else 1.2
+    minimum = {
+        "applicable": True,
+        "status": condition_status,
+        "scope_key": "applicable_first_generation_rectangle",
+        "value": value,
+        "ok": condition_status == "PASS",
+        "detailing_status": detailing_status,
+        "detailing_scope_key": detailing_scope_key,
+    }
+    inp = {
+        "mode": "",
+        "torsion_on": True,
+        "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
+    }
+    torsion = {
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "closed_links_present": True,
+        "assessment_status": "NOT ASSESSED",
+        "min_reinf": minimum,
+    }
+
+    rows = presentation.result_summary_rows(inp, {"torsion": torsion})
+    condition = next(
+        row for row in rows
+        if row.get("overview_key") == "torsion:minimum_reinforcement"
+    )
+    detailing = next(
+        row for row in rows
+        if row.get("overview_key")
+        == "torsion:minimum_reinforcement:detailing"
+    )
+
+    assert condition["status"] == condition_status
+    assert presentation.minimum_reinforcement_screen_outcome(minimum) in {
+        "low-action condition satisfied",
+        "low-action condition not satisfied",
+    }
+    assert "suffices" not in condition["note"].casefold()
+    assert detailing["status"] == detailing_status
+    assert detailing["overview_scope_in_result_table"] is True
+    if detailing_status == "PASS":
+        assert "ratio and spacing" in detailing["note"]
+    elif detailing_status == "FAIL":
+        assert "checks fail" in detailing["note"]
+    else:
+        assert "was not selected" in detailing["note"]
 
 
 def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():

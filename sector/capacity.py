@@ -1265,6 +1265,7 @@ def aggregate_assessment_status(statuses):
         "NOT RUN",
         "CONDITIONAL",
         "PASS",
+        "NOT APPLICABLE",
     ):
         if status in values:
             return status
