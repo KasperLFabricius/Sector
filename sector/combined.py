@@ -220,6 +220,13 @@ def minimum_reinforcement_screen_result(
         detailing_status="NOT RUN",
         detailing_scope_key="separate_detailing_not_run",
     )
+    if dk_na and normal_or_moment_active:
+        return MinimumReinforcementScreenResult(
+            applicable=False,
+            status="NOT APPLICABLE",
+            scope_key="dkna_combined_normal_or_moment",
+            **common,
+        )
     if model_2023:
         return MinimumReinforcementScreenResult(
             applicable=False,
@@ -239,13 +246,6 @@ def minimum_reinforcement_screen_result(
             applicable=False,
             status="NOT APPLICABLE",
             scope_key="section_geometry",
-            **common,
-        )
-    if dk_na and normal_or_moment_active:
-        return MinimumReinforcementScreenResult(
-            applicable=False,
-            status="NOT APPLICABLE",
-            scope_key="dkna_combined_normal_or_moment",
             **common,
         )
     if not shear_available or v_ed is None or vrd_c is None:

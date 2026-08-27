@@ -98,7 +98,10 @@ def test_manual_limits_formula_631_condition_and_separates_detailing():
     assert "approximately solid rectangular sections" in text
     assert "first-generation $V_{Rd,c}$ route" in text
     assert "Hollow, circular, triangular, flanged or compound sections" in text
-    assert "2023 shear route do not" in text
+    assert "For the 2023 shear method, Formula (6.31) is unavailable" in text
+    assert "separately reported 2023 shear check" in text
+    assert "independently selected torsion and interaction checks" in text
+    assert "2023 shear-and-torsion" not in text
     assert "low-action screen" in text
     assert "does not verify the minimum ratio, spacing" in text
     assert "PASS, FAIL, NOT RUN or NOT ASSESSED" in text

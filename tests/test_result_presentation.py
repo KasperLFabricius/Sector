@@ -7,6 +7,7 @@ import math
 import inspect
 import pathlib
 import sys
+from dataclasses import asdict
 
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from app import modelled_direction  # noqa: E402
+from sector import combined as combined_core  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 
 
@@ -297,8 +299,93 @@ def test_formula_631_scope_row_remains_in_the_governing_overview():
     screen = next(row for row in result_rows if "6.31" in row["check"])
 
     assert screen["status"] == "NOT APPLICABLE"
-    assert "selected 2023 shear-and-torsion checks" in screen["note"]
+    assert "selected 2023 shear method" in screen["note"]
+    assert "reported 2023 shear check" in screen["note"]
+    assert "independently selected torsion and interaction checks" in screen["note"]
+    assert "2023 shear-and-torsion" not in screen["note"]
     assert screen not in information_rows
+
+
+@pytest.mark.parametrize(
+    ("scope_context", "scope_overrides"),
+    (
+        ("nonrectangular", {"solid_rectangle": False}),
+        ("hollow", {"solid_rectangle": False}),
+        (
+            "subdivided",
+            {"solid_rectangle": False, "subdivided": True},
+        ),
+        (
+            "unavailable-shear",
+            {"shear_available": False, "v_ed": None, "vrd_c": None},
+        ),
+    ),
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+@pytest.mark.parametrize(
+    ("action", "value"),
+    (
+        ("n_ed", -20.0),
+        ("n_ed", 20.0),
+        ("mx_ed", -15.0),
+        ("mx_ed", 15.0),
+        ("my_ed", -10.0),
+        ("my_ed", 10.0),
+    ),
+)
+def test_formula_631_overview_keeps_dkna_combined_requirement(
+    scope_context,
+    scope_overrides,
+    action,
+    value,
+):
+    inputs = dict(
+        t_ed=15.0,
+        trd_c=60.0,
+        v_ed=30.0,
+        vrd_c=120.0,
+        solid_rectangle=True,
+        subdivided=False,
+        model_2023=False,
+        shear_available=True,
+        dk_na=True,
+        shear_method="DS/EN 1992-1-1:2005 + DK NA:2024",
+        torsion_method="DS/EN 1992-1-1:2005 + DK NA:2024",
+        n_ed=0.0,
+        mx_ed=0.0,
+        my_ed=0.0,
+    )
+    inputs.update(scope_overrides)
+    inputs[action] = value
+    minimum = asdict(
+        combined_core.minimum_reinforcement_screen_result(**inputs)
+    )
+    inp = {
+        "mode": "",
+        "torsion_on": True,
+        "plastic_case": {"id": "PL-DK", "type": "ULS", "source": "C1"},
+    }
+    torsion = {
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "closed_links_present": True,
+        "assessment_status": "NOT ASSESSED",
+        "min_reinf": minimum,
+    }
+
+    rows = presentation.result_summary_rows(inp, {"torsion": torsion})
+    screen = next(
+        row for row in rows
+        if row["check"] == "Formula (6.31) minimum-reinforcement screen"
+    )
+
+    assert screen["status"] == "NOT APPLICABLE"
+    assert scope_context in {
+        "nonrectangular", "hollow", "subdivided", "unavailable-shear"
+    }
+    assert "DK NA 6.3.2(6) combined N-M-V-T check" in screen["note"]
+    assert "low-action condition satisfied" not in screen["note"].casefold()
 
 
 @pytest.mark.parametrize("condition_status", ("PASS", "FAIL"))

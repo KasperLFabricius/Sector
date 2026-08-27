@@ -1671,11 +1671,15 @@ def test_app_2023_shear_route_never_receives_formula_631_verdict():
     assert mr["status"] == "NOT APPLICABLE"
     assert mr["scope_key"] == "selected_2023_route"
     assert mr["value"] is None and mr["ok"] is None
+    assert mr["shear_method"] == codes.EC2_2023.label
+    assert mr["torsion_method"] == codes.EC2_2005_DKNA.label
 
     _select_view(at, "Torsion")
     captions = " ".join(item.value for item in at.caption)
-    assert "belongs to the first-generation EN 1992-1-1 route" in captions
-    assert "use the selected 2023 shear-and-torsion checks" in captions
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "reported 2023 shear check" in captions
+    assert "independently selected torsion and interaction checks" in captions
+    assert "2023 shear-and-torsion" not in captions
     assert "minimum reinf. suffices" not in captions
 
     _select_view(at, "Results Overview")
@@ -1688,7 +1692,10 @@ def test_app_2023_shear_route_never_receives_formula_631_verdict():
     ].iloc[0]
     assert screen["Status"] == "NOT APPLICABLE"
     captions = " ".join(item.value for item in at.caption)
-    assert "use the selected 2023 shear-and-torsion checks" in captions
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "reported 2023 shear check" in captions
+    assert "independently selected torsion and interaction checks" in captions
+    assert "2023 shear-and-torsion" not in captions
 
 
 def test_app_selected_2023_route_without_shear_stays_not_applicable():
@@ -1714,10 +1721,14 @@ def test_app_selected_2023_route_without_shear_stays_not_applicable():
     assert mr["scope_key"] == "selected_2023_route"
     assert mr["model_2023"] is True
     assert mr["shear_method"] == codes.EC2_2023.label
+    assert mr["torsion_method"] == codes.EC2_2005_DKNA.label
 
     _select_view(at, "Torsion")
     captions = " ".join(item.value for item in at.caption)
-    assert "use the selected 2023 shear-and-torsion checks" in captions
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "reported 2023 shear check" in captions
+    assert "independently selected torsion and interaction checks" in captions
+    assert "2023 shear-and-torsion" not in captions
     assert "Calculate the first-generation V_Rd,c" not in captions
 
     _select_view(at, "Results Overview")
@@ -1730,6 +1741,10 @@ def test_app_selected_2023_route_without_shear_stays_not_applicable():
     ].iloc[0]
     assert screen["Status"] == "NOT APPLICABLE"
     captions = " ".join(item.value for item in at.caption)
+    assert "unavailable for the selected 2023 shear method" in captions
+    assert "reported 2023 shear check" in captions
+    assert "independently selected torsion and interaction checks" in captions
+    assert "2023 shear-and-torsion" not in captions
     assert "Calculate the first-generation V_Rd,c" not in captions
 
 
@@ -1954,6 +1969,84 @@ def test_app_dkna_formula_631_scope_tracks_zero_and_signed_normal_actions():
         assert mr["status"] == "NOT APPLICABLE"
         assert mr["scope_key"] == "dkna_combined_normal_or_moment"
         _select_view(at, "Torsion")
+        captions = " ".join(item.value for item in at.caption)
+        assert "DK NA 6.3.2(6) combined N-M-V-T check" in captions
+        assert "low-action condition satisfied" not in captions
+
+
+@pytest.mark.parametrize(
+    "scope_context",
+    ("nonrectangular", "hollow", "subdivided", "unavailable-shear"),
+)
+def test_app_dkna_formula_631_requirement_outranks_other_scope_limits(
+    scope_context,
+):
+    at = _fresh()
+    at.run()
+    if scope_context == "nonrectangular":
+        at.session_state["_qs_open"] = True
+        at.run()
+        _set(at, ("selectbox", "shape", "Circular"))
+        _set_and_click(at, "qs_apply")
+    elif scope_context == "hollow":
+        _apply_box_section(at)
+    elif scope_context == "subdivided":
+        _subdivided(at, T=1.0)
+
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set(
+        at,
+        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+        ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
+    )
+    if scope_context == "unavailable-shear":
+        _set(at, ("checkbox", "shear_on", False))
+    action_sets = (
+        (-20.0, 0.0, 0.0),
+        (20.0, 0.0, 0.0),
+        (0.0, -15.0, 0.0),
+        (0.0, 15.0, 0.0),
+        (0.0, 0.0, -10.0),
+        (0.0, 0.0, 10.0),
+    )
+    for n_ed, mx_ed, my_ed in action_sets:
+        changes = [
+            ("number_input", "pl_P", n_ed),
+            ("number_input", "pl_Mx", mx_ed),
+            ("number_input", "pl_My", my_ed),
+            ("number_input", "torsion_T", 1.0),
+        ]
+        if scope_context != "unavailable-shear":
+            changes.append(("number_input", "shear_V", 5.0))
+        _set_and_click(at, "calculate", *changes)
+
+        assert not at.exception
+        minimum = at.session_state["results"]["torsion"]["min_reinf"]
+        assert minimum["applicable"] is False
+        assert minimum["status"] == "NOT APPLICABLE"
+        assert minimum["scope_key"] == "dkna_combined_normal_or_moment"
+        assert minimum["normal_or_moment_active"] is True
+        assert minimum["value"] is None and minimum["ok"] is None
+
+        _select_view(at, "Torsion")
+        captions = " ".join(item.value for item in at.caption)
+        assert "DK NA 6.3.2(6) combined N-M-V-T check" in captions
+        assert "low-action condition satisfied" not in captions
+
+        _select_view(at, "Results Overview")
+        overview = next(
+            table.value for table in at.table
+            if "Check" in table.value.columns
+        )
+        screen = overview.loc[
+            overview["Check"]
+            == "Formula (6.31) minimum-reinforcement screen"
+        ].iloc[0]
+        assert screen["Status"] == "NOT APPLICABLE"
         captions = " ".join(item.value for item in at.caption)
         assert "DK NA 6.3.2(6) combined N-M-V-T check" in captions
         assert "low-action condition satisfied" not in captions

@@ -5888,6 +5888,7 @@ def test_report_profiles_use_selected_2023_scope_when_shear_is_disabled(profile)
         solid=True,
         model_2023=True,
         shear_method=codes.EC2_2023.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
         detailing_status="NOT RUN",
         detailing_scope_key="separate_detailing_not_run",
     )
@@ -5897,6 +5898,7 @@ def test_report_profiles_use_selected_2023_scope_when_shear_is_disabled(profile)
         torsion_on=True,
         shear_on=False,
         shear_method=codes.EC2_2023.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
     )
 
     text = " ".join(
@@ -5907,7 +5909,10 @@ def test_report_profiles_use_selected_2023_scope_when_shear_is_disabled(profile)
         ).split()
     )
 
-    assert "use the selected 2023 shear-and-torsion checks" in text
+    assert "unavailable for the selected 2023 shear method" in text
+    assert "reported 2023 shear check" in text
+    assert "independently selected torsion and interaction checks" in text
+    assert "2023 shear-and-torsion" not in text
     assert "Calculate the first-generation V_Rd,c" not in text
     assert "low-action condition satisfied" not in text.casefold()
 
@@ -5992,6 +5997,95 @@ def test_report_profiles_retain_dkna_formula_631_normal_and_moment_scope(
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 @pytest.mark.parametrize(
+    ("scope_context", "scope_overrides"),
+    (
+        ("nonrectangular", {"solid_rectangle": False}),
+        ("hollow", {"solid_rectangle": False}),
+        (
+            "subdivided",
+            {"solid_rectangle": False, "subdivided": True},
+        ),
+        (
+            "unavailable-shear",
+            {"shear_available": False, "v_ed": None, "vrd_c": None},
+        ),
+    ),
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+@pytest.mark.parametrize(
+    ("action", "value"),
+    (
+        ("n_ed", -20.0),
+        ("n_ed", 20.0),
+        ("mx_ed", -15.0),
+        ("mx_ed", 15.0),
+        ("my_ed", -10.0),
+        ("my_ed", 10.0),
+    ),
+)
+def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
+    profile,
+    scope_context,
+    scope_overrides,
+    action,
+    value,
+):
+    inputs = dict(
+        t_ed=15.0,
+        trd_c=60.0,
+        v_ed=30.0,
+        vrd_c=120.0,
+        solid_rectangle=True,
+        subdivided=False,
+        model_2023=False,
+        shear_available=True,
+        dk_na=True,
+        shear_method=codes.EC2_2005_DKNA.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
+        n_ed=0.0,
+        mx_ed=0.0,
+        my_ed=0.0,
+    )
+    inputs.update(scope_overrides)
+    inputs[action] = value
+    minimum = asdict(
+        combined_core.minimum_reinforcement_screen_result(**inputs)
+    )
+    out = _out()
+    torsion = _torsion_out()
+    torsion["min_reinf"] = minimum
+    out["torsion"] = torsion
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        shear_on=inputs["shear_available"],
+        shear_method=codes.EC2_2005_DKNA.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
+        P_pl=inputs["n_ed"],
+        Mx_pl=inputs["mx_ed"],
+        My_pl=inputs["my_ed"],
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert minimum["status"] == "NOT APPLICABLE"
+    assert minimum["scope_key"] == "dkna_combined_normal_or_moment"
+    assert scope_context in {
+        "nonrectangular", "hollow", "subdivided", "unavailable-shear"
+    }
+    assert "With acting N_Ed or M_Ed under the Danish National Annex" in text
+    assert "DK NA 6.3.2(6) combined N-M-V-T check" in text
+    assert "low-action condition satisfied" not in text.casefold()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
     ("status", "reason", "note"),
     (
         (
@@ -6007,7 +6101,7 @@ def test_report_profiles_retain_dkna_formula_631_normal_and_moment_scope(
         (
             "NOT APPLICABLE",
             "selected_2023_route",
-            "belongs to the first-generation EN 1992-1-1 route",
+            "unavailable for the selected 2023 shear method",
         ),
         (
             "NOT ASSESSED",
@@ -6043,6 +6137,15 @@ def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
     out["torsion"] = t
     inp = _inp()
     inp.update(torsion_on=True, shear_on=True)
+    if reason == "selected_2023_route":
+        t["min_reinf"].update(
+            shear_method=codes.EC2_2023.label,
+            torsion_method=codes.EC2_2005_DKNA.label,
+        )
+        inp.update(
+            shear_method=codes.EC2_2023.label,
+            torsion_method=codes.EC2_2005_DKNA.label,
+        )
 
     txt = " ".join(
         _pdf_text(
@@ -6057,6 +6160,10 @@ def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
     assert status in txt
     assert note in txt
     assert "low-action condition satisfied" not in txt.casefold()
+    if reason == "selected_2023_route":
+        assert "reported 2023 shear check" in txt
+        assert "independently selected torsion and interaction checks" in txt
+        assert "2023 shear-and-torsion" not in txt
 
 
 def _combined_out(mv_independent=False):

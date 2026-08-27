@@ -165,6 +165,71 @@ def test_dkna_formula_631_scope_rejects_signed_normal_or_moment_actions(
     assert "DK NA:2024" in result.torsion_method
 
 
+@pytest.mark.parametrize(
+    ("scope_context", "scope_overrides"),
+    (
+        ("nonrectangular", {"solid_rectangle": False}),
+        ("hollow", {"solid_rectangle": False}),
+        (
+            "subdivided",
+            {"solid_rectangle": False, "subdivided": True},
+        ),
+        (
+            "unavailable-shear",
+            {"shear_available": False, "v_ed": None, "vrd_c": None},
+        ),
+    ),
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+@pytest.mark.parametrize(
+    ("action", "value"),
+    (
+        ("n_ed", -20.0),
+        ("n_ed", 20.0),
+        ("mx_ed", -15.0),
+        ("mx_ed", 15.0),
+        ("my_ed", -10.0),
+        ("my_ed", 10.0),
+    ),
+)
+def test_dkna_formula_631_requirement_outranks_other_scope_limitations(
+    scope_context,
+    scope_overrides,
+    action,
+    value,
+):
+    inputs = dict(
+        t_ed=15.0,
+        trd_c=60.0,
+        v_ed=30.0,
+        vrd_c=120.0,
+        solid_rectangle=True,
+        subdivided=False,
+        model_2023=False,
+        shear_available=True,
+        dk_na=True,
+        shear_method=codes.EC2_2005_DKNA.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
+        n_ed=0.0,
+        mx_ed=0.0,
+        my_ed=0.0,
+    )
+    inputs.update(scope_overrides)
+    inputs[action] = value
+
+    result = combined.minimum_reinforcement_screen_result(**inputs)
+
+    assert scope_context in {
+        "nonrectangular", "hollow", "subdivided", "unavailable-shear"
+    }
+    assert result.applicable is False
+    assert result.status == "NOT APPLICABLE"
+    assert result.scope_key == "dkna_combined_normal_or_moment"
+    assert result.normal_or_moment_active is True
+    assert result.dk_na is True
+    assert result.value is None and result.ok is None
+
+
 def test_dkna_formula_631_scope_accepts_exact_zero_normal_and_moment_actions():
     result = combined.minimum_reinforcement_screen_result(
         15.0,
