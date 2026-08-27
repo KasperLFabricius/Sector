@@ -88,6 +88,20 @@ def test_manual_blocks_are_wellformed():
             assert all(len(row) == len(headers) for row in rows)  # rectangular
 
 
+def test_manual_limits_formula_631_sufficiency_to_supported_scope():
+    text = "\n".join(
+        str(block[2] if block[0] == "callout" else block[1])
+        for block in manual.manual_blocks()
+        if block[0] in {"md", "callout"}
+    )
+
+    assert "approximately solid rectangular sections" in text
+    assert "first-generation $V_{Rd,c}$ route" in text
+    assert "Hollow, circular, triangular, flanged or compound sections" in text
+    assert "2023 shear route do not" in text
+    assert "use their complete shear-and-torsion checks" in text
+
+
 def test_manual_dkna_combined_rule_includes_n_and_action_alone_resistances():
     text = "\n".join(
         str(block[2] if block[0] == "callout" else block[1])

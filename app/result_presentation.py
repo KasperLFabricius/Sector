@@ -1383,6 +1383,64 @@ def torsion_assessment_note(torsion):
     )
 
 
+_MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
+    "applicable_first_generation_rectangle": (
+        "Formula (6.31) uses the first-generation V_Rd,c result for this "
+        "approximately solid rectangular section"
+    ),
+    "selected_2023_route": (
+        "Formula (6.31) belongs to the first-generation EN 1992-1-1 route; "
+        "use the selected 2023 shear-and-torsion checks"
+    ),
+    "subdivided_section": (
+        "For a subdivided compound section, use the complete sub-tube "
+        "shear-and-torsion checks; Formula (6.31) is limited to approximately "
+        "solid rectangular sections"
+    ),
+    "section_geometry": (
+        "For this section geometry, use the complete shear-and-torsion checks; "
+        "Formula (6.31) is evaluated for approximately solid rectangular "
+        "sections"
+    ),
+    "shear_resistance_unavailable": (
+        "Calculate the first-generation V_Rd,c shear result to evaluate "
+        "Formula (6.31) for this rectangular section"
+    ),
+    "positive_resistance_unavailable": (
+        "A positive T_Rd,c and V_Rd,c are required to evaluate Formula (6.31)"
+    ),
+}
+
+
+def minimum_reinforcement_screen_status(check):
+    """Return the retained Formula (6.31) applicability/verdict state."""
+
+    check = check or {}
+    retained = str(check.get("status") or "").upper()
+    if retained in {"PASS", "FAIL", "NOT ASSESSED", "NOT APPLICABLE"}:
+        return retained
+    if not check.get("applicable"):
+        return "NOT ASSESSED"
+    value = _publication_metric(check.get("value"))
+    if value is None:
+        return "NOT ASSESSED"
+    return "PASS" if bool(check.get("ok")) else "FAIL"
+
+
+def minimum_reinforcement_screen_note(check):
+    """Return concise engineer guidance for one Formula (6.31) screen."""
+
+    check = check or {}
+    reason = str(check.get("scope_key") or check.get("reason") or "").strip()
+    return _MINIMUM_REINFORCEMENT_SCREEN_NOTES.get(
+        reason,
+        (
+            "Formula (6.31) requires an approximately solid rectangular section "
+            "and a first-generation V_Rd,c shear result"
+        ),
+    )
+
+
 def _map_assessment_status(status):
     return {
         "OK": "PASS",
@@ -2322,6 +2380,64 @@ def result_summary_rows(inp, results, *, stale=False):
                     overview_parent="torsion",
                 ))
 
+        def append_minimum_reinforcement_screen(
+            minimum,
+            *,
+            label="Formula (6.31) minimum-reinforcement screen",
+            overview_key="torsion:minimum_reinforcement",
+        ):
+            if not isinstance(minimum, Mapping):
+                return
+            status = minimum_reinforcement_screen_status(minimum)
+            value = _publication_metric(minimum.get("value"))
+            scope_note = minimum_reinforcement_screen_note(minimum)
+            if status == "PASS":
+                note = (
+                    "Minimum reinforcement suffices within this screen; "
+                    + scope_note
+                )
+            elif status == "FAIL":
+                note = "Designed reinforcement is required; " + scope_note
+            else:
+                note = scope_note
+            row = _summary_row(
+                label,
+                "plastic",
+                status,
+                _percent(value) if minimum.get("applicable") else "-",
+                (
+                    "<= 100 %"
+                    if minimum.get("applicable")
+                    else "Approximately solid rectangular; first-generation route"
+                ),
+                value if minimum.get("applicable") else None,
+                "Torsion",
+                note,
+                inp,
+                overview_key=overview_key,
+                overview_parent="torsion",
+            )
+            # Applicability is the engineering result of this bounded screen.
+            # Keep its explanation in the shared overview rather than reducing
+            # it to a status-only calculation-state line.
+            row["overview_scope_in_result_table"] = True
+            rows.append(row)
+
+        directional_screens = torsion.get("directional_interactions") or {}
+        if directional_screens:
+            for component, label in (
+                ("vx", "Vx+T Formula (6.31) minimum-reinforcement screen"),
+                ("vy", "Vy+T Formula (6.31) minimum-reinforcement screen"),
+            ):
+                item = directional_screens.get(component) or {}
+                append_minimum_reinforcement_screen(
+                    item.get("min_reinf"),
+                    label=label,
+                    overview_key=f"torsion:minimum_reinforcement:{component}",
+                )
+        else:
+            append_minimum_reinforcement_screen(torsion.get("min_reinf"))
+
     combined = results.get("combined")
     if combined is None and inp.get("combined_on"):
         torsion_not_assessed = (
@@ -2770,8 +2886,11 @@ def governing_result_rows(rows):
     return [
         dict(row)
         for row in rows
-        if str(row.get("status") or "").upper()
-        not in GOVERNING_OVERVIEW_INFORMATION_STATUSES
+        if (
+            row.get("overview_scope_in_result_table") is True
+            or str(row.get("status") or "").upper()
+            not in GOVERNING_OVERVIEW_INFORMATION_STATUSES
+        )
     ]
 
 
@@ -2781,8 +2900,11 @@ def governing_information_rows(rows):
     return [
         dict(row)
         for row in rows
-        if str(row.get("status") or "").upper()
-        in GOVERNING_OVERVIEW_INFORMATION_STATUSES
+        if (
+            row.get("overview_scope_in_result_table") is not True
+            and str(row.get("status") or "").upper()
+            in GOVERNING_OVERVIEW_INFORMATION_STATUSES
+        )
     ]
 
 

@@ -1060,10 +1060,13 @@ def manual_blocks() -> list:
          "independent directional checks. With torsion, each V+T direction is "
          "calculated separately. Simultaneous Vx+Vy or Vx+Vy+T interaction requires "
          "a separate member check.")
-    md("Where torsion is active, the report also shows the directional Equation "
-       "6.31 minimum-reinforcement screen for Vx+T and Vy+T. This screen states "
-       "whether minimum reinforcement suffices; the resistance checks remain "
-       "separate.")
+    md("Where torsion is active, the report also shows the directional Formula "
+       "(6.31) minimum-reinforcement screen for Vx+T and Vy+T. A sufficiency "
+       "verdict is calculated only for approximately solid rectangular sections "
+       "using the first-generation $V_{Rd,c}$ route. Hollow, circular, "
+       "triangular, flanged or compound sections and the 2023 shear route do not "
+       "receive that verdict; use their complete shear-and-torsion checks. The "
+       "resistance checks remain separate.")
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],

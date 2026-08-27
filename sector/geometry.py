@@ -657,6 +657,74 @@ def polygon_is_convex(verts: Vertices, tol: float = 1e-12) -> bool:
     return True
 
 
+def polygon_is_approximately_rectangle(
+    verts: Vertices,
+    *,
+    relative_tolerance: float = 1.0e-8,
+) -> bool:
+    """Whether one polygon represents an approximately rectangular outline.
+
+    The classification is rotation and translation invariant. Intermediate
+    collinear boundary points are accepted, while trapezoidal, curved,
+    triangular and re-entrant outlines are rejected. The tolerance classifies
+    representation roundoff only; it does not alter the calculation geometry.
+    """
+
+    try:
+        arr = ring_without_terminal_closure(verts)
+    except (TypeError, ValueError):
+        return False
+    if len(arr) < 4 or not np.isfinite(arr).all():
+        return False
+    local = arr - arr[0]
+    edges = np.roll(local, -1, axis=0) - local
+    lengths = np.linalg.norm(edges, axis=1)
+    span = np.ptp(local, axis=0)
+    scale = max(float(np.max(span)), 1.0e-12)
+    length_tolerance = max(1.0e-12, relative_tolerance * scale)
+    if np.any(lengths <= length_tolerance):
+        return False
+
+    ux = edges[0] / lengths[0]
+    uy = np.asarray((-ux[1], ux[0]), dtype=float)
+    for edge, length in zip(edges, lengths, strict=True):
+        along_x = abs(float(np.dot(edge, uy)))
+        along_y = abs(float(np.dot(edge, ux)))
+        if min(along_x, along_y) > relative_tolerance * float(length):
+            return False
+
+    projected_x = local @ ux
+    projected_y = local @ uy
+    width = float(np.ptp(projected_x))
+    height = float(np.ptp(projected_y))
+    if width <= length_tolerance or height <= length_tolerance:
+        return False
+    rectangle_area = width * height
+    polygon_area = abs(signed_area(local))
+    area_tolerance = max(
+        length_tolerance * max(width, height),
+        relative_tolerance * rectangle_area,
+    )
+    return math.isclose(
+        polygon_area,
+        rectangle_area,
+        rel_tol=relative_tolerance,
+        abs_tol=area_tolerance,
+    )
+
+
+def section_is_approximately_solid_rectangle(
+    outer: Vertices,
+    holes: Iterable[Vertices] = (),
+) -> bool:
+    """Whether a section has one approximately rectangular solid region."""
+
+    if holes is not None:
+        for _hole in holes:
+            return False
+    return polygon_is_approximately_rectangle(outer)
+
+
 _ZERO_MOMENTS = AreaMoments(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 

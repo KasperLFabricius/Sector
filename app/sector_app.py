@@ -10344,34 +10344,29 @@ def _run_uniaxial_capacity_checks(inp, out):
         if tors_ctx is not None:
             t_ed = tors_ctx["t_ed"]
             primary = out["torsion"]["primary"]
-            # Minimum-reinforcement screen (EN 1992-1-1 6.3.2(5), Eq 6.31): for an
-            # approximately solid rectangular section, no DESIGNED shear+torsion
-            # reinforcement (only the minimum) is needed if TEd/TRd,c + VEd/VRd,c <= 1.
+            # Minimum-reinforcement screen (EN 1992-1-1 6.3.2(5), Eq 6.31).
+            # Applicability is decided here and retained with the operands so no
+            # presentation surface can infer a favourable verdict from geometry
+            # alone.
             sh_ms = out.get("shear")
             _trdc = primary["trd_c"]
-            if tors_ctx["subdivide"]:
-                # 6.31 is written for an approximately solid rectangular section, so
-                # it does not apply to a subdivided compound section.
-                out["torsion"]["min_reinf"] = dict(
-                    applicable=False, reason="subdivided (compound) section")
-            elif sh_ms is None or not sh_ms["res"]["valid"]:
-                out["torsion"]["min_reinf"] = dict(applicable=False,
-                                                   reason="no shear check")
-            elif _trdc <= 0.0 or sh_ms["res"]["vrd_c"] <= 0.0:
-                out["torsion"]["min_reinf"] = dict(applicable=False,
-                                                   reason="zero resistance")
-            else:
-                vrd_c_ms, v_ed_ms = sh_ms["res"]["vrd_c"], sh_ms["v_ed"]
-                torsion_ratio = t_ed / _trdc
-                shear_ratio = v_ed_ms / vrd_c_ms
-                screen = torsion_ratio + shear_ratio
-                out["torsion"]["min_reinf"] = dict(
-                    applicable=True, value=screen, ok=bool(screen <= 1.0 + 1e-9),
-                    t_ed=t_ed, trd_c=_trdc, v_ed=v_ed_ms, vrd_c=vrd_c_ms,
-                    torsion_ratio=torsion_ratio, shear_ratio=shear_ratio,
-                    governs=("torsion" if torsion_ratio >= shear_ratio else "shear"),
-                    solid=bool(not inp["holes"]),
-                    model_2023=bool(sh_ms.get("model_2023")))
+            sh_res = (sh_ms or {}).get("res") or {}
+            out["torsion"]["min_reinf"] = dataclasses.asdict(
+                combined.minimum_reinforcement_screen_result(
+                    t_ed,
+                    _trdc,
+                    (sh_ms or {}).get("v_ed"),
+                    sh_res.get("vrd_c") if sh_res.get("valid") else None,
+                    solid_rectangle=(
+                        geometry.section_is_approximately_solid_rectangle(
+                            inp["outer"], inp.get("holes") or ()
+                        )
+                    ),
+                    subdivided=bool(tors_ctx["subdivide"]),
+                    model_2023=bool((sh_ms or {}).get("model_2023")),
+                    shear_available=bool(sh_ms is not None and sh_res.get("valid")),
+                )
+            )
             # Combined shear+torsion concrete crushing (6.29) at the member angle,
             # pairing the shear with the PRIMARY (web) tube's torsion share.
             sh_links = out.get("shear", {}).get("links")
@@ -10448,7 +10443,7 @@ def _minimum_reinf_assessment(torsion_out):
         return "NOT RUN", 0.0
     check = (torsion_out or {}).get("min_reinf") or {}
     if not check.get("applicable"):
-        return "NOT ASSESSED", 0.0
+        return presentation.minimum_reinforcement_screen_status(check), 0.0
     value = check.get("value")
     if value is None or not math.isfinite(float(value)):
         return "INVALID", math.inf
@@ -11234,6 +11229,14 @@ def results_overview_view(inp, results, *, stale=False):
             width="stretch",
             height="content",
         )
+
+    for row in rows:
+        if str(row.get("overview_key") or "").startswith(
+            "torsion:minimum_reinforcement"
+        ):
+            st.caption(
+                f"{row['check']} - {row['status']}: {row.get('note') or '-'}"
+            )
 
     if information_rows:
         st.markdown("**Scope and calculation state**")
@@ -13995,17 +13998,21 @@ def torsion_view(inp, results):
             })
             min_reinf = item.get("min_reinf") or {}
             if min_reinf:
-                if not min_reinf.get("applicable"):
-                    outcome = "not assessed"
-                elif min_reinf.get("ok"):
+                min_reinf_status = (
+                    presentation.minimum_reinforcement_screen_status(min_reinf)
+                )
+                if min_reinf_status == "PASS":
                     outcome = "minimum sufficient"
-                else:
+                elif min_reinf_status == "FAIL":
                     outcome = "designed reinforcement required"
+                else:
+                    outcome = min_reinf_status
                 min_reinf_rows.append({
                     "Directional 6.31 screen": (
                         "Vx,Ed + TEd" if component == "vx" else "Vy,Ed + TEd"
                     ),
                     "6.31 sum": min_reinf.get("value"),
+                    "Status": min_reinf_status,
                     "Outcome": outcome,
                     "Governing face": viz.directional_face_label(
                         component,
@@ -14013,15 +14020,55 @@ def torsion_view(inp, results):
                             "directional_min_reinf_governing_face"
                         ),
                     ),
+                    "Scope / guidance": (
+                        presentation.minimum_reinforcement_screen_note(min_reinf)
+                    ),
                 })
         st.dataframe(rows, hide_index=True, width="stretch")
         if min_reinf_rows:
             st.caption(
-                "Directional Eq. 6.31 checks whether minimum shear/torsion "
-                "reinforcement is sufficient; it is not an overall resistance "
-                "verdict."
+                "Within its stated scope, Formula (6.31) screens whether minimum "
+                "shear-and-torsion reinforcement is sufficient. The complete "
+                "resistance checks remain separate."
             )
             st.dataframe(min_reinf_rows, hide_index=True, width="stretch")
+
+    # A biaxial run reports Formula (6.31) per shear direction above. The
+    # standalone torsion payload deliberately has no shear companion and must
+    # not replace it. Render the retained single-direction scope before any
+    # torsion-resistance early return so unavailable links cannot hide it.
+    mr = None if directional_interactions else t.get("min_reinf")
+    if mr is not None:
+        st.divider()
+        st.markdown("**Minimum-reinforcement screen (6.3.2(5), Eq 6.31)**")
+        if not mr.get("applicable"):
+            status = presentation.minimum_reinforcement_screen_status(mr)
+            st.caption(
+                f"{status}: "
+                + presentation.minimum_reinforcement_screen_note(mr)
+                + "."
+            )
+        else:
+            val = mr["value"]
+            ok_mr = mr["ok"]
+            s1, s2, s3 = st.columns(3)
+            s1.metric(
+                r"$T_{Ed}/T_{Rd,c}$",
+                f"{mr['t_ed'] / mr['trd_c'] * 100:.1f} %",
+            )
+            s2.metric(
+                r"$V_{Ed}/V_{Rd,c}$",
+                f"{mr['v_ed'] / mr['vrd_c'] * 100:.1f} %",
+            )
+            s3.metric(r"Sum ($\leq100\%$)", f"{val * 100:.1f} %",
+                      delta=("minimum reinf. suffices" if ok_mr
+                             else "designed reinf. required"),
+                      delta_color=("normal" if ok_mr else "inverse"))
+            st.caption("TEd/TRd,c + VEd/VRd,c <= 1 (6.3.2(5), Eq 6.31): if satisfied, "
+                       "only minimum shear + torsion reinforcement is required -- no "
+                       "designed stirrups for these actions. "
+                       + presentation.minimum_reinforcement_screen_note(mr)
+                       + ".")
     if tube_valid and not transverse_resistance_assessed:
         raw_reason = (
             t.get("assessment_reason")
@@ -14340,38 +14387,6 @@ def torsion_view(inp, results):
                    "closed stirrups round the periphery + distributed longitudinal "
                    "steel on both faces. This selected detailing condition remains "
                    "subject to the overall longitudinal verification above.")
-
-    # A biaxial run reports Eq. 6.31 per shear direction above. The standalone
-    # torsion payload deliberately has no shear companion and must not replace it.
-    mr = None if directional_interactions else t.get("min_reinf")
-    if mr is not None:
-        st.divider()
-        st.markdown("**Minimum-reinforcement screen (6.3.2(5), Eq 6.31)**")
-        if not mr.get("applicable"):
-            st.caption("Enable the shear check (VRd,c) as well to evaluate the 6.31 "
-                       "screen TEd/TRd,c + VEd/VRd,c <= 1.")
-        else:
-            val = mr["value"]
-            ok_mr = mr["ok"]
-            s1, s2, s3 = st.columns(3)
-            s1.metric(r"$T_{Ed}/T_{Rd,c}$", f"{mr['t_ed'] / mr['trd_c'] * 100:.1f} %")
-            s2.metric(r"$V_{Ed}/V_{Rd,c}$", f"{mr['v_ed'] / mr['vrd_c'] * 100:.1f} %")
-            s3.metric(r"Sum ($\leq100\%$)", f"{val * 100:.1f} %",
-                      delta=("minimum reinf. suffices" if ok_mr
-                             else "designed reinf. required"),
-                      delta_color=("normal" if ok_mr else "inverse"))
-            solid_note = ("Assumes an approximately solid rectangular section."
-                          if mr["solid"] else "This section has a void: 6.31 is for "
-                          "solid sections, so it does not strictly apply (a hollow "
-                          "section needs the full shear + torsion check).")
-            ed_note = (
-                " VRd,c here is the 2023 tau_Rd,c including the Formula (8.31) "
-                "axial-force modification."
-                if mr["model_2023"] else ""
-            )
-            st.caption("TEd/TRd,c + VEd/VRd,c <= 1 (6.3.2(5), Eq 6.31): if satisfied, "
-                       "only minimum shear + torsion reinforcement is required -- no "
-                       "designed stirrups for these actions. " + solid_note + ed_note)
 
     inter = t.get("interaction")
     if inter is not None and not inter.get("valid"):

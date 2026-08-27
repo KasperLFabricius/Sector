@@ -8285,15 +8285,49 @@ class ReportBuilder:
             ),
             result=f"{_fmt(minimum['value'], 3)}  ({outcome})",
         )
-        solid_note = (
-            "Assumes an approximately solid rectangular section."
-            if minimum["solid"]
-            else "This section has a void: 6.31 is for solid sections, so it "
-            "does not strictly apply."
-        )
         self._small(
             "If &#8804; 1, only minimum shear + torsion reinforcement is required "
-            "(no designed stirrups for these actions). " + solid_note
+            "(no designed stirrups for these actions). "
+            + _html_escape(
+                presentation.minimum_reinforcement_screen_note(minimum)
+            )
+            + "."
+        )
+
+    def _torsion_minimum_reinforcement_summary(self, minimum):
+        """Publish one retained Formula (6.31) scope and verdict."""
+
+        if not isinstance(minimum, dict):
+            return
+        status = presentation.minimum_reinforcement_screen_status(minimum)
+        if status == "PASS":
+            outcome = "minimum reinforcement suffices"
+        elif status == "FAIL":
+            outcome = "designed reinforcement required"
+        else:
+            outcome = status
+        self._h2("Minimum-reinforcement screen (Formula 6.31)")
+        self._table(
+            [
+                ["Status", "6.31 sum", "Outcome"],
+                [
+                    status,
+                    (
+                        _fmt(minimum.get("value"), 3)
+                        if minimum.get("applicable")
+                        else "-"
+                    ),
+                    outcome,
+                ],
+            ],
+            [40 * mm, 40 * mm, 100 * mm],
+        )
+        self._small(
+            _html_escape(
+                presentation.minimum_reinforcement_screen_note(minimum)
+            )
+            + ". The complete shear-and-torsion resistance checks remain "
+            "separate."
         )
 
     def _crushing_interaction(self, t):
@@ -8419,6 +8453,8 @@ class ReportBuilder:
                 + "."
             )
         directional = t.get("directional_interactions") or {}
+        if not directional and isinstance(t.get("min_reinf"), dict):
+            self._torsion_minimum_reinforcement_summary(t["min_reinf"])
         if directional and transverse_resistance_available:
             self._small(
                 "Standalone torsion, Vx+T and Vy+T are reported separately. A "
@@ -8427,7 +8463,10 @@ class ReportBuilder:
             )
             rows = [["Screen", "T<sub>Ed</sub>/T<sub>Rd</sub>",
                      "6.29 V+T", "Governing face", "cot theta", "Status"]]
-            min_reinf_rows = [["Screen", "6.31 sum", "Governing face", "Outcome"]]
+            min_reinf_rows = [[
+                "Screen", "6.31 sum", "Governing face", "Status", "Outcome"
+            ]]
+            min_reinf_notes = []
             for component in ("vx", "vy"):
                 item = directional.get(component)
                 if not item:
@@ -8449,13 +8488,17 @@ class ReportBuilder:
                 ])
                 min_reinf = item.get("min_reinf") or {}
                 if min_reinf:
-                    outcome = (
-                        "not assessed"
-                        if not min_reinf.get("applicable")
-                        else "minimum sufficient"
-                        if min_reinf.get("ok")
-                        else "designed reinforcement required"
+                    min_reinf_status = (
+                        presentation.minimum_reinforcement_screen_status(
+                            min_reinf
+                        )
                     )
+                    if min_reinf_status == "PASS":
+                        outcome = "minimum sufficient"
+                    elif min_reinf_status == "FAIL":
+                        outcome = "designed reinforcement required"
+                    else:
+                        outcome = min_reinf_status
                     min_reinf_rows.append([
                         "Vx+T" if component == "vx" else "Vy+T",
                         (_fmt(min_reinf.get("value"), 3)
@@ -8466,8 +8509,15 @@ class ReportBuilder:
                                 "directional_min_reinf_governing_face"
                             ),
                         ),
+                        min_reinf_status,
                         outcome,
                     ])
+                    min_reinf_notes.append((
+                        min_reinf_status,
+                        presentation.minimum_reinforcement_screen_note(
+                            min_reinf
+                        ),
+                    ))
             self._table(
                 rows,
                 [27 * mm, 28 * mm, 25 * mm, 38 * mm, 20 * mm, 32 * mm],
@@ -8477,14 +8527,19 @@ class ReportBuilder:
                 self._h2("Directional minimum-reinforcement screens (Eq. 6.31)")
                 self._table(
                     min_reinf_rows,
-                    [31 * mm, 28 * mm, 39 * mm, 72 * mm],
+                    [25 * mm, 22 * mm, 32 * mm, 29 * mm, 72 * mm],
                     font=6.5,
                 )
                 self._small(
-                    "Equation 6.31 determines whether minimum shear/torsion "
-                    "reinforcement is sufficient; it is not an overall resistance "
-                    "verdict."
+                    "Within its stated scope, Formula 6.31 screens whether "
+                    "minimum shear-and-torsion reinforcement is sufficient. The "
+                    "complete resistance checks remain separate."
                 )
+                for min_reinf_status, note in dict.fromkeys(min_reinf_notes):
+                    self._small(
+                        "<b>" + min_reinf_status + ":</b> "
+                        + _html_escape(note) + "."
+                    )
         if tube_valid and not transverse_resistance_assessed:
             reason = _result_reason(
                 t.get("assessment_reason")

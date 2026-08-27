@@ -26,7 +26,9 @@ from sector.geometry import (
     distance_to_boundary,
     orient,
     points_inside_concrete,
+    polygon_is_approximately_rectangle,
     rectangles_partition_concrete,
+    section_is_approximately_solid_rectangle,
     signed_area,
 )
 
@@ -166,6 +168,55 @@ def test_polygon_is_convex_ignores_terminal_closure_at_reentrant_start():
     for winding in (concave, list(reversed(concave))):
         assert not polygon_is_convex(winding)
         assert not polygon_is_convex([*winding, winding[0]])
+
+
+def test_approximately_rectangular_scope_is_rotation_and_vertex_invariant():
+    rectangle = [
+        (-0.5, -0.3), (0.0, -0.3), (0.5, -0.3),
+        (0.5, 0.3), (-0.5, 0.3),
+    ]
+    angle = math.radians(31.0)
+    cosine, sine = math.cos(angle), math.sin(angle)
+    rotated = [
+        (
+            2.0 + x * cosine - y * sine,
+            -4.0 + x * sine + y * cosine,
+        )
+        for x, y in rectangle
+    ]
+
+    assert polygon_is_approximately_rectangle(rectangle)
+    assert polygon_is_approximately_rectangle(list(reversed(rotated)))
+    assert section_is_approximately_solid_rectangle(rotated, [])
+
+
+@pytest.mark.parametrize(
+    "outline",
+    [
+        [(-0.5, -0.3), (0.5, -0.3), (0.4, 0.3), (-0.4, 0.3)],
+        [(-0.5, -0.3), (0.5, -0.3), (0.0, 0.3)],
+        [
+            (0.3 * math.cos(2.0 * math.pi * index / 24.0),
+             0.3 * math.sin(2.0 * math.pi * index / 24.0))
+            for index in range(24)
+        ],
+        [
+            (-0.5, 0.1), (-0.15, 0.1), (-0.15, -0.4),
+            (0.15, -0.4), (0.15, 0.1), (0.5, 0.1),
+            (0.5, 0.3), (-0.5, 0.3),
+        ],
+    ],
+    ids=("trapezoid", "triangle", "circular", "flanged"),
+)
+def test_nonrectangular_outlines_are_outside_formula_631_scope(outline):
+    assert not polygon_is_approximately_rectangle(outline)
+    assert not section_is_approximately_solid_rectangle(outline, [])
+
+
+def test_rectangular_outline_with_void_is_not_a_solid_rectangle():
+    hole = [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)]
+    assert polygon_is_approximately_rectangle(_RECT)
+    assert not section_is_approximately_solid_rectangle(_RECT, [hole])
 
 
 def test_positioned_rectangles_form_valid_t_section_partition():

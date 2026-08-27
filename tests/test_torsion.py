@@ -1140,6 +1140,10 @@ def test_app_torsion_subdivided_sums_capacities():
     assert t["governing_sub"] == max(range(len(t["subtubes"])),
                                      key=lambda i: t["subtubes"][i]["util"])
     assert t["primary"]["t_ed"] == t["subtubes"][0]["t_ed"]              # web is primary
+    assert t["min_reinf"]["status"] == "NOT APPLICABLE"
+    assert t["min_reinf"]["scope_key"] == "subdivided_section"
+    assert t["min_reinf"]["value"] is None
+    assert t["min_reinf"]["ok"] is None
     longitudinal = t["longitudinal_assessment"]
     required_by_tube = tuple(item["asl_req"] for item in t["subtubes"])
     assert longitudinal["required_by_tube_mm2"] == pytest.approx(
@@ -1322,6 +1326,9 @@ def test_app_torsion_subdivided_view_renders():
         for item in at.session_state["results"]["torsion"]["subtubes"]
     ]
     assert list(table["Asl,req,i (mm2)"]) == required
+    captions = " ".join(item.value for item in at.caption)
+    assert "For a subdivided compound section" in captions
+    assert "minimum reinf. suffices" not in captions
 
 
 def test_app_torsion_subdivided_uses_the_shared_member_angle():
@@ -1609,8 +1616,19 @@ def test_app_min_reinf_screen_evaluated():
                                         + mr["v_ed"] / mr["vrd_c"])
     assert mr["ok"] is (mr["value"] <= 1.0 + 1e-9)
     assert mr["solid"] is True                          # default section has no void
+    assert mr["status"] in {"PASS", "FAIL"}
+    assert mr["scope_key"] == "applicable_first_generation_rectangle"
     _select_view(at, "Torsion")
     assert not at.exception
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    screen = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    assert screen["Status"] == mr["status"]
 
 
 def test_app_min_reinf_screen_needs_shear():
@@ -1621,8 +1639,133 @@ def test_app_min_reinf_screen_needs_shear():
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 15.0))
     mr = at.session_state["results"]["torsion"]["min_reinf"]
     assert mr["applicable"] is False
+    assert mr["status"] == "NOT ASSESSED"
+    assert mr["scope_key"] == "shear_resistance_unavailable"
     _select_view(at, "Torsion")
     assert not at.exception
+    assert any(
+        "Calculate the first-generation V_Rd,c shear result" in item.value
+        for item in at.caption
+    )
+
+
+def test_app_2023_shear_route_never_receives_formula_631_verdict():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    assert mr["status"] == "NOT APPLICABLE"
+    assert mr["scope_key"] == "selected_2023_route"
+    assert mr["value"] is None and mr["ok"] is None
+
+    _select_view(at, "Torsion")
+    captions = " ".join(item.value for item in at.caption)
+    assert "belongs to the first-generation EN 1992-1-1 route" in captions
+    assert "use the selected 2023 shear-and-torsion checks" in captions
+    assert "minimum reinf. suffices" not in captions
+
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    screen = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    assert screen["Status"] == "NOT APPLICABLE"
+    captions = " ".join(item.value for item in at.caption)
+    assert "use the selected 2023 shear-and-torsion checks" in captions
+
+
+def test_app_hollow_section_never_receives_formula_631_verdict():
+    at = _fresh()
+    at.run()
+    _apply_box_section(at)
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    assert mr["status"] == "NOT APPLICABLE"
+    assert mr["scope_key"] == "section_geometry"
+    assert mr["solid"] is False
+    assert mr["value"] is None and mr["ok"] is None
+
+    _select_view(at, "Torsion")
+    captions = " ".join(item.value for item in at.caption)
+    assert "For this section geometry" in captions
+    assert "complete shear-and-torsion checks" in captions
+    assert "minimum reinf. suffices" not in captions
+
+    _select_view(at, "Results Overview")
+    overview = next(
+        table.value for table in at.table
+        if "Check" in table.value.columns
+    )
+    screen = overview.loc[
+        overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
+    ].iloc[0]
+    assert screen["Status"] == "NOT APPLICABLE"
+    captions = " ".join(item.value for item in at.caption)
+    assert "For this section geometry" in captions
+
+
+@pytest.mark.parametrize("shape", ("Circular", "Trapezoid", "T-section"))
+def test_app_nonrectangular_sections_never_receive_formula_631_verdict(shape):
+    at = _fresh()
+    at.run()
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set(at, ("selectbox", "shape", shape))
+    _set_and_click(at, "qs_apply")
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 30.0),
+        ("number_input", "torsion_T", 15.0),
+    )
+
+    assert not at.exception
+    mr = at.session_state["results"]["torsion"]["min_reinf"]
+    assert mr["applicable"] is False
+    assert mr["status"] == "NOT APPLICABLE"
+    assert mr["scope_key"] == "section_geometry"
+    assert mr["value"] is None and mr["ok"] is None
+
+    _select_view(at, "Torsion")
+    captions = " ".join(item.value for item in at.caption)
+    assert "For this section geometry" in captions
+    assert "complete shear-and-torsion checks" in captions
+    assert "minimum reinf. suffices" not in captions
 
 
 def test_app_min_reinf_screen_over_limit():
@@ -1674,6 +1817,7 @@ def test_biaxial_torsion_retains_and_presents_directional_631_screens():
         assert mr["value"] == pytest.approx(
             mr["t_ed"] / mr["trd_c"] + mr["v_ed"] / mr["vrd_c"]
         )
+        assert mr["status"] in {"PASS", "FAIL"}
         assert item["directional_min_reinf_governing_face"] in {
             "negative", "positive"
         }
@@ -1689,6 +1833,11 @@ def test_biaxial_torsion_retains_and_presents_directional_631_screens():
     assert set(table["Outcome"]) <= {
         "minimum sufficient", "designed reinforcement required"
     }
+    assert set(table["Status"]) <= {"PASS", "FAIL"}
+    assert all(
+        "approximately solid rectangular section" in value
+        for value in table["Scope / guidance"]
+    )
 
 
 def test_app_torsion_is_saved_and_restored():

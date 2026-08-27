@@ -33,6 +33,116 @@ def test_crushing_interaction():
     assert math.isinf(combined.crushing_interaction(1.0, 0.0, 0.0, 1.0))
 
 
+def test_formula_631_screen_retains_operands_and_exact_existing_verdict():
+    result = combined.minimum_reinforcement_screen_result(
+        15.0,
+        60.0,
+        30.0,
+        120.0,
+        solid_rectangle=True,
+        subdivided=False,
+        model_2023=False,
+        shear_available=True,
+    )
+
+    assert result.applicable is True
+    assert result.status == "PASS"
+    assert result.value == pytest.approx(0.5)
+    assert result.torsion_ratio == pytest.approx(0.25)
+    assert result.shear_ratio == pytest.approx(0.25)
+    assert result.governs == "torsion"
+    assert result.ok is True
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "status", "scope_key"),
+    [
+        (
+            {"solid_rectangle": False},
+            "NOT APPLICABLE",
+            "section_geometry",
+        ),
+        (
+            {"subdivided": True},
+            "NOT APPLICABLE",
+            "subdivided_section",
+        ),
+        (
+            {"model_2023": True},
+            "NOT APPLICABLE",
+            "selected_2023_route",
+        ),
+        (
+            {"shear_available": False, "v_ed": None, "vrd_c": None},
+            "NOT ASSESSED",
+            "shear_resistance_unavailable",
+        ),
+        (
+            {"trd_c": 0.0},
+            "NOT ASSESSED",
+            "positive_resistance_unavailable",
+        ),
+    ],
+    ids=(
+        "unsupported-geometry",
+        "subdivided",
+        "2023-route",
+        "missing-shear",
+        "nonpositive-resistance",
+    ),
+)
+def test_formula_631_scope_branches_never_publish_a_verdict(
+    kwargs,
+    status,
+    scope_key,
+):
+    inputs = dict(
+        t_ed=15.0,
+        trd_c=60.0,
+        v_ed=30.0,
+        vrd_c=120.0,
+        solid_rectangle=True,
+        subdivided=False,
+        model_2023=False,
+        shear_available=True,
+    )
+    inputs.update(kwargs)
+
+    result = combined.minimum_reinforcement_screen_result(**inputs)
+
+    assert result.applicable is False
+    assert result.status == status
+    assert result.scope_key == scope_key
+    assert result.value is None
+    assert result.ok is None
+
+
+def test_formula_631_over_limit_is_fail_and_not_a_sufficiency_result():
+    result = combined.minimum_reinforcement_screen_result(
+        45.0,
+        60.0,
+        60.0,
+        120.0,
+        solid_rectangle=True,
+        subdivided=False,
+        model_2023=False,
+        shear_available=True,
+    )
+
+    assert result.value == pytest.approx(1.25)
+    assert result.status == "FAIL"
+    assert result.ok is False
+
+
+def test_all_not_applicable_directional_screens_remain_not_applicable():
+    assert capacity.aggregate_assessment_status(
+        ["NOT APPLICABLE", "NOT APPLICABLE"]
+    ) == "NOT APPLICABLE"
+    assert capacity.aggregate_assessment_status(
+        ["NOT APPLICABLE", "NOT ASSESSED"]
+    ) == "NOT ASSESSED"
+
+
 def test_dkna_sum_summed_vs_independent():
     assert combined.dkna_sum(
         0.3, 0.4, 0.2, r_n=0.1, m_v_independent=False

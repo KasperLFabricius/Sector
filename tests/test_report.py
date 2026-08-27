@@ -5739,17 +5739,109 @@ def test_report_torsion_shows_combined_interaction():
     assert "Combined shear" in txt
 
 
-def test_report_torsion_shows_min_reinf_screen():
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_torsion_shows_min_reinf_screen(profile):
     # F7: the 6.31 minimum-reinforcement screen appears when applicable.
     out = _out()
     t = _torsion_out()
-    t["min_reinf"] = dict(applicable=True, value=0.52, ok=True, t_ed=40.0,
-                          trd_c=26.435, v_ed=30.0, vrd_c=136.0, solid=True,
-                          model_2023=False)
+    t["min_reinf"] = dict(
+        applicable=True,
+        status="PASS",
+        scope_key="applicable_first_generation_rectangle",
+        value=0.52,
+        ok=True,
+        t_ed=40.0,
+        trd_c=100.0,
+        v_ed=30.0,
+        vrd_c=250.0,
+        torsion_ratio=0.4,
+        shear_ratio=0.12,
+        governs="torsion",
+        solid=True,
+        model_2023=False,
+    )
     out["torsion"] = t
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    inp = _inp()
+    inp.update(torsion_on=True, shear_on=True)
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
     assert "6.31" in txt                            # the screen clause
-    assert "minimum reinforcement suffices" in txt  # the verdict wording
+    assert "minimum reinforcement suffices" in txt.casefold()  # verdict wording
+    assert "approximately solid rectangular section" in txt
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    ("status", "reason", "note"),
+    (
+        (
+            "NOT APPLICABLE",
+            "section_geometry",
+            "For this section geometry",
+        ),
+        (
+            "NOT APPLICABLE",
+            "subdivided_section",
+            "For a subdivided compound section",
+        ),
+        (
+            "NOT APPLICABLE",
+            "selected_2023_route",
+            "belongs to the first-generation EN 1992-1-1 route",
+        ),
+        (
+            "NOT ASSESSED",
+            "shear_resistance_unavailable",
+            "Calculate the first-generation V_Rd,c shear result",
+        ),
+    ),
+)
+def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
+    profile,
+    status,
+    reason,
+    note,
+):
+    out = _out()
+    t = _torsion_out()
+    t["min_reinf"] = dict(
+        applicable=False,
+        status=status,
+        scope_key=reason,
+        value=None,
+        ok=None,
+        t_ed=40.0,
+        trd_c=26.435,
+        v_ed=30.0 if reason != "shear_resistance_unavailable" else None,
+        vrd_c=136.0 if reason != "shear_resistance_unavailable" else None,
+        torsion_ratio=None,
+        shear_ratio=None,
+        governs=None,
+        solid=False,
+        model_2023=reason == "selected_2023_route",
+    )
+    out["torsion"] = t
+    inp = _inp()
+    inp.update(torsion_on=True, shear_on=True)
+
+    txt = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "6.31" in txt
+    assert "minimum-reinforcement screen" in txt.casefold()
+    assert status in txt
+    assert note in txt
+    assert "minimum reinforcement suffices" not in txt
 
 
 def _combined_out(mv_independent=False):

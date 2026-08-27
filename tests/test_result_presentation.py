@@ -221,6 +221,86 @@ def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
     }
 
 
+@pytest.mark.parametrize(
+    ("check", "status", "note"),
+    [
+        (
+            {
+                "applicable": True,
+                "status": "PASS",
+                "scope_key": "applicable_first_generation_rectangle",
+                "value": 0.8,
+                "ok": True,
+            },
+            "PASS",
+            "approximately solid rectangular section",
+        ),
+        (
+            {
+                "applicable": False,
+                "status": "NOT APPLICABLE",
+                "scope_key": "section_geometry",
+                "value": None,
+                "ok": None,
+            },
+            "NOT APPLICABLE",
+            "complete shear-and-torsion checks",
+        ),
+        (
+            {
+                "applicable": False,
+                "status": "NOT ASSESSED",
+                "scope_key": "shear_resistance_unavailable",
+                "value": None,
+                "ok": None,
+            },
+            "NOT ASSESSED",
+            "Calculate the first-generation V_Rd,c shear result",
+        ),
+    ],
+)
+def test_formula_631_status_and_engineer_guidance_are_retained(
+    check,
+    status,
+    note,
+):
+    assert presentation.minimum_reinforcement_screen_status(check) == status
+    assert note in presentation.minimum_reinforcement_screen_note(check)
+
+
+def test_formula_631_scope_row_remains_in_the_governing_overview():
+    inp = {
+        "mode": "",
+        "torsion_on": True,
+        "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
+    }
+    torsion = {
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "closed_links_present": True,
+        "assessment_status": "NOT ASSESSED",
+        "min_reinf": {
+            "applicable": False,
+            "status": "NOT APPLICABLE",
+            "scope_key": "selected_2023_route",
+            "value": None,
+            "ok": None,
+        },
+    }
+
+    selected = presentation.governing_summary_rows(
+        presentation.result_summary_rows(inp, {"torsion": torsion})
+    )
+    result_rows = presentation.governing_result_rows(selected)
+    information_rows = presentation.governing_information_rows(selected)
+    screen = next(row for row in result_rows if "6.31" in row["check"])
+
+    assert screen["status"] == "NOT APPLICABLE"
+    assert "selected 2023 shear-and-torsion checks" in screen["note"]
+    assert screen not in information_rows
+
+
 def test_crack_comparison_selection_uses_largest_width_not_largest_ratio():
     out = {
         "elastic_cases": [
