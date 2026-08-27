@@ -1389,9 +1389,9 @@ _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
         "approximately solid rectangular section"
     ),
     "selected_2023_route": (
-        "Formula (6.31) is unavailable for the selected 2023 shear method; "
-        "use the reported 2023 shear check and the independently selected "
-        "torsion and interaction checks"
+        "Formula (6.31) is unavailable for the selected 2023 shear method. "
+        "Assess shear using the 2023 check; assess torsion and interaction "
+        "using their selected methods"
     ),
     "subdivided_section": (
         "For a subdivided compound section, use the complete sub-tube "

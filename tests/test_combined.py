@@ -178,6 +178,14 @@ def test_dkna_formula_631_scope_rejects_signed_normal_or_moment_actions(
             "unavailable-shear",
             {"shear_available": False, "v_ed": None, "vrd_c": None},
         ),
+        (
+            "selected-2023",
+            {
+                "model_2023": True,
+                "shear_method": codes.EC2_2023.label,
+                "torsion_method": codes.EC2_2005_DKNA.label,
+            },
+        ),
     ),
     ids=lambda value: value if isinstance(value, str) else None,
 )
@@ -220,7 +228,8 @@ def test_dkna_formula_631_requirement_outranks_other_scope_limitations(
     result = combined.minimum_reinforcement_screen_result(**inputs)
 
     assert scope_context in {
-        "nonrectangular", "hollow", "subdivided", "unavailable-shear"
+        "nonrectangular", "hollow", "subdivided", "unavailable-shear",
+        "selected-2023",
     }
     assert result.applicable is False
     assert result.status == "NOT APPLICABLE"
@@ -228,6 +237,10 @@ def test_dkna_formula_631_requirement_outranks_other_scope_limitations(
     assert result.normal_or_moment_active is True
     assert result.dk_na is True
     assert result.value is None and result.ok is None
+    if scope_context == "selected-2023":
+        assert result.model_2023 is True
+        assert result.shear_method == codes.EC2_2023.label
+        assert result.torsion_method == codes.EC2_2005_DKNA.label
 
 
 def test_dkna_formula_631_scope_accepts_exact_zero_normal_and_moment_actions():

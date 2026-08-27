@@ -1677,8 +1677,9 @@ def test_app_2023_shear_route_never_receives_formula_631_verdict():
     _select_view(at, "Torsion")
     captions = " ".join(item.value for item in at.caption)
     assert "unavailable for the selected 2023 shear method" in captions
-    assert "reported 2023 shear check" in captions
-    assert "independently selected torsion and interaction checks" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
     assert "2023 shear-and-torsion" not in captions
     assert "minimum reinf. suffices" not in captions
 
@@ -1693,8 +1694,9 @@ def test_app_2023_shear_route_never_receives_formula_631_verdict():
     assert screen["Status"] == "NOT APPLICABLE"
     captions = " ".join(item.value for item in at.caption)
     assert "unavailable for the selected 2023 shear method" in captions
-    assert "reported 2023 shear check" in captions
-    assert "independently selected torsion and interaction checks" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
     assert "2023 shear-and-torsion" not in captions
 
 
@@ -1726,8 +1728,9 @@ def test_app_selected_2023_route_without_shear_stays_not_applicable():
     _select_view(at, "Torsion")
     captions = " ".join(item.value for item in at.caption)
     assert "unavailable for the selected 2023 shear method" in captions
-    assert "reported 2023 shear check" in captions
-    assert "independently selected torsion and interaction checks" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
     assert "2023 shear-and-torsion" not in captions
     assert "Calculate the first-generation V_Rd,c" not in captions
 
@@ -1742,8 +1745,9 @@ def test_app_selected_2023_route_without_shear_stays_not_applicable():
     assert screen["Status"] == "NOT APPLICABLE"
     captions = " ".join(item.value for item in at.caption)
     assert "unavailable for the selected 2023 shear method" in captions
-    assert "reported 2023 shear check" in captions
-    assert "independently selected torsion and interaction checks" in captions
+    assert "Assess shear using the 2023 check" in captions
+    assert "assess torsion and interaction using their selected methods" in captions
+    assert "reported 2023 shear check" not in captions
     assert "2023 shear-and-torsion" not in captions
     assert "Calculate the first-generation V_Rd,c" not in captions
 
@@ -1976,7 +1980,13 @@ def test_app_dkna_formula_631_scope_tracks_zero_and_signed_normal_actions():
 
 @pytest.mark.parametrize(
     "scope_context",
-    ("nonrectangular", "hollow", "subdivided", "unavailable-shear"),
+    (
+        "nonrectangular",
+        "hollow",
+        "subdivided",
+        "unavailable-shear",
+        "selected-2023",
+    ),
 )
 def test_app_dkna_formula_631_requirement_outranks_other_scope_limits(
     scope_context,
@@ -1998,9 +2008,14 @@ def test_app_dkna_formula_631_requirement_outranks_other_scope_limits(
         ("checkbox", "shear_on", True),
         ("checkbox", "torsion_on", True),
     )
+    shear_method = (
+        codes.EC2_2023.label
+        if scope_context == "selected-2023"
+        else codes.EC2_2005_DKNA.label
+    )
     _set(
         at,
-        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+        ("selectbox", "shear_method", shear_method),
         ("selectbox", "torsion_method", codes.EC2_2005_DKNA.label),
     )
     if scope_context == "unavailable-shear":
@@ -2031,6 +2046,10 @@ def test_app_dkna_formula_631_requirement_outranks_other_scope_limits(
         assert minimum["scope_key"] == "dkna_combined_normal_or_moment"
         assert minimum["normal_or_moment_active"] is True
         assert minimum["value"] is None and minimum["ok"] is None
+        if scope_context == "selected-2023":
+            assert minimum["model_2023"] is True
+            assert minimum["shear_method"] == codes.EC2_2023.label
+            assert minimum["torsion_method"] == codes.EC2_2005_DKNA.label
 
         _select_view(at, "Torsion")
         captions = " ".join(item.value for item in at.caption)

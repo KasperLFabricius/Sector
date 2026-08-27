@@ -1073,9 +1073,9 @@ def manual_blocks() -> list:
        "using the first-generation $V_{Rd,c}$ route. Hollow, circular, "
        "triangular, flanged or compound sections do not receive a Formula "
        "(6.31) condition result; use their complete shear-and-torsion checks. "
-       "For the 2023 shear method, Formula (6.31) is unavailable; use the "
-       "separately reported 2023 shear check and the independently selected "
-       "torsion and interaction checks. The "
+       "For the 2023 shear method, Formula (6.31) is unavailable. Assess "
+       "shear using the 2023 check; assess torsion and interaction using "
+       "their selected methods. The "
        "resistance checks remain separate. When N_Ed or M_Ed acts under the "
        "Danish National Annex, use the DK NA 6.3.2(6) combined N-M-V-T check; "
        "Formula (6.31) is not used as the combined verdict.")

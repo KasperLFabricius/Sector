@@ -300,8 +300,9 @@ def test_formula_631_scope_row_remains_in_the_governing_overview():
 
     assert screen["status"] == "NOT APPLICABLE"
     assert "selected 2023 shear method" in screen["note"]
-    assert "reported 2023 shear check" in screen["note"]
-    assert "independently selected torsion and interaction checks" in screen["note"]
+    assert "Assess shear using the 2023 check" in screen["note"]
+    assert "assess torsion and interaction using their selected methods" in screen["note"]
+    assert "reported 2023 shear check" not in screen["note"]
     assert "2023 shear-and-torsion" not in screen["note"]
     assert screen not in information_rows
 
@@ -318,6 +319,14 @@ def test_formula_631_scope_row_remains_in_the_governing_overview():
         (
             "unavailable-shear",
             {"shear_available": False, "v_ed": None, "vrd_c": None},
+        ),
+        (
+            "selected-2023",
+            {
+                "model_2023": True,
+                "shear_method": "DS/EN 1992-1-1:2023",
+                "torsion_method": "DS/EN 1992-1-1:2005 + DK NA:2024",
+            },
         ),
     ),
     ids=lambda value: value if isinstance(value, str) else None,
@@ -382,8 +391,13 @@ def test_formula_631_overview_keeps_dkna_combined_requirement(
 
     assert screen["status"] == "NOT APPLICABLE"
     assert scope_context in {
-        "nonrectangular", "hollow", "subdivided", "unavailable-shear"
+        "nonrectangular", "hollow", "subdivided", "unavailable-shear",
+        "selected-2023",
     }
+    if scope_context == "selected-2023":
+        assert minimum["model_2023"] is True
+        assert minimum["shear_method"] == "DS/EN 1992-1-1:2023"
+        assert minimum["torsion_method"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
     assert "DK NA 6.3.2(6) combined N-M-V-T check" in screen["note"]
     assert "low-action condition satisfied" not in screen["note"].casefold()
 

@@ -5910,8 +5910,9 @@ def test_report_profiles_use_selected_2023_scope_when_shear_is_disabled(profile)
     )
 
     assert "unavailable for the selected 2023 shear method" in text
-    assert "reported 2023 shear check" in text
-    assert "independently selected torsion and interaction checks" in text
+    assert "Assess shear using the 2023 check" in text
+    assert "assess torsion and interaction using their selected methods" in text
+    assert "reported 2023 shear check" not in text
     assert "2023 shear-and-torsion" not in text
     assert "Calculate the first-generation V_Rd,c" not in text
     assert "low-action condition satisfied" not in text.casefold()
@@ -6009,6 +6010,14 @@ def test_report_profiles_retain_dkna_formula_631_normal_and_moment_scope(
             "unavailable-shear",
             {"shear_available": False, "v_ed": None, "vrd_c": None},
         ),
+        (
+            "selected-2023",
+            {
+                "model_2023": True,
+                "shear_method": codes.EC2_2023.label,
+                "torsion_method": codes.EC2_2005_DKNA.label,
+            },
+        ),
     ),
     ids=lambda value: value if isinstance(value, str) else None,
 )
@@ -6059,8 +6068,8 @@ def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
     inp.update(
         torsion_on=True,
         shear_on=inputs["shear_available"],
-        shear_method=codes.EC2_2005_DKNA.label,
-        torsion_method=codes.EC2_2005_DKNA.label,
+        shear_method=inputs["shear_method"],
+        torsion_method=inputs["torsion_method"],
         P_pl=inputs["n_ed"],
         Mx_pl=inputs["mx_ed"],
         My_pl=inputs["my_ed"],
@@ -6077,8 +6086,13 @@ def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
     assert minimum["status"] == "NOT APPLICABLE"
     assert minimum["scope_key"] == "dkna_combined_normal_or_moment"
     assert scope_context in {
-        "nonrectangular", "hollow", "subdivided", "unavailable-shear"
+        "nonrectangular", "hollow", "subdivided", "unavailable-shear",
+        "selected-2023",
     }
+    if scope_context == "selected-2023":
+        assert minimum["model_2023"] is True
+        assert minimum["shear_method"] == codes.EC2_2023.label
+        assert minimum["torsion_method"] == codes.EC2_2005_DKNA.label
     assert "With acting N_Ed or M_Ed under the Danish National Annex" in text
     assert "DK NA 6.3.2(6) combined N-M-V-T check" in text
     assert "low-action condition satisfied" not in text.casefold()
@@ -6161,8 +6175,9 @@ def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
     assert note in txt
     assert "low-action condition satisfied" not in txt.casefold()
     if reason == "selected_2023_route":
-        assert "reported 2023 shear check" in txt
-        assert "independently selected torsion and interaction checks" in txt
+        assert "Assess shear using the 2023 check" in txt
+        assert "assess torsion and interaction using their selected methods" in txt
+        assert "reported 2023 shear check" not in txt
         assert "2023 shear-and-torsion" not in txt
 
 
