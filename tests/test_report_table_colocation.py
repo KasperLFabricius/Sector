@@ -95,7 +95,12 @@ def test_results_overview_owns_its_caption_without_self_reference(monkeypatch):
     assert table._cellvalues[0][0].getPlainText().startswith(
         "Table 0.1."
     )
-    assert table.keepWithNext == 1
+    assert isinstance(table, sector_report._ResultsOverviewTable)
+    assert table.keepWithNext == 0
+    assert (
+        "one governing row"
+        in table._sector_trailing_note.getPlainText()
+    )
     assert "See Table" not in table._cellvalues[0][0].getPlainText()
 
 

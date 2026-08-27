@@ -550,6 +550,7 @@ class _PaginatedReportTable(Table):
             "_sector_data_start",
             "_sector_context_count",
             "_sector_context_labels",
+            "_sector_results_overview",
             "_sector_force_page_break_between_fragments",
         )
         already_continued = bool(
@@ -587,6 +588,78 @@ class _PaginatedReportTable(Table):
                 separated.append(fragment)
             return separated
         return fragments
+
+
+class _ResultsOverviewTable(_PaginatedReportTable):
+    """Keep the governing note with the final overview-table fragment."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sector_trailing_note = None
+        self._sector_trailing_note_gap = 2.0
+        self._sector_trailing_note_height = 0.0
+
+    def _measure_trailing_note(self, availWidth, availHeight):
+        note = self._sector_trailing_note
+        if note is None:
+            self._sector_trailing_note_height = 0.0
+            return 0.0, 0.0
+        width, height = note.wrap(availWidth, availHeight)
+        self._sector_trailing_note_height = height
+        return width, height
+
+    def wrap(self, availWidth, availHeight):
+        table_width, table_height = super().wrap(availWidth, availHeight)
+        note_width, note_height = self._measure_trailing_note(
+            availWidth, availHeight
+        )
+        if self._sector_trailing_note is None:
+            return table_width, table_height
+        return (
+            max(table_width, note_width),
+            table_height + self._sector_trailing_note_gap + note_height,
+        )
+
+    def split(self, availWidth, availHeight):
+        note = self._sector_trailing_note
+        if note is None:
+            return super().split(availWidth, availHeight)
+
+        fragments = super().split(availWidth, availHeight)
+        if len(fragments) <= 1:
+            _note_width, note_height = self._measure_trailing_note(
+                availWidth, availHeight
+            )
+            reserved_height = self._sector_trailing_note_gap + note_height
+            fragments = super().split(
+                availWidth,
+                max(0.0, availHeight - reserved_height),
+            )
+        if len(fragments) <= 1:
+            return []
+
+        for fragment in fragments:
+            fragment._sector_trailing_note = None
+        fragments[-1]._sector_trailing_note = note
+        fragments[-1]._sector_trailing_note_gap = (
+            self._sector_trailing_note_gap
+        )
+        return fragments
+
+    def draw(self):
+        note = self._sector_trailing_note
+        if note is None:
+            return super().draw()
+        note_height = self._sector_trailing_note_height
+        note.drawOn(self.canv, 0, 0)
+        self.canv.saveState()
+        try:
+            self.canv.translate(
+                0, note_height + self._sector_trailing_note_gap
+            )
+            super().draw()
+        finally:
+            self.canv.restoreState()
 
 
 def ensure_image_server(timeout=None):
@@ -1485,18 +1558,6 @@ class ReportBuilder:
             formatted.append([
                 Paragraph(_greek(str(cell)), style) for cell in row
             ])
-        if self.profile.key == "Brief":
-            governing_note = (
-                "The table shows one governing row per engineering check type."
-            )
-        else:
-            governing_note = (
-                "The table shows one governing row for each engineering check type."
-            )
-        note_data_index = len(data)
-        formatted.append([
-            Paragraph(_greek(governing_note), body)
-        ] + [""] * (len(formatted[0]) - 1))
         table_item = self._publication_counter.issue(
             "Table", "Results overview across calculated checks"
         )
@@ -1517,7 +1578,7 @@ class ReportBuilder:
         context_count = len(context_rows)
         formatted = caption_row + context_rows + formatted
         header_row = 1 + context_count
-        table = _PaginatedReportTable(
+        table = _ResultsOverviewTable(
             formatted,
             colWidths=[
                 36 * mm, 22 * mm, 25 * mm,
@@ -1578,12 +1639,6 @@ class ReportBuilder:
             fill = fills.get(status)
             if fill is not None:
                 style.append(("BACKGROUND", (2, row_index), (2, row_index), fill))
-        note_row_index = header_row + note_data_index
-        style.extend([
-            ("SPAN", (0, note_row_index), (-1, note_row_index)),
-            ("TOPPADDING", (0, note_row_index), (-1, note_row_index), 3),
-            ("BOTTOMPADDING", (0, note_row_index), (-1, note_row_index), 3),
-        ])
         table.setStyle(TableStyle(style))
         table._sector_context_labels = context_labels
         table._sector_context_count = context_count
@@ -1599,7 +1654,18 @@ class ReportBuilder:
         table._sector_overview_groups = tuple(
             label for _index, label in group_rows
         )
-        table.keepWithNext = 1
+        table.keepWithNext = 0
+        if self.profile.key == "Brief":
+            governing_note = (
+                "The table shows one governing row per engineering check type."
+            )
+        else:
+            governing_note = (
+                "The table shows one governing row for each engineering check type."
+            )
+        table._sector_trailing_note = Paragraph(
+            _greek(governing_note), self.s["small"]
+        )
         self.flow.append(table)
         if information_rows:
             self._small("<b>Scope and calculation state</b>")
