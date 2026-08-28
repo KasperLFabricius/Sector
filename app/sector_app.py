@@ -5904,6 +5904,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "closed-torsion-link-authority-v1",
     "torsion-wall-location-lower-bound-v1",
     "nominal-shear-resistance-route-v1",
+    "combined-edition-scope-v1",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",
@@ -6880,22 +6881,34 @@ def build_inputs(host=st):
                  "(or Both), the shear check and the torsion check as well.")
     combined_on = _seeded_checkbox(
         sts, r"Check combined $M$-$V$-$T$", False, "combined_on",
-        help=r"Tie the $M$, $V$ and $T$ checks together (crushing 6.29 and the DK NA sum rule); "
-             "locks their method to the shared edition below. See the manual.")
+        help=r"Tie the $M$, $V$ and $T$ checks together under one shared edition. "
+             "Base EN reports its supported physical interactions; the DK NA edition "
+             "also applies its action-alone sum rule. See the manual.")
     combined_method = _seeded_selectbox(
         sts, "Combined edition (shared)", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label, key="combined_method", disabled=not combined_on,
         help="The single code edition used for the shear and torsion checks while "
              "Combined is on (their own method selectors are locked to this).")
-    combined_mv_independent = _seeded_checkbox(
-        sts, r"Apply separate $M$/$V$ route as a design assumption", False,
-        "combined_mv_independent", disabled=not combined_on,
-        help="DK NA 6.3.2(6): select after verifying the capacity, distribution "
-             "and anchorage of the longitudinal reinforcement added for shear "
-             "beyond bending. Sector then calculates "
-             r"$N+M+T$ and $N+V+T$. A value within the numerical limit is "
-             "CONDITIONAL; a value above the limit is FAIL even under the "
-             "favourable assumption.")
+    dkna_combined = combined_method == codes.EC2_2005_DKNA.label
+    if dkna_combined:
+        combined_mv_independent = _seeded_checkbox(
+            sts, r"Apply separate $M$/$V$ route as a design assumption", False,
+            "combined_mv_independent", disabled=not combined_on,
+            help="DK NA 6.3.2(6): select after verifying the capacity, distribution "
+                 "and anchorage of the longitudinal reinforcement added for shear "
+                 "beyond bending. Sector then calculates "
+                 r"$N+M+T$ and $N+V+T$. A value within the numerical limit is "
+                 "CONDITIONAL; a value above the limit is FAIL even under the "
+                 "favourable assumption.")
+    else:
+        # Keep a loaded schema-27 value round-trippable while detaching the DK-only
+        # widget from Streamlit's cleanup. The value has no calculation authority
+        # under Base EN and the control is intentionally not rendered.
+        st.session_state.setdefault("combined_mv_independent", False)
+        combined_mv_independent = bool(
+            st.session_state["combined_mv_independent"]
+        )
+        st.session_state["combined_mv_independent"] = combined_mv_independent
     # Filled at the end of this block (once the shear/torsion toggles below are
     # known) with any missing combined-check prerequisites -- so the user sees them
     # here, right under the toggle, instead of only after Calculate.
@@ -11228,7 +11241,10 @@ def _run_capacity_checks(inp, out):
         directional_combined = {
             key: value["combined"] for key, value in directions.items()
         }
-        independent_mv = inp.get("combined_mv_independent") is True
+        dkna_basis = inp.get("combined_method") == codes.EC2_2005_DKNA.label
+        independent_mv = bool(
+            dkna_basis and inp.get("combined_mv_independent") is True
+        )
         separation_condition = next((
             direction.get("m_v_separation_condition")
             for direction in directional_combined.values()
@@ -11236,16 +11252,21 @@ def _run_capacity_checks(inp, out):
             and direction.get("m_v_independent") is independent_mv
             and isinstance(direction.get("m_v_separation_condition"), dict)
         ), None)
-        out["combined"] = dict(
+        aggregate = dict(
             directions=directional_combined,
             biaxial=True,
-            m_v_independent=independent_mv,
-            m_v_separation_condition=separation_condition,
+            method=inp.get("combined_method"),
             note=(
                 "Independent Vx+T and Vy+T calculations are reported. Generic "
                 "Vx+Vy+T interaction is not calculated."
             ),
         )
+        if dkna_basis:
+            aggregate.update(
+                m_v_independent=independent_mv,
+                m_v_separation_condition=separation_condition,
+            )
+        out["combined"] = aggregate
 
 
 def _direction_detailing_depth(direction):
@@ -15362,9 +15383,125 @@ def _no_common_angle_msg(d):
     )
 
 
+def _render_base_en_combined(c):
+    """Render the supported Base-EN physical checks without a DK aggregate."""
+
+    st.info(
+        "Base EN reports its supported V+T concrete, closed-stirrup and "
+        "longitudinal-reinforcement checks separately. No additional aggregate "
+        "interaction verdict is published for this route."
+    )
+    st.markdown("**Physical resistance components**")
+    components = presentation.combined_physical_components(c)
+    for box, component in zip(st.columns(3), components):
+        status = component["status"]
+        if status in {"PASS", "FAIL"}:
+            _verdict_metric(
+                box,
+                component["label"],
+                _pct(component["util"]),
+                status == "PASS",
+                help=component["note"],
+            )
+        else:
+            box.metric(
+                component["label"],
+                _pct(component["util"]),
+                help=component["note"],
+            )
+            box.caption(status)
+    st.caption(
+        "These are independent physical checks; Sector does not publish an "
+        "additional Base-EN aggregate interaction verdict."
+    )
+
+    cr = c.get("crushing")
+    st.divider()
+    st.markdown(
+        r"**Concrete compression strut (6.29): "
+        r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**"
+    )
+    if cr is not None and cr.get("valid"):
+        _verdict_metric(
+            st,
+            "Formula (6.29) utilisation",
+            _pct(cr.get("value")),
+            viz.util_ok(cr.get("value")),
+        )
+        st.caption(
+            f"Common member angle: cot {_THETA} = {float(cr['cot']):.3f}; "
+            f"T_Rd,max = {float(cr['trd_max']):.3f} kNm and "
+            f"V_Rd,max = {float(cr['vrd_max']):.3f} kN."
+        )
+    elif cr is not None:
+        _manual_warning(st, "calculation-warning", _no_common_angle_msg(cr))
+    else:
+        st.caption(
+            "Formula (6.29) requires the applicable shear-link and torsion "
+            "resistance evidence."
+        )
+
+    tr = c.get("transverse")
+    st.divider()
+    st.markdown("**Shared closed stirrup: shear + torsion**")
+    if tr is not None and tr.get("valid"):
+        boxes = st.columns(3)
+        boxes[0].metric("Shear share", _pct(tr.get("shear_fraction")))
+        boxes[1].metric("Torsion share", _pct(tr.get("torsion_fraction")))
+        _verdict_metric(
+            boxes[2],
+            "Closed-stirrup utilisation",
+            _pct(tr.get("u_stirrup")),
+            viz.util_ok(tr.get("u_stirrup")),
+        )
+    elif tr is not None:
+        _manual_warning(st, "calculation-warning", _no_common_angle_msg(tr))
+    else:
+        st.caption("No assessable shared closed-stirrup result is available.")
+
+    st.divider()
+    st.markdown("**Longitudinal reinforcement: combined M + V + T tension chord**")
+    longitudinal = next(
+        component for component in components
+        if component["key"] == "longitudinal"
+    )
+    lg = c.get("longitudinal")
+    if isinstance(lg, dict) and lg.get("valid"):
+        boxes = st.columns(3)
+        boxes[0].metric("Bending demand", f"{float(lg['m_ed']):.3f} kNm")
+        boxes[1].metric(
+            "Combined chord demand", f"{float(lg['m_total']):.3f} kNm"
+        )
+        if longitudinal["status"] in {"PASS", "FAIL"}:
+            _verdict_metric(
+                boxes[2],
+                "Chord utilisation",
+                _pct(longitudinal["util"]),
+                longitudinal["status"] == "PASS",
+                help=longitudinal["note"],
+            )
+        else:
+            boxes[2].metric(
+                "Chord utilisation",
+                _pct(longitudinal["util"]),
+                help=longitudinal["note"],
+            )
+            boxes[2].caption(longitudinal["status"])
+        st.caption(
+            f"M_Ed,total = {float(lg['m_ed']):.3f} + "
+            f"{float(lg['mv']):.3f} + {float(lg['mt']):.3f} = "
+            f"{float(lg['m_total']):.3f} kNm; "
+            f"M_Rd = {float(lg['m_rd']):.3f} kNm."
+        )
+    else:
+        st.caption(
+            f"Longitudinal chord assessment: {longitudinal['status']}. "
+            f"{longitudinal['note']}."
+        )
+
+
 def combined_view(inp, results):
-    """Combined M-V-T interaction: the concrete-crushing (6.29) and DK NA
-    sum(SEd/SRd) checks across the plastic (M), shear (V) and torsion (T) results."""
+    """Publish the selected edition's supported M-V-T component checks."""
     if not results or "combined" not in results:
         if not inp.get("combined_requested", inp.get("combined_on")):
             st.info("Enable 'Check combined M-V-T' in Analysis settings "
@@ -15404,6 +15541,7 @@ def combined_view(inp, results):
         )
         return
     aggregate = results["combined"]
+    dkna_basis = presentation.combined_uses_dkna(aggregate)
     _member_material_note(inp)
     if aggregate.get("biaxial"):
         st.info(
@@ -15414,22 +15552,34 @@ def combined_view(inp, results):
         rows = []
         for component in ("vx", "vy"):
             item = directions.get(component) or {}
-            rows.append({
+            row = {
                 "Directional screen": "Vx,Ed + TEd" if component == "vx"
                 else "Vy,Ed + TEd",
-                "Axial util.": item.get("r_n"),
-                "Bending util.": item.get("r_m"),
-                "Shear util.": item.get("r_v"),
-                "Torsion util.": item.get("r_t"),
-                "DK NA sum": item.get("dkna_sum"),
                 "Governing face": viz.directional_face_label(
                     component, item.get("governing_face")
                 ),
                 f"cot {_THETA}": item.get("governing_cot"),
-                "DK NA sum status": (
-                    presentation.combined_dkna_status(item)
-                ),
-            })
+            }
+            if dkna_basis:
+                row.update({
+                    "Axial util.": item.get("r_n"),
+                    "Bending util.": item.get("r_m"),
+                    "Shear util.": item.get("r_v"),
+                    "Torsion util.": item.get("r_t"),
+                    "DK NA sum": item.get("dkna_sum"),
+                    "DK NA sum status": presentation.combined_dkna_status(item),
+                })
+            else:
+                physical = {
+                    component["key"]: component
+                    for component in presentation.combined_physical_components(item)
+                }
+                row.update({
+                    "Concrete strut": physical["concrete"]["status"],
+                    "Closed stirrup": physical["stirrup"]["status"],
+                    "Longitudinal": physical["longitudinal"]["status"],
+                })
+            rows.append(row)
         st.dataframe(rows, hide_index=True, width="stretch")
         options = [component for component in ("vx", "vy") if directions.get(component)]
         if not options:
@@ -15494,6 +15644,9 @@ def combined_view(inp, results):
             "method's default range. The actual values are used in every "
             "combined calculation.",
         )
+    if not presentation.combined_uses_dkna(c):
+        _render_base_en_combined(c)
+        return
     action_alone = c.get("action_alone") or {}
 
     def _action_help(key, unit):

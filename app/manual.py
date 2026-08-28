@@ -1214,9 +1214,10 @@ def manual_blocks() -> list:
     md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
        "shear ($V$) and torsion ($T$) checks together under **one shared code "
        "edition** (the per-check method selectors are then locked to it). It reports "
-       "the concrete-crushing interaction (6.29) and the DK NA "
-       "$\\sum(S_{Ed}/S_{Rd}) \\leq 1$ rule (6.3.2(6)), and lists the additional "
-       "longitudinal steel that shear and torsion demand. The summary separates the "
+       "the supported concrete-crushing, closed-stirrup and longitudinal-"
+       "reinforcement checks for the Base-EN edition. Selecting the Danish edition "
+       "additionally applies the DK NA $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ rule "
+       "(6.3.2(6)). The summary separates the "
        "three physical component checks: concrete compression strut, shared closed "
        "stirrup and governing longitudinal reinforcement. All three checks (Plastic, "
        "Shear, Torsion) must be enabled, and the row must have nonzero $V_{Ed}$ and "
@@ -2158,11 +2159,15 @@ def manual_blocks() -> list:
 
     h1("Combined M-V-T interaction")
     md("Bending, shear and torsion act together, so their checks are tied together "
-       "under one code edition (6.3.2). Two interactions apply. The concrete web "
+       "under one code edition (6.3.2). For both supported first-generation editions, "
+       "the concrete web "
        "struts carry both shear and torsion, limited by\n\n"
        "$$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\le 1 \\quad(6.29),$$\n\n"
-       "checked at a common strut angle near 45 degrees. The DK NA:2024 (6.3.2(6)) "
-       "adds a general rule over the acting sectional forces,\n\n"
+       "checked at a common strut angle, together with the supported closed-stirrup "
+       "and longitudinal-chord equilibrium checks. Base EN reports those physical "
+       "checks separately and does not publish an additional aggregate interaction "
+       "verdict. The DK NA:2024 selection (6.3.2(6)) adds a general rule over the "
+       "acting sectional forces,\n\n"
        "$$\\sum (S_{Ed}/S_{Rd}) \\le 1,$$\n\n"
        "each $S_{Rd}$ being the resistance to that force acting alone. Sector "
        "therefore determines a separate axial resistance for the entered tension "
@@ -2337,7 +2342,8 @@ def manual_blocks() -> list:
            ["Shear, strain-based (2023)", "DS/EN 1992-1-1:2023 4.3.3 and Table 4.3 (NDP) ($\\gamma_V$); 8.2.2 ($\\tau_{Rd,c}$, $d_{dg}$)"],
            ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
            ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"],
-           ["Combined M-V-T", "DS/EN 1992-1-1 6.3.2(4) + DK NA 6.3.2(6)"]])
+           ["Combined M-V-T (Base EN)", "EN 1992-1-1 6.3.2(2), (4) and (6.29)"],
+           ["Combined M-V-T (Danish edition)", "DS/EN 1992-1-1 6.3.2 + DK NA 6.3.2(6)"]])
 
     h1("Limitations & troubleshooting")
     md("Use this indexed chapter for explicit model boundaries and for the "

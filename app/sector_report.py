@@ -3194,8 +3194,15 @@ class ReportBuilder:
                 resistance_rows.extend([
                     ["Combined M-V-T", "yes"],
                     ["Combined shared method", _html_escape(str(inp.get("combined_method") or "-"))],
-                    ["Separate M/V route selected as a design assumption", self._brief_switch(inp.get("combined_mv_independent"))],
                 ])
+                if (
+                    inp.get("combined_method")
+                    == ec2_codes.EC2_2005_DKNA.label
+                ):
+                    resistance_rows.append([
+                        "Separate M/V route selected as a design assumption",
+                        self._brief_switch(inp.get("combined_mv_independent")),
+                    ])
             if shear_active:
                 resistance_rows.extend([
                     ["Shear method", _html_escape(str(effective_shear_method or "-"))],
@@ -7792,8 +7799,197 @@ class ReportBuilder:
                 )
             )
 
+    def _combined_base_en_direction(self, c):
+        """Publish Base-EN physical interactions without a DK aggregate."""
+
+        if not c.get("valid"):
+            missing = [
+                label
+                for key, label in (
+                    ("have_m", "bending"),
+                    ("have_v", "shear"),
+                    ("have_t", "torsion"),
+                )
+                if key in c and not c.get(key)
+            ]
+            reason = (
+                _html_escape(_result_reason(
+                    c["reason"],
+                    "combined",
+                    "Base EN combined prerequisite reason",
+                ))
+                if c.get("reason")
+                else "Complete the required component checks and recalculate"
+            )
+            self._small(
+                "Base-EN combined components are NOT ASSESSED"
+                + (": missing " + ", ".join(missing) if missing else "")
+                + ". "
+                + reason
+                + "."
+            )
+            return
+        self._p(
+            "The shared edition is <b>EN 1992-1-1:2005</b>. Sector reports "
+            "the supported V+T concrete, closed-stirrup and longitudinal-"
+            "reinforcement checks separately. No additional aggregate "
+            "interaction verdict is published for this route."
+        )
+        component_rows = [["Component", "Utilisation", "Status", "Engineering note"]]
+        component_rows.extend([
+            [
+                component["label"],
+                _pct(component["util"]),
+                component["status"],
+                component["note"],
+            ]
+            for component in presentation.combined_physical_components(c)
+        ])
+        self._h2("Supported Base-EN physical interactions")
+        self._table(
+            component_rows,
+            [48 * mm, 28 * mm, 29 * mm, 65 * mm],
+            font=7.5,
+        )
+        self._small(
+            "These are independent physical checks; no additional Base-EN "
+            "aggregate interaction verdict is published."
+        )
+        cr = c.get("crushing")
+        if isinstance(cr, Mapping) and cr.get("valid"):
+            self._h2("Concrete compression strut (6.29)")
+            self._formula(
+                "T<sub>Ed</sub>/T<sub>Rd,max</sub> + "
+                "V<sub>Ed</sub>/V<sub>Rd,max</sub>",
+                equation_key="combined.crushing.interaction",
+                ref="EN 1992-1-1 (6.29)",
+                subst=(
+                    f"{_fmt(cr['t_ed'], 3)}/{_fmt(cr['trd_max'], 3)} + "
+                    f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}"
+                ),
+                result=(
+                    f"{_pct(cr['value'])}  "
+                    f"({_demand_resistance_verdict(viz.util_ok(cr['value']))})"
+                ),
+            )
+            self._small(
+                f"Common member angle cot theta = {_fmt(cr.get('cot'), 3)}."
+            )
+        elif isinstance(cr, Mapping):
+            self._h2("Concrete compression strut (6.29)")
+            self._small(
+                "NOT ASSESSED: the shared member-angle calculation is invalid."
+            )
+        tr = c.get("transverse")
+        if isinstance(tr, Mapping) and tr.get("valid"):
+            self._h2("Shared closed stirrup: shear + torsion")
+            self._table(
+                [
+                    ["Shear share", "Torsion share", "Utilisation", "Status"],
+                    [
+                        _pct(tr.get("shear_fraction")),
+                        _pct(tr.get("torsion_fraction")),
+                        _pct(tr.get("u_stirrup")),
+                        (
+                            "PASS"
+                            if viz.util_ok(tr.get("u_stirrup"))
+                            else "FAIL"
+                        ),
+                    ],
+                ],
+                [40 * mm, 40 * mm, 40 * mm, 40 * mm],
+            )
+        lg = c.get("longitudinal")
+        longitudinal = next(
+            component
+            for component in presentation.combined_physical_components(c)
+            if component["key"] == "longitudinal"
+        )
+        self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
+        if isinstance(lg, Mapping) and lg.get("valid"):
+            self._table(
+                [
+                    ["MEd", "Shear shift", "Torsion share", "MEd,total", "MRd", "Status"],
+                    [
+                        f"{_fmt(lg.get('m_ed'), 3)} kNm",
+                        f"{_fmt(lg.get('mv'), 3)} kNm",
+                        f"{_fmt(lg.get('mt'), 3)} kNm",
+                        f"{_fmt(lg.get('m_total'), 3)} kNm",
+                        f"{_fmt(lg.get('m_rd'), 3)} kNm",
+                        longitudinal["status"],
+                    ],
+                ],
+                [27 * mm, 27 * mm, 27 * mm, 29 * mm, 27 * mm, 23 * mm],
+                font=7.2,
+            )
+        else:
+            self._small(
+                "Longitudinal chord assessment: "
+                f"{longitudinal['status']}. "
+                f"{_html_escape(longitudinal['note'])}."
+            )
+
+    def _combined_base_en(self, aggregate):
+        """Publish Base-EN uniaxial/directional component evidence."""
+
+        self._case_heading(
+            "Combined bending + shear + torsion (M-V-T)", "plastic"
+        )
+        blocker = presentation.combined_bending_assessment_blocker(self.out)
+        if blocker is not None:
+            self._small("Combined Base-EN components: NOT ASSESSED. " + blocker)
+            return
+        directions = aggregate.get("directions") or {}
+        if aggregate.get("biaxial") and directions:
+            self._small(
+                "V<sub>x,Ed</sub> + T<sub>Ed</sub> and V<sub>y,Ed</sub> + "
+                "T<sub>Ed</sub> are reported independently. No simultaneous "
+                "V<sub>x</sub> + V<sub>y</sub> + T verdict is inferred."
+            )
+            rows = [[
+                "Direction", "Concrete strut", "Closed stirrup",
+                "Longitudinal", "Governing face", "cot theta",
+            ]]
+            for component in ("vx", "vy"):
+                item = directions.get(component)
+                if not item:
+                    continue
+                physical = {
+                    value["key"]: value
+                    for value in presentation.combined_physical_components(item)
+                }
+                rows.append([
+                    "Vx+T" if component == "vx" else "Vy+T",
+                    physical["concrete"]["status"],
+                    physical["stirrup"]["status"],
+                    physical["longitudinal"]["status"],
+                    viz.directional_face_label(
+                        component, item.get("governing_face")
+                    ),
+                    _fmt(item.get("governing_cot"), 3),
+                ])
+            self._table(
+                rows,
+                [24 * mm, 27 * mm, 27 * mm, 27 * mm, 36 * mm, 22 * mm],
+                font=6.8,
+            )
+            selected = self._selected_family("combined", self.inp)
+            selected_component = (
+                selected.get("component") if isinstance(selected, Mapping) else None
+            )
+            if selected_component not in directions:
+                selected_component = next(iter(directions))
+            label = "Vx+T" if selected_component == "vx" else "Vy+T"
+            self._h2(f"Representative Base-EN directional calculation: {label}")
+            self._combined_base_en_direction(directions[selected_component])
+            return
+        self._combined_base_en_direction(aggregate)
+
     def _combined(self):
         aggregate = self.out["combined"]
+        if not presentation.combined_uses_dkna(aggregate):
+            self._combined_base_en(aggregate)
+            return
         screen_label = presentation.combined_dkna_screen_label(aggregate)
         combined_blocker = presentation.combined_bending_assessment_blocker(
             self.out

@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from app import modelled_direction  # noqa: E402
-from sector import combined as combined_core  # noqa: E402
+from sector import codes, combined as combined_core  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 
 
@@ -2062,6 +2062,70 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
     assert by_check["Combined Vx+T - DK NA sum"]["criterion"] == "<= 100 %"
     assert by_check["Generic Vx-Vy-T interaction"]["status"] == "NOT CALCULATED"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_base_en_combined_summary_publishes_only_supported_physical_checks():
+    def direction(concrete, stirrup, longitudinal):
+        return {
+            "valid": True,
+            "method": codes.EC2_2005.label,
+            "transverse": {
+                "valid": True,
+                "u_crush": concrete,
+                "u_stirrup": stirrup,
+                "cot": 1.5,
+                "shear_fraction": 0.2,
+                "torsion_fraction": stirrup - 0.2,
+            },
+            "longitudinal": {
+                "valid": True,
+                "util": longitudinal,
+                "axis": "x",
+                "tension_low": True,
+            },
+            "governing_longitudinal": {
+                "valid": True,
+                "util": longitudinal,
+                "axis": "x",
+                "tension_low": True,
+            },
+            "longitudinal_all_conditional": True,
+            "longitudinal_assessment": {
+                "status": "PASS" if longitudinal <= 1.0 else "FAIL",
+                "util": longitudinal,
+                "coverage_complete": True,
+            },
+        }
+
+    combined = {
+        "biaxial": True,
+        "method": codes.EC2_2005.label,
+        "directions": {
+            "vx": direction(0.50, 0.60, 0.70),
+            "vy": direction(0.80, 0.90, 1.10),
+        },
+    }
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    checks = {row["check"] for row in combined_rows}
+    assert "Combined Vx+T concrete compression strut" in checks
+    assert "Combined Vy+T closed stirrup" in checks
+    assert "Combined Vy+T longitudinal reinforcement" in checks
+    assert "Generic Vx-Vy-T interaction" in checks
+    assert all("DK NA" not in row["check"] for row in combined_rows)
+    assert all("dkna" not in row["overview_key"] for row in combined_rows)
+    assert next(
+        row for row in combined_rows
+        if row["check"] == "Combined Vy+T longitudinal reinforcement"
+    )["status"] == "FAIL"
 
 
 def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():

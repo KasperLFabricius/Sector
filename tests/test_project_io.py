@@ -1424,6 +1424,27 @@ def test_current_schema_retains_every_capacity_method_identity(key, label):
     assert project_io.project_provenance(second)["input_hash_valid"] is True
 
 
+def test_current_schema_keeps_dk_only_route_setting_dormant_under_base_en():
+    tables, scalars = _current_project()
+    scalars.update(
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        combined_mv_independent=True,
+    )
+
+    first = project_io.dump_project(tables, scalars)
+    loaded_tables, loaded_scalars = project_io.parse_project(first)
+    second = project_io.dump_project(loaded_tables, loaded_scalars)
+    _, reloaded_scalars = project_io.parse_project(second)
+
+    assert loaded_scalars["combined_method"] == codes.EC2_2005.label
+    assert loaded_scalars["combined_mv_independent"] is True
+    assert reloaded_scalars["combined_method"] == codes.EC2_2005.label
+    assert reloaded_scalars["combined_mv_independent"] is True
+    assert project_io.project_provenance(first)["input_hash_valid"] is True
+    assert project_io.project_provenance(second)["input_hash_valid"] is True
+
+
 @pytest.mark.parametrize(
     "key",
     ["shear_method", "torsion_method", "combined_method"],

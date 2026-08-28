@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from sector import capacity, codes, torsion
+from sector import combined as combined_core
 from sector import section as section_core
 from sector.engineer_message import EngineerMessage
 from sector.materials import Concrete, MildSteel
@@ -3771,6 +3772,216 @@ def test_finalize_combined_builds_valid_payload(monkeypatch):
     assert result["m_v_separation_condition"]["source_clause"].endswith(
         "6.3.2(6)"
     )
+
+
+def test_finalize_combined_base_en_retains_physical_checks_without_dkna(
+    monkeypatch,
+):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Base EN entered the DK NA action-alone interaction")
+
+    monkeypatch.setattr(
+        capacity, "dkna_normal_bending_action_alone", forbidden
+    )
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", forbidden)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", forbidden)
+    monkeypatch.setattr(combined_core, "dkna_interaction_result", forbidden)
+    chord = {
+        "valid": True,
+        "util": 0.55,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+    }
+    chord_assessment = {
+        "status": "PASS",
+        "reason": "required_longitudinal_chord_coverage_complete",
+        "util": 0.55,
+        "coverage_complete": True,
+    }
+    inp = _member_input(
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_method=codes.EC2_2005.label,
+        torsion_method=codes.EC2_2005.label,
+        combined_mv_independent=True,
+    )
+    out = {
+        "plastic": {"util": 0.20},
+        "shear": {
+            "res": {"valid": True, "vrd_c": 100.0},
+            "util": 0.30,
+            "v_ed": 30.0,
+            "links": {
+                "res": {
+                    "valid": True,
+                    "vrd_s": 100.0,
+                    "vrd_max": 200.0,
+                    "cot": 1.5,
+                },
+                "util": 0.30,
+                "delta_ftd": 15.0,
+                "chord": chord,
+                "longitudinal_assessment": chord_assessment,
+            },
+        },
+        "torsion": {
+            "valid": True,
+            "assessment_status": "PASS",
+            "overall_reason": None,
+            "longitudinal_assessment": {
+                "status": "PASS",
+                "demand_ratio": 0.50,
+            },
+            "interaction": {
+                "valid": True,
+                "cot": 1.5,
+                "value": 0.40,
+            },
+            "primary": {"t_ed": 20.0, "trd_s": 100.0},
+            "asl_req": 125.0,
+            "asw_over_s": 0.1,
+        },
+    }
+
+    capacity.finalize_combined(inp, out)
+
+    result = out["combined"]
+    assert result["valid"] is True
+    assert result["method"] == codes.EC2_2005.label
+    assert result["crushing"] == out["torsion"]["interaction"]
+    assert result["transverse"]["valid"] is True
+    assert result["longitudinal"] is chord
+    assert result["longitudinal_assessment"] is chord_assessment
+    forbidden_keys = {
+        "source_clause",
+        "r_n",
+        "r_m",
+        "r_v",
+        "r_t",
+        "m_v_independent",
+        "m_v_separation_condition",
+        "dkna_sum",
+        "dkna_valid",
+        "dkna_reason",
+        "dkna_conditional",
+        "dkna_limit_satisfied",
+        "dkna_status",
+        "dkna_ok",
+        "dkna_selection",
+        "action_alone",
+    }
+    assert forbidden_keys.isdisjoint(result)
+
+
+def test_finalize_combined_editions_share_physical_results_but_only_dk_runs_sum(
+    monkeypatch,
+):
+    chord = {
+        "valid": True,
+        "util": 0.55,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+    }
+    chord_assessment = {
+        "status": "PASS",
+        "reason": "required_longitudinal_chord_coverage_complete",
+        "util": 0.55,
+        "coverage_complete": True,
+    }
+    component_out = {
+        "plastic": {"util": 0.20},
+        "shear": {
+            "res": {"valid": True, "vrd_c": 100.0},
+            "util": 0.30,
+            "v_ed": 30.0,
+            "links": {
+                "res": {
+                    "valid": True,
+                    "vrd_s": 100.0,
+                    "vrd_max": 200.0,
+                    "cot": 1.5,
+                },
+                "util": 0.30,
+                "delta_ftd": 15.0,
+                "chord": chord,
+                "longitudinal_assessment": chord_assessment,
+            },
+        },
+        "torsion": {
+            "valid": True,
+            "assessment_status": "PASS",
+            "overall_reason": None,
+            "longitudinal_assessment": {
+                "status": "PASS",
+                "demand_ratio": 0.50,
+            },
+            "interaction": {
+                "valid": True,
+                "cot": 1.5,
+                "value": 0.40,
+            },
+            "primary": {"t_ed": 20.0, "trd_s": 100.0},
+            "asl_req": 125.0,
+            "asw_over_s": 0.1,
+        },
+    }
+    n = capacity._dkna_action_record("N", 0.0, None, valid=True)
+    m = capacity._dkna_action_record("M", 0.2, 1.0, valid=True)
+    v = capacity._dkna_action_record("V", 0.3, 1.0, valid=True)
+    t = capacity._dkna_action_record("T", 0.4, 1.0, valid=True)
+    action_calls = []
+
+    def v_action(_inp):
+        action_calls.append("V")
+        return v
+
+    def t_action(_inp):
+        action_calls.append("T")
+        return t
+
+    monkeypatch.setattr(capacity, "_dkna_shear_action_alone", v_action)
+    monkeypatch.setattr(capacity, "_dkna_torsion_action_alone", t_action)
+    base_inp = _member_input(
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_method=codes.EC2_2005.label,
+        torsion_method=codes.EC2_2005.label,
+        combined_mv_independent=True,
+    )
+    dk_inp = dict(
+        base_inp,
+        combined_method=codes.EC2_2005_DKNA.label,
+        shear_method=codes.EC2_2005_DKNA.label,
+        torsion_method=codes.EC2_2005_DKNA.label,
+        _dkna_nm_action_alone={"n": n, "m": m},
+    )
+    base_out = copy.deepcopy(component_out)
+    dk_out = copy.deepcopy(component_out)
+
+    capacity.finalize_combined(base_inp, base_out)
+    assert action_calls == []
+    capacity.finalize_combined(dk_inp, dk_out)
+    assert action_calls == ["V", "T"]
+
+    base_result = base_out["combined"]
+    dk_result = dk_out["combined"]
+    for key in (
+        "valid",
+        "crushing",
+        "asl_torsion",
+        "delta_ftd",
+        "links",
+        "longitudinal",
+        "longitudinal_assessment",
+        "transverse",
+    ):
+        assert base_result[key] == dk_result[key]
+    assert "dkna_sum" not in base_result
+    assert "action_alone" not in base_result
+    assert dk_result["dkna_sum"] == pytest.approx(0.70)
+    assert tuple(dk_result["action_alone"]) == ("n", "m", "v", "t")
 
 
 @pytest.mark.parametrize(

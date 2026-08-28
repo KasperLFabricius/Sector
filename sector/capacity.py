@@ -2723,28 +2723,32 @@ def finalize_combined(inp, out):
     """Build the final combined M-V-T payload from completed component checks."""
     if not inp.get("combined_on"):
         return
-    selected_combined_code(inp.get("combined_method"))
-    independent_mv = _solver_flag(
+    selected_code = selected_combined_code(inp.get("combined_method"))
+    declared_independent_mv = _solver_flag(
         inp["combined_mv_independent"],
         "independent M/V longitudinal-reinforcement condition",
     )
-    separation_condition = {
-        "confirmed": False,
-        "declared": independent_mv,
-        "mechanically_verified": False,
-        "verification_state": (
-            "design assumption" if independent_mv else "not selected"
-        ),
-        "condition": (
-            "Additional longitudinal reinforcement required for shear "
-            "beyond that required for bending is provided"
-        ),
-        "limitation": (
-            "This section calculation does not verify the additional "
-            "reinforcement capacity, distribution or anchorage"
-        ),
-        "source_clause": _DKNA_CLAUSE,
-    }
+    dkna_basis = selected_code.key == codes.EC2_2005_DKNA.key
+    independent_mv = declared_independent_mv if dkna_basis else False
+    separation_condition = None
+    if dkna_basis:
+        separation_condition = {
+            "confirmed": False,
+            "declared": independent_mv,
+            "mechanically_verified": False,
+            "verification_state": (
+                "design assumption" if independent_mv else "not selected"
+            ),
+            "condition": (
+                "Additional longitudinal reinforcement required for shear "
+                "beyond that required for bending is provided"
+            ),
+            "limitation": (
+                "This section calculation does not verify the additional "
+                "reinforcement capacity, distribution or anchorage"
+            ),
+            "source_clause": _DKNA_CLAUSE,
+        }
     plastic = out.get("plastic")
     shear_out = out.get("shear")
     torsion_out = out.get("torsion")
@@ -2835,9 +2839,12 @@ def finalize_combined(inp, out):
             "have_v": have_v,
             "have_t": have_t,
             "method": inp["combined_method"],
-            "m_v_independent": independent_mv,
-            "m_v_separation_condition": separation_condition,
         }
+        if dkna_basis:
+            payload.update(
+                m_v_independent=independent_mv,
+                m_v_separation_condition=separation_condition,
+            )
         if isinstance(links, Mapping) and links.get("model_2023") is True:
             payload["longitudinal_model_2023"] = True
         if torsion_assessment_status is not None:
@@ -2848,58 +2855,19 @@ def finalize_combined(inp, out):
         out["combined"] = payload
         return
 
-    retained_nm = inp.get("_dkna_nm_action_alone")
-    if not isinstance(retained_nm, Mapping) or not all(
-        isinstance(retained_nm.get(key), Mapping) for key in ("n", "m")
-    ):
-        retained_nm = dkna_normal_bending_action_alone(inp)
-    n_action = dict(retained_nm["n"])
-    m_action = dict(retained_nm["m"])
-    v_action = _dkna_shear_action_alone(inp)
-    t_action = _dkna_torsion_action_alone(inp)
     combined = _module("combined")
-    dk_selection = combined.dkna_interaction_result(
-        n_action["demand"],
-        n_action["resistance"],
-        m_action["demand"],
-        m_action["resistance"],
-        v_action["demand"],
-        v_action["resistance"],
-        t_action["demand"],
-        t_action["resistance"],
-        m_v_independent=independent_mv,
-    )
-    dk_sum = dk_selection.utilisation
     outside_default_range = bool(
         torsion_out.get("out_of_limits")
         or (links is not None and links.get("out_of_limits"))
     )
-    combined_statuses = [
-        torsion_assessment_status or "NOT ASSESSED",
-        dk_selection.status,
-    ]
+    component_statuses = [torsion_assessment_status or "NOT ASSESSED"]
     if isinstance(chord_assessment, Mapping):
-        combined_statuses.append(
+        component_statuses.append(
             str(chord_assessment.get("status") or "NOT ASSESSED").upper()
         )
     payload = {
         "valid": True,
         "method": inp["combined_method"],
-        "source_clause": _DKNA_CLAUSE,
-        "r_n": dk_selection.r_n,
-        "r_m": dk_selection.r_m,
-        "r_v": dk_selection.r_v,
-        "r_t": dk_selection.r_t,
-        "m_v_independent": independent_mv,
-        "m_v_separation_condition": separation_condition,
-        "dkna_sum": dk_sum,
-        "dkna_valid": dk_selection.valid,
-        "dkna_reason": dk_selection.reason,
-        "dkna_conditional": dk_selection.conditional,
-        "dkna_limit_satisfied": dk_selection.limit_satisfied,
-        "dkna_status": dk_selection.status,
-        "dkna_ok": dk_selection.ok,
-        "assessment_status": aggregate_assessment_status(combined_statuses),
         "torsion_assessment_status": (
             torsion_assessment_status or "NOT ASSESSED"
         ),
@@ -2907,13 +2875,6 @@ def finalize_combined(inp, out):
         "torsion_longitudinal_assessment": torsion_out.get(
             "longitudinal_assessment"
         ),
-        "dkna_selection": asdict(dk_selection),
-        "action_alone": {
-            "n": n_action,
-            "m": m_action,
-            "v": v_action,
-            "t": t_action,
-        },
         "outside_default_range": outside_default_range,
         "crushing": torsion_out.get("interaction"),
         "asl_torsion": torsion_out["asl_req"],
@@ -2925,6 +2886,54 @@ def finalize_combined(inp, out):
             else torsion_out.get("member_angle_selection")
         ),
     }
+    if dkna_basis:
+        retained_nm = inp.get("_dkna_nm_action_alone")
+        if not isinstance(retained_nm, Mapping) or not all(
+            isinstance(retained_nm.get(key), Mapping) for key in ("n", "m")
+        ):
+            retained_nm = dkna_normal_bending_action_alone(inp)
+        n_action = dict(retained_nm["n"])
+        m_action = dict(retained_nm["m"])
+        v_action = _dkna_shear_action_alone(inp)
+        t_action = _dkna_torsion_action_alone(inp)
+        dk_selection = combined.dkna_interaction_result(
+            n_action["demand"],
+            n_action["resistance"],
+            m_action["demand"],
+            m_action["resistance"],
+            v_action["demand"],
+            v_action["resistance"],
+            t_action["demand"],
+            t_action["resistance"],
+            m_v_independent=independent_mv,
+        )
+        payload.update(
+            source_clause=_DKNA_CLAUSE,
+            r_n=dk_selection.r_n,
+            r_m=dk_selection.r_m,
+            r_v=dk_selection.r_v,
+            r_t=dk_selection.r_t,
+            m_v_independent=independent_mv,
+            m_v_separation_condition=separation_condition,
+            dkna_sum=dk_selection.utilisation,
+            dkna_valid=dk_selection.valid,
+            dkna_reason=dk_selection.reason,
+            dkna_conditional=dk_selection.conditional,
+            dkna_limit_satisfied=dk_selection.limit_satisfied,
+            dkna_status=dk_selection.status,
+            dkna_ok=dk_selection.ok,
+            assessment_status=aggregate_assessment_status((
+                *component_statuses,
+                dk_selection.status,
+            )),
+            dkna_selection=asdict(dk_selection),
+            action_alone={
+                "n": n_action,
+                "m": m_action,
+                "v": v_action,
+                "t": t_action,
+            },
+        )
     if isinstance(links, Mapping) and links.get("model_2023") is True:
         payload["longitudinal_model_2023"] = True
     longitudinal = links.get("chord") if links is not None else None

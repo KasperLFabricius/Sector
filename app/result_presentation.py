@@ -18,7 +18,7 @@ import viz
 
 from app import engineer_messages
 from app import modelled_direction
-from sector import capacity
+from sector import capacity, codes
 from sector.design_standards import get_design_basis
 from sector.engineer_message import EngineerMessage
 
@@ -677,6 +677,30 @@ def combined_dkna_screen_label(result):
     )
 
 
+def combined_uses_dkna(result):
+    """Return whether one retained/input combined method is the Danish edition."""
+
+    result = result or {}
+    method = str(result.get("method") or "")
+    if method:
+        return method in {codes.EC2_2005_DKNA.label, "DK NA"}
+    directions = result.get("directions") or {}
+    if any(combined_uses_dkna(item) for item in directions.values()):
+        return True
+    # Compatibility for retained pre-contract report fixtures. Current Base-EN
+    # results always carry an explicit method and therefore never enter this path.
+    return any(
+        key in result
+        for key in (
+            "dkna_sum",
+            "dkna_valid",
+            "dkna_selection",
+            "action_alone",
+            "m_v_separation_condition",
+        )
+    )
+
+
 def combined_dkna_limit_satisfied(result):
     """Return the numerical limit comparison without promoting its authority."""
 
@@ -910,6 +934,17 @@ def _transverse_metric(family, result):
     def combined_metric(item):
         if not item.get("valid"):
             return None
+        if not combined_uses_dkna(item):
+            physical = [
+                _publication_metric(
+                    component.get("util"), allow_positive_infinity=True
+                )
+                for component in combined_physical_components(item)
+            ]
+            return max(
+                (value for value in physical if value is not None),
+                default=None,
+            )
         return _publication_metric(
             item.get("dkna_sum"), allow_positive_infinity=True
         )
@@ -3036,13 +3071,20 @@ def result_summary_rows(inp, results, *, stale=False):
 
     combined = results.get("combined")
     if combined is None and inp.get("combined_on"):
+        dkna_basis = (
+            inp.get("combined_method") == codes.EC2_2005_DKNA.label
+        )
         torsion_not_assessed = (
             torsion is not None
             and torsion_tube_valid
             and not torsion_transverse_resistance_assessed
         )
         rows.append(_summary_row(
-            "Combined M-V-T",
+            (
+                "Combined M-V-T - DK NA sum"
+                if dkna_basis
+                else "Combined M-V-T supported components"
+            ),
             "plastic",
             "NOT ASSESSED" if torsion_not_assessed else "NOT RUN",
             view="M-V-T Combined",
@@ -3058,15 +3100,22 @@ def result_summary_rows(inp, results, *, stale=False):
                 else "Calculate required"
             ),
             inp=inp,
-            overview_key="combined:dkna_sum",
+            overview_key=(
+                "combined:dkna_sum" if dkna_basis else "combined:physical"
+            ),
         ))
     elif (
         inp.get("combined_on")
         and (combined_blocker := combined_bending_assessment_blocker(results))
         is not None
     ):
+        dkna_basis = combined_uses_dkna(combined or inp)
         rows.append(_summary_row(
-            "Combined M-V-T - DK NA sum",
+            (
+                "Combined M-V-T - DK NA sum"
+                if dkna_basis
+                else "Combined M-V-T supported components"
+            ),
             "plastic",
             "NOT ASSESSED",
             result="-",
@@ -3075,9 +3124,84 @@ def result_summary_rows(inp, results, *, stale=False):
             view="M-V-T Combined",
             note=combined_blocker,
             inp=inp,
-            overview_key="combined:dkna_sum",
+            overview_key=(
+                "combined:dkna_sum" if dkna_basis else "combined:physical"
+            ),
         ))
-    elif combined is not None and inp.get("combined_on"):
+    elif (
+        combined is not None
+        and inp.get("combined_on")
+        and not combined_uses_dkna(combined)
+    ):
+        directions = combined.get("directions") or {}
+        physical_items = (
+            [
+                ("Vx+T" if component == "vx" else "Vy+T", directions[component])
+                for component in ("vx", "vy")
+                if component in directions
+            ]
+            if combined.get("biaxial") and directions
+            else [("", combined)]
+        )
+        for direction_label, item in physical_items:
+            prefix = f"Combined {direction_label} " if direction_label else "Combined "
+            if item.get("valid"):
+                for physical in combined_physical_components(item):
+                    rows.append(_summary_row(
+                        prefix + physical["label"].lower(),
+                        "plastic",
+                        physical["status"],
+                        _percent(physical["util"]),
+                        "<= 100 %",
+                        physical["util"],
+                        "M-V-T Combined",
+                        physical["note"],
+                        inp,
+                        overview_key=f"combined:{physical['key']}",
+                    ))
+            else:
+                missing = [
+                    label
+                    for key, label in (
+                        ("have_m", "M"),
+                        ("have_v", "V"),
+                        ("have_t", "T"),
+                    )
+                    if key in item and not item.get(key)
+                ]
+                note = "Missing prerequisite: " + ", ".join(missing)
+                if item.get("reason"):
+                    note += "; " + result_reason(
+                        item["reason"],
+                        "combined",
+                        context="Base EN combined prerequisite reason",
+                    )
+                rows.append(_summary_row(
+                    prefix + "supported components",
+                    "plastic",
+                    "NOT ASSESSED",
+                    view="M-V-T Combined",
+                    note=note,
+                    inp=inp,
+                    overview_key="combined:physical",
+                ))
+        if combined.get("biaxial") and directions:
+            rows.append(_summary_row(
+                "Generic Vx-Vy-T interaction",
+                "plastic",
+                "NOT CALCULATED",
+                result="Independent Vx+T and Vy+T calculations",
+                criterion="Not calculated",
+                view="M-V-T Combined",
+                note="No aggregate cross-direction verdict",
+                inp=inp,
+                overview_key="combined:cross_direction",
+            ))
+    elif (
+        combined is not None
+        and inp.get("combined_on")
+        and combined_uses_dkna(combined)
+    ):
         directions = combined.get("directions") or {}
         if combined.get("biaxial") and directions:
             for component in ("vx", "vy"):

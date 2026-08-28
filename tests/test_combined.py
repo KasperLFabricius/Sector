@@ -1492,6 +1492,259 @@ def test_app_combined_edition_lock():
     assert at.selectbox(key="torsion_method").disabled
 
 
+def test_app_base_en_keeps_physical_interactions_without_dkna_artifacts():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    assert results["shear"]["method"] == codes.EC2_2005.label
+    assert results["torsion"]["method"] == codes.EC2_2005.label
+    combined_result = results["combined"]
+    assert combined_result["method"] == codes.EC2_2005.label
+    assert combined_result["crushing"]["valid"] is True
+    assert combined_result["transverse"]["valid"] is True
+    assert combined_result["longitudinal"]["valid"] is True
+    for forbidden in (
+        "source_clause",
+        "r_n",
+        "r_m",
+        "r_v",
+        "r_t",
+        "m_v_independent",
+        "m_v_separation_condition",
+        "dkna_sum",
+        "dkna_valid",
+        "dkna_reason",
+        "dkna_status",
+        "dkna_ok",
+        "dkna_selection",
+        "action_alone",
+    ):
+        assert forbidden not in combined_result
+
+    _goto_page(at, "Inputs")
+    assert "combined_mv_independent" not in {
+        widget.key for widget in at.checkbox
+    }
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value)
+        for family in (at.info, at.warning, at.caption, at.markdown)
+        for item in family
+    )
+    assert "Base EN reports its supported V+T concrete" in visible
+    assert "No additional aggregate interaction verdict" in visible
+    assert "DK NA" not in visible
+    assert "action-alone" not in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    checks = tuple(str(value) for value in overview["Check"])
+    assert any("concrete compression strut" in value.casefold() for value in checks)
+    assert any("closed stirrup" in value.casefold() for value in checks)
+    assert any("longitudinal reinforcement" in value.casefold() for value in checks)
+    assert not any("DK NA" in value for value in checks)
+
+
+def test_app_base_en_biaxial_view_keeps_only_directional_physical_checks():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    aggregate = at.session_state["results"]["combined"]
+    assert aggregate["method"] == codes.EC2_2005.label
+    assert set(aggregate["directions"]) == {"vx", "vy"}
+    for direction in aggregate["directions"].values():
+        assert direction["method"] == codes.EC2_2005.label
+        assert "action_alone" not in direction
+        assert not any(key.startswith("dkna_") for key in direction)
+
+    _select_view(at, "M-V-T Combined")
+    direction_table = next(
+        frame.value
+        for frame in at.dataframe
+        if "Directional screen" in frame.value.columns
+    )
+    assert tuple(direction_table["Directional screen"]) == (
+        "Vx,Ed + TEd",
+        "Vy,Ed + TEd",
+    )
+    assert {"Concrete strut", "Closed stirrup", "Longitudinal"}.issubset(
+        direction_table.columns
+    )
+    assert not any("DK NA" in str(column) for column in direction_table.columns)
+    assert not any("action-alone" in str(column).casefold() for column in direction_table.columns)
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    checks = tuple(str(value) for value in overview["Check"])
+    assert "Combined Vx+T concrete compression strut" in checks
+    assert "Combined Vx+T closed stirrup" in checks
+    assert not any("DK NA" in value or "action-alone" in value.casefold() for value in checks)
+
+
+def test_app_combined_basis_switch_invalidates_results_and_reports():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    _calculate(at)
+    base_before = at.session_state["results"]["combined"]
+    base_signature = at.session_state["result_sig"]
+    assert "action_alone" not in base_before
+
+    _goto_page(at, "Report")
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "reused-current-analysis-results"
+    )
+    base_report_signature = at.session_state["report_signature"]
+    assert not any("Report out of date" in item.value for item in at.warning)
+
+    _set(
+        at,
+        ("selectbox", "combined_method", codes.EC2_2005_DKNA.label),
+        ("checkbox", "combined_mv_independent", True),
+    )
+    _select_view(at, "M-V-T Combined")
+    assert any("press Calculate" in item.value for item in at.warning)
+    _goto_page(at, "Report")
+    assert any("Report out of date" in item.value for item in at.warning)
+    _calculate(at)
+    dk_result = at.session_state["results"]["combined"]
+    dk_signature = at.session_state["result_sig"]
+    assert dk_result is not base_before
+    assert dk_signature != base_signature
+    assert dk_result["method"] == codes.EC2_2005_DKNA.label
+    assert dk_result["m_v_independent"] is True
+    assert "action_alone" in dk_result
+    assert "dkna_sum" in dk_result
+
+    _goto_page(at, "Report")
+    at.button(key="gen_report").click().run()
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "reused-current-analysis-results"
+    )
+    dk_report_signature = at.session_state["report_signature"]
+    assert dk_report_signature != base_report_signature
+
+    _set(at, ("selectbox", "combined_method", codes.EC2_2005.label))
+    _select_view(at, "M-V-T Combined")
+    assert any("press Calculate" in item.value for item in at.warning)
+    _goto_page(at, "Report")
+    assert any("Report out of date" in item.value for item in at.warning)
+    _calculate(at)
+    base_after = at.session_state["results"]["combined"]
+    assert base_after is not dk_result
+    assert base_after["method"] == codes.EC2_2005.label
+    assert "action_alone" not in base_after
+    assert "dkna_sum" not in base_after
+    assert at.session_state["combined_mv_independent"] is True
+    _goto_page(at, "Inputs")
+    assert "combined_mv_independent" not in {
+        widget.key for widget in at.checkbox
+    }
+
+
+def test_mvt_m03_contract_recomputes_pre_scope_capacity_results():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Both"))
+    _enable_all(at, mv_independent=True)
+
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    scope_marker = "combined-edition-scope-v1"
+    assert scope_marker in token
+    pre_scope_token = tuple(item for item in token if item != scope_marker)
+    for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
+        assert tuple(latest[key]).count(token) == 1
+
+    before = at.session_state["results"]
+    plastic_before = before["plastic"]
+    elastic_before = before["elastic"]
+    shear_before = before["shear"]
+    torsion_before = before["torsion"]
+    combined_before = before["combined"]
+    cached_case = before["plastic_cases"][0]
+    assert cached_case["results"]["combined"] is combined_before
+    combined_before["pre_mvt_m03_marker"] = True
+    combined_before["dkna_sum"] = 0.01
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            pre_scope_token if item == token else item
+            for item in at.session_state[key]
+        )
+    assert at.session_state["result_sig"] != latest["signature"]
+
+    _calculate(at)
+    refreshed = at.session_state["results"]
+    assert refreshed["plastic"] is plastic_before
+    assert refreshed["elastic"] is elastic_before
+    assert refreshed["shear"] is not shear_before
+    assert refreshed["torsion"] is not torsion_before
+    assert refreshed["combined"] is not combined_before
+    assert "pre_mvt_m03_marker" not in refreshed["combined"]
+    assert refreshed["combined"]["dkna_sum"] != pytest.approx(0.01)
+    assert refreshed["plastic_cases"][0]["reused"] is False
+    assert refreshed["elastic_cases"][0]["reused"] is True
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        assert tuple(at.session_state[key]).count(token) == 1
+
+
 def test_app_combined_incomplete_flags_missing(monkeypatch):
     monkeypatch.setattr(
         capacity,
@@ -2610,9 +2863,12 @@ def test_app_combined_is_saved_and_restored():
     at.run()
     at.checkbox(key="combined_on").set_value(True).run()
     at.selectbox(key="combined_method").set_value(codes.EC2_2005.label).run()
+    at.session_state["combined_mv_independent"] = True
+    at.run()
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     assert scalars["combined_on"] is True
+    assert scalars["combined_mv_independent"] is True
     at2 = _fresh()
     at2.run()
     at2.session_state["_pending_project"] = project_io.dump_project({}, scalars)
@@ -2620,3 +2876,7 @@ def test_app_combined_is_saved_and_restored():
     assert not at2.exception
     assert at2.session_state["combined_on"] is True
     assert at2.session_state["combined_method"] == codes.EC2_2005.label
+    assert at2.session_state["combined_mv_independent"] is True
+    assert "combined_mv_independent" not in {
+        widget.key for widget in at2.checkbox
+    }

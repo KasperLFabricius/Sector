@@ -6589,6 +6589,126 @@ def _combined_out(mv_independent=False):
     }
 
 
+def _base_en_combined_out():
+    combined = _combined_out()
+    for key in (
+        "r_n", "r_m", "r_v", "r_t", "m_v_independent", "dkna_sum",
+        "dkna_valid", "dkna_conditional", "dkna_limit_satisfied",
+        "dkna_status", "dkna_ok", "dkna_selection",
+        "m_v_separation_condition", "action_alone",
+    ):
+        combined.pop(key, None)
+    combined["method"] = codes.EC2_2005.label
+    combined["transverse"] = {
+        "valid": True,
+        "cot": 1.5,
+        "u_stirrup": 0.58,
+        "u_crush": 0.72,
+        "shear_fraction": 0.28,
+        "torsion_fraction": 0.30,
+    }
+    chord = {
+        "valid": True,
+        "axis": "x",
+        "tension_low": True,
+        "m_ed": 60.0,
+        "mv": 20.0,
+        "mt": 10.0,
+        "m_total": 90.0,
+        "m_rd": 150.0,
+        "util": 0.60,
+        "ok": True,
+        "conditional": True,
+    }
+    combined["longitudinal"] = chord
+    combined["longitudinal_assessment"] = {
+        "status": "PASS",
+        "util": 0.60,
+        "coverage_complete": True,
+        "governing": "x-axis negative face",
+        "reason": "Complete longitudinal chord coverage",
+    }
+    _retain_combined_chords(combined, chord)
+    return combined
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        combined_mv_independent=True,
+        shear_on=True,
+        torsion_on=True,
+    )
+    out = {"plastic": _out()["plastic"], "combined": _base_en_combined_out()}
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    folded = text.casefold()
+    assert "concrete compression strut" in folded
+    assert "closed stirrup" in folded
+    assert "longitudinal reinforcement" in folded
+    assert "DK NA" not in text
+    assert "action-alone" not in text
+    assert "DK NA sum" not in text
+    assert "N+M+V+T" not in text
+    assert "max(N+M+T, N+V+T)" not in text
+    assert "Separate M/V route selected as a design assumption" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Supported Base-EN physical interactions" in text
+        assert "Concrete compression strut (6.29)" in text
+        assert "Shared closed stirrup: shear + torsion" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        combined_mv_independent=True,
+        shear_on=True,
+        torsion_on=True,
+    )
+    vx = _base_en_combined_out()
+    vy = copy.deepcopy(vx)
+    vx.update(component="vx", governing_face="negative", governing_cot=1.25)
+    vy.update(component="vy", governing_face="positive", governing_cot=1.75)
+    out = {
+        "plastic": _out()["plastic"],
+        "combined": {
+            "method": codes.EC2_2005.label,
+            "biaxial": True,
+            "directions": {"vx": vx, "vy": vy},
+        },
+    }
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Vx+T" in text
+    assert "Vy+T" in text
+    assert "DK NA" not in text
+    assert "DK NA sum" not in text
+    assert "N+M+V+T" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Representative Base-EN directional calculation" in text
+        assert "No simultaneous Vx + Vy + T verdict is inferred" in text
+
+
 def _retain_combined_chords(payload, *candidates):
     retained = [item for item in candidates if item is not None]
     payload["longitudinal_candidates"] = retained
