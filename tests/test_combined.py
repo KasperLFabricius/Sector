@@ -1616,7 +1616,8 @@ def test_app_base_en_biaxial_view_keeps_only_directional_physical_checks():
     assert not any("DK NA" in value or "action-alone" in value.casefold() for value in checks)
 
 
-def test_app_base_en_missing_biaxial_direction_fails_closed():
+@pytest.mark.parametrize("malformed_vy", ("missing", "empty"))
+def test_app_base_en_missing_biaxial_direction_fails_closed(malformed_vy):
     at = _fresh()
     at.run()
     _set(
@@ -1637,7 +1638,10 @@ def test_app_base_en_missing_biaxial_direction_fails_closed():
         ("number_input", "torsion_T", 5.0),
     )
     aggregate = at.session_state["results"]["combined"]
-    aggregate["directions"].pop("vy")
+    if malformed_vy == "missing":
+        aggregate["directions"].pop("vy")
+    else:
+        aggregate["directions"]["vy"] = {}
 
     _select_view(at, "M-V-T Combined")
     assert not at.exception
@@ -1692,7 +1696,20 @@ def test_app_base_en_boolean_utilisations_are_not_published_as_one():
 
     _select_view(at, "M-V-T Combined")
     assert not at.exception
+    component_metrics = {
+        metric.label: str(metric.value)
+        for metric in at.metric
+        if metric.label in {
+            "Concrete compression strut",
+            "Closed stirrup",
+            "Longitudinal reinforcement",
+        }
+    }
+    assert component_metrics["Concrete compression strut"] == "-"
+    assert component_metrics["Closed stirrup"] == "-"
+    assert component_metrics["Longitudinal reinforcement"] != "100.0 %"
     assert "100.0 %" not in {str(metric.value) for metric in at.metric}
+    assert "inf" not in {str(metric.value).casefold() for metric in at.metric}
     assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
 
     _select_view(at, "Results Overview")

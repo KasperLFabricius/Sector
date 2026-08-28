@@ -6632,6 +6632,74 @@ def _base_en_combined_out():
     return combined
 
 
+def _base_en_scheduler_combined_case(action, util, *, component):
+    """Build one internally reconciled synthetic scheduler result.
+
+    The retained Formula (6.29), shared-stirrup and chord operands are derived
+    from the same action row that the report prints.  The values are deterministic
+    publication fixtures, not independent resistance oracles.
+    """
+
+    result = _base_en_combined_out()
+    v_ed = abs(float(action[f"{component}_ed_kn"]))
+    t_ed = abs(float(action["t_ed_knm"]))
+    moment_key = "my_ed_knm" if component == "vx" else "mx_ed_knm"
+    m_ed = abs(float(action[moment_key]))
+
+    torsion_ratio = util * 0.40
+    shear_ratio = util - torsion_ratio
+    crushing = result["crushing"]
+    crushing.update(
+        t_ed=t_ed,
+        v_ed=v_ed,
+        trd_max=t_ed / torsion_ratio,
+        vrd_max=v_ed / shear_ratio,
+        torsion_ratio=torsion_ratio,
+        shear_ratio=shear_ratio,
+        value=util,
+        ok=util <= 1.0,
+    )
+
+    stirrup_util = util - 0.05
+    torsion_fraction = min(0.20, stirrup_util / 2.0)
+    shear_fraction = stirrup_util - torsion_fraction
+    result["transverse"].update(
+        u_crush=util,
+        u_stirrup=stirrup_util,
+        shear_fraction=shear_fraction,
+        torsion_fraction=torsion_fraction,
+        v_ed=v_ed,
+    )
+
+    chord_util = util - 0.10
+    shear_shift = 0.10 * v_ed
+    torsion_share = 0.50 * t_ed
+    m_total = m_ed + shear_shift + torsion_share
+    chord = result["longitudinal"]
+    chord.update(
+        axis="y" if component == "vx" else "x",
+        m_ed=m_ed,
+        mv=shear_shift,
+        mt=torsion_share,
+        m_total=m_total,
+        m_rd=m_total / chord_util,
+        util=chord_util,
+        ok=chord_util <= 1.0,
+    )
+    result["longitudinal_assessment"].update(
+        status="PASS" if chord_util <= 1.0 else "FAIL",
+        util=chord_util,
+        coverage_complete=True,
+    )
+    result["governing_longitudinal"] = chord
+    result["longitudinal_candidates"] = [chord]
+    result.update(
+        component=component,
+        governing_face="negative" if component == "vx" else "positive",
+    )
+    return result
+
+
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile):
     inp = _inp()
@@ -6710,7 +6778,10 @@ def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile)
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_base_en_missing_biaxial_direction_fails_closed(profile):
+@pytest.mark.parametrize("malformed_vy", ["missing", "empty"])
+def test_report_base_en_missing_biaxial_direction_fails_closed(
+    profile, malformed_vy
+):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -6729,6 +6800,8 @@ def test_report_base_en_missing_biaxial_direction_fails_closed(profile):
             "directions": {"vx": vx},
         },
     }
+    if malformed_vy == "empty":
+        out["combined"]["directions"]["vy"] = {}
 
     text = " ".join(
         _pdf_text(
@@ -6783,6 +6856,13 @@ def test_report_base_en_boolean_utilisations_are_not_published(profile):
     assert re.search(r"100[.,]0\s*%", text) is None
     if profile in {"Standard", "Audit"}:
         assert "Supported Base-EN physical interactions" in text
+        for label in (
+            "Concrete compression strut",
+            "Closed stirrup",
+            "Longitudinal reinforcement",
+        ):
+            assert f"{label} - NOT ASSESSED" in text
+            assert f"{label} inf NOT ASSESSED" not in text
     else:
         assert "Combined concrete compression strut" in text
     assert "DK NA" not in text
@@ -6801,52 +6881,45 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     actions = [
         {
             "name": "PL-LOW", "description": "Lower combined utilisation",
-            "n_ed_kn": 0.0, "mx_ed_knm": 40.0, "my_ed_knm": 0.0,
-            "vx_ed_kn": 20.0, "vy_ed_kn": 0.0,
+            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 20.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 10.0,
         },
         {
             "name": "PL-GOV", "description": "Governing combined utilisation",
             "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 0.0,
-            "vx_ed_kn": 80.0, "vy_ed_kn": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 80.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 40.0,
         },
         {
             "name": "PL-INCOMPLETE",
             "description": "Incomplete longitudinal assessment",
-            "n_ed_kn": 0.0, "mx_ed_knm": 60.0, "my_ed_knm": 0.0,
+            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 0.0,
             "vx_ed_kn": 30.0, "vy_ed_kn": 25.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 15.0,
         },
     ]
     inp["plastic_cases"] = actions
+    for action in actions:
+        assert action["n_ed_kn"] == pytest.approx(inp["P_pl"])
+        assert action["mx_ed_knm"] == pytest.approx(inp["Mx_pl"])
+        assert action["my_ed_knm"] == pytest.approx(inp["My_pl"])
 
-    def combined_case(util):
-        result = _base_en_combined_out()
-        result["transverse"].update(
-            u_crush=util,
-            u_stirrup=util - 0.05,
-            shear_fraction=util - 0.25,
-            torsion_fraction=0.20,
-        )
-        result["longitudinal"].update(util=util - 0.10, ok=True)
-        result["longitudinal_assessment"].update(
-            status="PASS",
-            util=util - 0.10,
-        )
-        result["governing_longitudinal"] = result["longitudinal"]
-        result["longitudinal_candidates"] = [result["longitudinal"]]
-        return result
-
-    low = combined_case(0.40)
-    governing = combined_case(0.85)
-    incomplete_vx = combined_case(0.95)
-    incomplete_vx.update(component="vx", governing_face="negative")
-    incomplete_vy = combined_case(0.90)
-    incomplete_vy.update(component="vy", governing_face="positive")
+    low = _base_en_scheduler_combined_case(
+        actions[0], 0.40, component="vy"
+    )
+    governing = _base_en_scheduler_combined_case(
+        actions[1], 0.85, component="vy"
+    )
+    incomplete_vx = _base_en_scheduler_combined_case(
+        actions[2], 0.95, component="vx"
+    )
+    incomplete_vy = _base_en_scheduler_combined_case(
+        actions[2], 0.90, component="vy"
+    )
     incomplete_vy["longitudinal_assessment"].update(
         status="NOT ASSESSED",
-        util=0.85,
+        util=None,
         coverage_complete=False,
         reason="required_longitudinal_chord_coverage_incomplete",
     )
@@ -6889,6 +6962,38 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     out["worked_example_selection"] = (
         result_presentation.worked_example_selection(inp, out)
     )
+
+    for action, result in zip(actions[:2], (low, governing), strict=True):
+        crushing = result["crushing"]
+        chord = result["longitudinal"]
+        assert crushing["v_ed"] == pytest.approx(abs(action["vy_ed_kn"]))
+        assert crushing["t_ed"] == pytest.approx(abs(action["t_ed_knm"]))
+        assert crushing["value"] == pytest.approx(
+            crushing["t_ed"] / crushing["trd_max"]
+            + crushing["v_ed"] / crushing["vrd_max"]
+        )
+        assert result["transverse"]["u_stirrup"] == pytest.approx(
+            result["transverse"]["shear_fraction"]
+            + result["transverse"]["torsion_fraction"]
+        )
+        assert chord["m_ed"] == pytest.approx(abs(action["mx_ed_knm"]))
+        assert chord["m_total"] == pytest.approx(
+            chord["m_ed"] + chord["mv"] + chord["mt"]
+        )
+        assert chord["util"] == pytest.approx(
+            chord["m_total"] / chord["m_rd"]
+        )
+    for component, result in incomplete["directions"].items():
+        action = actions[2]
+        crushing = result["crushing"]
+        moment_key = "my_ed_knm" if component == "vx" else "mx_ed_knm"
+        assert crushing["v_ed"] == pytest.approx(
+            abs(action[f"{component}_ed_kn"])
+        )
+        assert crushing["t_ed"] == pytest.approx(abs(action["t_ed_knm"]))
+        assert result["longitudinal"]["m_ed"] == pytest.approx(
+            abs(action[moment_key])
+        )
     assert out["worked_example_selection"]["families"]["combined"] == {
         "case_id": "PL-GOV",
         "component": None,

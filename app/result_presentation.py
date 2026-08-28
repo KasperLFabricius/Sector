@@ -717,11 +717,12 @@ def combined_uses_dkna(result):
 
 
 def base_en_combined_direction_items(result):
-    """Return both required Base-EN biaxial directions, or fail closed.
+    """Return both required Base-EN biaxial direction records, or fail closed.
 
     A biaxial retained result is publication-complete only when both independent
-    Vx+T and Vy+T payloads are mappings.  Missing or malformed direction evidence
-    must not let the surviving direction become a governing worked example.
+    Vx+T and Vy+T payloads carry the current Base-EN direction contract.  Merely
+    being a mapping is insufficient: an empty or stale record must not let the
+    surviving direction become a governing worked example.
     """
 
     if not isinstance(result, Mapping) or result.get("biaxial") is not True:
@@ -732,7 +733,32 @@ def base_en_combined_direction_items(result):
     items = []
     for component in ("vx", "vy"):
         item = directions.get(component)
-        if not isinstance(item, Mapping):
+        if (
+            not isinstance(item, Mapping)
+            or type(item.get("valid")) is not bool
+            or item.get("method") != codes.EC2_2005.label
+        ):
+            return None
+        if item["valid"]:
+            transverse = item.get("transverse")
+            if (
+                not isinstance(transverse, Mapping)
+                or type(transverse.get("valid")) is not bool
+                or not any(
+                    isinstance(item.get(key), Mapping)
+                    for key in (
+                        "longitudinal",
+                        "governing_longitudinal",
+                        "longitudinal_assessment",
+                    )
+                )
+            ):
+                return None
+        elif not (
+            any(key in item for key in ("have_m", "have_v", "have_t"))
+            or bool(item.get("reason"))
+            or "torsion_assessment_status" in item
+        ):
             return None
         items.append((component, item))
     return tuple(items)

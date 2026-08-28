@@ -13,26 +13,37 @@ from sector import geometry
 _PERMILLE = chr(0x2030)  # per-mille sign
 
 
+def _is_boolean_scalar(value):
+    """Return whether a scalar is a built-in or NumPy Boolean."""
+
+    value_type = type(value)
+    return isinstance(value, bool) or (
+        value_type.__module__ == "numpy"
+        and value_type.__name__ in {"bool", "bool_"}
+    )
+
+
 def pct(x, nd=1):
-    """A utilisation fraction as a percentage string, ``inf`` when unbounded/undefined.
+    """Format a utilisation fraction without inventing unavailable evidence.
 
     Shared by the Streamlit views and the PDF report so the same utilisation never
     formats differently on screen and in the document. ``nd`` is the decimal count
-    (the sub-tube table prints whole percent, most checks one decimal).
+    (the sub-tube table prints whole percent, most checks one decimal). Missing,
+    malformed and Boolean values render as ``-``; a retained positive infinity
+    remains ``inf``.
     """
-    x_type = type(x)
-    if isinstance(x, bool) or (
-        x_type.__module__ == "numpy" and x_type.__name__ in {"bool", "bool_"}
-    ):
+    if _is_boolean_scalar(x):
         return "-"
     if x is None:
-        return "inf"
+        return "-"
     try:
         value = float(x)
     except (TypeError, ValueError, OverflowError):
         return "-"
-    if not math.isfinite(value):
+    if value == math.inf:
         return "inf"
+    if not math.isfinite(value):
+        return "-"
     return f"{value * 100:.{nd}f} %"
 
 
@@ -43,7 +54,18 @@ def util_ok(util, tol=0.0):
     badge and the report OK/EXCEEDED verdict can never diverge. ``tol`` allows the
     tiny float slack (1e-9) some call sites use.
     """
-    return util is not None and math.isfinite(util) and util <= 1.0 + tol
+    if util is None or _is_boolean_scalar(util) or _is_boolean_scalar(tol):
+        return False
+    try:
+        value = float(util)
+        tolerance = float(tol)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return (
+        math.isfinite(value)
+        and math.isfinite(tolerance)
+        and value <= 1.0 + tolerance
+    )
 
 
 def tension_face_label(tension_low, axis=None):

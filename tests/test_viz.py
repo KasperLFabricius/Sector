@@ -29,6 +29,25 @@ def _has_marker_trace(fig):
     return any(getattr(t, "mode", None) == "markers" for t in fig.data)
 
 
+def test_utilisation_formatting_rejects_boolean_and_marks_missing_as_unavailable():
+    import numpy as np
+
+    for value in (
+        None,
+        True,
+        np.bool_(True),
+        "not a utilisation",
+        math.nan,
+        -math.inf,
+    ):
+        assert viz.pct(value) == "-"
+        assert viz.util_ok(value) is False
+    assert viz.pct(math.inf) == "inf"
+    assert viz.util_ok(math.inf) is False
+    assert viz.pct(1.0) == "100.0 %"
+    assert viz.util_ok(1.0) is True
+
+
 def test_concrete_figure_greek_axes_dots_and_axis_labels():
     fig = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.5, curve=2))
     xtitle = fig.layout.xaxis.title.text

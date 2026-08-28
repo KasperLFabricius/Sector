@@ -2235,6 +2235,57 @@ def test_base_en_biaxial_direction_evidence_fails_closed(directions):
     )
 
 
+def test_base_en_empty_second_direction_cannot_publish_surviving_direction():
+    chord = {
+        "valid": True,
+        "util": 0.70,
+        "axis": "x",
+        "tension_low": True,
+    }
+    vx = {
+        "valid": True,
+        "method": codes.EC2_2005.label,
+        "transverse": {
+            "valid": True,
+            "u_crush": 0.50,
+            "u_stirrup": 0.60,
+            "cot": 1.5,
+            "shear_fraction": 0.30,
+            "torsion_fraction": 0.30,
+        },
+        "longitudinal": chord,
+        "governing_longitudinal": chord,
+        "longitudinal_all_conditional": True,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "util": 0.70,
+            "coverage_complete": True,
+        },
+    }
+    combined = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": {"vx": vx, "vy": {}},
+    }
+
+    assert presentation.base_en_combined_direction_items(combined) is None
+    assert presentation._transverse_metric("combined", combined) is None
+    assert presentation._transverse_direction("combined", combined) is None
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert len(combined_rows) == 1
+    assert combined_rows[0]["status"] == "NOT ASSESSED"
+    assert combined_rows[0]["result"] == "-"
+
+
 @pytest.mark.parametrize("retained", (True, np.bool_(True)))
 def test_base_en_boolean_utilisations_are_not_publication_numbers(retained):
     chord = {
@@ -2271,6 +2322,7 @@ def test_base_en_boolean_utilisations_are_not_publication_numbers(retained):
     assert presentation.interaction_assessment_status(
         {"valid": True, "value": retained}
     ) == "NOT ASSESSED"
+    assert presentation.viz.util_ok(retained) is False
 
     rows = presentation.result_summary_rows(
         _inp(
