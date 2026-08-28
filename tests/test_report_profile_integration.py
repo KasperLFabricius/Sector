@@ -68,7 +68,7 @@ def test_brief_retains_relevant_input_rows_without_standard_derivations():
     text = _profile_text("Brief")
     for expected in (
         "Outer 1 -100.000 -150.000",
-        "Bar R1 0.000 -120.000 500.000",
+        "Bar R1 -70.000 -120.000 250.000",
         "Mild / M1 Bars R1",
         "Concrete rings",
         "PL-QA-1",
@@ -1027,6 +1027,19 @@ def test_every_profile_retains_governing_statuses_and_engineering_values():
         )
         for value in expected:
             assert value in text
+
+
+def test_deeper_profiles_retain_torsion_wall_selection_operands():
+    brief = _profile_text("Brief")
+    assert "Torsion PL-QA-1 NOT ASSESSED NOT ASSESSED" in brief
+    assert "Torsion transverse/strut resistance PL-QA-1 FAIL 163.4 %" in brief
+
+    for profile in ("Standard", "Audit"):
+        text = _profile_text(profile)
+        assert "Base thickness A/u 60.0 mm" in text
+        assert "60.0 mm (A/u and reinforcement lower bound)" in text
+        assert "Lower bound 2a" in text
+        assert "30.0 mm" in text and "60.0 mm" in text
 
 
 def test_brief_omits_non_governing_requested_results_and_statuses():

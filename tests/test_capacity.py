@@ -75,6 +75,22 @@ def _member_input(**overrides):
     return inp
 
 
+def _torsion_wall_bars(*, b=0.3, h=0.6, a=0.05, total_area=1473.0):
+    area = total_area / 4.0
+    return [
+        (a, a, area),
+        (b - a, a, area),
+        (b - a, h - a, area),
+        (a, h - a, area),
+    ]
+
+
+def _torsion_input(**overrides):
+    values = {"bars": _torsion_wall_bars()}
+    values.update(overrides)
+    return _member_input(**values)
+
+
 def _shear_route_result(v_ed, *, vrd_c=103.417, vrd_links=None):
     result = {
         "v_ed": v_ed,
@@ -2484,7 +2500,7 @@ def test_torsion_longitudinal_missing_component_or_material_evidence_fails_close
 
 def _torsion_cracking_result(method, gamma_ct, demand=28.0):
     ctx = capacity.build_torsion_context(
-        _member_input(
+        _torsion_input(
             torsion_on=True,
             torsion_method=method,
             torsion_gamma_ct=gamma_ct,
@@ -2503,7 +2519,7 @@ def _torsion_cracking_result(method, gamma_ct, demand=28.0):
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
 def test_tube_torsion_requires_current_closed_link_authority(method):
-    absent_input = _member_input(
+    absent_input = _torsion_input(
         torsion_on=True,
         torsion_method=method,
         torsion_gamma_ct=(
@@ -2688,7 +2704,7 @@ def test_tube_torsion_requires_current_closed_link_authority(method):
 
 def test_torsion_uses_one_closed_loop_leg_independent_of_shear_leg_count():
     one_leg = capacity.build_torsion_context(
-        _member_input(
+        _torsion_input(
             torsion_on=True,
             shear_links=True,
             shear_link_legs=1.0,
@@ -2696,7 +2712,7 @@ def test_torsion_uses_one_closed_loop_leg_independent_of_shear_leg_count():
         0.0,
     )
     many_legs = capacity.build_torsion_context(
-        _member_input(
+        _torsion_input(
             torsion_on=True,
             shear_links=True,
             shear_link_legs=8.0,
@@ -2789,7 +2805,7 @@ def test_build_torsion_context_requires_link_authority_and_gates_nu_v():
         capacity.build_torsion_context(missing, 0.0)
 
     no_links = capacity.build_torsion_context(
-        _member_input(
+        _torsion_input(
             torsion_on=True,
             shear_links=False,
             torsion_nu_v=True,
@@ -3087,10 +3103,10 @@ def test_gamma_v_is_isolated_from_2005_links_torsion_and_combined_routes(
     assert low_links["build"](1.0, 2.0) == high_links["build"](1.0, 2.0)
 
     torsion_low = capacity.build_torsion_context(
-        _member_input(torsion_on=True, shear_gamma_v=0.50), 0.0
+        _torsion_input(torsion_on=True, shear_gamma_v=0.50), 0.0
     )
     torsion_high = capacity.build_torsion_context(
-        _member_input(torsion_on=True, shear_gamma_v=9.00), 0.0
+        _torsion_input(torsion_on=True, shear_gamma_v=9.00), 0.0
     )
     assert torsion_low == torsion_high
 
@@ -3324,7 +3340,7 @@ def test_mandatory_all_conditional_faces_use_utilisation_as_tie_breaker():
 
 
 def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
-    valid = _member_input(
+    valid = _torsion_input(
         torsion_on=True,
         torsion_subdivide=True,
         torsion_subrects=[(150.0, 300.0, 300.0, 600.0)],
@@ -3345,7 +3361,7 @@ def test_build_torsion_context_accepts_exact_partition_and_rejects_gap():
 
 
 def test_torsion_subdivision_requires_zero_global_tef_and_keeps_subtubes_automatic():
-    automatic = _member_input(
+    automatic = _torsion_input(
         torsion_on=True,
         torsion_subdivide=True,
         torsion_tef=0.0,
@@ -3357,7 +3373,10 @@ def test_torsion_subdivision_requires_zero_global_tef_and_keeps_subtubes_automat
     assert ctx["subdivide"] is True
     assert len(ctx["subtubes"]) == 1
     assert ctx["subtubes"][0]["tef_user"] is False
-    assert ctx["subtubes"][0]["tef_selection"] == "A/u"
+    assert ctx["subtubes"][0]["tef_selection"] == (
+        "A/u and reinforcement lower bound"
+    )
+    assert ctx["subtubes"][0]["wall_evidence"]["complete"] is True
 
     two_holes = [
         [(0.05, 0.10), (0.10, 0.10), (0.10, 0.15), (0.05, 0.15)],
@@ -3382,6 +3401,312 @@ def test_torsion_subdivision_requires_zero_global_tef_and_keeps_subtubes_automat
             ),
         ):
             capacity.build_torsion_context(overridden, 0.0)
+
+
+def test_torsion_context_recomputes_false_pass_oracle_from_required_160mm_wall():
+    inp = _torsion_input(
+        outer=_rect(0.4, 0.6),
+        bars=_torsion_wall_bars(b=0.4, h=0.6, a=0.08),
+        torsion_on=True,
+        torsion_T=100.0,
+        shear_links=True,
+        shear_link_dia=10.0,
+        shear_link_s=150.0,
+        shear_fywk=500.0,
+        strut_cot_min=2.0,
+        strut_cot_max=2.0,
+    )
+    context = capacity.build_torsion_context(inp, 0.0)
+    selected = capacity.tube_torsion(
+        context["tube"], context["t_ed"], **context["_tk"]
+    )
+    legacy_tube = torsion.tube_properties(inp["outer"], None)
+    unchecked = capacity.tube_torsion(
+        legacy_tube, context["t_ed"], **context["_tk"]
+    )
+    tk = context["_tk"]
+    legacy_steel = torsion.trd_s_result(
+        legacy_tube["Ak"], tk["fywd"], tk["asw_over_s"], 2.0
+    )
+    legacy_strut = torsion.trd_max_result(
+        tk["fck"],
+        tk["tcode"],
+        legacy_tube["Ak"],
+        legacy_tube["tef"],
+        tk["alpha_cw"],
+        2.0,
+        closed_detailing=(
+            tk["closed_links_present"] is True and tk["nu_detail"] is True
+        ),
+        fcd_mpa=tk["fcd"],
+    )
+    legacy_selection = torsion.select_full_torsion_resistance(
+        legacy_steel.trd_s,
+        legacy_strut.trd_max,
+        closed_links_present=tk["closed_links_present"],
+        asw_over_s=tk["asw_over_s"],
+    )
+
+    assert legacy_tube["tef"] == pytest.approx(120.0)
+    assert legacy_tube["Ak"] == pytest.approx(0.1344)
+    assert legacy_steel.trd_s == pytest.approx(117.2861257340)
+    assert legacy_strut.trd_max == pytest.approx(114.4531862069)
+    assert legacy_selection.resistance == pytest.approx(114.4531862069)
+    assert 100.0 / legacy_selection.resistance == pytest.approx(0.8737200704)
+    assert unchecked["valid"] is False
+    assert unchecked["tube_valid"] is False
+    assert unchecked["assessment_reason"] == (
+        "torsion wall reinforcement locations are missing"
+    )
+    for key in (
+        "trd_s",
+        "trd_max",
+        "trd",
+        "trd_c",
+        "cot",
+        "theta_deg",
+        "util",
+        "asl_req",
+        "nu",
+        "governs",
+        "angle_selection",
+        "steel_resistance",
+        "strut_resistance",
+        "resistance_selection",
+        "cracking_resistance",
+        "longitudinal_reinforcement",
+    ):
+        assert unchecked[key] is None
+
+    assert context["tube"]["tef"] == pytest.approx(160.0)
+    assert context["tube"]["Ak"] == pytest.approx(0.1056)
+    assert context["tube"]["uk"] == pytest.approx(1.36)
+    assert selected["trd_s"] == pytest.approx(92.1533845053)
+    assert selected["trd_max"] == pytest.approx(119.9033379310)
+    assert selected["trd"] == pytest.approx(92.1533845053)
+    assert selected["util"] == pytest.approx(1.0851473450)
+
+
+def test_tube_torsion_rejects_unchecked_wall_geometry_before_kernels(
+    monkeypatch,
+):
+    context = capacity.build_torsion_context(
+        _torsion_input(
+            outer=_rect(0.4, 0.6),
+            bars=_torsion_wall_bars(b=0.4, h=0.6, a=0.08),
+            torsion_on=True,
+            torsion_T=100.0,
+            shear_links=True,
+            shear_link_dia=10.0,
+            shear_link_s=150.0,
+            strut_cot_min=2.0,
+            strut_cot_max=2.0,
+        ),
+        0.0,
+    )
+    unchecked = torsion.tube_properties(_rect(0.4, 0.6), None)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("unchecked wall geometry entered the torsion kernel")
+
+    monkeypatch.setattr(torsion, "trd_s_result", forbidden)
+    result = capacity.tube_torsion(
+        unchecked, context["t_ed"], **context["_tk"]
+    )
+
+    assert result["valid"] is False
+    assert result["transverse_resistance_assessed"] is False
+    assert result["assessment_reason"] == (
+        "torsion wall reinforcement locations are missing"
+    )
+    assert result["trd"] is None
+    assert result["util"] is None
+
+
+def test_tube_torsion_rejects_assessed_looking_compound_geometry_before_kernels(
+    monkeypatch,
+):
+    outer = [
+        (0.0, 0.0),
+        (0.3, 0.0),
+        (0.3, 0.1),
+        (0.1, 0.1),
+        (0.1, 0.3),
+        (0.0, 0.3),
+    ]
+    bars = [
+        (0.15, 0.02, 100.0),
+        (0.28, 0.05, 100.0),
+        (0.20, 0.08, 100.0),
+        (0.08, 0.20, 100.0),
+        (0.05, 0.28, 100.0),
+        (0.02, 0.15, 100.0),
+    ]
+    tube = torsion.tube_properties_with_reinforcement(outer, None, bars)
+    reference = capacity.build_torsion_context(
+        _torsion_input(torsion_on=True),
+        0.0,
+    )
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("compound geometry entered the torsion resistance kernel")
+
+    monkeypatch.setattr(torsion, "trd_s_result", forbidden)
+    result = capacity.tube_torsion(tube, 20.0, **reference["_tk"])
+
+    assert tube["valid"] is False
+    assert tube["reason"] == "compound outline requires subdivision"
+    assert result["valid"] is False
+    assert result["assessment_reason"] == "compound outline requires subdivision"
+    assert result["trd"] is None
+    assert result["util"] is None
+    assert result["asl_req"] is None
+
+
+def test_mixed_corner_and_mid_face_wall_evidence_fails_before_solver_until_override(
+    monkeypatch,
+):
+    bars = [
+        (0.04, 0.08, 100.0),
+        (0.36, 0.08, 100.0),
+        (0.36, 0.52, 100.0),
+        (0.04, 0.52, 100.0),
+        (0.20, 0.05, 100.0),
+        (0.20, 0.55, 100.0),
+    ]
+    inp = _torsion_input(
+        outer=_rect(0.4, 0.6),
+        bars=bars,
+        torsion_on=True,
+        torsion_T=100.0,
+        shear_links=True,
+        shear_link_dia=10.0,
+        shear_link_s=150.0,
+        shear_fywk=500.0,
+        strut_cot_min=2.0,
+        strut_cot_max=2.0,
+    )
+    context = capacity.build_torsion_context(inp, 0.0)
+
+    assert context["tube"]["valid"] is False
+    assert context["tube"]["reason"] == (
+        "torsion wall automatic thickness varies by wall"
+    )
+    assert [
+        wall["a_mm"] for wall in context["tube"]["wall_evidence"]["walls"]
+    ] == pytest.approx([80.0, 40.0, 80.0, 40.0])
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("conflicting wall thickness entered the torsion kernel")
+
+    with monkeypatch.context() as isolated:
+        isolated.setattr(torsion, "trd_s_result", forbidden)
+        rejected = capacity.tube_torsion(
+            context["tube"], context["t_ed"], **context["_tk"]
+        )
+    assert rejected["valid"] is False
+    assert rejected["trd"] is None
+    assert rejected["util"] is None
+
+    corrected = capacity.build_torsion_context(
+        dict(inp, torsion_tef=160.0),
+        0.0,
+    )
+    accepted = capacity.tube_torsion(
+        corrected["tube"], corrected["t_ed"], **corrected["_tk"]
+    )
+    assert accepted["tube_valid"] is True
+    assert accepted["tube"]["tef"] == pytest.approx(160.0)
+    assert accepted["trd_s"] == pytest.approx(92.1533845053)
+    assert accepted["trd_max"] == pytest.approx(119.9033379310)
+    assert accepted["trd"] == pytest.approx(92.1533845053)
+    assert accepted["util"] == pytest.approx(1.0851473450)
+
+
+def test_subdivided_tubes_require_complete_unambiguous_wall_mapping():
+    rectangles = [
+        (150.0, 300.0, 300.0, 600.0),
+        (450.0, 300.0, 300.0, 600.0),
+    ]
+    complete_bars = [
+        *_torsion_wall_bars(b=0.3, h=0.6, a=0.05, total_area=736.5),
+        *[
+            (x + 0.3, y, area)
+            for x, y, area in _torsion_wall_bars(
+                b=0.3,
+                h=0.6,
+                a=0.05,
+                total_area=736.5,
+            )
+        ],
+    ]
+    complete = capacity.build_torsion_context(
+        _torsion_input(
+            outer=_rect(0.6, 0.6),
+            bars=complete_bars,
+            torsion_on=True,
+            torsion_subdivide=True,
+            torsion_subrects=rectangles,
+        ),
+        0.0,
+    )
+
+    assert complete["subdivide"] is True
+    assert all(tube["valid"] for tube in complete["subtubes"])
+    assert [tube["tef"] for tube in complete["subtubes"]] == pytest.approx(
+        [100.0, 100.0]
+    )
+    assert all(
+        tube["wall_evidence"]["complete"] for tube in complete["subtubes"]
+    )
+    assert {
+        position
+        for wall in complete["subtubes"][0]["wall_evidence"]["walls"]
+        for position in wall["bar_indices"]
+    } == {1, 2, 3, 4}
+    assert {
+        position
+        for wall in complete["subtubes"][1]["wall_evidence"]["walls"]
+        for position in wall["bar_indices"]
+    } == {5, 6, 7, 8}
+
+    incomplete = capacity.build_torsion_context(
+        _torsion_input(
+            outer=_rect(0.6, 0.6),
+            bars=[bar for bar in complete_bars if bar[0] < 0.55 - 1.0e-12],
+            torsion_on=True,
+            torsion_subdivide=True,
+            torsion_subrects=rectangles,
+        ),
+        0.0,
+    )
+    assert incomplete["subdivide"] is True
+    assert not all(tube["valid"] for tube in incomplete["subtubes"])
+    assert any(
+        tube["reason"]
+        in {
+            "torsion wall reinforcement mapping is incomplete",
+            "torsion sub-tube reinforcement mapping is incomplete",
+        }
+        for tube in incomplete["subtubes"]
+    )
+
+    shared_boundary = [*complete_bars, (0.3, 0.05, 10.0)]
+    ambiguous = capacity.build_torsion_context(
+        _torsion_input(
+            outer=_rect(0.6, 0.6),
+            bars=shared_boundary,
+            torsion_on=True,
+            torsion_subdivide=True,
+            torsion_subrects=rectangles,
+        ),
+        0.0,
+    )
+    assert all(not tube["valid"] for tube in ambiguous["subtubes"])
+    assert all(
+        tube["reason"] == "torsion sub-tube reinforcement assignment is ambiguous"
+        for tube in ambiguous["subtubes"]
+    )
 
 
 def test_build_torsion_context_rejects_closed_concave_ring_started_at_reentrant_corner():

@@ -4,10 +4,12 @@ section 6.3).
 A solid (or hollow) section is idealised as a thin-walled closed tube (6.3.2(1)):
 the applied torsion ``TEd`` is carried by a constant shear flow ``TEd/(2*Ak)`` round
 the walls, where ``Ak`` is the area enclosed by the wall centre-lines. The effective
-wall thickness is ``tef = A/u`` (``A`` the total area within the outer perimeter,
-including any hollow; ``u`` the outer perimeter), capped at the real wall thickness
-for a hollow section. The centre-line is the outer outline offset inward by
-``tef/2``, so ``Ak`` and its perimeter ``uk`` follow from that offset polygon.
+wall thickness starts from ``tef = A/u`` (``A`` the total area within the outer
+perimeter, including any hollow; ``u`` the outer perimeter), must also satisfy the
+wall-specific lower bound ``tef >= 2a`` from the assigned longitudinal-bar centres,
+and is capped at the real wall thickness for a hollow section. The centre-line is
+the outer outline offset inward by ``tef/2``, so ``Ak`` and its perimeter ``uk``
+follow from that offset polygon.
 
 Resistances (variable strut angle ``theta``, shared with the shear check):
 
@@ -34,6 +36,12 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from . import geometry
+
+
+# Classification-only envelope for near-aligned corner rows.  Actual wall distances
+# remain in the evidence, automatic selection uses their maximum 2a, and manual
+# override limits retain the stricter floating-point tolerance below.
+_CORNER_ALIGNMENT_RELATIVE_TOLERANCE = 2.0e-5
 
 
 class TorsionWallThicknessError(ValueError):
@@ -186,6 +194,572 @@ def _ensure_ccw(ring: Sequence):
     if geometry.signed_area(pts) < 0.0:
         pts.reverse()
     return pts
+
+
+def _finite_reinforcement_bar(bar: object) -> tuple[float, float, float] | None:
+    """Return one strict longitudinal-bar record or ``None``.
+
+    The torsion-wall applicability check consumes the actual point-table geometry,
+    not a derived steel total.  Keep this boundary deliberately strict so Boolean,
+    non-finite and incomplete coordinates cannot become wall-location evidence.
+    """
+
+    if type(bar) not in (tuple, list) or len(bar) != 3:
+        return None
+    values = []
+    for value in bar:
+        if (
+            isinstance(value, (str, bytes))
+            or type(value).__name__ in {"bool", "bool_"}
+        ):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(number):
+            return None
+        values.append(number)
+    if values[2] <= 0.0:
+        return None
+    return values[0], values[1], values[2]
+
+
+def _point_segment_distance(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    """Distance formed in edge-local coordinates to retain translated precision."""
+
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    rx, ry = point[0] - start[0], point[1] - start[1]
+    length2 = dx * dx + dy * dy
+    if length2 <= 0.0:
+        return math.hypot(rx, ry)
+    fraction = max(0.0, min(1.0, (rx * dx + ry * dy) / length2))
+    return math.hypot(rx - fraction * dx, ry - fraction * dy)
+
+
+def _point_in_wall_endpoint_zone(
+    point: tuple[float, float],
+    edge: tuple[tuple[float, float], tuple[float, float]],
+    *,
+    at_start: bool,
+    zone: float,
+    tolerance: float,
+) -> bool:
+    """Whether ``point`` belongs to one endpoint zone of a physical wall.
+
+    Corner ownership is established in edge-local coordinates.  Both the distance
+    along the wall from the shared endpoint and the perpendicular wall distance must
+    lie inside the fixed geometry-derived zone.  This remains continuous when the
+    two wall covers are almost, but not exactly, equal and does not turn an ordinary
+    mid-wall bar into corner reinforcement.
+    """
+
+    endpoint = edge[0] if at_start else edge[1]
+    opposite = edge[1] if at_start else edge[0]
+    dx = opposite[0] - endpoint[0]
+    dy = opposite[1] - endpoint[1]
+    length = math.hypot(dx, dy)
+    if length <= tolerance:
+        return False
+    rx = point[0] - endpoint[0]
+    ry = point[1] - endpoint[1]
+    along = (rx * dx + ry * dy) / length
+    perpendicular = abs(rx * dy - ry * dx) / length
+    return bool(
+        -tolerance <= along <= zone + tolerance
+        and perpendicular <= zone + tolerance
+    )
+
+
+def _canonical_wall_edges(
+    ring: Sequence,
+    tolerance: float,
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Return physical walls, merging only representational collinear vertices."""
+
+    points = _ensure_ccw(ring)
+    if len(points) < 3:
+        return []
+    changed = True
+    while changed and len(points) > 3:
+        changed = False
+        reduced = []
+        count = len(points)
+        for index, point in enumerate(points):
+            previous = points[(index - 1) % count]
+            following = points[(index + 1) % count]
+            incoming = (point[0] - previous[0], point[1] - previous[1])
+            outgoing = (following[0] - point[0], following[1] - point[1])
+            incoming_length = math.hypot(*incoming)
+            outgoing_length = math.hypot(*outgoing)
+            cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+            same_direction = incoming[0] * outgoing[0] + incoming[1] * outgoing[1]
+            collinear_tolerance = tolerance * max(
+                incoming_length,
+                outgoing_length,
+                tolerance,
+            )
+            if (
+                incoming_length > tolerance
+                and outgoing_length > tolerance
+                and abs(cross) <= collinear_tolerance
+                and same_direction > 0.0
+            ):
+                changed = True
+                continue
+            reduced.append(point)
+        if len(reduced) < 3:
+            break
+        points = reduced
+    return [
+        (points[index], points[(index + 1) % len(points)])
+        for index in range(len(points))
+    ]
+
+
+def _circular_wall_geometry(
+    ring: Sequence,
+    tolerance: float,
+) -> tuple[float, float, float] | None:
+    """Identify a densely sampled circular physical wall.
+
+    Quick Section represents circular and annular faces by regular polygons.  Those
+    chords are analysis discretisation, not separate torsion walls.  Recognise only
+    a sufficiently dense, tightly cyclic ring so ordinary polygon sides retain their
+    independent wall identity.
+    """
+
+    points = _ensure_ccw(ring)
+    if len(points) < 12:
+        return None
+    cx = sum(point[0] for point in points) / len(points)
+    cy = sum(point[1] for point in points) / len(points)
+    radii = [math.hypot(point[0] - cx, point[1] - cy) for point in points]
+    radius = sum(radii) / len(radii)
+    radial_tolerance = max(
+        32.0 * tolerance,
+        radius * 1.0e-10,
+        32.0 * math.ulp(max(radius, 1.0)),
+    )
+    if radius <= radial_tolerance:
+        return None
+    if any(abs(value - radius) > radial_tolerance for value in radii):
+        return None
+    return cx, cy, radius
+
+
+def _segment_clearance(
+    first: tuple[tuple[float, float], tuple[float, float]],
+    second: tuple[tuple[float, float], tuple[float, float]],
+) -> float:
+    """Minimum clearance between two non-crossing section-boundary segments."""
+
+    return min(
+        _point_segment_distance(first[0], *second),
+        _point_segment_distance(first[1], *second),
+        _point_segment_distance(second[0], *first),
+        _point_segment_distance(second[1], *first),
+    )
+
+
+def _wall_evidence_invalid(base: dict, reason: str, evidence: dict) -> dict:
+    """Remove authoritative tube quantities from one fail-closed selector result."""
+
+    return dict(
+        base,
+        tef=0.0,
+        Ak=0.0,
+        uk=0.0,
+        tef_capped=False,
+        tef_user=bool(evidence.get("override_mm", 0.0) > 0.0),
+        valid=False,
+        reason=reason,
+        tef_selection="none",
+        centreline_method="none",
+        wall_evidence=evidence,
+        applicability_status="NOT ASSESSED",
+    )
+
+
+def tube_properties_with_reinforcement(
+    outer: Sequence,
+    holes: Optional[Sequence],
+    longitudinal_bars: object,
+    tef_override: float = 0.0,
+    *,
+    longitudinal_bar_positions: object = None,
+) -> dict:
+    """Select one clause-consistent tube from wall-specific bar locations.
+
+    EN 1992-1-1 6.3.2(1) permits ``A/u`` only together with the lower bound
+    ``t_eff,i >= 2*a_i`` and the real-wall upper bound for hollow sections.  Sector's
+    current first-generation kernel has one scalar wall thickness, so automatic
+    selection is assessed only when every physical wall resolves to that same scalar.
+    A positive override is accepted only when it lies in every wall's interval.
+    """
+
+    base = tube_properties(outer, holes, tef_override=0.0)
+    if not base.get("valid"):
+        return base
+    topology = geometry.validate_section_topology(outer, holes or [])
+    topology.require_valid()
+    if (
+        isinstance(tef_override, (str, bytes))
+        or type(tef_override).__name__ in {"bool", "bool_"}
+    ):
+        raise ValueError("tef override must be a finite non-negative real number (mm)")
+    try:
+        override_mm = float(tef_override)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "tef override must be a finite non-negative real number (mm)"
+        ) from exc
+    if not math.isfinite(override_mm) or override_mm < 0.0:
+        raise ValueError("tef override must be a finite non-negative real number (mm)")
+
+    tolerance_m = max(
+        topology.floating_point_tolerance,
+        topology.length_tolerance,
+        8.0 * math.ulp(max(topology.scale, 1.0)),
+    )
+    outer_walls = _canonical_wall_edges(outer, tolerance_m)
+    circular_outer = _circular_wall_geometry(outer, tolerance_m)
+    hole_walls = [
+        edge
+        for hole in (holes or [])
+        for edge in _canonical_wall_edges(hole, tolerance_m)
+    ]
+    circular_real_wall_m = None
+    if circular_outer is not None and holes:
+        circular_hole = (
+            _circular_wall_geometry(holes[0], tolerance_m)
+            if len(holes) == 1
+            else None
+        )
+        if circular_hole is not None:
+            outer_cx, outer_cy, outer_radius = circular_outer
+            hole_cx, hole_cy, hole_radius = circular_hole
+            centre_tolerance = max(
+                tolerance_m,
+                32.0 * math.ulp(max(outer_radius, 1.0)),
+            )
+            if math.hypot(hole_cx - outer_cx, hole_cy - outer_cy) <= centre_tolerance:
+                circular_real_wall_m = outer_radius - hole_radius
+        if circular_real_wall_m is None and outer_walls and hole_walls:
+            circular_real_wall_m = min(
+                _segment_clearance(outer_edge, hole_edge)
+                for outer_edge in outer_walls
+                for hole_edge in hole_walls
+            )
+    evidence = {
+        "complete": False,
+        "reason": None,
+        "a_over_u_mm": float(base["tef_auto"]),
+        "override_mm": override_mm,
+        "selected_tef_mm": None,
+        "selection": "none",
+        "walls": (),
+    }
+    if not geometry.polygon_is_convex(outer):
+        evidence["reason"] = "compound outline requires subdivision"
+        return _wall_evidence_invalid(base, evidence["reason"], evidence)
+    physical_wall_count = 1 if circular_outer is not None else len(outer_walls)
+    if physical_wall_count == 0:
+        evidence["reason"] = "torsion wall reinforcement mapping is incomplete"
+        return _wall_evidence_invalid(base, evidence["reason"], evidence)
+    if type(longitudinal_bars) not in (tuple, list):
+        evidence["reason"] = "torsion wall reinforcement locations are missing"
+        return _wall_evidence_invalid(base, evidence["reason"], evidence)
+    if longitudinal_bar_positions is None:
+        bar_positions = tuple(range(1, len(longitudinal_bars) + 1))
+    elif (
+        type(longitudinal_bar_positions) not in (tuple, list)
+        or len(longitudinal_bar_positions) != len(longitudinal_bars)
+        or any(
+            type(value) is not int or value <= 0
+            for value in longitudinal_bar_positions
+        )
+        or len(set(longitudinal_bar_positions)) != len(longitudinal_bar_positions)
+    ):
+        evidence["reason"] = "torsion wall reinforcement locations are invalid"
+        return _wall_evidence_invalid(base, evidence["reason"], evidence)
+    else:
+        bar_positions = tuple(longitudinal_bar_positions)
+    bars = []
+    for bar_position, item in zip(bar_positions, longitudinal_bars):
+        bar = _finite_reinforcement_bar(item)
+        if bar is None:
+            evidence["reason"] = "torsion wall reinforcement locations are invalid"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        bars.append((bar_position, bar))
+    if not bars:
+        evidence["reason"] = "torsion wall reinforcement locations are missing"
+        return _wall_evidence_invalid(base, evidence["reason"], evidence)
+    inside = geometry.points_inside_concrete(
+        [bar for _index, bar in bars],
+        outer,
+        holes or [],
+        tol=tolerance_m,
+    )
+    if not all(bool(value) for value in inside):
+        evidence["reason"] = "torsion wall reinforcement locations are invalid"
+        return _wall_evidence_invalid(base, evidence["reason"], evidence)
+
+    assignments: list[list[tuple[int, float]]] = [
+        [] for _wall in range(physical_wall_count)
+    ]
+    corner_zone_m = float(base["tef_auto"]) / 1000.0
+    corner_tolerance = max(
+        tolerance_m,
+        8.0 * math.ulp(max(corner_zone_m, 1.0)),
+    )
+    corner_alignment_tolerance = max(
+        corner_tolerance,
+        _CORNER_ALIGNMENT_RELATIVE_TOLERANCE * corner_zone_m,
+    )
+    distance_records = []
+    for bar_position, (x, y, _area) in bars:
+        if circular_outer is not None:
+            cx, cy, radius = circular_outer
+            distances = [radius - math.hypot(x - cx, y - cy)]
+        else:
+            distances = [
+                _point_segment_distance((x, y), start, end)
+                for start, end in outer_walls
+            ]
+        minimum = min(distances)
+        equality_tolerance = max(
+            tolerance_m,
+            8.0 * math.ulp(max(minimum, 1.0)),
+        )
+        nearest = [
+            index
+            for index, distance in enumerate(distances)
+            if abs(distance - minimum) <= equality_tolerance
+        ]
+        corner_pairs = []
+        point = (x, y)
+        if physical_wall_count > 1:
+            for following in range(physical_wall_count):
+                previous = (following - 1) % physical_wall_count
+                if not (
+                    _point_in_wall_endpoint_zone(
+                        point,
+                        outer_walls[previous],
+                        at_start=False,
+                        zone=corner_zone_m,
+                        tolerance=corner_tolerance,
+                    )
+                    and _point_in_wall_endpoint_zone(
+                        point,
+                        outer_walls[following],
+                        at_start=True,
+                        zone=corner_zone_m,
+                        tolerance=corner_tolerance,
+                    )
+                ):
+                    continue
+                pair = (previous, following)
+                if any(index in pair for index in nearest):
+                    endpoint = outer_walls[following][0]
+                    corner_pairs.append(
+                        (pair, math.hypot(x - endpoint[0], y - endpoint[1]))
+                    )
+        distance_records.append(
+            (bar_position, distances, tuple(nearest), tuple(corner_pairs))
+        )
+
+    corner_minimum_distance: dict[tuple[int, int], float] = {}
+    for _position, _distances, _nearest, corner_pairs in distance_records:
+        for pair, endpoint_distance in corner_pairs:
+            corner_minimum_distance[pair] = min(
+                endpoint_distance,
+                corner_minimum_distance.get(pair, math.inf),
+            )
+
+    for bar_position, distances, nearest, corner_pairs in distance_records:
+        # A genuinely aligned corner belongs to both adjoining walls even when
+        # endpoint thinning retains another row closer to the shared endpoint.
+        aligned_corner_pairs = [
+            pair
+            for pair, _endpoint_distance in corner_pairs
+            if abs(distances[pair[0]] - distances[pair[1]])
+            <= corner_alignment_tolerance
+        ]
+        retained_pairs = [
+            pair
+            for pair, endpoint_distance in corner_pairs
+            if endpoint_distance
+            <= corner_minimum_distance[pair] + corner_tolerance
+        ]
+        if physical_wall_count == 1:
+            assigned_walls = (0,)
+        elif len(aligned_corner_pairs) > 1:
+            evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        elif aligned_corner_pairs:
+            assigned_walls = aligned_corner_pairs[0]
+            if any(index not in assigned_walls for index in nearest):
+                evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+                return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        elif len(retained_pairs) > 1:
+            evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        elif retained_pairs:
+            assigned_walls = retained_pairs[0]
+            if any(index not in assigned_walls for index in nearest):
+                evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+                return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        elif len(nearest) == 1:
+            assigned_walls = (nearest[0],)
+        else:
+            evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        for wall_index in assigned_walls:
+            assignments[wall_index].append((bar_position, distances[wall_index]))
+
+    wall_records = []
+    automatic_values = []
+    for wall_index, assigned in enumerate(assignments):
+        edge = None if circular_outer is not None else outer_walls[wall_index]
+        if not assigned:
+            evidence["reason"] = "torsion wall reinforcement mapping is incomplete"
+            evidence["walls"] = tuple(wall_records)
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        assigned = sorted(assigned, key=lambda item: item[0])
+        distances_mm = tuple(distance * 1000.0 for _index, distance in assigned)
+        a_mm = max(distances_mm)
+        lower_mm = 2.0 * a_mm
+        upper_mm = None
+        if circular_outer is not None and circular_real_wall_m is not None:
+            upper_mm = circular_real_wall_m * 1000.0
+        elif hole_walls and edge is not None:
+            upper_mm = min(
+                _segment_clearance(edge, hole_edge) for hole_edge in hole_walls
+            ) * 1000.0
+        comparison_tolerance_mm = max(
+            tolerance_m * 1000.0,
+            8.0 * math.ulp(max(lower_mm, upper_mm or 0.0, 1.0)),
+        )
+        if upper_mm is not None and lower_mm > upper_mm + comparison_tolerance_mm:
+            wall_records.append({
+                "wall": wall_index + 1,
+                "start_m": None if edge is None else edge[0],
+                "end_m": None if edge is None else edge[1],
+                "bar_indices": tuple(index for index, _distance in assigned),
+                "bar_distances_mm": distances_mm,
+                "a_mm": a_mm,
+                "lower_bound_mm": lower_mm,
+                "real_wall_mm": upper_mm,
+                "automatic_tef_mm": None,
+                "automatic_sources": (),
+            })
+            evidence["reason"] = "torsion wall lower bound exceeds real wall"
+            evidence["walls"] = tuple(wall_records)
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        automatic_mm = max(float(base["tef_auto"]), lower_mm)
+        if upper_mm is not None:
+            automatic_mm = min(automatic_mm, upper_mm)
+        sources = []
+        if abs(automatic_mm - float(base["tef_auto"])) <= comparison_tolerance_mm:
+            sources.append("A/u")
+        if abs(automatic_mm - lower_mm) <= comparison_tolerance_mm:
+            sources.append("longitudinal reinforcement lower bound")
+        if upper_mm is not None and abs(automatic_mm - upper_mm) <= comparison_tolerance_mm:
+            sources.append("real-wall limit")
+        wall_records.append({
+            "wall": wall_index + 1,
+            "start_m": None if edge is None else edge[0],
+            "end_m": None if edge is None else edge[1],
+            "bar_indices": tuple(index for index, _distance in assigned),
+            "bar_distances_mm": distances_mm,
+            "a_mm": a_mm,
+            "lower_bound_mm": lower_mm,
+            "real_wall_mm": upper_mm,
+            "automatic_tef_mm": automatic_mm,
+            "automatic_sources": tuple(sources),
+        })
+        automatic_values.append(automatic_mm)
+
+    evidence["walls"] = tuple(wall_records)
+    interval_tolerance_mm = max(
+        tolerance_m * 1000.0,
+        8.0 * math.ulp(max([1.0, override_mm, *automatic_values])),
+    )
+    automatic_alignment_tolerance_mm = max(
+        interval_tolerance_mm,
+        2.0 * corner_alignment_tolerance * 1000.0,
+    )
+    if override_mm > 0.0:
+        if any(
+            override_mm < wall["lower_bound_mm"] - interval_tolerance_mm
+            for wall in wall_records
+        ):
+            evidence["reason"] = "torsion wall override is below reinforcement lower bound"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        if any(
+            wall["real_wall_mm"] is not None
+            and override_mm > wall["real_wall_mm"] + interval_tolerance_mm
+            for wall in wall_records
+        ):
+            evidence["reason"] = "torsion wall override exceeds real wall"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        selected_mm = override_mm
+        selection = "user override"
+    else:
+        selected_mm = max(automatic_values)
+        if any(
+            selected_mm - value > automatic_alignment_tolerance_mm
+            for value in automatic_values
+        ) or any(
+            wall["real_wall_mm"] is not None
+            and selected_mm > wall["real_wall_mm"] + interval_tolerance_mm
+            for wall in wall_records
+        ):
+            evidence["reason"] = "torsion wall automatic thickness varies by wall"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        source_union = {
+            source
+            for wall in wall_records
+            for source in wall["automatic_sources"]
+        }
+        source_labels = {
+            "A/u": "A/u",
+            "longitudinal reinforcement lower bound": (
+                "reinforcement lower bound"
+            ),
+            "real-wall limit": "real-wall cap",
+        }
+        selection = " and ".join(
+            source_labels[source]
+            for source in (
+                "A/u",
+                "longitudinal reinforcement lower bound",
+                "real-wall limit",
+            )
+            if source in source_union
+        ) or "A/u"
+
+    selected = tube_properties(outer, holes, tef_override=selected_mm)
+    evidence.update({
+        "complete": True,
+        "reason": None,
+        "selected_tef_mm": selected_mm,
+        "selection": selection,
+    })
+    selected.update({
+        "tef_auto": base["tef_auto"],
+        "tef_capped": bool(selected_mm < float(base["tef_auto"]) - interval_tolerance_mm),
+        "tef_user": bool(override_mm > 0.0),
+        "tef_selection": selection,
+        "wall_evidence": evidence,
+        "applicability_status": "ASSESSED",
+    })
+    return selected
 
 
 def _line_intersect(a, b):

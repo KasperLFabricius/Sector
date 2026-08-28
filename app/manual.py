@@ -1167,9 +1167,12 @@ def manual_blocks() -> list:
        "resistance component, not by itself an overall torsion verdict.")
     md("**Actions and tube geometry.** Enter signed $T_{Ed}$ in each "
        "Plastic/capacity row; zero skips torsion for that row. Sector derives "
-       "$A$, $u$, $t_{ef}$, $A_k$ and $u_k$ from the outline. A positive "
-       "$t_{ef}$ overrides a single tube; subdivided tubes require zero and "
-       "derive each thickness separately.")
+       "$A$, $u$, $t_{ef}$, $A_k$ and $u_k$ from the outline and the modelled "
+       "longitudinal reinforcement. For each tube wall, $t_{ef}$ must be at least "
+       "twice the distance from the concrete edge to the assigned bar centre and, "
+       "for a hollow section, no greater than the real wall. A positive single-tube "
+       "override must satisfy every wall interval. Subdivided tubes require zero "
+       "and complete bar-to-wall evidence for every sub-tube.")
     md("**Material and strut inputs.** Enter one compression-strut range under "
        "**Links / stirrups** for both shear and torsion. The direct positive "
        "$\\gamma_{ct}$ gives $f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}$; starting values "
@@ -1367,7 +1370,8 @@ def manual_blocks() -> list:
     h2("Torsion results")
     md("The **Torsion** view reports $T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd}$, the "
        "cracking $T_{Rd,c}$ and the transverse/strut utilisation, plus the derived "
-       "tube ($A$, $u$, $t_{ef}$, $A_k$, $u_k$), required $\\sum A_{sl}$, modelled "
+       "tube ($A$, $u$, $A/u$, each wall's $a$ and $2a$, $t_{ef}$, $A_k$, $u_k$), "
+       "required $\\sum A_{sl}$, modelled "
        "passive-bar upper bound and the separate overall status. When shear links "
        "are also defined it adds the combined shear+torsion crushing check. A "
        "resistance-component PASS never overrides an insufficient or unverified "
@@ -2098,9 +2102,11 @@ def manual_blocks() -> list:
     h1("Torsion (thin-walled tube)")
     md("A section resisting torsion is idealised as a thin-walled closed tube "
        "(6.3.2(1)): the torque is carried by a constant shear flow round the walls. "
-       "The effective wall thickness is $t_{ef} = A/u$ ($A$ the area within the "
-       "outer perimeter including any hollow, $u$ that perimeter), capped at the "
-       "real wall for a hollow section. The centre-line is the outline offset "
+       "The effective thickness may start from $A/u$ ($A$ the area within the "
+       "outer perimeter including any hollow, $u$ that perimeter), but each wall "
+       "also requires $t_{ef,i}\\geq2a_i$, where $a_i$ is the distance from the "
+       "concrete edge to the assigned longitudinal-reinforcement centre. A hollow "
+       "wall supplies the corresponding upper limit. The centre-line is the outline offset "
        "inward by $t_{ef}/2$; $A_k$ is the area it encloses and $u_k$ its "
        "perimeter. The resistances (at the strut angle $\\theta$) are\n\n"
        "$$T_{Rd,s} = \\frac{A_{sw}}{s}\\,2A_k\\,f_{ywd}\\,\\cot\\theta, \\qquad "
@@ -2134,13 +2140,17 @@ def manual_blocks() -> list:
          "require explicit sub-division (6.3.1(3)); the single-tube resistance and "
          "verdict are withheld until component rectangles are defined. A positive "
          "global $t_{ef}$ override is not transferred to those component tubes and "
-         "therefore blocks a subdivided calculation; 0 selects automatic $A/u$ for "
-         "each sub-tube. A curved "
-         "outline should have $t_{ef}$ entered by hand. Bounds outside the selected "
+          "therefore blocks a subdivided calculation; 0 selects the wall-specific "
+          "automatic thickness for each sub-tube. Missing, ambiguous or conflicting "
+          "bar-to-wall evidence gives NOT ASSESSED before any resistance or "
+          "interaction is calculated. A manual override does not replace that "
+          "location evidence. Bounds outside the selected "
          "method's default $\\cot\\theta$ range remain actual calculation inputs; "
          "Sector reports the resulting demand/resistance verdict with a warning.")
-    md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, closed $\\phi$10 "
-       "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, $t_{ef} = 100$ mm, "
+    md("**Worked** (300 x 600 mm rectangle with implementation-fixture bar centres "
+       "50 mm from every wall, C35, DK NA:2024, closed $\\phi$10 "
+       "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, "
+       "$A/u = 100$ mm and $2a = 100$ mm, so $t_{ef} = 100$ mm, "
        "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "
        "$\\cot\\theta = 1.75$ the stirrups and struts meet at "
        "$T_{Rd} \\approx 76.4$ kN$\\cdot$m, with "
@@ -3006,6 +3016,12 @@ def build_manual_pdf(buffer, figures=True):
                 title, styles["MH1"], block[1], 1, toc_entry=True
             ))
         elif kind == "h2":
+            if _strip_num(block[1]) == "Combined M-V-T interaction":
+                # Keep the complete torsion applicability and wall-selection
+                # explanation together, then start its dependent interaction
+                # method on a fresh page. This also prevents the two safety-heavy
+                # sections from forming one visually over-dense page.
+                flow.append(PageBreak())
             n2 += 1
             title = f"{n1}.{n2} " + _inline_md_to_rl(_strip_num(block[1]))
             flow.append(_heading(

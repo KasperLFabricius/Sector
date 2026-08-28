@@ -1428,6 +1428,31 @@ def tube_torsion(
     fyd_long,
 ):
     """Build the resistance/utilisation payload for one thin-walled tube."""
+    wall_evidence = (
+        tube.get("wall_evidence") if isinstance(tube, dict) else None
+    )
+    wall_geometry_assessed = bool(
+        isinstance(tube, dict)
+        and tube.get("valid") is True
+        and tube.get("applicability_status") == "ASSESSED"
+        and isinstance(wall_evidence, dict)
+        and wall_evidence.get("complete") is True
+    )
+    if not wall_geometry_assessed:
+        unchecked_tube = dict(tube) if isinstance(tube, dict) else {}
+        unchecked_tube.update({
+            "valid": False,
+            "reason": (
+                unchecked_tube.get("reason")
+                or "torsion wall reinforcement locations are missing"
+            ),
+            "applicability_status": "NOT ASSESSED",
+        })
+        return unassessed_tube_torsion(
+            unchecked_tube,
+            t_ed,
+            closed_links_present=closed_links_present,
+        )
     closed_detailing_applied = bool(
         closed_links_present is True and nu_detail is True
     )
@@ -1516,6 +1541,38 @@ def tube_torsion(
         "resistance_selection": asdict(selection),
         "cracking_resistance": asdict(cracking),
         "longitudinal_reinforcement": asdict(longitudinal),
+    }
+
+
+def unassessed_tube_torsion(tube, t_ed, *, closed_links_present):
+    """Retain one invalid tube without entering any angle or resistance kernel."""
+
+    reason = tube.get("reason") or "torsion tube evidence is invalid"
+    return {
+        "tube": tube,
+        "t_ed": t_ed,
+        "trd_s": None,
+        "trd_max": None,
+        "trd": None,
+        "trd_c": None,
+        "cot": None,
+        "theta_deg": None,
+        "util": None,
+        "asl_req": None,
+        "nu": None,
+        "governs": None,
+        "valid": False,
+        "tube_valid": False,
+        "closed_links_present": bool(closed_links_present),
+        "transverse_resistance_assessed": False,
+        "full_resistance_assessed": False,
+        "assessment_reason": reason,
+        "angle_selection": None,
+        "steel_resistance": None,
+        "strut_resistance": None,
+        "resistance_selection": None,
+        "cracking_resistance": None,
+        "longitudinal_reinforcement": None,
     }
 
 
@@ -1998,8 +2055,11 @@ def build_torsion_context(inp, n_ed_comp):
             )
     torsion = _module("torsion")
     try:
-        tube = torsion.tube_properties(
-            inp["outer"], inp["holes"], tef_override=tef_override_mm
+        tube = torsion.tube_properties_with_reinforcement(
+            inp["outer"],
+            inp["holes"],
+            inp.get("bars"),
+            tef_override=tef_override_mm,
         )
     except torsion.TorsionWallThicknessError as exc:
         raise CapacityInputError(
@@ -2084,11 +2144,115 @@ def build_torsion_context(inp, n_ed_comp):
 
     if subdivide:
         subtubes, stiffnesses, dimensions = [], [], []
-        for x_mm, y_mm, b_mm, h_mm in subrects:
-            b_m, h_m = b_mm / 1000.0, h_mm / 1000.0
-            subtubes.append(
-                torsion.tube_properties(torsion.rectangle_ring(b_m, h_m), None)
+        rectangles_m = [
+            (
+                x_mm / 1000.0,
+                y_mm / 1000.0,
+                b_mm / 1000.0,
+                h_mm / 1000.0,
             )
+            for x_mm, y_mm, b_mm, h_mm in subrects
+        ]
+        local_bar_sets: list[list[tuple[float, float, float]]] | None = [
+            [] for _rectangle in rectangles_m
+        ]
+        local_bar_positions: list[list[int]] | None = [
+            [] for _rectangle in rectangles_m
+        ]
+        assignment_reason = None
+        raw_bars = inp.get("bars")
+        if type(raw_bars) not in (tuple, list):
+            local_bar_sets = None
+            local_bar_positions = None
+            assignment_reason = "torsion sub-tube reinforcement locations are missing"
+        else:
+            scale = max(
+                [1.0, *[max(abs(x), abs(y), b, h) for x, y, b, h in rectangles_m]]
+            )
+            membership_tolerance = max(1.0e-12 * scale, 8.0 * math.ulp(scale))
+            for bar_position, raw_bar in enumerate(raw_bars, start=1):
+                if type(raw_bar) not in (tuple, list) or len(raw_bar) != 3:
+                    local_bar_sets = None
+                    local_bar_positions = None
+                    assignment_reason = (
+                        "torsion sub-tube reinforcement locations are invalid"
+                    )
+                    break
+                coordinates = []
+                malformed = False
+                for value in raw_bar:
+                    if (
+                        isinstance(value, (str, bytes))
+                        or type(value).__name__ in {"bool", "bool_"}
+                    ):
+                        malformed = True
+                        break
+                    try:
+                        number = float(value)
+                    except (TypeError, ValueError, OverflowError):
+                        malformed = True
+                        break
+                    if not math.isfinite(number):
+                        malformed = True
+                        break
+                    coordinates.append(number)
+                if malformed or coordinates[2] <= 0.0:
+                    local_bar_sets = None
+                    local_bar_positions = None
+                    assignment_reason = (
+                        "torsion sub-tube reinforcement locations are invalid"
+                    )
+                    break
+                x_bar, y_bar, area_bar = coordinates
+                memberships = [
+                    index
+                    for index, (x, y, b, h) in enumerate(rectangles_m)
+                    if (
+                        x - b / 2.0 - membership_tolerance
+                        <= x_bar
+                        <= x + b / 2.0 + membership_tolerance
+                        and y - h / 2.0 - membership_tolerance
+                        <= y_bar
+                        <= y + h / 2.0 + membership_tolerance
+                    )
+                ]
+                if len(memberships) != 1:
+                    local_bar_sets = None
+                    local_bar_positions = None
+                    assignment_reason = (
+                        "torsion sub-tube reinforcement assignment is ambiguous"
+                        if len(memberships) > 1
+                        else "torsion sub-tube reinforcement mapping is incomplete"
+                    )
+                    break
+                rectangle_index = memberships[0]
+                rectangle_x, rectangle_y, _b, _h = rectangles_m[rectangle_index]
+                local_bar_sets[rectangle_index].append((
+                    x_bar - rectangle_x,
+                    y_bar - rectangle_y,
+                    area_bar,
+                ))
+                local_bar_positions[rectangle_index].append(bar_position)
+        for index, (x_mm, y_mm, b_mm, h_mm) in enumerate(subrects):
+            b_m, h_m = b_mm / 1000.0, h_mm / 1000.0
+            selected = torsion.tube_properties_with_reinforcement(
+                torsion.rectangle_ring(b_m, h_m),
+                None,
+                None if local_bar_sets is None else local_bar_sets[index],
+                longitudinal_bar_positions=(
+                    None
+                    if local_bar_positions is None
+                    else local_bar_positions[index]
+                ),
+            )
+            if assignment_reason is not None:
+                selected = dict(selected, reason=assignment_reason)
+                selected["wall_evidence"] = dict(
+                    selected.get("wall_evidence") or {},
+                    complete=False,
+                    reason=assignment_reason,
+                )
+            subtubes.append(selected)
             stiffnesses.append(torsion.rectangle_torsion_constant(b_m, h_m))
             dimensions.append((x_mm, y_mm, b_mm, h_mm))
         distribution = torsion.stiffness_distribution_result(t_ed, stiffnesses)

@@ -5902,6 +5902,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "capacity-result-contract",
     "torsion-subdivision-automatic-tef-v1",
     "closed-torsion-link-authority-v1",
+    "torsion-wall-location-lower-bound-v1",
     "nominal-shear-resistance-route-v1",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
@@ -7160,9 +7161,11 @@ def build_inputs(host=st):
     torsion_tef = _seeded_number(
         sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
-        help="Zero derives A/u, capped at the nearest real wall for a single-cell "
-             "hollow section. A positive single-tube override cannot exceed that "
-             "wall; subdivided tubes require zero and derive each thickness.")
+        help="Zero applies A/u together with the wall-specific lower bound from "
+             "the longitudinal reinforcement centres and the real-wall limit for "
+             "a single-cell hollow section. A positive single-tube override must "
+             "satisfy every wall interval; subdivided tubes require zero and "
+             "complete reinforcement locations for each sub-tube.")
     torsion_gamma_ct = _seeded_number(
         sts,
         r"Concrete tensile factor $\gamma_{ct}$",
@@ -9966,11 +9969,15 @@ def _run_uniaxial_capacity_checks(inp, out):
             and (lk_probe.get("vrd_s") or 0.0) > 0.0
             and (lk_probe.get("vrd_max") or 0.0) > 0.0
         )
+        torsion_geometry_valid = bool(
+            tors_ctx is not None
+            and all(tb["valid"] for tb in tors_ctx["subtubes"])
+        )
         tors_valid = bool(
             tors_ctx is not None
             and tors_ctx["closed_links_present"]
             and tors_ctx["asw_over_s_t"] > 0.0
-            and all(tb["valid"] for tb in tors_ctx["subtubes"])
+            and torsion_geometry_valid
         )
         retained_vrd_c = (
             link_ctx.get("vrd_c") if link_ctx is not None else None
@@ -10195,7 +10202,7 @@ def _run_uniaxial_capacity_checks(inp, out):
             s = {}
             if link_ctx is not None:
                 s["lk"] = link_ctx["build"](cot, cot)
-            if tors_ctx is not None:
+            if tors_ctx is not None and torsion_geometry_valid:
                 tk = dict(tors_ctx["_tk"], cot_min=cot, cot_max=cot)
                 s["subs"] = tuple(_tube_torsion(tb, te, **tk)
                                   for tb, te in zip(tors_ctx["subtubes"],
@@ -10330,8 +10337,24 @@ def _run_uniaxial_capacity_checks(inp, out):
             # at its resistance optimum within the same user-entered range.
             if cot_star is not None and tors_live:
                 tk = dict(tk, cot_min=cot_star, cot_max=cot_star)
-            sub_res = [_tube_torsion(tb, te, **tk)
-                       for tb, te in zip(tors_ctx["subtubes"], tors_ctx["ted_parts"])]
+            if torsion_geometry_valid:
+                sub_res = [
+                    _tube_torsion(tb, te, **tk)
+                    for tb, te in zip(
+                        tors_ctx["subtubes"], tors_ctx["ted_parts"]
+                    )
+                ]
+            else:
+                sub_res = [
+                    capacity.unassessed_tube_torsion(
+                        tb,
+                        te,
+                        closed_links_present=tors_ctx["closed_links_present"],
+                    )
+                    for tb, te in zip(
+                        tors_ctx["subtubes"], tors_ctx["ted_parts"]
+                    )
+                ]
             governing_sub = None
             if subdivide:
                 for r, c, dims in zip(sub_res, tors_ctx["consts"],
@@ -10345,8 +10368,16 @@ def _run_uniaxial_capacity_checks(inp, out):
                 )
                 valid = bool(tube_valid and transverse_resistance_assessed)
                 trd = sum(r["trd"] for r in sub_res) if valid else None
-                asl_req = sum(r["asl_req"] for r in sub_res)
+                asl_req = (
+                    sum(r["asl_req"] for r in sub_res)
+                    if tube_valid
+                    else None
+                )
                 primary = sub_res[0]
+                if not tube_valid:
+                    primary = next(
+                        result for result in sub_res if not result["tube_valid"]
+                    )
                 tube_main = primary["tube"]
                 # Governing = the WORST sub-tube (each carries its stiffness share).
                 if valid:
@@ -10379,8 +10410,10 @@ def _run_uniaxial_capacity_checks(inp, out):
                 if not tube_valid
                 else assessment_reason
             )
-            required_by_tube = tuple(
-                item["asl_req"] for item in (sub_res or [primary])
+            required_by_tube = (
+                tuple(item["asl_req"] for item in (sub_res or [primary]))
+                if tube_valid
+                else ()
             )
             longitudinal_assessment = (
                 capacity.torsion_longitudinal_assessment(
@@ -14896,14 +14929,18 @@ def torsion_view(inp, results):
                 {
                     "Quantity": [
                         "Gross area A",
+                        "Base thickness A/u",
                         "Wall thickness tef",
+                        "Selection source",
                         "Enclosed area Ak",
                         "Centre-line perimeter uk",
                         "Required longitudinal steel Asl",
                     ],
                     "Value": [
                         f"{tube['A'] * 1e6:.0f} mm2",
+                        f"{tube['tef_auto']:.1f} mm",
                         f"{tube['tef']:.1f} mm",
+                        str(tube.get("tef_selection") or "-"),
                         f"{tube['Ak'] * 1e6:.0f} mm2",
                         f"{tube['uk'] * 1e3:.0f} mm",
                         f"{t['asl_req']:.0f} mm2",
@@ -14912,6 +14949,25 @@ def torsion_view(inp, results):
                 hide_index=True,
                 width="stretch",
             )
+            wall_rows = (tube.get("wall_evidence") or {}).get("walls") or ()
+            if wall_rows:
+                st.dataframe(
+                    {
+                        "Wall": [f"Wall {row['wall']}" for row in wall_rows],
+                        "a": [f"{row['a_mm']:.1f} mm" for row in wall_rows],
+                        "Lower bound 2a": [
+                            f"{row['lower_bound_mm']:.1f} mm" for row in wall_rows
+                        ],
+                        "Real wall": [
+                            "-"
+                            if row.get("real_wall_mm") is None
+                            else f"{row['real_wall_mm']:.1f} mm"
+                            for row in wall_rows
+                        ],
+                    },
+                    hide_index=True,
+                    width="stretch",
+                )
             st.plotly_chart(
                 viz.tube_figure(
                     inp["outer"],
@@ -14952,6 +15008,48 @@ def torsion_view(inp, results):
                 "the concrete section. Adjust centres and dimensions "
                 "to cover the net area without gaps, overlaps or boundary crossings."
             )
+        elif (
+            str(t.get("reason") or "").startswith("torsion wall")
+            or str(t.get("reason") or "").startswith(
+                "torsion sub-tube reinforcement"
+            )
+        ):
+            guidance = presentation.result_reason(
+                t.get("reason"),
+                "torsion",
+                context="torsion wall-thickness applicability reason",
+            )
+            _manual_warning(st, "calculation-warning", guidance + ".")
+            wall_evidence = tube.get("wall_evidence") or {}
+            a_over_u = wall_evidence.get("a_over_u_mm")
+            a_over_u_text = (
+                "-" if a_over_u is None else f"{float(a_over_u):.1f}"
+            )
+            st.caption(
+                "Equivalent-tube wall selection: "
+                f"A/u = {a_over_u_text} mm; "
+                "the selected thickness must also satisfy every reinforcement-"
+                "centre lower bound and each applicable real-wall limit."
+            )
+            wall_rows = wall_evidence.get("walls") or ()
+            if wall_rows:
+                st.dataframe(
+                    {
+                        "Wall": [f"Wall {row['wall']}" for row in wall_rows],
+                        "a": [f"{row['a_mm']:.1f} mm" for row in wall_rows],
+                        "Lower bound 2a": [
+                            f"{row['lower_bound_mm']:.1f} mm" for row in wall_rows
+                        ],
+                        "Real wall": [
+                            "-"
+                            if row.get("real_wall_mm") is None
+                            else f"{row['real_wall_mm']:.1f} mm"
+                            for row in wall_rows
+                        ],
+                    },
+                    hide_index=True,
+                    width="stretch",
+                )
         else:
             _manual_warning(
                 st,
@@ -14995,6 +15093,38 @@ def torsion_view(inp, results):
         m3.metric(r"Cracking $T_{Rd,c}$", f"{t['trd_c']:.3f} kNm")
         m4.metric(r"Transverse/strut utilisation $T_{Ed}/T_{Rd}$", util_txt)
         m4.caption(resistance_status)
+
+    wall_evidence = tube.get("wall_evidence") or {}
+    if wall_evidence.get("complete") and not t.get("subdivided"):
+        st.caption(
+            "Equivalent-tube wall thickness: "
+            f"A/u = {float(wall_evidence['a_over_u_mm']):.1f} mm; "
+            "selected wall thickness = "
+            f"{float(wall_evidence['selected_tef_mm']):.1f} mm "
+            f"from {wall_evidence.get('selection') or 'the wall limits'}."
+        )
+        wall_rows = wall_evidence.get("walls") or ()
+        st.dataframe(
+            {
+                "Wall": [f"Wall {row['wall']}" for row in wall_rows],
+                "Bar positions": [
+                    ", ".join(str(value) for value in row["bar_indices"])
+                    for row in wall_rows
+                ],
+                "a": [f"{row['a_mm']:.1f} mm" for row in wall_rows],
+                "Lower bound 2a": [
+                    f"{row['lower_bound_mm']:.1f} mm" for row in wall_rows
+                ],
+                "Real wall": [
+                    "-"
+                    if row.get("real_wall_mm") is None
+                    else f"{row['real_wall_mm']:.1f} mm"
+                    for row in wall_rows
+                ],
+            },
+            hide_index=True,
+            width="stretch",
+        )
 
     overall_status = presentation.torsion_assessment_status(t)
     overall_note = presentation.torsion_assessment_note(t)
@@ -15067,7 +15197,11 @@ def torsion_view(inp, results):
                  f"{s['x_mm']:.0f}, {s['y_mm']:.0f}" for s in subs
              ],
              "b x h (mm)": [f"{s['b_mm']:.0f} x {s['h_mm']:.0f}" for s in subs],
+             "Base A/u (mm)": [f"{s['tube']['tef_auto']:.1f}" for s in subs],
              "tef (mm)": [f"{s['tube']['tef']:.1f}" for s in subs],
+             "Selection source": [
+                 str(s["tube"].get("tef_selection") or "-") for s in subs
+             ],
              "Ak (mm2)": [f"{s['tube']['Ak'] * 1e6:.0f}" for s in subs],
              f"cot {_THETA}": [f"{s['cot']:.3f}" for s in subs],
              "Stiffness": [f"{s['stiffness'] / c_tot * 100:.1f} %" for s in subs],
@@ -15077,6 +15211,46 @@ def torsion_view(inp, results):
              "Asl,req,i (mm2)": [f"{s['asl_req']:.0f}" for s in subs],
              "Governs": [s["governs"] for s in subs]},
             hide_index=True, width="stretch")
+        subtube_wall_rows = [
+            (
+                "web" if index == 0 else f"part {index + 1}",
+                row,
+            )
+            for index, sub in enumerate(subs)
+            for row in ((sub.get("tube") or {}).get("wall_evidence") or {}).get(
+                "walls", ()
+            )
+        ]
+        if subtube_wall_rows:
+            st.markdown("**Sub-tube wall-selection evidence**")
+            st.dataframe(
+                {
+                    "Sub-tube": [label for label, _row in subtube_wall_rows],
+                    "Wall": [
+                        f"Wall {row['wall']}" for _label, row in subtube_wall_rows
+                    ],
+                    "Bar positions": [
+                        ", ".join(str(value) for value in row["bar_indices"])
+                        for _label, row in subtube_wall_rows
+                    ],
+                    "a": [
+                        f"{row['a_mm']:.1f} mm"
+                        for _label, row in subtube_wall_rows
+                    ],
+                    "Lower bound 2a": [
+                        f"{row['lower_bound_mm']:.1f} mm"
+                        for _label, row in subtube_wall_rows
+                    ],
+                    "Real wall": [
+                        "-"
+                        if row.get("real_wall_mm") is None
+                        else f"{row['real_wall_mm']:.1f} mm"
+                        for _label, row in subtube_wall_rows
+                    ],
+                },
+                hide_index=True,
+                width="stretch",
+            )
         g = t.get("governing_sub")
         gov_lbl = (("web" if g == 0 else f"part {g + 1}") if g is not None else "-")
         st.caption(f"Governing sub-tube resistance component: {gov_lbl}; "
@@ -15101,17 +15275,17 @@ def torsion_view(inp, results):
             f"$T_{{Rd,s}}={t['trd_s']:.3f}$ kNm, "
             f"$T_{{Rd,max}}={t['trd_max']:.3f}$ kNm."
         )
-        tef_note = ("user input" if tube["tef_user"]
-                    else ("auto A/u, capped at the wall" if tube["tef_capped"]
-                          else "auto = A/u"))
+        tef_note = str(tube.get("tef_selection") or "wall limits")
         st.markdown("**Tube idealisation and torsion quantities**")
         st.dataframe(
-            {"Quantity": ["Gross area A", "Outer perimeter u", "Wall thickness tef",
+            {"Quantity": ["Gross area A", "Outer perimeter u", "Base thickness A/u",
+                          "Wall thickness tef",
                           "Enclosed area Ak", "Centre-line perimeter uk",
                           f"Strut factor {_NU}", f"Chord factor {_ALPHA}cw",
                           "Concrete tensile factor gamma_ct",
                           "Required long. steel " + chr(0x03A3) + "Asl"],
              "Value": [f"{tube['A'] * 1e6:.0f} mm2", f"{tube['u'] * 1e3:.0f} mm",
+                       f"{tube['tef_auto']:.1f} mm",
                        f"{tube['tef']:.1f} mm ({tef_note})",
                        f"{tube['Ak'] * 1e6:.0f} mm2",
                        f"{tube['uk'] * 1e3:.0f} mm", f"{t['nu']:.3f}",

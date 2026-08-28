@@ -335,7 +335,63 @@ _TORSION_REASON_MESSAGES = {
         "TORSION-NO-OUTLINE",
         "A valid section outline is required for the torsion calculation",
     ),
+    "torsion wall reinforcement locations are missing": EngineerMessage(
+        "TORSION-WALL-BARS-MISSING",
+        "Torsion is not assessed because longitudinal reinforcement locations are required around every equivalent-tube wall",
+    ),
+    "torsion wall reinforcement locations are invalid": EngineerMessage(
+        "TORSION-WALL-BARS-INVALID",
+        "Torsion is not assessed because one or more longitudinal reinforcement locations cannot be used for the equivalent-tube walls",
+    ),
+    "torsion wall reinforcement mapping is incomplete": EngineerMessage(
+        "TORSION-WALL-BARS-INCOMPLETE",
+        "Torsion is not assessed because longitudinal reinforcement has not been established for every equivalent-tube wall",
+    ),
+    "torsion wall reinforcement mapping is ambiguous": EngineerMessage(
+        "TORSION-WALL-BARS-AMBIGUOUS",
+        "Torsion is not assessed because the longitudinal reinforcement cannot be assigned unambiguously to every equivalent-tube wall",
+    ),
+    "torsion sub-tube reinforcement locations are missing": EngineerMessage(
+        "TORSION-SUBTUBE-BARS-MISSING",
+        "Torsion is not assessed because each sub-tube needs longitudinal reinforcement locations around all four walls",
+    ),
+    "torsion sub-tube reinforcement locations are invalid": EngineerMessage(
+        "TORSION-SUBTUBE-BARS-INVALID",
+        "Torsion is not assessed because one or more longitudinal reinforcement locations cannot be used for the sub-tubes",
+    ),
+    "torsion sub-tube reinforcement mapping is incomplete": EngineerMessage(
+        "TORSION-SUBTUBE-BARS-INCOMPLETE",
+        "Torsion is not assessed because longitudinal reinforcement has not been established for every sub-tube wall",
+    ),
+    "torsion sub-tube reinforcement assignment is ambiguous": EngineerMessage(
+        "TORSION-SUBTUBE-BARS-AMBIGUOUS",
+        "Torsion is not assessed because reinforcement on a shared sub-tube boundary cannot be assigned unambiguously",
+    ),
+    "torsion wall lower bound exceeds real wall": EngineerMessage(
+        "TORSION-WALL-INTERVAL",
+        "Torsion is not assessed because the reinforcement-based wall-thickness lower bound exceeds the available hollow wall",
+    ),
+    "torsion wall automatic thickness varies by wall": EngineerMessage(
+        "TORSION-WALL-VARIATION",
+        "Torsion is not assessed because the wall-specific limits do not support one automatic equivalent-tube thickness",
+    ),
+    "torsion wall override is below reinforcement lower bound": EngineerMessage(
+        "TORSION-WALL-OVERRIDE-LOW",
+        "Torsion is not assessed because the entered wall thickness is below the reinforcement-based lower bound",
+    ),
+    "torsion wall override exceeds real wall": EngineerMessage(
+        "TORSION-WALL-OVERRIDE-HIGH",
+        "Torsion is not assessed because the entered wall thickness exceeds an available hollow wall",
+    ),
 }
+
+_TORSION_WALL_APPLICABILITY_REASONS = frozenset(
+    reason for reason in _TORSION_REASON_MESSAGES if reason.startswith("torsion wall")
+) | frozenset(
+    reason
+    for reason in _TORSION_REASON_MESSAGES
+    if reason.startswith("torsion sub-tube reinforcement")
+)
 _COMBINED_REASON_MESSAGES = {
     "no evaluable shared angle": EngineerMessage(
         "COMBINED-SHARED-ANGLE",
@@ -2794,10 +2850,16 @@ def result_summary_rows(inp, results, *, stale=False):
         ):
             torsion_transverse_resistance_assessed = False
         if not torsion_tube_valid:
+            tube_reason = str(torsion.get("reason") or "")
+            tube_status = (
+                "NOT ASSESSED"
+                if tube_reason in _TORSION_WALL_APPLICABILITY_REASONS
+                else "INVALID"
+            )
             rows.append(_summary_row(
                 "Torsion",
                 "plastic",
-                "INVALID",
+                tube_status,
                 "-",
                 "-",
                 None,

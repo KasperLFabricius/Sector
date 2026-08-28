@@ -208,7 +208,12 @@ def _inputs() -> dict:
         for item in mild_catalogue["items"]
     }
     outer = [(-0.1, -0.15), (0.1, -0.15), (0.1, 0.15), (-0.1, 0.15)]
-    bars = [(0.0, -0.12, 500.0), (0.0, 0.12, 400.0)]
+    bars = [
+        (-0.07, -0.12, 250.0),
+        (0.07, 0.12, 200.0),
+        (0.07, -0.12, 250.0),
+        (-0.07, 0.12, 200.0),
+    ]
     fatigue_catalogue = fatigue_inputs.default_catalog()
     fatigue_catalogue["items"][0].update({
         "name": "Straight reinforcing bars",
@@ -317,14 +322,26 @@ def _inputs() -> dict:
         ),
         "bar_elements": [
             {
-                "id": "R1", "x_mm": 0.0, "y_mm": -120.0,
-                "area_mm2": 500.0, "diameter_mm": 25.23,
+                "id": "R1", "x_mm": -70.0, "y_mm": -120.0,
+                "area_mm2": 250.0, "diameter_mm": 17.84,
                 "size_mode": "Area", "material_id": "M1",
                 "fatigue_detail_id": "F1",
             },
             {
-                "id": "R2", "x_mm": 0.0, "y_mm": 120.0,
-                "area_mm2": 400.0, "diameter_mm": 22.57,
+                "id": "R2", "x_mm": 70.0, "y_mm": 120.0,
+                "area_mm2": 200.0, "diameter_mm": 15.96,
+                "size_mode": "Area", "material_id": second_id,
+                "fatigue_detail_id": "F1",
+            },
+            {
+                "id": "R3", "x_mm": 70.0, "y_mm": -120.0,
+                "area_mm2": 250.0, "diameter_mm": 17.84,
+                "size_mode": "Area", "material_id": "M1",
+                "fatigue_detail_id": "F1",
+            },
+            {
+                "id": "R4", "x_mm": -70.0, "y_mm": 120.0,
+                "area_mm2": 200.0, "diameter_mm": 15.96,
                 "size_mode": "Area", "material_id": second_id,
                 "fatigue_detail_id": "F1",
             },
@@ -334,7 +351,12 @@ def _inputs() -> dict:
         "steel": mild_materials["M1"],
         "mild_material_catalog": mild_catalogue,
         "mild_materials": mild_materials,
-        "bar_materials": [mild_materials["M1"], mild_materials[second_id]],
+        "bar_materials": [
+            mild_materials["M1"],
+            mild_materials[second_id],
+            mild_materials["M1"],
+            mild_materials[second_id],
+        ],
         "capacity_steel_material_id": second_id,
         "prestress": None,
         "P_pl": 0.0,
@@ -617,8 +639,11 @@ def _results(inp: dict | None = None) -> dict:
     link_asw_over_s = link_asw / link_spacing
     torsion_asw = math.pi * link_dia ** 2 / 4.0
     torsion_asw_over_s = torsion_asw / link_spacing
-    tube = torsion.tube_properties(
-        inp["outer"], inp.get("holes"), inp.get("torsion_tef", 0.0)
+    tube = torsion.tube_properties_with_reinforcement(
+        inp["outer"],
+        inp.get("holes"),
+        inp.get("bars"),
+        inp.get("torsion_tef", 0.0),
     )
     shear_res = shear.vrd_c(
         30.0, code, bw_mm=200.0, d_mm=270.0,
