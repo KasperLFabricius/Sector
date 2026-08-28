@@ -481,10 +481,31 @@ def test_manual_documents_direct_torsion_tensile_factor_and_benchmark():
 def test_manual_documents_automatic_subtube_wall_thickness_boundary():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
-    assert "subdivided tubes require zero" in text
-    assert "derive each thickness separately" in text
+    assert "subdivided tubes require zero" in text.casefold()
+    assert "complete bar-to-wall evidence for every sub-tube" in text
     assert "positive global $t_{ef}$ override" in text
-    assert "0 selects automatic $A/u$ for each sub-tube" in text
+    assert "wall-specific automatic thickness for each sub-tube" in text
+    assert "$t_{ef,i}\\\\geq2a_i$" in text
+    assert "A manual override does not replace that location evidence" in text
+    assert "implementation-fixture bar centres" in text
+
+
+def test_manual_pdf_starts_combined_mvt_after_the_torsion_applicability_page():
+    pdf = manual.build_manual_pdf_bytes(figures=False)
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    pages = [" ".join((page.extract_text() or "").split()) for page in reader.pages]
+
+    torsion_page = next(
+        index for index, text in enumerate(pages)
+        if "6.7 Torsion (TRd, thin-walled tube)" in text
+    )
+    combined_page = next(
+        index for index, text in enumerate(pages)
+        if "6.8 Combined M-V-T interaction" in text
+    )
+    assert combined_page > torsion_page
+    assert "6.8 Combined M-V-T interaction" not in pages[combined_page - 1]
+    assert "Subdivide into sub-tubes" in pages[combined_page - 1]
 
 
 def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():

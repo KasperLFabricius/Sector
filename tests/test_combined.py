@@ -2299,6 +2299,53 @@ def test_incomplete_2023_chord_keeps_retained_mvt_not_assessed():
     )
 
 
+def test_incomplete_torsion_wall_evidence_blocks_stale_mvt_verdicts():
+    raw_reason = "torsion wall reinforcement mapping is incomplete"
+    torsion_result = {
+        "valid": False,
+        "tube_valid": False,
+        "closed_links_present": True,
+        "transverse_resistance_assessed": False,
+        "full_resistance_assessed": False,
+        "reason": raw_reason,
+        "trd": 999.123,
+        "util": 0.42,
+    }
+    stale_combined = {
+        "valid": True,
+        "dkna_valid": True,
+        "dkna_sum": 0.72,
+        "dkna_limit_satisfied": True,
+        "dkna_status": "PASS",
+        "dkna_ok": True,
+    }
+    results = {"torsion": torsion_result, "combined": stale_combined}
+
+    blocker = result_presentation.combined_bending_assessment_blocker(results)
+    assert blocker == (
+        "Torsion prerequisite is not assessed: Torsion is not assessed because "
+        "longitudinal reinforcement has not been established for every "
+        "equivalent-tube wall"
+    )
+    assert raw_reason not in blocker
+    rows = result_presentation.result_summary_rows(
+        {"torsion_on": True, "combined_on": True, "shear_links": True},
+        results,
+    )
+    combined_row = next(
+        row for row in rows if row["check"] == "Combined M-V-T - DK NA sum"
+    )
+    assert combined_row["status"] == "NOT ASSESSED"
+    assert combined_row["result"] == "-"
+    assert combined_row["util"] is None
+    assert (
+        result_presentation.worked_example_selection({}, results)["families"].get(
+            "combined"
+        )
+        is None
+    )
+
+
 def test_app_invalid_tube_does_not_poison_the_member_angle():
     # Workflow finding: an INVALID torsion tube (util = inf at every angle) must not
     # constrain the member angle -- previously it tied the scan and pinned the links

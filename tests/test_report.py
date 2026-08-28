@@ -5540,8 +5540,31 @@ def test_report_without_shear_omits_the_section():
 
 
 def _torsion_out(interaction=False):
+    walls = tuple(
+        {
+            "wall": index,
+            "bar_indices": bar_indices,
+            "a_mm": 50.0,
+            "lower_bound_mm": 100.0,
+            "real_wall_mm": None,
+        }
+        for index, bar_indices in enumerate(
+            ((1, 4), (1, 2), (2, 3), (3, 4)), start=1
+        )
+    )
+    wall_evidence = {
+        "complete": True,
+        "reason": None,
+        "a_over_u_mm": 100.0,
+        "override_mm": 0.0,
+        "selected_tef_mm": 100.0,
+        "selection": "A/u and reinforcement lower bound",
+        "walls": walls,
+    }
     tube = {"A": 0.18, "u": 1.8, "tef": 100.0, "Ak": 0.1, "uk": 1.4,
             "tef_auto": 100.0, "tef_capped": False, "tef_user": False,
+            "tef_selection": "A/u and reinforcement lower bound",
+            "wall_evidence": wall_evidence,
             "hollow": False, "valid": True}
     angle = shear_core.optimum_strut_angle(
         0.5236 * 416.67,
@@ -5643,6 +5666,90 @@ def test_report_includes_torsion_section():
     assert not any(
         token in txt for token in ("sqrt", "Cfrac", "Big", "sincos", "sum A", "kN.m")
     )
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_publish_torsion_wall_selection_evidence(profile):
+    torsion = _torsion_out()
+    inp = _inp()
+    inp.update(torsion_on=True, shear_links=True)
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, {"torsion": torsion}, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Torsion" in text and "NOT ASSESSED" in text
+    assert "Torsion transverse/strut resistance" in text and "52.4 %" in text
+    if profile != "Brief":
+        assert "Base thickness" in text and "A/u" in text
+        assert "A/u and reinforcement lower bound" in text
+        assert "Lower bound 2a" in text
+        assert "50.0 mm" in text and "100.0 mm" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_fail_closed_for_incomplete_torsion_wall_evidence(profile):
+    torsion = _torsion_out()
+    raw_reason = "torsion wall reinforcement mapping is incomplete"
+    torsion.update(
+        valid=False,
+        tube_valid=False,
+        transverse_resistance_assessed=False,
+        full_resistance_assessed=False,
+        resistance_status="NOT ASSESSED",
+        assessment_status="NOT ASSESSED",
+        reason=raw_reason,
+        trd=999.123,
+        util=9.99,
+        asl_req=888.0,
+    )
+    torsion["tube"] = dict(
+        torsion["tube"],
+        valid=False,
+        tef=0.0,
+        Ak=0.0,
+        uk=0.0,
+        reason=raw_reason,
+        wall_evidence={
+            "complete": False,
+            "reason": raw_reason,
+            "a_over_u_mm": 100.0,
+            "override_mm": 0.0,
+            "selected_tef_mm": None,
+            "selection": "none",
+            "walls": (
+                {
+                    "wall": 1,
+                    "bar_indices": (1, 4),
+                    "a_mm": 80.0,
+                    "lower_bound_mm": 160.0,
+                    "real_wall_mm": None,
+                },
+            ),
+        },
+    )
+    inp = _inp()
+    inp.update(torsion_on=True, shear_links=True)
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, {"torsion": torsion}, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Torsion" in text and "NOT ASSESSED" in text
+    assert "not been established for every equivalent-tube wall" in text
+    if profile != "Brief":
+        assert "Base thickness A/u" in text and "100.0 mm" in text
+        assert "Lower bound 2a" in text and "160.0 mm" in text
+    assert sector_report._fmt(999.123, 3) not in text
+    assert raw_reason not in text
 
 
 @pytest.mark.parametrize(
@@ -5847,8 +5954,38 @@ def _subtube(b, h, tef, ak, c, ted, trd, util, gov, cx=0.0, cy=0.0):
     resistance = torsion_core.select_torsion_resistance(
         steel.trd_s, strut.trd_max, asw_over_s=0.5236
     )
+    a_over_u = b * h / (2.0 * (b + h))
+    a = tef / 2.0
+    selection = (
+        "A/u and reinforcement lower bound"
+        if a_over_u == pytest.approx(tef)
+        else "reinforcement lower bound"
+    )
+    wall_evidence = {
+        "complete": True,
+        "a_over_u_mm": a_over_u,
+        "selected_tef_mm": tef,
+        "selection": selection,
+        "walls": tuple(
+            {
+                "wall": index,
+                "bar_indices": (index,),
+                "a_mm": a,
+                "lower_bound_mm": tef,
+                "real_wall_mm": None,
+            }
+            for index in range(1, 5)
+        ),
+    }
     return dict(
-        tube={"tef": tef, "Ak": ak, "valid": True}, b_mm=b, h_mm=h,
+        tube={
+            "tef": tef,
+            "tef_auto": a_over_u,
+            "tef_selection": selection,
+            "Ak": ak,
+            "valid": True,
+            "wall_evidence": wall_evidence,
+        }, b_mm=b, h_mm=h,
         x_mm=cx, y_mm=cy, stiffness=c, t_ed=ted,
         trd=resistance.resistance, util=ted / resistance.resistance,
         governs=resistance.governs, trd_s=steel.trd_s,
@@ -5902,6 +6039,12 @@ def test_report_torsion_subdivided():
     assert "governing" in txt                        # P1: governing (max) utilisation
     assert "6.29" in txt                             # P2: crushing printed in sub-report
     assert "850" in txt and "550" in txt            # Formula 6.28 per sub-tube
+    assert "Equivalent-tube wall selection" in txt
+    assert "Base A/u" in txt
+    assert "100.0 mm" in txt and "83.3 mm" in txt
+    assert "A/u and reinforcement lower bound" in txt
+    assert "reinforcement lower bound" in txt
+    assert "Bar positions" in txt
 
 
 def test_report_invalid_subtube_partition_withholds_verdict():

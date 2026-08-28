@@ -8424,6 +8424,47 @@ class ReportBuilder:
                 "unavailable. Recalculate before issuing the report."
             )
             return
+        wall_selection_rows = [[
+            "Sub-tube", "Base A/u", "Selected t<sub>ef</sub>", "Source"
+        ]]
+        wall_detail_rows = [[
+            "Sub-tube", "Wall", "Bar positions", "a", "Lower bound 2a",
+            "Real wall",
+        ]]
+        for index, sub in enumerate(subs):
+            role = "web" if index == 0 else f"part {index + 1}"
+            tube = sub.get("tube") or {}
+            evidence = tube.get("wall_evidence") or {}
+            wall_rows = evidence.get("walls") or ()
+            if not evidence.get("complete") or not wall_rows:
+                self._h2("Sub-tube wall selection unavailable")
+                self._small(
+                    "The reinforcement-centre evidence required for one or more "
+                    "sub-tube walls is unavailable. Recalculate before issuing "
+                    "the report."
+                )
+                return
+            wall_selection_rows.append([
+                role,
+                f"{_fmt(evidence.get('a_over_u_mm'), 1)} mm",
+                f"{_fmt(evidence.get('selected_tef_mm'), 1)} mm",
+                _html_escape(evidence.get("selection") or "wall limits"),
+            ])
+            wall_detail_rows.extend([
+                [
+                    role,
+                    f"Wall {row['wall']}",
+                    ", ".join(str(value) for value in row["bar_indices"]),
+                    f"{_fmt(row.get('a_mm'), 1)} mm",
+                    f"{_fmt(row.get('lower_bound_mm'), 1)} mm",
+                    (
+                        "-"
+                        if row.get("real_wall_mm") is None
+                        else f"{_fmt(row.get('real_wall_mm'), 1)} mm"
+                    ),
+                ]
+                for row in wall_rows
+            ])
         self._p("Compound section: modelled as component rectangles, each an equivalent "
                 "thin-walled tube. The T<sub>Rd</sub> component is the sum of the "
                 "sub-tube resistance components "
@@ -8432,6 +8473,17 @@ class ReportBuilder:
                 "rectangle (web) carries the shear in the combined V+T checks. Its "
                 "positioned rectangle union has been validated against the concrete "
                 "outline and voids before these results are issued.")
+        self._h2("Equivalent-tube wall selection")
+        self._table(
+            wall_selection_rows,
+            [30 * mm, 30 * mm, 35 * mm, 85 * mm],
+            font=7.0,
+        )
+        self._table(
+            wall_detail_rows,
+            [22 * mm, 20 * mm, 30 * mm, 24 * mm, 38 * mm, 30 * mm],
+            font=6.5,
+        )
         rows = [["Sub-tube", "centre x, y<br/>b x h (mm)", "t<sub>ef</sub>",
                  "A<sub>k</sub> (mm2)", "share", "T<sub>Ed,i</sub>",
                  "T<sub>Rd,i</sub>", "util", "A<sub>sl,req</sub>",
@@ -9003,6 +9055,61 @@ class ReportBuilder:
                     "crossings. Torsion resistance and dependent interaction "
                     "checks are not calculated."
                 )
+            elif (
+                str(t.get("reason") or "").startswith("torsion wall")
+                or str(t.get("reason") or "").startswith(
+                    "torsion sub-tube reinforcement"
+                )
+            ):
+                reason = _result_reason(
+                    t.get("reason"),
+                    "torsion",
+                    "report torsion wall-thickness applicability reason",
+                )
+                self._small(
+                    "Torsion NOT ASSESSED: " + _html_escape(reason) + ". "
+                    "No torsion resistance, utilisation or dependent interaction "
+                    "verdict is published."
+                )
+                wall_evidence = (t.get("tube") or {}).get("wall_evidence") or {}
+                evidence_rows = [
+                    ["Quantity", "Value"],
+                    [
+                        "Base thickness A/u",
+                        f"{_fmt(wall_evidence.get('a_over_u_mm'), 1)} mm",
+                    ],
+                    [
+                        "Entered override",
+                        (
+                            "automatic"
+                            if not wall_evidence.get("override_mm")
+                            else f"{_fmt(wall_evidence.get('override_mm'), 1)} mm"
+                        ),
+                    ],
+                ]
+                self._table(evidence_rows, [75 * mm, 75 * mm])
+                wall_rows = wall_evidence.get("walls") or ()
+                if wall_rows:
+                    self._table(
+                        [
+                            ["Wall", "a", "Lower bound 2a", "Real wall"],
+                            *[
+                                [
+                                    f"Wall {row['wall']}",
+                                    f"{_fmt(row.get('a_mm'), 1)} mm",
+                                    f"{_fmt(row.get('lower_bound_mm'), 1)} mm",
+                                    (
+                                        "-"
+                                        if row.get("real_wall_mm") is None
+                                        else f"{_fmt(row.get('real_wall_mm'), 1)} mm"
+                                    ),
+                                ]
+                                for row in wall_rows
+                            ],
+                        ],
+                        [30 * mm, 35 * mm, 45 * mm, 40 * mm],
+                        font=7.0,
+                    )
             else:
                 self._small("Warning: the tube could not be formed (a degenerate or "
                             "too-thin section).")
@@ -9092,11 +9199,11 @@ class ReportBuilder:
         resistance = retained["resistance_selection"]
         cracking = retained["cracking_resistance"]
         longitudinal = retained["longitudinal_reinforcement"]
-        tef_src = ("user input" if tube["tef_user"]
-                   else ("A/u, capped at the wall" if tube["tef_capped"] else "A/u"))
+        tef_src = str(tube.get("tef_selection") or "wall limits")
         rows = [["Quantity", "Symbol", "Value"],
                 ["Gross area (incl. hollow)", "A", f"{_fmt(tube['A'] * 1e6, 0)} mm<sup>2</sup>"],
                 ["Outer perimeter", "u", f"{_fmt(tube['u'] * 1e3, 0)} mm"],
+                ["Base thickness", "A/u", f"{_fmt(tube['tef_auto'], 1)} mm"],
                 ["Wall thickness", "t<sub>ef</sub>",
                  f"{_fmt(tube['tef'], 1)} mm ({tef_src})"],
                 ["Enclosed area", "A<sub>k</sub>", f"{_fmt(tube['Ak'] * 1e6, 0)} mm<sup>2</sup>"],
@@ -9112,6 +9219,33 @@ class ReportBuilder:
                  f"{_fmt(t.get('fctd'), 3)} MPa"],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(t['fywd'], 1)} MPa"]]
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        wall_rows = (tube.get("wall_evidence") or {}).get("walls") or ()
+        if wall_rows:
+            self._small(
+                "Wall-specific reinforcement-centre lower bounds and hollow-wall "
+                "limits used for the selected equivalent-tube thickness:"
+            )
+            self._table(
+                [
+                    ["Wall", "Bar(s)", "a", "Lower bound 2a", "Real wall"],
+                    *[
+                        [
+                            f"Wall {row['wall']}",
+                            ", ".join(str(value) for value in row["bar_indices"]),
+                            f"{_fmt(row.get('a_mm'), 1)} mm",
+                            f"{_fmt(row.get('lower_bound_mm'), 1)} mm",
+                            (
+                                "-"
+                                if row.get("real_wall_mm") is None
+                                else f"{_fmt(row.get('real_wall_mm'), 1)} mm"
+                            ),
+                        ]
+                        for row in wall_rows
+                    ],
+                ],
+                [25 * mm, 25 * mm, 30 * mm, 40 * mm, 35 * mm],
+                font=6.8,
+            )
         shared_angle = t.get("member_angle_selection") or {}
         if shared_angle:
             self._small(

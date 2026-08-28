@@ -1970,6 +1970,37 @@ def test_torsion_geometry_failure_remains_distinct_from_missing_links():
     )
 
 
+def test_torsion_wall_evidence_failure_is_not_assessed_without_stale_value():
+    raw_reason = "torsion wall reinforcement mapping is incomplete"
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", torsion_on=True, shear_links=True),
+        {
+            "plastic": _plastic(),
+            "torsion": {
+                "tube_valid": False,
+                "closed_links_present": True,
+                "transverse_resistance_assessed": False,
+                "full_resistance_assessed": False,
+                "valid": False,
+                "util": 0.42,
+                "trd": 999.123,
+                "reason": raw_reason,
+            },
+        },
+    )
+    torsion_row = next(row for row in rows if row["check"] == "Torsion")
+
+    assert torsion_row["status"] == "NOT ASSESSED"
+    assert torsion_row["result"] == "-"
+    assert torsion_row["criterion"] == "-"
+    assert torsion_row["util"] is None
+    assert torsion_row["note"] == (
+        "Torsion is not assessed because longitudinal reinforcement has not "
+        "been established for every equivalent-tube wall"
+    )
+    assert raw_reason not in torsion_row["note"]
+
+
 def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
     vx = {
         "res": {"valid": True, "vrd_c": 100.0},
