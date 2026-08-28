@@ -5927,6 +5927,11 @@ _ELASTIC_CONTEXT_SIG_KEYS = (
 _SHEAR_SIG_KEYS = (
     "shear_on", "shear_method", "shear_Vx", "shear_Vy",
     "shear_face_x", "shear_face_y", "shear_vx_bw", "shear_vy_bw",
+    "shear_section_form", "shear_vx_web_inclination_deg",
+    "shear_vy_web_inclination_deg", "shear_hoop_diameter",
+    "shear_vx_fitted_z", "shear_vy_fitted_z", "shear_duct_case",
+    "shear_vx_duct_sum", "shear_vy_duct_sum", "shear_vx_duct_largest",
+    "shear_vy_duct_largest",
     "shear_dlower", "shear_gamma_v",
     "shear_links", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
@@ -6958,6 +6963,157 @@ def build_inputs(host=st):
         bwy, r"$b_{w,y}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
         "shear_vy_bw", disabled=not shear_on,
         help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
+    )
+    shear_section_form = _seeded_selectbox(
+        sts,
+        "Shear section form",
+        list(shear.SHEAR_SECTION_FORMS),
+        shear.SHEAR_SECTION_AUTO,
+        key="shear_section_form",
+        disabled=not shear_on,
+        help=(
+            "Automatic treatment recognises a solid rectangle only. For other "
+            "sections, select the applicable form and enter the governing web "
+            "geometry."
+        ),
+    )
+    variable_section = shear_section_form == shear.SHEAR_SECTION_VARIABLE
+    circular_section = shear_section_form == shear.SHEAR_SECTION_CIRCULAR
+    if shear_on and not _shear_2023 and (variable_section or circular_section):
+        sts.warning(
+            "This section form is not assessed by the selected first-generation "
+            "shear method in Sector. Use a separately applicable member calculation."
+        )
+    incx, incy = sts.columns(2)
+    shear_vx_web_inclination_deg = _seeded_number(
+        incx,
+        r"$V_x$ reinforcement inclination $\delta_x$ (degrees)",
+        0.0,
+        89.9,
+        0.0,
+        0.5,
+        "shear_vx_web_inclination_deg",
+        disabled=not (shear_on and variable_section and _shear_2023),
+        help=(
+            "Inclination used in the variable-width factor "
+            r"$A_{sw}\cos\delta$ for the $V_x$ direction."
+        ),
+    )
+    shear_vy_web_inclination_deg = _seeded_number(
+        incy,
+        r"$V_y$ reinforcement inclination $\delta_y$ (degrees)",
+        0.0,
+        89.9,
+        0.0,
+        0.5,
+        "shear_vy_web_inclination_deg",
+        disabled=not (shear_on and variable_section and _shear_2023),
+        help=(
+            "Inclination used in the variable-width factor "
+            r"$A_{sw}\cos\delta$ for the $V_y$ direction."
+        ),
+    )
+    shear_hoop_diameter = _seeded_number(
+        sts,
+        r"Circular hoop diameter $D_h$ (mm)",
+        0.0,
+        100000.0,
+        0.0,
+        10.0,
+        "shear_hoop_diameter",
+        disabled=not (shear_on and circular_section and _shear_2023),
+        help=(
+            "Diameter of the circular shear hoop. The effective shear-link area "
+            r"is multiplied by $b_w/D_h$."
+        ),
+    )
+    fitx, fity = sts.columns(2)
+    shear_vx_fitted_z = _seeded_number(
+        fitx,
+        r"$V_x$ fitted-section arm $z_x$ (mm)",
+        0.0,
+        100000.0,
+        0.0,
+        10.0,
+        "shear_vx_fitted_z",
+        disabled=not (shear_on and circular_section and _shear_2023),
+        help="Lever arm from the section fitted into the circular section.",
+    )
+    shear_vy_fitted_z = _seeded_number(
+        fity,
+        r"$V_y$ fitted-section arm $z_y$ (mm)",
+        0.0,
+        100000.0,
+        0.0,
+        10.0,
+        "shear_vy_fitted_z",
+        disabled=not (shear_on and circular_section and _shear_2023),
+        help="Lever arm from the section fitted into the circular section.",
+    )
+    shear_duct_case = _seeded_selectbox(
+        sts,
+        "Web duct condition",
+        list(shear.SHEAR_DUCT_CASES),
+        shear.SHEAR_DUCT_NONE,
+        key="shear_duct_case",
+        disabled=not shear_on,
+        help=(
+            "Select the duct material and filling condition. Diameters are entered "
+            "at the most unfavourable level in each shear direction."
+        ),
+    )
+    ducts_present = shear_duct_case != shear.SHEAR_DUCT_NONE
+    ductx, ducty = sts.columns(2)
+    shear_vx_duct_sum = _seeded_number(
+        ductx,
+        r"$V_x$ duct diameter sum $\Sigma\phi_{duct}$ (mm)",
+        0.0,
+        100000.0,
+        0.0,
+        5.0,
+        "shear_vx_duct_sum",
+        disabled=not (shear_on and ducts_present),
+        help="Sum of duct outer diameters at the most unfavourable level.",
+    )
+    shear_vy_duct_sum = _seeded_number(
+        ducty,
+        r"$V_y$ duct diameter sum $\Sigma\phi_{duct}$ (mm)",
+        0.0,
+        100000.0,
+        0.0,
+        5.0,
+        "shear_vy_duct_sum",
+        disabled=not (shear_on and ducts_present),
+        help="Sum of duct outer diameters at the most unfavourable level.",
+    )
+    largestx, largesty = sts.columns(2)
+    shear_vx_duct_largest = _seeded_number(
+        largestx,
+        r"$V_x$ largest duct diameter (mm)",
+        0.0,
+        100000.0,
+        0.0,
+        5.0,
+        "shear_vx_duct_largest",
+        disabled=not (shear_on and ducts_present),
+        help=(
+            "Largest outer diameter at that level; used for the first-generation "
+            "grouted-steel threshold."
+        ),
+    )
+    shear_vy_duct_largest = _seeded_number(
+        largesty,
+        r"$V_y$ largest duct diameter (mm)",
+        0.0,
+        100000.0,
+        0.0,
+        5.0,
+        "shear_vy_duct_largest",
+        disabled=not (shear_on and ducts_present),
+        help=(
+            "Largest outer diameter at that level; used for the first-generation "
+            "grouted-steel threshold."
+        ),
     )
     sts.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
     sts.caption(
@@ -8139,6 +8295,17 @@ def build_inputs(host=st):
                     else load_cases.FACE_AUTO
                 ),
                 shear_vx_bw=shear_vx_bw, shear_vy_bw=shear_vy_bw,
+                shear_section_form=shear_section_form,
+                shear_vx_web_inclination_deg=shear_vx_web_inclination_deg,
+                shear_vy_web_inclination_deg=shear_vy_web_inclination_deg,
+                shear_hoop_diameter=shear_hoop_diameter,
+                shear_vx_fitted_z=shear_vx_fitted_z,
+                shear_vy_fitted_z=shear_vy_fitted_z,
+                shear_duct_case=shear_duct_case,
+                shear_vx_duct_sum=shear_vx_duct_sum,
+                shear_vy_duct_sum=shear_vy_duct_sum,
+                shear_vx_duct_largest=shear_vx_duct_largest,
+                shear_vy_duct_largest=shear_vy_duct_largest,
                 shear_dlower=shear_dlower,
                 shear_gamma_v=effective_shear_gamma_v,
                 shear_links=shear_links,
@@ -9813,6 +9980,7 @@ def _run_uniaxial_capacity_checks(inp, out):
         pl = out.get("plastic")
         chord_faces = []           # shear-axis chord faces (see below)
         chord_off_faces = []       # off-axis chord faces (both), built when torsion is live
+        off_axis_geometry_reason = None
         if links_valid and pl is not None and pl.get("util") is not None:
             l_axis, tlow = link_ctx["axis"], link_ctx["tension_low"]
             model_2023 = bool(link_ctx.get("model_2023"))
@@ -9883,7 +10051,13 @@ def _run_uniaxial_capacity_checks(inp, out):
                     # the required opposite-face check.
                     if not cond_f:
                         continue
-                    if f_tlow is tlow:
+                    fitted_section_z = (link_ctx.get("shear_geometry") or {}).get(
+                        "fitted_z_mm"
+                    )
+                    if fitted_section_z is not None:
+                        z_f_mm = float(fitted_section_z)
+                        z_f_src = "circular_fitted_section"
+                    elif f_tlow is tlow:
                         z_f_mm, z_f_src = link_ctx["z_mm"], link_ctx["z_src"]
                     else:
                         _, s_cg = shear.tension_reinforcement(
@@ -9937,11 +10111,32 @@ def _run_uniaxial_capacity_checks(inp, out):
             if (chord_faces and tors_live
                     and not tors_ctx.get("subdivide", False)):
                 o_axis = "y" if l_axis == "x" else "x"
+                other_component = "vy" if o_axis == "x" else "vx"
+                circular_off_axis_geometry = None
+                if inp.get("shear_section_form") == shear.SHEAR_SECTION_CIRCULAR:
+                    circular_off_axis_geometry = (
+                        shear.resolve_circular_shear_geometry(
+                            bw_mm=inp.get(f"shear_{other_component}_bw"),
+                            hoop_diameter_mm=inp.get("shear_hoop_diameter"),
+                            fitted_z_mm=inp.get(
+                                f"shear_{other_component}_fitted_z"
+                            ),
+                        )
+                    )
+                    if not circular_off_axis_geometry["valid"]:
+                        off_axis_geometry_reason = circular_off_axis_geometry[
+                            "reason"
+                        ]
                 _, ocx, ocy = capacity.gross_area_centroid(
                     inp["outer"], inp["holes"]
                 )
                 o_centroid = ocy if o_axis == "x" else ocx
                 for o_tlow in (True, False):
+                    if (
+                        circular_off_axis_geometry is not None
+                        and not circular_off_axis_geometry["valid"]
+                    ):
+                        continue
                     m_ed_o = combined.chord_applied_moment(off_signed, o_tlow)
                     m_rd_o, o_cond = _shear_face_mrd(inp, o_axis, o_tlow,
                                                      m_off=m_origin_signed)
@@ -9949,10 +10144,19 @@ def _run_uniaxial_capacity_checks(inp, out):
                         continue
                     # Lever arm about the off axis: the exact face-aligned Plastic
                     # internal lever arm, like the reinforced-shear z.
-                    _, o_cg = shear.tension_reinforcement(inp["bars"], o_axis,
-                                                          o_tlow, o_centroid)
-                    d_o = shear.effective_depth(inp["outer"], o_axis, o_tlow, o_cg)
-                    z_o_mm, z_o_src = _shear_lever_arm(inp, o_axis, o_tlow, d_o)
+                    if circular_off_axis_geometry is not None:
+                        z_o_mm = circular_off_axis_geometry["fitted_z_mm"]
+                        z_o_src = "circular_fitted_section"
+                    else:
+                        _, o_cg = shear.tension_reinforcement(
+                            inp["bars"], o_axis, o_tlow, o_centroid
+                        )
+                        d_o = shear.effective_depth(
+                            inp["outer"], o_axis, o_tlow, o_cg
+                        )
+                        z_o_mm, z_o_src = _shear_lever_arm(
+                            inp, o_axis, o_tlow, d_o
+                        )
                     if z_o_mm is None or z_o_mm <= 0.0:
                         continue
                     chord_off_faces.append(
@@ -10310,6 +10514,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                 # chord must not read as a clean OK -- disclose it.
                 if tors_live and tors_ctx.get("subdivide", False):
                     off_not_evaluated = "subdivided"
+                elif tors_live and off_axis_geometry_reason is not None:
+                    off_not_evaluated = "circular_geometry"
                 elif tors_live and len(chord_faces) + len(chord_off_faces) < 4:
                     off_not_evaluated = "not_solved"
                 else:
@@ -10387,6 +10593,9 @@ def _run_uniaxial_capacity_checks(inp, out):
             links_payload = dict(
                 res=lk, util=util_l, asw=link_ctx["asw"],
                 asw_over_s=link_ctx["asw_over_s"],
+                effective_asw_over_s=link_ctx["effective_asw_over_s"],
+                asw_factor=link_ctx["asw_factor"],
+                shear_geometry=link_ctx["shear_geometry"],
                 legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
                 s=inp["shear_link_s"], fywk=inp["shear_fywk"],
                 cot_min=link_ctx["cot_min"], cot_max=link_ctx["cot_max"],
@@ -10419,7 +10628,12 @@ def _run_uniaxial_capacity_checks(inp, out):
                     else lk.get("reason")
                 ),
                 out_of_limits=links_out_of_limits,
-                required=bool(v_ed > link_ctx["vrd_c"]), chord=lchk,
+                required=(
+                    bool(v_ed > link_ctx["vrd_c"])
+                    if link_ctx.get("vrd_c") is not None
+                    else None
+                ),
+                chord=lchk,
                 chord_off=ochk,
                 chord_candidates=required_chords,
                 governing_longitudinal=governing_longitudinal,
@@ -10430,18 +10644,25 @@ def _run_uniaxial_capacity_checks(inp, out):
                 theta_mode=(theta_mode_str if shear_live else "resistance"),
                 member_angle_selection=member_angle_selection,
             )
-            links_payload["longitudinal_assessment"] = (
-                capacity.longitudinal_chord_assessment(
-                    links_payload,
-                    shear_axis=link_ctx["axis"],
-                    shear_tension_low=link_ctx["tension_low"],
-                    shear_live=shear_live,
-                    torsion_live=tors_live,
-                    torsion_subdivided=bool(
-                        tors_ctx is not None and tors_ctx.get("subdivide", False)
-                    ),
-                )
+            longitudinal_assessment = capacity.longitudinal_chord_assessment(
+                links_payload,
+                shear_axis=link_ctx["axis"],
+                shear_tension_low=link_ctx["tension_low"],
+                shear_live=shear_live,
+                torsion_live=tors_live,
+                torsion_subdivided=bool(
+                    tors_ctx is not None and tors_ctx.get("subdivide", False)
+                ),
             )
+            if (
+                off_axis_geometry_reason is not None
+                and longitudinal_assessment["status"] == "NOT ASSESSED"
+            ):
+                longitudinal_assessment = dict(
+                    longitudinal_assessment,
+                    reason=off_axis_geometry_reason,
+                )
+            links_payload["longitudinal_assessment"] = longitudinal_assessment
             link_resistance_status = (
                 "NOT ASSESSED"
                 if util_l is None
@@ -10547,7 +10768,10 @@ def _run_uniaxial_capacity_checks(inp, out):
 
 def _directional_shear_status(inp, shear_out):
     """Acceptance state for one directional shear calculation."""
-    if not shear_out or not (shear_out.get("res") or {}).get("valid"):
+    resistance = (shear_out or {}).get("res") or {}
+    if resistance.get("calculation_state") == "NOT ASSESSED":
+        return "NOT ASSESSED"
+    if not shear_out or not resistance.get("valid"):
         return "INVALID"
     if inp.get("shear_links") is True:
         links = shear_out.get("links")
@@ -13663,6 +13887,54 @@ def shear_view(inp, results):
     axis_lbl = (r"$V_{y,Ed}$ along y; paired with $M_{x,Ed}$" if component == "vy"
                 else r"$V_{x,Ed}$ along x; paired with $M_{y,Ed}$")
     face_lbl = viz.tension_face_label(sh["tension_low"], sh["axis"])
+    if res.get("calculation_state") == "NOT ASSESSED":
+        reason = presentation.result_reason(
+            res.get("reason"),
+            "shear",
+            context="shear section geometry result",
+        )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The shear check is NOT ASSESSED: " + reason + ".",
+        )
+        c1, c2, c3 = st.columns(3)
+        signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
+        c1.metric(f"Applied {action_math}", f"{signed_v_ed:.3f} kN")
+        c2.metric(r"Resistance $V_{Rd}$", "-")
+        c3.metric("Assessment", "NOT ASSESSED")
+        geometry_record = sh.get("shear_geometry") or {}
+        st.dataframe(
+            {
+                "Input": [
+                    "Section form",
+                    "Governing web width",
+                    "Web duct condition",
+                    "Duct diameter sum",
+                ],
+                "Value": [
+                    geometry_record.get("section_form") or "-",
+                    (
+                        f"{float(geometry_record['bw_mm']):.1f} mm"
+                        if geometry_record.get("bw_mm") is not None
+                        else "-"
+                    ),
+                    geometry_record.get("duct_case") or "-",
+                    (
+                        f"{float(geometry_record['duct_sum_mm']):.1f} mm"
+                        if geometry_record.get("duct_sum_mm") is not None
+                        else "-"
+                    ),
+                ],
+            },
+            hide_index=True,
+            width="stretch",
+        )
+        st.caption(
+            "No resistance, utilisation or PASS/FAIL verdict is published until "
+            "the required shear geometry is complete."
+        )
+        return
     if not res["valid"]:
         _manual_warning(
             st,
@@ -13674,8 +13946,9 @@ def shear_view(inp, results):
     util = sh["util"]
     ok = viz.util_ok(util)
     links_res = (sh.get("links") or {}).get("res") or {}
-    axial_compression_guarded = (
-        links_res.get("reason") == shear.LINKS_2023_AXIAL_COMPRESSION_REASON
+    reinforced_shear_unassessed = bool(
+        inp.get("shear_links") is True
+        and not links_res.get("valid")
     )
     m1, m2, m3 = st.columns(3)
     signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
@@ -13683,11 +13956,11 @@ def shear_view(inp, results):
     m2.metric(r"Resistance $V_{Rd,c}$", f"{res['vrd_c']:.3f} kN")
     util_txt = _pct(util)
     m3.metric(f"Utilisation {util_math}", util_txt,
-              delta=(None if axial_compression_guarded
+              delta=(None if reinforced_shear_unassessed
                      else ("OK" if ok else "Over limit")),
-              delta_color=("off" if axial_compression_guarded
+              delta_color=("off" if reinforced_shear_unassessed
                            else ("normal" if ok else "inverse")))
-    if axial_compression_guarded:
+    if reinforced_shear_unassessed:
         st.caption(
             r"$V_{Rd,c}$ and its ratio are retained as non-governing "
             "concrete-only context; the selected reinforced shear check is "
@@ -13798,8 +14071,12 @@ def shear_view(inp, results):
     )
     st.caption(geometry_basis["statement"])
 
+    geometry_record = sh.get("shear_geometry") or {}
+    calculation_bw = float(res.get("bw", sh["bw"]))
     bw_note = ("user input" if sh["bw_user"]
                else f"auto = min solid width {sh['bw_auto']:.1f} mm")
+    if not math.isclose(calculation_bw, float(sh["bw"]), rel_tol=0.0, abs_tol=1e-9):
+        bw_note = f"nominal after duct allowance; physical bw = {sh['bw']:.1f} mm"
     st.markdown("**Derived quantities**")
     if sh.get("model_2023"):
         a_cs_text = (
@@ -13814,8 +14091,9 @@ def shear_view(inp, results):
                           "Axial factor kvp", "Modified depth kvp*d (8.27)",
                            "Aggregate ddg", f"{_TAU}Rd,c", f"{_TAU}Rd,c,min",
                            "Flexural fyd", f"{_GAMMA}V"],
-              "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
-                        f"{res['z']:.1f} mm (0.9 d)", f"{sh['asl']:.1f} mm2",
+              "Value": [f"{sh['d']:.1f} mm", f"{calculation_bw:.1f} mm ({bw_note})",
+                        f"{res['z']:.1f} mm (0.9 d)",
+                        f"{sh['asl']:.1f} mm2",
                         f"{res['rho_l']:.4f}", f"{sh['m_ed_2023']:.3f} kNm",
                         a_cs_text, f"{res['k_vp']:.4f} (>= 0.1)",
                         f"{res['d_kvp']:.1f} mm", f"{res['ddg']:.1f} mm",
@@ -13835,7 +14113,7 @@ def shear_view(inp, results):
                           f"Reinf. ratio {_RHO}l", "Size factor k",
                           f"Axial stress {_SIGMA}cp", "Concrete area Ac",
                           "CRd,c", "vmin", "fcd"],
-             "Value": [f"{sh['d']:.1f} mm", f"{sh['bw']:.1f} mm ({bw_note})",
+             "Value": [f"{sh['d']:.1f} mm", f"{calculation_bw:.1f} mm ({bw_note})",
                        f"{sh['asl']:.1f} mm2",
                        f"{res['rho_l']:.4f} ({chr(0x2264)} 0.02)",
                        f"{res['k']:.3f} ({chr(0x2264)} 2.0)",
@@ -13848,7 +14126,14 @@ def shear_view(inp, results):
             r"\ v_{min} + k_1\sigma_{cp}]\,b_w d$, with $k_1 = "
             f"{res['k1']:.2f}$. "
             r"$A_{sl}$ is the tension reinforcement on the chosen face, assumed fully "
-            r"anchored ($\geq l_{bd} + d$) beyond the section.")
+             r"anchored ($\geq l_{bd} + d$) beyond the section.")
+    st.caption(
+        "Shear section form: "
+        + str(geometry_record.get("resolved_form") or geometry_record.get("section_form") or "-")
+        + ". Web duct condition: "
+        + str(geometry_record.get("duct_case") or "-")
+        + "."
+    )
 
     # Shear reinforcement (links): the governing check when present.
     links = sh.get("links")
@@ -13893,6 +14178,7 @@ def shear_view(inp, results):
                    else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
                         "reinforcement rules still apply")
         st.caption(f"For this $V_{{Ed}}$, {req_txt}.")
+        links_bw = float(lk.get("bw", sh["bw"]))
         util_l = links["util"]
         ok_l = viz.util_ok(util_l)
         c1, c2, c3, c4 = st.columns(4)
@@ -13927,6 +14213,9 @@ def shear_view(inp, results):
                     + ".",
                 )
         if links.get("model_2023"):
+            effective_asw_over_s = links.get(
+                "effective_asw_over_s", links.get("asw_over_s", 0.0)
+            )
             st.dataframe(
                 {
                     "Quantity": [
@@ -13935,6 +14224,8 @@ def shear_view(inp, results):
                         f"Permitted cot {_THETA}",
                         "Lever arm z",
                         "Link area/spacing Asw/s",
+                        "Effective link area/spacing",
+                        "Compression-field web width",
                         f"Link ratio {_RHO}w",
                         "Design yield fywd",
                         f"Compression factor {_NU}",
@@ -13952,9 +14243,13 @@ def shear_view(inp, results):
                             f"{links['cot_limit_hi']:.2f}; "
                             f"class {(links.get('angle_limits') or {}).get('ductility_class', 'B')}"
                         ),
-                        f"{lk['z']:.1f} mm ({links['z_source']})",
+                        f"{lk['z']:.1f} mm "
+                        f"({presentation.shear_link_arm_source_label(links.get('z_source'))})",
                         f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
                         f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
+                        f"{effective_asw_over_s:.5f} mm2/mm "
+                        f"(factor {float(links.get('asw_factor', 1.0)):.5f})",
+                        f"{links_bw:.1f} mm",
                         f"{lk['rho_w']:.5f}",
                         f"{lk['fywd']:.1f} MPa",
                         f"{lk['nu']:.3f}",
@@ -13969,20 +14264,47 @@ def shear_view(inp, results):
                 width="stretch",
             )
         else:
+            effective_asw_over_s = links.get(
+                "effective_asw_over_s", links.get("asw_over_s", 0.0)
+            )
             st.dataframe(
                 {"Quantity": [f"Strut angle {_THETA}", f"cot {_THETA} (auto)",
                               "Lever arm z", "Link area/spacing Asw/s",
+                              "Effective link area/spacing",
+                              "Compression-field web width",
                               "Design yield fywd", f"Strut factor {_NU}1",
                               f"Chord factor {_ALPHA}cw",
                               f"Extra long. tension {_DELTA}Ftd"],
                  "Value": [f"{lk['theta_deg']:.1f}{_DEG}", f"{lk['cot']:.3f}",
-                           f"{lk['z']:.1f} mm ({links['z_source']})",
-                           f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
-                           f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
+                           f"{lk['z']:.1f} mm "
+                           f"({presentation.shear_link_arm_source_label(links.get('z_source'))})",
+                            f"{links['asw']:.1f} mm2 / {links['s']:.0f} mm "
+                            f"({links['legs']:.0f} x {chr(0x00F8)}{links['dia']:.0f})",
+                            f"{effective_asw_over_s:.5f} mm2/mm "
+                            f"(factor {float(links.get('asw_factor', 1.0)):.5f})",
+                            f"{links_bw:.1f} mm",
                            f"{lk['fywd']:.1f} MPa", f"{lk['nu1']:.3f}",
                            f"{lk['alpha_cw']:.3f}",
                            f"{links['longitudinal_shear_force']:.1f} kN"]},
                 hide_index=True, width="stretch")
+        links_geometry = links.get("shear_geometry") or {}
+        if not math.isclose(
+            float(links.get("asw_factor", 1.0)),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            st.caption(
+                "The selected section-form factor is applied to Asw before the "
+                "links resistance is calculated."
+            )
+        if float(links_geometry.get("duct_factor_links") or 0.0) > 0.0:
+            st.caption(
+                "Duct diameter sum "
+                f"{float(links_geometry.get('duct_sum_mm') or 0.0):.1f} mm and "
+                f"kduct = {float(links_geometry['duct_factor_links']):.2f}; the "
+                "compression-field check uses the retained nominal web width."
+            )
         if links.get("theta_mode") == "utilisation":
             shared_ref = (
                 " (shared with torsion when enabled)"
@@ -14158,6 +14480,16 @@ def shear_view(inp, results):
                            "longitudinal steel is per sub-tube, so the off-axis "
                            "chord's torsion share is not evaluated here; the "
                            + chr(0x03A3) + "(SEd/SRd) check covers the interaction.")
+            elif coverage == "circular_geometry":
+                _manual_warning(
+                    st,
+                    "calculation-warning",
+                    "The fitted-section lever arm required for the circular "
+                    "off-axis chord is not established. Enter the governing web "
+                    "width, hoop diameter and fitted-section lever arm for both "
+                    "directions before relying on the longitudinal shear "
+                    "assessment.",
+                )
             elif coverage == "not_solved":
                 _manual_warning(
                     st,
@@ -14220,7 +14552,9 @@ def _render_chord_off(och, *, assessment_complete=True):
         f"$M_{{Rd}} = {och['m_rd']:.1f}$ kNm "
         + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True)
         + f"; $z = {och['z']:.3f}$ m "
-        + f"({och.get('z_src') or 'calculated source not retained'}).")
+        + "("
+        + presentation.shear_link_arm_source_label(och.get("z_src"))
+        + ").")
     st.caption("The shear shift acts in the shear plane, while this orthogonal chord "
                "receives the torsion share. The shared steel carries both demands; "
                "the DK NA " + chr(0x03A3)

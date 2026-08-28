@@ -1088,6 +1088,29 @@ def manual_blocks() -> list:
             "aggregate size $d_{dg}$ and the user-selected $\\gamma_V$ without "
             "links (default 1.40); the "
             "compression-field method (8.2.3) with links"]])
+    md("Select the **shear section form** separately from the polygon. Automatic "
+       "treatment is limited to a solid rectangle. A non-rectangular constant-width "
+       "web needs an entered governing $b_w$. For the 2023 links method, a "
+       "variable-width web also needs the reinforcement inclination $\\delta$ in "
+       "each active direction; a circular section needs the hoop diameter $D_h$ "
+       "and the lever arm $z$ from the fitted section. Sector does not apply these "
+       "2023 section-form rules to a first-generation shear method. That combination "
+       "is reported as NOT ASSESSED and requires a separately applicable member "
+       "calculation.")
+    md("The retained web-duct allowances are: 2023 grouted steel, "
+       "$k_{duct}=0.5$; 2023 grouted plastic with confirmed thin wall, "
+       "$k_{duct}=0.8$; and 2023 thick-wall plastic, ungrouted or soft-filled "
+       "ducts, $k_{duct}=1.2$. These 2023 allowances apply when "
+       "$\\sum\\phi_{duct}>b_w/8$. For the 2005 links method, grouted steel "
+       "uses $k_{duct}=0.5$ when the largest $\\phi_{duct}>b_w/8$; plastic, "
+       "ungrouted or unbonded ducts use $k_{duct}=1.2$. No web-width reduction "
+       "is applied when no ducts are selected.")
+    md("Where the applicable duct threshold is exceeded, the compression-field "
+       "width is $b_{w,nom}=b_w-k_{duct}\\sum\\phi_{duct}$. The 2023 no-links "
+       "check considers this allowance only for ungrouted or soft-filled ducts; "
+       "the 2005 no-links check is unchanged. If the selected branch needs a web, "
+       "hoop, fitted-section, inclination or duct dimension that is not established, "
+       "Sector publishes NOT ASSESSED rather than using a rectangular result.")
     call("standard", "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP), "
           "define $\\gamma_V$ for shear resistance without shear reinforcement. "
           "The input starts at 1.40; select the positive value required by the "
@@ -1330,7 +1353,12 @@ def manual_blocks() -> list:
     md("The **Shear** view reports the applied $V_{Ed}$, the resistance "
        "$V_{Rd,c}$ and the utilisation, then the derived quantities ($d$, $b_w$, "
        "$A_{sl}$, $\\rho_l$, $k$, $\\sigma_{cp}$, $A_c$) and the code coefficients "
-       "used. The web width shows whether it was entered or derived.")
+       "used. The web width shows whether it was entered or derived. With links, "
+       "the view separately shows the physical web width, any duct-adjusted "
+       "$b_{w,nom}$, gross and effective $A_{sw}/s$, the section-form factor and "
+       "the fitted circular lever arm where applicable. An incomplete required "
+       "geometry branch shows NOT ASSESSED without a resistance, utilisation or "
+       "PASS/FAIL verdict.")
     h2("Torsion results")
     md("The **Torsion** view reports $T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd}$, the "
        "cracking $T_{Rd,c}$ and the transverse/strut utilisation, plus the derived "
@@ -1982,7 +2010,7 @@ def manual_blocks() -> list:
        "$V_{Rd,c} = 0.627 \\cdot 300 \\cdot 550 = 103.4$ kN.")
 
     h2("Members with shear reinforcement (links)")
-    md("A member with designed vertical links is a truss: the links are the "
+    md("A member with designed links is a truss: the links are the "
        "tension ties and the concrete web the inclined compression struts at an "
        "angle $\\theta$ to the axis. For the 2005 family, the resistance is\n\n"
        "$$V_{Rd,s} = \\frac{A_{sw}}{s}\\,z\\,f_{ywd}\\,\\cot\\theta \\quad(6.8), "
@@ -2010,6 +2038,14 @@ def manual_blocks() -> list:
        "bending capacities conditional on the acting axial force and orthogonal "
        "moment. Because the axial action is already included in those capacities, "
        "it is not added a second time to the equivalent-moment comparison.")
+    call("standard", "For 2023 variable-width sections, Sector uses the entered "
+         "governing $b_w$ and multiplies $A_{sw}$ by $\\cos\\delta$ (8.2.3(9)). "
+         "For a circular section it multiplies $A_{sw}$ by $b_w/D_h$ and uses "
+         "the entered fitted-section lever arm $z$. Thus $b_w/D_h=400/600=2/3$: "
+         "the link contribution is two thirds of the unadjusted value, whose ratio "
+         "to the corrected contribution is 1.5. Clause 8.2.3(10) applies the "
+         "selected duct allowance to the compression-field width. The 2005-family "
+         "links check applies its duct allowance to $V_{Rd,max}$ under 6.2.3(6).")
     md("**2023 chord example:** $M_{Ed}=90$ kNm, $M_{Rd}=100$ kNm, "
        "$N_{Vd}=250$ kN and $z=0.5$ m give "
        "$M_{Ed,total}=90+250\\cdot0.5=215$ kNm and utilisation "
@@ -2414,7 +2450,7 @@ def manual_published_item_parts():
 _LATEX_CMD = {
     r"\varepsilon": "&#949;", r"\gamma": "&#947;", r"\sigma": "&#963;",
     r"\varphi": "&#966;", r"\alpha": "&#945;", r"\rho": "&#961;",
-    r"\kappa": "&#954;",
+    r"\kappa": "&#954;", r"\delta": "&#948;",
     r"\lambda": "&#955;", r"\phi": "&#966;", r"\eta": "&#951;",
     r"\beta": "&#946;", r"\theta": "&#952;", r"\nu": "&#957;",
     r"\tau": "&#964;", r"\xi": "&#958;", r"\pi": "&#960;",

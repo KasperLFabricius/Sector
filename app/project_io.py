@@ -43,6 +43,7 @@ from sector import (
     heightened_crack_control,
     material_presets,
     plastic,
+    shear,
 )
 from sector.build_info import source_revision
 from sector.engineer_message import EngineerMessage
@@ -249,6 +250,11 @@ SCALAR_KEYS = [
     # Independent Vx and Vy shear calculations.
     "shear_on", "shear_method", "shear_Vx", "shear_Vy",
     "shear_face_x", "shear_face_y", "shear_vx_bw", "shear_vy_bw",
+    "shear_section_form", "shear_vx_web_inclination_deg",
+    "shear_vy_web_inclination_deg", "shear_hoop_diameter",
+    "shear_vx_fitted_z", "shear_vy_fitted_z", "shear_duct_case",
+    "shear_vx_duct_sum", "shear_vy_duct_sum", "shear_vx_duct_largest",
+    "shear_vy_duct_largest",
     "shear_dlower", "shear_gamma_v", "shear_links", "shear_vx_link_legs",
     "shear_vy_link_legs", "shear_link_dia", "shear_link_s",
     "shear_fywk", "shear_vx_transverse_leg_spacing",
@@ -368,6 +374,8 @@ _TEXT_SCALAR_KEYS = frozenset({
     "shear_method",
     "shear_face_x",
     "shear_face_y",
+    "shear_section_form",
+    "shear_duct_case",
     "torsion_method",
     "combined_method",
     "capacity_steel_material_id",
@@ -401,6 +409,8 @@ _EXACT_TEXT_OPTIONS = {
     }),
     "qsv_t_orientation": frozenset({"Flange at top", "Flange at bottom"}),
     "qsv_qs_rebar_mode": frozenset({"By number", "By spacing"}),
+    "shear_section_form": frozenset(shear.SHEAR_SECTION_FORMS),
+    "shear_duct_case": frozenset(shear.SHEAR_DUCT_CASES),
     "conc_preset": frozenset(material_presets.CONCRETE_PRESETS),
     "mild_preset": frozenset({
         *material_catalog.presets("mild"),

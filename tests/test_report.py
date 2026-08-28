@@ -7036,13 +7036,16 @@ def test_report_off_axis_chord_block():
     c["chord_off"] = dict(valid=True, axis="y", z=0.3, m_ed=90.0, m_rd=180.0,
                           ftd_v=0.0, ftd_t=100.0, mv=0.0, mt=15.0, m_total=105.0,
                           util=105.0 / 180.0, ok=True, capped=False,
-                          tension_low=True, m_off=20.0, conditional=True)
+                          tension_low=True, m_off=20.0, conditional=True,
+                          z_src="circular_fitted_section")
     _retain_combined_chords(c, c["longitudinal"], c["chord_off"])
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
     assert "Off-axis chord (about y" in txt          # header now names the governing face
     assert "conditional on the coexisting Mx = 20.0 kNm" in txt
+    assert "fitted circular section" in txt
+    assert "circular_fitted_section" not in txt
 
 
 def test_report_combined_independent_uses_max_form():
@@ -7100,6 +7103,246 @@ def _links_out():
             "z_source_case": "PL-TEST",
             "z_source_axial_kn": 0.0,
             "out_of_limits": False, "required": True}
+
+
+def _h06_circular_shear_out(*, complete=True):
+    sh = _shear_out_2023()
+    concrete = shear_core.vrd_c_2023(
+        35.0,
+        codes.EC2_2023,
+        400.0,
+        550.0,
+        1473.0,
+        500.0 / 1.15,
+        32.0,
+        n_ed_tension_kn=300.0,
+        m_ed_knm=110.0,
+        v_ed_kn=50.0,
+    )
+    geometry_result = shear_core.resolve_shear_geometry(
+        model_2023=True,
+        solid_rectangle=False,
+        section_form=shear_core.SHEAR_SECTION_CIRCULAR,
+        bw_mm=400.0,
+        bw_user=True,
+        links_present=True,
+        hoop_diameter_mm=600.0 if complete else 0.0,
+        fitted_z_mm=500.0 if complete else 0.0,
+        duct_case=shear_core.SHEAR_DUCT_GROUTED_PLASTIC_THIN,
+        duct_sum_mm=80.0,
+        duct_largest_mm=40.0,
+    )
+    sh.update(
+        res=concrete,
+        util=50.0 / concrete["vrd_c"],
+        bw=400.0,
+        bw_auto=600.0,
+        bw_user=True,
+        shear_geometry=geometry_result,
+    )
+    asw = 2.0 * math.pi * 10.0**2 / 4.0
+    gross = asw / 150.0
+    if complete:
+        link_result = shear_core.vrd_links(
+            35.0,
+            codes.EC2_2023,
+            geometry_result["links_bw_mm"],
+            550.0,
+            gross * geometry_result["asw_factor"],
+            500.0,
+            0.0,
+            0.18,
+            1.0,
+            2.5,
+            z_mm=geometry_result["fitted_z_mm"],
+            fcd_mpa=20.0,
+            gamma_s=1.15,
+            v_ed_kn=50.0,
+        )
+    else:
+        link_result = shear_core.unassessed_links_result(
+            model="2023",
+            reason=geometry_result["links_reason"],
+            bw_mm=400.0,
+            d_mm=550.0,
+            asw_over_s=0.0,
+        )
+    sh["links"] = {
+        "res": link_result,
+        "util": (
+            50.0 / link_result["vrd"] if link_result.get("valid") else None
+        ),
+        "assessment_reason": link_result.get("reason"),
+        "asw": asw,
+        "asw_over_s": gross,
+        "effective_asw_over_s": (
+            gross * geometry_result["asw_factor"] if complete else 0.0
+        ),
+        "asw_factor": geometry_result.get("asw_factor"),
+        "shear_geometry": geometry_result,
+        "legs": 2.0,
+        "dia": 10.0,
+        "s": 150.0,
+        "fywk": 500.0,
+        "cot_min": 1.0,
+        "cot_max": 2.5,
+        "delta_ftd": None,
+        "longitudinal_shear_force": (
+            50.0 * link_result["cot"] if link_result.get("valid") else None
+        ),
+        "cot_limit_lo": 1.0,
+        "cot_limit_hi": 2.5,
+        "angle_limits": {
+            "clause": "DS/EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
+        },
+        "model_2023": True,
+        "z_source": (
+            "circular_fitted_section"
+            if complete else shear_core.SHEAR_CIRCULAR_REASON
+        ),
+        "out_of_limits": False,
+        "required": False if complete else None,
+    }
+    return sh
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_retain_h06_circular_and_duct_result(profile):
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        shear_method=codes.EC2_2023.label,
+        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
+    )
+    shear_out = _h06_circular_shear_out()
+    out = {"shear": shear_out}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Shear with links" in text
+    assert f"{100.0 * shear_out['links']['util']:.1f} %" in text
+    assert "link-yield resistance governs" in text
+    if profile != "Brief":
+        assert "Circular section" in text
+        assert "Fitted-section arm z = 500.000 mm" in text
+        assert "Effective link area / spacing" in text
+        assert "0.66667" in text
+        assert "Grouted plastic ducts - confirmed thin wall" in text
+        assert "336.0 mm" in text
+        assert "0.80" in text
+        assert "fitted circular section" in text
+        assert "circular_fitted_section" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_fail_closed_for_missing_circular_shear_geometry(profile):
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        shear_method=codes.EC2_2023.label,
+        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
+    )
+    out = {"shear": _h06_circular_shear_out(complete=False)}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    assert "Enter the governing web width, hoop diameter" in text
+    assert shear_core.SHEAR_CIRCULAR_REASON not in text
+    assert "(OK)" not in text
+    assert "(EXCEEDED)" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(profile):
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        torsion_on=True,
+        shear_method=codes.EC2_2023.label,
+        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
+    )
+    shear_out = _h06_circular_shear_out()
+    chord = {
+        "valid": True,
+        "role": "shear_axis",
+        "chord_role": "flexural_tension",
+        "chord_formula": "8.51",
+        "axis": "y",
+        "tension_low": True,
+        "z": 0.5,
+        "m_ed": 0.0,
+        "face_m_ed_signed": 0.0,
+        "m_rd": 400.0,
+        "ftd_v": 100.0,
+        "ftd_t": 80.0,
+        "mv": 50.0,
+        "mt": 20.0,
+        "m_total": 70.0,
+        "util": 0.175,
+        "ok": True,
+        "status": "NOT ASSESSED",
+        "capped": False,
+        "conditional": True,
+        "m_off": 0.0,
+        "has_torsion": True,
+        "gets_shift": True,
+        "theta_mode": "utilisation",
+        "off_not_evaluated": "circular_geometry",
+    }
+    shear_out["links"].update(
+        chord=chord,
+        chord_off=None,
+        chord_candidates=[chord],
+        longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": chord["util"],
+            "coverage_complete": False,
+            "reason": shear_core.SHEAR_CIRCULAR_REASON,
+        },
+    )
+    shear_out.update(
+        assessment_status="NOT ASSESSED",
+        assessment_ok=None,
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, {"shear": shear_out}, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Shear longitudinal chords" in text
+    assert "NOT ASSESSED" in text
+    if profile == "Brief":
+        assert "Enter the governing web width, hoop diameter" in text
+    else:
+        assert "NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE" in text
+        assert (
+            "fitted-section lever arm required for the circular off-axis chord"
+            in text
+        )
+        assert "for both directions" in text
+        assert "Longitudinal chord assessment: NOT ASSESSED" in text
+    assert shear_core.SHEAR_CIRCULAR_REASON not in text
 
 
 def test_report_includes_shear_links_section():

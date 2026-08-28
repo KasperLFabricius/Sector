@@ -6690,10 +6690,16 @@ class ReportBuilder:
     def _shear_2023(self, sh, res):
         """The DS/EN 1992-1-1:2023 strain-based tau_Rd,c body (sec. 8.2.2)."""
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
+        calculation_bw = float(res.get("bw", sh["bw"]))
+        if not math.isclose(
+            calculation_bw, float(sh["bw"]), rel_tol=0.0, abs_tol=1e-9
+        ):
+            bw_src = f"nominal after duct allowance; physical bw = {_fmt(sh['bw'], 1)} mm"
         fck = sh["fck"]
         rows = [["Quantity", "Symbol", "Value"],
                 ["Effective depth", "d", f"{_fmt(sh['d'], 1)} mm"],
-                ["Web width", "b<sub>w</sub>", f"{_fmt(sh['bw'], 1)} mm ({bw_src})"],
+                ["Web width", "b<sub>w</sub>",
+                 f"{_fmt(calculation_bw, 1)} mm ({bw_src})"],
                 ["Standard-defined concrete-shear arm", "z",
                  f"{_fmt(res['z'], 1)} mm (0.9 d; 8.2.1(3))"],
                 ["Tension reinforcement", "A<sub>sl</sub>",
@@ -6757,16 +6763,24 @@ class ReportBuilder:
             equation_key="shear.2023.vrdc",
             references=("shear.2023.tau-basic", "shear.2023.tau-minimum"),
             subst=f"max({_fmt(res['tau_rdc'], 3)}, {_fmt(res['tau_min'], 3)}) &#183; "
-                  f"{_fmt(sh['bw'], 1)} &#183; {_fmt(res['z'], 1)} / 1000",
+                  f"{_fmt(calculation_bw, 1)} &#183; {_fmt(res['z'], 1)} / 1000",
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
         util = sh["util"]
         util_txt = _pct(util)
-        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
+        links_unassessed = bool(
+            sh.get("links") is not None
+            and not ((sh.get("links") or {}).get("res") or {}).get("valid")
+        )
         self._h2("Utilisation")
         self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
                       equation_key="shear.2023.utilisation",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
+                      result=(
+                          f"{util_txt} (non-governing concrete-only context)"
+                          if links_unassessed
+                          else f"{util_txt}  "
+                               f"({'OK' if viz.util_ok(util) else 'EXCEEDED'})"
+                      ))
         self._small(
             "The selected gamma<sub>V</sub> is defined in DS/EN "
             "1992-1-1:2023, 4.3.3 and Table 4.3 (NDP), and applied in "
@@ -6805,6 +6819,18 @@ class ReportBuilder:
                 )
             return None
 
+        def selected_failure_reason(item):
+            if self.inp.get("shear_links") is True:
+                return link_failure_reason(item)
+            result = item.get("res") or {}
+            if result.get("calculation_state") == "NOT ASSESSED":
+                return _result_reason(
+                    result.get("reason"),
+                    "shear",
+                    "report shear-geometry result reason",
+                )
+            return None
+
         if not directions:
             self._case_heading("Shear resistance", "plastic")
             links = aggregate.get("links") or {}
@@ -6813,8 +6839,17 @@ class ReportBuilder:
                 if links else (aggregate.get("res") or {}).get("vrd_c")
             )
             utilisation = links.get("util") if links else aggregate.get("util")
+            result_unavailable = bool(
+                (aggregate.get("res") or {}).get("calculation_state")
+                == "NOT ASSESSED"
+            )
             links_unavailable = bool(
                 links and not (links.get("res") or {}).get("valid")
+            )
+            selected_unavailable = (
+                links_unavailable
+                if self.inp.get("shear_links") is True
+                else result_unavailable
             )
             component = aggregate.get("component") or (
                 "vy" if aggregate.get("axis") == "x" else "vx"
@@ -6828,12 +6863,12 @@ class ReportBuilder:
                         action,
                         f"{_fmt(aggregate.get('signed_v_ed', aggregate.get('v_ed')), 3)} kN",
                         (
-                            "-" if links_unavailable
+                            "-" if selected_unavailable
                             else f"{_fmt(resistance, 3)} kN"
                         ),
-                        "-" if links_unavailable else _pct(utilisation),
+                        "-" if selected_unavailable else _pct(utilisation),
                         (
-                            "NOT ASSESSED" if links_unavailable
+                            "NOT ASSESSED" if selected_unavailable
                             else aggregate.get("status", "NOT ASSESSED")
                         ),
                         viz.tension_face_label(
@@ -6850,11 +6885,11 @@ class ReportBuilder:
                     "the selected method's default range. The actual entered "
                     "bounds remain in the completed result."
                 )
-            if (reason := link_failure_reason(aggregate)) is not None:
+            if (reason := selected_failure_reason(aggregate)) is not None:
                 self._small(
                     "NOT ASSESSED: "
                     + _html_escape(reason)
-                    + ". No link lever arm, resistance, utilisation or PASS/FAIL "
+                    + ". No resistance, utilisation or PASS/FAIL "
                       "verdict is published for this result."
                 )
             if not critical:
@@ -6909,21 +6944,30 @@ class ReportBuilder:
                 if self.inp.get("shear_links") is True
                 else item.get("util")
             )
+            result_unavailable = bool(
+                (item.get("res") or {}).get("calculation_state")
+                == "NOT ASSESSED"
+            )
             links_unavailable = bool(
                 self.inp.get("shear_links") is True
                 and links
                 and not (links.get("res") or {}).get("valid")
             )
+            selected_unavailable = (
+                links_unavailable
+                if self.inp.get("shear_links") is True
+                else result_unavailable
+            )
             rows.append([
                 "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
                 f"{_fmt(item.get('signed_v_ed', item.get('v_ed')), 3)} kN",
                 (
-                    "-" if links_unavailable
+                    "-" if selected_unavailable
                     else f"{_fmt(resistance, 3)} kN"
                 ),
-                "-" if links_unavailable else _pct(utilisation),
+                "-" if selected_unavailable else _pct(utilisation),
                 (
-                    "NOT ASSESSED" if links_unavailable
+                    "NOT ASSESSED" if selected_unavailable
                     else item.get("status", "NOT ASSESSED")
                 ),
                 viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
@@ -6949,13 +6993,13 @@ class ReportBuilder:
             item = directions.get(component)
             if item is None:
                 continue
-            reason = link_failure_reason(item)
+            reason = selected_failure_reason(item)
             if reason is not None:
                 label = "Vx,Ed" if component == "vx" else "Vy,Ed"
                 self._small(
                     f"{label} NOT ASSESSED: "
                     + _html_escape(reason)
-                    + ". No link lever arm, resistance, utilisation or PASS/FAIL "
+                    + ". No resistance, utilisation or PASS/FAIL "
                       "verdict is published for this result."
                 )
         if not critical:
@@ -7015,6 +7059,53 @@ class ReportBuilder:
                 "concrete centroid: "
                 f"{_fmt(sh.get('associated_moment'), 3)} kNm."
             )
+        if res.get("calculation_state") == "NOT ASSESSED":
+            reason = _result_reason(
+                res.get("reason"),
+                "shear",
+                "report shear section-geometry reason",
+            )
+            geometry_record = sh.get("shear_geometry") or {}
+            self._h2("Assessment")
+            self._small(
+                "NOT ASSESSED: "
+                + _html_escape(reason)
+                + ". No resistance, utilisation or PASS/FAIL verdict is "
+                  "published for this result."
+            )
+            self._table(
+                [
+                    ["Input", "Value"],
+                    [
+                        "Section form",
+                        _html_escape(
+                            str(geometry_record.get("section_form") or "-")
+                        ),
+                    ],
+                    [
+                        "Governing web width",
+                        (
+                            f"{_fmt(geometry_record.get('bw_mm'), 1)} mm"
+                            if geometry_record.get("bw_mm") is not None
+                            else "-"
+                        ),
+                    ],
+                    [
+                        "Web duct condition",
+                        _html_escape(str(geometry_record.get("duct_case") or "-")),
+                    ],
+                    [
+                        "Duct diameter sum",
+                        (
+                            f"{_fmt(geometry_record.get('duct_sum_mm'), 1)} mm"
+                            if geometry_record.get("duct_sum_mm") is not None
+                            else "-"
+                        ),
+                    ],
+                ],
+                [65 * mm, 85 * mm],
+            )
+            return
         if not res["valid"]:
             self._small("Warning: V<sub>Rd,c</sub> is zero -- no tension "
                         "reinforcement on the chosen face, or a zero effective depth "
@@ -7130,15 +7221,41 @@ class ReportBuilder:
                 "line is the gross-section centroid used as the selection boundary."
             )
         self._small(_html_escape(geometry_basis["statement"]))
+        shear_geometry = sh.get("shear_geometry") or {}
+        self._small(
+            "Shear section form: "
+            + _html_escape(
+                str(
+                    shear_geometry.get("resolved_form")
+                    or shear_geometry.get("section_form")
+                    or "-"
+                )
+            )
+            + ". Web duct condition: "
+            + _html_escape(str(shear_geometry.get("duct_case") or "-"))
+            + "."
+        )
+        if float(shear_geometry.get("duct_factor_concrete") or 0.0) > 0.0:
+            self._small(
+                "The no-links check uses the retained nominal web width after "
+                f"the duct allowance k<sub>duct</sub> = "
+                f"{_fmt(shear_geometry.get('duct_factor_concrete'), 2)}."
+            )
         if sh.get("model_2023"):
             self._shear_2023(sh, res)
             return
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
+        calculation_bw = float(res.get("bw", sh["bw"]))
+        if not math.isclose(
+            calculation_bw, float(sh["bw"]), rel_tol=0.0, abs_tol=1e-9
+        ):
+            bw_src = f"nominal after duct allowance; physical bw = {_fmt(sh['bw'], 1)} mm"
         fck = sh["fck"]
         k1 = res["k1"]
         rows = [["Quantity", "Symbol", "Value"],
                 ["Effective depth", "d", f"{_fmt(sh['d'], 1)} mm"],
-                ["Web width", "b<sub>w</sub>", f"{_fmt(sh['bw'], 1)} mm ({bw_src})"],
+                ["Web width", "b<sub>w</sub>",
+                 f"{_fmt(calculation_bw, 1)} mm ({bw_src})"],
                 ["Tension reinforcement", "A<sub>sl</sub>",
                  f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
                 ["Reinforcement ratio", "rho<sub>l</sub>",
@@ -7185,16 +7302,24 @@ class ReportBuilder:
             equation_key="shear.2005.vrdc",
             references=("shear.2005.stress-basic", "shear.2005.stress-minimum"),
             subst=f"max({_fmt(res['v_basic'], 3)}, {_fmt(res['v_floor'], 3)}) &#183; "
-                  f"{_fmt(sh['bw'], 1)} &#183; {_fmt(sh['d'], 1)} / 1000",
+                  f"{_fmt(calculation_bw, 1)} &#183; {_fmt(sh['d'], 1)} / 1000",
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
         util = sh["util"]
         util_txt = _pct(util)
-        verdict = "OK" if viz.util_ok(util) else "EXCEEDED"
+        links_unassessed = bool(
+            sh.get("links") is not None
+            and not ((sh.get("links") or {}).get("res") or {}).get("valid")
+        )
         self._h2("Utilisation")
         self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
                       equation_key="shear.2005.utilisation",
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
+                      result=(
+                          f"{util_txt} (non-governing concrete-only context)"
+                          if links_unassessed
+                          else f"{util_txt}  "
+                               f"({'OK' if viz.util_ok(util) else 'EXCEEDED'})"
+                      ))
         self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
                     "assumed fully anchored (&#8805; l<sub>bd</sub> + d) beyond the "
                     "section. sigma<sub>cp</sub> uses the plastic axial force "
@@ -7210,12 +7335,6 @@ class ReportBuilder:
         self._h2("Shear reinforcement (links)")
         model_2023 = bool(links.get("model_2023"))
         clause = "8.2.3" if model_2023 else "6.2.3"
-        req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if links["required"]
-               else "not strictly required (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>); "
-                    "minimum reinforcement rules still apply")
-        self._p(f"With vertical links the resistance is the compression-field "
-                f"V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
-                f"(EN 1992-1-1 sec. {clause}). For this V<sub>Ed</sub>, links are {req}.")
         if not lk["valid"]:
             reason = _result_reason(
                 links.get("assessment_reason")
@@ -7231,6 +7350,12 @@ class ReportBuilder:
                   "verdict is published for this result."
             )
             return
+        req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if links["required"]
+               else "not strictly required (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>); "
+                    "minimum reinforcement rules still apply")
+        self._p(f"With the selected links the resistance is the compression-field "
+                f"V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
+                f"(EN 1992-1-1 sec. {clause}). For this V<sub>Ed</sub>, links are {req}.")
         retained_angle_fields = {
             "cot", "tan", "theta_deg", "cot_min", "cot_max",
             "cot_unconstrained", "angle_selection",
@@ -7253,16 +7378,37 @@ class ReportBuilder:
                         f"{_fmt(links['cot_limit_hi'], 1)}] ({limit_ref}). "
                         "The entered values are used in the links and dependent "
                         "interaction calculations.")
+        shear_geometry = links.get("shear_geometry") or {}
+        effective_asw_over_s = links.get(
+            "effective_asw_over_s", links.get("asw_over_s")
+        )
+        links_bw = lk.get("bw", sh.get("bw"))
         rows = [["Quantity", "Symbol", "Value"],
                 ["Links", "n x phi / s",
                  f"{_fmt(links['legs'], 0)} x {_fmt(links['dia'], 0)} / "
                  f"{_fmt(links['s'], 0)} mm"],
-                ["Link area / spacing", "A<sub>sw</sub>/s",
-                 f"{_fmt(links['asw'], 1)} / {_fmt(links['s'], 0)} mm<sup>2</sup>/mm"],
+                ["Gross link area / spacing", "A<sub>sw</sub>/s",
+                 f"{_fmt(links['asw_over_s'], 5)} mm<sup>2</sup>/mm"],
+                ["Effective link area / spacing", "A<sub>sw,eff</sub>/s",
+                 f"{_fmt(effective_asw_over_s, 5)} mm<sup>2</sup>/mm"],
+                ["Link-area factor", "A<sub>sw,eff</sub>/A<sub>sw</sub>",
+                 _fmt(links.get("asw_factor"), 5)],
+                ["Physical web width", "b<sub>w</sub>",
+                 f"{_fmt(shear_geometry.get('bw_mm'), 1)} mm"],
+                ["Compression-field web width", "b<sub>w,nom</sub>",
+                 f"{_fmt(links_bw, 1)} mm"],
+                ["Section form", "-",
+                 _html_escape(str(shear_geometry.get("resolved_form") or "-"))],
+                ["Web duct condition", "-",
+                 _html_escape(str(shear_geometry.get("duct_case") or "-"))],
+                ["Duct diameter sum", "sum phi<sub>duct</sub>",
+                 f"{_fmt(shear_geometry.get('duct_sum_mm'), 1)} mm"],
+                ["Duct allowance factor", "k<sub>duct</sub>",
+                 _fmt(shear_geometry.get("duct_factor_links"), 2)],
                 ["Design link yield", "f<sub>ywd</sub>", f"{_fmt(lk['fywd'], 1)} MPa"],
                 ["Calculated links arm", "z",
                  f"{_fmt(lk['z'], 1)} mm "
-                 f"({links.get('z_source') or 'calculation basis unavailable'})"],
+                 f"({presentation.shear_link_arm_source_label(links.get('z_source'))})"],
                 ["Strut angle", "theta",
                  f"{_fmt(lk['theta_deg'], 1)}&#176; "
                  f"(cot theta = {_fmt(lk['cot'], 3)})"],
@@ -7296,6 +7442,21 @@ class ReportBuilder:
                  f"{_fmt(lk['alpha_cw'], 3)}"]
             )
         self._table(rows, [55 * mm, 25 * mm, 70 * mm])
+        if not math.isclose(
+            float(links.get("asw_factor", 1.0)),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            self._small(
+                "The selected section-form factor is applied to A<sub>sw</sub> "
+                "before the links resistance is calculated."
+            )
+        if float(shear_geometry.get("duct_factor_links") or 0.0) > 0.0:
+            self._small(
+                "The compression-field check uses the retained nominal web width "
+                "after the selected duct allowance."
+            )
         shared_angle = links.get("member_angle_selection") or {}
         if shared_angle:
             labels = tuple(shared_angle.get("objective_labels") or ())
@@ -7343,7 +7504,7 @@ class ReportBuilder:
                 equation_key="shear.links.vrds",
                 equation_variant="2023",
                 references=("shear.links.tau-yield",),
-                subst=f"{_fmt(lk['tau_rd_sy'], 3)} &#183; {_fmt(sh['bw'], 1)} "
+                subst=f"{_fmt(lk['tau_rd_sy'], 3)} &#183; {_fmt(links_bw, 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / 1000",
                 result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
             self._formula(
@@ -7352,7 +7513,7 @@ class ReportBuilder:
                 equation_key="shear.links.vrdmax",
                 equation_variant="2023",
                 references=("shear.links.sigma-field",),
-                subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(sh['bw'], 1)} "
+                subst=f"{_fmt(lk['nu_fcd'], 3)} &#183; {_fmt(links_bw, 1)} "
                       f"&#183; {_fmt(lk['z'], 1)} / "
                       f"({_fmt(lk['cot'], 3)} + {_fmt(lk['tan'], 3)}) / 1000",
                 result=f"V<sub>Rd,max</sub> = {_fmt(lk['vrd_max'], 3)} kN")
@@ -7362,7 +7523,7 @@ class ReportBuilder:
                 equation_key="shear.links.vrds",
                 equation_variant="2005",
                 ref="EN 1992-1-1 (6.8)",
-                subst=f"{_fmt(links['asw_over_s'], 4)} &#183; {_fmt(lk['z'], 1)} "
+                subst=f"{_fmt(effective_asw_over_s, 4)} &#183; {_fmt(lk['z'], 1)} "
                       f"&#183; {_fmt(lk['fywd'], 1)} &#183; {_fmt(lk['cot'], 3)} / 1000",
                 result=f"V<sub>Rd,s</sub> = {_fmt(lk['vrd_s'], 3)} kN")
             self._formula(
@@ -7371,7 +7532,7 @@ class ReportBuilder:
                 equation_key="shear.links.vrdmax",
                 equation_variant="2005",
                 ref="EN 1992-1-1 (6.9)",
-                subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(sh['bw'], 1)} &#183; "
+                subst=f"{_fmt(lk['alpha_cw'], 3)} &#183; {_fmt(links_bw, 1)} &#183; "
                       f"{_fmt(lk['z'], 1)} &#183; {_fmt(lk['nu1'], 3)} &#183; "
                       f"{_fmt(lk['fcd'], 2)} / ({_fmt(lk['cot'], 3)} + "
                       f"{_fmt(lk['tan'], 3)}) / 1000",
@@ -7523,6 +7684,14 @@ class ReportBuilder:
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated here -- rely on the combined "
                          "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
+            elif coverage == "circular_geometry":
+                note += (
+                    " The fitted-section lever arm required for the circular "
+                    "off-axis chord is not established. Enter the governing web "
+                    "width, hoop diameter and fitted-section lever arm for both "
+                    "directions before relying on the longitudinal shear "
+                    "assessment."
+                )
             elif coverage == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "
@@ -8198,8 +8367,10 @@ class ReportBuilder:
                     else "(NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
                 )
             ))
-        self._small(f"z = {_fmt(och['z'], 3)} m "
-                    f"({och.get('z_src') or 'calculation basis unavailable'}). "
+        off_axis_arm_source = presentation.shear_link_arm_source_label(
+            och.get("z_src")
+        )
+        self._small(f"z = {_fmt(och['z'], 3)} m ({off_axis_arm_source}). "
                     "Each chord's capacity is conditional on the OTHER axis' "
                     "bending moment only; the longitudinal steel the two chords "
                     "share also carries both their shear/torsion tensions, an "

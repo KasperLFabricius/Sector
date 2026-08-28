@@ -1532,10 +1532,39 @@ def _build_shear_face_context(
     d_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg)
     bw_auto = shear.min_web_width(inp["outer"], inp["holes"], axis)
     bw_mm = bw_override if bw_override > 0.0 else bw_auto
+    shared_links_present = _shared_links_present(inp)
+    component_prefix = f"shear_{component}_"
+    shear_geometry = shear.resolve_shear_geometry(
+        model_2023=model_2023,
+        solid_rectangle=_module("geometry").section_is_approximately_solid_rectangle(
+            inp["outer"], inp.get("holes") or ()
+        ),
+        section_form=inp.get("shear_section_form", shear.SHEAR_SECTION_AUTO),
+        bw_mm=bw_mm,
+        bw_user=bool(bw_override > 0.0),
+        links_present=shared_links_present,
+        web_inclination_deg=inp.get(
+            component_prefix + "web_inclination_deg",
+            inp.get("shear_web_inclination_deg", 0.0),
+        ),
+        hoop_diameter_mm=inp.get("shear_hoop_diameter", 0.0),
+        fitted_z_mm=inp.get(
+            component_prefix + "fitted_z",
+            inp.get("shear_fitted_z", 0.0),
+        ),
+        duct_case=inp.get("shear_duct_case", shear.SHEAR_DUCT_NONE),
+        duct_sum_mm=inp.get(
+            component_prefix + "duct_sum",
+            inp.get("shear_duct_sum", 0.0),
+        ),
+        duct_largest_mm=inp.get(
+            component_prefix + "duct_largest",
+            inp.get("shear_duct_largest", 0.0),
+        ),
+    )
     fck = inp["concrete"].fck
     fyd_flex = design_yield(inp["steel"])
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
-    shared_links_present = _shared_links_present(inp)
     if model_2023 and not shared_links_present:
         try:
             gamma_v = shear.validate_gamma_v(
@@ -1560,15 +1589,39 @@ def _build_shear_face_context(
         moment_reference_shift = inp["P_pl"] * cx - my_prestress
         m_ed_2023 = inp["My_pl"] + moment_reference_shift
         m_prestress = my_prestress
-    result = shear.vrd_c(
-        fck, code, bw_mm, d_mm, asl, n_ed_comp, area,
-        fyd_mpa=fyd_flex, ddg_mm=(ddg or 32.0),
-        m_ed_knm=m_ed_2023, v_ed_kn=v_ed,
-        fcd_mpa=inp["concrete"].fcd,
-        gamma_c=inp["concrete"].gamma_c,
-        gamma_v=gamma_v,
+    if shear_geometry["concrete_valid"]:
+        result = shear.vrd_c(
+            fck,
+            code,
+            shear_geometry["concrete_bw_mm"],
+            d_mm,
+            asl,
+            n_ed_comp,
+            area,
+            fyd_mpa=fyd_flex,
+            ddg_mm=(ddg or 32.0),
+            m_ed_knm=m_ed_2023,
+            v_ed_kn=v_ed,
+            fcd_mpa=inp["concrete"].fcd,
+            gamma_c=inp["concrete"].gamma_c,
+            gamma_v=gamma_v,
+        )
+    else:
+        result = shear.unassessed_shear_result(
+            model="2023" if model_2023 else "2005",
+            reason=shear_geometry["concrete_reason"],
+            bw_mm=bw_mm,
+            d_mm=d_mm,
+            asl_mm2=asl,
+        )
+    resistance = result.get("vrd_c")
+    util = (
+        v_ed / float(resistance)
+        if result.get("valid") and resistance is not None and resistance > 0.0
+        else None
+        if result.get("calculation_state") == "NOT ASSESSED"
+        else math.inf
     )
-    util = v_ed / result["vrd_c"] if result["vrd_c"] > 0.0 else math.inf
     payload = {
         "res": result,
         "v_ed": v_ed,
@@ -1580,6 +1633,7 @@ def _build_shear_face_context(
         "bw": bw_mm,
         "bw_auto": bw_auto,
         "bw_user": bool(bw_override > 0.0),
+        "shear_geometry": shear_geometry,
         "d": d_mm,
         "asl": asl,
         "asl_bar_ids": asl_bar_ids,
@@ -1629,23 +1683,42 @@ def _build_shear_face_context(
     # Under positive net compression, stop before the face-aligned Plastic lever-
     # arm solve: that capacity-boundary state is not a substitute for the missing
     # action-state evidence.
-    if model_2023 and n_ed_comp > 0.0:
+    if not shear_geometry["links_valid"]:
+        z_mm = shear_geometry.get("fitted_z_mm")
+        z_source = shear_geometry["links_reason"]
+    elif shear_geometry.get("fitted_z_mm") is not None:
+        z_mm = shear_geometry["fitted_z_mm"]
+        z_source = "circular_fitted_section"
+    elif model_2023 and n_ed_comp > 0.0:
         z_mm = None
         z_source = shear.LINKS_2023_AXIAL_COMPRESSION_REASON
     else:
         z_mm, z_source = shear_lever_arm(inp, axis, tension_low, d_mm)
+
+    effective_asw_over_s = asw_over_s * float(
+        shear_geometry.get("asw_factor") or 0.0
+    )
 
     def links_at(
         cot_lo,
         cot_hi,
         _fck=fck,
         _code=code,
-        _bw=bw_mm,
+        _bw=shear_geometry.get("links_bw_mm"),
         _d=d_mm,
-        _asw_over_s=asw_over_s,
+        _asw_over_s=effective_asw_over_s,
         _area=area,
         _z=z_mm,
     ):
+        if not shear_geometry["links_valid"]:
+            return shear.unassessed_links_result(
+                model="2023" if model_2023 else "2005",
+                reason=shear_geometry["links_reason"],
+                bw_mm=bw_mm,
+                d_mm=_d,
+                asw_over_s=_asw_over_s,
+                z_mm=_z,
+            )
         return shear.vrd_links(
             _fck, _code, _bw, _d, _asw_over_s, inp["shear_fywk"],
             n_ed_comp, _area, cot_lo, cot_hi, z_mm=_z,
@@ -1660,6 +1733,9 @@ def _build_shear_face_context(
         "cot_max": cot_max,
         "asw": asw,
         "asw_over_s": asw_over_s,
+        "effective_asw_over_s": effective_asw_over_s,
+        "asw_factor": shear_geometry.get("asw_factor"),
+        "shear_geometry": shear_geometry,
         "z_mm": z_mm,
         "z_src": z_source,
         "z_component": "z_y" if axis == "x" else "z_x",
@@ -1670,7 +1746,7 @@ def _build_shear_face_context(
         "z_source_axial_kn": float(inp["P_pl"]),
         "code": code,
         "v_ed": v_ed,
-        "vrd_c": result["vrd_c"],
+        "vrd_c": result.get("vrd_c"),
         "axis": axis,
         "tension_low": tension_low,
         "component": component,
