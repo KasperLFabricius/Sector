@@ -4983,34 +4983,97 @@ def test_report_includes_shear_section():
     assert "selected 2005 no-links resistance has no z operand" in txt
 
 
-@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(profile):
-    inp = _inp()
-    inp.update(
-        shear_on=True,
-        shear_links=True,
-        transverse_detailing_on=True,
-        shear_method=codes.EC2_2005_DKNA.label,
+def _native_sparse_link_report_fixture():
+    # The frozen 80/103.417/29.452 route oracle retained no link geometry.
+    # Reverse the native 2005 kernel once to define a reproducible test layout.
+    demand_kn = 80.0
+    concrete_resistance_kn = 103.417
+    link_resistance_kn = 29.452
+    link_diameter_mm = 4.0
+    link_legs = 2.0
+    link_area_mm2 = link_legs * math.pi * link_diameter_mm**2 / 4.0
+    link_arm_mm = 495.0
+    fywk_mpa = 500.0
+    cot_min = 1.0
+    cot_max = 2.5
+    asw_over_s = link_resistance_kn * 1000.0 / (
+        link_arm_mm
+        * (fywk_mpa / codes.EC2_2005_DKNA.gamma_s)
+        * cot_max
     )
-    sh = _shear_out()
-    sh["res"]["vrd_c"] = 103.417
-    sh["util"] = 80.0 / 103.417
-    links = _links_out()
-    links["res"].update(
-        vrd_s=29.452,
-        vrd_max=200.0,
-        vrd=29.452,
-        governs="stirrups (VRd,s)",
+    link_spacing_mm = link_area_mm2 / asw_over_s
+
+    link_result = shear_core.vrd_links(
+        35.0,
+        codes.EC2_2005_DKNA,
+        300.0,
+        550.0,
+        asw_over_s,
+        fywk_mpa,
+        0.0,
+        0.18,
+        cot_min,
+        cot_max,
+        z_mm=link_arm_mm,
+        v_ed_kn=demand_kn,
     )
-    links.update(
-        util=80.0 / 29.452,
-        required=False,
-        longitudinal_shear_force=0.0,
-        longitudinal_assessment={
+    links = {
+        "res": link_result,
+        "util": demand_kn / link_result["vrd"],
+        "asw": link_area_mm2,
+        "asw_over_s": asw_over_s,
+        "effective_asw_over_s": asw_over_s,
+        "asw_factor": 1.0,
+        "legs": link_legs,
+        "dia": link_diameter_mm,
+        "s": link_spacing_mm,
+        "fywk": fywk_mpa,
+        "cot_min": cot_min,
+        "cot_max": cot_max,
+        "cot_limit_lo": cot_min,
+        "cot_limit_hi": cot_max,
+        "delta_ftd": 0.0,
+        "longitudinal_shear_force": 0.0,
+        "longitudinal_assessment": {
             "status": "NOT APPLICABLE",
             "reason": "no_longitudinal_chord_action",
         },
+        "z_source": "plastic internal lever arm",
+        "z_component": "z_y",
+        "z_source_angle_deg": 90.0,
+        "z_source_case": "PL-TEST",
+        "z_source_axial_kn": 0.0,
+        "out_of_limits": False,
+        "required": False,
+        "shear_geometry": {
+            "bw_mm": 300.0,
+            "resolved_form": "rectangular",
+            "duct_case": "none",
+            "duct_sum_mm": 0.0,
+            "duct_factor_links": 1.0,
+        },
+    }
+
+    transverse = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=35.0,
+        fywk_mpa=fywk_mpa,
+        diameter_mm=link_diameter_mm,
+        spacing_mm=link_spacing_mm,
+        shear_directions=[{
+            "component": "vy",
+            "bw_mm": 300.0,
+            "d_mm": 550.0,
+            "legs": link_legs,
+            "transverse_leg_spacing_mm": 300.0,
+            "links_present": True,
+            "links_required": False,
+        }],
     )
+
+    sh = _shear_out()
+    sh["res"]["vrd_c"] = concrete_resistance_kn
+    sh["util"] = demand_kn / concrete_resistance_kn
     sh["links"] = links
     sh["nominal_resistance"] = asdict(
         capacity.select_nominal_shear_resistance(sh, links_selected=True)
@@ -5020,31 +5083,48 @@ def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(profil
         assessment_status="PASS",
         assessment_ok=True,
     )
-    transverse = {
-        "status": "FAIL",
-        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
-        "member_type": "Beam",
-        "diameter_mm": 4.0,
-        "spacing_mm": 2000.0,
-        "fywk_mpa": 500.0,
-        "minimum_ratio": {
-            "coefficient": 0.08,
-            "ductility_factor": 1.0,
-            "ductility_reduction_applied": False,
-            "clause": "9.2.2(5)",
-        },
-        "governing": {"scope": "Shear VY", "utilisation": 2.0},
-        "checks": [{
-            "kind": "minimum_ratio",
-            "scope": "Shear VY",
-            "status": "FAIL",
-            "provided": 0.00002,
-            "limit": 0.00069,
-            "utilisation": 34.5,
-            "clause": "9.2.2(5)",
-        }],
-        "limitations": [],
-    }
+
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        transverse_detailing_on=True,
+        shear_method=codes.EC2_2005_DKNA.label,
+        shear_link_legs=link_legs,
+        shear_link_dia=link_diameter_mm,
+        shear_link_s=link_spacing_mm,
+    )
+    return inp, sh, transverse
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
+    profile,
+):
+    inp, sh, transverse = _native_sparse_link_report_fixture()
+    links = sh["links"]
+    minimum_ratio = next(
+        check for check in transverse["checks"]
+        if check["kind"] == "minimum_ratio"
+    )
+    assert links["res"]["vrd"] == pytest.approx(29.452)
+    assert links["s"] == pytest.approx(440.00644085487903)
+    assert links["asw_over_s"] == pytest.approx(
+        links["asw"] / links["s"]
+    )
+    assert transverse["diameter_mm"] == links["dia"]
+    assert transverse["spacing_mm"] == links["s"]
+    assert minimum_ratio["legs"] == links["legs"]
+    assert minimum_ratio["provided"] == pytest.approx(
+        links["asw_over_s"] / sh["bw"]
+    )
+    assert transverse["governing"] == minimum_ratio
+    assert transverse["governing_utilisation"] == pytest.approx(
+        minimum_ratio["utilisation"]
+    )
+    detailing_utilisation = (
+        f"{100.0 * transverse['governing_utilisation']:.1f} %"
+    )
     text = " ".join(
         _pdf_text(
             sector_report.build_report(
@@ -5069,6 +5149,8 @@ def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(profil
     if profile != "Brief":
         assert "103.417" in text
         assert "29.452" in text
+        assert "2 x 4 / 440 mm" in text
+        assert text.count(detailing_utilisation) >= 2
         assert "Separate link detailing assessment: FAIL" in text
         assert "non-governing comparison" in text
         assert "no longitudinal shear force is applied" in text
