@@ -359,7 +359,11 @@ def test_vrd_links_2023_hand_calc_and_derived_stresses():
 @pytest.mark.parametrize(
     "n_ed_comp_kn",
     (math.nextafter(0.0, math.inf), 750.0, 2000.0),
-    ids=("smallest-positive", "total-equals-v-cot-fixture", "high-compression"),
+    ids=(
+        "smallest-positive",
+        "total-equals-v-times-configured-cot-upper-bound",
+        "high-compression",
+    ),
 )
 def test_vrd_links_2023_axial_compression_fails_before_angle_selection(
     monkeypatch,
@@ -396,6 +400,8 @@ def test_vrd_links_2023_axial_compression_fails_before_angle_selection(
     assert result["vrd_max"] is None
     assert result["vrd"] is None
     assert result["z"] is None
+    assert result["cot"] is None
+    assert result["angle_selection"] == "none"
     applicability = result["axial_applicability"]
     assert applicability["net_axial_compression_kn"] == n_ed_comp_kn
     assert applicability["mean_compression_mpa"] == pytest.approx(
@@ -412,6 +418,13 @@ def test_vrd_links_2023_axial_compression_fails_before_angle_selection(
     assert applicability["simplified_method_applicable"] is False
     assert applicability["separate_member_assessment_required"] is True
     assert applicability["annex_g_requirement_determined"] is False
+    if n_ed_comp_kn == 750.0:
+        # This is apparent equality to VEd times the configured cotangent upper
+        # bound. No angle or NEdw allocation has been selected, so the total net
+        # compression cannot demonstrate the web-force condition in 8.2.3(11).
+        assert n_ed_comp_kn == pytest.approx(300.0 * 2.5)
+        assert result["cot_max"] == pytest.approx(2.5)
+        assert applicability["selected_web_force_kn"] is None
 
 
 @pytest.mark.parametrize("n_ed_comp_kn", (-300.0, -0.0, 0.0))
@@ -1518,6 +1531,15 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
     assert "applicability conditions were not demonstrated" not in visible
     assert "V_{Rd,s}" not in visible
     assert "PASS" not in visible
+    screening_metric = next(
+        metric
+        for metric in at.metric
+        if "Utilisation" in metric.label and "V_{Rd,c}" in metric.label
+    )
+    assert screening_metric.value == "20.7 %"
+    assert screening_metric.delta == ""
+    assert all(metric.delta not in {"OK", "Over limit"} for metric in at.metric)
+    assert "non-governing concrete-only context" in visible
 
     _select_view(at, "Results Overview")
     overview = at.table[0].value
