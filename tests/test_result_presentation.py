@@ -2157,6 +2157,14 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
             },
         }
 
+    mixed_biaxial = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": {
+            "vx": combined_result(0.95, "PASS"),
+            "vy": combined_result(0.90, "NOT ASSESSED"),
+        },
+    }
     out = {
         "plastic_cases": [
             {
@@ -2177,19 +2185,13 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
                 "name": "PL-BIAXIAL-INCOMPLETE",
                 "results": {
                     "plastic": _plastic(),
-                    "combined": {
-                        "method": codes.EC2_2005.label,
-                        "biaxial": True,
-                        "directions": {
-                            "vx": combined_result(0.95, "PASS"),
-                            "vy": combined_result(0.90, "NOT ASSESSED"),
-                        },
-                    },
+                    "combined": mixed_biaxial,
                 },
             },
         ]
     }
 
+    assert presentation._transverse_metric("combined", mixed_biaxial) is None
     assert presentation.worked_example_selection({}, out)["families"][
         "combined"
     ] == {"case_id": "PL-GOV", "component": None}

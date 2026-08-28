@@ -7992,7 +7992,23 @@ class ReportBuilder:
                 selected.get("component") if isinstance(selected, Mapping) else None
             )
             if selected_component not in directions:
-                selected_component = next(iter(directions))
+                selected_component = next(
+                    (
+                        component
+                        for component, item in directions.items()
+                        if item.get("valid") is not True
+                        or any(
+                            physical["status"] not in {"PASS", "FAIL"}
+                            or not self._retained_utilisation_available(
+                                physical["util"]
+                            )
+                            for physical in (
+                                presentation.combined_physical_components(item)
+                            )
+                        )
+                    ),
+                    next(iter(directions)),
+                )
             label = "Vx+T" if selected_component == "vx" else "Vy+T"
             self._h2(f"Representative Base-EN directional calculation: {label}")
             self._combined_base_en_direction(directions[selected_component])

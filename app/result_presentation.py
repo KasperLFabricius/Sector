@@ -956,14 +956,16 @@ def _transverse_metric(family, result):
         items = [directions[key] for key in ("vx", "vy") if key in directions]
         if not items:
             items = [result]
+        if family == "combined" and not combined_uses_dkna(result):
+            values = []
+            for item in items:
+                metric = combined_metric(item)
+                if metric is None:
+                    return None
+                values.append(metric)
+            return max(values) if values else None
         extractor = shear_metric if family == "shear" else combined_metric
         metrics = [extractor(item) for item in items]
-        if (
-            family == "combined"
-            and not combined_uses_dkna(result)
-            and any(metric is None for metric in metrics)
-        ):
-            return None
         values = [metric for metric in metrics if metric is not None]
     else:
         metric = (

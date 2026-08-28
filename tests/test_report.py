@@ -6769,6 +6769,7 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
         status="NOT ASSESSED",
         util=0.85,
         coverage_complete=False,
+        reason="required_longitudinal_chord_coverage_incomplete",
     )
     incomplete = {
         "method": codes.EC2_2005.label,
@@ -6830,6 +6831,9 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in text
     assert "Combined bending + shear + torsion (M-V-T) - PL-GOV" in text
     assert "Combined bending + shear + torsion (M-V-T) - PL-INCOMPLETE" in text
+    assert "Representative Base-EN directional calculation: Vy+T" in text
+    assert "Representative Base-EN directional calculation: Vx+T" not in text
+    assert "Complete both required longitudinal chord checks" in text
     assert "The complete combined M-V-T worked example is published only" not in text
     assert "DK NA sum" not in text
 
