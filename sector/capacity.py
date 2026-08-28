@@ -2724,12 +2724,15 @@ def finalize_combined(inp, out):
     if not inp.get("combined_on"):
         return
     selected_code = selected_combined_code(inp.get("combined_method"))
-    declared_independent_mv = _solver_flag(
-        inp["combined_mv_independent"],
-        "independent M/V longitudinal-reinforcement condition",
-    )
     dkna_basis = selected_code.key == codes.EC2_2005_DKNA.key
-    independent_mv = declared_independent_mv if dkna_basis else False
+    independent_mv = (
+        _solver_flag(
+            inp["combined_mv_independent"],
+            "independent M/V longitudinal-reinforcement condition",
+        )
+        if dkna_basis
+        else False
+    )
     separation_condition = None
     if dkna_basis:
         separation_condition = {

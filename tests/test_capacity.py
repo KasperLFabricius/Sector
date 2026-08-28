@@ -3774,8 +3774,13 @@ def test_finalize_combined_builds_valid_payload(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    "inactive_mv_option",
+    [True, "stale", "missing"],
+    ids=["persisted-true", "hostile-text", "omitted"],
+)
 def test_finalize_combined_base_en_retains_physical_checks_without_dkna(
-    monkeypatch,
+    monkeypatch, inactive_mv_option,
 ):
     def forbidden(*_args, **_kwargs):
         pytest.fail("Base EN entered the DK NA action-alone interaction")
@@ -3804,8 +3809,11 @@ def test_finalize_combined_base_en_retains_physical_checks_without_dkna(
         combined_method=codes.EC2_2005.label,
         shear_method=codes.EC2_2005.label,
         torsion_method=codes.EC2_2005.label,
-        combined_mv_independent=True,
     )
+    if inactive_mv_option == "missing":
+        inp.pop("combined_mv_independent")
+    else:
+        inp["combined_mv_independent"] = inactive_mv_option
     out = {
         "plastic": {"util": 0.20},
         "shear": {

@@ -6732,6 +6732,13 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
             "vx_ed_kn": 80.0, "vy_ed_kn": 0.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 40.0,
         },
+        {
+            "name": "PL-INCOMPLETE",
+            "description": "Incomplete longitudinal assessment",
+            "n_ed_kn": 0.0, "mx_ed_knm": 60.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 30.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 15.0,
+        },
     ]
     inp["plastic_cases"] = actions
 
@@ -6754,6 +6761,12 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
 
     low = combined_case(0.40)
     governing = combined_case(0.85)
+    incomplete = combined_case(0.72)
+    incomplete["longitudinal_assessment"].update(
+        status="NOT ASSESSED",
+        util=0.62,
+        coverage_complete=False,
+    )
     out = {
         "plastic_cases": [
             {
@@ -6774,6 +6787,15 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
                     "combined": governing,
                 },
             },
+            {
+                "name": actions[2]["name"],
+                "actions": actions[2],
+                "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(_out()["plastic"]),
+                    "combined": incomplete,
+                },
+            },
         ],
     }
     out["worked_example_selection"] = (
@@ -6784,7 +6806,6 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
         io.BytesIO(), {}, inp, out, figures=False, profile=profile
     )
     assert builder._needs_diagnostic_chapter("combined", low) is False
-    incomplete = dict(low, valid=False, reason="missing combined prerequisite")
     assert builder._needs_diagnostic_chapter("combined", incomplete) is True
 
     text = " ".join(
@@ -6796,6 +6817,7 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     )
     assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in text
     assert "Combined bending + shear + torsion (M-V-T) - PL-GOV" in text
+    assert "Combined bending + shear + torsion (M-V-T) - PL-INCOMPLETE" in text
     assert "The complete combined M-V-T worked example is published only" not in text
     assert "DK NA sum" not in text
 

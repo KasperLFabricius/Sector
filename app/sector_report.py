@@ -5113,9 +5113,9 @@ class ReportBuilder:
             directions = result.get("directions") or {}
             items = tuple(directions.values()) or (result,)
             if not presentation.combined_uses_dkna(result):
-                return not any(
+                return not all(
                     item.get("valid") is True
-                    and any(
+                    and all(
                         component["status"] in {"PASS", "FAIL"}
                         and self._retained_utilisation_available(
                             component["util"]
