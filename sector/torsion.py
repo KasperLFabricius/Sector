@@ -572,6 +572,13 @@ def tube_properties_with_reinforcement(
             )
 
     for bar_position, distances, nearest, corner_pairs in distance_records:
+        # A genuine equal-cover corner belongs to both adjoining walls even when
+        # endpoint thinning retains another row closer to the shared endpoint.
+        tied_corner_pairs = [
+            pair
+            for pair, _endpoint_distance in corner_pairs
+            if all(index in nearest for index in pair)
+        ]
         retained_pairs = [
             pair
             for pair, endpoint_distance in corner_pairs
@@ -580,6 +587,14 @@ def tube_properties_with_reinforcement(
         ]
         if physical_wall_count == 1:
             assigned_walls = (0,)
+        elif len(tied_corner_pairs) > 1:
+            evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        elif tied_corner_pairs:
+            assigned_walls = tied_corner_pairs[0]
+            if any(index not in assigned_walls for index in nearest):
+                evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+                return _wall_evidence_invalid(base, evidence["reason"], evidence)
         elif len(retained_pairs) > 1:
             evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
             return _wall_evidence_invalid(base, evidence["reason"], evidence)

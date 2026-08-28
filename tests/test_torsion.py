@@ -212,6 +212,45 @@ def test_true_corner_ownership_is_continuous_across_near_equal_covers(
     ) == 2
 
 
+def test_equal_cover_corner_keeps_both_walls_when_another_row_is_closer():
+    bars = [
+        (0.05, 0.05, 100.0),
+        (0.04, 0.02, 100.0),
+        (0.35, 0.05, 100.0),
+        (0.35, 0.55, 100.0),
+        (0.05, 0.55, 100.0),
+    ]
+
+    tube = torsion.tube_properties_with_reinforcement(
+        _rect(0.4, 0.6),
+        None,
+        bars,
+    )
+
+    assert tube["valid"] is True
+    assert tube["reason"] is None
+    assert tube["tef"] == pytest.approx(120.0)
+    walls = tube["wall_evidence"]["walls"]
+    assert [wall["bar_indices"] for wall in walls] == [
+        (1, 2, 3),
+        (3, 4),
+        (4, 5),
+        (1, 2, 5),
+    ]
+    assert sum(1 in wall["bar_indices"] for wall in walls) == 2
+
+    perturbed_bars = list(bars)
+    perturbed_bars[0] = (0.050001, 0.05, 100.0)
+    perturbed = torsion.tube_properties_with_reinforcement(
+        _rect(0.4, 0.6),
+        None,
+        perturbed_bars,
+    )
+    assert perturbed["valid"] is True
+    assert perturbed["reason"] is None
+    assert perturbed["tef"] == pytest.approx(tube["tef"])
+
+
 def test_only_endpoint_nearest_row_bar_supplies_each_adjoining_wall():
     bars = [
         *((x, 0.05, 100.0) for x in (0.05, 0.11, 0.17, 0.23, 0.29, 0.35)),
