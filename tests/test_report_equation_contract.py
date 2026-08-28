@@ -23,6 +23,7 @@ EXPECTED_CONTRACT_KEYS = {
     ("basis.plastic.equilibrium", None),
     ("basis.plastic.governing-curvature", None),
     ("combined.chord.demand", None),
+    ("combined.chord.demand", "2023"),
     ("combined.chord.utilisation", None),
     ("combined.crushing.interaction", None),
     ("combined.dk-na.sum", None),
@@ -218,7 +219,7 @@ def _builder():
 
 def test_catalogue_exactly_covers_every_live_call_and_variant():
     _source, calls = _formula_calls()
-    assert len(calls) == 144
+    assert len(calls) == 145
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -229,7 +230,7 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 144
+    assert len(catalogue_pairs) == 145
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     assert authored_pairs == EXPECTED_CONTRACT_KEYS
 
@@ -246,12 +247,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 136,
+        "numerical": 137,
         "none": 8,
     }
-    assert publication_role_counts == {"calculation": 136, "theory": 8}
+    assert publication_role_counts == {"calculation": 137, "theory": 8}
     # Conditional call sites expand to every exact runtime variant in the catalogue.
-    assert result_counts == {True: 136, False: 8}
+    assert result_counts == {True: 137, False: 8}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key
@@ -311,6 +312,17 @@ def test_dynamic_material_identity_and_variant_selection_are_exact():
         contracts.equation_contract("unknown.valid-key")
     with pytest.raises(ValueError, match="No report equation contract"):
         contracts.equation_contract("materials.steel.fyd-0")
+
+
+def test_2023_longitudinal_chord_contracts_use_the_signed_physical_face():
+    for key in ("shear.chord.demand", "combined.chord.demand"):
+        contract = contracts.equation_contract(key, "2023")
+        symbols = {symbol.markup: symbol.meaning for symbol in contract.symbols}
+
+        assert symbols["M<sub>face</sub>"] == (
+            "signed bending demand on the physical face"
+        )
+        assert "M<sub>Ed</sub>" not in symbols
 
 
 def test_review_regressions_have_distinct_roles_and_complete_result_identity():

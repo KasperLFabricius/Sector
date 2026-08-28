@@ -56,6 +56,61 @@ def test_conditional_equals_pure_axis_when_companion_matches():
     assert mrd == abs(p90.Mx)                  # exact equality, not approx
 
 
+def test_conditional_capacity_uses_declared_own_moment_reference():
+    sec, c, s = _beam()
+    p90 = plastic_capacity_at_angle(sec, c, s, 0.0, 90.0)
+    offset = 37.0
+
+    mrd, exact = conditional_capacity(
+        sec,
+        c,
+        s,
+        0.0,
+        "x",
+        True,
+        p90.My,
+        own_moment_offset=offset,
+    )
+
+    assert exact
+    assert mrd == pytest.approx(abs(p90.Mx + offset))
+
+
+def test_conditional_capacity_reference_shift_can_change_the_physical_face():
+    sec, c, s = _beam()
+    p90 = plastic_capacity_at_angle(sec, c, s, 0.0, 90.0)
+
+    mrd, exact = conditional_capacity(
+        sec,
+        c,
+        s,
+        0.0,
+        "x",
+        True,
+        p90.My,
+        own_moment_offset=-2.0 * abs(p90.Mx),
+    )
+
+    assert exact
+    assert mrd == 0.0
+
+
+@pytest.mark.parametrize("offset", (True, math.nan, math.inf, "reference"))
+def test_conditional_capacity_rejects_invalid_own_moment_reference(offset):
+    sec, c, s = _beam()
+    with pytest.raises(ValueError, match="finite"):
+        conditional_capacity(
+            sec,
+            c,
+            s,
+            0.0,
+            "x",
+            True,
+            0.0,
+            own_moment_offset=offset,
+        )
+
+
 def test_conditional_decreases_with_off_moment():
     # A growing off-axis moment consumes envelope: the conditional capacity about
     # the shear axis must fall monotonically from the pure-axis value.

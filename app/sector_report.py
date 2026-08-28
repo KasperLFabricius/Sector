@@ -7389,6 +7389,8 @@ class ReportBuilder:
                 angle_note + " The additional longitudinal force is "
                 "N<sub>Vd</sub> = |V<sub>Ed</sub>| cot theta = "
                 f"{_fmt(links['longitudinal_shear_force'], 1)} kN (8.50). "
+                "It is applied to both flexural chords using Formulae (8.51) "
+                "and (8.52). "
                 "The support/load-specific relief in (8.53) is not credited."
             )
         else:
@@ -7400,6 +7402,7 @@ class ReportBuilder:
         # Longitudinal chord under M + V (+ T), at the member strut angle -- the
         # same check the combined section shows; printed here so a shear + bending
         # run without torsion still documents it.
+        chord_assessment = links.get("longitudinal_assessment") or {}
         ch = links.get("chord")
         if ch is not None and ch.get("valid"):
             self._h2("Longitudinal chord: bending + shear"
@@ -7411,8 +7414,9 @@ class ReportBuilder:
             )
             if model_2023:
                 chord_formula = (
-                    "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                    "N<sub>Vd</sub>&#183;z + F<sub>td,T</sub>&#183;z/2"
+                    "M<sub>Ed,total</sub> = max(M<sub>face</sub> + "
+                    "N<sub>Vd</sub>&#183;z, 0) + "
+                    "F<sub>td,T</sub>&#183;z/2"
                 )
                 chord_ref = "DS/EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)"
             else:
@@ -7426,20 +7430,24 @@ class ReportBuilder:
                 equation_key="shear.chord.demand",
                 equation_variant="2023" if model_2023 else "2005",
                 ref=chord_ref,
-                subst=f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
-                      f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)",
+                subst=(
+                    f"max({_fmt(ch.get('face_m_ed_signed', ch['m_ed']), 1)} + "
+                    f"{_fmt(ch['mv'], 1)}, 0) + {_fmt(ch['mt'], 1)} kNm "
+                    f" (z = {_fmt(ch['z'], 3)} m)"
+                    if model_2023
+                    else f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
+                         f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)"
+                ),
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
             fallback = presentation.required_chord_fallback(links)
             fell_back = fallback is not None
-            if coverage:
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            assessment_complete = chord_status in {"PASS", "FAIL"}
+            if not assessment_complete:
                 verdict_suffix = (
                     "  (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
-                )
-            elif fell_back:
-                verdict_suffix = (
-                    "  (NOT ASSESSED - PURE-AXIS SUBSTITUTE SHOWN)"
-                    if not ch.get("conditional", True)
-                    else "  (NOT ASSESSED - ANOTHER FACE USES A SUBSTITUTE)"
                 )
             else:
                 verdict_suffix = f"  ({vv})"
@@ -7449,10 +7457,20 @@ class ReportBuilder:
                 references=("shear.chord.demand",),
                 subst=f"{_fmt(ch['m_total'], 1)} / {_fmt(ch['m_rd'], 1)}",
                 result=f"utilisation = {_pct(ch['util'])}{verdict_suffix}")
-            face_desc = (f"the shear tension face ({face})" if ch.get("gets_shift", True)
-                         else f"the shear compression face ({face}) -- the torsion "
-                         "tension governs there, with no shear shift and the bending "
-                         "relieving rather than adding")
+            if model_2023:
+                face_desc = (
+                    f"the flexural tension chord ({face}), Formula (8.51)"
+                    if ch.get("chord_role") == "flexural_tension"
+                    else f"the flexural compression chord ({face}), Formula "
+                         "(8.52), after bending-compression relief"
+                )
+            else:
+                face_desc = (
+                    f"the shear tension face ({face})"
+                    if ch.get("gets_shift", True)
+                    else f"the shear compression face ({face}), with torsion "
+                         "tension and bending relief"
+                )
             note = (f"Tension chord = {face_desc}; M<sub>Rd</sub> "
                     + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
                                           ch.get("conditional", True)) + ".")
@@ -7461,6 +7479,11 @@ class ReportBuilder:
                 note += (f" This {demand_word} demand is part of the strut-angle objective, "
                          "so theta backs off the band edge when the chord would "
                          "otherwise govern.")
+            if model_2023:
+                note += (
+                    " The acting axial force is already included in each "
+                    "face-specific conditional bending resistance."
+                )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = (
@@ -7486,9 +7509,67 @@ class ReportBuilder:
                          "chord shown may not be the critical face -- rely on the "
                          "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
             self._small(note)
+            if model_2023:
+                rows = [[
+                    "Face", "Chord", "Formula", "M<sub>face</sub>",
+                    "N<sub>Vd</sub>z", "M<sub>Ed,total</sub>",
+                    "M<sub>Rd</sub>", "Utilisation", "Status",
+                ]]
+                for candidate in links.get("chord_candidates") or ():
+                    if candidate.get("role") != "shear_axis":
+                        continue
+                    rows.append([
+                        viz.tension_face_label(
+                            candidate.get("tension_low", True),
+                            candidate.get("axis"),
+                        ),
+                        (
+                            "Flexural tension"
+                            if candidate.get("chord_role") == "flexural_tension"
+                            else "Flexural compression"
+                        ),
+                        f"({candidate.get('chord_formula', '-')})",
+                        f"{_fmt(candidate.get('face_m_ed_signed'), 1)} kNm",
+                        f"{_fmt(candidate.get('mv'), 1)} kNm",
+                        f"{_fmt(candidate.get('m_total'), 1)} kNm",
+                        f"{_fmt(candidate.get('m_rd'), 1)} kNm",
+                        _pct(candidate.get("util")),
+                        str(candidate.get("status") or "NOT ASSESSED"),
+                    ])
+                if len(rows) > 1:
+                    self._h2("Required 2023 longitudinal chord faces")
+                    self._table(
+                        rows,
+                        [16 * mm, 23 * mm, 17 * mm, 18 * mm, 18 * mm,
+                         20 * mm, 18 * mm, 20 * mm, 16 * mm],
+                        font=6.7,
+                    )
+                self._small(
+                    "Longitudinal chord assessment: "
+                    f"{chord_status}. "
+                    + presentation.result_reason(
+                        chord_assessment.get("reason"),
+                        "shear",
+                        context="report longitudinal chord assessment",
+                    )
+                )
             self._chord_off_block(
                 links.get("chord_off"),
-                assessment_complete=not bool(coverage) and not fell_back,
+                assessment_complete=assessment_complete,
+            )
+        elif model_2023 and isinstance(chord_assessment, Mapping):
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            self._h2("Required 2023 longitudinal chord faces")
+            self._small(
+                "Longitudinal chord assessment: "
+                f"{chord_status}. "
+                + presentation.result_reason(
+                    chord_assessment.get("reason"),
+                    "shear",
+                    context="report longitudinal chord assessment",
+                )
             )
 
     def _combined(self):
@@ -7535,11 +7616,11 @@ class ReportBuilder:
                 ],
                 [27 * mm, 20 * mm, 20 * mm, 20 * mm, 20 * mm, 28 * mm, 35 * mm],
             )
-            torsion_note = presentation.combined_torsion_governing_note(
+            governing_note = presentation.combined_governing_assessment_note(
                 aggregate
             )
-            if torsion_note:
-                self._small(_html_escape(torsion_note))
+            if governing_note:
+                self._small(_html_escape(governing_note))
             if aggregate.get("outside_default_range"):
                 self._small(
                     "Warning: the selected shared compression-strut bounds are "
@@ -7600,12 +7681,12 @@ class ReportBuilder:
              31 * mm, 17 * mm, 22 * mm],
             font=5.8,
         )
-        torsion_notes = {
-            presentation.combined_torsion_governing_note(item)
+        governing_notes = {
+            presentation.combined_governing_assessment_note(item)
             for item in directions.values()
-            if presentation.combined_torsion_governing_note(item)
+            if presentation.combined_governing_assessment_note(item)
         }
-        for note in sorted(torsion_notes):
+        for note in sorted(governing_notes):
             self._small(_html_escape(note))
         if any(
             item.get("outside_default_range")
@@ -7692,13 +7773,13 @@ class ReportBuilder:
             "to that action acting alone; the other external sectional actions are "
             "set to zero."
         )
-        torsion_assessment_note = (
-            presentation.combined_torsion_governing_note(c)
+        governing_assessment_note = (
+            presentation.combined_governing_assessment_note(c)
         )
-        if torsion_assessment_note:
+        if governing_assessment_note:
             self._small(
                 "<b>Overall M-V-T:</b> "
-                + _html_escape(torsion_assessment_note)
+                + _html_escape(governing_assessment_note)
             )
         action_records = c.get("action_alone") or {}
         rows = [["Action", "S<sub>Ed</sub>", "S<sub>Rd</sub>", "Ratio"]]
@@ -7790,7 +7871,7 @@ class ReportBuilder:
                         f"{_pct(selection['utilisation'])}  "
                         "(numerical component only)"
                         if (
-                            torsion_assessment_note
+                            governing_assessment_note
                             and presentation.combined_dkna_limit_satisfied(c)
                             is not False
                         )
@@ -7878,50 +7959,94 @@ class ReportBuilder:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             vv = _demand_resistance_verdict(lg["ok"])
             coverage = lg.get("off_not_evaluated")
+            model_2023_chord = lg.get("chord_formula") in {"8.51", "8.52"}
             ax = lg["axis"]
             face = viz.tension_face_label(
                 lg.get("tension_low", True), lg.get("axis")
             )
-            face_desc = (f"the shear tension face ({face})" if lg.get("gets_shift", True)
-                         else f"the shear compression face ({face}) -- the torsion "
-                         "tension governs there, with no shear shift and the bending "
-                         "relieving rather than adding")
-            self._p(
-                f"The governing tension chord is {face_desc} about the "
-                f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "
-                "The chord carries the bending tension plus the shear shift "
-                "&#916;F<sub>td</sub> = "
-                "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18, only on the flexural "
-                "tension face) and the torsion "
-                "longitudinal force F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>"
-                "&#183;cot theta/(2A<sub>k</sub>) (6.28, distributed round the "
-                "perimeter, so half acts on this chord). Each is turned into an "
-                "equivalent moment on the lever arm z and checked against "
-                "M<sub>Rd</sub> "
-                + viz.chord_mrd_label(ax, lg.get("m_off", 0.0),
-                                      lg.get("conditional", True)) + ".")
-            self._formula(
-                "M<sub>Ed,total</sub> = M<sub>Ed</sub> + &#916;F<sub>td</sub>&#183;z + "
-                "F<sub>td,T</sub>&#183;z/2",
-                equation_key="combined.chord.demand",
-                ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
-                subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
-                      f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
-                      f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
-                      f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
-                result=f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm")
+            if model_2023_chord:
+                face_desc = (
+                    f"the flexural tension chord ({face}), Formula (8.51)"
+                    if lg.get("chord_role") == "flexural_tension"
+                    else f"the flexural compression chord ({face}), Formula "
+                         "(8.52), after bending-compression relief"
+                )
+                self._p(
+                    f"The governing chord is {face_desc} about the {ax}-axis. "
+                    "N<sub>Vd</sub> = |V<sub>Ed</sub>| cot theta is applied to "
+                    "both flexural chords. Each face is checked against its "
+                    "bending resistance conditional on the acting axial force and "
+                    "coexisting orthogonal moment; axial force is therefore not "
+                    "added again to the equivalent-moment comparison. The "
+                    "support/load-specific Formula (8.53) relief is not credited."
+                )
+                self._formula(
+                    "M<sub>Ed,total</sub> = max(M<sub>face</sub> + "
+                    "N<sub>Vd</sub>&#183;z, 0) + F<sub>td,T</sub>&#183;z/2",
+                    equation_key="combined.chord.demand",
+                    equation_variant="2023",
+                    ref=(
+                        "DS/EN 1992-1-1:2023, 8.2.3(8), Formulae "
+                        "(8.50)-(8.52)"
+                    ),
+                    subst=(
+                        f"max({_fmt(lg.get('face_m_ed_signed'), 1)} + "
+                        f"{_fmt(lg['mv'], 1)}, 0) + {_fmt(lg['mt'], 1)} kNm "
+                        f" (z = {_fmt(lg['z'], 3)} m, "
+                        f"N<sub>Vd</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
+                        f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)"
+                    ),
+                    result=(
+                        f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm"
+                    ),
+                )
+            else:
+                face_desc = (
+                    f"the shear tension face ({face})"
+                    if lg.get("gets_shift", True)
+                    else f"the shear compression face ({face}), with torsion "
+                         "tension and bending relief"
+                )
+                self._p(
+                    f"The governing tension chord is {face_desc} about the "
+                    f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "
+                    "The chord carries the bending tension plus the shear shift "
+                    "&#916;F<sub>td</sub> = "
+                    "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18, only on the flexural "
+                    "tension face) and the torsion longitudinal force "
+                    "F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>&#183;cot "
+                    "theta/(2A<sub>k</sub>) (6.28, distributed round the perimeter, "
+                    "so half acts on this chord). Each is turned into an equivalent "
+                    "moment on the lever arm z and checked against M<sub>Rd</sub> "
+                    + viz.chord_mrd_label(
+                        ax, lg.get("m_off", 0.0), lg.get("conditional", True)
+                    )
+                    + "."
+                )
+                self._formula(
+                    "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
+                    "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2",
+                    equation_key="combined.chord.demand",
+                    ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                    subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
+                          f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
+                          f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
+                          f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
+                    result=(
+                        f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm"
+                    ),
+                )
             biaxial = lg.get("biaxial", False)
             fallback = presentation.required_chord_fallback(c)
             fell_back = fallback is not None
-            if coverage:
+            chord_assessment = c.get("longitudinal_assessment") or {}
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            assessment_complete = chord_status in {"PASS", "FAIL"}
+            if not assessment_complete:
                 verdict_suffix = (
                     "  (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
-                )
-            elif fell_back:
-                verdict_suffix = (
-                    "  (NOT ASSESSED - PURE-AXIS SUBSTITUTE SHOWN)"
-                    if not lg.get("conditional", True)
-                    else "  (NOT ASSESSED - ANOTHER FACE USES A SUBSTITUTE)"
                 )
             else:
                 verdict_suffix = f"  ({vv})"
@@ -7946,6 +8071,11 @@ class ReportBuilder:
                     "which uses the full biaxial bending utilisation."
                 )
             note = viz.chord_angle_note(lg.get("theta_mode"))
+            if model_2023_chord:
+                note += (
+                    " The required flexural tension and compression chord faces "
+                    "use Formulae (8.51) and (8.52), respectively."
+                )
             if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
@@ -7976,7 +8106,25 @@ class ReportBuilder:
             self._small(note)
             self._chord_off_block(
                 c.get("chord_off"),
-                assessment_complete=not bool(coverage) and not fell_back,
+                assessment_complete=assessment_complete,
+            )
+        elif (
+            c.get("longitudinal_model_2023") is True
+            and isinstance(c.get("longitudinal_assessment"), Mapping)
+        ):
+            chord_assessment = c["longitudinal_assessment"]
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            self._h2("Required 2023 longitudinal chord faces")
+            self._small(
+                "Longitudinal chord assessment: "
+                f"{chord_status}. "
+                + presentation.result_reason(
+                    chord_assessment.get("reason"),
+                    "shear",
+                    context="report longitudinal chord assessment",
+                )
             )
         else:
             self._small(f"Additional longitudinal steel: torsion "

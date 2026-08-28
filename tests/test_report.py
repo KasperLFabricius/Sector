@@ -6257,6 +6257,47 @@ def _retain_combined_chords(payload, *candidates):
     return payload
 
 
+@pytest.mark.parametrize("profile", ("Standard", "Audit"))
+def test_report_combined_zero_2023_chord_candidates_stays_not_assessed(
+    profile,
+):
+    inp = _inp()
+    inp.update(combined_on=True, shear_on=True, torsion_on=True)
+    out = _out()
+    combined_result = _combined_out()
+    combined_result.update(
+        longitudinal_model_2023=True,
+        longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": None,
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": None,
+        },
+    )
+    out["combined"] = combined_result
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {},
+                inp,
+                out,
+                figures=False,
+                profile=profile,
+            )
+        ).split()
+    )
+
+    assert "Required 2023 longitudinal chord faces" in text
+    assert "Longitudinal chord assessment: NOT ASSESSED" in text
+    assert "Complete both required longitudinal chord checks" in text
+    assert "Enable shear links for the full utilisation check" not in text
+    assert "both beyond the bending steel" not in text
+    assert "SHEAR-LONGITUDINAL" not in text
+
+
 def test_report_publishes_only_governing_transverse_family_worked_examples():
     inp = _inp()
     rows = [

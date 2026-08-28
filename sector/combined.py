@@ -451,6 +451,111 @@ def longitudinal_check(
                 status="PASS" if util <= 1.0 + 1e-9 else "FAIL")
 
 
+def longitudinal_chord_check_2023(
+    m_ed_signed: float,
+    m_rd: float,
+    n_vd: float,
+    ftd_t: float,
+    z: float,
+    *,
+    tension_low: bool,
+    flexural_tension_low: bool,
+    n_ed: float = 0.0,
+) -> dict:
+    """Check one physical chord for the 2023 shear-force addition.
+
+    Formulae (8.51) and (8.52) apply ``NVd`` to both flexural chords.  Sector's
+    bending resistance is already conditional on the acting axial force and the
+    coexisting orthogonal moment, so the comparison is made as an equivalent
+    face-signed moment without adding ``NEd`` a second time.  The signed ``NEd``
+    operand and the corresponding chord force remain in the result for publication.
+
+    On the flexural tension face, ``NVd*z`` adds directly to ``MEd``.  On the
+    flexural compression face, the acting bending compression first relieves that
+    tensile addition; only a reversal beyond zero becomes tensile demand on the
+    opposite face.  Distributed torsion tension is then added to both faces.
+    """
+
+    def finite_real(value, label):
+        if isinstance(value, (bool, np.bool_, str, bytes)):
+            raise ValueError(f"{label} must be a finite real number")
+        try:
+            number = float(value)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be a finite real number") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{label} must be a finite real number")
+        return number
+
+    if type(tension_low) is not bool or type(flexural_tension_low) is not bool:
+        raise ValueError("chord face identities must be Boolean values")
+    moment = finite_real(m_ed_signed, "MEd")
+    resistance = finite_real(m_rd, "MRd")
+    shear_force = finite_real(n_vd, "NVd")
+    torsion_force = finite_real(ftd_t, "torsion longitudinal force")
+    lever_arm = finite_real(z, "lever arm z")
+    axial = finite_real(n_ed, "NEd")
+    if resistance < 0.0:
+        raise ValueError("MRd must be non-negative")
+    if shear_force < 0.0 or torsion_force < 0.0:
+        raise ValueError("longitudinal chord forces must be non-negative")
+    if lever_arm <= 0.0:
+        raise ValueError("lever arm z must be positive")
+
+    moment_magnitude = abs(moment)
+    flexural_tension = tension_low is flexural_tension_low
+    face_moment_signed = moment_magnitude if flexural_tension else -moment_magnitude
+    mv = shear_force * lever_arm
+    mt = torsion_force * lever_arm / 2.0
+    shear_bending_tension = max(face_moment_signed + mv, 0.0)
+    total = shear_bending_tension + mt
+    utilisation = ratio(total, resistance)
+    passed = utilisation <= 1.0 + 1.0e-9
+
+    if flexural_tension:
+        formula = "8.51"
+        chord_role = "flexural_tension"
+        chord_force = moment_magnitude / lever_arm + shear_force + axial / 2.0
+        force_sign = "tension" if chord_force >= 0.0 else "compression"
+    else:
+        formula = "8.52"
+        chord_role = "flexural_compression"
+        # Positive Fcd denotes compression; a negative result denotes tension in
+        # the chord that was in flexural compression before NVd was applied.
+        chord_force = moment_magnitude / lever_arm - shear_force + axial / 2.0
+        force_sign = "compression" if chord_force >= 0.0 else "tension"
+
+    return {
+        "m_ed": moment_magnitude,
+        "m_ed_signed": moment,
+        "face_m_ed_signed": face_moment_signed,
+        "m_rd": resistance,
+        "ftd_v": shear_force,
+        "n_vd": shear_force,
+        "ftd_t": torsion_force,
+        "n_ed": axial,
+        "z": lever_arm,
+        "mv": mv,
+        "mt": mt,
+        "m_total": total,
+        "util": utilisation,
+        "ok": passed,
+        "status": "PASS" if passed else "FAIL",
+        "capped": False,
+        "cap_shear_force": False,
+        "mv_uncapped": mv,
+        "shear_headroom": max(resistance - max(face_moment_signed, 0.0), 0.0),
+        "shear_term_selection": "uncapped",
+        "tension_low": tension_low,
+        "flexural_tension_low": flexural_tension_low,
+        "chord_role": chord_role,
+        "chord_formula": formula,
+        "chord_force_kn": chord_force,
+        "chord_force_sign": force_sign,
+        "axial_force_conditioned_in_m_rd": True,
+    }
+
+
 def _dkna_number(value) -> float | None:
     """Return one finite non-Boolean real, or ``None`` when it is malformed."""
 

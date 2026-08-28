@@ -868,7 +868,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ("shear.chord.demand", "2023"): _result(
         "M<sub>Ed,total</sub>", "kNm",
         ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
-        ("M<sub>Ed</sub>", "bending demand on the chord", "kNm"),
+        ("M<sub>face</sub>", "signed bending demand on the physical face", "kNm"),
         ("N<sub>Vd</sub>", "shear-induced longitudinal force", "kN"),
         ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
         ("z", "internal lever arm", "m"),
@@ -907,6 +907,14 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
         ("M<sub>Ed</sub>", "bending demand on the chord", "kNm"),
         ("Delta F<sub>td</sub>", "shear-induced longitudinal tension", "kN"),
+        ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
+        ("z", "internal lever arm", "m"),
+    ),
+    ("combined.chord.demand", "2023"): _result(
+        "M<sub>Ed,total</sub>", "kNm",
+        ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
+        ("M<sub>face</sub>", "signed bending demand on the physical face", "kNm"),
+        ("N<sub>Vd</sub>", "shear-induced longitudinal force", "kN"),
         ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
         ("z", "internal lever arm", "m"),
     ),
@@ -1195,9 +1203,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 144:
+    if len(_CONTRACTS) != 145:
         raise RuntimeError(
-            f"Expected 144 report equation contracts, got {len(_CONTRACTS)}."
+            f"Expected 145 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):
