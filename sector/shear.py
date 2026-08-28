@@ -443,6 +443,67 @@ def _explicit_links_lever_arm(z_mm: Optional[float]) -> Optional[float]:
     return value if math.isfinite(value) and value > 0.0 else None
 
 
+LINKS_2023_AXIAL_COMPRESSION_REASON = (
+    "2023 axial-compression applicability conditions were not demonstrated"
+)
+
+
+def _links_2023_axial_applicability(
+    n_ed_comp_kn: float,
+    ac_m2: Optional[float],
+) -> dict:
+    """Retain the axial-compression applicability evidence for 8.2.3(11).
+
+    Sector's cross-section model retains the total net axial action, but it does
+    not select an ``N_Edw`` allocation or establish the action-state compression-
+    chord depth. It therefore cannot determine the simplified-method condition,
+    the high-axial-force branch, or whether Annex G is required.
+    """
+
+    try:
+        n_comp = float(n_ed_comp_kn)
+        area = None if ac_m2 is None else float(ac_m2)
+    except (TypeError, ValueError, OverflowError):
+        n_comp = math.nan
+        area = None
+    input_valid = math.isfinite(n_comp) and (
+        area is None or (math.isfinite(area) and area > 0.0)
+    )
+    compression_present = bool(input_valid and n_comp > 0.0)
+    mean_compression = (
+        n_comp / area / 1000.0
+        if input_valid and area is not None
+        else None
+    )
+    return {
+        "input_valid": input_valid,
+        "net_axial_compression_kn": n_comp if math.isfinite(n_comp) else None,
+        "gross_concrete_area_m2": area if input_valid else None,
+        "mean_compression_mpa": mean_compression,
+        "compression_present": compression_present,
+        "web_force_condition_required": compression_present,
+        "web_force_condition_demonstrated": (
+            False if compression_present else None
+        ),
+        "selected_web_force_kn": None,
+        "web_force_limit_kn": None,
+        "chord_depth_condition_required": (
+            None if compression_present else False
+        ),
+        "chord_depth_condition_demonstrated": (
+            False if compression_present else None
+        ),
+        "action_compression_chord_depth_mm": None,
+        "compression_chord_depth_limit_mm": None,
+        "simplified_method_applicable": bool(input_valid and not compression_present),
+        "separate_member_assessment_required": compression_present,
+        "annex_g_requirement_determined": (
+            False if compression_present else None
+        ),
+        "clause": "DS/EN 1992-1-1:2023, 8.2.3(11) and Annex G",
+    }
+
+
 def vrd_links_2023(
     fck: float,
     code,
@@ -457,6 +518,8 @@ def vrd_links_2023(
     fcd_mpa: Optional[float] = None,
     gamma_s: Optional[float] = None,
     v_ed_kn: float = 0.0,
+    n_ed_comp_kn: float = 0.0,
+    ac_m2: Optional[float] = None,
 ) -> dict:
     """Shear resistance with vertical links, EN 1992-1-1:2023, 8.2.3.
 
@@ -470,10 +533,59 @@ def vrd_links_2023(
     # The simplified 2023 value nu = 0.5 is independent of fck, but retain fck as
     # entered so a worked calculation can show the complete given-data set.
     z = _explicit_links_lever_arm(z_mm)
+    axial_applicability = _links_2023_axial_applicability(
+        n_ed_comp_kn,
+        ac_m2,
+    )
+    if math.isfinite(float(d_mm)) and float(d_mm) > 0.0:
+        axial_applicability["compression_chord_depth_limit_mm"] = 0.25 * float(
+            d_mm
+        )
     gs = code.gamma_s if gamma_s is None else float(gamma_s)
     # Callers must supply the final user-defined design strength. Reconstructing it
     # from a preset here could silently ignore edited partial factors.
     fcd = 0.0 if fcd_mpa is None else float(fcd_mpa)
+    if axial_applicability["compression_present"]:
+        return dict(
+            vrd_s=None,
+            vrd_max=None,
+            vrd=None,
+            cot=None,
+            theta_deg=None,
+            z=None,
+            fywd=None,
+            nu=0.5,
+            nu1=0.5,
+            alpha_cw=None,
+            sigma_cp=axial_applicability["mean_compression_mpa"],
+            fcd=fcd,
+            gamma_s=gs,
+            asw_over_s=asw_over_s,
+            rho_w=None,
+            tau_ed=None,
+            tau_rd_sy=None,
+            tau_rd_max=None,
+            sigma_cd=None,
+            nu_fcd=None,
+            governs="none",
+            model="2023",
+            axial_applicability=axial_applicability,
+            valid=False,
+            calculation_state="NOT ASSESSED",
+            reason=LINKS_2023_AXIAL_COMPRESSION_REASON,
+            fck=fck,
+            bw=bw_mm,
+            d=d_mm,
+            fywk=fywk,
+            cot_min=cot_min,
+            cot_max=cot_max,
+            tan=None,
+            sin_cos=None,
+            cot_unconstrained=None,
+            angle_selection="none",
+            angle_a=None,
+            angle_b=None,
+        )
     if (
         z is None
         or d_mm <= 0.0
@@ -481,6 +593,7 @@ def vrd_links_2023(
         or asw_over_s <= 0.0
         or fcd <= 0.0
         or gs <= 0.0
+        or not axial_applicability["input_valid"]
     ):
         arm_unavailable = z is None
         unavailable_value = None if arm_unavailable else 0.0
@@ -507,6 +620,7 @@ def vrd_links_2023(
             nu_fcd=0.5 * max(fcd, 0.0),
             governs="none",
             model="2023",
+            axial_applicability=axial_applicability,
             valid=False,
             calculation_state=("NOT ASSESSED" if arm_unavailable else "INVALID"),
             reason=(
@@ -572,6 +686,7 @@ def vrd_links_2023(
         nu_fcd=nu * fcd,
         governs=governs,
         model="2023",
+        axial_applicability=axial_applicability,
         valid=True,
     )
     result.update(_angle_fields(angle, a, b), fck=fck, bw=bw_mm, d=d_mm, fywk=fywk)
@@ -605,6 +720,8 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
             fcd_mpa=fcd_mpa,
             gamma_s=gamma_s,
             v_ed_kn=v_ed_kn,
+            n_ed_comp_kn=n_ed_comp_kn,
+            ac_m2=ac_m2,
         )
     z = _explicit_links_lever_arm(z_mm)
     gs = code.gamma_s if gamma_s is None else float(gamma_s)

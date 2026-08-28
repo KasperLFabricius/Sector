@@ -502,6 +502,18 @@ def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     assert "per action" not in text                       # stale pre-v0.69 wording
 
 
+def test_manual_documents_2023_axial_compression_applicability_boundary():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+
+    assert "conservative applicability boundary" in text
+    assert "net axial compression is positive" in text
+    assert "force assigned to the web" in text
+    assert "action-state compression-chord depth" in text
+    assert "8.2.3(11)" in text
+    assert "The reinforced-shear result is therefore NOT ASSESSED" in text
+    assert "including Annex G" in text
+
+
 def test_manual_documents_both_2023_chords_and_the_exact_failed_fixture():
     text = "\n".join(
         block[1] for block in manual.manual_blocks() if block[0] == "md"

@@ -11440,6 +11440,14 @@ def results_overview_view(inp, results, *, stale=False):
             st.caption(
                 f"{row['check']} - {row['status']}: {row.get('note') or '-'}"
             )
+        elif (
+            str(row.get("view") or "") == "Shear"
+            and str(row.get("status") or "").upper() == "NOT ASSESSED"
+            and row.get("note")
+        ):
+            st.caption(
+                f"{row['check']} - NOT ASSESSED: {row['note']}"
+            )
 
     if information_rows:
         st.markdown("**Scope and calculation state**")
@@ -13665,14 +13673,26 @@ def shear_view(inp, results):
         )
     util = sh["util"]
     ok = viz.util_ok(util)
+    links_res = (sh.get("links") or {}).get("res") or {}
+    axial_compression_guarded = (
+        links_res.get("reason") == shear.LINKS_2023_AXIAL_COMPRESSION_REASON
+    )
     m1, m2, m3 = st.columns(3)
     signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
     m1.metric(f"Applied {action_math}", f"{signed_v_ed:.3f} kN")
     m2.metric(r"Resistance $V_{Rd,c}$", f"{res['vrd_c']:.3f} kN")
     util_txt = _pct(util)
     m3.metric(f"Utilisation {util_math}", util_txt,
-              delta=("OK" if ok else "Over limit"),
-              delta_color=("normal" if ok else "inverse"))
+              delta=(None if axial_compression_guarded
+                     else ("OK" if ok else "Over limit")),
+              delta_color=("off" if axial_compression_guarded
+                           else ("normal" if ok else "inverse")))
+    if axial_compression_guarded:
+        st.caption(
+            r"$V_{Rd,c}$ and its ratio are retained as non-governing "
+            "concrete-only context; the selected reinforced shear check is "
+            "NOT ASSESSED."
+        )
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
                  "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
