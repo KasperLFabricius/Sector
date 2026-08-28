@@ -2106,6 +2106,64 @@ def test_shear_face_mrd_preserves_conditional_and_pure_axis_states(
     assert capacity.shear_face_mrd(inp, "x", True, 25.0) == (0.0, False)
 
 
+def test_shear_face_mrd_translates_conditional_and_fallback_resistance(
+    monkeypatch,
+):
+    inp = _member_input()
+    received = {}
+
+    def conditional(*args, **kwargs):
+        received.update(kwargs)
+        return 85.0, True
+
+    monkeypatch.setattr(capacity, "conditional_capacity", conditional)
+    assert capacity.shear_face_mrd(
+        inp,
+        "x",
+        True,
+        25.0,
+        moment_reference_shift=30.0,
+    ) == (85.0, True)
+    assert received["own_moment_offset"] == pytest.approx(30.0)
+
+    monkeypatch.setattr(
+        capacity,
+        "conditional_capacity",
+        lambda *args, **kwargs: (0.0, False),
+    )
+    monkeypatch.setattr(
+        capacity,
+        "plastic_capacity_at_angle",
+        lambda *args, **kwargs: _plastic_point(Mx=120.0),
+    )
+    assert capacity.shear_face_mrd(
+        inp,
+        "x",
+        True,
+        25.0,
+        moment_reference_shift=-20.0,
+    ) == (100.0, False)
+    assert capacity.shear_face_mrd(
+        inp,
+        "x",
+        True,
+        25.0,
+        moment_reference_shift=-200.0,
+    ) == (0.0, False)
+
+
+@pytest.mark.parametrize("shift", (True, math.nan, math.inf, "reference"))
+def test_shear_face_mrd_rejects_invalid_reference_shift(shift):
+    with pytest.raises(capacity.CapacityResultError, match="reference shift"):
+        capacity.shear_face_mrd(
+            _member_input(),
+            "x",
+            True,
+            25.0,
+            moment_reference_shift=shift,
+        )
+
+
 def test_shear_face_mrd_propagates_both_unexpected_solver_faults(monkeypatch):
     inp = _member_input()
 
@@ -3038,6 +3096,40 @@ def test_auto_face_uses_centroid_adjusted_moment_not_origin_moment():
     )
     payload, _links = contexts["vy"]["candidates"][0]
     assert payload["m_ed_2023"] == pytest.approx(40.0)
+    assert payload["moment_reference_shift"] == pytest.approx(30.0)
+
+
+def test_2023_chord_reference_includes_eccentric_locked_in_prestress():
+    prestress = _prestress_law()
+    inp = _member_input(
+        P_pl=100.0,
+        Mx_pl=10.0,
+        My_pl=0.0,
+        shear_method=codes.EC2_2023.label,
+        shear_Vy=25.0,
+        shear_components={"vy": {"signed_v_ed": 25.0}},
+        shear_face_y="auto",
+        prestress=prestress,
+        tendons=[(0.15, 0.0, 10.0)],
+        tendon_materials=[prestress],
+    )
+    prestress_force = prestress.Es * prestress.IS * 10.0 / 1000.0
+    prestress_mx_at_centroid = prestress_force * (0.0 - 0.30)
+    expected_shift = 100.0 * 0.30 - prestress_mx_at_centroid
+
+    contexts = capacity.build_directional_shear_contexts(
+        inp,
+        n_prestress=prestress_force,
+        n_ed_comp=-100.0 + prestress_force,
+    )
+    payload, _links = contexts["vy"]["candidates"][0]
+
+    assert payload["m_prestress"] == pytest.approx(
+        prestress_mx_at_centroid
+    )
+    assert payload["moment_reference_shift"] == pytest.approx(expected_shift)
+    assert payload["m_ed_2023"] == pytest.approx(10.0 + expected_shift)
+    assert payload["tension_low"] is True
 
 
 def test_mandatory_faces_are_governed_independently_for_shear_and_combined():
@@ -3711,8 +3803,13 @@ def test_finalize_combined_preserves_every_longitudinal_candidate(monkeypatch):
                         "cot": 1.5},
                 "util": 0.30,
                 "delta_ftd": 15.0,
+                "model_2023": True,
                 "chord": exact,
                 "chord_candidates": [fallback, exact],
+                "longitudinal_assessment": {
+                    "status": "NOT ASSESSED",
+                    "reason": "required_longitudinal_chord_coverage_incomplete",
+                },
             },
             "v_ed": 30.0,
         },
@@ -3728,4 +3825,5 @@ def test_finalize_combined_preserves_every_longitudinal_candidate(monkeypatch):
     capacity.finalize_combined(inp, out)
 
     assert out["combined"]["longitudinal"] is exact
+    assert out["combined"]["longitudinal_model_2023"] is True
     assert out["combined"]["longitudinal_candidates"] == [fallback, exact]

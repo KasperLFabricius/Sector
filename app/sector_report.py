@@ -7402,6 +7402,7 @@ class ReportBuilder:
         # Longitudinal chord under M + V (+ T), at the member strut angle -- the
         # same check the combined section shows; printed here so a shear + bending
         # run without torsion still documents it.
+        chord_assessment = links.get("longitudinal_assessment") or {}
         ch = links.get("chord")
         if ch is not None and ch.get("valid"):
             self._h2("Longitudinal chord: bending + shear"
@@ -7440,7 +7441,6 @@ class ReportBuilder:
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
             fallback = presentation.required_chord_fallback(links)
             fell_back = fallback is not None
-            chord_assessment = links.get("longitudinal_assessment") or {}
             chord_status = str(
                 chord_assessment.get("status") or "NOT ASSESSED"
             ).upper()
@@ -7545,7 +7545,9 @@ class ReportBuilder:
                         font=6.7,
                     )
                 self._small(
-                    presentation.result_reason(
+                    "Longitudinal chord assessment: "
+                    f"{chord_status}. "
+                    + presentation.result_reason(
                         chord_assessment.get("reason"),
                         "shear",
                         context="report longitudinal chord assessment",
@@ -7554,6 +7556,20 @@ class ReportBuilder:
             self._chord_off_block(
                 links.get("chord_off"),
                 assessment_complete=assessment_complete,
+            )
+        elif model_2023 and isinstance(chord_assessment, Mapping):
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            self._h2("Required 2023 longitudinal chord faces")
+            self._small(
+                "Longitudinal chord assessment: "
+                f"{chord_status}. "
+                + presentation.result_reason(
+                    chord_assessment.get("reason"),
+                    "shear",
+                    context="report longitudinal chord assessment",
+                )
             )
 
     def _combined(self):
@@ -8091,6 +8107,24 @@ class ReportBuilder:
             self._chord_off_block(
                 c.get("chord_off"),
                 assessment_complete=assessment_complete,
+            )
+        elif (
+            c.get("longitudinal_model_2023") is True
+            and isinstance(c.get("longitudinal_assessment"), Mapping)
+        ):
+            chord_assessment = c["longitudinal_assessment"]
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            self._h2("Required 2023 longitudinal chord faces")
+            self._small(
+                "Longitudinal chord assessment: "
+                f"{chord_status}. "
+                + presentation.result_reason(
+                    chord_assessment.get("reason"),
+                    "shear",
+                    context="report longitudinal chord assessment",
+                )
             )
         else:
             self._small(f"Additional longitudinal steel: torsion "

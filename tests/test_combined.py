@@ -833,6 +833,33 @@ def _set_and_click(at, button_key, *changes):
     return at.run()
 
 
+def _translate_section_y(at, offset_mm):
+    """Translate every section point while reseeding the rendered editors."""
+    _goto_page(at, "Inputs")
+    editors = {
+        "corners_base": "ed_corners",
+        "hole_base": "ed_hole",
+        "bars_base": "ed_bars",
+        "tendons_base": "ed_tendons",
+    }
+    for base_key, editor_key in editors.items():
+        table = at.session_state[base_key].copy(deep=True)
+        if "y (mm)" in table.columns:
+            table["y (mm)"] = table["y (mm)"] + offset_mm
+        try:
+            version = at.session_state[editor_key + "_ver"]
+        except KeyError:
+            version = 0
+        at.session_state[base_key] = table
+        at.session_state[editor_key + "_ver"] = version + 1
+        try:
+            del at.session_state[editor_key]
+        except KeyError:
+            pass
+    at.run()
+    return at
+
+
 def _enable_all(at, mv_independent=False):
     _set(
         at,
@@ -1698,6 +1725,68 @@ def test_app_2023_shear_retains_both_signed_longitudinal_chords(
     assert links["longitudinal_assessment"]["status"] in {"PASS", "FAIL"}
 
 
+def test_app_2023_chords_are_invariant_to_section_reference_translation():
+    at = _fresh().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "pl_P", 100.0),
+        ("number_input", "pl_Mx", 20.0),
+        ("number_input", "shear_V", 150.0),
+    )
+    assert not at.exception
+    centred_links = at.session_state["results"]["shear"]["links"]
+    centred = {
+        candidate["tension_low"]: candidate
+        for candidate in centred_links["chord_candidates"]
+        if candidate["role"] == "shear_axis"
+    }
+
+    _translate_section_y(at, 300.0)
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", -10.0),
+    )
+
+    assert not at.exception
+    shifted_links = at.session_state["results"]["shear"]["links"]
+    shifted = {
+        candidate["tension_low"]: candidate
+        for candidate in shifted_links["chord_candidates"]
+        if candidate["role"] == "shear_axis"
+    }
+    assert shifted_links["m_ed_2023"] == pytest.approx(20.0)
+    assert shifted_links["moment_reference_shift"] == pytest.approx(30.0)
+    assert set(shifted) == {True, False}
+    assert shifted[True]["chord_role"] == "flexural_tension"
+    assert shifted[False]["chord_role"] == "flexural_compression"
+    for tension_low in (True, False):
+        assert shifted[tension_low]["m_ed_origin_signed"] == pytest.approx(
+            -10.0
+        )
+        assert shifted[tension_low]["moment_reference_shift"] == pytest.approx(
+            30.0
+        )
+        assert shifted[tension_low]["face_m_ed_signed"] == pytest.approx(
+            centred[tension_low]["face_m_ed_signed"]
+        )
+        assert shifted[tension_low]["m_rd"] == pytest.approx(
+            centred[tension_low]["m_rd"],
+            rel=2.0e-6,
+        )
+        assert shifted[tension_low]["util"] == pytest.approx(
+            centred[tension_low]["util"],
+            rel=2.0e-6,
+        )
+
+
 def test_app_2023_shear_with_torsion_retains_complete_shifted_chords():
     at = _fresh().run()
     _set(
@@ -1876,10 +1965,16 @@ def test_failed_2023_chord_reaches_every_report_profile(monkeypatch, profile):
 def _app_with_incomplete_2023_chord(monkeypatch):
     original = capacity.shear_face_mrd
 
-    def one_face_unavailable(inp, axis, tension_low, m_off=0.0):
+    def one_face_unavailable(
+        inp,
+        axis,
+        tension_low,
+        m_off=0.0,
+        **kwargs,
+    ):
         if tension_low is False:
             return 0.0, False
-        return original(inp, axis, tension_low, m_off=m_off)
+        return original(inp, axis, tension_low, m_off=m_off, **kwargs)
 
     monkeypatch.setattr(capacity, "shear_face_mrd", one_face_unavailable)
     at = _fresh().run()
@@ -1959,6 +2054,101 @@ def test_incomplete_2023_chord_is_not_assessed_in_every_report_profile(
         assert "Required 2023 longitudinal chord faces" in text
         assert "(8.51)" in text
         assert "Flexural tension" in text
+
+
+def _app_with_no_2023_chord_candidate(monkeypatch):
+    monkeypatch.setattr(
+        capacity,
+        "shear_face_mrd",
+        lambda *args, **kwargs: (0.0, False),
+    )
+    at = _fresh().run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+    )
+    _set(
+        at,
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "pl_Mx", 90.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    return at
+
+
+def test_app_2023_zero_chord_candidates_remain_visibly_not_assessed(
+    monkeypatch,
+):
+    at = _app_with_no_2023_chord_candidate(monkeypatch)
+
+    assert not at.exception
+    results = at.session_state["results"]
+    links = results["shear"]["links"]
+    assert links["model_2023"] is True
+    assert links["chord"] is None
+    assert links["chord_candidates"] == []
+    assert links["longitudinal_assessment"]["status"] == "NOT ASSESSED"
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        str(item.value)
+        for item in (*at.warning, *at.info, *at.caption, *at.markdown)
+    )
+    assert "Complete both required longitudinal chord checks" in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Shear longitudinal chords"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_zero_2023_chord_candidates_publish_assessment_without_legacy_copy(
+    monkeypatch,
+    profile,
+):
+    import io
+
+    import pypdf
+
+    import sector_report
+
+    at = _app_with_no_2023_chord_candidate(monkeypatch)
+    assert not at.exception
+    inputs = at.session_state["_latest_inputs"]
+    results = at.session_state["results"]
+    results["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inputs, results)
+    )
+    pdf = sector_report.build_report(
+        {},
+        inputs,
+        results,
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in pypdf.PdfReader(io.BytesIO(pdf)).pages
+    )
+
+    assert "Shear longitudinal chords" in text
+    assert "NOT ASSESSED" in text
+    assert "Complete both required longitudinal chord checks" in text
+    assert "SHEAR-LONGITUDINAL" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Required 2023 longitudinal chord faces" in text
+        assert "Enable shear links for the full utilisation check" not in text
+        assert "both beyond the bending steel" not in text
 
 
 def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():

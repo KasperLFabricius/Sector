@@ -1505,6 +1505,7 @@ def conditional_capacity(
     tension_low: bool,
     m_off: float,
     *,
+    own_moment_offset: float = 0.0,
     prestress: "Prestress | None" = None,
     bar_materials: "Sequence[MildSteel] | None" = None,
     tendon_materials: "Sequence[Prestress] | None" = None,
@@ -1520,7 +1521,9 @@ def conditional_capacity(
     IS available -- the point on the plastic M-M envelope, on the branch that
     tensions the chosen face, where the companion moment equals ``m_off`` (kNm,
     signed, in the solver's convention) -- as the magnitude of the moment about
-    ``axis`` there.
+    ``axis`` there. ``own_moment_offset`` translates that own-axis envelope moment
+    to a declared section reference before branch selection and publication; the
+    default preserves the solver's global-origin convention.
 
     The envelope is found by a full-circle neutral-axis scan (not a fixed
     quarter-turn bracket): every angle where the companion moment crosses ``m_off``
@@ -1544,6 +1547,10 @@ def conditional_capacity(
     section.require_valid_analysis_inputs()
     P = finite_action(P, "axial force P")
     m_off = finite_action(m_off, "coexisting bending moment")
+    own_moment_offset = finite_action(
+        own_moment_offset,
+        "own-axis moment reference offset",
+    )
     n_bar = len(section.bar_arrays()[2])
     n_tendon = len(section.tendon_arrays()[2])
     bar_laws = _material_sequence(steel, bar_materials, n_bar, "bar")
@@ -1568,6 +1575,21 @@ def conditional_capacity(
     def _own(pt):
         return pt.Mx if axis == "x" else pt.My
 
+    def _face_own(pt):
+        """Return the referenced own-moment magnitude on the selected face."""
+        if not pt.converged:
+            return None
+        referenced = _own(pt) + own_moment_offset
+        return (
+            abs(referenced)
+            if (
+                (referenced > 0.0)
+                if want_positive
+                else (referenced < 0.0)
+            )
+            else None
+        )
+
     target = m_off
     want_positive = tension_low        # the chosen face carries own of this sign
 
@@ -1578,17 +1600,17 @@ def conditional_capacity(
     p0 = _cap(v0)
     if not p0.converged:
         return 0.0, False
-    scale = max(1.0, abs(_own(p0)), abs(target))
+    scale = max(
+        1.0,
+        abs(_own(p0) + own_moment_offset),
+        abs(target),
+    )
     if abs(_companion(p0) - target) <= 1.0e-9 * scale:
-        return abs(_own(p0)), True
-
-    def _face_own(pt):
-        """|own| if ``pt`` is on the chosen tension face (own of the wanted sign),
-        else None."""
-        if not pt.converged:
-            return None
-        o = _own(pt)
-        return abs(o) if ((o > 0.0) if want_positive else (o < 0.0)) else None
+        if own_moment_offset == 0.0:
+            return abs(_own(p0)), True
+        face_capacity = _face_own(p0)
+        if face_capacity is not None:
+            return face_capacity, True
 
     # Set by _refine/_extremum when a solve INSIDE a bracketed crossing fails to
     # converge (as opposed to a crossing legitimately landing on the wrong face).

@@ -9815,7 +9815,20 @@ def _run_uniaxial_capacity_checks(inp, out):
         chord_off_faces = []       # off-axis chord faces (both), built when torsion is live
         if links_valid and pl is not None and pl.get("util") is not None:
             l_axis, tlow = link_ctx["axis"], link_ctx["tension_low"]
-            m_signed = inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
+            model_2023 = bool(link_ctx.get("model_2023"))
+            m_origin_signed = (
+                inp["Mx_pl"] if l_axis == "x" else inp["My_pl"]
+            )
+            m_signed = (
+                link_ctx["m_ed_2023"]
+                if model_2023
+                else m_origin_signed
+            )
+            moment_reference_shift = (
+                link_ctx["moment_reference_shift"]
+                if model_2023
+                else 0.0
+            )
             off_signed = inp["My_pl"] if l_axis == "x" else inp["Mx_pl"]
             off_max = pl["max_my"] if l_axis == "x" else pl["max_mx"]
             off_min = pl.get("min_my" if l_axis == "x" else "min_mx", -off_max)
@@ -9836,7 +9849,6 @@ def _run_uniaxial_capacity_checks(inp, out):
             # section with asymmetric steel). The tension face keeps the legacy
             # fallback (pure-axis then sweep extremum) so a failed conditional solve
             # still reports; the torsion-only face is only used on an honest solve.
-            model_2023 = bool(link_ctx.get("model_2023"))
             if model_2023:
                 # Formulae (8.51) and (8.52) require both physical flexural
                 # chords. The applied moment sign establishes which face is the
@@ -9858,7 +9870,13 @@ def _run_uniaxial_capacity_checks(inp, out):
                     shear_faces.append((not tlow, False))
             for f_tlow, gets_shift in shear_faces:
                 m_ed_f = combined.chord_applied_moment(m_signed, f_tlow)
-                m_rd_f, cond_f = _shear_face_mrd(inp, l_axis, f_tlow, m_off=off_signed)
+                m_rd_f, cond_f = _shear_face_mrd(
+                    inp,
+                    l_axis,
+                    f_tlow,
+                    m_off=off_signed,
+                    moment_reference_shift=moment_reference_shift,
+                )
                 if model_2023:
                     # Both 2023 chord equations require the honest face-specific
                     # conditional resistance. A pure-axis substitute cannot close
@@ -9902,6 +9920,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                          off_util=off_util, m_off=off_signed, conditional=cond_f,
                          gets_shift=gets_shift,
                          m_ed_signed=m_signed,
+                         m_ed_origin_signed=m_origin_signed,
+                         moment_reference_shift=moment_reference_shift,
                          flexural_tension_low=flexural_tension_low))
             # Off-axis chord(s): with torsion live, the OTHER axis' tension chords
             # carry their bending tension plus a share of the distributed torsion
@@ -9924,7 +9944,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                 for o_tlow in (True, False):
                     m_ed_o = combined.chord_applied_moment(off_signed, o_tlow)
                     m_rd_o, o_cond = _shear_face_mrd(inp, o_axis, o_tlow,
-                                                     m_off=m_signed)
+                                                     m_off=m_origin_signed)
                     if not o_cond:
                         continue
                     # Lever arm about the off axis: the exact face-aligned Plastic
@@ -9938,7 +9958,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                     chord_off_faces.append(
                         dict(m_ed=m_ed_o, m_rd=m_rd_o, z_m=z_o_mm / 1000.0,
                              z_src=z_o_src, axis=o_axis, tension_low=o_tlow,
-                             m_off=m_signed, conditional=True))
+                             m_off=m_origin_signed, conditional=True))
 
         # The scan band comes from the one physical compression-strut input. A
         # companion that is invalid or carries no load does not join the objective,
@@ -10322,6 +10342,12 @@ def _run_uniaxial_capacity_checks(inp, out):
                                 conditional=_cf["conditional"],
                                 has_torsion=tors_live,
                                 gets_shift=_cf["gets_shift"],
+                                m_ed_origin_signed=_cf[
+                                    "m_ed_origin_signed"
+                                ],
+                                moment_reference_shift=_cf[
+                                    "moment_reference_shift"
+                                ],
                                 off_not_evaluated=off_not_evaluated,
                                 theta_mode=theta_mode_str,
                                 z_src=_cf.get("z_src"))
@@ -10377,6 +10403,11 @@ def _run_uniaxial_capacity_checks(inp, out):
                 cot_limit_lo=lo, cot_limit_hi=hi,
                 angle_limits=angle_limits,
                 model_2023=link_ctx.get("model_2023", False),
+                m_ed_2023=link_ctx.get("m_ed_2023"),
+                moment_reference_shift=link_ctx.get(
+                    "moment_reference_shift",
+                    0.0,
+                ),
                 z_source=link_ctx["z_src"],
                 z_component=link_ctx["z_component"],
                 z_source_angle_deg=link_ctx["z_source_angle_deg"],

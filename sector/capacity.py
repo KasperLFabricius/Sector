@@ -1208,16 +1208,35 @@ def shear_lever_arm(inp, axis, tension_low, d_mm):
     return lever * 1000.0, "plastic internal lever arm"
 
 
-def shear_face_mrd(inp, axis, tension_low, m_off=0.0):
-    """Return chord ``M_Rd`` conditional on the coexisting off-axis moment."""
+def shear_face_mrd(
+    inp,
+    axis,
+    tension_low,
+    m_off=0.0,
+    *,
+    moment_reference_shift=0.0,
+):
+    """Return chord ``M_Rd`` conditional on the coexisting off-axis moment.
+
+    ``moment_reference_shift`` translates the own-axis resistance from the
+    plastic solver's coordinate origin to the section reference used by the
+    applied chord moment. The off-axis target remains in the origin frame because
+    applying the same translation to its demand and envelope cancels exactly.
+    """
     if inp["section"] is None:
         return 0.0, False
     angle = _face_angle(axis, tension_low)
     _require_valid_input_geometry(inp)
+    reference_shift = _finite_solver_result(
+        moment_reference_shift,
+        "chord moment reference shift",
+    )
     prestress = inp["prestress"] if inp["tendons"] else None
     conditional = conditional_capacity(
         inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
-        axis, tension_low, m_off, prestress=prestress,
+        axis, tension_low, m_off,
+        own_moment_offset=reference_shift,
+        prestress=prestress,
         bar_materials=inp.get("bar_materials"),
         tendon_materials=inp.get("tendon_materials"),
     )
@@ -1256,7 +1275,19 @@ def shear_face_mrd(inp, axis, tension_low, m_off=0.0):
         ),
         "pure-axis chord resistance",
     )
-    return abs(moment), False
+    referenced_moment = moment + reference_shift
+    if reference_shift == 0.0:
+        return abs(moment), False
+    correct_face = (
+        referenced_moment > 0.0
+        if tension_low
+        else referenced_moment < 0.0
+    )
+    return (
+        (abs(referenced_moment), False)
+        if correct_face
+        else (0.0, False)
+    )
 
 
 def tube_torsion(
@@ -1522,10 +1553,12 @@ def _build_shear_face_context(
     else:
         gamma_v = None
     if axis == "x":
-        m_ed_2023 = inp["Mx_pl"] + inp["P_pl"] * cy - mx_prestress
+        moment_reference_shift = inp["P_pl"] * cy - mx_prestress
+        m_ed_2023 = inp["Mx_pl"] + moment_reference_shift
         m_prestress = mx_prestress
     else:
-        m_ed_2023 = inp["My_pl"] + inp["P_pl"] * cx - my_prestress
+        moment_reference_shift = inp["P_pl"] * cx - my_prestress
+        m_ed_2023 = inp["My_pl"] + moment_reference_shift
         m_prestress = my_prestress
     result = shear.vrd_c(
         fck, code, bw_mm, d_mm, asl, n_ed_comp, area,
@@ -1557,6 +1590,7 @@ def _build_shear_face_context(
         "n_prestress": n_prestress,
         "n_ed_comp": n_ed_comp,
         "m_ed_2023": m_ed_2023,
+        "moment_reference_shift": moment_reference_shift,
         "m_prestress": m_prestress,
         "centroid": (cx, cy),
         "method": inp["shear_method"],
@@ -1633,6 +1667,10 @@ def _build_shear_face_context(
         "component": component,
         "link_legs": link_legs,
         "model_2023": model_2023,
+        "m_ed_2023": m_ed_2023,
+        "moment_reference_shift": moment_reference_shift,
+        "m_prestress": m_prestress,
+        "centroid": (cx, cy),
         "angle_limits": angle_limits,
     }
     return payload, context
@@ -2365,6 +2403,8 @@ def finalize_combined(inp, out):
             "m_v_independent": independent_mv,
             "m_v_separation_condition": separation_condition,
         }
+        if isinstance(links, Mapping) and links.get("model_2023") is True:
+            payload["longitudinal_model_2023"] = True
         if torsion_assessment_status is not None:
             payload["torsion_assessment_status"] = torsion_assessment_status
             payload["torsion_assessment_reason"] = torsion_assessment_reason
@@ -2450,6 +2490,8 @@ def finalize_combined(inp, out):
             else torsion_out.get("member_angle_selection")
         ),
     }
+    if isinstance(links, Mapping) and links.get("model_2023") is True:
+        payload["longitudinal_model_2023"] = True
     longitudinal = links.get("chord") if links is not None else None
     if longitudinal is not None:
         payload["longitudinal"] = longitudinal
