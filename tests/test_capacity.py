@@ -3523,6 +3523,46 @@ def test_tube_torsion_rejects_unchecked_wall_geometry_before_kernels(
     assert result["util"] is None
 
 
+def test_tube_torsion_rejects_assessed_looking_compound_geometry_before_kernels(
+    monkeypatch,
+):
+    outer = [
+        (0.0, 0.0),
+        (0.3, 0.0),
+        (0.3, 0.1),
+        (0.1, 0.1),
+        (0.1, 0.3),
+        (0.0, 0.3),
+    ]
+    bars = [
+        (0.15, 0.02, 100.0),
+        (0.28, 0.05, 100.0),
+        (0.20, 0.08, 100.0),
+        (0.08, 0.20, 100.0),
+        (0.05, 0.28, 100.0),
+        (0.02, 0.15, 100.0),
+    ]
+    tube = torsion.tube_properties_with_reinforcement(outer, None, bars)
+    reference = capacity.build_torsion_context(
+        _torsion_input(torsion_on=True),
+        0.0,
+    )
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("compound geometry entered the torsion resistance kernel")
+
+    monkeypatch.setattr(torsion, "trd_s_result", forbidden)
+    result = capacity.tube_torsion(tube, 20.0, **reference["_tk"])
+
+    assert tube["valid"] is False
+    assert tube["reason"] == "compound outline requires subdivision"
+    assert result["valid"] is False
+    assert result["assessment_reason"] == "compound outline requires subdivision"
+    assert result["trd"] is None
+    assert result["util"] is None
+    assert result["asl_req"] is None
+
+
 def test_mixed_corner_and_mid_face_wall_evidence_fails_before_solver_until_override(
     monkeypatch,
 ):

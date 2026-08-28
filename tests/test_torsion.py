@@ -186,6 +186,84 @@ def test_side_wall_bars_cannot_supply_missing_walls_through_large_override():
     assert tube["uk"] == 0.0
 
 
+@pytest.mark.parametrize("first_x_m", (0.08, 0.079999))
+def test_true_corner_ownership_is_continuous_across_near_equal_covers(
+    first_x_m,
+):
+    bars = _wall_bars(0.3, 0.6, 0.08)
+    bars[0] = (first_x_m, 0.08, bars[0][2])
+
+    tube = torsion.tube_properties_with_reinforcement(
+        _rect(0.3, 0.6),
+        None,
+        bars,
+    )
+
+    assert tube["valid"] is True
+    assert tube["tef"] == pytest.approx(160.0)
+    assert [wall["bar_indices"] for wall in tube["wall_evidence"]["walls"]] == [
+        (1, 2),
+        (2, 3),
+        (3, 4),
+        (1, 4),
+    ]
+    assert sum(
+        1 in wall["bar_indices"] for wall in tube["wall_evidence"]["walls"]
+    ) == 2
+
+
+def test_only_endpoint_nearest_row_bar_supplies_each_adjoining_wall():
+    bars = [
+        *((x, 0.05, 100.0) for x in (0.05, 0.11, 0.17, 0.23, 0.29, 0.35)),
+        (0.05, 0.55, 100.0),
+        (0.35, 0.55, 100.0),
+    ]
+
+    tube = torsion.tube_properties_with_reinforcement(
+        _rect(0.4, 0.6),
+        None,
+        bars,
+    )
+
+    assert tube["valid"] is True
+    assert tube["tef"] == pytest.approx(120.0)
+    assert [wall["bar_indices"] for wall in tube["wall_evidence"]["walls"]] == [
+        (1, 2, 3, 4, 5, 6),
+        (6, 8),
+        (7, 8),
+        (1, 7),
+    ]
+
+
+def test_reinforced_tube_rejects_concave_outline_before_assessment():
+    outer = [
+        (0.0, 0.0),
+        (0.3, 0.0),
+        (0.3, 0.1),
+        (0.1, 0.1),
+        (0.1, 0.3),
+        (0.0, 0.3),
+    ]
+    bars = [
+        (0.15, 0.02, 100.0),
+        (0.28, 0.05, 100.0),
+        (0.20, 0.08, 100.0),
+        (0.08, 0.20, 100.0),
+        (0.05, 0.28, 100.0),
+        (0.02, 0.15, 100.0),
+    ]
+
+    tube = torsion.tube_properties_with_reinforcement(outer, None, bars)
+
+    assert tube["valid"] is False
+    assert tube["reason"] == "compound outline requires subdivision"
+    assert tube["applicability_status"] == "NOT ASSESSED"
+    assert tube["wall_evidence"]["complete"] is False
+    assert tube["tef"] == 0.0
+    assert tube["Ak"] == 0.0
+    assert tube["uk"] == 0.0
+
+
 def test_closer_mid_face_bars_do_not_erase_unequal_corner_wall_evidence():
     bars = [
         (0.04, 0.08, 100.0),
@@ -1623,6 +1701,48 @@ def test_app_unequal_offset_corner_bars_retain_complete_wall_evidence():
         "2, 3",
         "3, 4",
         "1, 4",
+    }
+    assert not at.exception
+
+
+def test_app_near_equal_corner_cover_remains_complete_after_live_edit():
+    at = _fresh()
+    at.run()
+    _apply_rectangle(at, b=300.0, h=600.0)
+    area = math.pi * 20.0**2 / 4.0
+    exact = [
+        (-70.0, -220.0, area),
+        (70.0, -220.0, area),
+        (70.0, 220.0, area),
+        (-70.0, 220.0, area),
+    ]
+    _replace_bar_points(at, exact)
+    _set(
+        at,
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "torsion_T", 25.0),
+    )
+    _calculate(at)
+    exact_result = at.session_state["results"]["torsion"]
+    assert exact_result["tube_valid"] is True
+    assert exact_result["tube"]["tef"] == pytest.approx(160.0)
+
+    near_equal = list(exact)
+    near_equal[0] = (-70.001, -220.0, area)
+    _replace_bar_points(at, near_equal)
+    _calculate(at)
+
+    result = at.session_state["results"]["torsion"]
+    assert result["tube_valid"] is True
+    assert result["resistance_status"] in {"PASS", "FAIL"}
+    assert result["tube"]["tef"] == pytest.approx(160.0)
+    walls = result["tube"]["wall_evidence"]["walls"]
+    assert set(wall["bar_indices"] for wall in walls) == {
+        (1, 2),
+        (2, 3),
+        (3, 4),
+        (1, 4),
     }
     assert not at.exception
 
