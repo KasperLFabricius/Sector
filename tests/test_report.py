@@ -6736,7 +6736,7 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
             "name": "PL-INCOMPLETE",
             "description": "Incomplete longitudinal assessment",
             "n_ed_kn": 0.0, "mx_ed_knm": 60.0, "my_ed_knm": 0.0,
-            "vx_ed_kn": 30.0, "vy_ed_kn": 0.0,
+            "vx_ed_kn": 30.0, "vy_ed_kn": 25.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 15.0,
         },
     ]
@@ -6761,12 +6761,20 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
 
     low = combined_case(0.40)
     governing = combined_case(0.85)
-    incomplete = combined_case(0.95)
-    incomplete["longitudinal_assessment"].update(
+    incomplete_vx = combined_case(0.95)
+    incomplete_vx.update(component="vx", governing_face="negative")
+    incomplete_vy = combined_case(0.90)
+    incomplete_vy.update(component="vy", governing_face="positive")
+    incomplete_vy["longitudinal_assessment"].update(
         status="NOT ASSESSED",
-        util=0.90,
+        util=0.85,
         coverage_complete=False,
     )
+    incomplete = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": {"vx": incomplete_vx, "vy": incomplete_vy},
+    }
     out = {
         "plastic_cases": [
             {

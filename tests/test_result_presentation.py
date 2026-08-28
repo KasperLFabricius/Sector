@@ -2173,6 +2173,20 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
                     "combined": combined_result(0.95, "NOT ASSESSED"),
                 },
             },
+            {
+                "name": "PL-BIAXIAL-INCOMPLETE",
+                "results": {
+                    "plastic": _plastic(),
+                    "combined": {
+                        "method": codes.EC2_2005.label,
+                        "biaxial": True,
+                        "directions": {
+                            "vx": combined_result(0.95, "PASS"),
+                            "vy": combined_result(0.90, "NOT ASSESSED"),
+                        },
+                    },
+                },
+            },
         ]
     }
 

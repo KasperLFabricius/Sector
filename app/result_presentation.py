@@ -957,7 +957,14 @@ def _transverse_metric(family, result):
         if not items:
             items = [result]
         extractor = shear_metric if family == "shear" else combined_metric
-        values = [metric for item in items if (metric := extractor(item)) is not None]
+        metrics = [extractor(item) for item in items]
+        if (
+            family == "combined"
+            and not combined_uses_dkna(result)
+            and any(metric is None for metric in metrics)
+        ):
+            return None
+        values = [metric for metric in metrics if metric is not None]
     else:
         metric = (
             _publication_metric(result.get("util"), allow_positive_infinity=True)
