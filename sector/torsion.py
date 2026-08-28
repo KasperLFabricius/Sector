@@ -503,47 +503,48 @@ def tube_properties_with_reinforcement(
                 return _wall_evidence_invalid(base, evidence["reason"], evidence)
         for wall_index in nearest:
             assignments[wall_index].append((bar_position, distances[wall_index]))
-        distance_records.append((bar_position, distances, tuple(nearest)))
+        distance_records.append((bar_position, (x, y), distances, tuple(nearest)))
 
     # A corner bar is longitudinal reinforcement for both adjoining walls.  The
     # cover offsets to those walls need not be equal, so a per-bar nearest-edge
-    # classification alone loses one legitimate wall.  Supplement each wall with
-    # its closest reinforcement row when that wall adjoins the bar's primary wall;
-    # this retains ordinary side bars while keeping opposite-wall mapping fail-closed.
-    wall_minima = [
-        min(distances[wall_index] for _position, distances, _nearest in distance_records)
-        for wall_index in range(physical_wall_count)
-    ]
-    for bar_position, distances, nearest in distance_records:
-        for wall_index, wall_minimum in enumerate(wall_minima):
-            adjacent_to_primary = bool(
-                physical_wall_count == 1
-                or wall_index in nearest
-                or (
-                    len(nearest) == 1
-                    and (
-                        abs(wall_index - nearest[0]) == 1
-                        or {wall_index, nearest[0]}
-                        == {0, physical_wall_count - 1}
-                    )
-                )
+    # classification alone loses one legitimate wall.  Establish the second-wall
+    # identity from proximity to the shared physical endpoint, using the geometry-
+    # derived A/u thickness as a fixed corner zone.  A manual override must never
+    # expand that zone and turn an ordinary side-wall bar into missing-wall evidence.
+    corner_zone_m = float(base["tef_auto"]) / 1000.0
+    corner_tolerance = max(
+        tolerance_m,
+        8.0 * math.ulp(max(corner_zone_m, 1.0)),
+    )
+    for bar_position, point, distances, nearest in distance_records:
+        if physical_wall_count == 1 or len(nearest) != 1:
+            continue
+        primary = nearest[0]
+        supplemental = []
+        for wall_index in range(physical_wall_count):
+            if wall_index == primary:
+                continue
+            shared_endpoint = None
+            if (primary + 1) % physical_wall_count == wall_index:
+                shared_endpoint = outer_walls[primary][1]
+            elif (wall_index + 1) % physical_wall_count == primary:
+                shared_endpoint = outer_walls[wall_index][1]
+            if shared_endpoint is None:
+                continue
+            endpoint_distance = math.hypot(
+                point[0] - shared_endpoint[0],
+                point[1] - shared_endpoint[1],
             )
-            comparison_tolerance = max(
-                tolerance_m,
-                8.0 * math.ulp(max(distances[wall_index], wall_minimum, 1.0)),
+            if endpoint_distance <= corner_zone_m + corner_tolerance:
+                supplemental.append(wall_index)
+        if len(supplemental) > 1:
+            evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
+            return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        if supplemental:
+            wall_index = supplemental[0]
+            assignments[wall_index].append(
+                (bar_position, distances[wall_index])
             )
-            if (
-                adjacent_to_primary
-                and abs(distances[wall_index] - wall_minimum)
-                <= comparison_tolerance
-                and all(
-                    existing_position != bar_position
-                    for existing_position, _distance in assignments[wall_index]
-                )
-            ):
-                assignments[wall_index].append(
-                    (bar_position, distances[wall_index])
-                )
 
     wall_records = []
     automatic_values = []
@@ -553,6 +554,7 @@ def tube_properties_with_reinforcement(
             evidence["reason"] = "torsion wall reinforcement mapping is incomplete"
             evidence["walls"] = tuple(wall_records)
             return _wall_evidence_invalid(base, evidence["reason"], evidence)
+        assigned = sorted(assigned, key=lambda item: item[0])
         distances_mm = tuple(distance * 1000.0 for _index, distance in assigned)
         a_mm = max(distances_mm)
         lower_mm = 2.0 * a_mm

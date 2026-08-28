@@ -3523,6 +3523,66 @@ def test_tube_torsion_rejects_unchecked_wall_geometry_before_kernels(
     assert result["util"] is None
 
 
+def test_mixed_corner_and_mid_face_wall_evidence_fails_before_solver_until_override(
+    monkeypatch,
+):
+    bars = [
+        (0.04, 0.08, 100.0),
+        (0.36, 0.08, 100.0),
+        (0.36, 0.52, 100.0),
+        (0.04, 0.52, 100.0),
+        (0.20, 0.05, 100.0),
+        (0.20, 0.55, 100.0),
+    ]
+    inp = _torsion_input(
+        outer=_rect(0.4, 0.6),
+        bars=bars,
+        torsion_on=True,
+        torsion_T=100.0,
+        shear_links=True,
+        shear_link_dia=10.0,
+        shear_link_s=150.0,
+        shear_fywk=500.0,
+        strut_cot_min=2.0,
+        strut_cot_max=2.0,
+    )
+    context = capacity.build_torsion_context(inp, 0.0)
+
+    assert context["tube"]["valid"] is False
+    assert context["tube"]["reason"] == (
+        "torsion wall automatic thickness varies by wall"
+    )
+    assert [
+        wall["a_mm"] for wall in context["tube"]["wall_evidence"]["walls"]
+    ] == pytest.approx([80.0, 40.0, 80.0, 40.0])
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("conflicting wall thickness entered the torsion kernel")
+
+    with monkeypatch.context() as isolated:
+        isolated.setattr(torsion, "trd_s_result", forbidden)
+        rejected = capacity.tube_torsion(
+            context["tube"], context["t_ed"], **context["_tk"]
+        )
+    assert rejected["valid"] is False
+    assert rejected["trd"] is None
+    assert rejected["util"] is None
+
+    corrected = capacity.build_torsion_context(
+        dict(inp, torsion_tef=160.0),
+        0.0,
+    )
+    accepted = capacity.tube_torsion(
+        corrected["tube"], corrected["t_ed"], **corrected["_tk"]
+    )
+    assert accepted["tube_valid"] is True
+    assert accepted["tube"]["tef"] == pytest.approx(160.0)
+    assert accepted["trd_s"] == pytest.approx(92.1533845053)
+    assert accepted["trd_max"] == pytest.approx(119.9033379310)
+    assert accepted["trd"] == pytest.approx(92.1533845053)
+    assert accepted["util"] == pytest.approx(1.0851473450)
+
+
 def test_subdivided_tubes_require_complete_unambiguous_wall_mapping():
     rectangles = [
         (150.0, 300.0, 300.0, 600.0),

@@ -100,25 +100,62 @@ def test_reinforcement_wall_lower_bound_selects_complete_300x600_tube(
     )
 
 
-def test_unequal_offset_corner_bars_belong_to_both_adjoining_walls():
+@pytest.mark.parametrize(
+    (
+        "width",
+        "vertical_offset",
+        "override_mm",
+        "valid",
+        "expected_tef",
+        "expected_reason",
+    ),
+    [
+        (0.3, 0.05, 0.0, True, 100.0, None),
+        (
+            0.4,
+            0.08,
+            0.0,
+            False,
+            0.0,
+            "torsion wall automatic thickness varies by wall",
+        ),
+        (0.4, 0.08, 160.0, True, 160.0, None),
+    ],
+)
+def test_unequal_offset_corner_bars_belong_to_both_adjoining_walls(
+    width,
+    vertical_offset,
+    override_mm,
+    valid,
+    expected_tef,
+    expected_reason,
+):
+    horizontal_offset = 0.04
     bars = [
-        (0.04, 0.05, 100.0),
-        (0.26, 0.05, 100.0),
-        (0.26, 0.55, 100.0),
-        (0.04, 0.55, 100.0),
+        (horizontal_offset, vertical_offset, 100.0),
+        (width - horizontal_offset, vertical_offset, 100.0),
+        (width - horizontal_offset, 0.6 - vertical_offset, 100.0),
+        (horizontal_offset, 0.6 - vertical_offset, 100.0),
     ]
 
     tube = torsion.tube_properties_with_reinforcement(
-        _rect(0.3, 0.6),
+        _rect(width, 0.6),
         None,
         bars,
+        tef_override=override_mm,
     )
 
-    assert tube["valid"] is True
-    assert tube["tef"] == pytest.approx(100.0)
+    assert tube["valid"] is valid
+    assert tube["reason"] == expected_reason
+    assert tube["tef"] == pytest.approx(expected_tef)
     walls = tube["wall_evidence"]["walls"]
     assert [wall["a_mm"] for wall in walls] == pytest.approx(
-        [50.0, 40.0, 50.0, 40.0]
+        [
+            vertical_offset * 1000.0,
+            horizontal_offset * 1000.0,
+            vertical_offset * 1000.0,
+            horizontal_offset * 1000.0,
+        ]
     )
     assert [wall["bar_indices"] for wall in walls] == [
         (1, 2),
@@ -126,6 +163,73 @@ def test_unequal_offset_corner_bars_belong_to_both_adjoining_walls():
         (3, 4),
         (1, 4),
     ]
+
+
+def test_side_wall_bars_cannot_supply_missing_walls_through_large_override():
+    tube = torsion.tube_properties_with_reinforcement(
+        _rect(0.6, 0.6),
+        None,
+        [
+            (0.05, 0.20, 100.0),
+            (0.05, 0.40, 100.0),
+            (0.55, 0.20, 100.0),
+            (0.55, 0.40, 100.0),
+        ],
+        tef_override=400.0,
+    )
+
+    assert tube["valid"] is False
+    assert tube["reason"] == "torsion wall reinforcement mapping is incomplete"
+    assert tube["applicability_status"] == "NOT ASSESSED"
+    assert tube["tef"] == 0.0
+    assert tube["Ak"] == 0.0
+    assert tube["uk"] == 0.0
+
+
+def test_closer_mid_face_bars_do_not_erase_unequal_corner_wall_evidence():
+    bars = [
+        (0.04, 0.08, 100.0),
+        (0.36, 0.08, 100.0),
+        (0.36, 0.52, 100.0),
+        (0.04, 0.52, 100.0),
+        (0.20, 0.05, 100.0),
+        (0.20, 0.55, 100.0),
+    ]
+
+    automatic = torsion.tube_properties_with_reinforcement(
+        _rect(0.4, 0.6),
+        None,
+        bars,
+    )
+
+    assert automatic["valid"] is False
+    assert automatic["reason"] == (
+        "torsion wall automatic thickness varies by wall"
+    )
+    assert automatic["applicability_status"] == "NOT ASSESSED"
+    assert automatic["tef"] == 0.0
+    assert automatic["Ak"] == 0.0
+    assert automatic["uk"] == 0.0
+    walls = automatic["wall_evidence"]["walls"]
+    assert [wall["a_mm"] for wall in walls] == pytest.approx(
+        [80.0, 40.0, 80.0, 40.0]
+    )
+    assert [wall["bar_indices"] for wall in walls] == [
+        (1, 2, 5),
+        (2, 3),
+        (3, 4, 6),
+        (1, 4),
+    ]
+
+    overridden = torsion.tube_properties_with_reinforcement(
+        _rect(0.4, 0.6),
+        None,
+        bars,
+        tef_override=160.0,
+    )
+    assert overridden["valid"] is True
+    assert overridden["tef"] == pytest.approx(160.0)
+    assert overridden["tef_selection"] == "user override"
 
 
 @pytest.mark.parametrize(
@@ -1521,6 +1625,163 @@ def test_app_unequal_offset_corner_bars_retain_complete_wall_evidence():
         "1, 4",
     }
     assert not at.exception
+
+
+def test_app_mid_face_bars_do_not_hide_corner_wall_conflict_then_override_recovers():
+    at = _fresh()
+    at.run()
+    _apply_rectangle(at, b=400.0, h=600.0)
+    area = math.pi * 20.0**2 / 4.0
+    _replace_bar_points(
+        at,
+        [
+            (-160.0, -220.0, area),
+            (160.0, -220.0, area),
+            (160.0, 220.0, area),
+            (-160.0, 220.0, area),
+            (0.0, -250.0, area),
+            (0.0, 250.0, area),
+        ],
+    )
+    _set(
+        at,
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "torsion_T", 100.0),
+        ("number_input", "shear_link_dia", 10.0),
+        ("number_input", "shear_link_s", 150.0),
+        ("number_input", "strut_cot_min", 2.0),
+        ("number_input", "strut_cot_max", 2.0),
+    )
+    _calculate(at)
+
+    rejected = at.session_state["results"]["torsion"]
+    assert rejected["tube_valid"] is False
+    assert rejected["resistance_status"] == "NOT ASSESSED"
+    assert rejected["assessment_status"] == "NOT ASSESSED"
+    assert rejected["trd"] is None
+    assert rejected["util"] is None
+    walls = rejected["tube"]["wall_evidence"]["walls"]
+    by_positions = {
+        frozenset(wall["bar_indices"]): wall["a_mm"] for wall in walls
+    }
+    assert by_positions == pytest.approx({
+        frozenset((1, 2, 5)): 80.0,
+        frozenset((2, 3)): 40.0,
+        frozenset((3, 4, 6)): 80.0,
+        frozenset((1, 4)): 40.0,
+    })
+    _select_view(at, "Torsion")
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("warning", "caption", "markdown", "info")
+        for item in getattr(at, element_type)
+    )
+    assert "one automatic equivalent-tube thickness" in visible
+    assert "traceback" not in visible.casefold()
+    assert "payload" not in visible.casefold()
+
+    _set(at, ("number_input", "torsion_tef", 160.0))
+    _calculate(at)
+    accepted = at.session_state["results"]["torsion"]
+    assert accepted["tube_valid"] is True
+    assert accepted["tube"]["tef"] == pytest.approx(160.0)
+    assert accepted["trd"] is not None
+    assert accepted["util"] is not None
+    assert not at.exception
+
+
+def test_mvt_m02_contract_recomputes_stale_capacity_and_reuses_other_families():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _apply_rectangle(at, b=400.0, h=600.0)
+    _replace_bar_points(at, _centred_wall_bar_points(400.0, 600.0, 80.0))
+    _set(
+        at,
+        ("radio", "mode", "Both"),
+        ("number_input", "pl_Mx", 20.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 50.0),
+        ("number_input", "torsion_T", 100.0),
+        ("number_input", "shear_link_dia", 10.0),
+        ("number_input", "shear_link_s", 150.0),
+        ("number_input", "strut_cot_min", 2.0),
+        ("number_input", "strut_cot_max", 2.0),
+    )
+    _calculate(at)
+
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    wall_marker = "torsion-wall-location-lower-bound-v1"
+    assert wall_marker in token
+    pre_wall_token = tuple(item for item in token if item != wall_marker)
+    for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
+        assert tuple(latest[key]).count(token) == 1
+    for key in (
+        "plastic_bending_context_sig",
+        "elastic_case_context_sig",
+        "elastic_sig",
+        "fatigue_sig",
+    ):
+        assert token not in tuple(latest[key])
+
+    before = at.session_state["results"]
+    plastic_before = before["plastic"]
+    elastic_before = before["elastic"]
+    shear_before = before["shear"]
+    torsion_before = before["torsion"]
+    combined_before = before["combined"]
+    cached_case = before["plastic_cases"][0]
+    assert cached_case["results"]["torsion"] is torsion_before
+    assert torsion_before["tube"]["tef"] == pytest.approx(160.0)
+    assert torsion_before["util"] == pytest.approx(1.0851473450)
+
+    for family in (shear_before, torsion_before, combined_before):
+        family["pre_mvt_m02_marker"] = True
+    torsion_before.update(
+        trd=114.4531862069,
+        util=0.8737196693,
+        resistance_status="PASS",
+    )
+    torsion_before["tube"]["tef"] = 120.0
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            pre_wall_token if item == token else item
+            for item in at.session_state[key]
+        )
+    assert at.session_state["result_sig"] != latest["signature"]
+
+    _calculate(at)
+    refreshed = at.session_state["results"]
+    assert refreshed["plastic"] is plastic_before
+    assert refreshed["elastic"] is elastic_before
+    assert refreshed["shear"] is not shear_before
+    assert refreshed["torsion"] is not torsion_before
+    assert refreshed["combined"] is not combined_before
+    for family_name in ("shear", "torsion", "combined"):
+        assert "pre_mvt_m02_marker" not in refreshed[family_name]
+    assert refreshed["torsion"]["tube"]["tef"] == pytest.approx(160.0)
+    assert refreshed["torsion"]["trd"] == pytest.approx(92.1533845053)
+    assert refreshed["torsion"]["util"] == pytest.approx(1.0851473450)
+    assert refreshed["torsion"]["resistance_status"] == "FAIL"
+    assert refreshed["plastic_cases"][0]["reused"] is False
+    assert refreshed["plastic_cases"][0]["results"]["plastic"] is plastic_before
+    assert refreshed["elastic_cases"][0]["reused"] is True
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        assert tuple(at.session_state[key]).count(token) == 1
 
 
 def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers():
