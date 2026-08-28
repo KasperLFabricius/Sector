@@ -212,25 +212,38 @@ def test_true_corner_ownership_is_continuous_across_near_equal_covers(
     ) == 2
 
 
-def test_equal_cover_corner_keeps_both_walls_when_another_row_is_closer():
+@pytest.mark.parametrize(
+    ("corner_x_m", "expected_tef_mm", "expected_a_mm"),
+    (
+        (0.08, 160.0, (80.0, 80.0, 80.0, 80.0)),
+        (0.080001, 160.002, (80.0, 80.0, 80.0, 80.001)),
+        (0.079999, 160.0, (80.0, 80.0, 80.0, 79.999)),
+    ),
+)
+def test_aligned_corner_keeps_both_walls_when_another_row_is_closer(
+    corner_x_m,
+    expected_tef_mm,
+    expected_a_mm,
+):
     bars = [
-        (0.05, 0.05, 100.0),
+        (corner_x_m, 0.08, 100.0),
         (0.04, 0.02, 100.0),
-        (0.35, 0.05, 100.0),
-        (0.35, 0.55, 100.0),
-        (0.05, 0.55, 100.0),
+        (0.22, 0.08, 100.0),
+        (0.22, 0.52, 100.0),
+        (0.04, 0.52, 100.0),
     ]
 
     tube = torsion.tube_properties_with_reinforcement(
-        _rect(0.4, 0.6),
+        _rect(0.3, 0.6),
         None,
         bars,
     )
 
     assert tube["valid"] is True
     assert tube["reason"] is None
-    assert tube["tef"] == pytest.approx(120.0)
+    assert tube["tef"] == pytest.approx(expected_tef_mm)
     walls = tube["wall_evidence"]["walls"]
+    assert [wall["a_mm"] for wall in walls] == pytest.approx(expected_a_mm)
     assert [wall["bar_indices"] for wall in walls] == [
         (1, 2, 3),
         (3, 4),
@@ -239,16 +252,35 @@ def test_equal_cover_corner_keeps_both_walls_when_another_row_is_closer():
     ]
     assert sum(1 in wall["bar_indices"] for wall in walls) == 2
 
-    perturbed_bars = list(bars)
-    perturbed_bars[0] = (0.050001, 0.05, 100.0)
-    perturbed = torsion.tube_properties_with_reinforcement(
-        _rect(0.4, 0.6),
+
+def test_near_aligned_corner_does_not_relax_manual_override_lower_bound():
+    bars = [
+        (0.080001, 0.08, 100.0),
+        (0.04, 0.02, 100.0),
+        (0.22, 0.08, 100.0),
+        (0.22, 0.52, 100.0),
+        (0.04, 0.52, 100.0),
+    ]
+
+    below = torsion.tube_properties_with_reinforcement(
+        _rect(0.3, 0.6),
         None,
-        perturbed_bars,
+        bars,
+        tef_override=160.0,
     )
-    assert perturbed["valid"] is True
-    assert perturbed["reason"] is None
-    assert perturbed["tef"] == pytest.approx(tube["tef"])
+    exact = torsion.tube_properties_with_reinforcement(
+        _rect(0.3, 0.6),
+        None,
+        bars,
+        tef_override=160.002,
+    )
+
+    assert below["valid"] is False
+    assert below["reason"] == (
+        "torsion wall override is below reinforcement lower bound"
+    )
+    assert exact["valid"] is True
+    assert exact["tef"] == pytest.approx(160.002)
 
 
 def test_only_endpoint_nearest_row_bar_supplies_each_adjoining_wall():
@@ -1751,9 +1783,10 @@ def test_app_near_equal_corner_cover_remains_complete_after_live_edit():
     area = math.pi * 20.0**2 / 4.0
     exact = [
         (-70.0, -220.0, area),
+        (-110.0, -280.0, area),
         (70.0, -220.0, area),
         (70.0, 220.0, area),
-        (-70.0, 220.0, area),
+        (-110.0, 220.0, area),
     ]
     _replace_bar_points(at, exact)
     _set(
@@ -1768,20 +1801,23 @@ def test_app_near_equal_corner_cover_remains_complete_after_live_edit():
     assert exact_result["tube"]["tef"] == pytest.approx(160.0)
 
     near_equal = list(exact)
-    near_equal[0] = (-70.001, -220.0, area)
+    near_equal[0] = (-69.999, -220.0, area)
     _replace_bar_points(at, near_equal)
     _calculate(at)
 
     result = at.session_state["results"]["torsion"]
     assert result["tube_valid"] is True
     assert result["resistance_status"] in {"PASS", "FAIL"}
-    assert result["tube"]["tef"] == pytest.approx(160.0)
+    assert result["tube"]["tef"] == pytest.approx(160.002)
     walls = result["tube"]["wall_evidence"]["walls"]
+    assert sorted(wall["a_mm"] for wall in walls) == pytest.approx(
+        [80.0, 80.0, 80.0, 80.001]
+    )
     assert set(wall["bar_indices"] for wall in walls) == {
-        (1, 2),
-        (2, 3),
+        (1, 2, 3),
         (3, 4),
-        (1, 4),
+        (4, 5),
+        (1, 2, 5),
     }
     assert not at.exception
 

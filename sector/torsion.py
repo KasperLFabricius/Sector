@@ -38,6 +38,12 @@ from typing import Optional, Sequence
 from . import geometry
 
 
+# Classification-only envelope for near-aligned corner rows.  Actual wall distances
+# remain in the evidence, automatic selection uses their maximum 2a, and manual
+# override limits retain the stricter floating-point tolerance below.
+_CORNER_ALIGNMENT_RELATIVE_TOLERANCE = 2.0e-5
+
+
 class TorsionWallThicknessError(ValueError):
     """A user-entered tube wall is thicker than the physical hollow wall."""
 
@@ -511,6 +517,10 @@ def tube_properties_with_reinforcement(
         tolerance_m,
         8.0 * math.ulp(max(corner_zone_m, 1.0)),
     )
+    corner_alignment_tolerance = max(
+        corner_tolerance,
+        _CORNER_ALIGNMENT_RELATIVE_TOLERANCE * corner_zone_m,
+    )
     distance_records = []
     for bar_position, (x, y, _area) in bars:
         if circular_outer is not None:
@@ -572,12 +582,13 @@ def tube_properties_with_reinforcement(
             )
 
     for bar_position, distances, nearest, corner_pairs in distance_records:
-        # A genuine equal-cover corner belongs to both adjoining walls even when
+        # A genuinely aligned corner belongs to both adjoining walls even when
         # endpoint thinning retains another row closer to the shared endpoint.
-        tied_corner_pairs = [
+        aligned_corner_pairs = [
             pair
             for pair, _endpoint_distance in corner_pairs
-            if all(index in nearest for index in pair)
+            if abs(distances[pair[0]] - distances[pair[1]])
+            <= corner_alignment_tolerance
         ]
         retained_pairs = [
             pair
@@ -587,11 +598,11 @@ def tube_properties_with_reinforcement(
         ]
         if physical_wall_count == 1:
             assigned_walls = (0,)
-        elif len(tied_corner_pairs) > 1:
+        elif len(aligned_corner_pairs) > 1:
             evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
             return _wall_evidence_invalid(base, evidence["reason"], evidence)
-        elif tied_corner_pairs:
-            assigned_walls = tied_corner_pairs[0]
+        elif aligned_corner_pairs:
+            assigned_walls = aligned_corner_pairs[0]
             if any(index not in assigned_walls for index in nearest):
                 evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
                 return _wall_evidence_invalid(base, evidence["reason"], evidence)
@@ -679,6 +690,10 @@ def tube_properties_with_reinforcement(
         tolerance_m * 1000.0,
         8.0 * math.ulp(max([1.0, override_mm, *automatic_values])),
     )
+    automatic_alignment_tolerance_mm = max(
+        interval_tolerance_mm,
+        2.0 * corner_alignment_tolerance * 1000.0,
+    )
     if override_mm > 0.0:
         if any(
             override_mm < wall["lower_bound_mm"] - interval_tolerance_mm
@@ -696,10 +711,14 @@ def tube_properties_with_reinforcement(
         selected_mm = override_mm
         selection = "user override"
     else:
-        selected_mm = automatic_values[0]
+        selected_mm = max(automatic_values)
         if any(
-            abs(value - selected_mm) > interval_tolerance_mm
-            for value in automatic_values[1:]
+            selected_mm - value > automatic_alignment_tolerance_mm
+            for value in automatic_values
+        ) or any(
+            wall["real_wall_mm"] is not None
+            and selected_mm > wall["real_wall_mm"] + interval_tolerance_mm
+            for wall in wall_records
         ):
             evidence["reason"] = "torsion wall automatic thickness varies by wall"
             return _wall_evidence_invalid(base, evidence["reason"], evidence)
