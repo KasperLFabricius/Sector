@@ -5112,6 +5112,20 @@ class ReportBuilder:
         if family == "combined":
             directions = result.get("directions") or {}
             items = tuple(directions.values()) or (result,)
+            if not presentation.combined_uses_dkna(result):
+                return not any(
+                    item.get("valid") is True
+                    and any(
+                        component["status"] in {"PASS", "FAIL"}
+                        and self._retained_utilisation_available(
+                            component["util"]
+                        )
+                        for component in presentation.combined_physical_components(
+                            item
+                        )
+                    )
+                    for item in items
+                )
             return not any(
                 item.get("valid") is True
                 and item.get("dkna_valid", item.get("valid")) is True

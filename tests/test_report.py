@@ -6709,6 +6709,97 @@ def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile)
         assert "No simultaneous Vx + Vy + T verdict is inferred" in text
 
 
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    actions = [
+        {
+            "name": "PL-LOW", "description": "Lower combined utilisation",
+            "n_ed_kn": 0.0, "mx_ed_knm": 40.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 20.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 10.0,
+        },
+        {
+            "name": "PL-GOV", "description": "Governing combined utilisation",
+            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 80.0, "vy_ed_kn": 0.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 40.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+
+    def combined_case(util):
+        result = _base_en_combined_out()
+        result["transverse"].update(
+            u_crush=util,
+            u_stirrup=util - 0.05,
+            shear_fraction=util - 0.25,
+            torsion_fraction=0.20,
+        )
+        result["longitudinal"].update(util=util - 0.10, ok=True)
+        result["longitudinal_assessment"].update(
+            status="PASS",
+            util=util - 0.10,
+        )
+        result["governing_longitudinal"] = result["longitudinal"]
+        result["longitudinal_candidates"] = [result["longitudinal"]]
+        return result
+
+    low = combined_case(0.40)
+    governing = combined_case(0.85)
+    out = {
+        "plastic_cases": [
+            {
+                "name": actions[0]["name"],
+                "actions": actions[0],
+                "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(_out()["plastic"]),
+                    "combined": low,
+                },
+            },
+            {
+                "name": actions[1]["name"],
+                "actions": actions[1],
+                "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(_out()["plastic"]),
+                    "combined": governing,
+                },
+            },
+        ],
+    }
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
+
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, out, figures=False, profile=profile
+    )
+    assert builder._needs_diagnostic_chapter("combined", low) is False
+    incomplete = dict(low, valid=False, reason="missing combined prerequisite")
+    assert builder._needs_diagnostic_chapter("combined", incomplete) is True
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+    assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in text
+    assert "Combined bending + shear + torsion (M-V-T) - PL-GOV" in text
+    assert "The complete combined M-V-T worked example is published only" not in text
+    assert "DK NA sum" not in text
+
+
 def _retain_combined_chords(payload, *candidates):
     retained = [item for item in candidates if item is not None]
     payload["longitudinal_candidates"] = retained
