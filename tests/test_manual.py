@@ -790,6 +790,27 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
     assert "Lap / bundle ID" not in text
 
 
+def test_manual_separates_nominal_shear_resistance_from_link_detailing():
+    blocks = manual.manual_blocks()
+    text = "\n".join(
+        block[1]
+        for block in blocks
+        if len(block) > 1 and isinstance(block[1], str)
+    )
+    structured_text = "\n".join(str(block) for block in blocks)
+
+    assert "$V_{Rd,c}$ as the nominal resistance" in text
+    assert "$|V_{Ed}| \\leq V_{Rd,c}$" in text
+    assert "Only above that boundary does the designed-link resistance" in text
+    assert "Minimum reinforcement, spacing and other link-detailing" in text
+    assert "requirements remain separate checks" in text
+    assert "including when links are entered" in structured_text
+    assert "the same selected" in structured_text
+    assert "gamma_V" in structured_text
+    assert "the shear resistance becomes" not in text
+    assert "instead of $V_{Rd,c}$" not in text
+
+
 def test_latex_to_rl_converts_the_subset():
     # The PDF converter turns the LaTeX subset into ReportLab markup: Greek and
     # operators to entities, sub/superscripts to tags, fractions to a/b, and it

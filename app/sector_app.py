@@ -5902,6 +5902,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "capacity-result-contract",
     "torsion-subdivision-automatic-tef-v1",
     "closed-torsion-link-authority-v1",
+    "nominal-shear-resistance-route-v1",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",
@@ -6928,7 +6929,6 @@ def build_inputs(host=st):
     shear_gamma_v_active = bool(
         shear_on
         and _shear_2023
-        and st.session_state.get("shear_links") is not True
     )
     shear_gamma_v = _seeded_number(
         sts,
@@ -6941,9 +6941,10 @@ def build_inputs(host=st):
         disabled=not shear_gamma_v_active,
         help=(
             "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP) define "
-            "the partial factor for shear resistance without shear "
-            "reinforcement. 1.40 is the initial value; the selected positive "
-            "value is applied in 8.2.2. Confirm the project basis."
+            "the partial factor for the concrete shear-resistance route. "
+            "1.40 is the initial value; the selected positive value is applied "
+            "in 8.2.2, including when links are present and the concrete route "
+            "remains applicable. Confirm the project basis."
         ),
     )
     effective_shear_gamma_v = (
@@ -9971,7 +9972,20 @@ def _run_uniaxial_capacity_checks(inp, out):
             and tors_ctx["asw_over_s_t"] > 0.0
             and all(tb["valid"] for tb in tors_ctx["subtubes"])
         )
-        shear_live = links_valid and v_ed_s > 0.0
+        retained_vrd_c = (
+            link_ctx.get("vrd_c") if link_ctx is not None else None
+        )
+        concrete_route_applicable = bool(
+            retained_vrd_c is not None
+            and math.isfinite(float(retained_vrd_c))
+            and float(retained_vrd_c) > 0.0
+            and v_ed_s <= float(retained_vrd_c)
+        )
+        shear_live = (
+            links_valid
+            and v_ed_s > 0.0
+            and not concrete_route_applicable
+        )
         tors_live = tors_valid and t_ed_s > 0.0
 
         # Longitudinal-chord parameters: the shear tension face's applied moment and
@@ -10201,6 +10215,8 @@ def _run_uniaxial_capacity_checks(inp, out):
 
         def _ftd_v_at(cot):
             """Additional longitudinal shear force on the tension chord (kN)."""
+            if not shear_live:
+                return 0.0
             factor = 1.0 if links_model_2023 else 0.5
             return factor * v_ed_s * cot
 
@@ -10474,7 +10490,10 @@ def _run_uniaxial_capacity_checks(inp, out):
             longitudinal_shear_force = (
                 (1.0 if link_ctx.get("model_2023") else 0.5)
                 * v_ed * lk["cot"]
-                if lk["valid"] else None
+                if lk["valid"] and shear_live
+                else 0.0
+                if lk["valid"]
+                else None
             )
             delta_ftd = (
                 None if link_ctx.get("model_2023") or not lk["valid"]
@@ -10663,29 +10682,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                     reason=off_axis_geometry_reason,
                 )
             links_payload["longitudinal_assessment"] = longitudinal_assessment
-            link_resistance_status = (
-                "NOT ASSESSED"
-                if util_l is None
-                else "PASS"
-                if math.isfinite(float(util_l)) and float(util_l) <= 1.0 + 1.0e-9
-                else "FAIL"
-            )
-            shear_assessment_status = capacity.aggregate_assessment_status((
-                link_resistance_status,
-                links_payload["longitudinal_assessment"]["status"],
-            ))
-            out["shear"].update(
-                links=links_payload,
-                resistance_status=link_resistance_status,
-                assessment_status=shear_assessment_status,
-                assessment_ok=(
-                    True
-                    if shear_assessment_status == "PASS"
-                    else False
-                    if shear_assessment_status == "FAIL"
-                    else None
-                ),
-            )
+            out["shear"].update(links=links_payload)
 
         # ---- checks that pair shear and torsion, at the member angle ----
         if tors_ctx is not None:
@@ -10763,56 +10760,71 @@ def _run_uniaxial_capacity_checks(inp, out):
                     ok=inter.ok,
                     torsion_strut=dataclasses.asdict(trdmax_result))
 
+    shear_result = out.get("shear")
+    if shear_result is not None:
+        nominal = capacity.select_nominal_shear_resistance(
+            shear_result,
+            links_selected=inp.get("shear_links") is True,
+        )
+        nominal_payload = dataclasses.asdict(nominal)
+        assessment_status = nominal.status
+        links_payload = shear_result.get("links") or {}
+        chord_assessment = links_payload.get("longitudinal_assessment")
+        if isinstance(chord_assessment, dict):
+            chord_status = str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper()
+            if chord_status != "NOT APPLICABLE":
+                assessment_status = capacity.aggregate_assessment_status((
+                    nominal.status,
+                    chord_status,
+                ))
+        shear_result.update(
+            nominal_resistance=nominal_payload,
+            resistance_status=nominal.status,
+            assessment_status=assessment_status,
+            assessment_ok=(
+                True
+                if assessment_status == "PASS"
+                else False
+                if assessment_status == "FAIL"
+                else None
+            ),
+        )
     capacity.finalize_combined(inp, out)
 
 
 def _directional_shear_status(inp, shear_out):
     """Acceptance state for one directional shear calculation."""
-    resistance = (shear_out or {}).get("res") or {}
-    if resistance.get("calculation_state") == "NOT ASSESSED":
-        return "NOT ASSESSED"
-    if not shear_out or not resistance.get("valid"):
-        return "INVALID"
-    if inp.get("shear_links") is True:
-        links = shear_out.get("links")
-        if links is None or not (links.get("res") or {}).get("valid"):
-            return "NOT ASSESSED"
-        util = links.get("util")
-        chord_assessment = links.get("longitudinal_assessment")
-    else:
-        util = shear_out.get("util")
-        chord_assessment = None
+    nominal = (shear_out or {}).get("nominal_resistance")
+    if not isinstance(nominal, dict):
+        nominal = dataclasses.asdict(capacity.select_nominal_shear_resistance(
+            shear_out,
+            links_selected=inp.get("shear_links") is True,
+        ))
+    status = str(nominal.get("status") or "INVALID").upper()
+    if nominal.get("valid") is not True:
+        return status if status in {"NOT ASSESSED", "INVALID"} else "INVALID"
+    util = nominal.get("utilisation")
     if util is None or not math.isfinite(float(util)):
         return "INVALID"
     retained_status = str(shear_out.get("assessment_status") or "").upper()
     if retained_status in {"PASS", "FAIL", "NOT ASSESSED"}:
         return retained_status
-    resistance_status = "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
-    if isinstance(chord_assessment, dict):
-        return capacity.aggregate_assessment_status((
-            resistance_status,
-            chord_assessment.get("status", "NOT ASSESSED"),
-        ))
-    return resistance_status
+    return status
 
 
 def _shear_candidate_assessment(inp, candidate_out):
     """Return the status and shear-only metric for one candidate face."""
     shear_out = candidate_out.get("shear") or {}
     status = _directional_shear_status(inp, shear_out)
-    links = shear_out.get("links") or {}
-    # VRd,c remains useful context when links are present, but it is no longer the
-    # acceptance resistance. Rank faces/components by the same applicable metric
-    # used by the shear-resistance row. The assessment status separately carries
-    # any required longitudinal-chord failure or incomplete coverage.
-    metric = float(
-        (
-            links.get("util")
-            if inp.get("shear_links") is True
-            else shear_out.get("util")
-        )
-        or 0.0
-    )
+    nominal = shear_out.get("nominal_resistance")
+    if not isinstance(nominal, dict):
+        nominal = dataclasses.asdict(capacity.select_nominal_shear_resistance(
+            shear_out,
+            links_selected=inp.get("shear_links") is True,
+        ))
+    metric = float(nominal.get("utilisation") or 0.0)
     return status, (math.inf if status == "INVALID" else metric)
 
 
@@ -11242,7 +11254,7 @@ def _transverse_detailing_result(inp, out):
                 and math.isfinite(float(vrd_c))
                 and math.isfinite(float(v_ed))
             ):
-                links_required = float(v_ed) > float(vrd_c) + 1.0e-9
+                links_required = float(v_ed) > float(vrd_c)
             else:
                 links_required = None
             shear_specs.append({
@@ -13791,6 +13803,18 @@ def _member_material_note(inp):
     st.caption(f"Member-check reinforcing material: {label}{suffix}.")
 
 
+def _nominal_shear_record(inp, shear_result):
+    """Return retained nominal shear-route evidence with a legacy fallback."""
+
+    retained = (shear_result or {}).get("nominal_resistance")
+    if isinstance(retained, dict):
+        return retained
+    return dataclasses.asdict(capacity.select_nominal_shear_resistance(
+        shear_result,
+        links_selected=inp.get("shear_links") is True,
+    ))
+
+
 def shear_view(inp, results):
     """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
 
@@ -13820,19 +13844,12 @@ def shear_view(inp, results):
             if component not in directions:
                 continue
             item = directions[component]
-            governing_util = (
-                (item.get("links") or {}).get("util")
-                if inp.get("shear_links") is True else item.get("util")
-            )
+            nominal = _nominal_shear_record(inp, item)
             summary.append({
                 "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
                 "VEd [kN]": item.get("signed_v_ed", item.get("v_ed")),
-                "VRd [kN]": (
-                    ((item.get("links") or {}).get("res") or {}).get("vrd")
-                    if inp.get("shear_links") is True
-                    else (item.get("res") or {}).get("vrd_c")
-                ),
-                "Utilisation": governing_util,
+                "VRd [kN]": nominal.get("resistance"),
+                "Utilisation": nominal.get("utilisation"),
                 "Status": item.get("status"),
                 "Tension face": viz.tension_face_label(
                     item.get("tension_low", True), item.get("axis")
@@ -13882,8 +13899,6 @@ def shear_view(inp, results):
     component = sh.get("component") or ("vy" if sh["axis"] == "x" else "vx")
     action_label = "Vx,Ed" if component == "vx" else "Vy,Ed"
     action_math = r"$V_{x,Ed}$" if component == "vx" else r"$V_{y,Ed}$"
-    util_math = (r"$|V_{x,Ed}|/V_{Rd,c}$" if component == "vx"
-                 else r"$|V_{y,Ed}|/V_{Rd,c}$")
     axis_lbl = (r"$V_{y,Ed}$ along y; paired with $M_{x,Ed}$" if component == "vy"
                 else r"$V_{x,Ed}$ along x; paired with $M_{y,Ed}$")
     face_lbl = viz.tension_face_label(sh["tension_low"], sh["axis"])
@@ -13943,28 +13958,68 @@ def shear_view(inp, results):
             "chosen face, or the derived effective depth / web width is zero. "
             r"Add tension bars on that face and check the geometry (or enter $b_w$).",
         )
-    util = sh["util"]
-    ok = viz.util_ok(util)
-    links_res = (sh.get("links") or {}).get("res") or {}
-    reinforced_shear_unassessed = bool(
-        inp.get("shear_links") is True
-        and not links_res.get("valid")
-    )
+    nominal = _nominal_shear_record(inp, sh)
+    nominal_valid = nominal.get("valid") is True
+    nominal_route = nominal.get("route")
+    nominal_resistance = nominal.get("resistance")
+    nominal_util = nominal.get("utilisation")
     m1, m2, m3 = st.columns(3)
     signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
     m1.metric(f"Applied {action_math}", f"{signed_v_ed:.3f} kN")
-    m2.metric(r"Resistance $V_{Rd,c}$", f"{res['vrd_c']:.3f} kN")
-    util_txt = _pct(util)
-    m3.metric(f"Utilisation {util_math}", util_txt,
-              delta=(None if reinforced_shear_unassessed
-                     else ("OK" if ok else "Over limit")),
-              delta_color=("off" if reinforced_shear_unassessed
-                           else ("normal" if ok else "inverse")))
-    if reinforced_shear_unassessed:
+    resistance_symbol = r"$V_{Rd,c}$" if nominal_route == "concrete" else r"$V_{Rd}$"
+    displayed_resistance = (
+        nominal_resistance if nominal_valid else res.get("vrd_c")
+    )
+    m2.metric(
+        (
+            f"Selected resistance {resistance_symbol}"
+            if nominal_valid
+            else r"Resistance $V_{Rd,c}$"
+        ),
+        (
+            f"{float(displayed_resistance):.3f} kN"
+            if displayed_resistance is not None
+            else "-"
+        ),
+    )
+    util_label = (
+        r"$|V_{Ed}|/V_{Rd,c}$"
+        if nominal_route == "concrete" or not nominal_valid
+        else r"$|V_{Ed}|/V_{Rd}$"
+    )
+    displayed_util = nominal_util if nominal_valid else sh.get("util")
+    util_txt = _pct(displayed_util) if displayed_util is not None else "-"
+    m3.metric(
+        (
+            f"Nominal utilisation {util_label}"
+            if nominal_valid
+            else f"Utilisation {util_label}"
+        ),
+        util_txt,
+        delta=(
+            None
+            if not nominal_valid
+            else "OK"
+            if nominal.get("ok") is True
+            else "Over limit"
+        ),
+        delta_color=(
+            "off"
+            if not nominal_valid
+            else "normal"
+            if nominal.get("ok") is True
+            else "inverse"
+        ),
+    )
+    if not nominal_valid:
         st.caption(
             r"$V_{Rd,c}$ and its ratio are retained as non-governing "
-            "concrete-only context; the selected reinforced shear check is "
-            "NOT ASSESSED."
+            "concrete-only context; the nominal shear resistance is NOT ASSESSED."
+        )
+    elif nominal_route == "concrete" and inp.get("shear_links") is True:
+        st.caption(
+            r"The concrete route governs because $|V_{Ed}|\leq V_{Rd,c}$. "
+            "Provided-link resistance and link detailing are reported separately."
         )
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
                  "prestress initial strain)" if sh.get("n_prestress") else "")
@@ -14135,12 +14190,24 @@ def shear_view(inp, results):
         + "."
     )
 
-    # Shear reinforcement (links): the governing check when present.
+    # Shear reinforcement (links): resistance context plus separate detailing.
     links = sh.get("links")
     if links is not None:
         lk = links["res"]
         st.divider()
         st.markdown("**Shear reinforcement (links)**")
+        transverse = results.get("transverse_reinforcement")
+        if not inp.get("transverse_detailing_on"):
+            detailing_status = "NOT RUN"
+        elif isinstance(transverse, dict):
+            detailing_status = str(
+                transverse.get("status") or "NOT ASSESSED"
+            ).upper()
+        else:
+            detailing_status = "NOT ASSESSED"
+        st.caption(
+            "Separate link detailing assessment: " + detailing_status + "."
+        )
         if not lk["valid"]:
             reason = presentation.result_reason(
                 links.get("assessment_reason")
@@ -14187,7 +14254,21 @@ def shear_view(inp, results):
         c3.metric(r"$V_{Rd}=\min$", f"{lk['vrd']:.3f} kN",
                   help=f"governed by {lk['governs']}")
         ul_txt = _pct(util_l)
-        _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l)
+        if nominal_route == "links":
+            _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l)
+        else:
+            c4.metric(
+                r"Provided-link comparison $V_{Ed}/V_{Rd}$",
+                ul_txt,
+                help=(
+                    "Non-governing resistance context while the concrete route "
+                    "is applicable. Link detailing is assessed separately."
+                ),
+            )
+            st.caption(
+                r"The provided-link comparison is not a shear-capacity verdict "
+                r"while $|V_{Ed}|\leq V_{Rd,c}$."
+            )
         chord_assessment = links.get("longitudinal_assessment")
         if isinstance(chord_assessment, dict):
             chord_status = str(
@@ -14319,15 +14400,28 @@ def shear_view(inp, results):
         else:
             theta_txt = (r"Sector auto-optimises $\theta$ within the bounds to "
                          r"maximise $V_{Rd} = \min(V_{Rd,s}, V_{Rd,max})$.")
+        if nominal_route == "links":
+            chord_force_note_2023 = (
+                r" $N_{Vd}=|V_{Ed}|\cot\theta$ (8.50) is applied to both "
+                "flexural chords using Formulae (8.51) and (8.52), without the "
+                "support-specific (8.53) relief."
+            )
+            chord_force_note_2005 = (
+                r" $\Delta F_{td}=0.5V_{Ed}\cot\theta$ is the extra "
+                "longitudinal tension the tension chord must also carry."
+            )
+        else:
+            chord_force_note_2023 = chord_force_note_2005 = (
+                " The concrete route is selected, so no shear-induced "
+                "longitudinal chord force is applied."
+            )
         if links.get("model_2023"):
             st.caption(
                 r"$\tau_{Rd,sy}=\rho_w f_{ywd}\cot\theta$ (8.42); "
                 r"$\sigma_{cd}=\tau_{Ed}(\cot\theta+\tan\theta)"
                 r"\leq\nu f_{cd}$ (8.44), with $\nu=0.5$. "
                 + theta_txt
-                + r" $N_{Vd}=|V_{Ed}|\cot\theta$ (8.50) is applied to both "
-                "flexural chords using Formulae (8.51) and (8.52), without the "
-                "support-specific (8.53) relief."
+                + chord_force_note_2023
             )
         else:
             st.caption(
@@ -14335,12 +14429,18 @@ def shear_view(inp, results):
                 r"$V_{Rd,max} = \alpha_{cw} b_w z\,\nu_1 f_{cd}/"
                 r"(\cot\theta+\tan\theta)$ (6.9). "
                 + theta_txt
-                + r" $\Delta F_{td}=0.5V_{Ed}\cot\theta$ is the extra "
-                "longitudinal tension the tension chord must also carry."
+                + chord_force_note_2005
             )
         # Longitudinal chord under M + V (+ T): the same check the combined view
         # shows, computed at the member strut angle.
         ch = links.get("chord")
+        if (
+            isinstance(chord_assessment, dict)
+            and str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper() == "NOT APPLICABLE"
+        ):
+            ch = None
         if ch is not None and ch.get("valid"):
             st.markdown("**Longitudinal chord: bending + shear"
                         + (" + torsion" if ch.get("has_torsion") else "")

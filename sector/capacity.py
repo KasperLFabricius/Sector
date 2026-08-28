@@ -81,6 +81,27 @@ class CombinedInteractionAuthority:
 
 
 @dataclass(frozen=True, slots=True)
+class NominalShearResistanceSelection:
+    """Authoritative nominal shear-resistance route for one direction.
+
+    The concrete route remains applicable through ``VEd == VRd,c``.  Valid
+    designed links become the nominal resistance route only above that exact
+    boundary.  Link detailing is intentionally outside this record.
+    """
+
+    valid: bool
+    route: str | None
+    resistance: float | None
+    utilisation: float | None
+    status: str
+    ok: bool | None
+    concrete_applicable: bool | None
+    links_selected: bool
+    links_required: bool | None
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class LockedInPrestressTendon:
     """One tendon's locked-in elastic prestress contribution.
 
@@ -253,6 +274,105 @@ def _nonnegative_finite_real(
             engineer_message=engineer_message,
         )
     return number
+
+
+def select_nominal_shear_resistance(
+    shear_result: object,
+    *,
+    links_selected: bool,
+) -> NominalShearResistanceSelection:
+    """Select the nominal resistance without conflating link detailing.
+
+    A selected but unavailable link route remains fail-closed so the H03-H06
+    geometry and applicability boundaries cannot be bypassed by a finite
+    concrete-only value retained for context.
+    """
+
+    if type(links_selected) is not bool:
+        raise CapacityInputError("links-selected authority must be a Boolean")
+
+    def unavailable(status: str, reason: object) -> NominalShearResistanceSelection:
+        return NominalShearResistanceSelection(
+            valid=False,
+            route=None,
+            resistance=None,
+            utilisation=None,
+            status=status,
+            ok=None,
+            concrete_applicable=None,
+            links_selected=links_selected,
+            links_required=None,
+            reason=str(reason or "shear resistance is unavailable"),
+        )
+
+    if not isinstance(shear_result, Mapping):
+        return unavailable("INVALID", "shear result is unavailable")
+    concrete = shear_result.get("res")
+    if not isinstance(concrete, Mapping):
+        return unavailable("INVALID", "concrete shear resistance is unavailable")
+    concrete_state = str(concrete.get("calculation_state") or "").upper()
+    if concrete.get("valid") is not True:
+        return unavailable(
+            "NOT ASSESSED" if concrete_state == "NOT ASSESSED" else "INVALID",
+            concrete.get("reason"),
+        )
+    try:
+        demand = _nonnegative_finite_real(
+            shear_result.get("v_ed", _MISSING), "shear demand"
+        )
+        concrete_resistance = _positive_finite_real(
+            concrete.get("vrd_c", _MISSING), "concrete shear resistance"
+        )
+    except CapacityInputError as exc:
+        return unavailable("INVALID", exc)
+
+    concrete_applicable = demand <= concrete_resistance
+    links_required = not concrete_applicable
+    link_resistance = None
+    if links_selected:
+        links = shear_result.get("links")
+        link_result = links.get("res") if isinstance(links, Mapping) else None
+        if not isinstance(link_result, Mapping) or link_result.get("valid") is not True:
+            reason = None
+            if isinstance(links, Mapping):
+                reason = links.get("assessment_reason")
+            if isinstance(link_result, Mapping):
+                reason = reason or link_result.get("reason")
+            return unavailable(
+                "NOT ASSESSED",
+                reason or "the selected links resistance is unavailable",
+            )
+        try:
+            link_resistance = _positive_finite_real(
+                link_result.get("vrd", _MISSING), "links shear resistance"
+            )
+        except CapacityInputError as exc:
+            return unavailable("NOT ASSESSED", exc)
+
+    if concrete_applicable or not links_selected:
+        route = "concrete"
+        resistance = concrete_resistance
+    else:
+        route = "links"
+        resistance = link_resistance
+    if resistance is None:
+        return unavailable(
+            "NOT ASSESSED", "the selected shear resistance is unavailable"
+        )
+    utilisation = demand / resistance
+    ok = utilisation <= 1.0
+    return NominalShearResistanceSelection(
+        valid=True,
+        route=route,
+        resistance=resistance,
+        utilisation=utilisation,
+        status="PASS" if ok else "FAIL",
+        ok=ok,
+        concrete_applicable=concrete_applicable,
+        links_selected=links_selected,
+        links_required=links_required,
+        reason=None,
+    )
 
 
 def combined_interaction_authority(
@@ -1565,7 +1685,7 @@ def _build_shear_face_context(
     fck = inp["concrete"].fck
     fyd_flex = design_yield(inp["steel"])
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
-    if model_2023 and not shared_links_present:
+    if model_2023:
         try:
             gamma_v = shear.validate_gamma_v(
                 inp.get("shear_gamma_v", _MISSING),
@@ -2285,10 +2405,11 @@ def _dkna_shear_action_alone(inp):
                 or not (shear_payload.get("res") or {}).get("valid")
             ):
                 raise CapacityResultError("action-alone shear face is unavailable")
+            shear_payload = dict(shear_payload, v_ed=v_ed)
             if link_context is None:
-                resistance = (shear_payload.get("res") or {}).get("vrd_c")
-                cot = None
-                resistance_kind = "concrete shear resistance"
+                selection = select_nominal_shear_resistance(
+                    shear_payload, links_selected=False
+                )
             else:
                 links = link_context["build"](
                     link_context["cot_min"], link_context["cot_max"]
@@ -2297,9 +2418,26 @@ def _dkna_shear_action_alone(inp):
                     raise CapacityResultError(
                         "action-alone reinforced shear face is unavailable"
                     )
-                resistance = links.get("vrd")
-                cot = links.get("cot")
-                resistance_kind = "reinforced shear resistance"
+                shear_payload = dict(
+                    shear_payload,
+                    links={"res": links, "util": links.get("util")},
+                )
+                selection = select_nominal_shear_resistance(
+                    shear_payload, links_selected=True
+                )
+            if not selection.valid:
+                raise CapacityResultError("action-alone shear resistance is unavailable")
+            resistance = selection.resistance
+            cot = (
+                (shear_payload.get("links") or {}).get("res", {}).get("cot")
+                if selection.route == "links"
+                else None
+            )
+            resistance_kind = (
+                "concrete shear resistance"
+                if selection.route == "concrete"
+                else "reinforced shear resistance"
+            )
             resistance_value = _positive_finite_real(
                 resistance, "action-alone VRd"
             )
@@ -2335,6 +2473,11 @@ def _dkna_shear_action_alone(inp):
             ),
             "cot": governing["cot"],
             "resistance_kind": governing["resistance_kind"],
+            "nominal_route": (
+                "concrete"
+                if governing["resistance_kind"] == "concrete shear resistance"
+                else "links"
+            ),
             "face_resistances": candidates,
             "external_axial_action_kn": 0.0,
             "external_moment_knm": 0.0,
@@ -2455,29 +2598,72 @@ def finalize_combined(inp, out):
     r_m = plastic.get("util") if plastic else None
     have_m = r_m is not None
     links = shear_out.get("links") if shear_out is not None else None
-    concrete_shear_valid = bool(
-        shear_out is not None and shear_out["res"]["valid"]
-    )
     links_selected = inp.get("shear_links") is True or links is not None
-    links_valid = bool(
-        links is not None and (links.get("res") or {}).get("valid")
+    shear_selection_input = dict(shear_out or {})
+    demand = shear_selection_input.get("v_ed")
+    if demand is None:
+        demand = abs(
+            _finite_solver_result(inp.get("shear_V"), "entered shear action")
+        )
+        shear_selection_input["v_ed"] = demand
+    concrete_result = dict(shear_selection_input.get("res") or {})
+    if concrete_result.get("vrd_c") is None:
+        concrete_util = shear_selection_input.get("util")
+        if (
+            not _is_boolean_scalar(concrete_util)
+            and isinstance(concrete_util, (int, float))
+            and math.isfinite(float(concrete_util))
+            and float(concrete_util) > 0.0
+        ):
+            concrete_result["vrd_c"] = float(demand) / float(concrete_util)
+    shear_selection_input["res"] = concrete_result
+    if isinstance(links, Mapping):
+        link_payload = dict(links)
+        link_result = dict(link_payload.get("res") or {})
+        if link_result.get("vrd") is None:
+            link_candidates = []
+            for key in ("vrd_s", "vrd_max"):
+                value = link_result.get(key)
+                if value is None or _is_boolean_scalar(value):
+                    continue
+                try:
+                    candidate = float(value)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if math.isfinite(candidate) and candidate > 0.0:
+                    link_candidates.append(candidate)
+            if link_candidates:
+                link_result["vrd"] = min(link_candidates)
+            else:
+                link_util = link_payload.get("util")
+                if (
+                    not _is_boolean_scalar(link_util)
+                    and isinstance(link_util, (int, float))
+                    and math.isfinite(float(link_util))
+                    and float(link_util) > 0.0
+                ):
+                    link_result["vrd"] = float(demand) / float(link_util)
+        link_payload["res"] = link_result
+        shear_selection_input["links"] = link_payload
+    shear_selection = select_nominal_shear_resistance(
+        shear_selection_input,
+        links_selected=links_selected,
     )
     chord_assessment = (
         links.get("longitudinal_assessment")
         if isinstance(links, Mapping)
         else None
     )
-    have_v = concrete_shear_valid and (
-        not links_selected or links_valid
-    )
+    have_v = shear_selection.valid
     have_t = torsion_out is not None and torsion_out["valid"]
     if not (have_m and have_v and have_t):
         shear_reason = None
-        if links_selected and not links_valid:
+        if not shear_selection.valid:
             shear_reason = (
-                (links or {}).get("assessment_reason")
+                shear_selection.reason
+                or (links or {}).get("assessment_reason")
                 or ((links or {}).get("res") or {}).get("reason")
-                or "reinforced-shear prerequisite was not assessed"
+                or "the selected shear resistance was not assessed"
             )
         payload = {
             "valid": False,

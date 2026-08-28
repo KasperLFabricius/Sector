@@ -1085,9 +1085,10 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1:2005 + DK NA:2024", "As 2005 but the raised "
             "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"],
            ["DS/EN 1992-1-1:2023", "The strain-based $\\tau_{Rd,c}$ (8.2.2) with the "
-            "aggregate size $d_{dg}$ and the user-selected $\\gamma_V$ without "
-            "links (default 1.40); the "
-            "compression-field method (8.2.3) with links"]])
+            "aggregate size $d_{dg}$ and the user-selected $\\gamma_V$ "
+            "(default 1.40). This remains the nominal route while "
+            "$|V_{Ed}| \\leq V_{Rd,c}$, including when links are entered; above "
+            "that boundary the compression-field method (8.2.3) applies"]])
     md("Select the **shear section form** separately from the polygon. Automatic "
        "treatment is limited to a solid rectangle. A non-rectangular constant-width "
        "web needs an entered governing $b_w$. For the 2023 links method, a "
@@ -1123,17 +1124,21 @@ def manual_blocks() -> list:
           "$a_{cs}=\\max(|M_{Ed}/V_{Ed}|,d)$ (8.30-8.31), including locked-in "
           "prestress effects. Tendons are assumed parallel to the member axis "
           "($\\cos\\beta=1$), because a cross-section model has no longitudinal "
-          "tendon inclination. Members **with** links use the compression-field "
-          "method in 8.2.3; torsion and the combined lock stay on the 2005 family.")
+          "tendon inclination. When links are entered, the same selected "
+          "$\\gamma_V$ remains active wherever the 8.2.2 concrete route applies; "
+          "the compression-field method in 8.2.3 applies above that boundary. "
+          "Torsion and the combined lock stay on the 2005 family.")
     call("limit", "$A_{sl}$ is the tension-face bars, **assumed fully anchored** "
           "($\\geq l_{bd} + d$). Confirm anchorage in the member design and enter "
           "an appropriately reduced $f_{yk}$ / $f_{ywk}$ where the force cannot "
           "be developed.")
-    md("With **Shared links / closed torsion stirrups present** on, the shear "
-       "resistance becomes "
-       "$V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3 or 8.2.3) instead of "
-       "$V_{Rd,c}$ (which is still shown, to indicate whether links are strictly "
-       "required). The link inputs are the effective legs for each direction, the bar diameter and the "
+    md("With **Shared links / closed torsion stirrups present** on, Sector keeps "
+       "$V_{Rd,c}$ as the nominal resistance while $|V_{Ed}| \\leq V_{Rd,c}$. "
+       "Only above that boundary does the designed-link resistance "
+       "$V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3 or 8.2.3) become the "
+       "nominal route. Minimum reinforcement, spacing and other link-detailing "
+       "requirements remain separate checks. The link inputs are the effective "
+       "legs for each direction, the bar diameter and the "
        "spacing $s$ (so $A_{sw} = n_{legs}\\,\\pi\\phi^2/4$), the link yield "
        "$f_{ywk}$, and one compression-strut range $\\cot\\theta_{min}$ / "
        "$\\cot\\theta_{max}$ entered under **Links / stirrups**. A stand-alone "

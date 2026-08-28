@@ -1115,7 +1115,6 @@ def _canonical_scalars(
     gamma_v_active = (
         payload.get("shear_on") is True
         and effective_shear_method == codes.EC2_2023.label
-        and payload.get("shear_links") is not True
     )
     if "shear_gamma_v" not in payload:
         if gamma_v_active and not migrate_gamma_v:
@@ -2099,7 +2098,6 @@ def parse_project_with_info(text: str):
                 if migrated_scalars.get("combined_on") is True
                 else migrated_scalars.get("shear_method")
             ) == codes.EC2_2023.label
-            and migrated_scalars.get("shear_links") is not True
         )
         if gamma_v_active:
             migration_warnings = (
@@ -2141,7 +2139,6 @@ def parse_project_with_info(text: str):
                 if migrated_scalars.get("combined_on") is True
                 else migrated_scalars.get("shear_method")
             ) == codes.EC2_2023.label
-            and migrated_scalars.get("shear_links") is not True
         )
         if gamma_v_active:
             migration_warnings = (

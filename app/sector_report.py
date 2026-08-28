@@ -3209,11 +3209,10 @@ class ReportBuilder:
                             inp.get("shear_dlower")
                         ),
                     ])
-                    if not shear_links_active:
-                        resistance_rows.append([
-                            "Shear partial factor gamma<sub>V</sub>",
-                            _fmt_gamma_v(inp.get("shear_gamma_v")),
-                        ])
+                    resistance_rows.append([
+                        "Shear partial factor gamma<sub>V</sub>",
+                        _fmt_gamma_v(inp.get("shear_gamma_v")),
+                    ])
             if inp.get("torsion_on"):
                 resistance_rows.extend([
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],
@@ -6767,9 +6766,12 @@ class ReportBuilder:
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
         util = sh["util"]
         util_txt = _pct(util)
-        links_unassessed = bool(
-            sh.get("links") is not None
-            and not ((sh.get("links") or {}).get("res") or {}).get("valid")
+        nominal = presentation.nominal_shear_resistance(
+            sh,
+            links_selected=self.inp.get("shear_links") is True,
+        )
+        concrete_route_selected = bool(
+            nominal.get("valid") is True and nominal.get("route") == "concrete"
         )
         self._h2("Utilisation")
         self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
@@ -6777,7 +6779,7 @@ class ReportBuilder:
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
                       result=(
                           f"{util_txt} (non-governing concrete-only context)"
-                          if links_unassessed
+                          if not concrete_route_selected
                           else f"{util_txt}  "
                                f"({'OK' if viz.util_ok(util) else 'EXCEEDED'})"
                       ))
@@ -6803,25 +6805,17 @@ class ReportBuilder:
         selected = self._selected_family("shear", self.inp)
         critical = selected is not None
 
-        def link_failure_reason(item):
-            links = item.get("links") or {}
-            result = links.get("res") or {}
-            if (
-                links
-                and not result.get("valid")
-            ):
-                return _result_reason(
-                    links.get("assessment_reason")
-                    or result.get("reason")
-                    or "invalid reinforced-shear input",
-                    "shear",
-                    "report shear-link result reason",
-                )
-            return None
-
         def selected_failure_reason(item):
-            if self.inp.get("shear_links") is True:
-                return link_failure_reason(item)
+            selected_resistance = presentation.nominal_shear_resistance(
+                item,
+                links_selected=self.inp.get("shear_links") is True,
+            )
+            if selected_resistance.get("valid") is not True:
+                return _result_reason(
+                    selected_resistance.get("reason"),
+                    "shear",
+                    "report nominal shear-resistance reason",
+                )
             result = item.get("res") or {}
             if result.get("calculation_state") == "NOT ASSESSED":
                 return _result_reason(
@@ -6834,23 +6828,18 @@ class ReportBuilder:
         if not directions:
             self._case_heading("Shear resistance", "plastic")
             links = aggregate.get("links") or {}
-            resistance = (
-                (links.get("res") or {}).get("vrd")
-                if links else (aggregate.get("res") or {}).get("vrd_c")
+            selected_resistance = presentation.nominal_shear_resistance(
+                aggregate,
+                links_selected=self.inp.get("shear_links") is True,
             )
-            utilisation = links.get("util") if links else aggregate.get("util")
-            result_unavailable = bool(
-                (aggregate.get("res") or {}).get("calculation_state")
-                == "NOT ASSESSED"
-            )
-            links_unavailable = bool(
-                links and not (links.get("res") or {}).get("valid")
-            )
-            selected_unavailable = (
-                links_unavailable
-                if self.inp.get("shear_links") is True
-                else result_unavailable
-            )
+            resistance = selected_resistance.get("resistance")
+            utilisation = selected_resistance.get("utilisation")
+            selected_unavailable = selected_resistance.get("valid") is not True
+            retained_status = str(
+                aggregate.get("assessment_status")
+                or selected_resistance.get("status")
+                or "NOT ASSESSED"
+            ).upper()
             component = aggregate.get("component") or (
                 "vy" if aggregate.get("axis") == "x" else "vx"
             )
@@ -6869,7 +6858,7 @@ class ReportBuilder:
                         "-" if selected_unavailable else _pct(utilisation),
                         (
                             "NOT ASSESSED" if selected_unavailable
-                            else aggregate.get("status", "NOT ASSESSED")
+                            else retained_status
                         ),
                         viz.tension_face_label(
                             aggregate.get("tension_low", True),
@@ -6934,30 +6923,19 @@ class ReportBuilder:
                 continue
             item = directions[component]
             links = item.get("links") or {}
-            resistance = (
-                (links.get("res") or {}).get("vrd")
-                if self.inp.get("shear_links") is True
-                else (item.get("res") or {}).get("vrd_c")
+            selected_resistance = presentation.nominal_shear_resistance(
+                item,
+                links_selected=self.inp.get("shear_links") is True,
             )
-            utilisation = (
-                links.get("util")
-                if self.inp.get("shear_links") is True
-                else item.get("util")
-            )
-            result_unavailable = bool(
-                (item.get("res") or {}).get("calculation_state")
-                == "NOT ASSESSED"
-            )
-            links_unavailable = bool(
-                self.inp.get("shear_links") is True
-                and links
-                and not (links.get("res") or {}).get("valid")
-            )
-            selected_unavailable = (
-                links_unavailable
-                if self.inp.get("shear_links") is True
-                else result_unavailable
-            )
+            resistance = selected_resistance.get("resistance")
+            utilisation = selected_resistance.get("utilisation")
+            selected_unavailable = selected_resistance.get("valid") is not True
+            retained_status = str(
+                item.get("status")
+                or item.get("assessment_status")
+                or selected_resistance.get("status")
+                or "NOT ASSESSED"
+            ).upper()
             rows.append([
                 "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
                 f"{_fmt(item.get('signed_v_ed', item.get('v_ed')), 3)} kN",
@@ -6968,7 +6946,7 @@ class ReportBuilder:
                 "-" if selected_unavailable else _pct(utilisation),
                 (
                     "NOT ASSESSED" if selected_unavailable
-                    else item.get("status", "NOT ASSESSED")
+                    else retained_status
                 ),
                 viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
             ])
@@ -7306,9 +7284,12 @@ class ReportBuilder:
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
         util = sh["util"]
         util_txt = _pct(util)
-        links_unassessed = bool(
-            sh.get("links") is not None
-            and not ((sh.get("links") or {}).get("res") or {}).get("valid")
+        nominal = presentation.nominal_shear_resistance(
+            sh,
+            links_selected=self.inp.get("shear_links") is True,
+        )
+        concrete_route_selected = bool(
+            nominal.get("valid") is True and nominal.get("route") == "concrete"
         )
         self._h2("Utilisation")
         self._formula("|V<sub>Ed</sub>| / V<sub>Rd,c</sub>",
@@ -7316,7 +7297,7 @@ class ReportBuilder:
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(res['vrd_c'], 3)}",
                       result=(
                           f"{util_txt} (non-governing concrete-only context)"
-                          if links_unassessed
+                          if not concrete_route_selected
                           else f"{util_txt}  "
                                f"({'OK' if viz.util_ok(util) else 'EXCEEDED'})"
                       ))
@@ -7335,6 +7316,27 @@ class ReportBuilder:
         self._h2("Shear reinforcement (links)")
         model_2023 = bool(links.get("model_2023"))
         clause = "8.2.3" if model_2023 else "6.2.3"
+        nominal = presentation.nominal_shear_resistance(
+            sh,
+            links_selected=self.inp.get("shear_links") is True,
+        )
+        links_are_nominal = bool(
+            nominal.get("valid") is True and nominal.get("route") == "links"
+        )
+        transverse = self.out.get("transverse_reinforcement")
+        if not self.inp.get("transverse_detailing_on"):
+            detailing_status = "NOT RUN"
+        elif isinstance(transverse, dict):
+            detailing_status = str(
+                transverse.get("status") or "NOT ASSESSED"
+            ).upper()
+        else:
+            detailing_status = "NOT ASSESSED"
+        self._small(
+            "Separate link detailing assessment: "
+            + _html_escape(detailing_status)
+            + "."
+        )
         if not lk["valid"]:
             reason = _result_reason(
                 links.get("assessment_reason")
@@ -7353,9 +7355,19 @@ class ReportBuilder:
         req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if links["required"]
                else "not strictly required (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>); "
                     "minimum reinforcement rules still apply")
-        self._p(f"With the selected links the resistance is the compression-field "
-                f"V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
-                f"(EN 1992-1-1 sec. {clause}). For this V<sub>Ed</sub>, links are {req}.")
+        if links_are_nominal:
+            self._p(
+                "The selected nominal resistance is the compression-field "
+                "V<sub>Rd</sub> = min(V<sub>Rd,s</sub>, V<sub>Rd,max</sub>) "
+                f"(EN 1992-1-1 sec. {clause}). For this V<sub>Ed</sub>, links are {req}."
+            )
+        else:
+            self._p(
+                "The provided-link resistance is retained as non-governing context. "
+                "The concrete route remains the selected nominal resistance because "
+                "|V<sub>Ed</sub>| &#8804; V<sub>Rd,c</sub>. Minimum reinforcement "
+                "and link detailing are assessed separately."
+            )
         retained_angle_fields = {
             "cot", "tan", "theta_deg", "cot_min", "cot_max",
             "cot_unconstrained", "angle_selection",
@@ -7551,7 +7563,11 @@ class ReportBuilder:
                       equation_key="shear.links.utilisation",
                       references=("shear.links.vrd",),
                       subst=f"{_fmt(sh['v_ed'], 3)} / {_fmt(lk['vrd'], 3)}",
-                      result=f"{util_txt}  ({verdict})")
+                      result=(
+                          f"{util_txt}  ({verdict})"
+                          if links_are_nominal
+                          else f"{util_txt} (non-governing comparison)"
+                      ))
         if links.get("theta_mode") == "utilisation":
             shared_note = (
                 "shared with torsion when enabled"
@@ -7566,7 +7582,20 @@ class ReportBuilder:
         else:
             angle_note = ("The strut angle is auto-optimised within the bounds to "
                           "maximise V<sub>Rd</sub>.")
-        if model_2023:
+        chord_assessment = links.get("longitudinal_assessment") or {}
+        if not links_are_nominal:
+            self._small(
+                angle_note
+                + " The provided links do not replace the applicable concrete "
+                  "resistance route, so no longitudinal shear force is applied in "
+                  "the nominal check."
+            )
+            chord_status = str(
+                chord_assessment.get("status") or "NOT APPLICABLE"
+            ).upper()
+            if chord_status not in {"PASS", "FAIL", "NOT ASSESSED"}:
+                return
+        elif model_2023:
             self._small(
                 angle_note + " The additional longitudinal force is "
                 "N<sub>Vd</sub> = |V<sub>Ed</sub>| cot theta = "
@@ -7584,8 +7613,9 @@ class ReportBuilder:
         # Longitudinal chord under M + V (+ T), at the member strut angle -- the
         # same check the combined section shows; printed here so a shear + bending
         # run without torsion still documents it.
-        chord_assessment = links.get("longitudinal_assessment") or {}
         ch = links.get("chord")
+        if chord_assessment.get("status") == "NOT APPLICABLE":
+            ch = None
         if ch is not None and ch.get("valid"):
             self._h2("Longitudinal chord: bending + shear"
                      + (" + torsion" if ch.get("has_torsion") else "") + " tension")

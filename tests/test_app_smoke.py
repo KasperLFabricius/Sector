@@ -2091,10 +2091,14 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
         ("radio", "mode", "Both"),
         ("checkbox", "torsion_on", True),
         ("number_input", "torsion_T", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 10.0),
     )
     latest = at.session_state["_latest_inputs"]
     token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
-    assert token[-1] == "closed-torsion-link-authority-v1"
+    assert token[-1] == "nominal-shear-resistance-route-v1"
+    pre_route_token = token[:-1]
 
     for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
         assert tuple(latest[key]).count(token) == 1
@@ -2107,7 +2111,8 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
         assert token not in tuple(latest[key])
     pre_contract_inputs = copy.deepcopy(latest)
     pre_contract_inputs["signature"] = tuple(
-        item for item in latest["signature"] if item != token
+        pre_route_token if item == token else item
+        for item in latest["signature"]
     )
     assert sector_app._engineering_input_hash(
         pre_contract_inputs
@@ -2116,13 +2121,20 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
     plastic_before = at.session_state["results"]["plastic"]
     torsion_before = at.session_state["results"]["torsion"]
     elastic_before = at.session_state["results"]["elastic"]
+    cached_case = at.session_state["results"]["plastic_cases"][0]
+    assert cached_case["results"]["shear"]["nominal_resistance"][
+        "route"
+    ] == "concrete"
+    cached_case["results"]["shear"].pop("nominal_resistance")
+    cached_case["results"]["shear"]["legacy_links_governed"] = True
     for key in (
         "result_sig",
         "result_plastic_sig",
         "result_plastic_case_context_sig",
     ):
         at.session_state[key] = tuple(
-            item for item in at.session_state[key] if item != token
+            pre_route_token if item == token else item
+            for item in at.session_state[key]
         )
     assert at.session_state["result_sig"] != latest["signature"]
 
@@ -2132,6 +2144,9 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
     assert results["torsion"] is not torsion_before
     assert results["elastic"] is elastic_before
     assert results["plastic_cases"][0]["reused"] is False
+    refreshed_shear = results["plastic_cases"][0]["results"]["shear"]
+    assert refreshed_shear["nominal_resistance"]["route"] == "concrete"
+    assert "legacy_links_governed" not in refreshed_shear
     assert results["elastic_cases"][0]["reused"] is True
     assert at.session_state["result_plastic_bending_context_sig"] == (
         latest["plastic_bending_context_sig"]
@@ -5149,6 +5164,48 @@ def test_current_schema_load_clears_prior_migration_evidence():
     assert not at.exception
     assert "_loaded_project_migration" not in at.session_state
     assert "_project_migration_warnings" not in at.session_state
+
+
+def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
+    import project_io
+    from sector import codes
+
+    payload = json.loads(project_io.dump_project(
+        {},
+        {
+            "shear_on": True,
+            "shear_method": codes.EC2_2023.label,
+            "shear_links": True,
+            "shear_gamma_v": 1.40,
+        },
+    ))
+    payload["version"] = project_io.MIGRATABLE_VERSION
+    payload["scalars"].pop("shear_gamma_v")
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    at = _fresh()
+    at.session_state["_pending_project"] = json.dumps(payload)
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["shear_links"] is True
+    assert at.session_state["shear_gamma_v"] == pytest.approx(1.40)
+    assert at.number_input(key="shear_gamma_v").disabled is False
+    assert any(
+        "explicit gamma_V input at 1.40" in warning.value
+        for warning in at.warning
+    )
+    migration = at.session_state["_loaded_project_migration"]
+    assert migration["source_schema_version"] == 26
+    assert migration["target_schema_version"] == 27
+    assert migration["migration_provenance"]["shear_gamma_v"] == {
+        "defaulted": True,
+        "value": 1.40,
+        "active_2023_shear": True,
+    }
 
 
 def test_app_restores_fatigue_inputs_into_the_ui():
