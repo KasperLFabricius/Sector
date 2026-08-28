@@ -5151,6 +5151,48 @@ def test_current_schema_load_clears_prior_migration_evidence():
     assert "_project_migration_warnings" not in at.session_state
 
 
+def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
+    import project_io
+    from sector import codes
+
+    payload = json.loads(project_io.dump_project(
+        {},
+        {
+            "shear_on": True,
+            "shear_method": codes.EC2_2023.label,
+            "shear_links": True,
+            "shear_gamma_v": 1.40,
+        },
+    ))
+    payload["version"] = project_io.MIGRATABLE_VERSION
+    payload["scalars"].pop("shear_gamma_v")
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    at = _fresh()
+    at.session_state["_pending_project"] = json.dumps(payload)
+    at.run()
+
+    assert not at.exception
+    assert at.session_state["shear_links"] is True
+    assert at.session_state["shear_gamma_v"] == pytest.approx(1.40)
+    assert at.number_input(key="shear_gamma_v").disabled is False
+    assert any(
+        "explicit gamma_V input at 1.40" in warning.value
+        for warning in at.warning
+    )
+    migration = at.session_state["_loaded_project_migration"]
+    assert migration["source_schema_version"] == 26
+    assert migration["target_schema_version"] == 27
+    assert migration["migration_provenance"]["shear_gamma_v"] == {
+        "defaulted": True,
+        "value": 1.40,
+        "active_2023_shear": True,
+    }
+
+
 def test_app_restores_fatigue_inputs_into_the_ui():
     import fatigue_inputs
     import project_io
