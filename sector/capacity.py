@@ -1685,7 +1685,7 @@ def _build_shear_face_context(
     fck = inp["concrete"].fck
     fyd_flex = design_yield(inp["steel"])
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
-    if model_2023 and not shared_links_present:
+    if model_2023:
         try:
             gamma_v = shear.validate_gamma_v(
                 inp.get("shear_gamma_v", _MISSING),

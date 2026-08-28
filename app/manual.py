@@ -1085,9 +1085,10 @@ def manual_blocks() -> list:
            ["DS/EN 1992-1-1:2005 + DK NA:2024", "As 2005 but the raised "
             "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"],
            ["DS/EN 1992-1-1:2023", "The strain-based $\\tau_{Rd,c}$ (8.2.2) with the "
-            "aggregate size $d_{dg}$ and the user-selected $\\gamma_V$ without "
-            "links (default 1.40); the "
-            "compression-field method (8.2.3) with links"]])
+            "aggregate size $d_{dg}$ and the user-selected $\\gamma_V$ "
+            "(default 1.40). This remains the nominal route while "
+            "$|V_{Ed}| \\leq V_{Rd,c}$, including when links are entered; above "
+            "that boundary the compression-field method (8.2.3) applies"]])
     md("Select the **shear section form** separately from the polygon. Automatic "
        "treatment is limited to a solid rectangle. A non-rectangular constant-width "
        "web needs an entered governing $b_w$. For the 2023 links method, a "
@@ -1123,8 +1124,10 @@ def manual_blocks() -> list:
           "$a_{cs}=\\max(|M_{Ed}/V_{Ed}|,d)$ (8.30-8.31), including locked-in "
           "prestress effects. Tendons are assumed parallel to the member axis "
           "($\\cos\\beta=1$), because a cross-section model has no longitudinal "
-          "tendon inclination. Members **with** links use the compression-field "
-          "method in 8.2.3; torsion and the combined lock stay on the 2005 family.")
+          "tendon inclination. When links are entered, the same selected "
+          "$\\gamma_V$ remains active wherever the 8.2.2 concrete route applies; "
+          "the compression-field method in 8.2.3 applies above that boundary. "
+          "Torsion and the combined lock stay on the 2005 family.")
     call("limit", "$A_{sl}$ is the tension-face bars, **assumed fully anchored** "
           "($\\geq l_{bd} + d$). Confirm anchorage in the member design and enter "
           "an appropriately reduced $f_{yk}$ / $f_{ywk}$ where the force cannot "

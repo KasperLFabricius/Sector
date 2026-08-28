@@ -2997,27 +2997,37 @@ def test_2023_shear_context_uses_the_exact_selected_gamma_v():
         "1.40",
     ),
 )
-def test_2023_shear_context_rejects_malformed_gamma_v(gamma_v):
+@pytest.mark.parametrize("links_selected", (False, True))
+def test_2023_shear_context_rejects_malformed_gamma_v(
+    gamma_v,
+    links_selected,
+):
+    inp = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_gamma_v=gamma_v,
+        shear_links=links_selected,
+    )
+    if links_selected:
+        inp["section"] = None
     with pytest.raises(
         capacity.CapacityInputError,
         match="gamma_V must be a positive finite real number",
     ) as caught:
-        capacity.build_shear_context(
-            _member_input(
-                shear_method=codes.EC2_2023.label,
-                shear_gamma_v=gamma_v,
-            ),
-            0.0,
-            0.0,
-        )
+        capacity.build_shear_context(inp, 0.0, 0.0)
     assert isinstance(caught.value.engineer_message, EngineerMessage)
     assert caught.value.engineer_message.text == (
         "gamma_V must be a positive finite real number"
     )
 
 
-def test_2023_shear_context_rejects_a_missing_gamma_v():
-    inp = _member_input(shear_method=codes.EC2_2023.label)
+@pytest.mark.parametrize("links_selected", (False, True))
+def test_2023_shear_context_rejects_a_missing_gamma_v(links_selected):
+    inp = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_links=links_selected,
+    )
+    if links_selected:
+        inp["section"] = None
     del inp["shear_gamma_v"]
 
     with pytest.raises(
@@ -3028,23 +3038,25 @@ def test_2023_shear_context_rejects_a_missing_gamma_v():
     assert isinstance(caught.value.engineer_message, EngineerMessage)
 
 
-def test_2023_shear_links_ignore_inactive_missing_or_malformed_gamma_v():
-    base = _member_input(
+def test_2023_shear_links_apply_the_exact_selected_gamma_v():
+    low_input = _member_input(
         shear_method=codes.EC2_2023.label,
         shear_links=True,
+        shear_gamma_v=1.20,
         section=None,
     )
-    variants = []
-    missing = dict(base)
-    missing.pop("shear_gamma_v")
-    variants.append(missing)
-    for value in (0.0, -1.0, float("nan"), True, "1.40"):
-        variants.append(dict(base, shear_gamma_v=value))
+    high_input = dict(low_input, shear_gamma_v=1.80)
 
-    for inp in variants:
-        payload, links = capacity.build_shear_context(inp, 0.0, 0.0)
-        assert links is not None
-        assert payload["res"]["gamma_v"] == pytest.approx(1.40)
+    low_payload, low_links = capacity.build_shear_context(low_input, 0.0, 0.0)
+    high_payload, high_links = capacity.build_shear_context(high_input, 0.0, 0.0)
+
+    assert low_links is not None and high_links is not None
+    assert low_payload["res"]["gamma_v"] == pytest.approx(1.20)
+    assert high_payload["res"]["gamma_v"] == pytest.approx(1.80)
+    assert low_payload["res"]["vrd_c"] == pytest.approx(
+        high_payload["res"]["vrd_c"] * 1.80 / 1.20
+    )
+    assert low_links["build"](1.0, 2.0) == high_links["build"](1.0, 2.0)
 
 
 def test_gamma_v_is_isolated_from_2005_links_torsion_and_combined_routes(

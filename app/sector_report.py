@@ -3209,11 +3209,10 @@ class ReportBuilder:
                             inp.get("shear_dlower")
                         ),
                     ])
-                    if not shear_links_active:
-                        resistance_rows.append([
-                            "Shear partial factor gamma<sub>V</sub>",
-                            _fmt_gamma_v(inp.get("shear_gamma_v")),
-                        ])
+                    resistance_rows.append([
+                        "Shear partial factor gamma<sub>V</sub>",
+                        _fmt_gamma_v(inp.get("shear_gamma_v")),
+                    ])
             if inp.get("torsion_on"):
                 resistance_rows.extend([
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],

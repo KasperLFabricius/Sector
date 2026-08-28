@@ -6928,7 +6928,6 @@ def build_inputs(host=st):
     shear_gamma_v_active = bool(
         shear_on
         and _shear_2023
-        and st.session_state.get("shear_links") is not True
     )
     shear_gamma_v = _seeded_number(
         sts,
@@ -6941,9 +6940,10 @@ def build_inputs(host=st):
         disabled=not shear_gamma_v_active,
         help=(
             "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP) define "
-            "the partial factor for shear resistance without shear "
-            "reinforcement. 1.40 is the initial value; the selected positive "
-            "value is applied in 8.2.2. Confirm the project basis."
+            "the partial factor for the concrete shear-resistance route. "
+            "1.40 is the initial value; the selected positive value is applied "
+            "in 8.2.2, including when links are present and the concrete route "
+            "remains applicable. Confirm the project basis."
         ),
     )
     effective_shear_gamma_v = (

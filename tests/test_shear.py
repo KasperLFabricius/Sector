@@ -2677,7 +2677,7 @@ def test_app_gamma_v_control_has_the_exact_2023_scope_and_references():
     assert at.number_input(key="shear_gamma_v").disabled is False
 
     _set(at, ("checkbox", "shear_links", True))
-    assert at.number_input(key="shear_gamma_v").disabled is True
+    assert at.number_input(key="shear_gamma_v").disabled is False
     _set(at, ("checkbox", "shear_links", False))
     assert at.number_input(key="shear_gamma_v").disabled is False
 
@@ -2744,39 +2744,49 @@ def test_app_gamma_v_is_absent_from_the_2005_result_signature():
     )
 
 
-def test_app_gamma_v_is_inactive_for_2023_shear_links():
+def test_app_gamma_v_remains_active_for_2023_sparse_links():
     at = _fresh()
     at.run()
     _set(
         at,
         ("checkbox", "shear_on", True),
         ("selectbox", "shear_method", codes.EC2_2023.label),
-        ("number_input", "shear_gamma_v", 0.0),
-        ("number_input", "shear_V", 100.0),
+        ("number_input", "shear_gamma_v", 1.80),
+        ("number_input", "shear_V", 10.0),
         ("checkbox", "shear_links", True),
     )
 
-    assert at.number_input(key="shear_gamma_v").disabled is True
+    assert at.number_input(key="shear_gamma_v").disabled is False
     _calculate(at)
 
     assert not at.exception
-    assert not any("shear_gamma_v" in item.value for item in at.error)
     result = at.session_state["results"]["shear"]
-    assert result["res"]["gamma_v"] == pytest.approx(1.40)
+    assert result["res"]["gamma_v"] == pytest.approx(1.80)
     assert result["links"] is not None
+    assert result["nominal_resistance"]["route"] == "concrete"
+    high_gamma_resistance = result["res"]["vrd_c"]
     old_signature = at.session_state["result_sig"]
 
     _goto_page(at, "Inputs")
-    at.session_state["shear_gamma_v"] = 9.00
-    at.run()
+    _set(at, ("number_input", "shear_gamma_v", 1.25))
 
-    assert at.session_state["_latest_inputs"]["signature"] == old_signature
+    assert at.session_state["_latest_inputs"]["signature"] != old_signature
     assert at.session_state["result_sig"] == old_signature
+
+    _calculate(at)
+    recalculated = at.session_state["results"]["shear"]
+    assert recalculated["res"]["gamma_v"] == pytest.approx(1.25)
+    assert recalculated["res"]["vrd_c"] == pytest.approx(
+        high_gamma_resistance * 1.80 / 1.25
+    )
+    assert recalculated["nominal_resistance"]["route"] == "concrete"
 
 
 @pytest.mark.parametrize("unsafe_gamma_v", (0.0, 1e-309))
+@pytest.mark.parametrize("links_selected", (False, True))
 def test_app_rejects_unsafe_active_gamma_v_before_a_shear_result(
     unsafe_gamma_v,
+    links_selected,
 ):
     at = _fresh()
     at.run()
@@ -2786,6 +2796,7 @@ def test_app_rejects_unsafe_active_gamma_v_before_a_shear_result(
         ("selectbox", "shear_method", codes.EC2_2023.label),
         ("number_input", "shear_gamma_v", unsafe_gamma_v),
         ("number_input", "shear_V", 100.0),
+        ("checkbox", "shear_links", links_selected),
     )
 
     _calculate(at)
