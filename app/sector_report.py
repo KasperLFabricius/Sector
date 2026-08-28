@@ -8473,7 +8473,8 @@ class ReportBuilder:
                 "rectangle (web) carries the shear in the combined V+T checks. Its "
                 "positioned rectangle union has been validated against the concrete "
                 "outline and voids before these results are issued.")
-        self._h2("Equivalent-tube wall selection", reserve=300)
+        self._page_break()
+        self._h2("Equivalent-tube wall selection", reserve=0)
         self._table(
             wall_selection_rows,
             [30 * mm, 30 * mm, 35 * mm, 85 * mm],

@@ -5691,7 +5691,10 @@ def test_report_profiles_publish_torsion_wall_selection_evidence(profile):
         wall_pages = [
             page_text
             for page_text in page_texts
-            if "Equivalent-tube wall selection" in page_text
+            if re.search(
+                r"(?m)^(?:\d+\.\d+ )?Equivalent-tube wall selection\s*$",
+                page_text,
+            )
             and "Base thickness" in page_text
         ]
         assert len(wall_pages) == 1
