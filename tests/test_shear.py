@@ -1332,6 +1332,10 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
     assert "not a shear-capacity verdict" in visible
     assert "Overall reinforced shear assessment: FAIL" not in visible
     assert "Longitudinal chord: bending + shear tension" not in visible
+    assert "no shear-induced longitudinal chord force is applied" in visible
+    assert (
+        "extra longitudinal tension the tension chord must also carry" not in visible
+    )
     assert not any(
         "M_{Ed,\\mathrm{total}}" in metric.label
         or "M_{Ed,total}" in metric.label
@@ -2808,6 +2812,15 @@ def test_app_gamma_v_remains_active_for_2023_sparse_links():
         high_gamma_resistance * 1.80 / 1.25
     )
     assert recalculated["nominal_resistance"]["route"] == "concrete"
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        str(item.value)
+        for collection in (at.caption, at.warning, at.error, at.markdown)
+        for item in collection
+    )
+    assert "no shear-induced longitudinal chord force is applied" in visible
+    assert "is applied to both flexural chords" not in visible
 
 
 @pytest.mark.parametrize("unsafe_gamma_v", (0.0, 1e-309))

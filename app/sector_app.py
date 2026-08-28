@@ -14399,15 +14399,28 @@ def shear_view(inp, results):
         else:
             theta_txt = (r"Sector auto-optimises $\theta$ within the bounds to "
                          r"maximise $V_{Rd} = \min(V_{Rd,s}, V_{Rd,max})$.")
+        if nominal_route == "links":
+            chord_force_note_2023 = (
+                r" $N_{Vd}=|V_{Ed}|\cot\theta$ (8.50) is applied to both "
+                "flexural chords using Formulae (8.51) and (8.52), without the "
+                "support-specific (8.53) relief."
+            )
+            chord_force_note_2005 = (
+                r" $\Delta F_{td}=0.5V_{Ed}\cot\theta$ is the extra "
+                "longitudinal tension the tension chord must also carry."
+            )
+        else:
+            chord_force_note_2023 = chord_force_note_2005 = (
+                " The concrete route is selected, so no shear-induced "
+                "longitudinal chord force is applied."
+            )
         if links.get("model_2023"):
             st.caption(
                 r"$\tau_{Rd,sy}=\rho_w f_{ywd}\cot\theta$ (8.42); "
                 r"$\sigma_{cd}=\tau_{Ed}(\cot\theta+\tan\theta)"
                 r"\leq\nu f_{cd}$ (8.44), with $\nu=0.5$. "
                 + theta_txt
-                + r" $N_{Vd}=|V_{Ed}|\cot\theta$ (8.50) is applied to both "
-                "flexural chords using Formulae (8.51) and (8.52), without the "
-                "support-specific (8.53) relief."
+                + chord_force_note_2023
             )
         else:
             st.caption(
@@ -14415,8 +14428,7 @@ def shear_view(inp, results):
                 r"$V_{Rd,max} = \alpha_{cw} b_w z\,\nu_1 f_{cd}/"
                 r"(\cot\theta+\tan\theta)$ (6.9). "
                 + theta_txt
-                + r" $\Delta F_{td}=0.5V_{Ed}\cot\theta$ is the extra "
-                "longitudinal tension the tension chord must also carry."
+                + chord_force_note_2005
             )
         # Longitudinal chord under M + V (+ T): the same check the combined view
         # shows, computed at the member strut angle.
