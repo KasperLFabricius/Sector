@@ -6813,6 +6813,9 @@ class ReportBuilder:
                 if links else (aggregate.get("res") or {}).get("vrd_c")
             )
             utilisation = links.get("util") if links else aggregate.get("util")
+            links_unavailable = bool(
+                links and not (links.get("res") or {}).get("valid")
+            )
             component = aggregate.get("component") or (
                 "vy" if aggregate.get("axis") == "x" else "vx"
             )
@@ -6824,9 +6827,15 @@ class ReportBuilder:
                     [
                         action,
                         f"{_fmt(aggregate.get('signed_v_ed', aggregate.get('v_ed')), 3)} kN",
-                        f"{_fmt(resistance, 3)} kN",
-                        _pct(utilisation),
-                        aggregate.get("status", "NOT ASSESSED"),
+                        (
+                            "-" if links_unavailable
+                            else f"{_fmt(resistance, 3)} kN"
+                        ),
+                        "-" if links_unavailable else _pct(utilisation),
+                        (
+                            "NOT ASSESSED" if links_unavailable
+                            else aggregate.get("status", "NOT ASSESSED")
+                        ),
                         viz.tension_face_label(
                             aggregate.get("tension_low", True),
                             aggregate.get("axis"),
@@ -6900,11 +6909,23 @@ class ReportBuilder:
                 if self.inp.get("shear_links") is True
                 else item.get("util")
             )
+            links_unavailable = bool(
+                self.inp.get("shear_links") is True
+                and links
+                and not (links.get("res") or {}).get("valid")
+            )
             rows.append([
                 "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
                 f"{_fmt(item.get('signed_v_ed', item.get('v_ed')), 3)} kN",
-                f"{_fmt(resistance, 3)} kN",
-                _pct(utilisation), item.get("status", "NOT ASSESSED"),
+                (
+                    "-" if links_unavailable
+                    else f"{_fmt(resistance, 3)} kN"
+                ),
+                "-" if links_unavailable else _pct(utilisation),
+                (
+                    "NOT ASSESSED" if links_unavailable
+                    else item.get("status", "NOT ASSESSED")
+                ),
                 viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
             ])
         self._table(rows, [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm])

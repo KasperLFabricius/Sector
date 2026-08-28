@@ -11440,6 +11440,14 @@ def results_overview_view(inp, results, *, stale=False):
             st.caption(
                 f"{row['check']} - {row['status']}: {row.get('note') or '-'}"
             )
+        elif (
+            str(row.get("view") or "") == "Shear"
+            and str(row.get("status") or "").upper() == "NOT ASSESSED"
+            and row.get("note")
+        ):
+            st.caption(
+                f"{row['check']} - NOT ASSESSED: {row['note']}"
+            )
 
     if information_rows:
         st.markdown("**Scope and calculation state**")

@@ -1624,7 +1624,16 @@ def _build_shear_face_context(
         }
     asw = link_legs * _module("templates").bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
-    z_mm, z_source = shear_lever_arm(inp, axis, tension_low, d_mm)
+    # Sector does not retain a selected N_Edw allocation or the action-state
+    # compression-chord depth needed to determine the applicable 8.2.3(11) branch.
+    # Under positive net compression, stop before the face-aligned Plastic lever-
+    # arm solve: that capacity-boundary state is not a substitute for the missing
+    # action-state evidence.
+    if model_2023 and n_ed_comp > 0.0:
+        z_mm = None
+        z_source = shear.LINKS_2023_AXIAL_COMPRESSION_REASON
+    else:
+        z_mm, z_source = shear_lever_arm(inp, axis, tension_low, d_mm)
 
     def links_at(
         cot_lo,

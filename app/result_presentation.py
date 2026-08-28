@@ -193,6 +193,13 @@ _SHEAR_REASON_MESSAGES = {
         "SHEAR-LINK-INPUT",
         "Review the reinforced-shear geometry, link reinforcement, and material inputs",
     ),
+    "2023 axial-compression applicability conditions were not demonstrated": EngineerMessage(
+        "SHEAR-2023-AXIAL-COMPRESSION",
+        "Net axial compression is present; this cross-section calculation does "
+        "not establish the force assigned to the web or the action-state "
+        "compression-chord depth needed to select the applicable 2023 route. "
+        "Complete a member-level assessment, including Annex G where required",
+    ),
     "reinforced-shear prerequisite was not assessed": EngineerMessage(
         "SHEAR-LINK-PREREQUISITE",
         "Complete the reinforced-shear calculation before assessing the combined check",
@@ -2395,7 +2402,13 @@ def result_summary_rows(inp, results, *, stale=False):
                         or float(chord_util) >= float(overall_util)
                     ):
                         overall_util = chord_util
-                    if chord_status != "PASS":
+                    if (
+                        chord_status == "FAIL"
+                        or (
+                            link_status == "PASS"
+                            and chord_status not in {"PASS", "NOT APPLICABLE"}
+                        )
+                    ):
                         overall_note = result_reason(
                             chord_assessment.get("reason"),
                             "shear",

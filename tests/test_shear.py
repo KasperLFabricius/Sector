@@ -356,6 +356,92 @@ def test_vrd_links_2023_hand_calc_and_derived_stresses():
     )
 
 
+@pytest.mark.parametrize(
+    "n_ed_comp_kn",
+    (math.nextafter(0.0, math.inf), 750.0, 2000.0),
+    ids=("smallest-positive", "total-equals-v-cot-fixture", "high-compression"),
+)
+def test_vrd_links_2023_axial_compression_fails_before_angle_selection(
+    monkeypatch,
+    n_ed_comp_kn,
+):
+    def forbidden_angle_selection(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("the simplified compression-field method was entered")
+
+    monkeypatch.setattr(shear, "optimum_strut_angle", forbidden_angle_selection)
+    result = shear.vrd_links(
+        35.0,
+        codes.EC2_2023,
+        300.0,
+        550.0,
+        1.0,
+        500.0,
+        n_ed_comp_kn,
+        0.18,
+        1.0,
+        2.5,
+        z_mm=495.0,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=300.0,
+    )
+
+    assert result["valid"] is False
+    assert result["calculation_state"] == "NOT ASSESSED"
+    assert result["reason"] == (
+        "2023 axial-compression applicability conditions were not demonstrated"
+    )
+    assert result["vrd_s"] is None
+    assert result["vrd_max"] is None
+    assert result["vrd"] is None
+    assert result["z"] is None
+    applicability = result["axial_applicability"]
+    assert applicability["net_axial_compression_kn"] == n_ed_comp_kn
+    assert applicability["mean_compression_mpa"] == pytest.approx(
+        n_ed_comp_kn / 0.18 / 1000.0
+    )
+    assert applicability["web_force_condition_demonstrated"] is False
+    assert applicability["selected_web_force_kn"] is None
+    assert applicability["web_force_limit_kn"] is None
+    assert applicability["chord_depth_condition_demonstrated"] is False
+    assert applicability["action_compression_chord_depth_mm"] is None
+    assert applicability["compression_chord_depth_limit_mm"] == pytest.approx(
+        0.25 * 550.0
+    )
+    assert applicability["simplified_method_applicable"] is False
+    assert applicability["separate_member_assessment_required"] is True
+    assert applicability["annex_g_requirement_determined"] is False
+
+
+@pytest.mark.parametrize("n_ed_comp_kn", (-300.0, -0.0, 0.0))
+def test_vrd_links_2023_zero_or_tension_retains_existing_method(n_ed_comp_kn):
+    result = shear.vrd_links(
+        35.0,
+        codes.EC2_2023,
+        300.0,
+        550.0,
+        1.0,
+        500.0,
+        n_ed_comp_kn,
+        0.18,
+        1.0,
+        2.5,
+        z_mm=495.0,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=300.0,
+    )
+
+    assert result["valid"] is True
+    assert result["vrd"] > 0.0
+    applicability = result["axial_applicability"]
+    assert applicability["compression_present"] is False
+    assert applicability["simplified_method_applicable"] is True
+    assert applicability["web_force_condition_required"] is False
+    assert applicability["chord_depth_condition_required"] is False
+
+
 def test_vrd_links_2023_requires_final_fcd():
     result = shear.vrd_links(
         35.0,
@@ -1373,6 +1459,130 @@ def test_app_shear_2023_links_produce_compression_field_result():
     assert links["delta_ftd"] is None
     _select_view(at, "Shear")
     assert not any("not yet implemented" in m.value for m in at.info)
+
+
+def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
+    from sector import capacity
+    from sector import combined as combined_core
+
+    def forbidden_lever_arm(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("the face-aligned Plastic lever-arm solve was entered")
+
+    monkeypatch.setattr(capacity, "shear_lever_arm", forbidden_lever_arm)
+    monkeypatch.setattr(
+        combined_core,
+        "crushing_interaction_result",
+        forbidden_lever_arm,
+    )
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 50.0),
+        ("checkbox", "torsion_on", True),
+        ("number_input", "torsion_T", 40.0),
+        ("number_input", "pl_P", -200.0),
+    )
+
+    assert not at.exception
+    links = at.session_state["results"]["shear"]["links"]
+    shear_result = at.session_state["results"]["shear"]
+    assert shear_result["n_ed"] == pytest.approx(-200.0)
+    assert shear_result["n_prestress"] == pytest.approx(0.0)
+    assert shear_result["n_ed_comp"] == pytest.approx(200.0)
+    assert links["res"]["calculation_state"] == "NOT ASSESSED"
+    assert links["res"]["vrd"] is None
+    assert links["util"] is None
+    assert at.session_state["results"]["shear"]["assessment_status"] == (
+        "NOT ASSESSED"
+    )
+    torsion = at.session_state["results"]["torsion"]
+    assert "interaction" not in torsion
+    assert torsion["min_reinf"]["status"] == "NOT APPLICABLE"
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "Net axial compression is present" in visible
+    assert "force assigned to the web" in visible
+    assert "action-state compression-chord depth" in visible
+    assert "Annex G" in visible
+    assert "applicability conditions were not demonstrated" not in visible
+    assert "V_{Rd,s}" not in visible
+    assert "PASS" not in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
+    import result_presentation as _presentation
+
+    retained_rows = _presentation.governing_result_rows(
+        _presentation.governing_summary_rows(
+            _presentation.multi_case_summary_rows(
+                at.session_state["_latest_inputs"],
+                at.session_state["results"],
+            )
+        )
+    )
+    retained_row = next(
+        item for item in retained_rows if item["check"] == "Shear with links"
+    )
+    assert retained_row["view"] == "Shear"
+    assert "Net axial compression is present" in retained_row["note"]
+    overview_copy = " ".join(item.value for item in at.caption)
+    assert "Net axial compression is present" in overview_copy
+    assert "Annex G" in overview_copy
+    assert "No longitudinal chord action" not in overview_copy
+
+
+def test_app_prestress_triggers_2023_links_guard_until_exactly_cancelled():
+    at = _fresh()
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set_and_click(
+        at,
+        "qs_apply",
+        ("number_input", "tnd_n", 4),
+        ("number_input", "tnd_a", 1000.0),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pre_IS", 0.1),
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 50.0),
+    )
+
+    assert not at.exception
+    first = at.session_state["results"]["shear"]
+    assert first["n_prestress"] > 0.0
+    assert first["n_ed"] == pytest.approx(0.0)
+    assert first["n_ed_comp"] == pytest.approx(first["n_prestress"])
+    assert first["links"]["res"]["calculation_state"] == "NOT ASSESSED"
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_P", first["n_prestress"]),
+    )
+    cancelled = at.session_state["results"]["shear"]
+    assert cancelled["n_ed"] == pytest.approx(first["n_prestress"])
+    assert cancelled["n_prestress"] == pytest.approx(first["n_prestress"])
+    assert cancelled["n_ed_comp"] == pytest.approx(0.0, abs=1.0e-12)
+    assert cancelled["links"]["res"]["valid"] is True
+    assert cancelled["links"]["res"]["vrd"] > 0.0
 
 
 def test_app_shear_2023_class_a_default_range_deviation_is_recorded():

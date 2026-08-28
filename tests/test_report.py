@@ -7207,6 +7207,88 @@ def test_report_includes_2023_shear_links_stress_checks():
     assert "not implemented" not in text
 
 
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_fail_closed_for_2023_links_under_axial_compression(
+    profile,
+):
+    from sector import codes as _codes, shear as _shear
+
+    out = _out()
+    sh = _shear_out_2023()
+    result = _shear.vrd_links(
+        35.0,
+        _codes.EC2_2023,
+        300.0,
+        550.0,
+        1.0,
+        500.0,
+        800.0,
+        0.18,
+        1.0,
+        2.5,
+        z_mm=495.0,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=50.0,
+    )
+    reason = result["reason"]
+    sh["links"] = {
+        "res": result,
+        "util": None,
+        "assessment_reason": reason,
+        "asw": 150.0,
+        "asw_over_s": 1.0,
+        "legs": 2.0,
+        "dia": 10.0,
+        "s": 150.0,
+        "fywk": 500.0,
+        "cot_min": 1.0,
+        "cot_max": 2.5,
+        "model_2023": True,
+        "out_of_limits": False,
+        "required": True,
+        "longitudinal_assessment": {
+            "status": "NOT APPLICABLE",
+            "ok": None,
+            "util": None,
+            "reason": "no_longitudinal_chord_action",
+        },
+    }
+    sh.update(
+        n_ed_comp=800.0,
+        status="PASS",
+        resistance_status="NOT ASSESSED",
+        assessment_status="NOT ASSESSED",
+        assessment_ok=None,
+    )
+    out["shear"] = sh
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        shear_method=_codes.EC2_2023.label,
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    assert "Net axial compression is present" in text
+    assert "force assigned to the web" in text
+    assert "compression-chord depth" in text
+    assert "Annex G" in text
+    assert "applicability conditions were not demonstrated" not in text
+    assert "No longitudinal chord action requires assessment" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Vy,Ed 50.000 kN - - NOT ASSESSED" in text
+        assert "- kN inf NOT ASSESSED" not in text
+
+
 def test_report_shear_links_out_of_limits_note():
     out = _out()
     sh = _shear_out()

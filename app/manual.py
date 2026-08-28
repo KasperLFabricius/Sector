@@ -2040,6 +2040,13 @@ def manual_blocks() -> list:
          "$\\max(2.5-0.1N_{Ed}/|V_{Ed}|,1)$ and class A reduces it by 20%. "
          "The section check uses 2.5 as its upper bound; extension to 3.0 "
          "requires separate confirmation of the compression-chord depth.")
+    call("standard", "Sector applies a conservative applicability boundary when "
+         "net axial compression is positive. The cross-section calculation does "
+         "not select the force assigned to the web or establish the action-state "
+         "compression-chord depth needed to determine the simplified 2023 route "
+         "under 8.2.3(11). The reinforced-shear result is therefore NOT ASSESSED; "
+         "complete a separately applicable member assessment, including Annex G "
+         "where required.")
     md("**Worked** (same section, C35, DK NA:2024, 2-leg $\\phi$10 links at "
        "$s = 150$ mm, $f_{ywk} = 500$; calculated $z = 509.151$ mm): "
        "$f_{ywd} = 417$ MPa, $\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The "
