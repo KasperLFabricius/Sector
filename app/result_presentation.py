@@ -568,13 +568,25 @@ GOVERNING_OVERVIEW_INFORMATION_STATUSES = frozenset({
 })
 
 
+def is_boolean_scalar(value):
+    """Return whether a retained scalar is a built-in or NumPy Boolean."""
+
+    value_type = type(value)
+    return isinstance(value, bool) or (
+        value_type.__module__ == "numpy"
+        and value_type.__name__ in {"bool", "bool_"}
+    )
+
+
 def _publication_metric(value, *, allow_positive_infinity=False):
     """Return one eligible retained publication-ranking metric."""
     if value is None:
         return None
+    if is_boolean_scalar(value):
+        return None
     try:
         metric = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if math.isfinite(metric):
         return metric
@@ -680,12 +692,15 @@ def combined_dkna_screen_label(result):
 def combined_uses_dkna(result):
     """Return whether one retained/input combined method is the Danish edition."""
 
-    result = result or {}
+    if not isinstance(result, Mapping):
+        return False
     method = str(result.get("method") or "")
     if method:
         return method in {codes.EC2_2005_DKNA.label, "DK NA"}
-    directions = result.get("directions") or {}
-    if any(combined_uses_dkna(item) for item in directions.values()):
+    directions = result.get("directions")
+    if isinstance(directions, Mapping) and any(
+        combined_uses_dkna(item) for item in directions.values()
+    ):
         return True
     # Compatibility for retained pre-contract report fixtures. Current Base-EN
     # results always carry an explicit method and therefore never enter this path.
@@ -699,6 +714,28 @@ def combined_uses_dkna(result):
             "m_v_separation_condition",
         )
     )
+
+
+def base_en_combined_direction_items(result):
+    """Return both required Base-EN biaxial directions, or fail closed.
+
+    A biaxial retained result is publication-complete only when both independent
+    Vx+T and Vy+T payloads are mappings.  Missing or malformed direction evidence
+    must not let the surviving direction become a governing worked example.
+    """
+
+    if not isinstance(result, Mapping) or result.get("biaxial") is not True:
+        return None
+    directions = result.get("directions")
+    if not isinstance(directions, Mapping):
+        return None
+    items = []
+    for component in ("vx", "vy"):
+        item = directions.get(component)
+        if not isinstance(item, Mapping):
+            return None
+        items.append((component, item))
+    return tuple(items)
 
 
 def combined_dkna_limit_satisfied(result):
@@ -902,6 +939,9 @@ def nominal_shear_resistance(result, *, links_selected=None):
 
 def _transverse_metric(family, result):
     """Rank an already-computed shear, torsion or combined result."""
+    if not isinstance(result, Mapping):
+        return None
+
     def shear_metric(item):
         selected = nominal_shear_resistance(item)
         if selected.get("valid") is not True:
@@ -951,12 +991,16 @@ def _transverse_metric(family, result):
             item.get("dkna_sum"), allow_positive_infinity=True
         )
 
-    directions = result.get("directions") or {}
+    directions = result.get("directions")
     if family in {"shear", "combined"}:
-        items = [directions[key] for key in ("vx", "vy") if key in directions]
-        if not items:
-            items = [result]
         if family == "combined" and not combined_uses_dkna(result):
+            if result.get("biaxial") is True:
+                direction_items = base_en_combined_direction_items(result)
+                if direction_items is None:
+                    return None
+                items = [item for _, item in direction_items]
+            else:
+                items = [result]
             values = []
             for item in items:
                 metric = combined_metric(item)
@@ -964,6 +1008,15 @@ def _transverse_metric(family, result):
                     return None
                 values.append(metric)
             return max(values) if values else None
+        if directions is not None and not isinstance(directions, Mapping):
+            return None
+        items = [
+            directions[key]
+            for key in ("vx", "vy")
+            if isinstance(directions, Mapping) and key in directions
+        ]
+        if not items:
+            items = [result]
         extractor = shear_metric if family == "shear" else combined_metric
         metrics = [extractor(item) for item in items]
         values = [metric for metric in metrics if metric is not None]
@@ -978,10 +1031,25 @@ def _transverse_metric(family, result):
 
 def _transverse_direction(family, result):
     """Return the retained governing direction, with first-direction tie-break."""
+    if not isinstance(result, Mapping):
+        return None
+    if (
+        family == "combined"
+        and not combined_uses_dkna(result)
+        and result.get("biaxial") is True
+    ):
+        retained = base_en_combined_direction_items(result)
+        if retained is None:
+            return None
+        directions = dict(retained)
+    else:
+        directions = result.get("directions")
+        if not isinstance(directions, Mapping):
+            return None
     best = None
     for order, component in enumerate(("vx", "vy")):
-        item = (result.get("directions") or {}).get(component)
-        if not item:
+        item = directions.get(component)
+        if not isinstance(item, Mapping):
             continue
         metric = _transverse_metric(family, item)
         if metric is None:
@@ -1650,9 +1718,12 @@ def _util_summary_status(util, *, valid=True):
         return "INVALID"
     if util is None:
         return "NOT ASSESSED"
-    if not math.isfinite(util):
+    metric = _publication_metric(util, allow_positive_infinity=True)
+    if metric is None:
+        return "NOT ASSESSED"
+    if not math.isfinite(metric):
         return "FAIL"
-    return "PASS" if viz.util_ok(util) else "FAIL"
+    return "PASS" if viz.util_ok(metric) else "FAIL"
 
 
 def torsion_assessment_status(torsion):
@@ -1835,16 +1906,19 @@ def interaction_assessment_status(interaction):
     value = interaction.get("value")
     if not interaction.get("valid") or value is None:
         return "NOT ASSESSED"
-    value = float(value)
+    value = _publication_metric(value, allow_positive_infinity=True)
+    if value is None:
+        return "NOT ASSESSED"
     if not math.isfinite(value):
         return "FAIL"
     return "PASS" if value <= 1.0 + 1.0e-9 else "FAIL"
 
 
 def _percent(util):
-    if util is None:
+    metric = _publication_metric(util, allow_positive_infinity=True)
+    if metric is None:
         return "-"
-    return "infinite" if not math.isfinite(util) else f"{util * 100:.1f} %"
+    return "infinite" if not math.isfinite(metric) else f"{metric * 100:.1f} %"
 
 
 def required_chord_fallback(payload):
@@ -1862,9 +1936,9 @@ def combined_physical_components(combined):
     reinforcement utilisation: concrete strut crushing, closed-stirrup demand and
     longitudinal-chord demand are different physical checks.
     """
-    combined = combined or {}
+    combined = combined if isinstance(combined, Mapping) else {}
     transverse = combined.get("transverse")
-    if transverse is None:
+    if not isinstance(transverse, Mapping):
         missing_note = "Shear links are required for the combined component checks"
         concrete = {
             "key": "concrete",
@@ -1884,8 +1958,12 @@ def combined_physical_components(combined):
         }
     else:
         transverse_valid = bool(transverse.get("valid"))
-        concrete_util = transverse.get("u_crush")
-        stirrup_util = transverse.get("u_stirrup")
+        concrete_util = _publication_metric(
+            transverse.get("u_crush"), allow_positive_infinity=True
+        )
+        stirrup_util = _publication_metric(
+            transverse.get("u_stirrup"), allow_positive_infinity=True
+        )
         try:
             cot = float(transverse.get("cot"))
         except (TypeError, ValueError):
@@ -1924,10 +2002,12 @@ def combined_physical_components(combined):
         }
 
     longitudinal = combined.get("longitudinal")
+    if not isinstance(longitudinal, Mapping):
+        longitudinal = None
     chord_off = combined.get("chord_off")
 
     governing = combined.get("governing_longitudinal")
-    if not isinstance(governing, dict) or not governing.get("valid"):
+    if not isinstance(governing, Mapping) or not governing.get("valid"):
         governing = None
     coverage = (
         longitudinal.get("off_not_evaluated")
@@ -1936,7 +2016,13 @@ def combined_physical_components(combined):
     conditional = bool(combined.get("longitudinal_all_conditional"))
     main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
     long_valid = governing is not None and main_valid
-    long_util = governing.get("util") if governing is not None else None
+    long_util = (
+        _publication_metric(
+            governing.get("util"), allow_positive_infinity=True
+        )
+        if governing is not None
+        else None
+    )
     if not main_valid:
         long_status = "NOT ASSESSED"
         long_note = "No valid shear-axis longitudinal chord check"
@@ -1985,6 +2071,8 @@ def combined_physical_components(combined):
             retained_chord_assessment.get("util"),
             allow_positive_infinity=True,
         )
+        if retained_status in {"PASS", "FAIL"} and retained_util is None:
+            retained_status = "NOT ASSESSED"
         retained_chord_note = result_reason(
             retained_chord_assessment.get("reason"),
             "shear",
@@ -3144,16 +3232,34 @@ def result_summary_rows(inp, results, *, stale=False):
         and inp.get("combined_on")
         and not combined_uses_dkna(combined)
     ):
-        directions = combined.get("directions") or {}
-        physical_items = (
-            [
-                ("Vx+T" if component == "vx" else "Vy+T", directions[component])
-                for component in ("vx", "vy")
-                if component in directions
-            ]
-            if combined.get("biaxial") and directions
-            else [("", combined)]
+        biaxial = combined.get("biaxial") is True
+        direction_items = (
+            base_en_combined_direction_items(combined) if biaxial else ()
         )
+        if biaxial and direction_items is None:
+            rows.append(_summary_row(
+                "Combined M-V-T supported components",
+                "plastic",
+                "NOT ASSESSED",
+                result="-",
+                criterion="Complete Vx+T and Vy+T direction results",
+                util=None,
+                view="M-V-T Combined",
+                note=(
+                    "Both directional combined calculations are required. "
+                    "Check the actions and component results, then recalculate"
+                ),
+                inp=inp,
+                overview_key="combined:physical",
+            ))
+            physical_items = []
+        elif biaxial:
+            physical_items = [
+                ("Vx+T" if component == "vx" else "Vy+T", item)
+                for component, item in direction_items
+            ]
+        else:
+            physical_items = [("", combined)]
         for direction_label, item in physical_items:
             prefix = f"Combined {direction_label} " if direction_label else "Combined "
             if item.get("valid"):
@@ -3196,7 +3302,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     inp=inp,
                     overview_key="combined:physical",
                 ))
-        if combined.get("biaxial") and directions:
+        if biaxial and direction_items is not None:
             rows.append(_summary_row(
                 "Generic Vx-Vy-T interaction",
                 "plastic",
@@ -3549,8 +3655,7 @@ def overall_summary_status(rows):
 def _governing_overview_utilisation(row):
     value = row.get("util")
     if (
-        isinstance(value, bool)
-        or type(value).__name__ == "bool_"
+        is_boolean_scalar(value)
         or not isinstance(value, Real)
     ):
         return None

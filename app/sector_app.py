@@ -6,6 +6,7 @@ demand-versus-resistance checks.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import copy
 import dataclasses
 import functools
@@ -15386,6 +15387,7 @@ def _no_common_angle_msg(d):
 def _render_base_en_combined(c):
     """Render the supported Base-EN physical checks without a DK aggregate."""
 
+    c = c if isinstance(c, Mapping) else {}
     st.info(
         "Base EN reports its supported V+T concrete, closed-stirrup and "
         "longitudinal-reinforcement checks separately. No additional aggregate "
@@ -15393,6 +15395,9 @@ def _render_base_en_combined(c):
     )
     st.markdown("**Physical resistance components**")
     components = presentation.combined_physical_components(c)
+    components_by_key = {
+        component["key"]: component for component in components
+    }
     for box, component in zip(st.columns(3), components):
         status = component["status"]
         if status in {"PASS", "FAIL"}:
@@ -15422,17 +15427,26 @@ def _render_base_en_combined(c):
         r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**"
     )
     if cr is not None and cr.get("valid"):
-        _verdict_metric(
-            st,
-            "Formula (6.29) utilisation",
-            _pct(cr.get("value")),
-            viz.util_ok(cr.get("value")),
-        )
-        st.caption(
-            f"Common member angle: cot {_THETA} = {float(cr['cot']):.3f}; "
-            f"T_Rd,max = {float(cr['trd_max']):.3f} kNm and "
-            f"V_Rd,max = {float(cr['vrd_max']):.3f} kN."
-        )
+        cr_status = presentation.interaction_assessment_status(cr)
+        if cr_status in {"PASS", "FAIL"}:
+            _verdict_metric(
+                st,
+                "Formula (6.29) utilisation",
+                _pct(cr.get("value")),
+                cr_status == "PASS",
+            )
+            st.caption(
+                f"Common member angle: cot {_THETA} = {float(cr['cot']):.3f}; "
+                f"T_Rd,max = {float(cr['trd_max']):.3f} kNm and "
+                f"V_Rd,max = {float(cr['vrd_max']):.3f} kN."
+            )
+        else:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "Formula (6.29) is NOT ASSESSED. Complete the shared "
+                "compression-strut calculation and recalculate.",
+            )
     elif cr is not None:
         _manual_warning(st, "calculation-warning", _no_common_angle_msg(cr))
     else:
@@ -15444,7 +15458,10 @@ def _render_base_en_combined(c):
     tr = c.get("transverse")
     st.divider()
     st.markdown("**Shared closed stirrup: shear + torsion**")
-    if tr is not None and tr.get("valid"):
+    if (
+        isinstance(tr, Mapping)
+        and components_by_key["stirrup"]["status"] in {"PASS", "FAIL"}
+    ):
         boxes = st.columns(3)
         boxes[0].metric("Shear share", _pct(tr.get("shear_fraction")))
         boxes[1].metric("Torsion share", _pct(tr.get("torsion_fraction")))
@@ -15452,10 +15469,15 @@ def _render_base_en_combined(c):
             boxes[2],
             "Closed-stirrup utilisation",
             _pct(tr.get("u_stirrup")),
-            viz.util_ok(tr.get("u_stirrup")),
+            components_by_key["stirrup"]["status"] == "PASS",
         )
-    elif tr is not None:
-        _manual_warning(st, "calculation-warning", _no_common_angle_msg(tr))
+    elif isinstance(tr, Mapping):
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The shared closed-stirrup check is NOT ASSESSED. Complete the "
+            "component calculation and recalculate.",
+        )
     else:
         st.caption("No assessable shared closed-stirrup result is available.")
 
@@ -15548,7 +15570,19 @@ def combined_view(inp, results):
             "Vx+T and Vy+T are calculated separately. Generic simultaneous "
             "Vx+Vy+T interaction is not calculated."
         )
-        directions = aggregate.get("directions") or {}
+        if not dkna_basis:
+            retained = presentation.base_en_combined_direction_items(aggregate)
+            if retained is None:
+                _manual_warning(
+                    st,
+                    "calculation-warning",
+                    "Base-EN directional components are NOT ASSESSED. Complete "
+                    "both Vx+T and Vy+T calculations, then recalculate.",
+                )
+                return
+            directions = dict(retained)
+        else:
+            directions = aggregate.get("directions") or {}
         rows = []
         for component in ("vx", "vy"):
             item = directions.get(component) or {}

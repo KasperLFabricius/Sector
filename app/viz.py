@@ -20,9 +20,20 @@ def pct(x, nd=1):
     formats differently on screen and in the document. ``nd`` is the decimal count
     (the sub-tube table prints whole percent, most checks one decimal).
     """
-    if x is None or (isinstance(x, float) and not math.isfinite(x)):
+    x_type = type(x)
+    if isinstance(x, bool) or (
+        x_type.__module__ == "numpy" and x_type.__name__ in {"bool", "bool_"}
+    ):
+        return "-"
+    if x is None:
         return "inf"
-    return f"{x * 100:.{nd}f} %"
+    try:
+        value = float(x)
+    except (TypeError, ValueError, OverflowError):
+        return "-"
+    if not math.isfinite(value):
+        return "inf"
+    return f"{value * 100:.{nd}f} %"
 
 
 def util_ok(util, tol=0.0):

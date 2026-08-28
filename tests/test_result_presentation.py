@@ -2197,6 +2197,95 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
     ] == {"case_id": "PL-GOV", "component": None}
 
 
+@pytest.mark.parametrize(
+    "directions",
+    (
+        {},
+        {"vx": {}},
+        {"vx": {}, "vy": None},
+        {"vx": {}, "vy": "unavailable"},
+        "unavailable",
+    ),
+)
+def test_base_en_biaxial_direction_evidence_fails_closed(directions):
+    combined = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": directions,
+    }
+
+    assert presentation.base_en_combined_direction_items(combined) is None
+    assert presentation._transverse_metric("combined", combined) is None
+    assert presentation._transverse_direction("combined", combined) is None
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert len(combined_rows) == 1
+    assert combined_rows[0]["status"] == "NOT ASSESSED"
+    assert combined_rows[0]["util"] is None
+    assert "both directional combined calculations" in (
+        combined_rows[0]["note"].casefold()
+    )
+
+
+@pytest.mark.parametrize("retained", (True, np.bool_(True)))
+def test_base_en_boolean_utilisations_are_not_publication_numbers(retained):
+    chord = {
+        "valid": True,
+        "util": retained,
+        "axis": "x",
+        "tension_low": True,
+    }
+    combined = {
+        "valid": True,
+        "method": codes.EC2_2005.label,
+        "transverse": {
+            "valid": True,
+            "u_crush": retained,
+            "u_stirrup": retained,
+            "cot": 1.5,
+            "shear_fraction": retained,
+            "torsion_fraction": retained,
+        },
+        "longitudinal": chord,
+        "governing_longitudinal": chord,
+        "longitudinal_all_conditional": True,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "util": retained,
+            "coverage_complete": True,
+        },
+    }
+
+    components = presentation.combined_physical_components(combined)
+    assert {item["status"] for item in components} == {"NOT ASSESSED"}
+    assert all(item["util"] is None for item in components)
+    assert presentation._transverse_metric("combined", combined) is None
+    assert presentation.interaction_assessment_status(
+        {"valid": True, "value": retained}
+    ) == "NOT ASSESSED"
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert len(combined_rows) == 3
+    assert {row["status"] for row in combined_rows} == {"NOT ASSESSED"}
+    assert all(row["result"] == "-" and row["util"] is None for row in combined_rows)
+
+
 def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():
     unavailable = {
         "valid": True,

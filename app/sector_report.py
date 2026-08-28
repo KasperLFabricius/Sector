@@ -5110,9 +5110,16 @@ class ReportBuilder:
                 for item in items
             )
         if family == "combined":
-            directions = result.get("directions") or {}
-            items = tuple(directions.values()) or (result,)
             if not presentation.combined_uses_dkna(result):
+                if result.get("biaxial") is True:
+                    retained = presentation.base_en_combined_direction_items(
+                        result
+                    )
+                    if retained is None:
+                        return True
+                    items = tuple(item for _, item in retained)
+                else:
+                    items = (result,)
                 return not all(
                     item.get("valid") is True
                     and all(
@@ -5126,6 +5133,8 @@ class ReportBuilder:
                     )
                     for item in items
                 )
+            directions = result.get("directions") or {}
+            items = tuple(directions.values()) or (result,)
             return not any(
                 item.get("valid") is True
                 and item.get("dkna_valid", item.get("valid")) is True
@@ -5137,9 +5146,11 @@ class ReportBuilder:
     @staticmethod
     def _retained_utilisation_available(value):
         """Whether a stored assessment utilisation can be published."""
+        if presentation.is_boolean_scalar(value):
+            return False
         try:
             metric = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return False
         return math.isfinite(metric) or metric == math.inf
 
@@ -7816,6 +7827,7 @@ class ReportBuilder:
     def _combined_base_en_direction(self, c):
         """Publish Base-EN physical interactions without a DK aggregate."""
 
+        c = c if isinstance(c, Mapping) else {}
         if not c.get("valid"):
             missing = [
                 label
@@ -7849,6 +7861,10 @@ class ReportBuilder:
             "reinforcement checks separately. No additional aggregate "
             "interaction verdict is published for this route."
         )
+        physical_components = presentation.combined_physical_components(c)
+        physical_by_key = {
+            component["key"]: component for component in physical_components
+        }
         component_rows = [["Component", "Utilisation", "Status", "Engineering note"]]
         component_rows.extend([
             [
@@ -7857,7 +7873,7 @@ class ReportBuilder:
                 component["status"],
                 component["note"],
             ]
-            for component in presentation.combined_physical_components(c)
+            for component in physical_components
         ])
         self._h2("Supported Base-EN physical interactions")
         self._table(
@@ -7870,7 +7886,12 @@ class ReportBuilder:
             "aggregate interaction verdict is published."
         )
         cr = c.get("crushing")
-        if isinstance(cr, Mapping) and cr.get("valid"):
+        cr_status = (
+            presentation.interaction_assessment_status(cr)
+            if isinstance(cr, Mapping)
+            else "NOT ASSESSED"
+        )
+        if isinstance(cr, Mapping) and cr_status in {"PASS", "FAIL"}:
             self._h2("Concrete compression strut (6.29)")
             self._formula(
                 "T<sub>Ed</sub>/T<sub>Rd,max</sub> + "
@@ -7883,7 +7904,7 @@ class ReportBuilder:
                 ),
                 result=(
                     f"{_pct(cr['value'])}  "
-                    f"({_demand_resistance_verdict(viz.util_ok(cr['value']))})"
+                    f"({_demand_resistance_verdict(cr_status == 'PASS')})"
                 ),
             )
             self._small(
@@ -7895,7 +7916,11 @@ class ReportBuilder:
                 "NOT ASSESSED: the shared member-angle calculation is invalid."
             )
         tr = c.get("transverse")
-        if isinstance(tr, Mapping) and tr.get("valid"):
+        stirrup = physical_by_key["stirrup"]
+        if (
+            isinstance(tr, Mapping)
+            and stirrup["status"] in {"PASS", "FAIL"}
+        ):
             self._h2("Shared closed stirrup: shear + torsion")
             self._table(
                 [
@@ -7905,18 +7930,22 @@ class ReportBuilder:
                         _pct(tr.get("torsion_fraction")),
                         _pct(tr.get("u_stirrup")),
                         (
-                            "PASS"
-                            if viz.util_ok(tr.get("u_stirrup"))
-                            else "FAIL"
+                            stirrup["status"]
                         ),
                     ],
                 ],
                 [40 * mm, 40 * mm, 40 * mm, 40 * mm],
             )
+        elif isinstance(tr, Mapping):
+            self._h2("Shared closed stirrup: shear + torsion")
+            self._small(
+                "NOT ASSESSED: complete the shared closed-stirrup calculation "
+                "and recalculate."
+            )
         lg = c.get("longitudinal")
         longitudinal = next(
             component
-            for component in presentation.combined_physical_components(c)
+            for component in physical_components
             if component["key"] == "longitudinal"
         )
         self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
@@ -7953,8 +7982,15 @@ class ReportBuilder:
         if blocker is not None:
             self._small("Combined Base-EN components: NOT ASSESSED. " + blocker)
             return
-        directions = aggregate.get("directions") or {}
-        if aggregate.get("biaxial") and directions:
+        if aggregate.get("biaxial") is True:
+            retained = presentation.base_en_combined_direction_items(aggregate)
+            if retained is None:
+                self._small(
+                    "Base-EN directional combined components are NOT ASSESSED. "
+                    "Complete both Vx+T and Vy+T calculations, then recalculate."
+                )
+                return
+            directions = dict(retained)
             self._small(
                 "V<sub>x,Ed</sub> + T<sub>Ed</sub> and V<sub>y,Ed</sub> + "
                 "T<sub>Ed</sub> are reported independently. No simultaneous "
@@ -7965,9 +8001,7 @@ class ReportBuilder:
                 "Longitudinal", "Governing face", "cot theta",
             ]]
             for component in ("vx", "vy"):
-                item = directions.get(component)
-                if not item:
-                    continue
+                item = directions[component]
                 physical = {
                     value["key"]: value
                     for value in presentation.combined_physical_components(item)

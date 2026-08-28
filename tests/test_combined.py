@@ -1616,6 +1616,95 @@ def test_app_base_en_biaxial_view_keeps_only_directional_physical_checks():
     assert not any("DK NA" in value or "action-alone" in value.casefold() for value in checks)
 
 
+def test_app_base_en_missing_biaxial_direction_fails_closed():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+    aggregate = at.session_state["results"]["combined"]
+    aggregate["directions"].pop("vy")
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    assert any(
+        "both Vx+T and Vy+T" in warning.value
+        for warning in at.warning
+    )
+    assert not any(
+        "Directional screen" in frame.value.columns
+        for frame in at.dataframe
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    combined_rows = overview[
+        overview["Check"] == "Combined M-V-T supported components"
+    ]
+    assert tuple(combined_rows["Status"]) == ("NOT ASSESSED",)
+    assert tuple(combined_rows["Result"]) == ("-",)
+
+
+def test_app_base_en_boolean_utilisations_are_not_published_as_one():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    combined = at.session_state["results"]["combined"]
+    combined["transverse"].update(
+        u_crush=True,
+        u_stirrup=True,
+        shear_fraction=True,
+        torsion_fraction=True,
+    )
+    combined["crushing"]["value"] = True
+    combined["longitudinal"]["util"] = True
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(status="PASS", util=True)
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    assert "100.0 %" not in {str(metric.value) for metric in at.metric}
+    assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    combined_rows = overview[
+        overview["Check"].str.startswith("Combined ")
+    ]
+    assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
+    assert "100.0 %" not in set(combined_rows["Result"])
+
+
 def test_app_combined_basis_switch_invalidates_results_and_reports():
     at = _fresh()
     at.run()

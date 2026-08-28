@@ -6709,6 +6709,85 @@ def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile)
         assert "No simultaneous Vx + Vy + T verdict is inferred" in text
 
 
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_base_en_missing_biaxial_direction_fails_closed(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    vx = _base_en_combined_out()
+    vx.update(component="vx", governing_face="negative", governing_cot=1.25)
+    out = {
+        "plastic": _out()["plastic"],
+        "combined": {
+            "method": codes.EC2_2005.label,
+            "biaxial": True,
+            "directions": {"vx": vx},
+        },
+    }
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    if profile == "Brief":
+        assert "both directional combined calculations" in text.casefold()
+    else:
+        assert "both vx+t and vy+t" in text.casefold()
+    assert "Representative Base-EN directional calculation" not in text
+    assert "Supported Base-EN physical interactions" not in text
+    assert "DK NA" not in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_base_en_boolean_utilisations_are_not_published(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _base_en_combined_out()
+    combined["transverse"].update(
+        u_crush=True,
+        u_stirrup=True,
+        shear_fraction=True,
+        torsion_fraction=True,
+    )
+    combined["crushing"]["value"] = True
+    combined["longitudinal"]["util"] = True
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(status="PASS", util=True)
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    assert re.search(r"100[.,]0\s*%", text) is None
+    if profile in {"Standard", "Audit"}:
+        assert "Supported Base-EN physical interactions" in text
+    else:
+        assert "Combined concrete compression strut" in text
+    assert "DK NA" not in text
+
+
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
 def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     inp = _inp()
