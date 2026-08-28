@@ -5902,6 +5902,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "capacity-result-contract",
     "torsion-subdivision-automatic-tef-v1",
     "closed-torsion-link-authority-v1",
+    "nominal-shear-resistance-route-v1",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",

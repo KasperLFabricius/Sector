@@ -2091,10 +2091,14 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
         ("radio", "mode", "Both"),
         ("checkbox", "torsion_on", True),
         ("number_input", "torsion_T", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 10.0),
     )
     latest = at.session_state["_latest_inputs"]
     token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
-    assert token[-1] == "closed-torsion-link-authority-v1"
+    assert token[-1] == "nominal-shear-resistance-route-v1"
+    pre_route_token = token[:-1]
 
     for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
         assert tuple(latest[key]).count(token) == 1
@@ -2107,7 +2111,8 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
         assert token not in tuple(latest[key])
     pre_contract_inputs = copy.deepcopy(latest)
     pre_contract_inputs["signature"] = tuple(
-        item for item in latest["signature"] if item != token
+        pre_route_token if item == token else item
+        for item in latest["signature"]
     )
     assert sector_app._engineering_input_hash(
         pre_contract_inputs
@@ -2116,13 +2121,20 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
     plastic_before = at.session_state["results"]["plastic"]
     torsion_before = at.session_state["results"]["torsion"]
     elastic_before = at.session_state["results"]["elastic"]
+    cached_case = at.session_state["results"]["plastic_cases"][0]
+    assert cached_case["results"]["shear"]["nominal_resistance"][
+        "route"
+    ] == "concrete"
+    cached_case["results"]["shear"].pop("nominal_resistance")
+    cached_case["results"]["shear"]["legacy_links_governed"] = True
     for key in (
         "result_sig",
         "result_plastic_sig",
         "result_plastic_case_context_sig",
     ):
         at.session_state[key] = tuple(
-            item for item in at.session_state[key] if item != token
+            pre_route_token if item == token else item
+            for item in at.session_state[key]
         )
     assert at.session_state["result_sig"] != latest["signature"]
 
@@ -2132,6 +2144,9 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
     assert results["torsion"] is not torsion_before
     assert results["elastic"] is elastic_before
     assert results["plastic_cases"][0]["reused"] is False
+    refreshed_shear = results["plastic_cases"][0]["results"]["shear"]
+    assert refreshed_shear["nominal_resistance"]["route"] == "concrete"
+    assert "legacy_links_governed" not in refreshed_shear
     assert results["elastic_cases"][0]["reused"] is True
     assert at.session_state["result_plastic_bending_context_sig"] == (
         latest["plastic_bending_context_sig"]
