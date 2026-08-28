@@ -5674,17 +5674,27 @@ def test_report_profiles_publish_torsion_wall_selection_evidence(profile):
     inp = _inp()
     inp.update(torsion_on=True, shear_links=True)
 
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, {"torsion": torsion}, figures=False, profile=profile
-            )
-        ).split()
+    pdf = sector_report.build_report(
+        {}, inp, {"torsion": torsion}, figures=False, profile=profile
     )
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "Torsion" in text and "NOT ASSESSED" in text
     assert "Torsion transverse/strut resistance" in text and "52.4 %" in text
     if profile != "Brief":
+        import pypdf
+
+        page_texts = [
+            page.extract_text() or ""
+            for page in pypdf.PdfReader(io.BytesIO(pdf)).pages
+        ]
+        wall_pages = [
+            page_text
+            for page_text in page_texts
+            if "Equivalent-tube wall selection" in page_text
+            and "Base thickness" in page_text
+        ]
+        assert len(wall_pages) == 1
         assert "Equivalent-tube wall selection" in text
         assert "Subsection: Equivalent-tube wall selection" in text
         assert "Minimum-reinforcement screen (Formula 6.31): Quantity" not in text
