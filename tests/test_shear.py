@@ -419,11 +419,11 @@ def test_vrd_links_2023_axial_compression_fails_before_angle_selection(
     assert applicability["separate_member_assessment_required"] is True
     assert applicability["annex_g_requirement_determined"] is False
     if n_ed_comp_kn == 750.0:
-        # This is apparent equality to VEd times the configured cotangent upper
-        # bound. No angle or NEdw allocation has been selected, so the total net
-        # compression cannot demonstrate the web-force condition in 8.2.3(11).
-        assert n_ed_comp_kn == pytest.approx(300.0 * 2.5)
+        # This is exact equality to VEd times the configured cotangent upper bound.
+        # No angle or NEdw allocation has been selected, so the total net compression
+        # cannot demonstrate the web-force condition in 8.2.3(11).
         assert result["cot_max"] == pytest.approx(2.5)
+        assert n_ed_comp_kn == 300.0 * result["cot_max"]
         assert applicability["selected_web_force_kn"] is None
 
 
