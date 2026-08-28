@@ -14421,6 +14421,13 @@ def shear_view(inp, results):
         # Longitudinal chord under M + V (+ T): the same check the combined view
         # shows, computed at the member strut angle.
         ch = links.get("chord")
+        if (
+            isinstance(chord_assessment, dict)
+            and str(
+                chord_assessment.get("status") or "NOT ASSESSED"
+            ).upper() == "NOT APPLICABLE"
+        ):
+            ch = None
         if ch is not None and ch.get("valid"):
             st.markdown("**Longitudinal chord: bending + shear"
                         + (" + torsion" if ch.get("has_torsion") else "")

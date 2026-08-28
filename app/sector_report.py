@@ -6835,6 +6835,11 @@ class ReportBuilder:
             resistance = selected_resistance.get("resistance")
             utilisation = selected_resistance.get("utilisation")
             selected_unavailable = selected_resistance.get("valid") is not True
+            retained_status = str(
+                aggregate.get("assessment_status")
+                or selected_resistance.get("status")
+                or "NOT ASSESSED"
+            ).upper()
             component = aggregate.get("component") or (
                 "vy" if aggregate.get("axis") == "x" else "vx"
             )
@@ -6853,7 +6858,7 @@ class ReportBuilder:
                         "-" if selected_unavailable else _pct(utilisation),
                         (
                             "NOT ASSESSED" if selected_unavailable
-                            else selected_resistance.get("status", "NOT ASSESSED")
+                            else retained_status
                         ),
                         viz.tension_face_label(
                             aggregate.get("tension_low", True),
@@ -6925,6 +6930,12 @@ class ReportBuilder:
             resistance = selected_resistance.get("resistance")
             utilisation = selected_resistance.get("utilisation")
             selected_unavailable = selected_resistance.get("valid") is not True
+            retained_status = str(
+                item.get("status")
+                or item.get("assessment_status")
+                or selected_resistance.get("status")
+                or "NOT ASSESSED"
+            ).upper()
             rows.append([
                 "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
                 f"{_fmt(item.get('signed_v_ed', item.get('v_ed')), 3)} kN",
@@ -6935,7 +6946,7 @@ class ReportBuilder:
                 "-" if selected_unavailable else _pct(utilisation),
                 (
                     "NOT ASSESSED" if selected_unavailable
-                    else selected_resistance.get("status", "NOT ASSESSED")
+                    else retained_status
                 ),
                 viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
             ])

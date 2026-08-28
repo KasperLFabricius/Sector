@@ -1331,6 +1331,12 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
     assert "Separate link detailing assessment: FAIL" in visible
     assert "not a shear-capacity verdict" in visible
     assert "Overall reinforced shear assessment: FAIL" not in visible
+    assert "Longitudinal chord: bending + shear tension" not in visible
+    assert not any(
+        "M_{Ed,\\mathrm{total}}" in metric.label
+        or "M_{Ed,total}" in metric.label
+        for metric in at.metric
+    )
     nominal_metric = next(
         metric for metric in at.metric if "Nominal utilisation" in metric.label
     )

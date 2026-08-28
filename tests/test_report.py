@@ -7431,8 +7431,13 @@ def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(profile):
     assert "Shear longitudinal chords" in text
     assert "NOT ASSESSED" in text
     if profile == "Brief":
+        assert "Shear longitudinal chords PL-TEST NOT ASSESSED" in text
         assert "Enter the governing web width, hoop diameter" in text
     else:
+        assert re.search(
+            r"Vy,Ed 50\.000 kN [0-9.]+ kN [0-9.]+ % NOT ASSESSED",
+            text,
+        )
         assert "NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE" in text
         assert (
             "fitted-section lever arm required for the circular off-axis chord"
@@ -7441,6 +7446,54 @@ def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(profile):
         assert "for both directions" in text
         assert "Longitudinal chord assessment: NOT ASSESSED" in text
     assert shear_core.SHEAR_CIRCULAR_REASON not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_directional_shear_table_retains_chord_assessment_status(profile):
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        shear_method=codes.EC2_2023.label,
+        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
+    )
+    direction = _h06_circular_shear_out()
+    direction["component"] = "vy"
+    direction["signed_v_ed"] = direction["v_ed"]
+    direction["status"] = "NOT ASSESSED"
+    direction["assessment_status"] = "NOT ASSESSED"
+    direction["links"]["longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": 0.175,
+        "coverage_complete": False,
+        "reason": shear_core.SHEAR_CIRCULAR_REASON,
+    }
+    aggregate = {
+        "directions": {"vy": direction},
+        "biaxial": False,
+    }
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, {"shear": aggregate}, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    if profile == "Brief":
+        assert "Shear Vy longitudinal chords PL-TEST NOT ASSESSED" in text
+        assert "Shear Vy longitudinal chords PL-TEST PASS" not in text
+    else:
+        assert re.search(
+            r"Vy,Ed 50\.000 kN [0-9.]+ kN [0-9.]+ % NOT ASSESSED",
+            text,
+        )
+        assert not re.search(
+            r"Vy,Ed 50\.000 kN [0-9.]+ kN [0-9.]+ % PASS",
+            text,
+        )
 
 
 def test_report_includes_shear_links_section():
