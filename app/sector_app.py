@@ -9980,6 +9980,7 @@ def _run_uniaxial_capacity_checks(inp, out):
         pl = out.get("plastic")
         chord_faces = []           # shear-axis chord faces (see below)
         chord_off_faces = []       # off-axis chord faces (both), built when torsion is live
+        off_axis_geometry_reason = None
         if links_valid and pl is not None and pl.get("util") is not None:
             l_axis, tlow = link_ctx["axis"], link_ctx["tension_low"]
             model_2023 = bool(link_ctx.get("model_2023"))
@@ -10110,11 +10111,32 @@ def _run_uniaxial_capacity_checks(inp, out):
             if (chord_faces and tors_live
                     and not tors_ctx.get("subdivide", False)):
                 o_axis = "y" if l_axis == "x" else "x"
+                other_component = "vy" if o_axis == "x" else "vx"
+                circular_off_axis_geometry = None
+                if inp.get("shear_section_form") == shear.SHEAR_SECTION_CIRCULAR:
+                    circular_off_axis_geometry = (
+                        shear.resolve_circular_shear_geometry(
+                            bw_mm=inp.get(f"shear_{other_component}_bw"),
+                            hoop_diameter_mm=inp.get("shear_hoop_diameter"),
+                            fitted_z_mm=inp.get(
+                                f"shear_{other_component}_fitted_z"
+                            ),
+                        )
+                    )
+                    if not circular_off_axis_geometry["valid"]:
+                        off_axis_geometry_reason = circular_off_axis_geometry[
+                            "reason"
+                        ]
                 _, ocx, ocy = capacity.gross_area_centroid(
                     inp["outer"], inp["holes"]
                 )
                 o_centroid = ocy if o_axis == "x" else ocx
                 for o_tlow in (True, False):
+                    if (
+                        circular_off_axis_geometry is not None
+                        and not circular_off_axis_geometry["valid"]
+                    ):
+                        continue
                     m_ed_o = combined.chord_applied_moment(off_signed, o_tlow)
                     m_rd_o, o_cond = _shear_face_mrd(inp, o_axis, o_tlow,
                                                      m_off=m_origin_signed)
@@ -10122,24 +10144,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                         continue
                     # Lever arm about the off axis: the exact face-aligned Plastic
                     # internal lever arm, like the reinforced-shear z.
-                    other_component = "vy" if o_axis == "x" else "vx"
-                    circular_fitted_z = (
-                        inp.get(f"shear_{other_component}_fitted_z")
-                        if inp.get("shear_section_form")
-                        == shear.SHEAR_SECTION_CIRCULAR
-                        else None
-                    )
-                    if inp.get("shear_section_form") == shear.SHEAR_SECTION_CIRCULAR:
-                        if (
-                            circular_fitted_z is not None
-                            and math.isfinite(float(circular_fitted_z))
-                            and float(circular_fitted_z) > 0.0
-                        ):
-                            z_o_mm = float(circular_fitted_z)
-                            z_o_src = "circular_fitted_section"
-                        else:
-                            z_o_mm = None
-                            z_o_src = shear.SHEAR_CIRCULAR_REASON
+                    if circular_off_axis_geometry is not None:
+                        z_o_mm = circular_off_axis_geometry["fitted_z_mm"]
+                        z_o_src = "circular_fitted_section"
                     else:
                         _, o_cg = shear.tension_reinforcement(
                             inp["bars"], o_axis, o_tlow, o_centroid
@@ -10507,6 +10514,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                 # chord must not read as a clean OK -- disclose it.
                 if tors_live and tors_ctx.get("subdivide", False):
                     off_not_evaluated = "subdivided"
+                elif tors_live and off_axis_geometry_reason is not None:
+                    off_not_evaluated = "circular_geometry"
                 elif tors_live and len(chord_faces) + len(chord_off_faces) < 4:
                     off_not_evaluated = "not_solved"
                 else:
@@ -10635,18 +10644,25 @@ def _run_uniaxial_capacity_checks(inp, out):
                 theta_mode=(theta_mode_str if shear_live else "resistance"),
                 member_angle_selection=member_angle_selection,
             )
-            links_payload["longitudinal_assessment"] = (
-                capacity.longitudinal_chord_assessment(
-                    links_payload,
-                    shear_axis=link_ctx["axis"],
-                    shear_tension_low=link_ctx["tension_low"],
-                    shear_live=shear_live,
-                    torsion_live=tors_live,
-                    torsion_subdivided=bool(
-                        tors_ctx is not None and tors_ctx.get("subdivide", False)
-                    ),
-                )
+            longitudinal_assessment = capacity.longitudinal_chord_assessment(
+                links_payload,
+                shear_axis=link_ctx["axis"],
+                shear_tension_low=link_ctx["tension_low"],
+                shear_live=shear_live,
+                torsion_live=tors_live,
+                torsion_subdivided=bool(
+                    tors_ctx is not None and tors_ctx.get("subdivide", False)
+                ),
             )
+            if (
+                off_axis_geometry_reason is not None
+                and longitudinal_assessment["status"] == "NOT ASSESSED"
+            ):
+                longitudinal_assessment = dict(
+                    longitudinal_assessment,
+                    reason=off_axis_geometry_reason,
+                )
+            links_payload["longitudinal_assessment"] = longitudinal_assessment
             link_resistance_status = (
                 "NOT ASSESSED"
                 if util_l is None
@@ -14464,6 +14480,16 @@ def shear_view(inp, results):
                            "longitudinal steel is per sub-tube, so the off-axis "
                            "chord's torsion share is not evaluated here; the "
                            + chr(0x03A3) + "(SEd/SRd) check covers the interaction.")
+            elif coverage == "circular_geometry":
+                _manual_warning(
+                    st,
+                    "calculation-warning",
+                    "The fitted-section lever arm required for the circular "
+                    "off-axis chord is not established. Enter the governing web "
+                    "width, hoop diameter and fitted-section lever arm for both "
+                    "directions before relying on the longitudinal shear "
+                    "assessment.",
+                )
             elif coverage == "not_solved":
                 _manual_warning(
                     st,

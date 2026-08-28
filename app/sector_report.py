@@ -7684,6 +7684,14 @@ class ReportBuilder:
                          "steel is per sub-tube, so the off-axis chord's torsion "
                          "share is not evaluated here -- rely on the combined "
                          "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
+            elif coverage == "circular_geometry":
+                note += (
+                    " The fitted-section lever arm required for the circular "
+                    "off-axis chord is not established. Enter the governing web "
+                    "width, hoop diameter and fitted-section lever arm for both "
+                    "directions before relying on the longitudinal shear "
+                    "assessment."
+                )
             elif coverage == "not_solved":
                 note += (" One or more chord faces carrying the torsion share could "
                          "not be evaluated (a conditional solve failed or a face has "

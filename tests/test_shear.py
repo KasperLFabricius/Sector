@@ -1337,6 +1337,92 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
     assert "Review the shear inputs" not in retained_row["note"]
 
 
+def test_app_circular_vx_torsion_rejects_invalid_off_axis_arm_then_recovers():
+    at = _fresh()
+    at.run()
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set(at, ("selectbox", "shape", "Circular"))
+    _set_and_click(at, "qs_apply")
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+        ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CIRCULAR),
+        ("number_input", "shear_vx_bw", 400.0),
+        ("number_input", "shear_vy_bw", 400.0),
+        ("checkbox", "torsion_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_Vx", 50.0),
+        ("number_input", "shear_Vy", 0.0),
+        ("number_input", "torsion_T", 40.0),
+        ("number_input", "shear_hoop_diameter", 600.0),
+        ("number_input", "shear_vx_fitted_z", 500.0),
+        ("number_input", "shear_vy_fitted_z", 700.0),
+    )
+
+    assert not at.exception
+    blocked = at.session_state["results"]["shear"]
+    assert blocked["component"] == "vx"
+    assert blocked["links"]["res"]["valid"] is True
+    assert blocked["links"]["chord_off"] is None
+    assert blocked["links"]["chord"]["off_not_evaluated"] == (
+        "circular_geometry"
+    )
+    assessment = blocked["links"]["longitudinal_assessment"]
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["coverage_complete"] is False
+    assert assessment["reason"] == shear.SHEAR_CIRCULAR_REASON
+    assert blocked["assessment_status"] == "NOT ASSESSED"
+    assert blocked["assessment_ok"] is None
+
+    _select_view(at, "Shear")
+    blocked_visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "fitted-section lever arm" in blocked_visible
+    assert "for both directions" in blocked_visible
+    assert "Overall reinforced shear assessment: NOT ASSESSED" in blocked_visible
+    assert "Required 2023 longitudinal chord faces" in blocked_visible
+    assert "Overall reinforced shear assessment: PASS" not in blocked_visible
+    assert shear.SHEAR_CIRCULAR_REASON not in blocked_visible
+
+    _select_view(at, "Results Overview")
+    overview = next(table.value for table in at.table if "Check" in table.value)
+    chord_row = overview.loc[
+        overview["Check"] == "Shear longitudinal chords"
+    ].iloc[0]
+    links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert chord_row["Status"] == "NOT ASSESSED"
+    assert chord_row["Result"].endswith(" %")
+    assert links_row["Status"] == "NOT ASSESSED"
+    assert "PASS" not in {chord_row["Status"], links_row["Status"]}
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_vy_fitted_z", 500.0),
+    )
+
+    assert not at.exception
+    recovered = at.session_state["results"]["shear"]
+    assert recovered["component"] == "vx"
+    assert recovered["links"]["chord_off"] is not None
+    assert recovered["links"]["chord_off"]["z"] == pytest.approx(0.5)
+    assert len(recovered["links"]["chord_candidates"]) == 4
+    recovered_assessment = recovered["links"]["longitudinal_assessment"]
+    assert recovered_assessment["coverage_complete"] is True
+    assert recovered_assessment["status"] in {"PASS", "FAIL"}
+    assert recovered["assessment_status"] in {"PASS", "FAIL"}
+
+
 def test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers(
     monkeypatch,
 ):

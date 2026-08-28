@@ -7267,6 +7267,84 @@ def test_report_profiles_fail_closed_for_missing_circular_shear_geometry(profile
     assert "(EXCEEDED)" not in text
 
 
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(profile):
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        torsion_on=True,
+        shear_method=codes.EC2_2023.label,
+        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
+    )
+    shear_out = _h06_circular_shear_out()
+    chord = {
+        "valid": True,
+        "role": "shear_axis",
+        "chord_role": "flexural_tension",
+        "chord_formula": "8.51",
+        "axis": "y",
+        "tension_low": True,
+        "z": 0.5,
+        "m_ed": 0.0,
+        "face_m_ed_signed": 0.0,
+        "m_rd": 400.0,
+        "ftd_v": 100.0,
+        "ftd_t": 80.0,
+        "mv": 50.0,
+        "mt": 20.0,
+        "m_total": 70.0,
+        "util": 0.175,
+        "ok": True,
+        "status": "NOT ASSESSED",
+        "capped": False,
+        "conditional": True,
+        "m_off": 0.0,
+        "has_torsion": True,
+        "gets_shift": True,
+        "theta_mode": "utilisation",
+        "off_not_evaluated": "circular_geometry",
+    }
+    shear_out["links"].update(
+        chord=chord,
+        chord_off=None,
+        chord_candidates=[chord],
+        longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": chord["util"],
+            "coverage_complete": False,
+            "reason": shear_core.SHEAR_CIRCULAR_REASON,
+        },
+    )
+    shear_out.update(
+        assessment_status="NOT ASSESSED",
+        assessment_ok=None,
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, {"shear": shear_out}, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Shear longitudinal chords" in text
+    assert "NOT ASSESSED" in text
+    if profile == "Brief":
+        assert "Enter the governing web width, hoop diameter" in text
+    else:
+        assert "NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE" in text
+        assert (
+            "fitted-section lever arm required for the circular off-axis chord"
+            in text
+        )
+        assert "for both directions" in text
+        assert "Longitudinal chord assessment: NOT ASSESSED" in text
+    assert shear_core.SHEAR_CIRCULAR_REASON not in text
+
+
 def test_report_includes_shear_links_section():
     out = _out()
     sh = _shear_out()

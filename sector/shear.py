@@ -92,6 +92,37 @@ def _finite_real(value) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def resolve_circular_shear_geometry(
+    *,
+    bw_mm,
+    hoop_diameter_mm,
+    fitted_z_mm,
+) -> dict:
+    """Validate the circular operands shared by shear and required chords."""
+
+    bw = _finite_real(bw_mm)
+    hoop = _finite_real(hoop_diameter_mm)
+    fitted_z = _finite_real(fitted_z_mm)
+    valid = bool(
+        bw is not None
+        and hoop is not None
+        and fitted_z is not None
+        and bw > 0.0
+        and hoop > 0.0
+        and fitted_z > 0.0
+        and bw <= hoop
+        and fitted_z <= hoop
+    )
+    return {
+        "valid": valid,
+        "reason": None if valid else SHEAR_CIRCULAR_REASON,
+        "bw_mm": bw,
+        "hoop_diameter_mm": hoop,
+        "fitted_z_mm": fitted_z,
+        "asw_factor": bw / hoop if valid else None,
+    }
+
+
 def _unavailable_geometry(
     *,
     reason: str,
@@ -252,19 +283,17 @@ def resolve_shear_geometry(
             if not math.isfinite(asw_factor) or asw_factor <= 0.0:
                 links_reason = SHEAR_VARIABLE_WIDTH_REASON
     elif links_present and resolved_form == SHEAR_SECTION_CIRCULAR:
-        hoop = _finite_real(hoop_diameter_mm)
-        fitted_z = _finite_real(fitted_z_mm)
-        if (
-            hoop is None
-            or fitted_z is None
-            or hoop <= 0.0
-            or fitted_z <= 0.0
-            or bw > hoop
-            or fitted_z > hoop
-        ):
+        circular_geometry = resolve_circular_shear_geometry(
+            bw_mm=bw,
+            hoop_diameter_mm=hoop_diameter_mm,
+            fitted_z_mm=fitted_z_mm,
+        )
+        hoop = circular_geometry["hoop_diameter_mm"]
+        fitted_z = circular_geometry["fitted_z_mm"]
+        if not circular_geometry["valid"]:
             links_reason = SHEAR_CIRCULAR_REASON
         else:
-            asw_factor = bw / hoop
+            asw_factor = circular_geometry["asw_factor"]
 
     # The selected case is authoritative; disabled controls may retain stale
     # numbers.  Dimensions are required only for a branch in which they can alter
