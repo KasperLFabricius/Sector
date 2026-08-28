@@ -8473,8 +8473,7 @@ class ReportBuilder:
                 "rectangle (web) carries the shear in the combined V+T checks. Its "
                 "positioned rectangle union has been validated against the concrete "
                 "outline and voids before these results are issued.")
-        self._page_break()
-        self._h2("Equivalent-tube wall selection", reserve=0)
+        self._h2("Equivalent-tube wall selection")
         self._table(
             wall_selection_rows,
             [30 * mm, 30 * mm, 35 * mm, 85 * mm],
@@ -9200,7 +9199,8 @@ class ReportBuilder:
         resistance = retained["resistance_selection"]
         cracking = retained["cracking_resistance"]
         longitudinal = retained["longitudinal_reinforcement"]
-        self._h2("Equivalent-tube wall selection")
+        self._page_break()
+        self._h2("Equivalent-tube wall selection", reserve=0)
         tef_src = str(tube.get("tef_selection") or "wall limits")
         rows = [["Quantity", "Symbol", "Value"],
                 ["Gross area (incl. hollow)", "A", f"{_fmt(tube['A'] * 1e6, 0)} mm<sup>2</sup>"],
