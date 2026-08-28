@@ -15248,6 +15248,27 @@ def combined_view(inp, results):
             c.get("chord_off"),
             assessment_complete=not bool(coverage) and not fell_back,
         )
+    elif (
+        c.get("longitudinal_model_2023") is True
+        and isinstance(c.get("longitudinal_assessment"), dict)
+    ):
+        chord_assessment = c["longitudinal_assessment"]
+        chord_status = str(
+            chord_assessment.get("status") or "NOT ASSESSED"
+        ).upper()
+        st.markdown("**Required 2023 longitudinal chord faces**")
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "Longitudinal chord assessment: "
+            f"{chord_status}. "
+            + presentation.result_reason(
+                chord_assessment.get("reason"),
+                "shear",
+                context="combined longitudinal chord assessment",
+            )
+            + ".",
+        )
     else:
         st.caption(
             f"Additional longitudinal demand: torsion {chr(0x03A3)}Asl = "

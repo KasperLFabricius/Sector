@@ -2151,6 +2151,44 @@ def test_zero_2023_chord_candidates_publish_assessment_without_legacy_copy(
         assert "both beyond the bending steel" not in text
 
 
+def test_mvt_view_zero_2023_chord_candidates_uses_retained_assessment():
+    at = _fresh().run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    combined_result.pop("longitudinal", None)
+    combined_result.pop("longitudinal_candidates", None)
+    combined_result.pop("governing_longitudinal", None)
+    combined_result["longitudinal_model_2023"] = True
+    combined_result["longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": None,
+        "reason": "required_longitudinal_chord_coverage_incomplete",
+        "coverage_complete": False,
+        "governing": None,
+    }
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+
+    assert not at.exception
+    visible = " ".join(
+        str(item.value)
+        for family in (at.markdown, at.warning, at.info, at.caption)
+        for item in family
+    )
+    assert "Required 2023 longitudinal chord faces" in visible
+    assert "Longitudinal chord assessment: NOT ASSESSED" in visible
+    assert "Complete both required longitudinal chord checks" in visible
+    assert "Enable links for the full utilisation check" not in visible
+    assert "(6.18)" not in visible
+    assert r"\Delta Ftd" not in visible
+    assert "ΔFtd" not in visible
+
+
 def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():
     assessment = {
         "status": "FAIL",
