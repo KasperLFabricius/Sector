@@ -6761,10 +6761,10 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
 
     low = combined_case(0.40)
     governing = combined_case(0.85)
-    incomplete = combined_case(0.72)
+    incomplete = combined_case(0.95)
     incomplete["longitudinal_assessment"].update(
         status="NOT ASSESSED",
-        util=0.62,
+        util=0.90,
         coverage_complete=False,
     )
     out = {
@@ -6801,6 +6801,10 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     out["worked_example_selection"] = (
         result_presentation.worked_example_selection(inp, out)
     )
+    assert out["worked_example_selection"]["families"]["combined"] == {
+        "case_id": "PL-GOV",
+        "component": None,
+    }
 
     builder = sector_report.ReportBuilder(
         io.BytesIO(), {}, inp, out, figures=False, profile=profile

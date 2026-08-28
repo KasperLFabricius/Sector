@@ -935,16 +935,18 @@ def _transverse_metric(family, result):
         if not item.get("valid"):
             return None
         if not combined_uses_dkna(item):
-            physical = [
-                _publication_metric(
+            physical = combined_physical_components(item)
+            values = []
+            for component in physical:
+                if component.get("status") not in {"PASS", "FAIL"}:
+                    return None
+                value = _publication_metric(
                     component.get("util"), allow_positive_infinity=True
                 )
-                for component in combined_physical_components(item)
-            ]
-            return max(
-                (value for value in physical if value is not None),
-                default=None,
-            )
+                if value is None:
+                    return None
+                values.append(value)
+            return max(values, default=None)
         return _publication_metric(
             item.get("dkna_sum"), allow_positive_infinity=True
         )

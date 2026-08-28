@@ -2128,6 +2128,59 @@ def test_base_en_combined_summary_publishes_only_supported_physical_checks():
     )["status"] == "FAIL"
 
 
+def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
+    def combined_result(util, longitudinal_status):
+        longitudinal = {
+            "valid": True,
+            "util": util - 0.05,
+            "axis": "x",
+            "tension_low": True,
+        }
+        return {
+            "valid": True,
+            "method": codes.EC2_2005.label,
+            "transverse": {
+                "valid": True,
+                "u_crush": util,
+                "u_stirrup": util - 0.10,
+                "cot": 1.5,
+                "shear_fraction": util - 0.30,
+                "torsion_fraction": 0.20,
+            },
+            "longitudinal": longitudinal,
+            "governing_longitudinal": longitudinal,
+            "longitudinal_all_conditional": True,
+            "longitudinal_assessment": {
+                "status": longitudinal_status,
+                "util": util - 0.05,
+                "coverage_complete": longitudinal_status in {"PASS", "FAIL"},
+            },
+        }
+
+    out = {
+        "plastic_cases": [
+            {
+                "name": "PL-GOV",
+                "results": {
+                    "plastic": _plastic(),
+                    "combined": combined_result(0.85, "PASS"),
+                },
+            },
+            {
+                "name": "PL-INCOMPLETE",
+                "results": {
+                    "plastic": _plastic(),
+                    "combined": combined_result(0.95, "NOT ASSESSED"),
+                },
+            },
+        ]
+    }
+
+    assert presentation.worked_example_selection({}, out)["families"][
+        "combined"
+    ] == {"case_id": "PL-GOV", "component": None}
+
+
 def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():
     unavailable = {
         "valid": True,
