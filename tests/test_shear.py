@@ -695,6 +695,379 @@ def test_vrd_links_widened_lower_bound_does_not_reduce_vrd():
     assert forced["vrd"] < wide["vrd"]
 
 
+# -- section-form and duct operands (MVT-H06) ------------------------------
+
+def _shear_geometry(**overrides):
+    values = dict(
+        model_2023=True,
+        solid_rectangle=True,
+        section_form=shear.SHEAR_SECTION_AUTO,
+        bw_mm=400.0,
+        bw_user=False,
+        links_present=True,
+        web_inclination_deg=0.0,
+        hoop_diameter_mm=0.0,
+        fitted_z_mm=0.0,
+        duct_case=shear.SHEAR_DUCT_NONE,
+        duct_sum_mm=0.0,
+        duct_largest_mm=0.0,
+    )
+    values.update(overrides)
+    return shear.resolve_shear_geometry(**values)
+
+
+@pytest.mark.parametrize("model_2023", (False, True))
+def test_rectangular_no_duct_geometry_retains_the_existing_operands(model_2023):
+    result = _shear_geometry(model_2023=model_2023)
+
+    assert result["valid"] is True
+    assert result["resolved_form"] == shear.SHEAR_SECTION_CONSTANT
+    assert result["concrete_bw_mm"] == pytest.approx(400.0)
+    assert result["links_bw_mm"] == pytest.approx(400.0)
+    assert result["asw_factor"] == pytest.approx(1.0)
+    assert result["duct_factor_concrete"] == pytest.approx(0.0)
+    assert result["duct_factor_links"] == pytest.approx(0.0)
+
+
+def test_2023_variable_width_applies_the_inclination_to_link_area_only():
+    result = _shear_geometry(
+        solid_rectangle=False,
+        section_form=shear.SHEAR_SECTION_VARIABLE,
+        bw_user=True,
+        web_inclination_deg=60.0,
+    )
+
+    assert result["valid"] is True
+    assert result["asw_factor"] == pytest.approx(0.5)
+    assert result["concrete_bw_mm"] == pytest.approx(400.0)
+    assert result["links_bw_mm"] == pytest.approx(400.0)
+
+    no_links = _shear_geometry(
+        solid_rectangle=False,
+        section_form=shear.SHEAR_SECTION_VARIABLE,
+        bw_user=True,
+        links_present=False,
+        web_inclination_deg="not required",
+    )
+    assert no_links["concrete_valid"] is True
+    assert no_links["asw_factor"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "section_form",
+    (shear.SHEAR_SECTION_VARIABLE, shear.SHEAR_SECTION_CIRCULAR),
+)
+def test_first_generation_variable_and_circular_forms_fail_closed(section_form):
+    result = _shear_geometry(
+        model_2023=False,
+        solid_rectangle=False,
+        section_form=section_form,
+        bw_user=True,
+        hoop_diameter_mm=600.0,
+        fitted_z_mm=500.0,
+    )
+
+    assert result["valid"] is False
+    assert result["concrete_valid"] is False
+    assert result["links_valid"] is False
+    assert result["reason"] == shear.SHEAR_SECTION_METHOD_REASON
+
+
+def test_2023_circular_factor_400_over_600_removes_the_1_5_overstatement():
+    geometry_result = _shear_geometry(
+        solid_rectangle=False,
+        section_form=shear.SHEAR_SECTION_CIRCULAR,
+        bw_user=True,
+        hoop_diameter_mm=600.0,
+        fitted_z_mm=500.0,
+    )
+    assert geometry_result["valid"] is True
+    assert geometry_result["asw_factor"] == pytest.approx(2.0 / 3.0)
+    assert geometry_result["fitted_z_mm"] == pytest.approx(500.0)
+
+    gross_asw_over_s = 2.0
+    common = dict(
+        fck=35.0,
+        code=codes.EC2_2023,
+        bw_mm=400.0,
+        d_mm=550.0,
+        fywk=500.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.24,
+        cot_min=2.0,
+        cot_max=2.0,
+        z_mm=500.0,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=100.0,
+    )
+    unadjusted = shear.vrd_links(
+        asw_over_s=gross_asw_over_s,
+        **common,
+    )
+    corrected = shear.vrd_links(
+        asw_over_s=gross_asw_over_s * geometry_result["asw_factor"],
+        **common,
+    )
+
+    assert corrected["vrd_s"] == pytest.approx(
+        unadjusted["vrd_s"] * 2.0 / 3.0
+    )
+    assert unadjusted["vrd_s"] / corrected["vrd_s"] == pytest.approx(1.5)
+
+
+@pytest.mark.parametrize(
+    ("duct_case", "factor"),
+    (
+        (shear.SHEAR_DUCT_GROUTED_STEEL, 0.5),
+        (shear.SHEAR_DUCT_GROUTED_PLASTIC_THIN, 0.8),
+        (shear.SHEAR_DUCT_GROUTED_PLASTIC_THICK, 1.2),
+        (shear.SHEAR_DUCT_UNGROUTED_OR_SOFT, 1.2),
+    ),
+)
+def test_2023_supported_duct_cases_use_formula_8_54(duct_case, factor):
+    result = _shear_geometry(
+        duct_case=duct_case,
+        duct_sum_mm=80.0,
+        duct_largest_mm=40.0,
+    )
+
+    assert result["links_valid"] is True
+    assert result["duct_factor_links"] == pytest.approx(factor)
+    assert result["links_bw_mm"] == pytest.approx(400.0 - factor * 80.0)
+    expected_concrete_factor = (
+        1.2 if duct_case == shear.SHEAR_DUCT_UNGROUTED_OR_SOFT else 0.0
+    )
+    assert result["duct_factor_concrete"] == pytest.approx(
+        expected_concrete_factor
+    )
+    assert result["concrete_bw_mm"] == pytest.approx(
+        400.0 - expected_concrete_factor * 80.0
+    )
+
+
+def test_2023_duct_threshold_is_strict_and_no_links_ignores_known_grouted_ducts():
+    at_threshold = _shear_geometry(
+        duct_case=shear.SHEAR_DUCT_GROUTED_PLASTIC_THIN,
+        duct_sum_mm=50.0,
+        duct_largest_mm=25.0,
+    )
+    assert at_threshold["links_bw_mm"] == pytest.approx(400.0)
+
+    known_grouted_no_links = _shear_geometry(
+        links_present=False,
+        duct_case=shear.SHEAR_DUCT_GROUTED_PLASTIC_THIN,
+        duct_sum_mm=0.0,
+        duct_largest_mm=0.0,
+    )
+    assert known_grouted_no_links["concrete_valid"] is True
+    assert known_grouted_no_links["concrete_bw_mm"] == pytest.approx(400.0)
+
+    ungrouted_no_links = _shear_geometry(
+        links_present=False,
+        duct_case=shear.SHEAR_DUCT_UNGROUTED_OR_SOFT,
+        duct_sum_mm=80.0,
+        duct_largest_mm=40.0,
+    )
+    assert ungrouted_no_links["concrete_bw_mm"] == pytest.approx(304.0)
+
+
+@pytest.mark.parametrize(
+    "duct_case",
+    (
+        shear.SHEAR_DUCT_GROUTED_PLASTIC_THIN,
+        shear.SHEAR_DUCT_GROUTED_PLASTIC_THICK,
+        shear.SHEAR_DUCT_UNGROUTED_OR_SOFT,
+    ),
+)
+def test_2005_plastic_and_ungrouted_duct_cases_use_the_1_2_sum(duct_case):
+    result = _shear_geometry(
+        model_2023=False,
+        duct_case=duct_case,
+        duct_sum_mm=80.0,
+        duct_largest_mm=40.0,
+    )
+
+    assert result["concrete_bw_mm"] == pytest.approx(400.0)
+    assert result["links_bw_mm"] == pytest.approx(304.0)
+    assert result["duct_factor_links"] == pytest.approx(1.2)
+
+
+def test_2005_grouted_steel_uses_largest_diameter_threshold_then_sum():
+    below = _shear_geometry(
+        model_2023=False,
+        duct_case=shear.SHEAR_DUCT_GROUTED_STEEL,
+        duct_sum_mm=0.0,
+        duct_largest_mm=50.0,
+    )
+    above = _shear_geometry(
+        model_2023=False,
+        duct_case=shear.SHEAR_DUCT_GROUTED_STEEL,
+        duct_sum_mm=100.0,
+        duct_largest_mm=60.0,
+    )
+
+    assert below["links_valid"] is True
+    assert below["links_bw_mm"] == pytest.approx(400.0)
+    assert above["links_bw_mm"] == pytest.approx(350.0)
+    assert above["duct_factor_links"] == pytest.approx(0.5)
+
+
+def test_duct_nominal_width_reduces_compression_field_not_link_yield():
+    common = dict(
+        fck=35.0,
+        d_mm=550.0,
+        asw_over_s=1.5,
+        fywk=500.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.22,
+        cot_min=2.0,
+        cot_max=2.0,
+        z_mm=495.0,
+        fcd_mpa=20.0,
+        gamma_s=1.15,
+        v_ed_kn=100.0,
+    )
+    for code, nominal_width in (
+        (codes.EC2_2005_DKNA, 350.0),
+        (codes.EC2_2023, 336.0),
+    ):
+        physical = shear.vrd_links(code=code, bw_mm=400.0, **common)
+        nominal = shear.vrd_links(code=code, bw_mm=nominal_width, **common)
+
+        assert nominal["vrd_s"] == pytest.approx(physical["vrd_s"])
+        assert nominal["vrd_max"] == pytest.approx(
+            physical["vrd_max"] * nominal_width / 400.0
+        )
+        assert nominal["vrd_max"] < physical["vrd_max"]
+
+
+def test_missing_or_impossible_required_shear_geometry_fails_closed():
+    circular = _shear_geometry(
+        solid_rectangle=False,
+        section_form=shear.SHEAR_SECTION_CIRCULAR,
+        bw_user=True,
+        hoop_diameter_mm=0.0,
+        fitted_z_mm=0.0,
+    )
+    assert circular["concrete_valid"] is True
+    assert circular["links_valid"] is False
+    assert circular["links_reason"] == shear.SHEAR_CIRCULAR_REASON
+
+    unknown_duct = _shear_geometry(
+        links_present=False,
+        duct_case=shear.SHEAR_DUCT_DETAILS_INCOMPLETE,
+    )
+    assert unknown_duct["concrete_valid"] is False
+    assert unknown_duct["concrete_reason"] == shear.SHEAR_DUCT_INPUT_REASON
+
+    no_web = _shear_geometry(
+        duct_case=shear.SHEAR_DUCT_UNGROUTED_OR_SOFT,
+        duct_sum_mm=400.0,
+        duct_largest_mm=200.0,
+    )
+    assert no_web["concrete_valid"] is False
+    assert no_web["links_valid"] is False
+    assert no_web["concrete_reason"] == shear.SHEAR_NOMINAL_WIDTH_REASON
+    assert no_web["links_reason"] == shear.SHEAR_NOMINAL_WIDTH_REASON
+
+
+@pytest.mark.parametrize(
+    ("hoop_diameter_mm", "fitted_z_mm"),
+    (
+        (True, 500.0),
+        ("600", 500.0),
+        (float("nan"), 500.0),
+        (float("inf"), 500.0),
+        (600.0, True),
+        (600.0, "500"),
+        (600.0, float("nan")),
+        (600.0, float("inf")),
+        (600.0, 601.0),
+        (399.0, 399.0),
+    ),
+)
+def test_invalid_circular_hoop_or_fitted_arm_withholds_the_links_branch(
+    hoop_diameter_mm,
+    fitted_z_mm,
+):
+    result = _shear_geometry(
+        solid_rectangle=False,
+        section_form=shear.SHEAR_SECTION_CIRCULAR,
+        bw_user=True,
+        hoop_diameter_mm=hoop_diameter_mm,
+        fitted_z_mm=fitted_z_mm,
+    )
+
+    assert result["concrete_valid"] is True
+    assert result["links_valid"] is False
+    assert result["links_reason"] == shear.SHEAR_CIRCULAR_REASON
+    assert result["links_bw_mm"] is None
+
+
+@pytest.mark.parametrize(
+    "bad_width",
+    (True, "400", float("nan"), float("inf"), 0.0, -1.0),
+)
+def test_invalid_web_width_never_reaches_a_shear_branch(bad_width):
+    result = _shear_geometry(bw_mm=bad_width)
+
+    assert result["concrete_valid"] is False
+    assert result["links_valid"] is False
+    assert result["reason"] == shear.SHEAR_SECTION_GEOMETRY_REASON
+    assert result["concrete_bw_mm"] is None
+    assert result["links_bw_mm"] is None
+
+
+@pytest.mark.parametrize(
+    "bad_inclination",
+    (True, "60", float("nan"), float("inf"), -0.1, 90.0),
+)
+def test_invalid_variable_width_inclination_withholds_the_links_branch(
+    bad_inclination,
+):
+    result = _shear_geometry(
+        solid_rectangle=False,
+        section_form=shear.SHEAR_SECTION_VARIABLE,
+        bw_user=True,
+        web_inclination_deg=bad_inclination,
+    )
+
+    assert result["concrete_valid"] is True
+    assert result["links_valid"] is False
+    assert result["links_reason"] == shear.SHEAR_VARIABLE_WIDTH_REASON
+    assert result["asw_factor"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "bad_duct_sum",
+    (True, "80", float("nan"), float("inf"), 0.0, -1.0),
+)
+def test_invalid_required_duct_sum_withholds_both_2023_branches(bad_duct_sum):
+    result = _shear_geometry(
+        duct_case=shear.SHEAR_DUCT_UNGROUTED_OR_SOFT,
+        duct_sum_mm=bad_duct_sum,
+        duct_largest_mm=0.0,
+    )
+
+    assert result["concrete_valid"] is False
+    assert result["links_valid"] is False
+    assert result["concrete_reason"] == shear.SHEAR_DUCT_INPUT_REASON
+    assert result["links_reason"] == shear.SHEAR_DUCT_INPUT_REASON
+
+
+def test_non_rectangular_constant_width_requires_an_entered_web_width():
+    result = _shear_geometry(
+        solid_rectangle=False,
+        section_form=shear.SHEAR_SECTION_CONSTANT,
+        bw_user=False,
+    )
+
+    assert result["concrete_valid"] is False
+    assert result["links_valid"] is False
+    assert result["reason"] == shear.SHEAR_SECTION_GEOMETRY_REASON
+
+
 # -- geometry derivation helpers --------------------------------------------
 
 def test_min_web_width_rect_t_box():
@@ -841,6 +1214,234 @@ def test_app_shear_check_produces_a_resistance():
     assert not sh["bw_user"]                           # auto width
     assert sh["asl_bar_ids"] and sh["asl_cg"] is not None
     assert sh["util"] == pytest.approx(100.0 / sh["res"]["vrd_c"])
+
+
+def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
+    monkeypatch,
+):
+    original_vrd_links = shear.vrd_links
+    calls = []
+
+    def tracked_vrd_links(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original_vrd_links(*args, **kwargs)
+
+    monkeypatch.setattr(shear, "vrd_links", tracked_vrd_links)
+    at = _fresh()
+    at.run()
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set(at, ("selectbox", "shape", "Circular"))
+    _set_and_click(at, "qs_apply")
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+        ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CIRCULAR),
+        ("number_input", "shear_vx_bw", 400.0),
+        ("number_input", "shear_vy_bw", 400.0),
+    )
+    _set_and_click(at, "calculate", ("number_input", "shear_V", 50.0))
+
+    assert not at.exception
+    assert calls == []
+    missing = at.session_state["results"]["shear"]
+    assert missing["res"]["valid"] is True
+    assert missing["links"]["res"]["calculation_state"] == "NOT ASSESSED"
+    assert missing["links"]["res"]["vrd"] is None
+    assert missing["links"]["util"] is None
+    assert missing["links"]["shear_geometry"]["links_reason"] == (
+        shear.SHEAR_CIRCULAR_REASON
+    )
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "Enter the governing web width, hoop diameter" in visible
+    assert "non-governing concrete-only context" in visible
+    relevant_metrics = [
+        metric
+        for metric in at.metric
+        if "V_{Rd" in metric.label or "Utilisation" in metric.label
+    ]
+    assert relevant_metrics
+    assert all(metric.delta not in {"OK", "Over limit", "PASS", "FAIL"}
+               for metric in relevant_metrics)
+    assert shear.SHEAR_CIRCULAR_REASON not in visible
+
+    _select_view(at, "Results Overview")
+    overview = next(table.value for table in at.table if "Check" in table.value)
+    links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert links_row["Status"] == "NOT ASSESSED"
+    assert links_row["Result"] == "-"
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_hoop_diameter", 600.0),
+        ("number_input", "shear_vx_fitted_z", 500.0),
+        ("number_input", "shear_vy_fitted_z", 500.0),
+    )
+    assert not at.exception
+    assert calls
+    applied = at.session_state["results"]["shear"]
+    assert applied["links"]["res"]["valid"] is True
+    assert applied["links"]["asw_factor"] == pytest.approx(2.0 / 3.0)
+    assert applied["links"]["effective_asw_over_s"] == pytest.approx(
+        applied["links"]["asw_over_s"] * 2.0 / 3.0
+    )
+    assert applied["links"]["res"]["z"] == pytest.approx(500.0)
+    assert applied["links"]["z_source"] == "circular_fitted_section"
+
+    _select_view(at, "Shear")
+    visible = " ".join(item.value for item in at.caption)
+    assert "Fitted-section arm" in visible
+    assert "section-form factor is applied" in visible
+    rendered = " ".join(
+        str(item.value)
+        for collection in (at.caption, at.markdown, at.table, at.dataframe)
+        for item in collection
+    )
+    assert "fitted circular section" in rendered
+    assert "circular_fitted_section" not in rendered
+
+    _select_view(at, "Results Overview")
+    overview = next(table.value for table in at.table if "Check" in table.value)
+    links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert links_row["Status"] in {"PASS", "FAIL"}
+    import result_presentation as _presentation
+
+    assert _presentation.result_reason(
+        "compression field (sigma_cd)",
+        "shear",
+        context="H06 compression-field governing branch",
+    ) == "concrete compression-field resistance governs"
+
+    retained_rows = _presentation.governing_result_rows(
+        _presentation.governing_summary_rows(
+            _presentation.multi_case_summary_rows(
+                at.session_state["_latest_inputs"],
+                at.session_state["results"],
+            )
+        )
+    )
+    retained_row = next(
+        item for item in retained_rows if item["check"] == "Shear with links"
+    )
+    assert "effective Asw factor 0.66667" in retained_row["note"]
+    assert "link-yield resistance governs" in retained_row["note"]
+    assert "Review the shear inputs" not in retained_row["note"]
+
+
+def test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers(
+    monkeypatch,
+):
+    original_vrd_c = shear.vrd_c
+    calls = []
+
+    def tracked_vrd_c(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original_vrd_c(*args, **kwargs)
+
+    monkeypatch.setattr(shear, "vrd_c", tracked_vrd_c)
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("selectbox", "shear_duct_case", shear.SHEAR_DUCT_DETAILS_INCOMPLETE),
+    )
+    _set_and_click(at, "calculate", ("number_input", "shear_V", 50.0))
+
+    assert not at.exception
+    assert calls == []
+    blocked = at.session_state["results"]["shear"]
+    assert blocked["res"]["calculation_state"] == "NOT ASSESSED"
+    assert blocked["res"]["vrd_c"] is None
+    assert blocked["util"] is None
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "Enter the duct type and outer diameters" in visible
+    assert "No resistance, utilisation or PASS/FAIL verdict" in visible
+    assert shear.SHEAR_DUCT_INPUT_REASON not in visible
+
+    _select_view(at, "Results Overview")
+    overview = next(table.value for table in at.table if "Check" in table.value)
+    row = overview.loc[overview["Check"] == "Shear without links"].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_duct_case", shear.SHEAR_DUCT_NONE),
+    )
+    assert not at.exception
+    assert calls
+    corrected = at.session_state["results"]["shear"]
+    assert corrected["res"]["valid"] is True
+    assert corrected["res"]["vrd_c"] > 0.0
+    assert corrected["util"] is not None
+
+
+def test_app_variable_width_2023_applies_cosine_and_2005_fails_closed():
+    at = _fresh()
+    at.run()
+    at.session_state["_qs_open"] = True
+    at.run()
+    _set(at, ("selectbox", "shape", "T-section"))
+    _set_and_click(at, "qs_apply")
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+        ("selectbox", "shear_section_form", shear.SHEAR_SECTION_VARIABLE),
+        ("number_input", "shear_vx_bw", 300.0),
+        ("number_input", "shear_vy_bw", 300.0),
+        ("number_input", "shear_vx_web_inclination_deg", 60.0),
+        ("number_input", "shear_vy_web_inclination_deg", 60.0),
+    )
+    _set_and_click(at, "calculate", ("number_input", "shear_V", 50.0))
+
+    assert not at.exception
+    supported = at.session_state["results"]["shear"]
+    assert supported["links"]["res"]["valid"] is True
+    assert supported["links"]["asw_factor"] == pytest.approx(0.5)
+    assert supported["links"]["effective_asw_over_s"] == pytest.approx(
+        supported["links"]["asw_over_s"] * 0.5
+    )
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+    )
+    assert not at.exception
+    unsupported = at.session_state["results"]["shear"]
+    assert unsupported["res"]["calculation_state"] == "NOT ASSESSED"
+    assert unsupported["res"]["vrd_c"] is None
+    assert unsupported["links"]["res"]["calculation_state"] == "NOT ASSESSED"
+    assert unsupported["links"]["res"]["vrd"] is None
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "separately applicable member calculation" in visible
+    assert shear.SHEAR_SECTION_METHOD_REASON not in visible
 
 
 def test_app_transverse_detailing_uses_active_direction_and_renders_view():
@@ -1642,6 +2243,14 @@ def test_app_shear_is_saved_and_restored():
         ("number_input", "shear_gamma_v", 1.25),
         ("number_input", "shear_Vx", 123.0),
         ("number_input", "shear_vx_bw", 240.0),
+        ("selectbox", "shear_section_form", shear.SHEAR_SECTION_VARIABLE),
+        ("number_input", "shear_vx_web_inclination_deg", 12.5),
+        ("number_input", "shear_vy_web_inclination_deg", 17.5),
+        ("selectbox", "shear_duct_case", shear.SHEAR_DUCT_GROUTED_PLASTIC_THIN),
+        ("number_input", "shear_vx_duct_sum", 80.0),
+        ("number_input", "shear_vy_duct_sum", 60.0),
+        ("number_input", "shear_vx_duct_largest", 40.0),
+        ("number_input", "shear_vy_duct_largest", 30.0),
     )
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
@@ -1660,6 +2269,22 @@ def test_app_shear_is_saved_and_restored():
     assert at2.session_state["shear_gamma_v"] == pytest.approx(1.25)
     assert first_case_value(at2, "shear_Vx") == pytest.approx(123.0)
     assert at2.session_state["shear_vx_bw"] == pytest.approx(240.0)
+    assert at2.session_state["shear_section_form"] == (
+        shear.SHEAR_SECTION_VARIABLE
+    )
+    assert at2.session_state["shear_vx_web_inclination_deg"] == pytest.approx(
+        12.5
+    )
+    assert at2.session_state["shear_vy_web_inclination_deg"] == pytest.approx(
+        17.5
+    )
+    assert at2.session_state["shear_duct_case"] == (
+        shear.SHEAR_DUCT_GROUTED_PLASTIC_THIN
+    )
+    assert at2.session_state["shear_vx_duct_sum"] == pytest.approx(80.0)
+    assert at2.session_state["shear_vy_duct_sum"] == pytest.approx(60.0)
+    assert at2.session_state["shear_vx_duct_largest"] == pytest.approx(40.0)
+    assert at2.session_state["shear_vy_duct_largest"] == pytest.approx(30.0)
 
 
 # -- Prestress resultants and axial-force effects in shear -------------------

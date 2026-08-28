@@ -514,6 +514,27 @@ def test_manual_documents_2023_axial_compression_applicability_boundary():
     assert "including Annex G" in text
 
 
+def test_manual_documents_variable_circular_and_duct_shear_rules():
+    text = "\n".join(
+        str(value)
+        for block in manual.manual_blocks()
+        for value in block[1:]
+    )
+
+    assert "Automatic treatment is limited to a solid rectangle" in text
+    assert "variable-width web" in text
+    assert r"multiplies $A_{sw}$ by $\cos\delta$" in text
+    assert r"multiplies $A_{sw}$ by $b_w/D_h$" in text
+    assert "$b_w/D_h=400/600=2/3$" in text
+    assert "ratio to the corrected contribution is 1.5" in text
+    assert r"$b_{w,nom}=b_w-k_{duct}\sum\phi_{duct}$" in text
+    assert "$k_{duct}=0.5$" in text
+    assert "$k_{duct}=0.8$" in text
+    assert "$k_{duct}=1.2$" in text
+    assert "2005-family links check applies its duct allowance" in text
+    assert "NOT ASSESSED rather than using a rectangular result" in text
+
+
 def test_manual_documents_both_2023_chords_and_the_exact_failed_fixture():
     text = "\n".join(
         block[1] for block in manual.manual_blocks() if block[0] == "md"

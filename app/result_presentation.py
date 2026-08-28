@@ -173,6 +173,14 @@ _SHEAR_REASON_MESSAGES = {
         "SHEAR-GOVERNS-CRUSHING",
         "crushing (VRd,max)",
     ),
+    "links (tau_Rd,sy)": EngineerMessage(
+        "SHEAR-GOVERNS-LINK-YIELD",
+        "link-yield resistance governs",
+    ),
+    "compression field (sigma_cd)": EngineerMessage(
+        "SHEAR-GOVERNS-COMPRESSION-FIELD",
+        "concrete compression-field resistance governs",
+    ),
     "the calculated face-aligned arm is unavailable": EngineerMessage(
         "SHEAR-LINK-ARM",
         "The face-aligned lever arm is unavailable; review the Plastic result and link inputs",
@@ -192,6 +200,30 @@ _SHEAR_REASON_MESSAGES = {
     "invalid reinforced-shear input": EngineerMessage(
         "SHEAR-LINK-INPUT",
         "Review the reinforced-shear geometry, link reinforcement, and material inputs",
+    ),
+    "the governing shear section geometry was not established": EngineerMessage(
+        "SHEAR-SECTION-GEOMETRY",
+        "Select the shear section form and enter the governing web geometry for this direction",
+    ),
+    "the variable-width shear geometry was not established": EngineerMessage(
+        "SHEAR-VARIABLE-WIDTH",
+        "Enter the governing web width and reinforcement inclination for the variable-width section",
+    ),
+    "the circular shear geometry was not established": EngineerMessage(
+        "SHEAR-CIRCULAR-GEOMETRY",
+        "Enter the governing web width, hoop diameter and fitted-section lever arm for the circular section",
+    ),
+    "the selected shear method does not assess this section form": EngineerMessage(
+        "SHEAR-SECTION-METHOD",
+        "Use a separately applicable member calculation for this section form and selected shear method",
+    ),
+    "the web-duct geometry was not established": EngineerMessage(
+        "SHEAR-DUCT-GEOMETRY",
+        "Enter the duct type and outer diameters at the most unfavourable web level",
+    ),
+    "the nominal web width is not positive": EngineerMessage(
+        "SHEAR-NOMINAL-WIDTH",
+        "Revise the web and duct geometry so the nominal web width remains positive",
     ),
     "2023 axial-compression applicability conditions were not demonstrated": EngineerMessage(
         "SHEAR-2023-AXIAL-COMPRESSION",
@@ -1192,6 +1224,17 @@ def action_set_text(inp, family, *, include_source=True):
     return text
 
 
+def shear_link_arm_source_label(source):
+    """Return an engineer-facing label for a retained link-arm source."""
+
+    labels = {
+        "circular_fitted_section": "fitted circular section",
+        "plastic internal lever arm": "calculated Plastic lever arm",
+        "0.9 d": "0.9d",
+    }
+    return labels.get(str(source or "").strip(), "calculation basis unavailable")
+
+
 def shear_geometry_basis(inp, shear_result):
     """Describe the retained ``d``/``z`` values and their calculation roles."""
 
@@ -1202,6 +1245,12 @@ def shear_geometry_basis(inp, shear_result):
     d_mm = _publication_metric(item.get("d"))
     d_text = "-" if d_mm is None else f"{d_mm:.3f} mm"
     d_note = "effective depth used in V<sub>Rd,c</sub>"
+    geometry_basis = item.get("shear_geometry") or links.get("shear_geometry") or {}
+    circular_fitted = (
+        _publication_metric(geometry_basis.get("fitted_z_mm"))
+        if geometry_basis.get("resolved_form") == "Circular section"
+        else None
+    )
 
     if links:
         z_mm = _publication_metric(link_result.get("z"))
@@ -1220,6 +1269,20 @@ def shear_geometry_basis(inp, shear_result):
                 "statement": (
                     f"Effective depth d = {d_text} is used in V_Rd,c. "
                     f"The links resistance is not assessed: {reason}."
+                ),
+            }
+        if circular_fitted is not None:
+            return {
+                "z_mm": z_mm,
+                "d_note": d_note,
+                "z_note": (
+                    "fitted-section arm for the circular section<br>"
+                    "used in V<sub>Rd,s</sub> and V<sub>Rd,max</sub>"
+                ),
+                "statement": (
+                    f"Fitted-section arm z = {z_mm:.3f} mm is used for the circular "
+                    "shear section in accordance with DS/EN 1992-1-1:2023 "
+                    "8.2.3(9)."
                 ),
             }
         component = str(links.get("z_component") or (
@@ -2325,31 +2388,52 @@ def result_summary_rows(inp, results, *, stale=False):
         def append_direction(component, direction):
             suffix = {"vx": " Vx", "vy": " Vy"}.get(component, "")
             action_label = {"vx": "Vx,Ed", "vy": "Vy,Ed"}.get(component, "VEd")
-            resistance = (direction.get("res") or {}).get("vrd_c")
+            direction_result = direction.get("res") or {}
+            geometry_record = direction.get("shear_geometry") or {}
+            direction_state = str(
+                direction_result.get("calculation_state") or ""
+            ).upper()
+            resistance = direction_result.get("vrd_c")
             result = (
                 f"{_percent(direction.get('util'))} "
                 f"({action_label} / VRd,c)"
                 if resistance is not None else "-"
             )
+            if links_selected:
+                without_links_status = "NOT APPLICABLE"
+                without_links_note = "Links present; use the reinforced shear check"
+            elif direction_state == "NOT ASSESSED":
+                without_links_status = "NOT ASSESSED"
+                without_links_note = result_reason(
+                    direction_result.get("reason"),
+                    "shear",
+                    context="shear summary geometry reason",
+                )
+            else:
+                without_links_status = _util_summary_status(
+                    direction.get("util"),
+                    valid=bool(direction_result.get("valid")),
+                )
+                without_links_note = (
+                    str(direction.get("method") or "")
+                    + "; section form: "
+                    + str(
+                        geometry_record.get("resolved_form")
+                        or geometry_record.get("section_form")
+                        or "-"
+                    )
+                    + "; web duct condition: "
+                    + str(geometry_record.get("duct_case") or "-")
+                )
             rows.append(_summary_row(
                 f"Shear{suffix} without links",
                 "plastic",
-                (
-                    "NOT APPLICABLE"
-                    if links_selected
-                    else _util_summary_status(
-                        direction.get("util"),
-                        valid=bool((direction.get("res") or {}).get("valid")),
-                    )
-                ),
+                without_links_status,
                 result,
                 "<= 100 %",
                 direction.get("util"),
                 "Shear",
-                (
-                    "Links present; use the reinforced shear check"
-                    if links_selected else str(direction.get("method") or "")
-                ),
+                without_links_note,
                 inp,
                 overview_key="shear:without_links",
                 overview_parent="shear",
@@ -2387,6 +2471,23 @@ def result_summary_rows(inp, results, *, stale=False):
                     "shear",
                     context="shear summary link reason",
                 )
+                link_geometry_note = ""
+                if link_result.get("valid"):
+                    link_geometry = links.get("shear_geometry") or geometry_record
+                    link_geometry_note = (
+                        "; section form: "
+                        + str(
+                            link_geometry.get("resolved_form")
+                            or link_geometry.get("section_form")
+                            or "-"
+                        )
+                        + f"; effective Asw factor "
+                        f"{float(links.get('asw_factor', 1.0)):.5f}"
+                        + f"; compression-field bw "
+                        f"{float(link_result.get('bw', direction.get('bw', 0.0))):.1f} mm"
+                        + "; web duct condition: "
+                        + str(link_geometry.get("duct_case") or "-")
+                    )
                 chord_assessment = links.get("longitudinal_assessment")
                 if isinstance(chord_assessment, dict):
                     chord_status = str(
@@ -2414,6 +2515,7 @@ def result_summary_rows(inp, results, *, stale=False):
                             "shear",
                             context="overall reinforced shear assessment",
                         )
+                overall_note += link_geometry_note
                 rows.append(_summary_row(
                     f"Shear{suffix} with links",
                     "plastic",

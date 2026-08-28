@@ -31,6 +31,402 @@ from typing import Optional, Sequence
 from . import geometry
 
 
+SHEAR_SECTION_AUTO = "Automatic - solid rectangle only"
+SHEAR_SECTION_CONSTANT = "Constant-width web"
+SHEAR_SECTION_VARIABLE = "Variable-width web"
+SHEAR_SECTION_CIRCULAR = "Circular section"
+SHEAR_SECTION_FORMS = (
+    SHEAR_SECTION_AUTO,
+    SHEAR_SECTION_CONSTANT,
+    SHEAR_SECTION_VARIABLE,
+    SHEAR_SECTION_CIRCULAR,
+)
+
+SHEAR_DUCT_NONE = "No web ducts"
+SHEAR_DUCT_GROUTED_STEEL = "Grouted steel ducts"
+SHEAR_DUCT_GROUTED_PLASTIC_THIN = (
+    "Grouted plastic ducts - confirmed thin wall"
+)
+SHEAR_DUCT_GROUTED_PLASTIC_THICK = "Grouted plastic ducts - thick wall"
+SHEAR_DUCT_UNGROUTED_OR_SOFT = (
+    "Not grouted, soft-filled, or unbonded"
+)
+SHEAR_DUCT_DETAILS_INCOMPLETE = "Duct details not established"
+SHEAR_DUCT_CASES = (
+    SHEAR_DUCT_NONE,
+    SHEAR_DUCT_GROUTED_STEEL,
+    SHEAR_DUCT_GROUTED_PLASTIC_THIN,
+    SHEAR_DUCT_GROUTED_PLASTIC_THICK,
+    SHEAR_DUCT_UNGROUTED_OR_SOFT,
+    SHEAR_DUCT_DETAILS_INCOMPLETE,
+)
+
+SHEAR_SECTION_GEOMETRY_REASON = (
+    "the governing shear section geometry was not established"
+)
+SHEAR_VARIABLE_WIDTH_REASON = (
+    "the variable-width shear geometry was not established"
+)
+SHEAR_CIRCULAR_REASON = "the circular shear geometry was not established"
+SHEAR_SECTION_METHOD_REASON = (
+    "the selected shear method does not assess this section form"
+)
+SHEAR_DUCT_INPUT_REASON = "the web-duct geometry was not established"
+SHEAR_NOMINAL_WIDTH_REASON = "the nominal web width is not positive"
+
+
+def _finite_real(value) -> float | None:
+    """Return a finite non-Boolean real, or ``None`` for unavailable input."""
+
+    value_type = type(value)
+    is_numpy_bool = (
+        value_type.__name__ in {"bool", "bool_"}
+        and value_type.__module__.split(".", 1)[0] == "numpy"
+    )
+    if isinstance(value, bool) or is_numpy_bool or isinstance(value, (str, bytes)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _unavailable_geometry(
+    *,
+    reason: str,
+    section_form: str,
+    resolved_form: str | None,
+    bw_mm: float | None,
+    duct_case: str,
+    duct_sum_mm: float | None,
+    duct_largest_mm: float | None,
+    concrete_valid: bool = False,
+    concrete_bw_mm: float | None = None,
+) -> dict:
+    """Build one fail-closed geometry record without resistance operands."""
+
+    return {
+        "valid": False,
+        "concrete_valid": bool(concrete_valid),
+        "links_valid": False,
+        "reason": reason,
+        "concrete_reason": None if concrete_valid else reason,
+        "links_reason": reason,
+        "section_form": section_form,
+        "resolved_form": resolved_form,
+        "bw_mm": bw_mm,
+        "concrete_bw_mm": concrete_bw_mm,
+        "links_bw_mm": None,
+        "web_inclination_deg": None,
+        "asw_factor": None,
+        "hoop_diameter_mm": None,
+        "fitted_z_mm": None,
+        "duct_case": duct_case,
+        "duct_sum_mm": duct_sum_mm,
+        "duct_largest_mm": duct_largest_mm,
+        "duct_factor_concrete": None,
+        "duct_factor_links": None,
+        "duct_threshold_mm": None,
+        "duct_reduction_applied_concrete": False,
+        "duct_reduction_applied_links": False,
+    }
+
+
+def resolve_shear_geometry(
+    *,
+    model_2023: bool,
+    solid_rectangle: bool,
+    section_form,
+    bw_mm,
+    bw_user: bool,
+    links_present: bool,
+    web_inclination_deg=0.0,
+    hoop_diameter_mm=0.0,
+    fitted_z_mm=0.0,
+    duct_case=SHEAR_DUCT_NONE,
+    duct_sum_mm=0.0,
+    duct_largest_mm=0.0,
+) -> dict:
+    """Resolve the edition-specific section and duct operands before shear work.
+
+    The function does not infer a variable or circular section from polygon points.
+    Automatic treatment is intentionally limited to a solid rectangle.  Other
+    sections need the governing web geometry selected by the engineer.  The return
+    value keeps the physical web width separate from the nominal compression-field
+    width and the effective shear-reinforcement factor.
+    """
+
+    form = str(section_form or SHEAR_SECTION_AUTO)
+    case = str(duct_case or SHEAR_DUCT_NONE)
+    bw = _finite_real(bw_mm)
+    duct_sum = _finite_real(duct_sum_mm)
+    duct_largest = _finite_real(duct_largest_mm)
+    if form not in SHEAR_SECTION_FORMS or case not in SHEAR_DUCT_CASES:
+        return _unavailable_geometry(
+            reason=SHEAR_SECTION_GEOMETRY_REASON,
+            section_form=form,
+            resolved_form=None,
+            bw_mm=bw,
+            duct_case=case,
+            duct_sum_mm=duct_sum,
+            duct_largest_mm=duct_largest,
+        )
+    if bw is None or bw <= 0.0:
+        return _unavailable_geometry(
+            reason=SHEAR_SECTION_GEOMETRY_REASON,
+            section_form=form,
+            resolved_form=None,
+            bw_mm=bw,
+            duct_case=case,
+            duct_sum_mm=duct_sum,
+            duct_largest_mm=duct_largest,
+        )
+
+    resolved_form = form
+    if form == SHEAR_SECTION_AUTO:
+        if not solid_rectangle:
+            return _unavailable_geometry(
+                reason=SHEAR_SECTION_GEOMETRY_REASON,
+                section_form=form,
+                resolved_form=None,
+                bw_mm=bw,
+                duct_case=case,
+                duct_sum_mm=duct_sum,
+                duct_largest_mm=duct_largest,
+            )
+        resolved_form = SHEAR_SECTION_CONSTANT
+    elif form == SHEAR_SECTION_CONSTANT and not solid_rectangle and not bw_user:
+        return _unavailable_geometry(
+            reason=SHEAR_SECTION_GEOMETRY_REASON,
+            section_form=form,
+            resolved_form=form,
+            bw_mm=bw,
+            duct_case=case,
+            duct_sum_mm=duct_sum,
+            duct_largest_mm=duct_largest,
+        )
+    elif resolved_form in {SHEAR_SECTION_VARIABLE, SHEAR_SECTION_CIRCULAR}:
+        if not model_2023:
+            return _unavailable_geometry(
+                reason=SHEAR_SECTION_METHOD_REASON,
+                section_form=form,
+                resolved_form=resolved_form,
+                bw_mm=bw,
+                duct_case=case,
+                duct_sum_mm=duct_sum,
+                duct_largest_mm=duct_largest,
+            )
+        if not bw_user:
+            return _unavailable_geometry(
+                reason=(
+                    SHEAR_VARIABLE_WIDTH_REASON
+                    if resolved_form == SHEAR_SECTION_VARIABLE
+                    else SHEAR_CIRCULAR_REASON
+                ),
+                section_form=form,
+                resolved_form=resolved_form,
+                bw_mm=bw,
+                duct_case=case,
+                duct_sum_mm=duct_sum,
+                duct_largest_mm=duct_largest,
+            )
+
+    concrete_reason = None
+    links_reason = None
+    inclination = 0.0
+    asw_factor = 1.0
+    hoop = None
+    fitted_z = None
+    if links_present and resolved_form == SHEAR_SECTION_VARIABLE:
+        inclination_value = _finite_real(web_inclination_deg)
+        if (
+            inclination_value is None
+            or inclination_value < 0.0
+            or inclination_value >= 90.0
+        ):
+            links_reason = SHEAR_VARIABLE_WIDTH_REASON
+        else:
+            inclination = inclination_value
+            asw_factor = math.cos(math.radians(inclination))
+            if not math.isfinite(asw_factor) or asw_factor <= 0.0:
+                links_reason = SHEAR_VARIABLE_WIDTH_REASON
+    elif links_present and resolved_form == SHEAR_SECTION_CIRCULAR:
+        hoop = _finite_real(hoop_diameter_mm)
+        fitted_z = _finite_real(fitted_z_mm)
+        if (
+            hoop is None
+            or fitted_z is None
+            or hoop <= 0.0
+            or fitted_z <= 0.0
+            or bw > hoop
+            or fitted_z > hoop
+        ):
+            links_reason = SHEAR_CIRCULAR_REASON
+        else:
+            asw_factor = bw / hoop
+
+    # The selected case is authoritative; disabled controls may retain stale
+    # numbers.  Dimensions are required only for a branch in which they can alter
+    # the selected edition's resistance.
+    if case == SHEAR_DUCT_NONE:
+        duct_sum = 0.0
+        duct_largest = 0.0
+    threshold = bw / 8.0
+    factor_concrete = 0.0
+    factor_links = 0.0
+    factors_2023 = {
+        SHEAR_DUCT_GROUTED_STEEL: 0.5,
+        SHEAR_DUCT_GROUTED_PLASTIC_THIN: 0.8,
+        SHEAR_DUCT_GROUTED_PLASTIC_THICK: 1.2,
+        SHEAR_DUCT_UNGROUTED_OR_SOFT: 1.2,
+    }
+
+    if model_2023:
+        # Formula (8.54) applies to the compression-field branch.  The no-links
+        # branch needs a duct allowance only for ungrouted or soft-filled ducts.
+        if case == SHEAR_DUCT_DETAILS_INCOMPLETE:
+            if links_present:
+                links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+            concrete_reason = SHEAR_DUCT_INPUT_REASON
+        elif case == SHEAR_DUCT_UNGROUTED_OR_SOFT:
+            if duct_sum is None or duct_sum <= 0.0:
+                concrete_reason = SHEAR_DUCT_INPUT_REASON
+                if links_present:
+                    links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+            elif duct_sum > threshold:
+                factor_concrete = 1.2
+        if links_present and case not in {
+            SHEAR_DUCT_NONE,
+            SHEAR_DUCT_DETAILS_INCOMPLETE,
+        }:
+            if duct_sum is None or duct_sum <= 0.0:
+                links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+            elif duct_sum > threshold:
+                factor_links = factors_2023[case]
+    elif links_present:
+        # EN 1992-1-1:2005 6.2.3(6) changes V_Rd,max only.  A grouted
+        # steel duct uses the largest-diameter threshold before the sum is needed;
+        # plastic/ungrouted cases use the 1.2 sum directly.
+        if case == SHEAR_DUCT_DETAILS_INCOMPLETE:
+            links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+        elif case == SHEAR_DUCT_GROUTED_STEEL:
+            if duct_largest is None or duct_largest <= 0.0:
+                links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+            elif duct_largest > threshold:
+                if duct_sum is None or duct_sum <= 0.0:
+                    links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+                else:
+                    factor_links = 0.5
+        elif case in {
+            SHEAR_DUCT_GROUTED_PLASTIC_THIN,
+            SHEAR_DUCT_GROUTED_PLASTIC_THICK,
+            SHEAR_DUCT_UNGROUTED_OR_SOFT,
+        }:
+            if duct_sum is None or duct_sum <= 0.0:
+                links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+            else:
+                factor_links = 1.2
+
+    if (
+        duct_sum is not None
+        and duct_sum > 0.0
+        and duct_largest is not None
+        and (duct_largest < 0.0 or duct_largest > duct_sum)
+    ):
+        if model_2023 and case == SHEAR_DUCT_UNGROUTED_OR_SOFT:
+            concrete_reason = SHEAR_DUCT_INPUT_REASON
+        if links_present and case != SHEAR_DUCT_NONE:
+            links_reason = links_reason or SHEAR_DUCT_INPUT_REASON
+
+    concrete_bw = bw - factor_concrete * (duct_sum or 0.0)
+    links_bw = bw - factor_links * (duct_sum or 0.0)
+    if concrete_reason is None and (
+        not math.isfinite(concrete_bw) or concrete_bw <= 0.0
+    ):
+        concrete_reason = SHEAR_NOMINAL_WIDTH_REASON
+    if links_reason is None and (
+        not math.isfinite(links_bw) or links_bw <= 0.0
+    ):
+        links_reason = SHEAR_NOMINAL_WIDTH_REASON
+
+    concrete_valid = concrete_reason is None
+    links_valid = links_reason is None
+    return {
+        "valid": bool(concrete_valid and (links_valid or not links_present)),
+        "concrete_valid": concrete_valid,
+        "links_valid": links_valid,
+        "reason": concrete_reason or links_reason,
+        "concrete_reason": concrete_reason,
+        "links_reason": links_reason,
+        "section_form": form,
+        "resolved_form": resolved_form,
+        "bw_mm": bw,
+        "concrete_bw_mm": concrete_bw if concrete_valid else None,
+        "links_bw_mm": links_bw if links_valid else None,
+        "web_inclination_deg": inclination,
+        "asw_factor": asw_factor,
+        "hoop_diameter_mm": hoop,
+        "fitted_z_mm": fitted_z,
+        "duct_case": case,
+        "duct_sum_mm": duct_sum,
+        "duct_largest_mm": duct_largest,
+        "duct_factor_concrete": factor_concrete,
+        "duct_factor_links": factor_links,
+        "duct_threshold_mm": threshold,
+        "duct_reduction_applied_concrete": bool(factor_concrete > 0.0),
+        "duct_reduction_applied_links": bool(factor_links > 0.0),
+    }
+
+
+def unassessed_shear_result(*, model: str, reason: str, bw_mm, d_mm, asl_mm2) -> dict:
+    """Return the stable no-verdict payload used before a shear kernel is entered."""
+
+    return {
+        "vrd_c": None,
+        "valid": False,
+        "calculation_state": "NOT ASSESSED",
+        "reason": reason,
+        "model": model,
+        "bw": bw_mm,
+        "d": d_mm,
+        "asl": asl_mm2,
+        "z": None,
+    }
+
+
+def unassessed_links_result(
+    *, model: str, reason: str, bw_mm, d_mm, asw_over_s, z_mm=None
+) -> dict:
+    """Return a stable reinforced-shear result with every verdict withheld."""
+
+    return {
+        "vrd_s": None,
+        "vrd_max": None,
+        "vrd": None,
+        "cot": None,
+        "theta_deg": None,
+        "z": z_mm,
+        "fywd": None,
+        "asw_over_s": asw_over_s,
+        "governs": "none",
+        "valid": False,
+        "calculation_state": "NOT ASSESSED",
+        "reason": reason,
+        "model": model,
+        "bw": bw_mm,
+        "d": d_mm,
+        "cot_min": None,
+        "cot_max": None,
+        "tan": None,
+        "sin_cos": None,
+        "cot_unconstrained": None,
+        "angle_selection": "none",
+        "angle_a": None,
+        "angle_b": None,
+    }
+
+
 def validate_gamma_v(value, *, label="gamma_v") -> float:
     """Return a positive factor that yields finite 2023 coefficients."""
 
@@ -234,16 +630,16 @@ def vrd_c_2023(fck: float, code, bw_mm: float, d_mm: float, asl_mm2: float,
     gv = validate_gamma_v(
         code.shear_gamma_v if gamma_v is None else gamma_v
     )
+    z = 0.9 * d_mm
     if d_mm <= 0.0 or bw_mm <= 0.0 or fyd_mpa <= 0.0:
         return dict(vrd_c=0.0, tau_rdc=0.0, tau_basic=0.0, tau_min=0.0, rho_l=0.0,
-                    z=0.9 * d_mm, ddg=ddg_mm, fyd=fyd_mpa, k_vp=1.0,
+                    z=z, ddg=ddg_mm, fyd=fyd_mpa, k_vp=1.0,
                     d_kvp=d_mm, a_cs=0.0, n_ed_tension=n_ed_tension_kn,
                     m_ed=m_ed_knm, v_ed=v_ed_kn, axial_applied=False,
                     gamma_v=gv, model="2023", valid=False,
                     fck=fck, bw=bw_mm, d=d_mm, asl=asl_mm2,
                     tau_governs="none")
     rho_l = asl_mm2 / (bw_mm * d_mm)
-    z = 0.9 * d_mm
     v_abs = abs(v_ed_kn)
     if v_abs > 1e-12:
         a_cs = max(abs(m_ed_knm) / v_abs * 1000.0, d_mm)
