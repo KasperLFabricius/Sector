@@ -9199,6 +9199,7 @@ class ReportBuilder:
         resistance = retained["resistance_selection"]
         cracking = retained["cracking_resistance"]
         longitudinal = retained["longitudinal_reinforcement"]
+        self._h2("Equivalent-tube wall selection")
         tef_src = str(tube.get("tef_selection") or "wall limits")
         rows = [["Quantity", "Symbol", "Value"],
                 ["Gross area (incl. hollow)", "A", f"{_fmt(tube['A'] * 1e6, 0)} mm<sup>2</sup>"],

@@ -1428,6 +1428,31 @@ def tube_torsion(
     fyd_long,
 ):
     """Build the resistance/utilisation payload for one thin-walled tube."""
+    wall_evidence = (
+        tube.get("wall_evidence") if isinstance(tube, dict) else None
+    )
+    wall_geometry_assessed = bool(
+        isinstance(tube, dict)
+        and tube.get("valid") is True
+        and tube.get("applicability_status") == "ASSESSED"
+        and isinstance(wall_evidence, dict)
+        and wall_evidence.get("complete") is True
+    )
+    if not wall_geometry_assessed:
+        unchecked_tube = dict(tube) if isinstance(tube, dict) else {}
+        unchecked_tube.update({
+            "valid": False,
+            "reason": (
+                unchecked_tube.get("reason")
+                or "torsion wall reinforcement locations are missing"
+            ),
+            "applicability_status": "NOT ASSESSED",
+        })
+        return unassessed_tube_torsion(
+            unchecked_tube,
+            t_ed,
+            closed_links_present=closed_links_present,
+        )
     closed_detailing_applied = bool(
         closed_links_present is True and nu_detail is True
     )

@@ -3421,16 +3421,62 @@ def test_torsion_context_recomputes_false_pass_oracle_from_required_160mm_wall()
         context["tube"], context["t_ed"], **context["_tk"]
     )
     legacy_tube = torsion.tube_properties(inp["outer"], None)
-    legacy = capacity.tube_torsion(
+    unchecked = capacity.tube_torsion(
         legacy_tube, context["t_ed"], **context["_tk"]
+    )
+    tk = context["_tk"]
+    legacy_steel = torsion.trd_s_result(
+        legacy_tube["Ak"], tk["fywd"], tk["asw_over_s"], 2.0
+    )
+    legacy_strut = torsion.trd_max_result(
+        tk["fck"],
+        tk["tcode"],
+        legacy_tube["Ak"],
+        legacy_tube["tef"],
+        tk["alpha_cw"],
+        2.0,
+        closed_detailing=(
+            tk["closed_links_present"] is True and tk["nu_detail"] is True
+        ),
+        fcd_mpa=tk["fcd"],
+    )
+    legacy_selection = torsion.select_full_torsion_resistance(
+        legacy_steel.trd_s,
+        legacy_strut.trd_max,
+        closed_links_present=tk["closed_links_present"],
+        asw_over_s=tk["asw_over_s"],
     )
 
     assert legacy_tube["tef"] == pytest.approx(120.0)
     assert legacy_tube["Ak"] == pytest.approx(0.1344)
-    assert legacy["trd_s"] == pytest.approx(117.2861257340)
-    assert legacy["trd_max"] == pytest.approx(114.4531862069)
-    assert legacy["trd"] == pytest.approx(114.4531862069)
-    assert legacy["util"] == pytest.approx(0.8737200704)
+    assert legacy_steel.trd_s == pytest.approx(117.2861257340)
+    assert legacy_strut.trd_max == pytest.approx(114.4531862069)
+    assert legacy_selection.resistance == pytest.approx(114.4531862069)
+    assert 100.0 / legacy_selection.resistance == pytest.approx(0.8737200704)
+    assert unchecked["valid"] is False
+    assert unchecked["tube_valid"] is False
+    assert unchecked["assessment_reason"] == (
+        "torsion wall reinforcement locations are missing"
+    )
+    for key in (
+        "trd_s",
+        "trd_max",
+        "trd",
+        "trd_c",
+        "cot",
+        "theta_deg",
+        "util",
+        "asl_req",
+        "nu",
+        "governs",
+        "angle_selection",
+        "steel_resistance",
+        "strut_resistance",
+        "resistance_selection",
+        "cracking_resistance",
+        "longitudinal_reinforcement",
+    ):
+        assert unchecked[key] is None
 
     assert context["tube"]["tef"] == pytest.approx(160.0)
     assert context["tube"]["Ak"] == pytest.approx(0.1056)
@@ -3439,6 +3485,42 @@ def test_torsion_context_recomputes_false_pass_oracle_from_required_160mm_wall()
     assert selected["trd_max"] == pytest.approx(119.9033379310)
     assert selected["trd"] == pytest.approx(92.1533845053)
     assert selected["util"] == pytest.approx(1.0851473450)
+
+
+def test_tube_torsion_rejects_unchecked_wall_geometry_before_kernels(
+    monkeypatch,
+):
+    context = capacity.build_torsion_context(
+        _torsion_input(
+            outer=_rect(0.4, 0.6),
+            bars=_torsion_wall_bars(b=0.4, h=0.6, a=0.08),
+            torsion_on=True,
+            torsion_T=100.0,
+            shear_links=True,
+            shear_link_dia=10.0,
+            shear_link_s=150.0,
+            strut_cot_min=2.0,
+            strut_cot_max=2.0,
+        ),
+        0.0,
+    )
+    unchecked = torsion.tube_properties(_rect(0.4, 0.6), None)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("unchecked wall geometry entered the torsion kernel")
+
+    monkeypatch.setattr(torsion, "trd_s_result", forbidden)
+    result = capacity.tube_torsion(
+        unchecked, context["t_ed"], **context["_tk"]
+    )
+
+    assert result["valid"] is False
+    assert result["transverse_resistance_assessed"] is False
+    assert result["assessment_reason"] == (
+        "torsion wall reinforcement locations are missing"
+    )
+    assert result["trd"] is None
+    assert result["util"] is None
 
 
 def test_subdivided_tubes_require_complete_unambiguous_wall_mapping():

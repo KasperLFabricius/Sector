@@ -5685,6 +5685,9 @@ def test_report_profiles_publish_torsion_wall_selection_evidence(profile):
     assert "Torsion" in text and "NOT ASSESSED" in text
     assert "Torsion transverse/strut resistance" in text and "52.4 %" in text
     if profile != "Brief":
+        assert "Equivalent-tube wall selection" in text
+        assert "Subsection: Equivalent-tube wall selection" in text
+        assert "Minimum-reinforcement screen (Formula 6.31): Quantity" not in text
         assert "Base thickness" in text and "A/u" in text
         assert "A/u and reinforcement lower bound" in text
         assert "Lower bound 2a" in text
