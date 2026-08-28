@@ -5945,7 +5945,21 @@ def test_report_compound_torsion_requires_subdivision():
     assert "Current shared links / closed torsion stirrups are required" not in txt
 
 
-def _subtube(b, h, tef, ak, c, ted, trd, util, gov, cx=0.0, cy=0.0):
+def _subtube(
+    b,
+    h,
+    tef,
+    ak,
+    c,
+    ted,
+    trd,
+    util,
+    gov,
+    cx=0.0,
+    cy=0.0,
+    *,
+    bar_position_start=1,
+):
     steel = torsion_core.trd_s_result(ak, 416.67, 0.5236, 1.75)
     strut = torsion_core.trd_max_result(
         35.0, codes.EC2_2005_DKNA, ak, tef, 1.0, 1.75,
@@ -5969,7 +5983,7 @@ def _subtube(b, h, tef, ak, c, ted, trd, util, gov, cx=0.0, cy=0.0):
         "walls": tuple(
             {
                 "wall": index,
-                "bar_indices": (index,),
+                "bar_indices": (bar_position_start + index - 1,),
                 "a_mm": a,
                 "lower_bound_mm": tef,
                 "real_wall_mm": None,
@@ -6001,7 +6015,8 @@ def test_report_torsion_subdivided():
     subs = [_subtube(300, 600, 100.0, 0.10, 0.0037, 24.6, 90.0, 24.6 / 90.0,
                      "stirrups (TRd,s)", 0.0, -100.0),
             _subtube(1000, 200, 91.0, 0.15, 0.0023, 15.4, 20.0, 15.4 / 20.0,
-                     "crushing (TRd,max)", 0.0, 300.0)]
+                     "crushing (TRd,max)", 0.0, 300.0,
+                     bar_position_start=5)]
     t["subdivided"] = True
     t["subtubes"] = subs
     t["trd"] = sum(s["trd"] for s in subs)
@@ -6045,6 +6060,8 @@ def test_report_torsion_subdivided():
     assert "A/u and reinforcement lower bound" in txt
     assert "reinforcement lower bound" in txt
     assert "Bar positions" in txt
+    assert all(f"Wall {wall}\n {wall}" in txt for wall in range(1, 5))
+    assert all(f"Wall {wall}\n {wall + 4}" in txt for wall in range(1, 5))
 
 
 def test_report_invalid_subtube_partition_withholds_verdict():

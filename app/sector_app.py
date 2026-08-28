@@ -15106,6 +15106,10 @@ def torsion_view(inp, results):
         st.dataframe(
             {
                 "Wall": [f"Wall {row['wall']}" for row in wall_rows],
+                "Bar positions": [
+                    ", ".join(str(value) for value in row["bar_indices"])
+                    for row in wall_rows
+                ],
                 "a": [f"{row['a_mm']:.1f} mm" for row in wall_rows],
                 "Lower bound 2a": [
                     f"{row['lower_bound_mm']:.1f} mm" for row in wall_rows

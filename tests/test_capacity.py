@@ -3477,6 +3477,16 @@ def test_subdivided_tubes_require_complete_unambiguous_wall_mapping():
     assert all(
         tube["wall_evidence"]["complete"] for tube in complete["subtubes"]
     )
+    assert {
+        position
+        for wall in complete["subtubes"][0]["wall_evidence"]["walls"]
+        for position in wall["bar_indices"]
+    } == {1, 2, 3, 4}
+    assert {
+        position
+        for wall in complete["subtubes"][1]["wall_evidence"]["walls"]
+        for position in wall["bar_indices"]
+    } == {5, 6, 7, 8}
 
     incomplete = capacity.build_torsion_context(
         _torsion_input(

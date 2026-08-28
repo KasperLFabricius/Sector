@@ -2131,19 +2131,24 @@ def build_torsion_context(inp, n_ed_comp):
         local_bar_sets: list[list[tuple[float, float, float]]] | None = [
             [] for _rectangle in rectangles_m
         ]
+        local_bar_positions: list[list[int]] | None = [
+            [] for _rectangle in rectangles_m
+        ]
         assignment_reason = None
         raw_bars = inp.get("bars")
         if type(raw_bars) not in (tuple, list):
             local_bar_sets = None
+            local_bar_positions = None
             assignment_reason = "torsion sub-tube reinforcement locations are missing"
         else:
             scale = max(
                 [1.0, *[max(abs(x), abs(y), b, h) for x, y, b, h in rectangles_m]]
             )
             membership_tolerance = max(1.0e-12 * scale, 8.0 * math.ulp(scale))
-            for raw_bar in raw_bars:
+            for bar_position, raw_bar in enumerate(raw_bars, start=1):
                 if type(raw_bar) not in (tuple, list) or len(raw_bar) != 3:
                     local_bar_sets = None
+                    local_bar_positions = None
                     assignment_reason = (
                         "torsion sub-tube reinforcement locations are invalid"
                     )
@@ -2168,6 +2173,7 @@ def build_torsion_context(inp, n_ed_comp):
                     coordinates.append(number)
                 if malformed or coordinates[2] <= 0.0:
                     local_bar_sets = None
+                    local_bar_positions = None
                     assignment_reason = (
                         "torsion sub-tube reinforcement locations are invalid"
                     )
@@ -2187,6 +2193,7 @@ def build_torsion_context(inp, n_ed_comp):
                 ]
                 if len(memberships) != 1:
                     local_bar_sets = None
+                    local_bar_positions = None
                     assignment_reason = (
                         "torsion sub-tube reinforcement assignment is ambiguous"
                         if len(memberships) > 1
@@ -2200,12 +2207,18 @@ def build_torsion_context(inp, n_ed_comp):
                     y_bar - rectangle_y,
                     area_bar,
                 ))
+                local_bar_positions[rectangle_index].append(bar_position)
         for index, (x_mm, y_mm, b_mm, h_mm) in enumerate(subrects):
             b_m, h_m = b_mm / 1000.0, h_mm / 1000.0
             selected = torsion.tube_properties_with_reinforcement(
                 torsion.rectangle_ring(b_m, h_m),
                 None,
                 None if local_bar_sets is None else local_bar_sets[index],
+                longitudinal_bar_positions=(
+                    None
+                    if local_bar_positions is None
+                    else local_bar_positions[index]
+                ),
             )
             if assignment_reason is not None:
                 selected = dict(selected, reason=assignment_reason)

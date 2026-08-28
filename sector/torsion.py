@@ -350,6 +350,8 @@ def tube_properties_with_reinforcement(
     holes: Optional[Sequence],
     longitudinal_bars: object,
     tef_override: float = 0.0,
+    *,
+    longitudinal_bar_positions: object = None,
 ) -> dict:
     """Select one clause-consistent tube from wall-specific bar locations.
 
@@ -429,13 +431,28 @@ def tube_properties_with_reinforcement(
     if type(longitudinal_bars) not in (tuple, list):
         evidence["reason"] = "torsion wall reinforcement locations are missing"
         return _wall_evidence_invalid(base, evidence["reason"], evidence)
+    if longitudinal_bar_positions is None:
+        bar_positions = tuple(range(1, len(longitudinal_bars) + 1))
+    elif (
+        type(longitudinal_bar_positions) not in (tuple, list)
+        or len(longitudinal_bar_positions) != len(longitudinal_bars)
+        or any(
+            type(value) is not int or value <= 0
+            for value in longitudinal_bar_positions
+        )
+        or len(set(longitudinal_bar_positions)) != len(longitudinal_bar_positions)
+    ):
+        evidence["reason"] = "torsion wall reinforcement locations are invalid"
+        return _wall_evidence_invalid(base, evidence["reason"], evidence)
+    else:
+        bar_positions = tuple(longitudinal_bar_positions)
     bars = []
-    for index, item in enumerate(longitudinal_bars):
+    for bar_position, item in zip(bar_positions, longitudinal_bars):
         bar = _finite_reinforcement_bar(item)
         if bar is None:
             evidence["reason"] = "torsion wall reinforcement locations are invalid"
             return _wall_evidence_invalid(base, evidence["reason"], evidence)
-        bars.append((index, bar))
+        bars.append((bar_position, bar))
     if not bars:
         evidence["reason"] = "torsion wall reinforcement locations are missing"
         return _wall_evidence_invalid(base, evidence["reason"], evidence)
@@ -452,7 +469,8 @@ def tube_properties_with_reinforcement(
     assignments: list[list[tuple[int, float]]] = [
         [] for _wall in range(physical_wall_count)
     ]
-    for bar_index, (x, y, _area) in bars:
+    distance_records = []
+    for bar_position, (x, y, _area) in bars:
         if circular_outer is not None:
             cx, cy, radius = circular_outer
             distances = [radius - math.hypot(x - cx, y - cy)]
@@ -484,7 +502,48 @@ def tube_properties_with_reinforcement(
                 evidence["reason"] = "torsion wall reinforcement mapping is ambiguous"
                 return _wall_evidence_invalid(base, evidence["reason"], evidence)
         for wall_index in nearest:
-            assignments[wall_index].append((bar_index, distances[wall_index]))
+            assignments[wall_index].append((bar_position, distances[wall_index]))
+        distance_records.append((bar_position, distances, tuple(nearest)))
+
+    # A corner bar is longitudinal reinforcement for both adjoining walls.  The
+    # cover offsets to those walls need not be equal, so a per-bar nearest-edge
+    # classification alone loses one legitimate wall.  Supplement each wall with
+    # its closest reinforcement row when that wall adjoins the bar's primary wall;
+    # this retains ordinary side bars while keeping opposite-wall mapping fail-closed.
+    wall_minima = [
+        min(distances[wall_index] for _position, distances, _nearest in distance_records)
+        for wall_index in range(physical_wall_count)
+    ]
+    for bar_position, distances, nearest in distance_records:
+        for wall_index, wall_minimum in enumerate(wall_minima):
+            adjacent_to_primary = bool(
+                physical_wall_count == 1
+                or wall_index in nearest
+                or (
+                    len(nearest) == 1
+                    and (
+                        abs(wall_index - nearest[0]) == 1
+                        or {wall_index, nearest[0]}
+                        == {0, physical_wall_count - 1}
+                    )
+                )
+            )
+            comparison_tolerance = max(
+                tolerance_m,
+                8.0 * math.ulp(max(distances[wall_index], wall_minimum, 1.0)),
+            )
+            if (
+                adjacent_to_primary
+                and abs(distances[wall_index] - wall_minimum)
+                <= comparison_tolerance
+                and all(
+                    existing_position != bar_position
+                    for existing_position, _distance in assignments[wall_index]
+                )
+            ):
+                assignments[wall_index].append(
+                    (bar_position, distances[wall_index])
+                )
 
     wall_records = []
     automatic_values = []
@@ -513,7 +572,7 @@ def tube_properties_with_reinforcement(
                 "wall": wall_index + 1,
                 "start_m": None if edge is None else edge[0],
                 "end_m": None if edge is None else edge[1],
-                "bar_indices": tuple(index + 1 for index, _distance in assigned),
+                "bar_indices": tuple(index for index, _distance in assigned),
                 "bar_distances_mm": distances_mm,
                 "a_mm": a_mm,
                 "lower_bound_mm": lower_mm,
@@ -538,7 +597,7 @@ def tube_properties_with_reinforcement(
             "wall": wall_index + 1,
             "start_m": None if edge is None else edge[0],
             "end_m": None if edge is None else edge[1],
-            "bar_indices": tuple(index + 1 for index, _distance in assigned),
+            "bar_indices": tuple(index for index, _distance in assigned),
             "bar_distances_mm": distances_mm,
             "a_mm": a_mm,
             "lower_bound_mm": lower_mm,

@@ -100,6 +100,34 @@ def test_reinforcement_wall_lower_bound_selects_complete_300x600_tube(
     )
 
 
+def test_unequal_offset_corner_bars_belong_to_both_adjoining_walls():
+    bars = [
+        (0.04, 0.05, 100.0),
+        (0.26, 0.05, 100.0),
+        (0.26, 0.55, 100.0),
+        (0.04, 0.55, 100.0),
+    ]
+
+    tube = torsion.tube_properties_with_reinforcement(
+        _rect(0.3, 0.6),
+        None,
+        bars,
+    )
+
+    assert tube["valid"] is True
+    assert tube["tef"] == pytest.approx(100.0)
+    walls = tube["wall_evidence"]["walls"]
+    assert [wall["a_mm"] for wall in walls] == pytest.approx(
+        [50.0, 40.0, 50.0, 40.0]
+    )
+    assert [wall["bar_indices"] for wall in walls] == [
+        (1, 2),
+        (2, 3),
+        (3, 4),
+        (1, 4),
+    ]
+
+
 @pytest.mark.parametrize(
     ("override_mm", "valid", "reason"),
     [
@@ -1446,6 +1474,55 @@ def test_app_torsion_wall_evidence_fails_closed_and_recovers(monkeypatch):
     assert recovered["util"] == pytest.approx(1.0851473450)
 
 
+def test_app_unequal_offset_corner_bars_retain_complete_wall_evidence():
+    at = _fresh()
+    at.run()
+    _apply_rectangle(at, b=300.0, h=600.0)
+    area = math.pi * 20.0**2 / 4.0
+    _replace_bar_points(
+        at,
+        [
+            (-110.0, -250.0, area),
+            (110.0, -250.0, area),
+            (110.0, 250.0, area),
+            (-110.0, 250.0, area),
+        ],
+    )
+    _set(
+        at,
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "torsion_T", 25.0),
+    )
+    _calculate(at)
+
+    result = at.session_state["results"]["torsion"]
+    assert result["tube_valid"] is True
+    assert result["tube"]["tef"] == pytest.approx(100.0)
+    walls = result["tube"]["wall_evidence"]["walls"]
+    assert sorted(wall["a_mm"] for wall in walls) == pytest.approx(
+        [40.0, 40.0, 50.0, 50.0]
+    )
+    assert all(
+        sum(position in wall["bar_indices"] for wall in walls) == 2
+        for position in range(1, 5)
+    )
+    _select_view(at, "Torsion")
+    wall_table = next(
+        frame.value
+        for frame in at.dataframe
+        if "Lower bound 2a" in frame.value.columns
+    )
+    assert set(wall_table["a"]) == {"40.0 mm", "50.0 mm"}
+    assert set(wall_table["Bar positions"]) == {
+        "1, 2",
+        "2, 3",
+        "3, 4",
+        "1, 4",
+    }
+    assert not at.exception
+
+
 def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers():
     import result_presentation as presentation
 
@@ -1766,6 +1843,22 @@ def test_app_torsion_subdivided_view_renders():
     assert list(wall_table["Sub-tube"]).count("web") == 4
     assert list(wall_table["Sub-tube"]).count("part 2") == 4
     assert set(wall_table["Lower bound 2a"]) == {"100.0 mm"}
+    web_positions = {
+        int(token.strip())
+        for text in wall_table.loc[
+            wall_table["Sub-tube"] == "web", "Bar positions"
+        ]
+        for token in text.split(",")
+    }
+    flange_positions = {
+        int(token.strip())
+        for text in wall_table.loc[
+            wall_table["Sub-tube"] == "part 2", "Bar positions"
+        ]
+        for token in text.split(",")
+    }
+    assert web_positions == {1, 2, 3, 4}
+    assert flange_positions == {5, 6, 7, 8}
     captions = " ".join(item.value for item in at.caption)
     assert "For a subdivided compound section" in captions
     assert "minimum reinf. suffices" not in captions
