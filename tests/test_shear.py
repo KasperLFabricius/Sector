@@ -1834,6 +1834,28 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
         for component in ("vx", "vy")
     } == {"PL-01"}
 
+    _select_view(at, "Shear")
+    summary = next(
+        frame.value
+        for frame in at.dataframe
+        if {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        .issubset(frame.value.columns)
+    ).set_index("Component")
+    for component, label in (("vx", "Vx,Ed"), ("vy", "Vy,Ed")):
+        direction = sh["directions"][component]
+        nominal = direction["nominal_resistance"]
+        assert nominal["route"] == "concrete"
+        assert summary.loc[label, "VRd [kN]"] == pytest.approx(
+            nominal["resistance"]
+        )
+        assert summary.loc[label, "Utilisation"] == pytest.approx(
+            nominal["utilisation"]
+        )
+        assert summary.loc[label, "Status"] == direction["status"]
+        assert summary.loc[label, "VRd [kN]"] != pytest.approx(
+            direction["links"]["res"]["vrd"]
+        )
+
 
 def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     at = _fresh()

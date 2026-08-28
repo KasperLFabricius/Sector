@@ -13843,16 +13843,12 @@ def shear_view(inp, results):
             if component not in directions:
                 continue
             item = directions[component]
-            governing_util = _nominal_shear_record(inp, item).get("utilisation")
+            nominal = _nominal_shear_record(inp, item)
             summary.append({
                 "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
                 "VEd [kN]": item.get("signed_v_ed", item.get("v_ed")),
-                "VRd [kN]": (
-                    ((item.get("links") or {}).get("res") or {}).get("vrd")
-                    if inp.get("shear_links") is True
-                    else (item.get("res") or {}).get("vrd_c")
-                ),
-                "Utilisation": governing_util,
+                "VRd [kN]": nominal.get("resistance"),
+                "Utilisation": nominal.get("utilisation"),
                 "Status": item.get("status"),
                 "Tension face": viz.tension_face_label(
                     item.get("tension_low", True), item.get("axis")
