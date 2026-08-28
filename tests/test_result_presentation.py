@@ -1566,6 +1566,60 @@ def test_shear_screening_does_not_fail_when_selected_links_pass():
     assert governing["Shear with links"] is True
 
 
+def test_sparse_links_keep_capacity_pass_and_publish_detailing_failure_separately():
+    shear = {
+        "v_ed": 80.0,
+        "res": {"valid": True, "vrd_c": 103.417},
+        "util": 80.0 / 103.417,
+        "method": "DK NA",
+        "links": {
+            "res": {
+                "valid": True,
+                "vrd": 29.452,
+                "governs": "stirrups (VRd,s)",
+            },
+            "util": 80.0 / 29.452,
+            "longitudinal_assessment": {
+                "status": "NOT APPLICABLE",
+                "util": None,
+                "reason": "no_longitudinal_chord_action",
+            },
+        },
+    }
+    results = {
+        "plastic": _plastic(),
+        "shear": shear,
+        "transverse_reinforcement": {
+            "status": "FAIL",
+            "reason": "minimum shear reinforcement is required for this beam",
+            "checks": [],
+        },
+    }
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            shear_on=True,
+            shear_links=True,
+            transverse_detailing_on=True,
+        ),
+        results,
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    concrete = by_check["Shear without links"]
+    provided_links = by_check["Shear with links"]
+    detailing = by_check["Shear/torsion link detailing"]
+    assert concrete["status"] == "PASS"
+    assert concrete["util"] == pytest.approx(80.0 / 103.417)
+    assert provided_links["status"] == "NOT APPLICABLE"
+    assert provided_links["util"] is None
+    assert "271.6 % (non-governing)" == provided_links["result"]
+    assert "context only" in provided_links["note"]
+    assert detailing["status"] == "FAIL"
+    assert "minimum shear reinforcement" in detailing["note"].lower()
+    assert presentation.overall_summary_status(rows) == "FAIL"
+
+
 def test_unavailable_calculated_link_arm_is_not_assessed_without_a_verdict():
     shear = {
         "res": {"valid": True, "vrd_c": 100.0},

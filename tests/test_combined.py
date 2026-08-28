@@ -2506,9 +2506,19 @@ def test_app_combined_transverse_shear_credit():
     assert tr["governing"] == pytest.approx(max(tr["u_stirrup"], tr["u_crush"]))
     assert tr["governs"] == ("crushing" if tr["u_crush"] > tr["u_stirrup"]
                              else "stirrups")
-    # One member strut angle: the transverse check sits at the links/torsion cot.
+    # The link comparison is not a live nominal route, so its resistance-optimum
+    # angle does not constrain the torsion-led combined check.
     r = at.session_state["results"]
-    assert tr["cot"] == pytest.approx(r["shear"]["links"]["res"]["cot"])
+    assert r["shear"]["nominal_resistance"]["route"] == "concrete"
+    assert r["shear"]["links"]["longitudinal_shear_force"] == pytest.approx(0.0)
+    assert r["combined"]["action_alone"]["v"]["evidence"][
+        "nominal_route"
+    ] == "concrete"
+    assert r["combined"]["r_v"] == pytest.approx(
+        r["combined"]["action_alone"]["v"]["demand"]
+        / r["combined"]["action_alone"]["v"]["resistance"]
+    )
+    assert r["shear"]["links"]["theta_mode"] == "resistance"
     assert tr["cot"] == pytest.approx(r["torsion"]["cot"])
 
 

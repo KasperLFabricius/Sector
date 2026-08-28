@@ -251,6 +251,56 @@ def test_vrd_c_hand_calc_dk_na():
     assert res["k1"] == pytest.approx(0.15)
 
 
+def test_physical_sparse_link_fixture_keeps_concrete_capacity_route():
+    concrete = shear.vrd_c(
+        fck=35.0,
+        code=codes.EC2_2005_DKNA,
+        bw_mm=300.0,
+        d_mm=550.0,
+        asl_mm2=1473.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.18,
+    )
+    asw_over_s = (math.pi * 4.0**2 / 4.0) / 2000.0
+    sparse = shear.vrd_links(
+        35.0,
+        codes.EC2_2005_DKNA,
+        300.0,
+        550.0,
+        asw_over_s,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+        z_mm=495.0,
+        gamma_s=1.20,
+        v_ed_kn=100.0,
+    )
+    result = {
+        "v_ed": 100.0,
+        "res": concrete,
+        "util": 100.0 / concrete["vrd_c"],
+        "links": {
+            "res": sparse,
+            "util": 100.0 / sparse["vrd"],
+        },
+    }
+
+    selected = capacity.select_nominal_shear_resistance(
+        result,
+        links_selected=True,
+    )
+
+    assert concrete["vrd_c"] == pytest.approx(103.4166341272)
+    assert sparse["vrd"] == pytest.approx(3.2397674240)
+    assert 100.0 / sparse["vrd"] == pytest.approx(30.8664132057)
+    assert selected.route == "concrete"
+    assert selected.resistance == pytest.approx(concrete["vrd_c"])
+    assert selected.utilisation == pytest.approx(100.0 / concrete["vrd_c"])
+    assert selected.status == "PASS"
+
+
 def test_vrd_c_uses_final_user_concrete_factor_and_fcd():
     # Deliberately differ from the DK preset (1.45): every shear quantity that
     # depends on concrete design strength must use the material-panel values.
@@ -1181,6 +1231,28 @@ def _set(at, *changes):
     return apply_widget_changes(at, changes)
 
 
+def _replace_base_table(at, base_key, value):
+    """Reseed one rendered point table through the application's live boundary."""
+
+    goto_input_stage(at, "Section")
+    editor = {
+        "corners_base": "ed_corners",
+        "bars_base": "ed_bars",
+    }[base_key]
+    try:
+        version = at.session_state[editor + "_ver"]
+    except KeyError:
+        version = 0
+    at.session_state[base_key] = value
+    at.session_state[editor + "_ver"] = version + 1
+    try:
+        del at.session_state[editor]
+    except KeyError:
+        pass
+    at.run()
+    return at
+
+
 def _set_and_click(at, button_key, *changes):
     """Submit a group of existing inputs with one button-triggered rerun."""
     if button_key in {"qs_apply", "qs_back"} and changes:
@@ -1198,6 +1270,93 @@ def _set_and_click(at, button_key, *changes):
     if button_key in {"qs_apply", "qs_back"}:
         discard_retired_qs_fragment(at)
     return at
+
+
+def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately():
+    import reinforcement_table
+
+    at = _fresh()
+    at.run()
+    corners = at.session_state["corners_base"].copy(deep=True)
+    corners.loc[:, "x (mm)"] = [-150.0, -150.0, 150.0, 150.0]
+    corners.loc[:, "y (mm)"] = [-300.0, 300.0, 300.0, -300.0]
+    _replace_base_table(at, "corners_base", corners)
+    bars = reinforcement_table.table_from_points(
+        [(0.0, -250.0, 1473.0), (0.0, 250.0, 1473.0)],
+        "bar",
+    )
+    _replace_base_table(at, "bars_base", bars)
+    _set(
+        at,
+        ("number_input", "mild_gamma_y", 1.20),
+        ("checkbox", "transverse_detailing_on", True),
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
+        ("checkbox", "shear_links", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "shear_V", 100.0),
+        ("number_input", "shear_bw", 300.0),
+        ("number_input", "shear_link_legs", 1),
+        ("number_input", "shear_link_dia", 4.0),
+        ("number_input", "shear_link_s", 2000.0),
+        ("number_input", "shear_fywk", 500.0),
+    )
+
+    assert not at.exception
+    sh = at.session_state["results"]["shear"]
+    selected = sh["nominal_resistance"]
+    assert sh["res"]["vrd_c"] == pytest.approx(103.4166341272)
+    assert sh["links"]["res"]["vrd"] < 5.0
+    assert sh["links"]["util"] > 20.0
+    assert selected["route"] == "concrete"
+    assert selected["resistance"] == pytest.approx(sh["res"]["vrd_c"])
+    assert selected["utilisation"] == pytest.approx(
+        100.0 / sh["res"]["vrd_c"]
+    )
+    assert sh["resistance_status"] == "PASS"
+    assert sh["assessment_status"] == "PASS"
+    assert sh["links"]["longitudinal_shear_force"] == pytest.approx(0.0)
+    assert sh["links"]["longitudinal_assessment"]["status"] == "NOT APPLICABLE"
+    assert at.session_state["results"]["transverse_reinforcement"]["status"] == "FAIL"
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        str(item.value)
+        for collection in (at.caption, at.warning, at.error, at.markdown)
+        for item in collection
+    )
+    assert "Separate link detailing assessment: FAIL" in visible
+    assert "not a shear-capacity verdict" in visible
+    assert "Overall reinforced shear assessment: FAIL" not in visible
+    nominal_metric = next(
+        metric for metric in at.metric if "Nominal utilisation" in metric.label
+    )
+    assert nominal_metric.value == "96.7 %"
+    assert nominal_metric.delta == "OK"
+    comparison_metric = next(
+        metric for metric in at.metric if "Provided-link comparison" in metric.label
+    )
+    assert comparison_metric.delta == ""
+
+    _select_view(at, "Results Overview")
+    overview = next(table.value for table in at.table if "Check" in table.value)
+    concrete_row = overview.loc[
+        overview["Check"] == "Shear without links"
+    ].iloc[0]
+    detail_row = overview.loc[
+        overview["Check"].str.contains("minimum ratio", case=False)
+    ].iloc[0]
+    assert concrete_row["Status"] == "PASS"
+    assert concrete_row["Result"] == "96.7 % (VEd / VRd,c)"
+    assert detail_row["Status"] == "FAIL"
+    assert not any(
+        row["Status"] == "FAIL"
+        for _index, row in overview.iterrows()
+        if row["Check"] in {"Shear without links", "Shear with links"}
+    )
 
 
 def test_app_shear_check_produces_a_resistance():
@@ -1311,8 +1470,11 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
 
     _select_view(at, "Results Overview")
     overview = next(table.value for table in at.table if "Check" in table.value)
-    links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
-    assert links_row["Status"] in {"PASS", "FAIL"}
+    concrete_row = overview.loc[
+        overview["Check"] == "Shear without links"
+    ].iloc[0]
+    assert concrete_row["Status"] == "PASS"
+    assert "Shear with links" not in set(overview["Check"])
     import result_presentation as _presentation
 
     assert _presentation.result_reason(
@@ -1321,13 +1483,9 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
         context="H06 compression-field governing branch",
     ) == "concrete compression-field resistance governs"
 
-    retained_rows = _presentation.governing_result_rows(
-        _presentation.governing_summary_rows(
-            _presentation.multi_case_summary_rows(
-                at.session_state["_latest_inputs"],
-                at.session_state["results"],
-            )
-        )
+    retained_rows = _presentation.multi_case_summary_rows(
+        at.session_state["_latest_inputs"],
+        at.session_state["results"],
     )
     retained_row = next(
         item for item in retained_rows if item["check"] == "Shear with links"

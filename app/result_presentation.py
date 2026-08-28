@@ -18,6 +18,7 @@ import viz
 
 from app import engineer_messages
 from app import modelled_direction
+from sector import capacity
 from sector.design_standards import get_design_basis
 from sector.engineer_message import EngineerMessage
 
@@ -773,19 +774,82 @@ def combined_dkna_assumption_note(result):
     )
 
 
+def nominal_shear_resistance(result, *, links_selected=None):
+    """Return retained nominal shear-route evidence with a safe fallback."""
+
+    retained = (result or {}).get("nominal_resistance")
+    if isinstance(retained, dict):
+        return retained
+    if links_selected is None:
+        links_selected = (result or {}).get("links") is not None
+    candidate = dict(result or {})
+    concrete = dict(candidate.get("res") or {})
+    concrete_util = _publication_metric(candidate.get("util"))
+    concrete_resistance = _publication_metric(concrete.get("vrd_c"))
+    if candidate.get("v_ed") is None and (
+        concrete_util is not None and concrete_resistance is not None
+    ):
+        candidate["v_ed"] = concrete_util * concrete_resistance
+    links = candidate.get("links")
+    if isinstance(links, dict):
+        links = dict(links)
+        link_result = dict(links.get("res") or {})
+        link_util = _publication_metric(links.get("util"))
+        demand = _publication_metric(candidate.get("v_ed"))
+        if link_result.get("vrd") is None and (
+            link_util is not None and link_util > 0.0 and demand is not None
+        ):
+            link_result["vrd"] = demand / link_util
+        links["res"] = link_result
+        candidate["links"] = links
+    selected = capacity.select_nominal_shear_resistance(
+        candidate,
+        links_selected=bool(links_selected),
+    )
+    return {
+        "valid": selected.valid,
+        "route": selected.route,
+        "resistance": selected.resistance,
+        "utilisation": selected.utilisation,
+        "status": selected.status,
+        "ok": selected.ok,
+        "concrete_applicable": selected.concrete_applicable,
+        "links_selected": selected.links_selected,
+        "links_required": selected.links_required,
+        "reason": selected.reason,
+    }
+
+
 def _transverse_metric(family, result):
     """Rank an already-computed shear, torsion or combined result."""
     def shear_metric(item):
-        links = item.get("links") or {}
-        if links:
-            if not (links.get("res") or {}).get("valid"):
-                return None
-            return _publication_metric(
-                links.get("util"), allow_positive_infinity=True
-            )
-        if not (item.get("res") or {}).get("valid"):
+        selected = nominal_shear_resistance(item)
+        if selected.get("valid") is not True:
+            # Minimal selection-register fixtures can retain only validity and
+            # utilisation. Keep that narrow ranking compatibility; current
+            # results must satisfy the full route boundary above.
+            if (
+                (item.get("res") or {}).get("valid") is True
+                and (item.get("res") or {}).get("vrd_c") is None
+            ):
+                links = item.get("links")
+                if isinstance(links, dict):
+                    link_result = links.get("res") or {}
+                    if (
+                        link_result.get("valid") is True
+                        and link_result.get("vrd") is None
+                    ):
+                        return _publication_metric(
+                            links.get("util"), allow_positive_infinity=True
+                        )
+                    return None
+                return _publication_metric(
+                    item.get("util"), allow_positive_infinity=True
+                )
             return None
-        return _publication_metric(item.get("util"), allow_positive_infinity=True)
+        return _publication_metric(
+            selected.get("utilisation"), allow_positive_infinity=True
+        )
 
     def combined_metric(item):
         if not item.get("valid"):
@@ -2393,15 +2457,32 @@ def result_summary_rows(inp, results, *, stale=False):
             direction_state = str(
                 direction_result.get("calculation_state") or ""
             ).upper()
+            selected_resistance = nominal_shear_resistance(
+                direction,
+                links_selected=links_selected,
+            )
+            selected_route = selected_resistance.get("route")
             resistance = direction_result.get("vrd_c")
             result = (
                 f"{_percent(direction.get('util'))} "
                 f"({action_label} / VRd,c)"
                 if resistance is not None else "-"
             )
-            if links_selected:
+            if selected_resistance.get("valid") is not True:
+                without_links_status = str(
+                    selected_resistance.get("status") or "NOT ASSESSED"
+                ).upper()
+                without_links_note = result_reason(
+                    selected_resistance.get("reason")
+                    or direction_result.get("reason"),
+                    "shear",
+                    context="shear summary nominal-resistance reason",
+                )
+            elif selected_route == "links":
                 without_links_status = "NOT APPLICABLE"
-                without_links_note = "Links present; use the reinforced shear check"
+                without_links_note = (
+                    "The action exceeds VRd,c; the designed-link resistance route applies"
+                )
             elif direction_state == "NOT ASSESSED":
                 without_links_status = "NOT ASSESSED"
                 without_links_note = result_reason(
@@ -2416,6 +2497,12 @@ def result_summary_rows(inp, results, *, stale=False):
                 )
                 without_links_note = (
                     str(direction.get("method") or "")
+                    + (
+                        "; selected nominal resistance route; provided-link resistance "
+                        "and detailing are reported separately"
+                        if links_selected
+                        else ""
+                    )
                     + "; section form: "
                     + str(
                         geometry_record.get("resolved_form")
@@ -2451,6 +2538,117 @@ def result_summary_rows(inp, results, *, stale=False):
                 ))
             else:
                 link_result = links.get("res") or {}
+                if selected_resistance.get("valid") is not True:
+                    rows.append(_summary_row(
+                        f"Shear{suffix} with links",
+                        "plastic",
+                        "NOT ASSESSED",
+                        "-",
+                        "-",
+                        None,
+                        "Shear",
+                        result_reason(
+                            selected_resistance.get("reason"),
+                            "shear",
+                            context="shear summary unavailable nominal route",
+                        ),
+                        inp,
+                        overview_key="shear:with_links",
+                        overview_parent="shear",
+                    ))
+                    return
+                if selected_route == "concrete" and selected_resistance.get("valid"):
+                    non_governing_util = links.get("util")
+                    link_geometry = links.get("shear_geometry") or geometry_record
+                    link_note = (
+                        "The concrete route is applicable because the action does "
+                        "not exceed VRd,c. Provided-link resistance is context only; "
+                        "minimum reinforcement and link detailing are assessed "
+                        "separately."
+                    )
+                    if link_result.get("valid"):
+                        link_factor = _publication_metric(
+                            links.get("asw_factor")
+                        )
+                        if link_factor is None:
+                            link_factor = 1.0
+                        link_note += (
+                            "; section form: "
+                            + str(
+                                link_geometry.get("resolved_form")
+                                or link_geometry.get("section_form")
+                                or "-"
+                            )
+                            + f"; effective Asw factor "
+                            f"{link_factor:.5f}"
+                            + "; "
+                            + result_reason(
+                                link_result.get("governs"),
+                                "shear",
+                                context="non-governing provided-link resistance",
+                            )
+                        )
+                    chord_assessment = links.get("longitudinal_assessment")
+                    chord_active = False
+                    chord_status = "NOT APPLICABLE"
+                    chord_util = None
+                    if isinstance(chord_assessment, dict):
+                        chord_status = str(
+                            chord_assessment.get("status") or "NOT ASSESSED"
+                        ).upper()
+                        chord_util = chord_assessment.get("util")
+                        chord_active = chord_status != "NOT APPLICABLE"
+                    overall_status = "NOT APPLICABLE"
+                    overall_result = (
+                        f"{_percent(non_governing_util)} (non-governing)"
+                        if non_governing_util is not None
+                        else "-"
+                    )
+                    overall_util = None
+                    if chord_active:
+                        overall_status = overall_summary_status((
+                            {"status": selected_resistance.get("status")},
+                            {"status": chord_status},
+                        ))
+                        overall_result = _percent(chord_util)
+                        overall_util = chord_util
+                        link_note += "; " + result_reason(
+                            chord_assessment.get("reason"),
+                            "shear",
+                            context="dependent longitudinal chord assessment",
+                        )
+                    rows.append(_summary_row(
+                        f"Shear{suffix} with links",
+                        "plastic",
+                        overall_status,
+                        overall_result,
+                        "<= 100 %" if chord_active else "-",
+                        overall_util,
+                        "Shear",
+                        link_note,
+                        inp,
+                        overview_key="shear:with_links",
+                        overview_parent="shear",
+                    ))
+                    if chord_active:
+                        rows.append(_summary_row(
+                            f"Shear{suffix} longitudinal chords",
+                            "plastic",
+                            chord_status,
+                            _percent(chord_util),
+                            "<= 100 %",
+                            chord_util,
+                            "Shear",
+                            result_reason(
+                                chord_assessment.get("reason"),
+                                "shear",
+                                context="shear longitudinal chord assessment",
+                            ),
+                            inp,
+                            overview_key="shear:longitudinal_chords",
+                            overview_parent="shear",
+                        ))
+                    return
                 calculation_state = link_result.get("calculation_state")
                 link_status = (
                     str(calculation_state)

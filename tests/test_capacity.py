@@ -75,6 +75,102 @@ def _member_input(**overrides):
     return inp
 
 
+def _shear_route_result(v_ed, *, vrd_c=103.417, vrd_links=None):
+    result = {
+        "v_ed": v_ed,
+        "util": v_ed / vrd_c,
+        "res": {"valid": True, "vrd_c": vrd_c},
+    }
+    if vrd_links is not None:
+        result["links"] = {
+            "res": {"valid": True, "vrd": vrd_links},
+            "util": v_ed / vrd_links,
+        }
+    return result
+
+
+def test_sparse_links_do_not_replace_applicable_concrete_resistance_or_verdict():
+    selected = capacity.select_nominal_shear_resistance(
+        _shear_route_result(80.0, vrd_links=29.452),
+        links_selected=True,
+    )
+
+    assert selected.route == "concrete"
+    assert selected.resistance == pytest.approx(103.417)
+    assert selected.utilisation == pytest.approx(80.0 / 103.417)
+    assert selected.status == "PASS"
+    assert selected.ok is True
+    assert selected.links_required is False
+    assert 80.0 / 29.452 == pytest.approx(2.7162841233)
+
+
+@pytest.mark.parametrize(
+    (
+        "demand",
+        "link_resistance",
+        "expected_route",
+        "expected_status",
+    ),
+    (
+        (math.nextafter(103.417, 0.0), None, "concrete", "PASS"),
+        (math.nextafter(103.417, 0.0), 29.452, "concrete", "PASS"),
+        (math.nextafter(103.417, 0.0), 200.0, "concrete", "PASS"),
+        (103.417, None, "concrete", "PASS"),
+        (103.417, 29.452, "concrete", "PASS"),
+        (103.417, 200.0, "concrete", "PASS"),
+        (math.nextafter(103.417, math.inf), None, "concrete", "FAIL"),
+        (math.nextafter(103.417, math.inf), 29.452, "links", "FAIL"),
+        (math.nextafter(103.417, math.inf), 200.0, "links", "PASS"),
+    ),
+)
+def test_nominal_shear_route_uses_exact_vrdc_boundary(
+    demand,
+    link_resistance,
+    expected_route,
+    expected_status,
+):
+    selected = capacity.select_nominal_shear_resistance(
+        _shear_route_result(demand, vrd_links=link_resistance),
+        links_selected=link_resistance is not None,
+    )
+
+    assert selected.route == expected_route
+    assert selected.status == expected_status
+    assert selected.links_required is (demand > 103.417)
+
+
+def test_missing_links_above_vrdc_retains_genuine_concrete_capacity_failure():
+    selected = capacity.select_nominal_shear_resistance(
+        _shear_route_result(math.nextafter(103.417, math.inf)),
+        links_selected=False,
+    )
+
+    assert selected.route == "concrete"
+    assert selected.status == "FAIL"
+    assert selected.links_required is True
+
+
+def test_unavailable_selected_links_cannot_bypass_fail_closed_geometry_gate():
+    result = _shear_route_result(80.0)
+    result["links"] = {
+        "res": {
+            "valid": False,
+            "calculation_state": "NOT ASSESSED",
+            "reason": "required shear geometry is unavailable",
+        },
+        "util": None,
+    }
+    selected = capacity.select_nominal_shear_resistance(
+        result,
+        links_selected=True,
+    )
+
+    assert selected.valid is False
+    assert selected.status == "NOT ASSESSED"
+    assert selected.route is None
+    assert selected.resistance is None
+
+
 def _dkna_plastic_input(**overrides):
     bars = [
         (-0.10, -0.25, 500.0),
@@ -3667,6 +3763,52 @@ def test_dkna_shear_action_alone_explicit_face_checks_only_that_face(monkeypatch
     assert action["resistance"] == pytest.approx(75.0)
     assert action["evidence"]["both_faces_evaluated"] is False
     assert action["evidence"]["faces_evaluated"] == ["negative"]
+
+
+@pytest.mark.parametrize(
+    ("demand", "expected_resistance", "expected_route"),
+    (
+        (80.0, 103.417, "concrete"),
+        (math.nextafter(103.417, math.inf), 29.452, "links"),
+    ),
+    ids=("concrete-route", "designed-links-route"),
+)
+def test_dkna_action_alone_uses_the_selected_nominal_shear_denominator(
+    monkeypatch,
+    demand,
+    expected_resistance,
+    expected_route,
+):
+    def face_context(_face_input, _n_prestress, _n_ed_comp):
+        return (
+            {"res": {"valid": True, "vrd_c": 103.417}},
+            {
+                "build": lambda _cot_min, _cot_max: {
+                    "valid": True,
+                    "vrd": 29.452,
+                    "cot": 2.0,
+                },
+                "cot_min": 1.0,
+                "cot_max": 2.5,
+            },
+        )
+
+    monkeypatch.setattr(capacity, "build_shear_context", face_context)
+    action = capacity._dkna_shear_action_alone(
+        _member_input(
+            shear_axis="x",
+            shear_face_y="negative",
+            shear_V=demand,
+            shear_links=True,
+        )
+    )
+
+    assert action["valid"] is True
+    assert action["resistance"] == pytest.approx(expected_resistance)
+    assert action["demand"] / action["resistance"] == pytest.approx(
+        demand / expected_resistance
+    )
+    assert action["evidence"]["nominal_route"] == expected_route
 
 
 def test_dkna_shear_action_alone_auto_fails_closed_if_either_face_is_unavailable(

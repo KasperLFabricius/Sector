@@ -4983,6 +4983,97 @@ def test_report_includes_shear_section():
     assert "selected 2005 no-links resistance has no z operand" in txt
 
 
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(profile):
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        transverse_detailing_on=True,
+        shear_method=codes.EC2_2005_DKNA.label,
+    )
+    sh = _shear_out()
+    sh["res"]["vrd_c"] = 103.417
+    sh["util"] = 80.0 / 103.417
+    links = _links_out()
+    links["res"].update(
+        vrd_s=29.452,
+        vrd_max=200.0,
+        vrd=29.452,
+        governs="stirrups (VRd,s)",
+    )
+    links.update(
+        util=80.0 / 29.452,
+        required=False,
+        longitudinal_shear_force=0.0,
+        longitudinal_assessment={
+            "status": "NOT APPLICABLE",
+            "reason": "no_longitudinal_chord_action",
+        },
+    )
+    sh["links"] = links
+    sh["nominal_resistance"] = asdict(
+        capacity.select_nominal_shear_resistance(sh, links_selected=True)
+    )
+    sh.update(
+        resistance_status="PASS",
+        assessment_status="PASS",
+        assessment_ok=True,
+    )
+    transverse = {
+        "status": "FAIL",
+        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
+        "member_type": "Beam",
+        "diameter_mm": 4.0,
+        "spacing_mm": 2000.0,
+        "fywk_mpa": 500.0,
+        "minimum_ratio": {
+            "coefficient": 0.08,
+            "ductility_factor": 1.0,
+            "ductility_reduction_applied": False,
+            "clause": "9.2.2(5)",
+        },
+        "governing": {"scope": "Shear VY", "utilisation": 2.0},
+        "checks": [{
+            "kind": "minimum_ratio",
+            "scope": "Shear VY",
+            "status": "FAIL",
+            "provided": 0.00002,
+            "limit": 0.00069,
+            "utilisation": 34.5,
+            "clause": "9.2.2(5)",
+        }],
+        "limitations": [],
+    }
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {},
+                inp,
+                {"shear": sh, "transverse_reinforcement": transverse},
+                figures=False,
+                profile=profile,
+            )
+        ).split()
+    )
+
+    assert "Shear without links" in text
+    assert "PASS" in text
+    assert "77.4 % (VEd / VRd,c)" in text
+    assert "Shear with links" in text
+    assert "NOT APPLICABLE" in text
+    assert "271.6 % (non-governing)" in text
+    assert "Shear/torsion link detailing" in text
+    assert "FAIL" in text
+    assert "271.6 % (EXCEEDED)" not in text
+    if profile != "Brief":
+        assert "103.417" in text
+        assert "29.452" in text
+        assert "Separate link detailing assessment: FAIL" in text
+        assert "non-governing comparison" in text
+        assert "no longitudinal shear force is applied" in text
+
+
 def test_report_audits_independent_governing_faces_and_angles():
     out = _out()
     sh = _shear_out()
@@ -7226,9 +7317,16 @@ def test_report_profiles_retain_h06_circular_and_duct_result(profile):
         ).split()
     )
 
+    selected = capacity.select_nominal_shear_resistance(
+        shear_out,
+        links_selected=True,
+    )
+    assert selected.route == "concrete"
+    assert "Shear without links" in text
     assert "Shear with links" in text
     assert f"{100.0 * shear_out['links']['util']:.1f} %" in text
-    assert "link-yield resistance governs" in text
+    assert "non-governing" in text
+    assert "link-yield resistance governs" not in text
     if profile != "Brief":
         assert "Circular section" in text
         assert "Fitted-section arm z = 500.000 mm" in text
@@ -7403,6 +7501,9 @@ def test_report_includes_2023_shear_links_stress_checks():
 
     out = _out()
     sh = _shear_out_2023()
+    demand = 150.0
+    sh["v_ed"] = demand
+    sh["util"] = demand / sh["res"]["vrd_c"]
     asw = 2.0 * math.pi * 10.0**2 / 4.0
     result = _shear.vrd_links(
         35.0,
@@ -7418,11 +7519,11 @@ def test_report_includes_2023_shear_links_stress_checks():
         z_mm=495.0,
         fcd_mpa=20.0,
         gamma_s=1.15,
-        v_ed_kn=50.0,
+        v_ed_kn=demand,
     )
     sh["links"] = {
         "res": result,
-        "util": 50.0 / result["vrd"],
+        "util": demand / result["vrd"],
         "asw": asw,
         "asw_over_s": asw / 150.0,
         "legs": 2.0,
@@ -7432,7 +7533,7 @@ def test_report_includes_2023_shear_links_stress_checks():
         "cot_min": 1.0,
         "cot_max": 2.5,
         "delta_ftd": None,
-        "longitudinal_shear_force": 50.0 * result["cot"],
+        "longitudinal_shear_force": demand * result["cot"],
         "cot_limit_lo": 1.0,
         "cot_limit_hi": 2.5,
         "angle_limits": {
@@ -7441,10 +7542,16 @@ def test_report_includes_2023_shear_links_stress_checks():
         "model_2023": True,
         "z_source": "0.9 d",
         "out_of_limits": False,
-        "required": False,
+        "required": True,
     }
     out["shear"] = sh
-    text = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    inp = _inp()
+    inp.update(
+        shear_on=True,
+        shear_links=True,
+        shear_method=codes.EC2_2023.label,
+    )
+    text = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     assert "8.42" in text and "8.44" in text and "8.50" in text
     assert "0.500" in text
     assert "not implemented" not in text
