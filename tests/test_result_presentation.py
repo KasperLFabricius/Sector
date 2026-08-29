@@ -2336,6 +2336,11 @@ def test_base_en_invalid_utilisations_are_not_publication_numbers(
     components = presentation.combined_physical_components(combined)
     assert {item["status"] for item in components} == {"NOT ASSESSED"}
     assert all(item["util"] is None for item in components)
+    longitudinal = next(
+        item for item in components if item["key"] == "longitudinal"
+    )
+    assert longitudinal["chord_status"] == "NOT ASSESSED"
+    assert longitudinal["chord_util"] is None
     assert presentation._transverse_metric("combined", combined) is None
     assert presentation.interaction_assessment_status(
         {"valid": True, "value": retained}

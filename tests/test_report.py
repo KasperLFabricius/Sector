@@ -6634,6 +6634,31 @@ def _base_en_combined_out():
     return combined
 
 
+def _dkna_complete_combined_out():
+    """Return one DK fixture with the same complete physical component state."""
+
+    combined = _base_en_combined_out()
+    combined.update(_combined_out())
+    combined["transverse"].update(
+        shear_credited=False,
+        v_ed=150.0,
+        vrd_c=100.0,
+    )
+    combined["longitudinal"].update(
+        ftd_v=40.0,
+        ftd_t=40.0,
+        z=0.5,
+        capped=False,
+        gets_shift=True,
+        biaxial=False,
+        m_off=0.0,
+        has_torsion=True,
+        off_not_evaluated=None,
+        theta_mode="utilisation",
+    )
+    return combined
+
+
 def _base_en_scheduler_combined_case(action, util, *, component):
     """Build one internally reconciled synthetic scheduler result.
 
@@ -6895,6 +6920,78 @@ def test_report_base_en_invalid_utilisations_are_not_published(
     else:
         assert "Combined concrete compression strut" in text
     assert "DK NA" not in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
+    profile,
+    retained,
+    transverse_retained,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005_DKNA.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _dkna_complete_combined_out()
+    combined["transverse"].update(
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
+    )
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(status="PASS", util=retained)
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    assert re.search(r"100[.,]0\s*%", text) is None
+    assert re.search(r"50[.,]0\s*%", text) is None
+    assert re.search(r"-25[.,]0\s*%", text) is None
+    assert re.search(r"\binf\b", text.casefold()) is None
+    assert "utilisation = inf" not in text
+    assert "closed-stirrup utilisation = - (EXCEEDED)" not in text
+    assert "utilisation = - (EXCEEDED)" not in text
+    if profile in {"Standard", "Audit"}:
+        assert (
+            "NOT ASSESSED: recalculate the shared compression-strut check"
+            in text
+        )
+        assert (
+            "NOT ASSESSED: recalculate the shared closed-stirrup check"
+            in text
+        )
+        assert (
+            "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+            in text
+        )
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])

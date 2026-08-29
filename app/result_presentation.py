@@ -2126,6 +2126,14 @@ def combined_physical_components(combined):
             ),
         )
         long_status = retained_status
+    # Keep the selected chord's own publication state separate from the later
+    # overall longitudinal component, which may also include the independent
+    # Formula (6.28) torsion-reinforcement assessment.  Worked UI/report paths
+    # use these fields so a malformed retained chord value cannot bypass the
+    # same tri-state boundary used by the summary table.
+    longitudinal_component["chord_status"] = longitudinal_component["status"]
+    longitudinal_component["chord_util"] = longitudinal_component["util"]
+    longitudinal_component["chord_note"] = longitudinal_component["note"]
     torsion_longitudinal = combined.get("torsion_longitudinal_assessment")
     if isinstance(torsion_longitudinal, Mapping):
         torsion_status = str(

@@ -1744,6 +1744,67 @@ def test_app_base_en_invalid_utilisations_are_not_published(
     assert "inf" not in {str(value).casefold() for value in combined_rows["Result"]}
 
 
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
+    retained,
+    transverse_retained,
+):
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    combined = at.session_state["results"]["combined"]
+    combined["transverse"].update(
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
+    )
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(
+        status="PASS", util=retained
+    )
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    sum_metrics = [metric for metric in at.metric if metric.label == "Sum"]
+    stirrup_metrics = [
+        metric
+        for metric in at.metric
+        if metric.label == "Closed-stirrup utilisation"
+    ]
+    chord_metrics = [
+        metric
+        for metric in at.metric
+        if "M_{Ed" in str(metric.label) and "/M_{Rd}" in str(metric.label)
+    ]
+    assert {str(metric.value) for metric in sum_metrics} == {"-"}
+    assert {str(metric.value) for metric in stirrup_metrics} == {"-"}
+    # The governing retained chord is unavailable; an independently valid
+    # orthogonal chord may remain visible as separate engineering evidence.
+    assert "-" in {str(metric.value) for metric in chord_metrics}
+    assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
+    visible_metrics = {str(metric.value) for metric in at.metric}
+    assert "100.0 %" not in visible_metrics
+    assert "50.0 %" not in visible_metrics
+    assert "-25.0 %" not in visible_metrics
+    assert "inf" not in {value.casefold() for value in visible_metrics}
+
+
 def test_app_combined_basis_switch_invalidates_results_and_reports():
     at = _fresh()
     at.run()

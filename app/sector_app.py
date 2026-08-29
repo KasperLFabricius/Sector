@@ -15877,10 +15877,14 @@ def combined_view(inp, results):
         )
 
     st.markdown("**Physical resistance components**")
+    physical_components = presentation.combined_physical_components(c)
+    physical_by_key = {
+        component["key"]: component for component in physical_components
+    }
     component_boxes = st.columns(3)
     for box, component in zip(
         component_boxes,
-        presentation.combined_physical_components(c),
+        physical_components,
     ):
         status = component["status"]
         value = _pct(component["util"])
@@ -15905,22 +15909,36 @@ def combined_view(inp, results):
         st.divider()
         st.markdown(r"**Concrete compression strut (6.29): "
                     r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**")
-        val = cr["value"]
-        ok_c = viz.util_ok(val)
-        cc1, cc2 = st.columns([1, 2])
-        _verdict_metric(
-            cc1, "Sum", _pct(val), ok_c,
+        cr_status = presentation.interaction_assessment_status(cr)
+        val = viz.utilisation_value(
+            cr.get("value"), allow_positive_infinity=True
         )
+        cc1, cc2 = st.columns([1, 2])
+        if cr_status in {"PASS", "FAIL"}:
+            _verdict_metric(
+                cc1, "Sum", _pct(val), cr_status == "PASS",
+            )
+        else:
+            cc1.metric("Sum", "-")
+            cc1.caption("NOT ASSESSED")
         cc2.caption(
             f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
             f"($\\theta={cr['theta_deg']:.1f}^\\circ$). "
             f"$T_{{Rd,max}}={cr['trd_max']:.1f}$ kNm, "
             f"$V_{{Rd,max}}={cr['vrd_max']:.1f}$ kN."
         )
-        st.plotly_chart(viz.vt_interaction_figure(
-            cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
-            show_verdict=True),
-            width="stretch")
+        if cr_status in {"PASS", "FAIL"}:
+            st.plotly_chart(viz.vt_interaction_figure(
+                cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
+                show_verdict=True),
+                width="stretch")
+        else:
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "Formula (6.29) is NOT ASSESSED. Recalculate the shared "
+                "compression-strut check before using this result.",
+            )
     elif cr is not None and not cr.get("valid"):
         _manual_warning(st, "calculation-warning", _no_common_angle_msg(cr))
     else:
@@ -15938,12 +15956,23 @@ def combined_view(inp, results):
         t1, t2, t3 = st.columns(3)
         t1.metric("Shear share", _pct(tr["shear_fraction"]))
         t2.metric("Torsion share", _pct(tr["torsion_fraction"]))
-        _verdict_metric(
-            t3,
-            "Closed-stirrup utilisation",
-            _pct(tr["u_stirrup"]),
-            viz.util_ok(tr["u_stirrup"]),
-        )
+        stirrup = physical_by_key["stirrup"]
+        if stirrup["status"] in {"PASS", "FAIL"}:
+            _verdict_metric(
+                t3,
+                "Closed-stirrup utilisation",
+                _pct(stirrup["util"]),
+                stirrup["status"] == "PASS",
+            )
+        else:
+            t3.metric("Closed-stirrup utilisation", "-")
+            t3.caption("NOT ASSESSED")
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "The shared closed-stirrup check is NOT ASSESSED. Recalculate "
+                "the component before using this result.",
+            )
         if tr["shear_credited"]:
             st.caption(
                 f"Concrete carries the shear (VEd = {tr['v_ed']:.1f} kN <= "
@@ -15973,7 +16002,9 @@ def combined_view(inp, results):
                      f"the shear COMPRESSION face ({face_lbl}) -- the torsion "
                      "tension governs there (no shear shift, bending relieves it)")
         biaxial = lg.get("biaxial", False)
-        ok_l = lg["ok"]
+        longitudinal = physical_by_key["longitudinal"]
+        chord_status = longitudinal["chord_status"]
+        chord_util = longitudinal["chord_util"]
         coverage = lg.get("off_not_evaluated")
         fallback = presentation.required_chord_fallback(c)
         fell_back = fallback is not None
@@ -15985,7 +16016,7 @@ def combined_view(inp, results):
         if coverage:
             g3.metric(
                 r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-                _pct(lg["util"]),
+                _pct(chord_util),
                 help=(
                     "NOT ASSESSED: longitudinal chord coverage is incomplete; "
                     "see the warning below."
@@ -15994,7 +16025,7 @@ def combined_view(inp, results):
         elif fell_back:
             g3.metric(
                 r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-                _pct(lg["util"]),
+                _pct(chord_util),
                 help=(
                     "NOT ASSESSED: the displayed capacity is a pure-axis "
                     "substitute; see the warning below."
@@ -16003,13 +16034,23 @@ def combined_view(inp, results):
                          "pure-axis substitute; see the warning below."
                 ),
             )
-        else:
+        elif chord_status in {"PASS", "FAIL"}:
             _verdict_metric(
                 g3,
                 r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-                _pct(lg["util"]),
-                ok_l,
+                _pct(chord_util),
+                chord_status == "PASS",
             )
+        else:
+            g3.metric(
+                r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
+                "-",
+                help=(
+                    "NOT ASSESSED: the longitudinal utilisation is unavailable. "
+                    "Recalculate before using this result."
+                ),
+            )
+            g3.caption("NOT ASSESSED")
         st.caption(
             f"Governing chord: {face_desc} about the {ax_lbl}-axis. "
             r"$M_{Ed,total}$ includes bending, shear shift and half the perimeter "
