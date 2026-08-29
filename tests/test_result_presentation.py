@@ -1734,6 +1734,103 @@ def test_unavailable_calculated_link_arm_is_not_assessed_without_a_verdict():
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
 
+def test_out_of_range_links_keep_angle_free_concrete_route_and_no_link_verdict():
+    reason = "selected strut-angle range is outside the permitted method range"
+    applicability = {
+        "applicable": False,
+        "requested_min": 1.0,
+        "requested_max": 3.0,
+        "permitted_min": 1.0,
+        "permitted_max": 2.5,
+    }
+    shear = {
+        "v_ed": 80.0,
+        "res": {"valid": True, "vrd_c": 103.417},
+        "util": 80.0 / 103.417,
+        "method": "DS/EN 1992-1-1:2005",
+        "links": {
+            "res": {
+                "valid": False,
+                "calculation_state": "NOT ASSESSED",
+                "reason": reason,
+                "vrd": None,
+                "angle_applicability": applicability,
+            },
+            "util": None,
+            "assessment_reason": reason,
+            "angle_applicability": applicability,
+        },
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", shear_on=True, shear_links=True),
+        {"plastic": _plastic(), "shear": shear},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear without links"]["status"] == "PASS"
+    assert by_check["Shear without links"]["util"] == pytest.approx(
+        80.0 / 103.417
+    )
+    assert by_check["Shear with links"]["status"] == "NOT ASSESSED"
+    assert by_check["Shear with links"]["result"] == "-"
+    assert by_check["Shear with links"]["util"] is None
+    assert "outside the permitted range" in by_check["Shear with links"]["note"]
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+
+
+def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
+    reason = "selected strut-angle range is outside the permitted method range"
+    torsion = {
+        "tube_valid": True,
+        "closed_links_present": True,
+        "transverse_resistance_assessed": False,
+        "full_resistance_assessed": False,
+        "valid": False,
+        "trd": 999.0,
+        "util": 0.01,
+        "reason": reason,
+        "assessment_reason": reason,
+        "angle_applicability": {
+            "applicable": False,
+            "requested_min": 1.0,
+            "requested_max": 3.0,
+            "permitted_min": 1.0,
+            "permitted_max": 2.5,
+        },
+    }
+    results = {
+        "plastic": _plastic(),
+        "torsion": torsion,
+        "combined": {
+            "valid": True,
+            "dkna_valid": True,
+            "dkna_sum": 0.10,
+            "dkna_ok": True,
+        },
+    }
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=True,
+        ),
+        results,
+    )
+    torsion_row = next(row for row in rows if row["check"] == "Torsion")
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+
+    assert torsion_row["status"] == "NOT ASSESSED"
+    assert torsion_row["result"] == "-"
+    assert torsion_row["util"] is None
+    assert "outside the permitted range" in torsion_row["note"]
+    assert combined_rows
+    assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
+    assert all(row["util"] is None for row in combined_rows)
+
+
 def test_2023_axial_compression_guidance_governs_the_links_overview_note():
     reason = (
         "2023 axial-compression applicability conditions were not demonstrated"

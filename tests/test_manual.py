@@ -462,6 +462,14 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     assert "remains **NOT ASSESSED**" in text
     assert "one leg of the same closed, anchored loop" in text
     assert "applied only when current closed links are present" in text
+    assert "complete entered compression-strut interval" in text
+    assert "Exact boundaries are admissible" in text
+    assert "dependent interactions are NOT ASSESSED" in text
+    assert "verdict for the links and every dependent interaction check" in text
+    assert "angle-dependent torsion resistance" in text
+    assert "$T_{Rd,c}$ may remain as angle-independent cracking context" in text
+    assert "reports the resulting demand/resistance verdict with a warning" not in text
+    assert "reported with an applicability warning" not in text
     assert "bands not overlap" not in text
     assert "reverts to each" not in text
 
@@ -503,6 +511,8 @@ def test_manual_pdf_starts_combined_mvt_after_the_torsion_applicability_page():
         index for index, text in enumerate(pages)
         if "6.8 Combined M-V-T interaction" in text
     )
+    assert torsion_page > 0
+    assert "upper angle limit is 2.5 for class B/C" in pages[torsion_page - 1]
     assert combined_page > torsion_page
     assert "6.8 Combined M-V-T interaction" not in pages[combined_page - 1]
     assert "Subdivide into sub-tubes" in pages[combined_page - 1]

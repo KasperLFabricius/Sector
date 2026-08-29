@@ -610,7 +610,8 @@ def test_vrd_links_invalid_without_stirrups():
 
 
 @pytest.mark.parametrize("code", (codes.EC2_2005_DKNA, codes.EC2_2023))
-def test_vrd_links_without_an_explicit_calculated_arm_fails_closed(code):
+@pytest.mark.parametrize("cot_max", (2.5, 3.0), ids=("in-range", "out-of-range"))
+def test_vrd_links_without_an_explicit_calculated_arm_fails_closed(code, cot_max):
     result = shear.vrd_links(
         35.0,
         code,
@@ -621,7 +622,7 @@ def test_vrd_links_without_an_explicit_calculated_arm_fails_closed(code):
         0.0,
         0.18,
         1.0,
-        2.5,
+        cot_max,
         fcd_mpa=20.0,
         gamma_s=1.15,
         v_ed_kn=100.0,
@@ -670,6 +671,153 @@ def test_optimum_cot_theta_never_below_one_even_with_wide_lower_bound():
     # at 1 before clamping, so a heavy-link section optimises at 1.0, not the 0.5 floor.
     assert shear.optimum_cot_theta(a=100.0, b=50.0, cot_min=0.5, cot_max=2.5) == 1.0
     assert shear.optimum_cot_theta(a=1.0, b=5.0, cot_min=0.5, cot_max=2.5) == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    ("requested_min", "requested_max", "permitted_max", "applicable"),
+    (
+        (1.0, 2.5, 2.5, True),
+        (math.nextafter(1.0, math.inf), math.nextafter(2.5, 0.0), 2.5, True),
+        (math.nextafter(1.0, 0.0), 2.5, 2.5, False),
+        (1.0, math.nextafter(2.5, math.inf), 2.5, False),
+        (1.0, 2.0, 2.0, True),
+        (1.0, math.nextafter(2.0, math.inf), 2.0, False),
+        (1.0, 1.6, 1.6, True),
+        (1.0, math.nextafter(1.6, math.inf), 1.6, False),
+    ),
+)
+def test_strut_angle_applicability_uses_exact_requested_interval(
+    requested_min,
+    requested_max,
+    permitted_max,
+    applicable,
+):
+    result = shear.strut_angle_applicability(
+        requested_min,
+        requested_max,
+        permitted_min=1.0,
+        permitted_max=permitted_max,
+        method="implementation fixture",
+        basis="fixture permitted range",
+        clause="fixture clause",
+    )
+
+    assert result["applicable"] is applicable
+    assert result["status"] == ("ASSESSED" if applicable else "NOT ASSESSED")
+    assert result["requested_min"] == min(requested_min, requested_max)
+    assert result["requested_max"] == max(requested_min, requested_max)
+    assert result["permitted_max"] == permitted_max
+    assert result["reason"] == (
+        None if applicable else shear.STRUT_ANGLE_OUT_OF_RANGE_REASON
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    (True, np.bool_(False), "2.5", math.nan, math.inf, -math.inf),
+)
+def test_strut_angle_applicability_rejects_non_real_or_non_finite_limits(value):
+    with pytest.raises(ValueError, match="finite real numbers"):
+        shear.strut_angle_applicability(
+            1.0,
+            value,
+            permitted_min=1.0,
+            permitted_max=2.5,
+            method="implementation fixture",
+            basis="fixture permitted range",
+            clause="fixture clause",
+        )
+
+
+def test_inactive_strut_angle_retains_limits_without_a_domain_verdict():
+    result = shear.strut_angle_applicability(
+        1.0,
+        3.0,
+        permitted_min=1.0,
+        permitted_max=2.5,
+        method="implementation fixture",
+        basis="fixture permitted range",
+        clause="fixture clause",
+        active=False,
+    )
+
+    assert result["active"] is False
+    assert result["applicable"] is False
+    assert result["status"] == "NOT APPLICABLE"
+    assert result["reason"] is None
+    assert result["requested_max"] == 3.0
+    assert result["permitted_max"] == 2.5
+
+
+def test_first_generation_false_pass_oracle_is_not_assessed_outside_band():
+    asw_over_s = 2.0 * math.pi * 10.0**2 / 4.0 / 150.0
+    common = dict(
+        fck=35.0,
+        code=codes.EC2_2005,
+        bw_mm=300.0,
+        d_mm=550.0,
+        asw_over_s=asw_over_s,
+        fywk=550.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.18,
+        cot_min=1.0,
+        z_mm=500.0,
+        fcd_mpa=35.0 / 1.45,
+        gamma_s=1.20,
+        v_ed_kn=620.0,
+    )
+
+    permitted = shear.vrd_links(cot_max=2.5, **common)
+    assert permitted["valid"] is True
+    assert permitted["vrd"] == pytest.approx(599.956930373051)
+    assert 620.0 / permitted["vrd"] == pytest.approx(1.0334075141268662)
+
+    outside = shear.vrd_links(cot_max=3.0, **common)
+    assert outside["valid"] is False
+    assert outside["calculation_state"] == "NOT ASSESSED"
+    assert outside["vrd_s"] is None
+    assert outside["vrd_max"] is None
+    assert outside["vrd"] is None
+    assert outside["cot"] is None
+    assert outside["angle_applicability"]["requested_max"] == 3.0
+    assert outside["angle_applicability"]["permitted_max"] == 2.5
+
+    inactive = shear.vrd_links(cot_max=3.0, **dict(common, v_ed_kn=0.0))
+    assert inactive["valid"] is True
+    assert math.isfinite(inactive["vrd"]) and inactive["vrd"] > 0.0
+    assert inactive["angle_applicability"]["active"] is False
+    assert inactive["angle_applicability"]["status"] == "NOT APPLICABLE"
+
+
+def test_2023_class_a_false_pass_oracle_is_not_assessed_outside_band():
+    asw_over_s = 2.0 * math.pi * 10.0**2 / 4.0 / 150.0
+    common = dict(
+        fck=35.0,
+        code=codes.EC2_2023,
+        bw_mm=300.0,
+        d_mm=550.0,
+        asw_over_s=asw_over_s,
+        fywk=550.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.165,
+        cot_min=1.0,
+        z_mm=500.0,
+        fcd_mpa=35.0 / 1.5,
+        gamma_s=1.15,
+        v_ed_kn=556.81558,
+        ductility_class="A",
+    )
+
+    permitted = shear.vrd_links(cot_max=2.0, **common)
+    assert permitted["valid"] is True
+    assert permitted["vrd"] == pytest.approx(500.8336114418512)
+    assert 556.81558 / permitted["vrd"] == pytest.approx(1.1117775789787394)
+
+    outside = shear.vrd_links(cot_max=2.5, **common)
+    assert outside["valid"] is False
+    assert outside["calculation_state"] == "NOT ASSESSED"
+    assert outside["vrd"] is None
+    assert outside["angle_applicability"]["permitted_max"] == 2.0
 
 
 def test_retained_strut_angle_is_compact_frozen_and_reconstructs_selection():
@@ -2227,9 +2375,7 @@ def test_shear_lever_arm_fails_closed_without_a_section():
     assert "section model" in src
 
 
-def test_app_shear_links_warn_outside_default_bounds_and_retain_verdict():
-    # Widening cot(theta) past the method default is allowed but flagged (warning, not
-    # a blocking error) and honoured by the optimiser.
+def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
@@ -2238,24 +2384,101 @@ def test_app_shear_links_warn_outside_default_bounds_and_retain_verdict():
         at,
         "calculate",
         ("number_input", "strut_cot_max", 3.0),
-        ("number_input", "shear_V", 100.0),
+        ("number_input", "shear_V", 80.0),
     )
     assert not at.exception
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["out_of_limits"] is True
-    assert "code_applicable" not in lk
+    assert lk["res"]["valid"] is False
+    assert lk["res"]["calculation_state"] == "NOT ASSESSED"
+    assert lk["res"]["vrd"] is None
+    assert lk["util"] is None
+    assert lk["longitudinal_shear_force"] is None
+    assert lk["chord"] is None
+    assert lk["angle_applicability"]["requested_max"] == 3.0
+    assert lk["angle_applicability"]["permitted_max"] == 2.5
+    nominal = at.session_state["results"]["shear"]["nominal_resistance"]
+    assert nominal["route"] == "concrete"
+    assert nominal["status"] == "PASS"
     _select_view(at, "Shear")
     assert not at.exception
-    assert any(
-        "actual values are used in the reported calculations"
-        in w.value.lower()
-        for w in at.warning
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
     )
-    util_metric = next(
-        m for m in at.metric
-        if m.label == r"Utilisation $V_{Ed}/V_{Rd}$"
+    assert "reinforced-shear check is NOT ASSESSED" in visible
+    assert "outside the permitted range" in visible
+    assert "Requested cot" in visible
+    assert "1.000 to 3.000" in visible
+    assert not any(
+        metric.label == r"Utilisation $V_{Ed}/V_{Rd}$"
+        for metric in at.metric
     )
-    assert util_metric.delta in {"PASS", "FAIL"}
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    concrete_row = overview.loc[
+        overview["Check"] == "Shear without links"
+    ].iloc[0]
+    link_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert concrete_row["Status"] == "PASS"
+    assert link_row["Status"] == "NOT ASSESSED"
+    assert link_row["Result"] == "-"
+
+
+@pytest.mark.parametrize(
+    "method",
+    (codes.EC2_2005_DKNA.label, codes.EC2_2023.label),
+)
+def test_app_angle_gate_cannot_bypass_unavailable_link_arm(monkeypatch, method):
+    from sector import capacity
+
+    monkeypatch.setattr(
+        capacity,
+        "shear_lever_arm",
+        lambda *_args, **_kwargs: (
+            None,
+            "calculated plastic lever arm unavailable: the exact "
+            "face-aligned Plastic solve did not converge",
+        ),
+    )
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", method),
+        ("number_input", "strut_cot_max", 3.0),
+        ("number_input", "shear_V", 80.0),
+    )
+
+    assert not at.exception
+    shear_result = at.session_state["results"]["shear"]
+    links = shear_result["links"]
+    assert links["res"]["valid"] is False
+    assert links["res"]["calculation_state"] == "NOT ASSESSED"
+    assert links["res"]["z"] is None
+    assert links["res"]["vrd"] is None
+    assert "lever arm" in links["res"]["reason"]
+    assert links["util"] is None
+    nominal = shear_result["nominal_resistance"]
+    assert nominal["valid"] is False
+    assert nominal["status"] == "NOT ASSESSED"
+    assert nominal["route"] is None
+    assert nominal["resistance"] is None
+    assert nominal["utilisation"] is None
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "reinforced-shear check is NOT ASSESSED" in visible
+    assert "face-aligned Plastic calculation did not converge" in visible
 
 
 def test_app_shear_uses_final_material_factors():
@@ -2484,7 +2707,7 @@ def test_app_prestress_triggers_2023_links_guard_until_exactly_cancelled():
     assert cancelled["links"]["res"]["vrd"] > 0.0
 
 
-def test_app_shear_2023_class_a_default_range_deviation_is_recorded():
+def test_app_shear_2023_class_a_range_is_enforced_and_recovers_at_equality():
     at = _fresh()
     at.run()
     _set(
@@ -2503,7 +2726,58 @@ def test_app_shear_2023_class_a_default_range_deviation_is_recorded():
     links = at.session_state["results"]["shear"]["links"]
     assert links["cot_limit_hi"] == pytest.approx(2.0)
     assert links["out_of_limits"]
-    assert "code_applicable" not in links
+    assert links["res"]["valid"] is False
+    assert links["res"]["vrd"] is None
+    assert links["util"] is None
+    assert links["res"]["calculation_state"] == "NOT ASSESSED"
+    assert links["angle_applicability"]["permitted_max"] == 2.0
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "strut_cot_max", 2.0),
+    )
+    recovered = at.session_state["results"]["shear"]["links"]
+    assert recovered["angle_applicability"]["applicable"] is True
+    assert recovered["res"]["valid"] is True
+    assert recovered["res"]["vrd"] > 0.0
+
+
+def test_app_shear_2023_axial_tension_range_uses_net_action_and_exact_boundary():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_P", 500.0),
+        ("number_input", "shear_V", 100.0),
+        ("number_input", "strut_cot_max", 2.5),
+    )
+
+    links = at.session_state["results"]["shear"]["links"]
+    limits = links["angle_limits"]
+    assert limits["axial_tension_applied"] is True
+    assert limits["maximum"] == pytest.approx(2.0)
+    assert links["angle_applicability"]["requested_max"] == 2.5
+    assert links["angle_applicability"]["applicable"] is False
+    assert links["res"]["vrd"] is None
+    assert links["util"] is None
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "strut_cot_max", 2.0),
+    )
+    recovered = at.session_state["results"]["shear"]["links"]
+    assert recovered["angle_applicability"]["applicable"] is True
+    assert recovered["res"]["valid"] is True
+    assert recovered["res"]["vrd"] > 0.0
 
 
 def test_app_shear_is_saved_and_restored():
@@ -2517,6 +2791,7 @@ def test_app_shear_is_saved_and_restored():
         at,
         ("selectbox", "shear_method", codes.EC2_2023.label),
         ("number_input", "shear_gamma_v", 1.25),
+        ("number_input", "strut_cot_max", 3.0),
         ("number_input", "shear_Vx", 123.0),
         ("number_input", "shear_vx_bw", 240.0),
         ("selectbox", "shear_section_form", shear.SHEAR_SECTION_VARIABLE),
@@ -2543,6 +2818,7 @@ def test_app_shear_is_saved_and_restored():
     assert at2.session_state["shear_on"] is True
     assert at2.session_state["shear_method"] == codes.EC2_2023.label
     assert at2.session_state["shear_gamma_v"] == pytest.approx(1.25)
+    assert at2.session_state["strut_cot_max"] == pytest.approx(3.0)
     assert first_case_value(at2, "shear_Vx") == pytest.approx(123.0)
     assert at2.session_state["shear_vx_bw"] == pytest.approx(240.0)
     assert at2.session_state["shear_section_form"] == (

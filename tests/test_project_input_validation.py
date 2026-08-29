@@ -30,6 +30,7 @@ _RESULT_KEYS = (
     "result_plastic_sig",
     "result_elastic_sig",
     "result_fatigue_sig",
+    "result_capacity_contract_sig",
     "result_plastic_case_context_sig",
     "result_elastic_case_context_sig",
     "result_plastic_bending_context_sig",

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from sector import capacity, codes, torsion
+from sector import capacity, codes, shear, torsion
 from sector import combined as combined_core
 from sector import section as section_core
 from sector.engineer_message import EngineerMessage
@@ -186,6 +186,41 @@ def test_unavailable_selected_links_cannot_bypass_fail_closed_geometry_gate():
     assert selected.status == "NOT ASSESSED"
     assert selected.route is None
     assert selected.resistance is None
+
+
+@pytest.mark.parametrize("code", (codes.EC2_2005_DKNA, codes.EC2_2023))
+def test_angle_gate_cannot_bypass_unavailable_link_arm(code):
+    result = _shear_route_result(80.0)
+    result["links"] = {
+        "res": shear.vrd_links(
+            35.0,
+            code,
+            300.0,
+            550.0,
+            1.0,
+            500.0,
+            0.0,
+            0.18,
+            1.0,
+            3.0,
+            fcd_mpa=20.0,
+            gamma_s=1.15,
+            v_ed_kn=80.0,
+        ),
+        "util": None,
+    }
+
+    selected = capacity.select_nominal_shear_resistance(
+        result,
+        links_selected=True,
+    )
+
+    assert selected.valid is False
+    assert selected.status == "NOT ASSESSED"
+    assert selected.route is None
+    assert selected.resistance is None
+    assert selected.utilisation is None
+    assert "lever arm" in selected.reason
 
 
 def _dkna_plastic_input(**overrides):
@@ -2519,6 +2554,74 @@ def _torsion_cracking_result(method, gamma_ct, demand=28.0):
     "method",
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
+def test_tube_torsion_angle_gate_precedes_angle_resistance_and_demand_kernels(
+    monkeypatch,
+    method,
+):
+    inp = _torsion_input(
+        torsion_on=True,
+        torsion_method=method,
+        torsion_gamma_ct=(
+            codes.EC2_2005.gamma_ct
+            if method == codes.EC2_2005.label
+            else codes.EC2_2005_DKNA.gamma_ct
+        ),
+        shear_links=True,
+        strut_cot_min=1.0,
+        strut_cot_max=3.0,
+        torsion_T=100.0,
+    )
+    context = capacity.build_torsion_context(inp, 0.0)
+
+    def forbidden(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("angle-dependent torsion kernel entered outside its range")
+
+    monkeypatch.setattr(shear, "optimum_strut_angle", forbidden)
+    monkeypatch.setattr(torsion, "trd_s_result", forbidden)
+    monkeypatch.setattr(torsion, "trd_max_result", forbidden)
+    monkeypatch.setattr(torsion, "asl_required_result", forbidden)
+
+    result = capacity.tube_torsion(
+        context["tube"], context["t_ed"], **context["_tk"]
+    )
+
+    assert result["tube_valid"] is True
+    assert result["valid"] is False
+    assert result["transverse_resistance_assessed"] is False
+    assert result["assessment_reason"] == shear.STRUT_ANGLE_OUT_OF_RANGE_REASON
+    assert result["trd_s"] is None
+    assert result["trd_max"] is None
+    assert result["trd"] is None
+    assert result["util"] is None
+    assert result["asl_req"] is None
+    assert result["trd_c"] > 0.0
+
+
+def test_zero_torsion_does_not_activate_an_out_of_range_interval():
+    inp = _torsion_input(
+        torsion_on=True,
+        shear_links=True,
+        strut_cot_min=1.0,
+        strut_cot_max=3.0,
+        torsion_T=0.0,
+    )
+    context = capacity.build_torsion_context(inp, 0.0)
+    result = capacity.tube_torsion(
+        context["tube"], context["t_ed"], **context["_tk"]
+    )
+
+    assert context["angle_applicability"]["active"] is False
+    assert context["angle_applicability"]["status"] == "NOT APPLICABLE"
+    assert result["valid"] is True
+    assert result["trd"] > 0.0
+    assert result["util"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "method",
+    [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
+)
 def test_tube_torsion_requires_current_closed_link_authority(method):
     absent_input = _torsion_input(
         torsion_on=True,
@@ -2575,11 +2678,22 @@ def test_tube_torsion_requires_current_closed_link_authority(method):
         below_unity_band_context["t_ed"],
         **below_unity_band_context["_tk"],
     )
-    assert below_unity_band["cot"] == pytest.approx(0.8)
-    assert below_unity_band["angle_selection"]["cot"] == pytest.approx(0.8)
-    assert below_unity_band["theta_deg"] == pytest.approx(
-        math.degrees(math.atan2(1.0, 0.8))
+    assert below_unity_band["valid"] is False
+    assert below_unity_band["tube_valid"] is True
+    assert below_unity_band["transverse_resistance_assessed"] is False
+    assert below_unity_band["assessment_reason"] == (
+        shear.STRUT_ANGLE_OUT_OF_RANGE_REASON
     )
+    assert below_unity_band["cot"] is None
+    assert below_unity_band["theta_deg"] is None
+    assert below_unity_band["trd_s"] is None
+    assert below_unity_band["trd_max"] is None
+    assert below_unity_band["trd"] is None
+    assert below_unity_band["util"] is None
+    assert below_unity_band["asl_req"] is None
+    assert below_unity_band["trd_c"] > 0.0
+    assert below_unity_band["angle_applicability"]["requested_min"] == 0.5
+    assert below_unity_band["angle_applicability"]["requested_max"] == 0.8
 
     stale_detail_kwargs = dict(absent_context["_tk"])
     stale_detail_kwargs["nu_detail"] = True
@@ -2974,6 +3088,91 @@ def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
     result = links["build"](1.0, links["angle_limits"]["maximum"])
     assert result["valid"]
     assert result["fcd"] == pytest.approx(inp["concrete"].fcd)
+
+
+@pytest.mark.parametrize(
+    ("lever_arm", "prerequisites_available"),
+    ((None, False), (495.0, True)),
+    ids=("missing-arm", "complete"),
+)
+def test_shear_angle_prerequisites_are_independent_of_range_applicability(
+    monkeypatch,
+    lever_arm,
+    prerequisites_available,
+):
+    monkeypatch.setattr(
+        capacity,
+        "shear_lever_arm",
+        lambda *_args, **_kwargs: (
+            lever_arm,
+            (
+                "calculated plastic lever arm unavailable"
+                if lever_arm is None
+                else "plastic internal lever arm"
+            ),
+        ),
+    )
+    inp = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_links=True,
+        transverse_ductility_class="A",
+        strut_cot_max=2.5,
+    )
+
+    _payload, links = capacity.build_shear_context(inp, 0.0, 0.0)
+
+    assert links is not None
+    assert links["angle_applicability"]["applicable"] is False
+    assert links["angle_applicability"]["permitted_max"] == pytest.approx(2.0)
+    assert links["angle_prerequisites_available"] is prerequisites_available
+
+
+@pytest.mark.parametrize(
+    "invalid_legs",
+    (True, np.bool_(True), float("nan"), float("inf"), -float("inf")),
+    ids=(
+        "boolean",
+        "numpy-boolean",
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+    ),
+)
+@pytest.mark.parametrize("entry", ("direct", "directional"))
+def test_invalid_shear_link_legs_cannot_satisfy_angle_prerequisites(
+    invalid_legs,
+    entry,
+):
+    inp = _member_input(
+        section=None,
+        shear_links=True,
+        shear_link_legs=invalid_legs,
+        shear_components={"vx": {"signed_v_ed": 75.0}},
+        shear_vx_link_legs=invalid_legs,
+        shear_vy_link_legs=2.0,
+    )
+
+    if entry == "direct":
+        _payload, links = capacity.build_shear_context(inp, 0.0, 0.0)
+    else:
+        directional = capacity.build_directional_shear_contexts(
+            inp, 0.0, 0.0
+        )
+        _payload, links = directional["vx"]["candidates"][0]
+
+    assert links is not None
+    assert links["link_legs"] is None
+    assert links["asw"] == 0.0
+    assert links["effective_asw_over_s"] == 0.0
+    assert links["angle_prerequisites_available"] is False
+    result = links["build"](1.0, 2.0)
+    assert result["valid"] is False
+    assert result["calculation_state"] == "NOT ASSESSED"
+    assert result["vrd"] is None
+    assert result["reason"] == (
+        "Enter a positive finite number of effective link legs for each active "
+        "shear direction"
+    )
 
 
 def test_2023_shear_context_uses_the_exact_selected_gamma_v():

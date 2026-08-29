@@ -2097,8 +2097,9 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
     )
     latest = at.session_state["_latest_inputs"]
     token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
-    assert token[-1] == "nominal-shear-resistance-route-v1"
-    pre_route_token = token[:-1]
+    route_marker = "nominal-shear-resistance-route-v1"
+    assert route_marker in token
+    pre_route_token = tuple(item for item in token if item != route_marker)
 
     for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
         assert tuple(latest[key]).count(token) == 1
@@ -7794,6 +7795,9 @@ def test_report_reuse_requires_one_current_coherent_calculation_tuple():
     state = {
         "results": results,
         "result_sig": inp["signature"],
+        sector_app._RESULT_CAPACITY_CONTRACT_KEY: (
+            sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+        ),
         "result_input_snapshot": copy.deepcopy(inp),
         "calculation_record": record,
     }
@@ -7827,6 +7831,11 @@ def test_report_reuse_requires_one_current_coherent_calculation_tuple():
         (
             "calculation_record",
             {**record, "result_sha256": "0" * 64},
+        ),
+        (sector_app._RESULT_CAPACITY_CONTRACT_KEY, None),
+        (
+            sector_app._RESULT_CAPACITY_CONTRACT_KEY,
+            ("capacity-result-contract", "superseded"),
         ),
         ("result_sig", ("engineering", 2.0)),
         ("result_input_snapshot", None),

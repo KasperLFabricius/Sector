@@ -1132,6 +1132,16 @@ def manual_blocks() -> list:
           "($\\geq l_{bd} + d$). Confirm anchorage in the member design and enter "
           "an appropriately reduced $f_{yk}$ / $f_{ywk}$ where the force cannot "
           "be developed.")
+    call(
+        "limit",
+        "The complete entered compression-strut interval must lie within every "
+        "active method's permitted range: $1.0\\leq\\cot\\theta\\leq2.5$ for "
+        "the 2005 family and 2023 class B/C, with the 2023 upper limit reduced to "
+        "2.0 for class A and further by axial tension under 8.2.3(4). Exact "
+        "boundaries are admissible. Outside the applicable range, linked shear, "
+        "torsion and dependent interactions are NOT ASSESSED; an applicable "
+        "concrete-only $V_{Rd,c}$ route remains independent.",
+    )
     md("With **Shared links / closed torsion stirrups present** on, Sector keeps "
        "$V_{Rd,c}$ as the nominal resistance while $|V_{Ed}| \\leq V_{Rd,c}$. "
        "Only above that boundary does the designed-link resistance "
@@ -1207,9 +1217,13 @@ def manual_blocks() -> list:
          "x/y and b/h; together they must cover the concrete net area without "
          "overlap, boundary crossing or entry into a void. Multi-cell sections "
          "require a separate applicable tube model.")
-    call("concept", "Entered strut bounds remain calculation inputs. Values "
-         "outside the selected method's standard range are reported with an "
-         "applicability warning.")
+    call(
+        "concept",
+        "Entered strut bounds remain visible calculation inputs. If the complete "
+        "interval is outside the selected method's permitted range, Sector "
+        "withholds the angle-dependent resistance, utilisation and interaction "
+        "verdicts as NOT ASSESSED until the limits are corrected.",
+    )
     h2("Combined M-V-T interaction")
     md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
        "shear ($V$) and torsion ($T$) checks together under **one shared code "
@@ -2123,7 +2137,8 @@ def manual_blocks() -> list:
        "$f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}=0.7f_{ctm}/\\gamma_{ct}$. "
        "The selected method supplies the editable starting value "
        "$\\gamma_{ct}=1.50$ (EN) or 1.70 (DK/NA).")
-    md("As for shear, $T_{Rd,s}$ rises with $\\cot\\theta$ and $T_{Rd,max}$ peaks "
+    md("Within the permitted method range, $T_{Rd,s}$ rises with $\\cot\\theta$ "
+       "and $T_{Rd,max}$ peaks "
        "at 45 degrees, so $T_{Rd} = \\min$ is largest at the crossover, which "
        "Sector auto-optimises within the $\\cot\\theta$ bounds. When shear and "
        "torsion act together the concrete struts carry both, limited by\n\n"
@@ -2145,9 +2160,12 @@ def manual_blocks() -> list:
           "automatic thickness for each sub-tube. Missing, ambiguous or conflicting "
           "bar-to-wall evidence gives NOT ASSESSED before any resistance or "
           "interaction is calculated. A manual override does not replace that "
-          "location evidence. Bounds outside the selected "
-         "method's default $\\cot\\theta$ range remain actual calculation inputs; "
-         "Sector reports the resulting demand/resistance verdict with a warning.")
+         "location evidence. If the entered $\\cot\\theta$ interval lies outside "
+         "the selected method's permitted range, the angle-dependent torsion "
+         "resistance, utilisation, longitudinal demand and dependent interaction "
+         "verdicts are NOT ASSESSED. The requested and permitted limits remain "
+         "visible for correction; $T_{Rd,c}$ may remain as angle-independent "
+         "cracking context.")
     md("**Worked** (300 x 600 mm rectangle with implementation-fixture bar centres "
        "50 mm from every wall, C35, DK NA:2024, closed $\\phi$10 "
        "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, "
@@ -3022,11 +3040,12 @@ def build_manual_pdf(buffer, figures=True):
                 title, styles["MH1"], block[1], 1, toc_entry=True
             ))
         elif kind == "h2":
-            if _strip_num(block[1]) == "Combined M-V-T interaction":
-                # Keep the complete torsion applicability and wall-selection
-                # explanation together, then start its dependent interaction
-                # method on a fresh page. This also prevents the two safety-heavy
-                # sections from forming one visually over-dense page.
+            if _strip_num(block[1]) in {
+                "Torsion (TRd, thin-walled tube)",
+                "Combined M-V-T interaction",
+            }:
+                # Start the two safety-heavy torsion sections on fresh pages so
+                # their applicability and wall-selection evidence stays together.
                 flow.append(PageBreak())
             n2 += 1
             title = f"{n1}.{n2} " + _inline_md_to_rl(_strip_num(block[1]))
