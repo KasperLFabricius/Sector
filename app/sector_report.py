@@ -5146,13 +5146,10 @@ class ReportBuilder:
     @staticmethod
     def _retained_utilisation_available(value):
         """Whether a stored assessment utilisation can be published."""
-        if presentation.is_boolean_scalar(value):
-            return False
-        try:
-            metric = float(value)
-        except (TypeError, ValueError, OverflowError):
-            return False
-        return math.isfinite(metric) or metric == math.inf
+        return (
+            viz.utilisation_value(value, allow_positive_infinity=True)
+            is not None
+        )
 
     def _theory(self):
         self._h1("Basis of analysis")

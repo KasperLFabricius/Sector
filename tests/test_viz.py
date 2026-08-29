@@ -37,13 +37,18 @@ def test_utilisation_formatting_rejects_boolean_and_marks_missing_as_unavailable
         True,
         np.bool_(True),
         "not a utilisation",
+        "0.5",
+        -0.25,
         math.nan,
         -math.inf,
     ):
         assert viz.pct(value) == "-"
         assert viz.util_ok(value) is False
+        assert viz.utilisation_value(value) is None
     assert viz.pct(math.inf) == "inf"
     assert viz.util_ok(math.inf) is False
+    assert viz.utilisation_value(math.inf) is None
+    assert viz.utilisation_value(math.inf, allow_positive_infinity=True) == math.inf
     assert viz.pct(1.0) == "100.0 %"
     assert viz.util_ok(1.0) is True
 

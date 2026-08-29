@@ -2286,8 +2286,21 @@ def test_base_en_empty_second_direction_cannot_publish_surviving_direction():
     assert combined_rows[0]["result"] == "-"
 
 
-@pytest.mark.parametrize("retained", (True, np.bool_(True)))
-def test_base_en_boolean_utilisations_are_not_publication_numbers(retained):
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained", "generic_interaction_status"),
+    (
+        (True, True, "NOT ASSESSED"),
+        (np.bool_(True), np.bool_(True), "NOT ASSESSED"),
+        ("0.5", "0.5", "NOT ASSESSED"),
+        (-0.25, -0.25, "NOT ASSESSED"),
+        (math.inf, True, "FAIL"),
+    ),
+)
+def test_base_en_invalid_utilisations_are_not_publication_numbers(
+    retained,
+    transverse_retained,
+    generic_interaction_status,
+):
     chord = {
         "valid": True,
         "util": retained,
@@ -2299,11 +2312,11 @@ def test_base_en_boolean_utilisations_are_not_publication_numbers(retained):
         "method": codes.EC2_2005.label,
         "transverse": {
             "valid": True,
-            "u_crush": retained,
-            "u_stirrup": retained,
+            "u_crush": transverse_retained,
+            "u_stirrup": transverse_retained,
             "cot": 1.5,
-            "shear_fraction": retained,
-            "torsion_fraction": retained,
+            "shear_fraction": transverse_retained,
+            "torsion_fraction": transverse_retained,
         },
         "longitudinal": chord,
         "governing_longitudinal": chord,
@@ -2313,6 +2326,11 @@ def test_base_en_boolean_utilisations_are_not_publication_numbers(retained):
             "util": retained,
             "coverage_complete": True,
         },
+        "torsion_longitudinal_assessment": {
+            "status": "FAIL",
+            "demand_ratio": retained,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+        },
     }
 
     components = presentation.combined_physical_components(combined)
@@ -2321,7 +2339,7 @@ def test_base_en_boolean_utilisations_are_not_publication_numbers(retained):
     assert presentation._transverse_metric("combined", combined) is None
     assert presentation.interaction_assessment_status(
         {"valid": True, "value": retained}
-    ) == "NOT ASSESSED"
+    ) == generic_interaction_status
     assert presentation.viz.util_ok(retained) is False
 
     rows = presentation.result_summary_rows(

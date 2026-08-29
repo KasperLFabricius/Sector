@@ -6599,9 +6599,11 @@ def _base_en_combined_out():
     ):
         combined.pop(key, None)
     combined["method"] = codes.EC2_2005.label
+    common_cot = float(combined["crushing"]["cot"])
     combined["transverse"] = {
         "valid": True,
-        "cot": 1.5,
+        "cot": common_cot,
+        "theta_deg": math.degrees(math.atan(1.0 / common_cot)),
         "u_stirrup": 0.58,
         "u_crush": 0.72,
         "shear_fraction": 0.28,
@@ -6641,6 +6643,8 @@ def _base_en_scheduler_combined_case(action, util, *, component):
     """
 
     result = _base_en_combined_out()
+    common_cot = float(result["crushing"]["cot"])
+    common_theta = math.degrees(math.atan(1.0 / common_cot))
     v_ed = abs(float(action[f"{component}_ed_kn"]))
     t_ed = abs(float(action["t_ed_knm"]))
     moment_key = "my_ed_knm" if component == "vx" else "mx_ed_knm"
@@ -6650,6 +6654,8 @@ def _base_en_scheduler_combined_case(action, util, *, component):
     shear_ratio = util - torsion_ratio
     crushing = result["crushing"]
     crushing.update(
+        cot=common_cot,
+        theta_deg=common_theta,
         t_ed=t_ed,
         v_ed=v_ed,
         trd_max=t_ed / torsion_ratio,
@@ -6664,6 +6670,8 @@ def _base_en_scheduler_combined_case(action, util, *, component):
     torsion_fraction = min(0.20, stirrup_util / 2.0)
     shear_fraction = stirrup_util - torsion_fraction
     result["transverse"].update(
+        cot=common_cot,
+        theta_deg=common_theta,
         u_crush=util,
         u_stirrup=stirrup_util,
         shear_fraction=shear_fraction,
@@ -6696,6 +6704,7 @@ def _base_en_scheduler_combined_case(action, util, *, component):
     result.update(
         component=component,
         governing_face="negative" if component == "vx" else "positive",
+        governing_cot=common_cot,
     )
     return result
 
@@ -6822,7 +6831,20 @@ def test_report_base_en_missing_biaxial_direction_fails_closed(
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_base_en_boolean_utilisations_are_not_published(profile):
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_report_base_en_invalid_utilisations_are_not_published(
+    profile,
+    retained,
+    transverse_retained,
+):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -6833,15 +6855,20 @@ def test_report_base_en_boolean_utilisations_are_not_published(profile):
     )
     combined = _base_en_combined_out()
     combined["transverse"].update(
-        u_crush=True,
-        u_stirrup=True,
-        shear_fraction=True,
-        torsion_fraction=True,
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
     )
-    combined["crushing"]["value"] = True
-    combined["longitudinal"]["util"] = True
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
     combined["governing_longitudinal"] = combined["longitudinal"]
-    combined["longitudinal_assessment"].update(status="PASS", util=True)
+    combined["longitudinal_assessment"].update(status="PASS", util=retained)
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
     out = {"plastic": _out()["plastic"], "combined": combined}
 
     text = " ".join(
@@ -6854,6 +6881,8 @@ def test_report_base_en_boolean_utilisations_are_not_published(profile):
 
     assert "NOT ASSESSED" in text
     assert re.search(r"100[.,]0\s*%", text) is None
+    assert re.search(r"-25[.,]0\s*%", text) is None
+    assert "Longitudinal reinforcement inf" not in text
     if profile in {"Standard", "Audit"}:
         assert "Supported Base-EN physical interactions" in text
         for label in (
@@ -6877,24 +6906,25 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
         combined_method=codes.EC2_2005.label,
         shear_on=True,
         torsion_on=True,
+        Mx_pl=80.0,
     )
     actions = [
         {
             "name": "PL-LOW", "description": "Lower combined utilisation",
-            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 0.0,
+            "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
             "vx_ed_kn": 0.0, "vy_ed_kn": 20.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 10.0,
         },
         {
             "name": "PL-GOV", "description": "Governing combined utilisation",
-            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 0.0,
+            "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
             "vx_ed_kn": 0.0, "vy_ed_kn": 80.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 40.0,
         },
         {
             "name": "PL-INCOMPLETE",
             "description": "Incomplete longitudinal assessment",
-            "n_ed_kn": 0.0, "mx_ed_knm": 100.0, "my_ed_knm": 0.0,
+            "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
             "vx_ed_kn": 30.0, "vy_ed_kn": 25.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 15.0,
         },
@@ -6963,6 +6993,11 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
         result_presentation.worked_example_selection(inp, out)
     )
 
+    for action, entry in zip(actions, out["plastic_cases"], strict=True):
+        assert tuple(entry["results"]["plastic"]["applied"]) == pytest.approx(
+            (action["mx_ed_knm"], action["my_ed_knm"])
+        )
+
     for action, result in zip(actions[:2], (low, governing), strict=True):
         crushing = result["crushing"]
         chord = result["longitudinal"]
@@ -6975,6 +7010,12 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
         assert result["transverse"]["u_stirrup"] == pytest.approx(
             result["transverse"]["shear_fraction"]
             + result["transverse"]["torsion_fraction"]
+        )
+        assert result["transverse"]["cot"] == pytest.approx(
+            result["crushing"]["cot"]
+        )
+        assert result["governing_cot"] == pytest.approx(
+            result["crushing"]["cot"]
         )
         assert chord["m_ed"] == pytest.approx(abs(action["mx_ed_knm"]))
         assert chord["m_total"] == pytest.approx(
@@ -7017,6 +7058,8 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     assert "Combined bending + shear + torsion (M-V-T) - PL-INCOMPLETE" in text
     assert "Representative Base-EN directional calculation: Vy+T" in text
     assert "Representative Base-EN directional calculation: Vx+T" not in text
+    assert f"V-T crushing at cot {chr(0x03B8)} = 1.00" in text
+    assert f"Common member angle cot {chr(0x03B8)} = 1.000" in text
     assert "Complete both required longitudinal chord checks" in text
     assert "The complete combined M-V-T worked example is published only" not in text
     assert "DK NA sum" not in text

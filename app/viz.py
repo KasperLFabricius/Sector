@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape as _html_escape
 import math
+from numbers import Real
 
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -23,6 +24,29 @@ def _is_boolean_scalar(value):
     )
 
 
+def utilisation_value(value, *, allow_positive_infinity=False):
+    """Return a strict non-negative utilisation scalar, or ``None``.
+
+    Retained results may be reconstructed from project data or older in-memory
+    state.  Only real numeric scalars are eligible for a public utilisation;
+    Booleans, numeric text, negative values and non-finite values fail closed.
+    Positive infinity is retained only for callers that explicitly use it as a
+    definite over-limit result.
+    """
+
+    if value is None or _is_boolean_scalar(value) or not isinstance(value, Real):
+        return None
+    try:
+        metric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if math.isfinite(metric):
+        return metric if metric >= 0.0 else None
+    if allow_positive_infinity and metric == math.inf:
+        return metric
+    return None
+
+
 def pct(x, nd=1):
     """Format a utilisation fraction without inventing unavailable evidence.
 
@@ -32,18 +56,11 @@ def pct(x, nd=1):
     malformed and Boolean values render as ``-``; a retained positive infinity
     remains ``inf``.
     """
-    if _is_boolean_scalar(x):
-        return "-"
-    if x is None:
-        return "-"
-    try:
-        value = float(x)
-    except (TypeError, ValueError, OverflowError):
+    value = utilisation_value(x, allow_positive_infinity=True)
+    if value is None:
         return "-"
     if value == math.inf:
         return "inf"
-    if not math.isfinite(value):
-        return "-"
     return f"{value * 100:.{nd}f} %"
 
 
@@ -54,18 +71,11 @@ def util_ok(util, tol=0.0):
     badge and the report OK/EXCEEDED verdict can never diverge. ``tol`` allows the
     tiny float slack (1e-9) some call sites use.
     """
-    if util is None or _is_boolean_scalar(util) or _is_boolean_scalar(tol):
+    value = utilisation_value(util)
+    tolerance = utilisation_value(tol)
+    if value is None or tolerance is None:
         return False
-    try:
-        value = float(util)
-        tolerance = float(tol)
-    except (TypeError, ValueError, OverflowError):
-        return False
-    return (
-        math.isfinite(value)
-        and math.isfinite(tolerance)
-        and value <= 1.0 + tolerance
-    )
+    return value <= 1.0 + tolerance
 
 
 def tension_face_label(tension_low, axis=None):

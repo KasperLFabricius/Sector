@@ -1664,7 +1664,19 @@ def test_app_base_en_missing_biaxial_direction_fails_closed(malformed_vy):
     assert tuple(combined_rows["Result"]) == ("-",)
 
 
-def test_app_base_en_boolean_utilisations_are_not_published_as_one():
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_app_base_en_invalid_utilisations_are_not_published(
+    retained,
+    transverse_retained,
+):
     at = _fresh()
     at.run()
     _set(
@@ -1684,15 +1696,20 @@ def test_app_base_en_boolean_utilisations_are_not_published_as_one():
     )
     combined = at.session_state["results"]["combined"]
     combined["transverse"].update(
-        u_crush=True,
-        u_stirrup=True,
-        shear_fraction=True,
-        torsion_fraction=True,
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
     )
-    combined["crushing"]["value"] = True
-    combined["longitudinal"]["util"] = True
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
     combined["governing_longitudinal"] = combined["longitudinal"]
-    combined["longitudinal_assessment"].update(status="PASS", util=True)
+    combined["longitudinal_assessment"].update(status="PASS", util=retained)
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
 
     _select_view(at, "M-V-T Combined")
     assert not at.exception
@@ -1709,6 +1726,8 @@ def test_app_base_en_boolean_utilisations_are_not_published_as_one():
     assert component_metrics["Closed stirrup"] == "-"
     assert component_metrics["Longitudinal reinforcement"] != "100.0 %"
     assert "100.0 %" not in {str(metric.value) for metric in at.metric}
+    assert "50.0 %" not in {str(metric.value) for metric in at.metric}
+    assert "-25.0 %" not in {str(metric.value) for metric in at.metric}
     assert "inf" not in {str(metric.value).casefold() for metric in at.metric}
     assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
 
@@ -1720,6 +1739,9 @@ def test_app_base_en_boolean_utilisations_are_not_published_as_one():
     ]
     assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
     assert "100.0 %" not in set(combined_rows["Result"])
+    assert "50.0 %" not in set(combined_rows["Result"])
+    assert "-25.0 %" not in set(combined_rows["Result"])
+    assert "inf" not in {str(value).casefold() for value in combined_rows["Result"]}
 
 
 def test_app_combined_basis_switch_invalidates_results_and_reports():

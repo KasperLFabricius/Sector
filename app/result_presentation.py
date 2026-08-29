@@ -582,7 +582,7 @@ def _publication_metric(value, *, allow_positive_infinity=False):
     """Return one eligible retained publication-ranking metric."""
     if value is None:
         return None
-    if is_boolean_scalar(value):
+    if is_boolean_scalar(value) or not isinstance(value, Real):
         return None
     try:
         metric = float(value)
@@ -593,6 +593,18 @@ def _publication_metric(value, *, allow_positive_infinity=False):
     if allow_positive_infinity and metric == math.inf:
         return metric
     return None
+
+
+def _publication_utilisation(value, *, allow_positive_infinity=False):
+    """Return one strict, non-negative retained utilisation scalar."""
+
+    metric = _publication_metric(
+        value,
+        allow_positive_infinity=allow_positive_infinity,
+    )
+    if metric is None or metric < 0.0:
+        return None
+    return metric
 
 
 def _publication_cases(out, family):
@@ -1006,7 +1018,7 @@ def _transverse_metric(family, result):
             for component in physical:
                 if component.get("status") not in {"PASS", "FAIL"}:
                     return None
-                value = _publication_metric(
+                value = _publication_utilisation(
                     component.get("util"), allow_positive_infinity=True
                 )
                 if value is None:
@@ -1744,7 +1756,7 @@ def _util_summary_status(util, *, valid=True):
         return "INVALID"
     if util is None:
         return "NOT ASSESSED"
-    metric = _publication_metric(util, allow_positive_infinity=True)
+    metric = _publication_utilisation(util, allow_positive_infinity=True)
     if metric is None:
         return "NOT ASSESSED"
     if not math.isfinite(metric):
@@ -1932,7 +1944,7 @@ def interaction_assessment_status(interaction):
     value = interaction.get("value")
     if not interaction.get("valid") or value is None:
         return "NOT ASSESSED"
-    value = _publication_metric(value, allow_positive_infinity=True)
+    value = _publication_utilisation(value, allow_positive_infinity=True)
     if value is None:
         return "NOT ASSESSED"
     if not math.isfinite(value):
@@ -1941,7 +1953,7 @@ def interaction_assessment_status(interaction):
 
 
 def _percent(util):
-    metric = _publication_metric(util, allow_positive_infinity=True)
+    metric = _publication_utilisation(util, allow_positive_infinity=True)
     if metric is None:
         return "-"
     return "infinite" if not math.isfinite(metric) else f"{metric * 100:.1f} %"
@@ -1984,10 +1996,10 @@ def combined_physical_components(combined):
         }
     else:
         transverse_valid = bool(transverse.get("valid"))
-        concrete_util = _publication_metric(
+        concrete_util = _publication_utilisation(
             transverse.get("u_crush"), allow_positive_infinity=True
         )
-        stirrup_util = _publication_metric(
+        stirrup_util = _publication_utilisation(
             transverse.get("u_stirrup"), allow_positive_infinity=True
         )
         try:
@@ -2043,9 +2055,7 @@ def combined_physical_components(combined):
     main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
     long_valid = governing is not None and main_valid
     long_util = (
-        _publication_metric(
-            governing.get("util"), allow_positive_infinity=True
-        )
+        _publication_utilisation(governing.get("util"))
         if governing is not None
         else None
     )
@@ -2082,7 +2092,7 @@ def combined_physical_components(combined):
         "label": "Longitudinal reinforcement",
         "status": long_status,
         "util": long_util,
-        "valid": long_valid,
+        "valid": long_status in {"PASS", "FAIL"},
         "note": long_note,
         "governing": governing,
         "coverage": coverage,
@@ -2093,12 +2103,11 @@ def combined_physical_components(combined):
         retained_status = str(
             retained_chord_assessment.get("status") or "NOT ASSESSED"
         ).upper()
-        retained_util = _publication_metric(
-            retained_chord_assessment.get("util"),
-            allow_positive_infinity=True,
+        retained_util = _publication_utilisation(
+            retained_chord_assessment.get("util")
         )
-        if retained_status in {"PASS", "FAIL"} and retained_util is None:
-            retained_status = "NOT ASSESSED"
+        if retained_status in {"PASS", "FAIL"}:
+            retained_status = _util_summary_status(retained_util)
         retained_chord_note = result_reason(
             retained_chord_assessment.get("reason"),
             "shear",
@@ -2122,10 +2131,11 @@ def combined_physical_components(combined):
         torsion_status = str(
             torsion_longitudinal.get("status") or "NOT ASSESSED"
         ).upper()
-        torsion_ratio = _publication_metric(
-            torsion_longitudinal.get("demand_ratio"),
-            allow_positive_infinity=True,
+        torsion_ratio = _publication_utilisation(
+            torsion_longitudinal.get("demand_ratio")
         )
+        if torsion_status in {"PASS", "FAIL"}:
+            torsion_status = _util_summary_status(torsion_ratio)
         if "FAIL" in {long_status, torsion_status}:
             longitudinal_component["status"] = "FAIL"
         elif "NOT ASSESSED" in {long_status, torsion_status}:
@@ -2135,9 +2145,8 @@ def combined_physical_components(combined):
         else:
             longitudinal_component["status"] = "NOT ASSESSED"
         if torsion_ratio is not None:
-            retained_ratio = _publication_metric(
-                longitudinal_component.get("util"),
-                allow_positive_infinity=True,
+            retained_ratio = _publication_utilisation(
+                longitudinal_component.get("util")
             )
             longitudinal_component["util"] = (
                 torsion_ratio
@@ -2165,6 +2174,9 @@ def combined_physical_components(combined):
         else:
             longitudinal_component["note"] = torsion_note
         longitudinal_component["torsion_assessment"] = torsion_longitudinal
+        longitudinal_component["valid"] = (
+            longitudinal_component["status"] in {"PASS", "FAIL"}
+        )
     return [concrete, stirrup, longitudinal_component]
 
 
