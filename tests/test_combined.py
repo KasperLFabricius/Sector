@@ -1817,7 +1817,7 @@ def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
     assert "inf" not in {value.casefold() for value in visible_metrics}
 
 
-def test_app_direct_shear_and_formula_629_boolean_utilisations_are_not_assessed():
+def test_app_direct_shear_and_formula_629_invalid_utilisations_are_not_assessed():
     at = _fresh()
     at.run()
     _enable_all(at)
@@ -1839,30 +1839,31 @@ def test_app_direct_shear_and_formula_629_boolean_utilisations_are_not_assessed(
     assert valid_formula_metric.delta in {"PASS", "FAIL"}
 
     results = at.session_state["results"]
-    results["shear"]["links"]["util"] = True
-    results["torsion"]["interaction"]["value"] = True
+    for rejected_utilisation in (True, math.inf):
+        results["shear"]["links"]["util"] = rejected_utilisation
+        results["torsion"]["interaction"]["value"] = rejected_utilisation
 
-    _select_view(at, "Shear")
-    assert not at.exception
-    shear_metric = next(
-        metric
-        for metric in at.metric
-        if metric.label == r"Utilisation $V_{Ed}/V_{Rd}$"
-    )
-    assert str(shear_metric.value) == "-"
-    assert shear_metric.delta in {None, ""}
-    assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
+        _select_view(at, "Shear")
+        assert not at.exception
+        shear_metric = next(
+            metric
+            for metric in at.metric
+            if metric.label == r"Utilisation $V_{Ed}/V_{Rd}$"
+        )
+        assert str(shear_metric.value) == "-"
+        assert shear_metric.delta in {None, ""}
+        assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
 
-    _select_view(at, "Torsion")
-    assert not at.exception
-    formula_metric = next(
-        metric
-        for metric in at.metric
-        if metric.label == r"Sum ($\leq100\%$)"
-    )
-    assert str(formula_metric.value) == "-"
-    assert formula_metric.delta in {None, ""}
-    assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
+        _select_view(at, "Torsion")
+        assert not at.exception
+        formula_metric = next(
+            metric
+            for metric in at.metric
+            if metric.label == r"Sum ($\leq100\%$)"
+        )
+        assert str(formula_metric.value) == "-"
+        assert formula_metric.delta in {None, ""}
+        assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
 
 
 @pytest.mark.parametrize(

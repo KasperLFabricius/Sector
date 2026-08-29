@@ -14306,9 +14306,10 @@ def shear_view(inp, results):
         st.caption(f"For this $V_{{Ed}}$, {req_txt}.")
         links_bw = float(lk.get("bw", sh["bw"]))
         util_l = links["util"]
+        displayed_util_l = viz.utilisation_value(util_l)
         ok_l = (
-            viz.util_ok(util_l)
-            if viz.utilisation_value(util_l) is not None
+            viz.util_ok(displayed_util_l)
+            if displayed_util_l is not None
             else None
         )
         c1, c2, c3, c4 = st.columns(4)
@@ -14316,7 +14317,7 @@ def shear_view(inp, results):
         c2.metric(r"$V_{Rd,max}$", f"{lk['vrd_max']:.3f} kN")
         c3.metric(r"$V_{Rd}=\min$", f"{lk['vrd']:.3f} kN",
                   help=f"governed by {lk['governs']}")
-        ul_txt = _pct(util_l)
+        ul_txt = _pct(displayed_util_l)
         if nominal_route == "links":
             _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l)
         else:
@@ -15353,9 +15354,10 @@ def torsion_view(inp, results):
         st.divider()
         st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
         val = inter["value"]
+        displayed_val = viz.utilisation_value(val)
         ok_i = (
-            viz.util_ok(val)
-            if viz.utilisation_value(val) is not None
+            viz.util_ok(displayed_val)
+            if displayed_val is not None
             else None
         )
         i1, i2, i3 = st.columns(3)
@@ -15363,7 +15365,7 @@ def torsion_view(inp, results):
                   if inter["trd_max"] > 0 else "inf")
         i2.metric(r"$V_{Ed}/V_{Rd,max}$", f"{(inter['v_ed']/inter['vrd_max']*100):.1f} %"
                   if inter["vrd_max"] > 0 else "inf")
-        val_txt = _pct(val)
+        val_txt = _pct(displayed_val)
         _verdict_metric(
             i3, r"Sum ($\leq100\%$)", val_txt, ok_i,
         )
