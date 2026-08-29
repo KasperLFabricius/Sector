@@ -1109,34 +1109,6 @@ def vrd_links_2023(
             angle_a=None,
             angle_b=None,
         )
-    if angle_applicability is None:
-        limits = compression_field_limits_2023(
-            -float(n_ed_comp_kn),
-            v_ed_kn,
-            ductility_class,
-        )
-        angle_applicability = strut_angle_applicability(
-            cot_min,
-            cot_max,
-            permitted_min=limits["minimum"],
-            permitted_max=limits["maximum"],
-            method=getattr(code, "label", "DS/EN 1992-1-1:2023"),
-            basis=limits["basis"],
-            clause=limits["clause"],
-            active=abs(float(v_ed_kn)) > 0.0,
-        )
-    if (
-        angle_applicability.get("active", True) is True
-        and angle_applicability.get("applicable") is not True
-    ):
-        return unassessed_strut_angle_links_result(
-            model="2023",
-            applicability=angle_applicability,
-            bw_mm=bw_mm,
-            d_mm=d_mm,
-            asw_over_s=asw_over_s,
-            z_mm=z,
-        )
     if (
         z is None
         or d_mm <= 0.0
@@ -1195,6 +1167,34 @@ def vrd_links_2023(
             angle_b=0.0,
         )
         return invalid
+    if angle_applicability is None:
+        limits = compression_field_limits_2023(
+            -float(n_ed_comp_kn),
+            v_ed_kn,
+            ductility_class,
+        )
+        angle_applicability = strut_angle_applicability(
+            cot_min,
+            cot_max,
+            permitted_min=limits["minimum"],
+            permitted_max=limits["maximum"],
+            method=getattr(code, "label", "DS/EN 1992-1-1:2023"),
+            basis=limits["basis"],
+            clause=limits["clause"],
+            active=abs(float(v_ed_kn)) > 0.0,
+        )
+    if (
+        angle_applicability.get("active", True) is True
+        and angle_applicability.get("applicable") is not True
+    ):
+        return unassessed_strut_angle_links_result(
+            model="2023",
+            applicability=angle_applicability,
+            bw_mm=bw_mm,
+            d_mm=d_mm,
+            asw_over_s=asw_over_s,
+            z_mm=z,
+        )
     fywd = fywk / gs
     nu = 0.5
     rho_w = asw_over_s / bw_mm
@@ -1285,29 +1285,6 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
             ductility_class=ductility_class,
             angle_applicability=angle_applicability,
         )
-    if angle_applicability is None:
-        angle_applicability = strut_angle_applicability(
-            cot_min,
-            cot_max,
-            permitted_min=code.shear_cot_min_limit,
-            permitted_max=code.shear_cot_max_limit,
-            method=getattr(code, "label", "EN 1992-1-1:2005"),
-            basis="2005-family compression-strut range",
-            clause="EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
-            active=abs(float(v_ed_kn)) > 0.0,
-        )
-    if (
-        angle_applicability.get("active", True) is True
-        and angle_applicability.get("applicable") is not True
-    ):
-        return unassessed_strut_angle_links_result(
-            model="2005",
-            applicability=angle_applicability,
-            bw_mm=bw_mm,
-            d_mm=d_mm,
-            asw_over_s=asw_over_s,
-            z_mm=z_mm,
-        )
     z = _explicit_links_lever_arm(z_mm)
     gs = code.gamma_s if gamma_s is None else float(gamma_s)
     if z is None or d_mm <= 0.0 or bw_mm <= 0.0 or asw_over_s <= 0.0:
@@ -1330,6 +1307,29 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
                         if arm_unavailable
                         else "invalid reinforced-shear input"
                     ))
+    if angle_applicability is None:
+        angle_applicability = strut_angle_applicability(
+            cot_min,
+            cot_max,
+            permitted_min=code.shear_cot_min_limit,
+            permitted_max=code.shear_cot_max_limit,
+            method=getattr(code, "label", "EN 1992-1-1:2005"),
+            basis="2005-family compression-strut range",
+            clause="EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
+            active=abs(float(v_ed_kn)) > 0.0,
+        )
+    if (
+        angle_applicability.get("active", True) is True
+        and angle_applicability.get("applicable") is not True
+    ):
+        return unassessed_strut_angle_links_result(
+            model="2005",
+            applicability=angle_applicability,
+            bw_mm=bw_mm,
+            d_mm=d_mm,
+            asw_over_s=asw_over_s,
+            z_mm=z,
+        )
     fcd = (code.concrete_factor(fck) * fck / code.gamma_c
            if fcd_mpa is None else float(fcd_mpa))                       # MPa
     fywd = fywk / gs                                                     # MPa

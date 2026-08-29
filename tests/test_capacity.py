@@ -188,6 +188,41 @@ def test_unavailable_selected_links_cannot_bypass_fail_closed_geometry_gate():
     assert selected.resistance is None
 
 
+@pytest.mark.parametrize("code", (codes.EC2_2005_DKNA, codes.EC2_2023))
+def test_angle_gate_cannot_bypass_unavailable_link_arm(code):
+    result = _shear_route_result(80.0)
+    result["links"] = {
+        "res": shear.vrd_links(
+            35.0,
+            code,
+            300.0,
+            550.0,
+            1.0,
+            500.0,
+            0.0,
+            0.18,
+            1.0,
+            3.0,
+            fcd_mpa=20.0,
+            gamma_s=1.15,
+            v_ed_kn=80.0,
+        ),
+        "util": None,
+    }
+
+    selected = capacity.select_nominal_shear_resistance(
+        result,
+        links_selected=True,
+    )
+
+    assert selected.valid is False
+    assert selected.status == "NOT ASSESSED"
+    assert selected.route is None
+    assert selected.resistance is None
+    assert selected.utilisation is None
+    assert "lever arm" in selected.reason
+
+
 def _dkna_plastic_input(**overrides):
     bars = [
         (-0.10, -0.25, 500.0),

@@ -610,7 +610,8 @@ def test_vrd_links_invalid_without_stirrups():
 
 
 @pytest.mark.parametrize("code", (codes.EC2_2005_DKNA, codes.EC2_2023))
-def test_vrd_links_without_an_explicit_calculated_arm_fails_closed(code):
+@pytest.mark.parametrize("cot_max", (2.5, 3.0), ids=("in-range", "out-of-range"))
+def test_vrd_links_without_an_explicit_calculated_arm_fails_closed(code, cot_max):
     result = shear.vrd_links(
         35.0,
         code,
@@ -621,7 +622,7 @@ def test_vrd_links_without_an_explicit_calculated_arm_fails_closed(code):
         0.0,
         0.18,
         1.0,
-        2.5,
+        cot_max,
         fcd_mpa=20.0,
         gamma_s=1.15,
         v_ed_kn=100.0,
@@ -2424,6 +2425,60 @@ def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     assert concrete_row["Status"] == "PASS"
     assert link_row["Status"] == "NOT ASSESSED"
     assert link_row["Result"] == "-"
+
+
+@pytest.mark.parametrize(
+    "method",
+    (codes.EC2_2005_DKNA.label, codes.EC2_2023.label),
+)
+def test_app_angle_gate_cannot_bypass_unavailable_link_arm(monkeypatch, method):
+    from sector import capacity
+
+    monkeypatch.setattr(
+        capacity,
+        "shear_lever_arm",
+        lambda *_args, **_kwargs: (
+            None,
+            "calculated plastic lever arm unavailable: the exact "
+            "face-aligned Plastic solve did not converge",
+        ),
+    )
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "shear_method", method),
+        ("number_input", "strut_cot_max", 3.0),
+        ("number_input", "shear_V", 80.0),
+    )
+
+    assert not at.exception
+    shear_result = at.session_state["results"]["shear"]
+    links = shear_result["links"]
+    assert links["res"]["valid"] is False
+    assert links["res"]["calculation_state"] == "NOT ASSESSED"
+    assert links["res"]["z"] is None
+    assert links["res"]["vrd"] is None
+    assert "lever arm" in links["res"]["reason"]
+    assert links["util"] is None
+    nominal = shear_result["nominal_resistance"]
+    assert nominal["valid"] is False
+    assert nominal["status"] == "NOT ASSESSED"
+    assert nominal["route"] is None
+    assert nominal["resistance"] is None
+    assert nominal["utilisation"] is None
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "reinforced-shear check is NOT ASSESSED" in visible
+    assert "face-aligned Plastic calculation did not converge" in visible
 
 
 def test_app_shear_uses_final_material_factors():
