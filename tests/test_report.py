@@ -6605,7 +6605,7 @@ def _base_en_combined_out():
         "cot": common_cot,
         "theta_deg": math.degrees(math.atan(1.0 / common_cot)),
         "u_stirrup": 0.58,
-        "u_crush": 0.72,
+        "u_crush": float(combined["crushing"]["value"]),
         "shear_fraction": 0.28,
         "torsion_fraction": 0.30,
     }
@@ -6621,6 +6621,7 @@ def _base_en_combined_out():
         "util": 0.60,
         "ok": True,
         "conditional": True,
+        "theta_mode": "utilisation",
     }
     combined["longitudinal"] = chord
     combined["longitudinal_assessment"] = {
@@ -6992,6 +6993,47 @@ def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
             "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
             in text
         )
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize(
+    "method",
+    [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
+)
+def test_report_conflicting_formula_629_evidence_fails_closed(profile, method):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=method,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = (
+        _base_en_combined_out()
+        if method == codes.EC2_2005.label
+        else _dkna_complete_combined_out()
+    )
+    combined["transverse"]["u_crush"] = True
+    combined["crushing"]["value"] = 0.50
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile=profile,
+    )).split())
+
+    assert "NOT ASSESSED" in text
+    assert "Concrete compression strut 50.0 % PASS" not in text
+    assert "50.0 % (OK)" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Formula (6.29) evidence is incomplete" in text
+        if method == codes.EC2_2005.label:
+            assert "recalculate the shared member-angle check" in text
+        else:
+            assert (
+                "NOT ASSESSED: recalculate the shared compression-strut check"
+                in text
+            )
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
@@ -8598,50 +8640,66 @@ def test_report_prints_public_one_based_concrete_point_without_conversion():
 
 
 def _combined_longitudinal(theta_mode):
-    # Minimal combined block that renders only the M+V+T tension-chord note. Crushing
-    # and transverse are omitted so the section reduces to the longitudinal paragraph,
-    # whose wording is driven purely by theta_mode.
-    dkna = combined_core.dkna_interaction_result(
-        0.0, None,
-        0.50, 1.0,
-        0.60, 1.0,
-        0.30, 1.0,
-        m_v_independent=False,
+    # A valid Base-EN-only payload keeps the angle explanation independent of
+    # the additional Danish interaction rule.
+    payload = (
+        _base_en_combined_out()
+        if theta_mode == "utilisation"
+        else {
+            "method": codes.EC2_2005.label,
+            "valid": True,
+        }
     )
-    payload = {
-        "method": "EN 1992-1-1:2005",
+    shear_shift = 20.0 if theta_mode == "utilisation" else 0.0
+    torsion_share = 10.0 if theta_mode == "utilisation" else 0.0
+    total = 100.0 + shear_shift + torsion_share
+    payload.setdefault("longitudinal", {}).update({
         "valid": True,
-        "r_n": 0.0, "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
-        "dkna_valid": dkna.valid,
-        "dkna_ok": dkna.ok,
-        "dkna_sum": dkna.utilisation,
-        "dkna_selection": asdict(dkna),
-        "m_v_independent": False,
-        "longitudinal": {
-            "valid": True, "ok": True, "axis": "x", "tension_low": True,
-            "m_ed": 100.0, "m_rd": 200.0, "mv": 20.0, "mt": 10.0,
-            "ftd_v": 40.0, "ftd_t": 15.0, "z": 0.25, "m_total": 130.0,
-            "util": 0.65, "biaxial": False, "capped": False,
-            "theta_mode": theta_mode,
-        },
+        "ok": True,
+        "axis": "x",
+        "tension_low": True,
+        "m_ed": 100.0,
+        "m_rd": 200.0,
+        "mv": shear_shift,
+        "mt": torsion_share,
+        "ftd_v": 40.0 if shear_shift else 0.0,
+        "ftd_t": 15.0 if torsion_share else 0.0,
+        "z": 0.25,
+        "m_total": total,
+        "util": total / 200.0,
+        "biaxial": False,
+        "capped": False,
+        "theta_mode": theta_mode,
+    })
+    payload["longitudinal_assessment"] = {
+        "status": "PASS",
+        "util": total / 200.0,
+        "coverage_complete": True,
+        "reason": "Complete longitudinal chord coverage",
     }
     _retain_combined_chords(payload, payload["longitudinal"])
     return {"combined": payload}
 
 
-def test_report_no_load_longitudinal_note_states_resistance_optimum():
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_no_load_longitudinal_note_states_resistance_optimum(profile):
     # theta_mode == "resistance": no live shear or torsion, so there is no live
     # member-angle objective and the capacity result uses its resistance optimum.
     txt = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), _combined_longitudinal("resistance"), figures=False)).split())
+        {}, _inp(), _combined_longitudinal("resistance"), figures=False,
+        profile=profile,
+    )).split())
     assert "No shear or torsion is acting" in txt
     assert "resistance-optimum" in txt
     assert "minimise the governing utilisation" not in txt
 
 
-def test_report_shared_longitudinal_note_states_the_common_angle():
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_shared_longitudinal_note_states_the_common_angle(profile):
     # theta_mode == "utilisation" is the normal case: one admissible member angle.
     txt = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), _combined_longitudinal("utilisation"), figures=False)).split())
+        {}, _inp(), _combined_longitudinal("utilisation"), figures=False,
+        profile=profile,
+    )).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt

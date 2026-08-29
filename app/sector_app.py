@@ -15421,19 +15421,19 @@ def _render_base_en_combined(c):
     )
 
     cr = c.get("crushing")
+    concrete = components_by_key["concrete"]
     st.divider()
     st.markdown(
         r"**Concrete compression strut (6.29): "
         r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**"
     )
-    if cr is not None and cr.get("valid"):
-        cr_status = presentation.interaction_assessment_status(cr)
-        if cr_status in {"PASS", "FAIL"}:
+    if isinstance(cr, Mapping) and cr.get("valid"):
+        if concrete["status"] in {"PASS", "FAIL"}:
             _verdict_metric(
                 st,
                 "Formula (6.29) utilisation",
-                _pct(cr.get("value")),
-                cr_status == "PASS",
+                _pct(concrete["util"]),
+                concrete["status"] == "PASS",
             )
             st.caption(
                 f"Common member angle: cot {_THETA} = {float(cr['cot']):.3f}; "
@@ -15444,8 +15444,9 @@ def _render_base_en_combined(c):
             _manual_warning(
                 st,
                 "calculation-warning",
-                "Formula (6.29) is NOT ASSESSED. Complete the shared "
-                "compression-strut calculation and recalculate.",
+                "Formula (6.29) is NOT ASSESSED. "
+                + concrete["note"]
+                + ".",
             )
     elif cr is not None:
         _manual_warning(st, "calculation-warning", _no_common_angle_msg(cr))
@@ -15513,7 +15514,8 @@ def _render_base_en_combined(c):
             f"M_Ed,total = {float(lg['m_ed']):.3f} + "
             f"{float(lg['mv']):.3f} + {float(lg['mt']):.3f} = "
             f"{float(lg['m_total']):.3f} kNm; "
-            f"M_Rd = {float(lg['m_rd']):.3f} kNm."
+            f"M_Rd = {float(lg['m_rd']):.3f} kNm. "
+            + viz.chord_angle_note(lg.get("theta_mode"))
         )
     else:
         st.caption(
@@ -15909,10 +15911,9 @@ def combined_view(inp, results):
         st.divider()
         st.markdown(r"**Concrete compression strut (6.29): "
                     r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**")
-        cr_status = presentation.interaction_assessment_status(cr)
-        val = viz.utilisation_value(
-            cr.get("value"), allow_positive_infinity=True
-        )
+        concrete = physical_by_key["concrete"]
+        cr_status = concrete["status"]
+        val = concrete["util"]
         cc1, cc2 = st.columns([1, 2])
         if cr_status in {"PASS", "FAIL"}:
             _verdict_metric(

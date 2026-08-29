@@ -7883,11 +7883,8 @@ class ReportBuilder:
             "aggregate interaction verdict is published."
         )
         cr = c.get("crushing")
-        cr_status = (
-            presentation.interaction_assessment_status(cr)
-            if isinstance(cr, Mapping)
-            else "NOT ASSESSED"
-        )
+        concrete = physical_by_key["concrete"]
+        cr_status = concrete["status"]
         if isinstance(cr, Mapping) and cr_status in {"PASS", "FAIL"}:
             self._h2("Concrete compression strut (6.29)")
             self._formula(
@@ -7900,7 +7897,7 @@ class ReportBuilder:
                     f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}"
                 ),
                 result=(
-                    f"{_pct(cr['value'])}  "
+                    f"{_pct(concrete['util'])}  "
                     f"({_demand_resistance_verdict(cr_status == 'PASS')})"
                 ),
             )
@@ -7910,7 +7907,7 @@ class ReportBuilder:
         elif isinstance(cr, Mapping):
             self._h2("Concrete compression strut (6.29)")
             self._small(
-                "NOT ASSESSED: the shared member-angle calculation is invalid."
+                "NOT ASSESSED: " + _html_escape(concrete["note"]) + "."
             )
         tr = c.get("transverse")
         stirrup = physical_by_key["stirrup"]
@@ -7962,6 +7959,7 @@ class ReportBuilder:
                 [27 * mm, 27 * mm, 27 * mm, 29 * mm, 27 * mm, 23 * mm],
                 font=7.2,
             )
+            self._small(viz.chord_angle_note(lg.get("theta_mode")))
         else:
             self._small(
                 "Longitudinal chord assessment: "
@@ -8384,10 +8382,9 @@ class ReportBuilder:
         cr = c.get("crushing")
         if cr is not None and cr.get("valid"):
             self._h2("Concrete compression strut (6.29)")
-            cr_status = presentation.interaction_assessment_status(cr)
-            val = viz.utilisation_value(
-                cr.get("value"), allow_positive_infinity=True
-            )
+            concrete = physical_by_key["concrete"]
+            cr_status = concrete["status"]
+            val = concrete["util"]
             if cr_status in {"PASS", "FAIL"}:
                 vv = _demand_resistance_verdict(cr_status == "PASS")
                 self._formula(

@@ -1550,6 +1550,8 @@ def test_app_base_en_keeps_physical_interactions_without_dkna_artifacts():
     )
     assert "Base EN reports its supported V+T concrete" in visible
     assert "No additional aggregate interaction verdict" in visible
+    assert "ONE member strut angle shared" in visible
+    assert "selected to minimise the governing utilisation" in visible
     assert "DK NA" not in visible
     assert "action-alone" not in visible
 
@@ -1803,6 +1805,59 @@ def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
     assert "50.0 %" not in visible_metrics
     assert "-25.0 %" not in visible_metrics
     assert "inf" not in {value.casefold() for value in visible_metrics}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
+)
+def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(method):
+    at = _fresh()
+    at.run()
+    if method == codes.EC2_2005.label:
+        _set(
+            at,
+            ("number_input", "pl_Mx", 100.0),
+            ("checkbox", "shear_on", True),
+            ("checkbox", "torsion_on", True),
+            ("checkbox", "combined_on", True),
+            ("selectbox", "combined_method", method),
+        )
+        _set_and_click(
+            at,
+            "calculate",
+            ("checkbox", "shear_links", True),
+            ("number_input", "shear_V", 150.0),
+            ("number_input", "torsion_T", 40.0),
+        )
+    else:
+        _enable_all(at)
+    combined = at.session_state["results"]["combined"]
+    combined["transverse"]["u_crush"] = True
+    combined["crushing"]["value"] = 0.50
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    concrete_metrics = [
+        metric for metric in at.metric
+        if metric.label in {"Concrete compression strut", "Sum"}
+    ]
+    assert {str(metric.value) for metric in concrete_metrics} == {"-"}
+    assert all(metric.delta in {None, ""} for metric in concrete_metrics)
+    assert "50.0 %" not in {str(metric.value) for metric in at.metric}
+    assert any(
+        "Formula (6.29) is NOT ASSESSED" in warning.value
+        for warning in at.warning
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    row = overview[
+        overview["Check"] == "Combined concrete compression strut"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
 
 
 def test_app_combined_basis_switch_invalidates_results_and_reports():

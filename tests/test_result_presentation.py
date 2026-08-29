@@ -1513,6 +1513,43 @@ def test_combined_physical_components_tolerates_missing_strut_angle():
     assert components[0]["note"] == "V-T crushing at the shared member angle"
 
 
+@pytest.mark.parametrize(
+    ("transverse_util", "interaction_util", "expected_status", "expected_util"),
+    (
+        (0.50, 0.50, "PASS", 0.50),
+        (True, 0.50, "NOT ASSESSED", None),
+        (0.40, 0.50, "NOT ASSESSED", None),
+        (0.50, True, "NOT ASSESSED", None),
+    ),
+)
+def test_combined_physical_components_reconciles_formula_629_evidence(
+    transverse_util,
+    interaction_util,
+    expected_status,
+    expected_util,
+):
+    components = presentation.combined_physical_components({
+        "transverse": {
+            "valid": True,
+            "cot": 1.5,
+            "u_crush": transverse_util,
+            "u_stirrup": 0.60,
+            "shear_fraction": 0.20,
+            "torsion_fraction": 0.40,
+        },
+        "crushing": {
+            "valid": True,
+            "value": interaction_util,
+        },
+    })
+
+    concrete = next(item for item in components if item["key"] == "concrete")
+    assert concrete["status"] == expected_status
+    assert concrete["util"] == expected_util
+    if expected_status == "NOT ASSESSED":
+        assert "recalculate" in concrete["note"]
+
+
 def test_combined_components_fail_closed_without_retained_governing_chord():
     components = presentation.combined_physical_components({
         "longitudinal": {

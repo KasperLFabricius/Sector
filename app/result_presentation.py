@@ -1999,6 +1999,32 @@ def combined_physical_components(combined):
         concrete_util = _publication_utilisation(
             transverse.get("u_crush"), allow_positive_infinity=True
         )
+        crushing = combined.get("crushing")
+        concrete_evidence_consistent = True
+        if isinstance(crushing, Mapping):
+            interaction_util = _publication_utilisation(
+                crushing.get("value"), allow_positive_infinity=True
+            )
+            concrete_evidence_consistent = bool(
+                crushing.get("valid") is True
+                and concrete_util is not None
+                and interaction_util is not None
+                and (
+                    concrete_util == interaction_util
+                    if not (
+                        math.isfinite(concrete_util)
+                        and math.isfinite(interaction_util)
+                    )
+                    else math.isclose(
+                        concrete_util,
+                        interaction_util,
+                        rel_tol=1.0e-12,
+                        abs_tol=1.0e-12,
+                    )
+                )
+            )
+            if not concrete_evidence_consistent:
+                concrete_util = None
         stirrup_util = _publication_utilisation(
             transverse.get("u_stirrup"), allow_positive_infinity=True
         )
@@ -2009,13 +2035,21 @@ def combined_physical_components(combined):
         concrete = {
             "key": "concrete",
             "label": "Concrete compression strut",
-            "status": _util_summary_status(
-                concrete_util,
-                valid=transverse_valid,
+            "status": (
+                "NOT ASSESSED"
+                if transverse_valid and not concrete_evidence_consistent
+                else _util_summary_status(
+                    concrete_util,
+                    valid=transverse_valid,
+                )
             ),
             "util": concrete_util,
-            "valid": transverse_valid,
+            "valid": transverse_valid and concrete_evidence_consistent,
             "note": (
+                "Formula (6.29) evidence is incomplete; recalculate the shared "
+                "member-angle check"
+                if transverse_valid and not concrete_evidence_consistent
+                else
                 f"V-T crushing at cot {_THETA} = {cot:.2f}"
                 if transverse_valid and cot is not None
                 else "V-T crushing at the shared member angle"
