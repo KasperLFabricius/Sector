@@ -9999,6 +9999,7 @@ def _run_uniaxial_capacity_checks(inp, out):
         shear_angle_active = bool(
             link_ctx is not None
             and (link_ctx.get("shear_geometry") or {}).get("links_valid") is True
+            and link_ctx.get("angle_prerequisites_available") is True
             and v_ed_s > 0.0
             and (
                 not concrete_route_applicable

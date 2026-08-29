@@ -2344,6 +2344,57 @@ def test_app_shared_2023_class_a_and_torsion_range_uses_the_intersection(
     assert recovered["torsion"]["trd"] > 0.0
 
 
+def test_unavailable_shear_arm_does_not_narrow_valid_torsion(monkeypatch):
+    monkeypatch.setattr(
+        capacity,
+        "shear_lever_arm",
+        lambda *_args, **_kwargs: (
+            None,
+            "calculated plastic lever arm unavailable: the exact "
+            "face-aligned Plastic solve did not converge",
+        ),
+    )
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("selectbox", "transverse_ductility_class", "A"),
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "strut_cot_max", 2.5),
+        ("number_input", "shear_V", 500.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    links = results["shear"]["links"]
+    assert links["res"]["valid"] is False
+    assert links["res"]["calculation_state"] == "NOT ASSESSED"
+    assert links["res"]["z"] is None
+    assert "lever arm" in links["res"]["reason"]
+
+    torsion_result = results["torsion"]
+    torsion_angle = torsion_result["angle_applicability"]
+    assert torsion_angle["applicable"] is True
+    assert torsion_angle["permitted_max"] == pytest.approx(2.5)
+    assert "shared shear and torsion" not in torsion_angle["basis"]
+    assert torsion_result["trd"] > 0.0
+    assert torsion_result["util"] is not None
+
+    combined_result = results["combined"]
+    assert combined_result["valid"] is False
+    assert "lever arm" in combined_result["reason"]
+    assert "dkna_sum" not in combined_result
+
+
 def test_signed_torsion_has_identical_direct_and_case_table_results():
     import case_analysis
     import sector_app

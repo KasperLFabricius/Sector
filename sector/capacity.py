@@ -1946,6 +1946,15 @@ def _build_shear_face_context(
     effective_asw_over_s = asw_over_s * float(
         shear_geometry.get("asw_factor") or 0.0
     )
+    angle_prerequisites_available = bool(
+        shear_geometry["links_valid"] is True
+        and z_mm is not None
+        and type(z_mm).__name__ not in {"bool", "bool_"}
+        and math.isfinite(float(z_mm))
+        and float(z_mm) > 0.0
+        and d_mm > 0.0
+        and effective_asw_over_s > 0.0
+    )
 
     def links_at(
         cot_lo,
@@ -2013,6 +2022,7 @@ def _build_shear_face_context(
         "centroid": (cx, cy),
         "angle_limits": angle_limits,
         "angle_applicability": angle_applicability,
+        "angle_prerequisites_available": angle_prerequisites_available,
     }
     return payload, context
 

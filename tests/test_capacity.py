@@ -3090,6 +3090,43 @@ def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
     assert result["fcd"] == pytest.approx(inp["concrete"].fcd)
 
 
+@pytest.mark.parametrize(
+    ("lever_arm", "prerequisites_available"),
+    ((None, False), (495.0, True)),
+    ids=("missing-arm", "complete"),
+)
+def test_shear_angle_prerequisites_are_independent_of_range_applicability(
+    monkeypatch,
+    lever_arm,
+    prerequisites_available,
+):
+    monkeypatch.setattr(
+        capacity,
+        "shear_lever_arm",
+        lambda *_args, **_kwargs: (
+            lever_arm,
+            (
+                "calculated plastic lever arm unavailable"
+                if lever_arm is None
+                else "plastic internal lever arm"
+            ),
+        ),
+    )
+    inp = _member_input(
+        shear_method=codes.EC2_2023.label,
+        shear_links=True,
+        transverse_ductility_class="A",
+        strut_cot_max=2.5,
+    )
+
+    _payload, links = capacity.build_shear_context(inp, 0.0, 0.0)
+
+    assert links is not None
+    assert links["angle_applicability"]["applicable"] is False
+    assert links["angle_applicability"]["permitted_max"] == pytest.approx(2.0)
+    assert links["angle_prerequisites_available"] is prerequisites_available
+
+
 def test_2023_shear_context_uses_the_exact_selected_gamma_v():
     default, _ = capacity.build_shear_context(
         _member_input(
