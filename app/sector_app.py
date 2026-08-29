@@ -13829,11 +13829,15 @@ def fatigue_view(inp, results, *, stale=False):
 
 
 def _verdict_metric(box, label, value, ok, *, help=None):
-    """Render a genuine demand-versus-resistance equation.
+    """Render a genuine tri-state demand-versus-resistance equation.
 
     Method-default-range deviations are reported separately as warnings and
     never suppress or relabel this result.
     """
+    if ok is None:
+        box.metric(label, value, help=help)
+        box.caption("NOT ASSESSED")
+        return
     box.metric(
         label,
         value,
@@ -14302,7 +14306,11 @@ def shear_view(inp, results):
         st.caption(f"For this $V_{{Ed}}$, {req_txt}.")
         links_bw = float(lk.get("bw", sh["bw"]))
         util_l = links["util"]
-        ok_l = viz.util_ok(util_l)
+        ok_l = (
+            viz.util_ok(util_l)
+            if viz.utilisation_value(util_l) is not None
+            else None
+        )
         c1, c2, c3, c4 = st.columns(4)
         c1.metric(r"$V_{Rd,s}$", f"{lk['vrd_s']:.3f} kN")
         c2.metric(r"$V_{Rd,max}$", f"{lk['vrd_max']:.3f} kN")
@@ -15345,7 +15353,11 @@ def torsion_view(inp, results):
         st.divider()
         st.markdown("**Combined shear + torsion (concrete crushing, 6.29)**")
         val = inter["value"]
-        ok_i = viz.util_ok(val)
+        ok_i = (
+            viz.util_ok(val)
+            if viz.utilisation_value(val) is not None
+            else None
+        )
         i1, i2, i3 = st.columns(3)
         i1.metric(r"$T_{Ed}/T_{Rd,max}$", f"{(inter['t_ed']/inter['trd_max']*100):.1f} %"
                   if inter["trd_max"] > 0 else "inf")

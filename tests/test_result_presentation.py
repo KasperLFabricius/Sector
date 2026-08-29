@@ -1822,7 +1822,7 @@ def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
         "resistance component can be assessed"
     )
 
-    combined_row = by_check["Combined M-V-T"]
+    combined_row = by_check["Combined M-V-T supported components"]
     assert combined_row["status"] == "NOT ASSESSED"
     assert combined_row["util"] is None
     assert combined_row["note"] == (
