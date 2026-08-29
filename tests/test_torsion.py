@@ -3215,6 +3215,7 @@ def test_app_torsion_outside_permitted_range_withholds_verdict():
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
+    _set(at, ("checkbox", "transverse_detailing_on", True))
     _set_and_click(
         at,
         "calculate",
@@ -3238,6 +3239,20 @@ def test_app_torsion_outside_permitted_range_withholds_verdict():
     assert t["assessment_ok"] is None
     assert t["angle_applicability"]["requested_max"] == 3.0
     assert t["angle_applicability"]["permitted_max"] == 2.5
+    detailing = at.session_state["results"]["transverse_reinforcement"]
+    torsion_detailing = [
+        check for check in detailing["checks"]
+        if check["scope"].startswith("Torsion")
+    ]
+    assert {check["kind"] for check in torsion_detailing} == {
+        "minimum_ratio",
+        "torsion_spacing",
+    }
+    assert all(
+        check["status"] in {"PASS", "FAIL"}
+        for check in torsion_detailing
+    )
+    assert all(check["utilisation"] is not None for check in torsion_detailing)
     _select_view(at, "Torsion")
     assert not at.exception
     visible = " ".join(
@@ -3262,3 +3277,50 @@ def test_app_torsion_outside_permitted_range_withholds_verdict():
     row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == "-"
+    detailing_rows = overview.loc[
+        overview["Check"].str.startswith("Torsion Tube")
+    ]
+    assert len(detailing_rows) == 2
+    assert set(detailing_rows["Status"]) <= {"PASS", "FAIL"}
+    assert all(value != "-" for value in detailing_rows["Result"])
+
+
+def test_app_subdivided_out_of_range_keeps_each_tube_detailing():
+    at = _fresh()
+    at.run()
+    _subdivided(at)
+    _set(at, ("checkbox", "transverse_detailing_on", True))
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "strut_cot_max", 3.0),
+    )
+
+    assert not at.exception
+    torsion_result = at.session_state["results"]["torsion"]
+    assert torsion_result["valid"] is False
+    assert torsion_result["resistance_status"] == "NOT ASSESSED"
+    assert torsion_result["trd"] is None
+    assert torsion_result["util"] is None
+    assert len(torsion_result["subtubes"]) == 2
+    assert all(
+        tube_result["tube_valid"] is True
+        and tube_result["valid"] is False
+        for tube_result in torsion_result["subtubes"]
+    )
+
+    detailing = at.session_state["results"]["transverse_reinforcement"]
+    torsion_detailing = [
+        check for check in detailing["checks"]
+        if check["scope"].startswith("Torsion Tube")
+    ]
+    assert len(torsion_detailing) == 4
+    assert {check["scope"] for check in torsion_detailing} == {
+        "Torsion Tube 1",
+        "Torsion Tube 2",
+    }
+    assert all(
+        check["status"] in {"PASS", "FAIL"}
+        for check in torsion_detailing
+    )
+    assert all(check["utilisation"] is not None for check in torsion_detailing)

@@ -11437,9 +11437,14 @@ def _transverse_detailing_result(inp, out):
         if subresults:
             for index, subresult in enumerate(subresults, start=1):
                 tube = subresult.get("tube") or {}
+                geometry_valid = (
+                    subresult.get("tube_valid")
+                    if "tube_valid" in subresult
+                    else subresult.get("valid")
+                )
                 torsion_specs.append({
                     "label": f"Tube {index}",
-                    "valid": bool(subresult.get("valid") and tube.get("valid")),
+                    "valid": bool(geometry_valid and tube.get("valid")),
                     "reason": tube.get("reason"),
                     "tef_mm": tube.get("tef", 0.0),
                     "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
@@ -11449,9 +11454,14 @@ def _transverse_detailing_result(inp, out):
                 })
         else:
             tube = torsion_out.get("tube") or {}
+            geometry_valid = (
+                torsion_out.get("tube_valid")
+                if "tube_valid" in torsion_out
+                else torsion_out.get("valid")
+            )
             torsion_specs.append({
                 "label": "Tube",
-                "valid": bool(torsion_out.get("valid") and tube.get("valid")),
+                "valid": bool(geometry_valid and tube.get("valid")),
                 "reason": torsion_out.get("reason") or tube.get("reason"),
                 "tef_mm": tube.get("tef", 0.0),
                 "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
