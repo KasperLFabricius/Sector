@@ -1555,6 +1555,16 @@ def test_app_base_en_keeps_physical_interactions_without_dkna_artifacts():
     assert "DK NA" not in visible
     assert "action-alone" not in visible
 
+    combined_result["longitudinal"]["theta_mode"] = "unknown"
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value)
+        for family in (at.info, at.warning, at.caption, at.markdown)
+        for item in family
+    )
+    assert "does not identify how the member strut angle was selected" in visible
+    assert "No shear or torsion is acting" not in visible
+
     _select_view(at, "Results Overview")
     overview = at.table[0].value
     checks = tuple(str(value) for value in overview["Check"])
@@ -1811,7 +1821,7 @@ def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
     "method",
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
-@pytest.mark.parametrize("conflict", ["utilisation", "angle"])
+@pytest.mark.parametrize("conflict", ["utilisation", "angle", "theta"])
 def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
     method,
     conflict,
@@ -1840,10 +1850,13 @@ def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
     if conflict == "utilisation":
         combined["transverse"]["u_crush"] = True
         combined["crushing"]["value"] = 0.50
-    else:
+    elif conflict == "angle":
         combined["transverse"]["u_crush"] = combined["crushing"]["value"]
         combined["transverse"]["cot"] = 1.50
         combined["crushing"]["cot"] = 1.40
+    else:
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["crushing"]["theta_deg"] = 60.0
 
     _select_view(at, "M-V-T Combined")
     assert not at.exception
@@ -1854,7 +1867,9 @@ def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
     assert {str(metric.value) for metric in concrete_metrics} == {"-"}
     assert all(metric.delta in {None, ""} for metric in concrete_metrics)
     assert "50.0 %" not in {str(metric.value) for metric in at.metric}
-    assert not any("1.40" in str(caption.value) for caption in at.caption)
+    visible_captions = " ".join(str(caption.value) for caption in at.caption)
+    assert "1.40" not in visible_captions
+    assert r"\theta=60.0" not in visible_captions
     assert any(
         "Formula (6.29) is NOT ASSESSED" in warning.value
         for warning in at.warning
@@ -1868,6 +1883,12 @@ def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
     ].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == "-"
+    if conflict in {"angle", "theta"}:
+        stirrup = overview[
+            overview["Check"] == "Combined closed stirrup"
+        ].iloc[0]
+        assert stirrup["Status"] == "NOT ASSESSED"
+        assert stirrup["Result"] == "-"
 
 
 def test_app_combined_basis_switch_invalidates_results_and_reports():

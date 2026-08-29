@@ -7000,7 +7000,7 @@ def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
     "method",
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
-@pytest.mark.parametrize("conflict", ["utilisation", "angle"])
+@pytest.mark.parametrize("conflict", ["utilisation", "angle", "theta"])
 def test_report_conflicting_formula_629_evidence_fails_closed(
     profile,
     method,
@@ -7022,10 +7022,13 @@ def test_report_conflicting_formula_629_evidence_fails_closed(
     if conflict == "utilisation":
         combined["transverse"]["u_crush"] = True
         combined["crushing"]["value"] = 0.50
-    else:
+    elif conflict == "angle":
         combined["transverse"]["u_crush"] = combined["crushing"]["value"]
         combined["transverse"]["cot"] = 1.50
         combined["crushing"]["cot"] = 1.40
+    else:
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["crushing"]["theta_deg"] = 60.0
     out = {"plastic": _out()["plastic"], "combined": combined}
 
     text = " ".join(_pdf_text(sector_report.build_report(
@@ -7036,8 +7039,16 @@ def test_report_conflicting_formula_629_evidence_fails_closed(
     assert "Concrete compression strut 50.0 % PASS" not in text
     assert "50.0 % (OK)" not in text
     assert "cot theta = 1.400" not in text
+    assert "theta = 60.0" not in text
     if profile in {"Standard", "Audit"}:
         assert "Formula (6.29) evidence is incomplete" in text
+        if conflict in {"angle", "theta"}:
+            assert "Closed stirrup - NOT ASSESSED" in text
+            assert (
+                "does not identify how the member strut angle was selected"
+                in text
+            )
+            assert "ONE member strut angle shared" not in text
         if method == codes.EC2_2005.label:
             assert "recalculate the shared member-angle check" in text
         else:
@@ -8037,6 +8048,7 @@ def test_report_combined_transverse_shows_shear_credit():
                            u_crush=0.4, governing=0.6, governs="stirrups", ok=True,
                            shear_fraction=0.0, torsion_fraction=0.6,
                            shear_credited=True, vrd_c=120.0, v_ed=40.0)
+    c["crushing"].update(cot=2.0, theta_deg=26.6, value=0.4)
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Shared stirrup" in txt
@@ -8653,16 +8665,17 @@ def test_report_prints_public_one_based_concrete_point_without_conversion():
 def _combined_longitudinal(theta_mode):
     # A valid Base-EN-only payload keeps the angle explanation independent of
     # the additional Danish interaction rule.
+    transverse_live = theta_mode != "resistance"
     payload = (
         _base_en_combined_out()
-        if theta_mode == "utilisation"
+        if transverse_live
         else {
             "method": codes.EC2_2005.label,
             "valid": True,
         }
     )
-    shear_shift = 20.0 if theta_mode == "utilisation" else 0.0
-    torsion_share = 10.0 if theta_mode == "utilisation" else 0.0
+    shear_shift = 20.0 if transverse_live else 0.0
+    torsion_share = 10.0 if transverse_live else 0.0
     total = 100.0 + shear_shift + torsion_share
     payload.setdefault("longitudinal", {}).update({
         "valid": True,
@@ -8714,3 +8727,18 @@ def test_report_shared_longitudinal_note_states_the_common_angle(profile):
     )).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt
+
+
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+@pytest.mark.parametrize("theta_mode", [None, "unknown"])
+def test_report_unknown_longitudinal_angle_mode_uses_neutral_note(
+    profile,
+    theta_mode,
+):
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _combined_longitudinal(theta_mode), figures=False,
+        profile=profile,
+    )).split())
+    assert "does not identify how the member strut angle was selected" in txt
+    assert "No shear or torsion is acting" not in txt
+    assert "resistance-optimum" not in txt

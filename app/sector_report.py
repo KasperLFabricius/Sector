@@ -7959,7 +7959,10 @@ class ReportBuilder:
                 [27 * mm, 27 * mm, 27 * mm, 29 * mm, 27 * mm, 23 * mm],
                 font=7.2,
             )
-            self._small(viz.chord_angle_note(lg.get("theta_mode")))
+            self._small(viz.chord_angle_note(
+                lg.get("theta_mode"),
+                angle_valid=concrete.get("angle_valid") is True,
+            ))
         else:
             self._small(
                 "Longitudinal chord assessment: "
@@ -8359,6 +8362,7 @@ class ReportBuilder:
         physical_by_key = {
             component["key"]: component for component in physical_components
         }
+        concrete = physical_by_key["concrete"]
         component_rows = [["Component", "Utilisation", "Status", "QA note"]]
         component_rows.extend([
             [
@@ -8382,7 +8386,6 @@ class ReportBuilder:
         cr = c.get("crushing")
         if cr is not None and cr.get("valid"):
             self._h2("Concrete compression strut (6.29)")
-            concrete = physical_by_key["concrete"]
             cr_status = concrete["status"]
             val = concrete["util"]
             if cr_status in {"PASS", "FAIL"}:
@@ -8396,8 +8399,9 @@ class ReportBuilder:
                           f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}",
                     result=f"{_pct(val)}  ({vv})")
                 self._small(
-                    f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
-                    f"(theta = {_fmt(cr['theta_deg'], 1)}&#176;)."
+                    "At a common strut cot theta = "
+                    f"{_fmt(concrete['cot'], 2)} "
+                    f"(theta = {_fmt(concrete['theta_deg'], 1)}&#176;)."
                 )
                 self._fig(viz.vt_interaction_figure(
                     cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
@@ -8447,8 +8451,8 @@ class ReportBuilder:
                         f"{_pct(stirrup['util'])}  ({vv})"
                     ))
                 self._small(note + f" At the member strut angle cot theta = "
-                            f"{_fmt(tr['cot'], 2)} "
-                            f"(theta = {_fmt(tr['theta_deg'], 1)}&#176;) -- "
+                            f"{_fmt(concrete['cot'], 2)} "
+                            f"(theta = {_fmt(concrete['theta_deg'], 1)}&#176;) -- "
                             "the one angle shared by every shear and torsion check "
                             "(6.3.2(2)), selected to minimise the governing "
                             "utilisation.")
@@ -8568,7 +8572,10 @@ class ReportBuilder:
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
                     "which uses the full biaxial bending utilisation."
                 )
-            note = viz.chord_angle_note(lg.get("theta_mode"))
+            note = viz.chord_angle_note(
+                lg.get("theta_mode"),
+                angle_valid=concrete.get("angle_valid") is True,
+            )
             if model_2023_chord:
                 note += (
                     " The required flexural tension and compression chord faces "

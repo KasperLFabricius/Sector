@@ -48,6 +48,34 @@ def test_utilisation_formatting_rejects_boolean_and_marks_missing_as_unavailable
     assert viz.pct(math.inf) == "inf"
     assert viz.util_ok(math.inf) is False
     assert viz.utilisation_value(math.inf) is None
+
+
+@pytest.mark.parametrize("theta_mode", [None, "", "unknown", True])
+def test_unknown_chord_angle_mode_uses_neutral_engineering_note(theta_mode):
+    note = viz.chord_angle_note(theta_mode)
+
+    assert "does not identify how the member strut angle was selected" in note
+    assert "No shear or torsion is acting" not in note
+    assert "resistance-optimum" not in note
+
+
+def test_known_chord_angle_modes_keep_their_specific_engineering_notes():
+    utilisation = viz.chord_angle_note("utilisation")
+    resistance = viz.chord_angle_note("resistance")
+    invalid_utilisation = viz.chord_angle_note(
+        "utilisation", angle_valid=False
+    )
+    resistance_without_live_angle = viz.chord_angle_note(
+        "resistance", angle_valid=False
+    )
+
+    assert "selected to minimise the governing utilisation" in utilisation
+    assert "No shear or torsion is acting" in resistance
+    assert "resistance-optimum" in resistance
+    assert "does not identify how the member strut angle was selected" in (
+        invalid_utilisation
+    )
+    assert "No shear or torsion is acting" in resistance_without_live_angle
     assert viz.utilisation_value(math.inf, allow_positive_infinity=True) == math.inf
     assert viz.pct(1.0) == "100.0 %"
     assert viz.util_ok(1.0) is True

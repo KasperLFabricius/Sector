@@ -15515,7 +15515,10 @@ def _render_base_en_combined(c):
             f"{float(lg['mv']):.3f} + {float(lg['mt']):.3f} = "
             f"{float(lg['m_total']):.3f} kNm; "
             f"M_Rd = {float(lg['m_rd']):.3f} kNm. "
-            + viz.chord_angle_note(lg.get("theta_mode"))
+            + viz.chord_angle_note(
+                lg.get("theta_mode"),
+                angle_valid=concrete.get("angle_valid") is True,
+            )
         )
     else:
         st.caption(
@@ -15883,6 +15886,7 @@ def combined_view(inp, results):
     physical_by_key = {
         component["key"]: component for component in physical_components
     }
+    concrete = physical_by_key["concrete"]
     component_boxes = st.columns(3)
     for box, component in zip(
         component_boxes,
@@ -15911,7 +15915,6 @@ def combined_view(inp, results):
         st.divider()
         st.markdown(r"**Concrete compression strut (6.29): "
                     r"$T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\leq1$**")
-        concrete = physical_by_key["concrete"]
         cr_status = concrete["status"]
         val = concrete["util"]
         cc1, cc2 = st.columns([1, 2])
@@ -15920,8 +15923,8 @@ def combined_view(inp, results):
                 cc1, "Sum", _pct(val), cr_status == "PASS",
             )
             cc2.caption(
-                f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
-                f"($\\theta={cr['theta_deg']:.1f}^\\circ$). "
+                f"At a common strut $\\cot\\theta={concrete['cot']:.2f}$ "
+                f"($\\theta={concrete['theta_deg']:.1f}^\\circ$). "
                 f"$T_{{Rd,max}}={cr['trd_max']:.1f}$ kNm, "
                 f"$V_{{Rd,max}}={cr['vrd_max']:.1f}$ kN."
             )
@@ -15983,12 +15986,14 @@ def combined_view(inp, results):
         else:
             st.caption("VEd > VRd,c, so the stirrup carries both: shear and torsion "
                        "demands add on the shared closed stirrup.")
-        st.caption(
-            f"At the member strut angle $\\cot\\theta={tr['cot']:.2f}$ "
-            f"($\\theta={tr['theta_deg']:.1f}^\\circ$), one angle is shared "
-            "by every shear and torsion check (6.3.2(2)), selected to minimise "
-            "the governing utilisation."
-        )
+        if stirrup["status"] in {"PASS", "FAIL"}:
+            st.caption(
+                "At the member strut angle "
+                f"$\\cot\\theta={concrete['cot']:.2f}$ "
+                f"($\\theta={concrete['theta_deg']:.1f}^\\circ$), one angle "
+                "is shared by every shear and torsion check (6.3.2(2)), "
+                "selected to minimise the governing utilisation."
+            )
 
     st.divider()
     st.markdown("**Longitudinal reinforcement: combined M + V + T tension chord**")
@@ -16061,7 +16066,10 @@ def combined_view(inp, results):
             + viz.chord_mrd_label(ax_lbl, lg.get("m_off", 0.0),
                                   lg.get("conditional", True))
             + f"; $z = {lg['z']:.3f}$ m. "
-            + viz.chord_angle_note(lg.get("theta_mode"))
+            + viz.chord_angle_note(
+                lg.get("theta_mode"),
+                angle_valid=concrete.get("angle_valid") is True,
+            )
         )
         if lg["capped"]:
             st.caption(

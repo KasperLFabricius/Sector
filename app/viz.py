@@ -96,7 +96,7 @@ def directional_face_label(component, face):
     return tension_face_label(token == "negative", axis)
 
 
-def chord_angle_note(theta_mode):
+def chord_angle_note(theta_mode, *, angle_valid=True):
     """One shared sentence explaining how the M+V+T chord's strut angle was chosen.
 
     Reused verbatim by the Shear/Combined views and the PDF report so the on-screen
@@ -105,15 +105,20 @@ def chord_angle_note(theta_mode):
 
     ``theta_mode`` is either ``utilisation`` (a live load drove the minimax choice)
     or ``resistance`` (no live transverse load, so the shear-shift and torsion terms
-    are zero and nothing drives the angle).
+    are zero and nothing drives the angle). A live-load explanation also requires
+    reconciled retained angle evidence.
     """
-    if theta_mode == "utilisation":
+    if theta_mode == "utilisation" and angle_valid is True:
         return ("Both contributions are at the ONE member strut angle shared by the "
                 "shear and torsion checks (6.3.2(2)), selected to minimise the "
                 "governing utilisation.")
-    return ("No shear or torsion is acting, so there is no strut-angle objective; the "
-            "shear-shift and torsion terms are zero and the angle is each action's "
-            "resistance-optimum.")
+    if theta_mode == "resistance":
+        return ("No shear or torsion is acting, so there is no strut-angle objective; "
+                "the shear-shift and torsion terms are zero and the angle is each "
+                "action's resistance-optimum.")
+    return ("The result does not identify how the member strut angle was selected; "
+            "review the shear and torsion inputs before using the angle-dependent "
+            "longitudinal chord evidence.")
 
 
 def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,

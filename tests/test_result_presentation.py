@@ -1519,17 +1519,35 @@ def test_combined_physical_components_tolerates_missing_strut_angle():
         "interaction_util",
         "transverse_cot",
         "interaction_cot",
+        "transverse_theta",
+        "interaction_theta",
         "expected_status",
         "expected_util",
+        "expected_angle_valid",
     ),
     (
-        (0.50, 0.50, 1.50, 1.50, "PASS", 0.50),
-        (True, 0.50, 1.50, 1.50, "NOT ASSESSED", None),
-        (0.40, 0.50, 1.50, 1.50, "NOT ASSESSED", None),
-        (0.50, True, 1.50, 1.50, "NOT ASSESSED", None),
-        (0.50, 0.50, 1.50, 1.40, "NOT ASSESSED", None),
-        (0.50, 0.50, True, 1.00, "NOT ASSESSED", None),
-        (0.50, 0.50, 1.50, math.inf, "NOT ASSESSED", None),
+        (0.50, 0.50, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "PASS", 0.50, True),
+        (0.50, 0.50, 2.00, 2.00, 26.6,
+         26.6, "PASS", 0.50, True),
+        (True, 0.50, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "NOT ASSESSED", None, True),
+        (0.40, 0.50, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "NOT ASSESSED", None, True),
+        (0.50, True, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "NOT ASSESSED", None, True),
+        (0.50, 0.50, 1.50, 1.40, 33.690067525979785,
+         35.53767779197438, "NOT ASSESSED", None, False),
+        (0.50, 0.50, True, 1.00, 45.0, 45.0,
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, math.inf, 33.690067525979785, 0.0,
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, 1.50, None, 33.690067525979785,
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, 1.50, 33.690067525979785, "33.69",
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, 1.50, 33.690067525979785, 60.0,
+         "NOT ASSESSED", None, False),
     ),
 )
 def test_combined_physical_components_reconciles_formula_629_evidence(
@@ -1537,13 +1555,17 @@ def test_combined_physical_components_reconciles_formula_629_evidence(
     interaction_util,
     transverse_cot,
     interaction_cot,
+    transverse_theta,
+    interaction_theta,
     expected_status,
     expected_util,
+    expected_angle_valid,
 ):
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True,
             "cot": transverse_cot,
+            "theta_deg": transverse_theta,
             "u_crush": transverse_util,
             "u_stirrup": 0.60,
             "shear_fraction": 0.20,
@@ -1553,12 +1575,18 @@ def test_combined_physical_components_reconciles_formula_629_evidence(
             "valid": True,
             "value": interaction_util,
             "cot": interaction_cot,
+            "theta_deg": interaction_theta,
         },
     })
 
     concrete = next(item for item in components if item["key"] == "concrete")
     assert concrete["status"] == expected_status
     assert concrete["util"] == expected_util
+    assert concrete["angle_valid"] is expected_angle_valid
+    stirrup = next(item for item in components if item["key"] == "stirrup")
+    assert stirrup["status"] == (
+        "PASS" if expected_angle_valid else "NOT ASSESSED"
+    )
     if expected_status == "NOT ASSESSED":
         assert "recalculate" in concrete["note"]
 

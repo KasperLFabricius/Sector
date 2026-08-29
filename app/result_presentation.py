@@ -25,6 +25,7 @@ from sector.engineer_message import EngineerMessage
 _DEGREE = chr(0x00B0)
 _THETA = chr(0x03B8)
 _RHO = chr(0x03C1)
+_THETA_DISPLAY_ABS_TOL_DEG = 5.0e-2
 
 _SINGLE_CASE_ID = "__single__"
 
@@ -2002,7 +2003,19 @@ def combined_physical_components(combined):
         cot = _publication_metric(transverse.get("cot"))
         if cot is not None and cot <= 0.0:
             cot = None
+        transverse_theta = _publication_metric(transverse.get("theta_deg"))
+        if (
+            transverse_theta is not None
+            and not 0.0 < transverse_theta < 90.0
+        ):
+            transverse_theta = None
+        derived_theta = (
+            math.degrees(math.atan2(1.0, cot))
+            if cot is not None
+            else None
+        )
         crushing = combined.get("crushing")
+        angle_evidence_consistent = True
         concrete_evidence_consistent = True
         if isinstance(crushing, Mapping):
             interaction_util = _publication_utilisation(
@@ -2011,12 +2024,44 @@ def combined_physical_components(combined):
             interaction_cot = _publication_metric(crushing.get("cot"))
             if interaction_cot is not None and interaction_cot <= 0.0:
                 interaction_cot = None
+            interaction_theta = _publication_metric(
+                crushing.get("theta_deg")
+            )
+            if (
+                interaction_theta is not None
+                and not 0.0 < interaction_theta < 90.0
+            ):
+                interaction_theta = None
+            angle_evidence_consistent = bool(
+                cot is not None
+                and interaction_cot is not None
+                and transverse_theta is not None
+                and interaction_theta is not None
+                and derived_theta is not None
+                and math.isclose(
+                    cot,
+                    interaction_cot,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
+                and math.isclose(
+                    transverse_theta,
+                    derived_theta,
+                    rel_tol=1.0e-12,
+                    abs_tol=_THETA_DISPLAY_ABS_TOL_DEG,
+                )
+                and math.isclose(
+                    interaction_theta,
+                    derived_theta,
+                    rel_tol=1.0e-12,
+                    abs_tol=_THETA_DISPLAY_ABS_TOL_DEG,
+                )
+            )
             concrete_evidence_consistent = bool(
                 crushing.get("valid") is True
                 and concrete_util is not None
                 and interaction_util is not None
-                and cot is not None
-                and interaction_cot is not None
+                and angle_evidence_consistent
                 and (
                     concrete_util == interaction_util
                     if not (
@@ -2030,18 +2075,21 @@ def combined_physical_components(combined):
                         abs_tol=1.0e-12,
                     )
                 )
-                and math.isclose(
-                    cot,
-                    interaction_cot,
-                    rel_tol=1.0e-12,
-                    abs_tol=1.0e-12,
-                )
             )
             if not concrete_evidence_consistent:
                 concrete_util = None
         stirrup_util = _publication_utilisation(
             transverse.get("u_stirrup"), allow_positive_infinity=True
         )
+        stirrup_valid = bool(
+            transverse_valid
+            and (
+                not isinstance(crushing, Mapping)
+                or angle_evidence_consistent
+            )
+        )
+        if not stirrup_valid:
+            stirrup_util = None
         concrete = {
             "key": "concrete",
             "label": "Concrete compression strut",
@@ -2055,6 +2103,26 @@ def combined_physical_components(combined):
             ),
             "util": concrete_util,
             "valid": transverse_valid and concrete_evidence_consistent,
+            "angle_valid": bool(
+                cot is not None
+                and derived_theta is not None
+                and (
+                    not isinstance(crushing, Mapping)
+                    or angle_evidence_consistent
+                )
+            ),
+            "cot": (
+                cot
+                if not isinstance(crushing, Mapping)
+                or angle_evidence_consistent
+                else None
+            ),
+            "theta_deg": (
+                derived_theta
+                if not isinstance(crushing, Mapping)
+                or angle_evidence_consistent
+                else None
+            ),
             "note": (
                 "Formula (6.29) evidence is incomplete; recalculate the shared "
                 "member-angle check"
@@ -2070,16 +2138,24 @@ def combined_physical_components(combined):
         stirrup = {
             "key": "stirrup",
             "label": "Closed stirrup",
-            "status": _util_summary_status(
-                stirrup_util,
-                valid=transverse_valid,
+            "status": (
+                "NOT ASSESSED"
+                if transverse_valid and not stirrup_valid
+                else _util_summary_status(
+                    stirrup_util,
+                    valid=stirrup_valid,
+                )
             ),
             "util": stirrup_util,
-            "valid": transverse_valid,
+            "valid": stirrup_valid,
             "note": (
                 f"Shear {_percent(transverse.get('shear_fraction'))} + "
                 f"torsion {_percent(transverse.get('torsion_fraction'))}"
-                if transverse_valid else "Combined stirrup check is invalid"
+                if stirrup_valid
+                else "Common member-angle evidence is incomplete; recalculate "
+                "the shared closed-stirrup check"
+                if transverse_valid
+                else "Combined stirrup check is invalid"
             ),
         }
 
