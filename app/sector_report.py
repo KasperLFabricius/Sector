@@ -3194,8 +3194,15 @@ class ReportBuilder:
                 resistance_rows.extend([
                     ["Combined M-V-T", "yes"],
                     ["Combined shared method", _html_escape(str(inp.get("combined_method") or "-"))],
-                    ["Separate M/V route selected as a design assumption", self._brief_switch(inp.get("combined_mv_independent"))],
                 ])
+                if (
+                    inp.get("combined_method")
+                    == ec2_codes.EC2_2005_DKNA.label
+                ):
+                    resistance_rows.append([
+                        "Separate M/V route selected as a design assumption",
+                        self._brief_switch(inp.get("combined_mv_independent")),
+                    ])
             if shear_active:
                 resistance_rows.extend([
                     ["Shear method", _html_escape(str(effective_shear_method or "-"))],
@@ -5103,6 +5110,29 @@ class ReportBuilder:
                 for item in items
             )
         if family == "combined":
+            if not presentation.combined_uses_dkna(result):
+                if result.get("biaxial") is True:
+                    retained = presentation.base_en_combined_direction_items(
+                        result
+                    )
+                    if retained is None:
+                        return True
+                    items = tuple(item for _, item in retained)
+                else:
+                    items = (result,)
+                return not all(
+                    item.get("valid") is True
+                    and all(
+                        component["status"] in {"PASS", "FAIL"}
+                        and self._retained_utilisation_available(
+                            component["util"]
+                        )
+                        for component in presentation.combined_physical_components(
+                            item
+                        )
+                    )
+                    for item in items
+                )
             directions = result.get("directions") or {}
             items = tuple(directions.values()) or (result,)
             return not any(
@@ -5116,11 +5146,10 @@ class ReportBuilder:
     @staticmethod
     def _retained_utilisation_available(value):
         """Whether a stored assessment utilisation can be published."""
-        try:
-            metric = float(value)
-        except (TypeError, ValueError):
-            return False
-        return math.isfinite(metric) or metric == math.inf
+        return (
+            viz.utilisation_value(value, allow_positive_infinity=True)
+            is not None
+        )
 
     def _theory(self):
         self._h1("Basis of analysis")
@@ -7792,8 +7821,237 @@ class ReportBuilder:
                 )
             )
 
+    def _combined_base_en_direction(self, c):
+        """Publish Base-EN physical interactions without a DK aggregate."""
+
+        c = c if isinstance(c, Mapping) else {}
+        if not c.get("valid"):
+            missing = [
+                label
+                for key, label in (
+                    ("have_m", "bending"),
+                    ("have_v", "shear"),
+                    ("have_t", "torsion"),
+                )
+                if key in c and not c.get(key)
+            ]
+            reason = (
+                _html_escape(_result_reason(
+                    c["reason"],
+                    "combined",
+                    "Base EN combined prerequisite reason",
+                ))
+                if c.get("reason")
+                else "Complete the required component checks and recalculate"
+            )
+            self._small(
+                "Base-EN combined components are NOT ASSESSED"
+                + (": missing " + ", ".join(missing) if missing else "")
+                + ". "
+                + reason
+                + "."
+            )
+            return
+        self._p(
+            "The shared edition is <b>EN 1992-1-1:2005</b>. Sector reports "
+            "the supported V+T concrete, closed-stirrup and longitudinal-"
+            "reinforcement checks separately. No additional aggregate "
+            "interaction verdict is published for this route."
+        )
+        physical_components = presentation.combined_physical_components(c)
+        physical_by_key = {
+            component["key"]: component for component in physical_components
+        }
+        component_rows = [["Component", "Utilisation", "Status", "Engineering note"]]
+        component_rows.extend([
+            [
+                component["label"],
+                _pct(component["util"]),
+                component["status"],
+                component["note"],
+            ]
+            for component in physical_components
+        ])
+        self._h2("Supported Base-EN physical interactions")
+        self._table(
+            component_rows,
+            [48 * mm, 28 * mm, 29 * mm, 65 * mm],
+            font=7.5,
+        )
+        self._small(
+            "These are independent physical checks; no additional Base-EN "
+            "aggregate interaction verdict is published."
+        )
+        cr = c.get("crushing")
+        concrete = physical_by_key["concrete"]
+        cr_status = concrete["status"]
+        if isinstance(cr, Mapping) and cr_status in {"PASS", "FAIL"}:
+            self._h2("Concrete compression strut (6.29)")
+            self._formula(
+                "T<sub>Ed</sub>/T<sub>Rd,max</sub> + "
+                "V<sub>Ed</sub>/V<sub>Rd,max</sub>",
+                equation_key="combined.crushing.interaction",
+                ref="EN 1992-1-1 (6.29)",
+                subst=(
+                    f"{_fmt(cr['t_ed'], 3)}/{_fmt(cr['trd_max'], 3)} + "
+                    f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}"
+                ),
+                result=(
+                    f"{_pct(concrete['util'])}  "
+                    f"({_demand_resistance_verdict(cr_status == 'PASS')})"
+                ),
+            )
+            self._small(
+                f"Common member angle cot theta = {_fmt(cr.get('cot'), 3)}."
+            )
+        elif isinstance(cr, Mapping):
+            self._h2("Concrete compression strut (6.29)")
+            self._small(
+                "NOT ASSESSED: " + _html_escape(concrete["note"]) + "."
+            )
+        tr = c.get("transverse")
+        stirrup = physical_by_key["stirrup"]
+        if (
+            isinstance(tr, Mapping)
+            and stirrup["status"] in {"PASS", "FAIL"}
+        ):
+            self._h2("Shared closed stirrup: shear + torsion")
+            self._table(
+                [
+                    ["Shear share", "Torsion share", "Utilisation", "Status"],
+                    [
+                        _pct(tr.get("shear_fraction")),
+                        _pct(tr.get("torsion_fraction")),
+                        _pct(tr.get("u_stirrup")),
+                        (
+                            stirrup["status"]
+                        ),
+                    ],
+                ],
+                [40 * mm, 40 * mm, 40 * mm, 40 * mm],
+            )
+        elif isinstance(tr, Mapping):
+            self._h2("Shared closed stirrup: shear + torsion")
+            self._small(
+                "NOT ASSESSED: complete the shared closed-stirrup calculation "
+                "and recalculate."
+            )
+        lg = c.get("longitudinal")
+        longitudinal = next(
+            component
+            for component in physical_components
+            if component["key"] == "longitudinal"
+        )
+        self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
+        if isinstance(lg, Mapping) and lg.get("valid"):
+            self._table(
+                [
+                    ["MEd", "Shear shift", "Torsion share", "MEd,total", "MRd", "Status"],
+                    [
+                        f"{_fmt(lg.get('m_ed'), 3)} kNm",
+                        f"{_fmt(lg.get('mv'), 3)} kNm",
+                        f"{_fmt(lg.get('mt'), 3)} kNm",
+                        f"{_fmt(lg.get('m_total'), 3)} kNm",
+                        f"{_fmt(lg.get('m_rd'), 3)} kNm",
+                        longitudinal["status"],
+                    ],
+                ],
+                [27 * mm, 27 * mm, 27 * mm, 29 * mm, 27 * mm, 23 * mm],
+                font=7.2,
+            )
+            self._small(viz.chord_angle_note(
+                lg.get("theta_mode"),
+                angle_valid=concrete.get("angle_valid") is True,
+            ))
+        else:
+            self._small(
+                "Longitudinal chord assessment: "
+                f"{longitudinal['status']}. "
+                f"{_html_escape(longitudinal['note'])}."
+            )
+
+    def _combined_base_en(self, aggregate):
+        """Publish Base-EN uniaxial/directional component evidence."""
+
+        self._case_heading(
+            "Combined bending + shear + torsion (M-V-T)", "plastic"
+        )
+        blocker = presentation.combined_bending_assessment_blocker(self.out)
+        if blocker is not None:
+            self._small("Combined Base-EN components: NOT ASSESSED. " + blocker)
+            return
+        if aggregate.get("biaxial") is True:
+            retained = presentation.base_en_combined_direction_items(aggregate)
+            if retained is None:
+                self._small(
+                    "Base-EN directional combined components are NOT ASSESSED. "
+                    "Complete both Vx+T and Vy+T calculations, then recalculate."
+                )
+                return
+            directions = dict(retained)
+            self._small(
+                "V<sub>x,Ed</sub> + T<sub>Ed</sub> and V<sub>y,Ed</sub> + "
+                "T<sub>Ed</sub> are reported independently. No simultaneous "
+                "V<sub>x</sub> + V<sub>y</sub> + T verdict is inferred."
+            )
+            rows = [[
+                "Direction", "Concrete strut", "Closed stirrup",
+                "Longitudinal", "Governing face", "cot theta",
+            ]]
+            for component in ("vx", "vy"):
+                item = directions[component]
+                physical = {
+                    value["key"]: value
+                    for value in presentation.combined_physical_components(item)
+                }
+                rows.append([
+                    "Vx+T" if component == "vx" else "Vy+T",
+                    physical["concrete"]["status"],
+                    physical["stirrup"]["status"],
+                    physical["longitudinal"]["status"],
+                    viz.directional_face_label(
+                        component, item.get("governing_face")
+                    ),
+                    _fmt(item.get("governing_cot"), 3),
+                ])
+            self._table(
+                rows,
+                [24 * mm, 27 * mm, 27 * mm, 27 * mm, 36 * mm, 22 * mm],
+                font=6.8,
+            )
+            selected = self._selected_family("combined", self.inp)
+            selected_component = (
+                selected.get("component") if isinstance(selected, Mapping) else None
+            )
+            if selected_component not in directions:
+                selected_component = next(
+                    (
+                        component
+                        for component, item in directions.items()
+                        if item.get("valid") is not True
+                        or any(
+                            physical["status"] not in {"PASS", "FAIL"}
+                            or not self._retained_utilisation_available(
+                                physical["util"]
+                            )
+                            for physical in (
+                                presentation.combined_physical_components(item)
+                            )
+                        )
+                    ),
+                    next(iter(directions)),
+                )
+            label = "Vx+T" if selected_component == "vx" else "Vy+T"
+            self._h2(f"Representative Base-EN directional calculation: {label}")
+            self._combined_base_en_direction(directions[selected_component])
+            return
+        self._combined_base_en_direction(aggregate)
+
     def _combined(self):
         aggregate = self.out["combined"]
+        if not presentation.combined_uses_dkna(aggregate):
+            self._combined_base_en(aggregate)
+            return
         screen_label = presentation.combined_dkna_screen_label(aggregate)
         combined_blocker = presentation.combined_bending_assessment_blocker(
             self.out
@@ -8100,6 +8358,11 @@ class ReportBuilder:
                 ),
             )
         self._h2("Physical resistance components")
+        physical_components = presentation.combined_physical_components(c)
+        physical_by_key = {
+            component["key"]: component for component in physical_components
+        }
+        concrete = physical_by_key["concrete"]
         component_rows = [["Component", "Utilisation", "Status", "QA note"]]
         component_rows.extend([
             [
@@ -8108,7 +8371,7 @@ class ReportBuilder:
                 component["status"],
                 component["note"],
             ]
-            for component in presentation.combined_physical_components(c)
+            for component in physical_components
         ])
         self._table(
             component_rows,
@@ -8123,21 +8386,32 @@ class ReportBuilder:
         cr = c.get("crushing")
         if cr is not None and cr.get("valid"):
             self._h2("Concrete compression strut (6.29)")
-            val = cr["value"]
-            vv = _demand_resistance_verdict(viz.util_ok(val))
-            self._formula(
-                "T<sub>Ed</sub>/T<sub>Rd,max</sub> + V<sub>Ed</sub>/V<sub>Rd,max</sub>",
-                equation_key="combined.crushing.interaction",
-                ref="EN 1992-1-1 (6.29)",
-                subst=f"{_fmt(cr['t_ed'], 3)}/{_fmt(cr['trd_max'], 3)} + "
-                      f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}",
-                result=f"{_pct(val)}  ({vv})")
-            self._small(f"At a common strut cot theta = {_fmt(cr['cot'], 2)} "
-                        f"(theta = {_fmt(cr['theta_deg'], 1)}&#176;).")
-            self._fig(viz.vt_interaction_figure(cr["vrd_max"], cr["trd_max"],
-                                                cr["v_ed"], cr["t_ed"],
-                                                show_verdict=True),
-                      120, 100)
+            cr_status = concrete["status"]
+            val = concrete["util"]
+            if cr_status in {"PASS", "FAIL"}:
+                vv = _demand_resistance_verdict(cr_status == "PASS")
+                self._formula(
+                    "T<sub>Ed</sub>/T<sub>Rd,max</sub> + "
+                    "V<sub>Ed</sub>/V<sub>Rd,max</sub>",
+                    equation_key="combined.crushing.interaction",
+                    ref="EN 1992-1-1 (6.29)",
+                    subst=f"{_fmt(cr['t_ed'], 3)}/{_fmt(cr['trd_max'], 3)} + "
+                          f"{_fmt(cr['v_ed'], 3)}/{_fmt(cr['vrd_max'], 3)}",
+                    result=f"{_pct(val)}  ({vv})")
+                self._small(
+                    "At a common strut cot theta = "
+                    f"{_fmt(concrete['cot'], 2)} "
+                    f"(theta = {_fmt(concrete['theta_deg'], 1)}&#176;)."
+                )
+                self._fig(viz.vt_interaction_figure(
+                    cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],
+                    show_verdict=True,
+                ), 120, 100)
+            else:
+                self._small(
+                    "NOT ASSESSED: recalculate the shared compression-strut "
+                    "check before using this result."
+                )
         elif cr is not None and not cr.get("valid"):
             self._h2("Concrete compression strut (6.29)")
             self._small(
@@ -8152,32 +8426,43 @@ class ReportBuilder:
         elif tr is not None:
             self._h2("Shared stirrup (shear + torsion transverse steel)")
             stirrup_start = len(self.flow)
-            vv = _demand_resistance_verdict(viz.util_ok(tr["u_stirrup"]))
-            if tr["shear_credited"]:
+            stirrup = physical_by_key["stirrup"]
+            if stirrup["status"] not in {"PASS", "FAIL"}:
+                self._small(
+                    "NOT ASSESSED: recalculate the shared closed-stirrup check "
+                    "before using this result."
+                )
+            elif tr["shear_credited"]:
                 note = (f"V<sub>Ed</sub> = {_fmt(tr['v_ed'], 1)} &#8804; V<sub>Rd,c</sub>"
                         f" = {_fmt(tr['vrd_c'], 1)} kN, so the concrete carries the "
                         "shear (6.2.1) and the whole closed stirrup serves torsion.")
             else:
                 note = ("V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>: shear and torsion "
                         "demands add on the shared closed stirrup.")
-            self._formula(
-                "shear share + torsion share (shared closed stirrup)",
-                equation_key="combined.stirrup.utilisation",
-                subst=f"{_pct(tr['shear_fraction'])} + {_pct(tr['torsion_fraction'])}",
-                result=(
-                    "closed-stirrup utilisation = "
-                    f"{_pct(tr['u_stirrup'])}  ({vv})"
-                ))
-            self._small(note + f" At the member strut angle cot theta = "
-                        f"{_fmt(tr['cot'], 2)} "
-                        f"(theta = {_fmt(tr['theta_deg'], 1)}&#176;) -- "
-                        "the one angle shared by every shear and torsion check "
-                        "(6.3.2(2)), selected to minimise the governing utilisation.")
-            self._keep_measured_calculation_from(stirrup_start)
+            if stirrup["status"] in {"PASS", "FAIL"}:
+                vv = _demand_resistance_verdict(stirrup["status"] == "PASS")
+                self._formula(
+                    "shear share + torsion share (shared closed stirrup)",
+                    equation_key="combined.stirrup.utilisation",
+                    subst=(f"{_pct(tr['shear_fraction'])} + "
+                           f"{_pct(tr['torsion_fraction'])}"),
+                    result=(
+                        "closed-stirrup utilisation = "
+                        f"{_pct(stirrup['util'])}  ({vv})"
+                    ))
+                self._small(note + f" At the member strut angle cot theta = "
+                            f"{_fmt(concrete['cot'], 2)} "
+                            f"(theta = {_fmt(concrete['theta_deg'], 1)}&#176;) -- "
+                            "the one angle shared by every shear and torsion check "
+                            "(6.3.2(2)), selected to minimise the governing "
+                            "utilisation.")
+                self._keep_measured_calculation_from(stirrup_start)
         lg = c.get("longitudinal")
         if lg is not None and lg["valid"]:
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
-            vv = _demand_resistance_verdict(lg["ok"])
+            longitudinal = physical_by_key["longitudinal"]
+            chord_status = longitudinal["chord_status"]
+            chord_util = longitudinal["chord_util"]
             coverage = lg.get("off_not_evaluated")
             model_2023_chord = lg.get("chord_formula") in {"8.51", "8.52"}
             ax = lg["axis"]
@@ -8259,23 +8544,20 @@ class ReportBuilder:
             biaxial = lg.get("biaxial", False)
             fallback = presentation.required_chord_fallback(c)
             fell_back = fallback is not None
-            chord_assessment = c.get("longitudinal_assessment") or {}
-            chord_status = str(
-                chord_assessment.get("status") or "NOT ASSESSED"
-            ).upper()
             assessment_complete = chord_status in {"PASS", "FAIL"}
             if not assessment_complete:
                 verdict_suffix = (
                     "  (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
                 )
             else:
+                vv = _demand_resistance_verdict(chord_status == "PASS")
                 verdict_suffix = f"  ({vv})"
             self._formula(
                 "M<sub>Ed,total</sub> / M<sub>Rd</sub>",
                 equation_key="combined.chord.utilisation",
                 references=("combined.chord.demand",),
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
-                result=f"utilisation = {_pct(lg['util'])}{verdict_suffix}")
+                result=f"utilisation = {_pct(chord_util)}{verdict_suffix}")
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = (
@@ -8290,7 +8572,10 @@ class ReportBuilder:
                     "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check above, "
                     "which uses the full biaxial bending utilisation."
                 )
-            note = viz.chord_angle_note(lg.get("theta_mode"))
+            note = viz.chord_angle_note(
+                lg.get("theta_mode"),
+                angle_valid=concrete.get("angle_valid") is True,
+            )
             if model_2023_chord:
                 note += (
                     " The required flexural tension and compression chord faces "

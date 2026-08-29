@@ -6589,6 +6589,643 @@ def _combined_out(mv_independent=False):
     }
 
 
+def _base_en_combined_out():
+    combined = _combined_out()
+    for key in (
+        "r_n", "r_m", "r_v", "r_t", "m_v_independent", "dkna_sum",
+        "dkna_valid", "dkna_conditional", "dkna_limit_satisfied",
+        "dkna_status", "dkna_ok", "dkna_selection",
+        "m_v_separation_condition", "action_alone",
+    ):
+        combined.pop(key, None)
+    combined["method"] = codes.EC2_2005.label
+    common_cot = float(combined["crushing"]["cot"])
+    combined["transverse"] = {
+        "valid": True,
+        "cot": common_cot,
+        "theta_deg": math.degrees(math.atan(1.0 / common_cot)),
+        "u_stirrup": 0.58,
+        "u_crush": float(combined["crushing"]["value"]),
+        "shear_fraction": 0.28,
+        "torsion_fraction": 0.30,
+    }
+    chord = {
+        "valid": True,
+        "axis": "x",
+        "tension_low": True,
+        "m_ed": 60.0,
+        "mv": 20.0,
+        "mt": 10.0,
+        "m_total": 90.0,
+        "m_rd": 150.0,
+        "util": 0.60,
+        "ok": True,
+        "conditional": True,
+        "theta_mode": "utilisation",
+    }
+    combined["longitudinal"] = chord
+    combined["longitudinal_assessment"] = {
+        "status": "PASS",
+        "util": 0.60,
+        "coverage_complete": True,
+        "governing": "x-axis negative face",
+        "reason": "Complete longitudinal chord coverage",
+    }
+    _retain_combined_chords(combined, chord)
+    return combined
+
+
+def _dkna_complete_combined_out():
+    """Return one DK fixture with the same complete physical component state."""
+
+    combined = _base_en_combined_out()
+    combined.update(_combined_out())
+    combined["transverse"].update(
+        shear_credited=False,
+        v_ed=150.0,
+        vrd_c=100.0,
+    )
+    combined["longitudinal"].update(
+        ftd_v=40.0,
+        ftd_t=40.0,
+        z=0.5,
+        capped=False,
+        gets_shift=True,
+        biaxial=False,
+        m_off=0.0,
+        has_torsion=True,
+        off_not_evaluated=None,
+        theta_mode="utilisation",
+    )
+    return combined
+
+
+def _base_en_scheduler_combined_case(action, util, *, component):
+    """Build one internally reconciled synthetic scheduler result.
+
+    The retained Formula (6.29), shared-stirrup and chord operands are derived
+    from the same action row that the report prints.  The values are deterministic
+    publication fixtures, not independent resistance oracles.
+    """
+
+    result = _base_en_combined_out()
+    common_cot = float(result["crushing"]["cot"])
+    common_theta = math.degrees(math.atan(1.0 / common_cot))
+    v_ed = abs(float(action[f"{component}_ed_kn"]))
+    t_ed = abs(float(action["t_ed_knm"]))
+    moment_key = "my_ed_knm" if component == "vx" else "mx_ed_knm"
+    m_ed = abs(float(action[moment_key]))
+
+    torsion_ratio = util * 0.40
+    shear_ratio = util - torsion_ratio
+    crushing = result["crushing"]
+    crushing.update(
+        cot=common_cot,
+        theta_deg=common_theta,
+        t_ed=t_ed,
+        v_ed=v_ed,
+        trd_max=t_ed / torsion_ratio,
+        vrd_max=v_ed / shear_ratio,
+        torsion_ratio=torsion_ratio,
+        shear_ratio=shear_ratio,
+        value=util,
+        ok=util <= 1.0,
+    )
+
+    stirrup_util = util - 0.05
+    torsion_fraction = min(0.20, stirrup_util / 2.0)
+    shear_fraction = stirrup_util - torsion_fraction
+    result["transverse"].update(
+        cot=common_cot,
+        theta_deg=common_theta,
+        u_crush=util,
+        u_stirrup=stirrup_util,
+        shear_fraction=shear_fraction,
+        torsion_fraction=torsion_fraction,
+        v_ed=v_ed,
+    )
+
+    chord_util = util - 0.10
+    shear_shift = 0.10 * v_ed
+    torsion_share = 0.50 * t_ed
+    m_total = m_ed + shear_shift + torsion_share
+    chord = result["longitudinal"]
+    chord.update(
+        axis="y" if component == "vx" else "x",
+        m_ed=m_ed,
+        mv=shear_shift,
+        mt=torsion_share,
+        m_total=m_total,
+        m_rd=m_total / chord_util,
+        util=chord_util,
+        ok=chord_util <= 1.0,
+    )
+    result["longitudinal_assessment"].update(
+        status="PASS" if chord_util <= 1.0 else "FAIL",
+        util=chord_util,
+        coverage_complete=True,
+    )
+    result["governing_longitudinal"] = chord
+    result["longitudinal_candidates"] = [chord]
+    result.update(
+        component=component,
+        governing_face="negative" if component == "vx" else "positive",
+        governing_cot=common_cot,
+    )
+    return result
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        combined_mv_independent=True,
+        shear_on=True,
+        torsion_on=True,
+    )
+    out = {"plastic": _out()["plastic"], "combined": _base_en_combined_out()}
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    folded = text.casefold()
+    assert "concrete compression strut" in folded
+    assert "closed stirrup" in folded
+    assert "longitudinal reinforcement" in folded
+    assert "DK NA" not in text
+    assert "action-alone" not in text
+    assert "DK NA sum" not in text
+    assert "N+M+V+T" not in text
+    assert "max(N+M+T, N+V+T)" not in text
+    assert "Separate M/V route selected as a design assumption" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Supported Base-EN physical interactions" in text
+        assert "Concrete compression strut (6.29)" in text
+        assert "Shared closed stirrup: shear + torsion" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        combined_mv_independent=True,
+        shear_on=True,
+        torsion_on=True,
+    )
+    vx = _base_en_combined_out()
+    vy = copy.deepcopy(vx)
+    vx.update(component="vx", governing_face="negative", governing_cot=1.25)
+    vy.update(component="vy", governing_face="positive", governing_cot=1.75)
+    out = {
+        "plastic": _out()["plastic"],
+        "combined": {
+            "method": codes.EC2_2005.label,
+            "biaxial": True,
+            "directions": {"vx": vx, "vy": vy},
+        },
+    }
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Vx+T" in text
+    assert "Vy+T" in text
+    assert "DK NA" not in text
+    assert "DK NA sum" not in text
+    assert "N+M+V+T" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Representative Base-EN directional calculation" in text
+        assert "No simultaneous Vx + Vy + T verdict is inferred" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize("malformed_vy", ["missing", "empty"])
+def test_report_base_en_missing_biaxial_direction_fails_closed(
+    profile, malformed_vy
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    vx = _base_en_combined_out()
+    vx.update(component="vx", governing_face="negative", governing_cot=1.25)
+    out = {
+        "plastic": _out()["plastic"],
+        "combined": {
+            "method": codes.EC2_2005.label,
+            "biaxial": True,
+            "directions": {"vx": vx},
+        },
+    }
+    if malformed_vy == "empty":
+        out["combined"]["directions"]["vy"] = {}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    if profile == "Brief":
+        assert "both directional combined calculations" in text.casefold()
+    else:
+        assert "both vx+t and vy+t" in text.casefold()
+    assert "Representative Base-EN directional calculation" not in text
+    assert "Supported Base-EN physical interactions" not in text
+    assert "DK NA" not in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_report_base_en_invalid_utilisations_are_not_published(
+    profile,
+    retained,
+    transverse_retained,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _base_en_combined_out()
+    combined["transverse"].update(
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
+    )
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(status="PASS", util=retained)
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    assert re.search(r"100[.,]0\s*%", text) is None
+    assert re.search(r"-25[.,]0\s*%", text) is None
+    assert "Longitudinal reinforcement inf" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Supported Base-EN physical interactions" in text
+        for label in (
+            "Concrete compression strut",
+            "Closed stirrup",
+            "Longitudinal reinforcement",
+        ):
+            assert f"{label} - NOT ASSESSED" in text
+            assert f"{label} inf NOT ASSESSED" not in text
+    else:
+        assert "Combined concrete compression strut" in text
+    assert "DK NA" not in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
+    profile,
+    retained,
+    transverse_retained,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005_DKNA.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _dkna_complete_combined_out()
+    combined["transverse"].update(
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
+    )
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(status="PASS", util=retained)
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in text
+    assert re.search(r"100[.,]0\s*%", text) is None
+    assert re.search(r"50[.,]0\s*%", text) is None
+    assert re.search(r"-25[.,]0\s*%", text) is None
+    assert re.search(r"\binf\b", text.casefold()) is None
+    assert "utilisation = inf" not in text
+    assert "closed-stirrup utilisation = - (EXCEEDED)" not in text
+    assert "utilisation = - (EXCEEDED)" not in text
+    if profile in {"Standard", "Audit"}:
+        assert (
+            "NOT ASSESSED: recalculate the shared compression-strut check"
+            in text
+        )
+        assert (
+            "NOT ASSESSED: recalculate the shared closed-stirrup check"
+            in text
+        )
+        assert (
+            "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+            in text
+        )
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize(
+    "method",
+    [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
+)
+@pytest.mark.parametrize("conflict", ["utilisation", "angle", "theta"])
+def test_report_conflicting_formula_629_evidence_fails_closed(
+    profile,
+    method,
+    conflict,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=method,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = (
+        _base_en_combined_out()
+        if method == codes.EC2_2005.label
+        else _dkna_complete_combined_out()
+    )
+    if conflict == "utilisation":
+        combined["transverse"]["u_crush"] = True
+        combined["crushing"]["value"] = 0.50
+    elif conflict == "angle":
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["transverse"]["cot"] = 1.50
+        combined["crushing"]["cot"] = 1.40
+    else:
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["crushing"]["theta_deg"] = 60.0
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile=profile,
+    )).split())
+
+    assert "NOT ASSESSED" in text
+    assert "Concrete compression strut 50.0 % PASS" not in text
+    assert "50.0 % (OK)" not in text
+    assert "cot theta = 1.400" not in text
+    assert "theta = 60.0" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Formula (6.29) evidence is incomplete" in text
+        if conflict in {"angle", "theta"}:
+            assert "Closed stirrup - NOT ASSESSED" in text
+            assert (
+                "does not identify how the member strut angle was selected"
+                in text
+            )
+            assert "ONE member strut angle shared" not in text
+        if method == codes.EC2_2005.label:
+            assert "recalculate the shared member-angle check" in text
+        else:
+            assert (
+                "NOT ASSESSED: recalculate the shared compression-strut check"
+                in text
+            )
+
+
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+        Mx_pl=80.0,
+    )
+    actions = [
+        {
+            "name": "PL-LOW", "description": "Lower combined utilisation",
+            "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 20.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 10.0,
+        },
+        {
+            "name": "PL-GOV", "description": "Governing combined utilisation",
+            "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0, "vy_ed_kn": 80.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 40.0,
+        },
+        {
+            "name": "PL-INCOMPLETE",
+            "description": "Incomplete longitudinal assessment",
+            "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
+            "vx_ed_kn": 30.0, "vy_ed_kn": 25.0,
+            "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 15.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+    for action in actions:
+        assert action["n_ed_kn"] == pytest.approx(inp["P_pl"])
+        assert action["mx_ed_knm"] == pytest.approx(inp["Mx_pl"])
+        assert action["my_ed_knm"] == pytest.approx(inp["My_pl"])
+
+    low = _base_en_scheduler_combined_case(
+        actions[0], 0.40, component="vy"
+    )
+    governing = _base_en_scheduler_combined_case(
+        actions[1], 0.85, component="vy"
+    )
+    incomplete_vx = _base_en_scheduler_combined_case(
+        actions[2], 0.95, component="vx"
+    )
+    incomplete_vy = _base_en_scheduler_combined_case(
+        actions[2], 0.90, component="vy"
+    )
+    incomplete_vy["longitudinal_assessment"].update(
+        status="NOT ASSESSED",
+        util=None,
+        coverage_complete=False,
+        reason="required_longitudinal_chord_coverage_incomplete",
+    )
+    incomplete = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": {"vx": incomplete_vx, "vy": incomplete_vy},
+    }
+    out = {
+        "plastic_cases": [
+            {
+                "name": actions[0]["name"],
+                "actions": actions[0],
+                "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(_out()["plastic"]),
+                    "combined": low,
+                },
+            },
+            {
+                "name": actions[1]["name"],
+                "actions": actions[1],
+                "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(_out()["plastic"]),
+                    "combined": governing,
+                },
+            },
+            {
+                "name": actions[2]["name"],
+                "actions": actions[2],
+                "evaluated": True,
+                "results": {
+                    "plastic": copy.deepcopy(_out()["plastic"]),
+                    "combined": incomplete,
+                },
+            },
+        ],
+    }
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
+
+    for action, entry in zip(actions, out["plastic_cases"], strict=True):
+        assert tuple(entry["results"]["plastic"]["applied"]) == pytest.approx(
+            (action["mx_ed_knm"], action["my_ed_knm"])
+        )
+
+    for action, result in zip(actions[:2], (low, governing), strict=True):
+        crushing = result["crushing"]
+        chord = result["longitudinal"]
+        assert crushing["v_ed"] == pytest.approx(abs(action["vy_ed_kn"]))
+        assert crushing["t_ed"] == pytest.approx(abs(action["t_ed_knm"]))
+        assert crushing["value"] == pytest.approx(
+            crushing["t_ed"] / crushing["trd_max"]
+            + crushing["v_ed"] / crushing["vrd_max"]
+        )
+        assert result["transverse"]["u_stirrup"] == pytest.approx(
+            result["transverse"]["shear_fraction"]
+            + result["transverse"]["torsion_fraction"]
+        )
+        assert result["transverse"]["cot"] == pytest.approx(
+            result["crushing"]["cot"]
+        )
+        assert result["governing_cot"] == pytest.approx(
+            result["crushing"]["cot"]
+        )
+        assert chord["m_ed"] == pytest.approx(abs(action["mx_ed_knm"]))
+        assert chord["m_total"] == pytest.approx(
+            chord["m_ed"] + chord["mv"] + chord["mt"]
+        )
+        assert chord["util"] == pytest.approx(
+            chord["m_total"] / chord["m_rd"]
+        )
+    for component, result in incomplete["directions"].items():
+        action = actions[2]
+        crushing = result["crushing"]
+        moment_key = "my_ed_knm" if component == "vx" else "mx_ed_knm"
+        assert crushing["v_ed"] == pytest.approx(
+            abs(action[f"{component}_ed_kn"])
+        )
+        assert crushing["t_ed"] == pytest.approx(abs(action["t_ed_knm"]))
+        assert result["longitudinal"]["m_ed"] == pytest.approx(
+            abs(action[moment_key])
+        )
+    assert out["worked_example_selection"]["families"]["combined"] == {
+        "case_id": "PL-GOV",
+        "component": None,
+    }
+
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, out, figures=False, profile=profile
+    )
+    assert builder._needs_diagnostic_chapter("combined", low) is False
+    assert builder._needs_diagnostic_chapter("combined", incomplete) is True
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+    assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in text
+    assert "Combined bending + shear + torsion (M-V-T) - PL-GOV" in text
+    assert "Combined bending + shear + torsion (M-V-T) - PL-INCOMPLETE" in text
+    assert "Representative Base-EN directional calculation: Vy+T" in text
+    assert "Representative Base-EN directional calculation: Vx+T" not in text
+    assert f"V-T crushing at cot {chr(0x03B8)} = 1.00" in text
+    assert f"Common member angle cot {chr(0x03B8)} = 1.000" in text
+    assert "Complete both required longitudinal chord checks" in text
+    assert "The complete combined M-V-T worked example is published only" not in text
+    assert "DK NA sum" not in text
+
+
 def _retain_combined_chords(payload, *candidates):
     retained = [item for item in candidates if item is not None]
     payload["longitudinal_candidates"] = retained
@@ -7411,6 +8048,7 @@ def test_report_combined_transverse_shows_shear_credit():
                            u_crush=0.4, governing=0.6, governs="stirrups", ok=True,
                            shear_fraction=0.0, torsion_fraction=0.6,
                            shear_credited=True, vrd_c=120.0, v_ed=40.0)
+    c["crushing"].update(cot=2.0, theta_deg=26.6, value=0.4)
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Shared stirrup" in txt
@@ -8025,50 +8663,82 @@ def test_report_prints_public_one_based_concrete_point_without_conversion():
 
 
 def _combined_longitudinal(theta_mode):
-    # Minimal combined block that renders only the M+V+T tension-chord note. Crushing
-    # and transverse are omitted so the section reduces to the longitudinal paragraph,
-    # whose wording is driven purely by theta_mode.
-    dkna = combined_core.dkna_interaction_result(
-        0.0, None,
-        0.50, 1.0,
-        0.60, 1.0,
-        0.30, 1.0,
-        m_v_independent=False,
+    # A valid Base-EN-only payload keeps the angle explanation independent of
+    # the additional Danish interaction rule.
+    transverse_live = theta_mode != "resistance"
+    payload = (
+        _base_en_combined_out()
+        if transverse_live
+        else {
+            "method": codes.EC2_2005.label,
+            "valid": True,
+        }
     )
-    payload = {
-        "method": "EN 1992-1-1:2005",
+    shear_shift = 20.0 if transverse_live else 0.0
+    torsion_share = 10.0 if transverse_live else 0.0
+    total = 100.0 + shear_shift + torsion_share
+    payload.setdefault("longitudinal", {}).update({
         "valid": True,
-        "r_n": 0.0, "r_m": 0.50, "r_v": 0.60, "r_t": 0.30,
-        "dkna_valid": dkna.valid,
-        "dkna_ok": dkna.ok,
-        "dkna_sum": dkna.utilisation,
-        "dkna_selection": asdict(dkna),
-        "m_v_independent": False,
-        "longitudinal": {
-            "valid": True, "ok": True, "axis": "x", "tension_low": True,
-            "m_ed": 100.0, "m_rd": 200.0, "mv": 20.0, "mt": 10.0,
-            "ftd_v": 40.0, "ftd_t": 15.0, "z": 0.25, "m_total": 130.0,
-            "util": 0.65, "biaxial": False, "capped": False,
-            "theta_mode": theta_mode,
-        },
+        "ok": True,
+        "axis": "x",
+        "tension_low": True,
+        "m_ed": 100.0,
+        "m_rd": 200.0,
+        "mv": shear_shift,
+        "mt": torsion_share,
+        "ftd_v": 40.0 if shear_shift else 0.0,
+        "ftd_t": 15.0 if torsion_share else 0.0,
+        "z": 0.25,
+        "m_total": total,
+        "util": total / 200.0,
+        "biaxial": False,
+        "capped": False,
+        "theta_mode": theta_mode,
+    })
+    payload["longitudinal_assessment"] = {
+        "status": "PASS",
+        "util": total / 200.0,
+        "coverage_complete": True,
+        "reason": "Complete longitudinal chord coverage",
     }
     _retain_combined_chords(payload, payload["longitudinal"])
     return {"combined": payload}
 
 
-def test_report_no_load_longitudinal_note_states_resistance_optimum():
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_no_load_longitudinal_note_states_resistance_optimum(profile):
     # theta_mode == "resistance": no live shear or torsion, so there is no live
     # member-angle objective and the capacity result uses its resistance optimum.
     txt = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), _combined_longitudinal("resistance"), figures=False)).split())
+        {}, _inp(), _combined_longitudinal("resistance"), figures=False,
+        profile=profile,
+    )).split())
     assert "No shear or torsion is acting" in txt
     assert "resistance-optimum" in txt
     assert "minimise the governing utilisation" not in txt
 
 
-def test_report_shared_longitudinal_note_states_the_common_angle():
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_shared_longitudinal_note_states_the_common_angle(profile):
     # theta_mode == "utilisation" is the normal case: one admissible member angle.
     txt = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), _combined_longitudinal("utilisation"), figures=False)).split())
+        {}, _inp(), _combined_longitudinal("utilisation"), figures=False,
+        profile=profile,
+    )).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt
+
+
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+@pytest.mark.parametrize("theta_mode", [None, "unknown"])
+def test_report_unknown_longitudinal_angle_mode_uses_neutral_note(
+    profile,
+    theta_mode,
+):
+    txt = " ".join(_pdf_text(sector_report.build_report(
+        {}, _inp(), _combined_longitudinal(theta_mode), figures=False,
+        profile=profile,
+    )).split())
+    assert "does not identify how the member strut angle was selected" in txt
+    assert "No shear or torsion is acting" not in txt
+    assert "resistance-optimum" not in txt

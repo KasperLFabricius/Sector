@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape as _html_escape
 import math
+from numbers import Real
 
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -13,16 +14,54 @@ from sector import geometry
 _PERMILLE = chr(0x2030)  # per-mille sign
 
 
+def _is_boolean_scalar(value):
+    """Return whether a scalar is a built-in or NumPy Boolean."""
+
+    value_type = type(value)
+    return isinstance(value, bool) or (
+        value_type.__module__ == "numpy"
+        and value_type.__name__ in {"bool", "bool_"}
+    )
+
+
+def utilisation_value(value, *, allow_positive_infinity=False):
+    """Return a strict non-negative utilisation scalar, or ``None``.
+
+    Retained results may be reconstructed from project data or older in-memory
+    state.  Only real numeric scalars are eligible for a public utilisation;
+    Booleans, numeric text, negative values and non-finite values fail closed.
+    Positive infinity is retained only for callers that explicitly use it as a
+    definite over-limit result.
+    """
+
+    if value is None or _is_boolean_scalar(value) or not isinstance(value, Real):
+        return None
+    try:
+        metric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if math.isfinite(metric):
+        return metric if metric >= 0.0 else None
+    if allow_positive_infinity and metric == math.inf:
+        return metric
+    return None
+
+
 def pct(x, nd=1):
-    """A utilisation fraction as a percentage string, ``inf`` when unbounded/undefined.
+    """Format a utilisation fraction without inventing unavailable evidence.
 
     Shared by the Streamlit views and the PDF report so the same utilisation never
     formats differently on screen and in the document. ``nd`` is the decimal count
-    (the sub-tube table prints whole percent, most checks one decimal).
+    (the sub-tube table prints whole percent, most checks one decimal). Missing,
+    malformed and Boolean values render as ``-``; a retained positive infinity
+    remains ``inf``.
     """
-    if x is None or (isinstance(x, float) and not math.isfinite(x)):
+    value = utilisation_value(x, allow_positive_infinity=True)
+    if value is None:
+        return "-"
+    if value == math.inf:
         return "inf"
-    return f"{x * 100:.{nd}f} %"
+    return f"{value * 100:.{nd}f} %"
 
 
 def util_ok(util, tol=0.0):
@@ -32,7 +71,11 @@ def util_ok(util, tol=0.0):
     badge and the report OK/EXCEEDED verdict can never diverge. ``tol`` allows the
     tiny float slack (1e-9) some call sites use.
     """
-    return util is not None and math.isfinite(util) and util <= 1.0 + tol
+    value = utilisation_value(util)
+    tolerance = utilisation_value(tol)
+    if value is None or tolerance is None:
+        return False
+    return value <= 1.0 + tolerance
 
 
 def tension_face_label(tension_low, axis=None):
@@ -53,7 +96,7 @@ def directional_face_label(component, face):
     return tension_face_label(token == "negative", axis)
 
 
-def chord_angle_note(theta_mode):
+def chord_angle_note(theta_mode, *, angle_valid=True):
     """One shared sentence explaining how the M+V+T chord's strut angle was chosen.
 
     Reused verbatim by the Shear/Combined views and the PDF report so the on-screen
@@ -62,15 +105,20 @@ def chord_angle_note(theta_mode):
 
     ``theta_mode`` is either ``utilisation`` (a live load drove the minimax choice)
     or ``resistance`` (no live transverse load, so the shear-shift and torsion terms
-    are zero and nothing drives the angle).
+    are zero and nothing drives the angle). A live-load explanation also requires
+    reconciled retained angle evidence.
     """
-    if theta_mode == "utilisation":
+    if theta_mode == "utilisation" and angle_valid is True:
         return ("Both contributions are at the ONE member strut angle shared by the "
                 "shear and torsion checks (6.3.2(2)), selected to minimise the "
                 "governing utilisation.")
-    return ("No shear or torsion is acting, so there is no strut-angle objective; the "
-            "shear-shift and torsion terms are zero and the angle is each action's "
-            "resistance-optimum.")
+    if theta_mode == "resistance":
+        return ("No shear or torsion is acting, so there is no strut-angle objective; "
+                "the shear-shift and torsion terms are zero and the angle is each "
+                "action's resistance-optimum.")
+    return ("The result does not identify how the member strut angle was selected; "
+            "review the shear and torsion inputs before using the angle-dependent "
+            "longitudinal chord evidence.")
 
 
 def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,

@@ -556,6 +556,17 @@ def test_manual_documents_variable_circular_and_duct_shear_rules():
     assert "NOT ASSESSED rather than using a rectangular result" in text
 
 
+def test_manual_distinguishes_base_en_components_from_the_danish_rule():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+
+    assert "supported concrete-crushing, closed-stirrup and longitudinal" in text
+    assert "Base EN reports those physical checks separately" in text
+    assert "does not publish an additional aggregate interaction verdict" in text
+    assert "Danish edition additionally applies the DK NA" in text
+    assert "Combined M-V-T (Base EN)" in text
+    assert "Combined M-V-T (Danish edition)" in text
+
+
 def test_manual_documents_both_2023_chords_and_the_exact_failed_fixture():
     text = "\n".join(
         block[1] for block in manual.manual_blocks() if block[0] == "md"

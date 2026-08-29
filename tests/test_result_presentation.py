@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from app import modelled_direction  # noqa: E402
-from sector import combined as combined_core  # noqa: E402
+from sector import codes, combined as combined_core  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 
 
@@ -1039,13 +1039,17 @@ def test_stale_summary_retains_last_status_as_evidence():
 
 
 def test_combined_summary_cannot_hide_subordinate_failure():
+    theta_deg = math.degrees(math.atan2(1.0, 1.5))
     combined = {
         "valid": True,
         "method": "DK NA",
         "dkna_sum": 0.80,
-        "crushing": {"valid": True, "value": 1.10, "cot": 1.5},
+        "crushing": {
+            "valid": True, "value": 1.10, "cot": 1.5,
+            "theta_deg": theta_deg,
+        },
         "transverse": {
-            "valid": True, "cot": 1.5,
+            "valid": True, "cot": 1.5, "theta_deg": theta_deg,
             "u_crush": 1.10, "u_stirrup": 0.75,
             "shear_fraction": 0.30, "torsion_fraction": 0.45,
             "governing": 1.10, "governs": "crushing",
@@ -1513,6 +1517,84 @@ def test_combined_physical_components_tolerates_missing_strut_angle():
     assert components[0]["note"] == "V-T crushing at the shared member angle"
 
 
+@pytest.mark.parametrize(
+    (
+        "transverse_util",
+        "interaction_util",
+        "transverse_cot",
+        "interaction_cot",
+        "transverse_theta",
+        "interaction_theta",
+        "expected_status",
+        "expected_util",
+        "expected_angle_valid",
+    ),
+    (
+        (0.50, 0.50, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "PASS", 0.50, True),
+        (0.50, 0.50, 2.00, 2.00, 26.6,
+         26.6, "PASS", 0.50, True),
+        (True, 0.50, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "NOT ASSESSED", None, True),
+        (0.40, 0.50, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "NOT ASSESSED", None, True),
+        (0.50, True, 1.50, 1.50, 33.690067525979785,
+         33.690067525979785, "NOT ASSESSED", None, True),
+        (0.50, 0.50, 1.50, 1.40, 33.690067525979785,
+         35.53767779197438, "NOT ASSESSED", None, False),
+        (0.50, 0.50, True, 1.00, 45.0, 45.0,
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, math.inf, 33.690067525979785, 0.0,
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, 1.50, None, 33.690067525979785,
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, 1.50, 33.690067525979785, "33.69",
+         "NOT ASSESSED", None, False),
+        (0.50, 0.50, 1.50, 1.50, 33.690067525979785, 60.0,
+         "NOT ASSESSED", None, False),
+    ),
+)
+def test_combined_physical_components_reconciles_formula_629_evidence(
+    transverse_util,
+    interaction_util,
+    transverse_cot,
+    interaction_cot,
+    transverse_theta,
+    interaction_theta,
+    expected_status,
+    expected_util,
+    expected_angle_valid,
+):
+    components = presentation.combined_physical_components({
+        "transverse": {
+            "valid": True,
+            "cot": transverse_cot,
+            "theta_deg": transverse_theta,
+            "u_crush": transverse_util,
+            "u_stirrup": 0.60,
+            "shear_fraction": 0.20,
+            "torsion_fraction": 0.40,
+        },
+        "crushing": {
+            "valid": True,
+            "value": interaction_util,
+            "cot": interaction_cot,
+            "theta_deg": interaction_theta,
+        },
+    })
+
+    concrete = next(item for item in components if item["key"] == "concrete")
+    assert concrete["status"] == expected_status
+    assert concrete["util"] == expected_util
+    assert concrete["angle_valid"] is expected_angle_valid
+    stirrup = next(item for item in components if item["key"] == "stirrup")
+    assert stirrup["status"] == (
+        "PASS" if expected_angle_valid else "NOT ASSESSED"
+    )
+    if expected_status == "NOT ASSESSED":
+        assert "recalculate" in concrete["note"]
+
+
 def test_combined_components_fail_closed_without_retained_governing_chord():
     components = presentation.combined_physical_components({
         "longitudinal": {
@@ -1740,7 +1822,7 @@ def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
         "resistance component can be assessed"
     )
 
-    combined_row = by_check["Combined M-V-T"]
+    combined_row = by_check["Combined M-V-T supported components"]
     assert combined_row["status"] == "NOT ASSESSED"
     assert combined_row["util"] is None
     assert combined_row["note"] == (
@@ -2062,6 +2144,303 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
     assert by_check["Combined Vx+T - DK NA sum"]["criterion"] == "<= 100 %"
     assert by_check["Generic Vx-Vy-T interaction"]["status"] == "NOT CALCULATED"
     assert presentation.overall_summary_status(rows) == "FAIL"
+
+
+def test_base_en_combined_summary_publishes_only_supported_physical_checks():
+    def direction(concrete, stirrup, longitudinal):
+        return {
+            "valid": True,
+            "method": codes.EC2_2005.label,
+            "transverse": {
+                "valid": True,
+                "u_crush": concrete,
+                "u_stirrup": stirrup,
+                "cot": 1.5,
+                "shear_fraction": 0.2,
+                "torsion_fraction": stirrup - 0.2,
+            },
+            "longitudinal": {
+                "valid": True,
+                "util": longitudinal,
+                "axis": "x",
+                "tension_low": True,
+            },
+            "governing_longitudinal": {
+                "valid": True,
+                "util": longitudinal,
+                "axis": "x",
+                "tension_low": True,
+            },
+            "longitudinal_all_conditional": True,
+            "longitudinal_assessment": {
+                "status": "PASS" if longitudinal <= 1.0 else "FAIL",
+                "util": longitudinal,
+                "coverage_complete": True,
+            },
+        }
+
+    combined = {
+        "biaxial": True,
+        "method": codes.EC2_2005.label,
+        "directions": {
+            "vx": direction(0.50, 0.60, 0.70),
+            "vy": direction(0.80, 0.90, 1.10),
+        },
+    }
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    checks = {row["check"] for row in combined_rows}
+    assert "Combined Vx+T concrete compression strut" in checks
+    assert "Combined Vy+T closed stirrup" in checks
+    assert "Combined Vy+T longitudinal reinforcement" in checks
+    assert "Generic Vx-Vy-T interaction" in checks
+    assert all("DK NA" not in row["check"] for row in combined_rows)
+    assert all("dkna" not in row["overview_key"] for row in combined_rows)
+    assert next(
+        row for row in combined_rows
+        if row["check"] == "Combined Vy+T longitudinal reinforcement"
+    )["status"] == "FAIL"
+
+
+def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
+    def combined_result(util, longitudinal_status):
+        longitudinal = {
+            "valid": True,
+            "util": util - 0.05,
+            "axis": "x",
+            "tension_low": True,
+        }
+        return {
+            "valid": True,
+            "method": codes.EC2_2005.label,
+            "transverse": {
+                "valid": True,
+                "u_crush": util,
+                "u_stirrup": util - 0.10,
+                "cot": 1.5,
+                "shear_fraction": util - 0.30,
+                "torsion_fraction": 0.20,
+            },
+            "longitudinal": longitudinal,
+            "governing_longitudinal": longitudinal,
+            "longitudinal_all_conditional": True,
+            "longitudinal_assessment": {
+                "status": longitudinal_status,
+                "util": util - 0.05,
+                "coverage_complete": longitudinal_status in {"PASS", "FAIL"},
+            },
+        }
+
+    mixed_biaxial = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": {
+            "vx": combined_result(0.95, "PASS"),
+            "vy": combined_result(0.90, "NOT ASSESSED"),
+        },
+    }
+    out = {
+        "plastic_cases": [
+            {
+                "name": "PL-GOV",
+                "results": {
+                    "plastic": _plastic(),
+                    "combined": combined_result(0.85, "PASS"),
+                },
+            },
+            {
+                "name": "PL-INCOMPLETE",
+                "results": {
+                    "plastic": _plastic(),
+                    "combined": combined_result(0.95, "NOT ASSESSED"),
+                },
+            },
+            {
+                "name": "PL-BIAXIAL-INCOMPLETE",
+                "results": {
+                    "plastic": _plastic(),
+                    "combined": mixed_biaxial,
+                },
+            },
+        ]
+    }
+
+    assert presentation._transverse_metric("combined", mixed_biaxial) is None
+    assert presentation.worked_example_selection({}, out)["families"][
+        "combined"
+    ] == {"case_id": "PL-GOV", "component": None}
+
+
+@pytest.mark.parametrize(
+    "directions",
+    (
+        {},
+        {"vx": {}},
+        {"vx": {}, "vy": None},
+        {"vx": {}, "vy": "unavailable"},
+        "unavailable",
+    ),
+)
+def test_base_en_biaxial_direction_evidence_fails_closed(directions):
+    combined = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": directions,
+    }
+
+    assert presentation.base_en_combined_direction_items(combined) is None
+    assert presentation._transverse_metric("combined", combined) is None
+    assert presentation._transverse_direction("combined", combined) is None
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert len(combined_rows) == 1
+    assert combined_rows[0]["status"] == "NOT ASSESSED"
+    assert combined_rows[0]["util"] is None
+    assert "both directional combined calculations" in (
+        combined_rows[0]["note"].casefold()
+    )
+
+
+def test_base_en_empty_second_direction_cannot_publish_surviving_direction():
+    chord = {
+        "valid": True,
+        "util": 0.70,
+        "axis": "x",
+        "tension_low": True,
+    }
+    vx = {
+        "valid": True,
+        "method": codes.EC2_2005.label,
+        "transverse": {
+            "valid": True,
+            "u_crush": 0.50,
+            "u_stirrup": 0.60,
+            "cot": 1.5,
+            "shear_fraction": 0.30,
+            "torsion_fraction": 0.30,
+        },
+        "longitudinal": chord,
+        "governing_longitudinal": chord,
+        "longitudinal_all_conditional": True,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "util": 0.70,
+            "coverage_complete": True,
+        },
+    }
+    combined = {
+        "method": codes.EC2_2005.label,
+        "biaxial": True,
+        "directions": {"vx": vx, "vy": {}},
+    }
+
+    assert presentation.base_en_combined_direction_items(combined) is None
+    assert presentation._transverse_metric("combined", combined) is None
+    assert presentation._transverse_direction("combined", combined) is None
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert len(combined_rows) == 1
+    assert combined_rows[0]["status"] == "NOT ASSESSED"
+    assert combined_rows[0]["result"] == "-"
+
+
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained", "generic_interaction_status"),
+    (
+        (True, True, "NOT ASSESSED"),
+        (np.bool_(True), np.bool_(True), "NOT ASSESSED"),
+        ("0.5", "0.5", "NOT ASSESSED"),
+        (-0.25, -0.25, "NOT ASSESSED"),
+        (math.inf, True, "FAIL"),
+    ),
+)
+def test_base_en_invalid_utilisations_are_not_publication_numbers(
+    retained,
+    transverse_retained,
+    generic_interaction_status,
+):
+    chord = {
+        "valid": True,
+        "util": retained,
+        "axis": "x",
+        "tension_low": True,
+    }
+    combined = {
+        "valid": True,
+        "method": codes.EC2_2005.label,
+        "transverse": {
+            "valid": True,
+            "u_crush": transverse_retained,
+            "u_stirrup": transverse_retained,
+            "cot": 1.5,
+            "shear_fraction": transverse_retained,
+            "torsion_fraction": transverse_retained,
+        },
+        "longitudinal": chord,
+        "governing_longitudinal": chord,
+        "longitudinal_all_conditional": True,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "util": retained,
+            "coverage_complete": True,
+        },
+        "torsion_longitudinal_assessment": {
+            "status": "FAIL",
+            "demand_ratio": retained,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+        },
+    }
+
+    components = presentation.combined_physical_components(combined)
+    assert {item["status"] for item in components} == {"NOT ASSESSED"}
+    assert all(item["util"] is None for item in components)
+    longitudinal = next(
+        item for item in components if item["key"] == "longitudinal"
+    )
+    assert longitudinal["chord_status"] == "NOT ASSESSED"
+    assert longitudinal["chord_util"] is None
+    assert presentation._transverse_metric("combined", combined) is None
+    assert presentation.interaction_assessment_status(
+        {"valid": True, "value": retained}
+    ) == generic_interaction_status
+    assert presentation.viz.util_ok(retained) is False
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            combined_on=True,
+            combined_method=codes.EC2_2005.label,
+        ),
+        {"plastic": _plastic(), "combined": combined},
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert len(combined_rows) == 3
+    assert {row["status"] for row in combined_rows} == {"NOT ASSESSED"}
+    assert all(row["result"] == "-" and row["util"] is None for row in combined_rows)
 
 
 def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():

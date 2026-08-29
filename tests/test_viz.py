@@ -29,6 +29,58 @@ def _has_marker_trace(fig):
     return any(getattr(t, "mode", None) == "markers" for t in fig.data)
 
 
+def test_utilisation_formatting_rejects_boolean_and_marks_missing_as_unavailable():
+    import numpy as np
+
+    for value in (
+        None,
+        True,
+        np.bool_(True),
+        "not a utilisation",
+        "0.5",
+        -0.25,
+        math.nan,
+        -math.inf,
+    ):
+        assert viz.pct(value) == "-"
+        assert viz.util_ok(value) is False
+        assert viz.utilisation_value(value) is None
+    assert viz.pct(math.inf) == "inf"
+    assert viz.util_ok(math.inf) is False
+    assert viz.utilisation_value(math.inf) is None
+
+
+@pytest.mark.parametrize("theta_mode", [None, "", "unknown", True])
+def test_unknown_chord_angle_mode_uses_neutral_engineering_note(theta_mode):
+    note = viz.chord_angle_note(theta_mode)
+
+    assert "does not identify how the member strut angle was selected" in note
+    assert "No shear or torsion is acting" not in note
+    assert "resistance-optimum" not in note
+
+
+def test_known_chord_angle_modes_keep_their_specific_engineering_notes():
+    utilisation = viz.chord_angle_note("utilisation")
+    resistance = viz.chord_angle_note("resistance")
+    invalid_utilisation = viz.chord_angle_note(
+        "utilisation", angle_valid=False
+    )
+    resistance_without_live_angle = viz.chord_angle_note(
+        "resistance", angle_valid=False
+    )
+
+    assert "selected to minimise the governing utilisation" in utilisation
+    assert "No shear or torsion is acting" in resistance
+    assert "resistance-optimum" in resistance
+    assert "does not identify how the member strut angle was selected" in (
+        invalid_utilisation
+    )
+    assert "No shear or torsion is acting" in resistance_without_live_angle
+    assert viz.utilisation_value(math.inf, allow_positive_infinity=True) == math.inf
+    assert viz.pct(1.0) == "100.0 %"
+    assert viz.util_ok(1.0) is True
+
+
 def test_concrete_figure_greek_axes_dots_and_axis_labels():
     fig = viz.concrete_curve_figure(Concrete(fck=35.0, gamma_c=1.5, curve=2))
     xtitle = fig.layout.xaxis.title.text

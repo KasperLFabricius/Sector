@@ -1492,6 +1492,583 @@ def test_app_combined_edition_lock():
     assert at.selectbox(key="torsion_method").disabled
 
 
+def test_app_base_en_keeps_physical_interactions_without_dkna_artifacts():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    assert results["shear"]["method"] == codes.EC2_2005.label
+    assert results["torsion"]["method"] == codes.EC2_2005.label
+    combined_result = results["combined"]
+    assert combined_result["method"] == codes.EC2_2005.label
+    assert combined_result["crushing"]["valid"] is True
+    assert combined_result["transverse"]["valid"] is True
+    assert combined_result["longitudinal"]["valid"] is True
+    for forbidden in (
+        "source_clause",
+        "r_n",
+        "r_m",
+        "r_v",
+        "r_t",
+        "m_v_independent",
+        "m_v_separation_condition",
+        "dkna_sum",
+        "dkna_valid",
+        "dkna_reason",
+        "dkna_status",
+        "dkna_ok",
+        "dkna_selection",
+        "action_alone",
+    ):
+        assert forbidden not in combined_result
+
+    _goto_page(at, "Inputs")
+    assert "combined_mv_independent" not in {
+        widget.key for widget in at.checkbox
+    }
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value)
+        for family in (at.info, at.warning, at.caption, at.markdown)
+        for item in family
+    )
+    assert "Base EN reports its supported V+T concrete" in visible
+    assert "No additional aggregate interaction verdict" in visible
+    assert "ONE member strut angle shared" in visible
+    assert "selected to minimise the governing utilisation" in visible
+    assert "DK NA" not in visible
+    assert "action-alone" not in visible
+
+    combined_result["longitudinal"]["theta_mode"] = "unknown"
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value)
+        for family in (at.info, at.warning, at.caption, at.markdown)
+        for item in family
+    )
+    assert "does not identify how the member strut angle was selected" in visible
+    assert "No shear or torsion is acting" not in visible
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    checks = tuple(str(value) for value in overview["Check"])
+    assert any("concrete compression strut" in value.casefold() for value in checks)
+    assert any("closed stirrup" in value.casefold() for value in checks)
+    assert any("longitudinal reinforcement" in value.casefold() for value in checks)
+    assert not any("DK NA" in value for value in checks)
+
+
+def test_app_base_en_biaxial_view_keeps_only_directional_physical_checks():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+
+    assert not at.exception
+    aggregate = at.session_state["results"]["combined"]
+    assert aggregate["method"] == codes.EC2_2005.label
+    assert set(aggregate["directions"]) == {"vx", "vy"}
+    for direction in aggregate["directions"].values():
+        assert direction["method"] == codes.EC2_2005.label
+        assert "action_alone" not in direction
+        assert not any(key.startswith("dkna_") for key in direction)
+
+    _select_view(at, "M-V-T Combined")
+    direction_table = next(
+        frame.value
+        for frame in at.dataframe
+        if "Directional screen" in frame.value.columns
+    )
+    assert tuple(direction_table["Directional screen"]) == (
+        "Vx,Ed + TEd",
+        "Vy,Ed + TEd",
+    )
+    assert {"Concrete strut", "Closed stirrup", "Longitudinal"}.issubset(
+        direction_table.columns
+    )
+    assert not any("DK NA" in str(column) for column in direction_table.columns)
+    assert not any("action-alone" in str(column).casefold() for column in direction_table.columns)
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    checks = tuple(str(value) for value in overview["Check"])
+    assert "Combined Vx+T concrete compression strut" in checks
+    assert "Combined Vx+T closed stirrup" in checks
+    assert not any("DK NA" in value or "action-alone" in value.casefold() for value in checks)
+
+
+@pytest.mark.parametrize("malformed_vy", ("missing", "empty"))
+def test_app_base_en_missing_biaxial_direction_fails_closed(malformed_vy):
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 40.0),
+        ("number_input", "pl_My", 30.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_Vx", 10.0),
+        ("number_input", "shear_Vy", 12.0),
+        ("number_input", "torsion_T", 5.0),
+    )
+    aggregate = at.session_state["results"]["combined"]
+    if malformed_vy == "missing":
+        aggregate["directions"].pop("vy")
+    else:
+        aggregate["directions"]["vy"] = {}
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    assert any(
+        "both Vx+T and Vy+T" in warning.value
+        for warning in at.warning
+    )
+    assert not any(
+        "Directional screen" in frame.value.columns
+        for frame in at.dataframe
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    combined_rows = overview[
+        overview["Check"] == "Combined M-V-T supported components"
+    ]
+    assert tuple(combined_rows["Status"]) == ("NOT ASSESSED",)
+    assert tuple(combined_rows["Result"]) == ("-",)
+
+
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_app_base_en_invalid_utilisations_are_not_published(
+    retained,
+    transverse_retained,
+):
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    combined = at.session_state["results"]["combined"]
+    combined["transverse"].update(
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
+    )
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(status="PASS", util=retained)
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    component_metrics = {
+        metric.label: str(metric.value)
+        for metric in at.metric
+        if metric.label in {
+            "Concrete compression strut",
+            "Closed stirrup",
+            "Longitudinal reinforcement",
+        }
+    }
+    assert component_metrics["Concrete compression strut"] == "-"
+    assert component_metrics["Closed stirrup"] == "-"
+    assert component_metrics["Longitudinal reinforcement"] != "100.0 %"
+    assert "100.0 %" not in {str(metric.value) for metric in at.metric}
+    assert "50.0 %" not in {str(metric.value) for metric in at.metric}
+    assert "-25.0 %" not in {str(metric.value) for metric in at.metric}
+    assert "inf" not in {str(metric.value).casefold() for metric in at.metric}
+    assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    combined_rows = overview[
+        overview["Check"].str.startswith("Combined ")
+    ]
+    assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
+    assert "100.0 %" not in set(combined_rows["Result"])
+    assert "50.0 %" not in set(combined_rows["Result"])
+    assert "-25.0 %" not in set(combined_rows["Result"])
+    assert "inf" not in {str(value).casefold() for value in combined_rows["Result"]}
+
+
+@pytest.mark.parametrize(
+    ("retained", "transverse_retained"),
+    (
+        (True, True),
+        ("0.5", "0.5"),
+        (-0.25, -0.25),
+        (math.inf, True),
+    ),
+)
+def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
+    retained,
+    transverse_retained,
+):
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    combined = at.session_state["results"]["combined"]
+    combined["transverse"].update(
+        u_crush=transverse_retained,
+        u_stirrup=transverse_retained,
+        shear_fraction=transverse_retained,
+        torsion_fraction=transverse_retained,
+    )
+    combined["crushing"]["value"] = transverse_retained
+    combined["longitudinal"]["util"] = retained
+    combined["governing_longitudinal"] = combined["longitudinal"]
+    combined["longitudinal_assessment"].update(
+        status="PASS", util=retained
+    )
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "demand_ratio": retained,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+    }
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    sum_metrics = [metric for metric in at.metric if metric.label == "Sum"]
+    stirrup_metrics = [
+        metric
+        for metric in at.metric
+        if metric.label == "Closed-stirrup utilisation"
+    ]
+    chord_metrics = [
+        metric
+        for metric in at.metric
+        if "M_{Ed" in str(metric.label) and "/M_{Rd}" in str(metric.label)
+    ]
+    assert {str(metric.value) for metric in sum_metrics} == {"-"}
+    assert {str(metric.value) for metric in stirrup_metrics} == {"-"}
+    # The governing retained chord is unavailable; an independently valid
+    # orthogonal chord may remain visible as separate engineering evidence.
+    assert "-" in {str(metric.value) for metric in chord_metrics}
+    assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
+    visible_metrics = {str(metric.value) for metric in at.metric}
+    assert "100.0 %" not in visible_metrics
+    assert "50.0 %" not in visible_metrics
+    assert "-25.0 %" not in visible_metrics
+    assert "inf" not in {value.casefold() for value in visible_metrics}
+
+
+def test_app_direct_shear_and_formula_629_invalid_utilisations_are_not_assessed():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+
+    _select_view(at, "Shear")
+    valid_shear_metric = next(
+        metric
+        for metric in at.metric
+        if metric.label == r"Utilisation $V_{Ed}/V_{Rd}$"
+    )
+    assert valid_shear_metric.delta in {"PASS", "FAIL"}
+
+    _select_view(at, "Torsion")
+    valid_formula_metric = next(
+        metric
+        for metric in at.metric
+        if metric.label == r"Sum ($\leq100\%$)"
+    )
+    assert valid_formula_metric.delta in {"PASS", "FAIL"}
+
+    results = at.session_state["results"]
+    for rejected_utilisation in (True, math.inf):
+        results["shear"]["links"]["util"] = rejected_utilisation
+        results["torsion"]["interaction"]["value"] = rejected_utilisation
+
+        _select_view(at, "Shear")
+        assert not at.exception
+        shear_metric = next(
+            metric
+            for metric in at.metric
+            if metric.label == r"Utilisation $V_{Ed}/V_{Rd}$"
+        )
+        assert str(shear_metric.value) == "-"
+        assert shear_metric.delta in {None, ""}
+        assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
+
+        _select_view(at, "Torsion")
+        assert not at.exception
+        formula_metric = next(
+            metric
+            for metric in at.metric
+            if metric.label == r"Sum ($\leq100\%$)"
+        )
+        assert str(formula_metric.value) == "-"
+        assert formula_metric.delta in {None, ""}
+        assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
+
+
+@pytest.mark.parametrize(
+    "method",
+    [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
+)
+@pytest.mark.parametrize("conflict", ["utilisation", "angle", "theta"])
+def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
+    method,
+    conflict,
+):
+    at = _fresh()
+    at.run()
+    if method == codes.EC2_2005.label:
+        _set(
+            at,
+            ("number_input", "pl_Mx", 100.0),
+            ("checkbox", "shear_on", True),
+            ("checkbox", "torsion_on", True),
+            ("checkbox", "combined_on", True),
+            ("selectbox", "combined_method", method),
+        )
+        _set_and_click(
+            at,
+            "calculate",
+            ("checkbox", "shear_links", True),
+            ("number_input", "shear_V", 150.0),
+            ("number_input", "torsion_T", 40.0),
+        )
+    else:
+        _enable_all(at)
+    combined = at.session_state["results"]["combined"]
+    if conflict == "utilisation":
+        combined["transverse"]["u_crush"] = True
+        combined["crushing"]["value"] = 0.50
+    elif conflict == "angle":
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["transverse"]["cot"] = 1.50
+        combined["crushing"]["cot"] = 1.40
+    else:
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["crushing"]["theta_deg"] = 60.0
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    concrete_metrics = [
+        metric for metric in at.metric
+        if metric.label in {"Concrete compression strut", "Sum"}
+    ]
+    assert {str(metric.value) for metric in concrete_metrics} == {"-"}
+    assert all(metric.delta in {None, ""} for metric in concrete_metrics)
+    assert "50.0 %" not in {str(metric.value) for metric in at.metric}
+    visible_captions = " ".join(str(caption.value) for caption in at.caption)
+    assert "1.40" not in visible_captions
+    assert r"\theta=60.0" not in visible_captions
+    assert any(
+        "Formula (6.29) is NOT ASSESSED" in warning.value
+        for warning in at.warning
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    row = overview[
+        overview["Check"] == "Combined concrete compression strut"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
+    if conflict in {"angle", "theta"}:
+        stirrup = overview[
+            overview["Check"] == "Combined closed stirrup"
+        ].iloc[0]
+        assert stirrup["Status"] == "NOT ASSESSED"
+        assert stirrup["Result"] == "-"
+
+
+def test_app_combined_basis_switch_invalidates_results_and_reports():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    _calculate(at)
+    base_before = at.session_state["results"]["combined"]
+    base_signature = at.session_state["result_sig"]
+    assert "action_alone" not in base_before
+
+    _goto_page(at, "Report")
+    at.session_state["_report_no_figures"] = True
+    at.button(key="gen_report").click().run()
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "reused-current-analysis-results"
+    )
+    base_report_signature = at.session_state["report_signature"]
+    assert not any("Report out of date" in item.value for item in at.warning)
+
+    _set(
+        at,
+        ("selectbox", "combined_method", codes.EC2_2005_DKNA.label),
+        ("checkbox", "combined_mv_independent", True),
+    )
+    _select_view(at, "M-V-T Combined")
+    assert any("press Calculate" in item.value for item in at.warning)
+    _goto_page(at, "Report")
+    assert any("Report out of date" in item.value for item in at.warning)
+    _calculate(at)
+    dk_result = at.session_state["results"]["combined"]
+    dk_signature = at.session_state["result_sig"]
+    assert dk_result is not base_before
+    assert dk_signature != base_signature
+    assert dk_result["method"] == codes.EC2_2005_DKNA.label
+    assert dk_result["m_v_independent"] is True
+    assert "action_alone" in dk_result
+    assert "dkna_sum" in dk_result
+
+    _goto_page(at, "Report")
+    at.button(key="gen_report").click().run()
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "reused-current-analysis-results"
+    )
+    dk_report_signature = at.session_state["report_signature"]
+    assert dk_report_signature != base_report_signature
+
+    _set(at, ("selectbox", "combined_method", codes.EC2_2005.label))
+    _select_view(at, "M-V-T Combined")
+    assert any("press Calculate" in item.value for item in at.warning)
+    _goto_page(at, "Report")
+    assert any("Report out of date" in item.value for item in at.warning)
+    _calculate(at)
+    base_after = at.session_state["results"]["combined"]
+    assert base_after is not dk_result
+    assert base_after["method"] == codes.EC2_2005.label
+    assert "action_alone" not in base_after
+    assert "dkna_sum" not in base_after
+    assert at.session_state["combined_mv_independent"] is True
+    _goto_page(at, "Inputs")
+    assert "combined_mv_independent" not in {
+        widget.key for widget in at.checkbox
+    }
+
+
+def test_mvt_m03_contract_recomputes_pre_scope_capacity_results():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set(at, ("radio", "mode", "Both"))
+    _enable_all(at, mv_independent=True)
+
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    scope_marker = "combined-edition-scope-v1"
+    assert scope_marker in token
+    pre_scope_token = tuple(item for item in token if item != scope_marker)
+    for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
+        assert tuple(latest[key]).count(token) == 1
+
+    before = at.session_state["results"]
+    plastic_before = before["plastic"]
+    elastic_before = before["elastic"]
+    shear_before = before["shear"]
+    torsion_before = before["torsion"]
+    combined_before = before["combined"]
+    cached_case = before["plastic_cases"][0]
+    assert cached_case["results"]["combined"] is combined_before
+    combined_before["pre_mvt_m03_marker"] = True
+    combined_before["dkna_sum"] = 0.01
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            pre_scope_token if item == token else item
+            for item in at.session_state[key]
+        )
+    assert at.session_state["result_sig"] != latest["signature"]
+
+    _calculate(at)
+    refreshed = at.session_state["results"]
+    assert refreshed["plastic"] is plastic_before
+    assert refreshed["elastic"] is elastic_before
+    assert refreshed["shear"] is not shear_before
+    assert refreshed["torsion"] is not torsion_before
+    assert refreshed["combined"] is not combined_before
+    assert "pre_mvt_m03_marker" not in refreshed["combined"]
+    assert refreshed["combined"]["dkna_sum"] != pytest.approx(0.01)
+    assert refreshed["plastic_cases"][0]["reused"] is False
+    assert refreshed["elastic_cases"][0]["reused"] is True
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        assert tuple(at.session_state[key]).count(token) == 1
+
+
 def test_app_combined_incomplete_flags_missing(monkeypatch):
     monkeypatch.setattr(
         capacity,
@@ -2610,9 +3187,12 @@ def test_app_combined_is_saved_and_restored():
     at.run()
     at.checkbox(key="combined_on").set_value(True).run()
     at.selectbox(key="combined_method").set_value(codes.EC2_2005.label).run()
+    at.session_state["combined_mv_independent"] = True
+    at.run()
     scalars = {k: at.session_state[k] for k in project_io.SCALAR_KEYS
                if k in at.session_state}
     assert scalars["combined_on"] is True
+    assert scalars["combined_mv_independent"] is True
     at2 = _fresh()
     at2.run()
     at2.session_state["_pending_project"] = project_io.dump_project({}, scalars)
@@ -2620,3 +3200,7 @@ def test_app_combined_is_saved_and_restored():
     assert not at2.exception
     assert at2.session_state["combined_on"] is True
     assert at2.session_state["combined_method"] == codes.EC2_2005.label
+    assert at2.session_state["combined_mv_independent"] is True
+    assert "combined_mv_independent" not in {
+        widget.key for widget in at2.checkbox
+    }
