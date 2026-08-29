@@ -167,6 +167,12 @@ _TRANSVERSE_REASON_MESSAGES = {
     ),
 }
 _SHEAR_REASON_MESSAGES = {
+    "selected strut-angle range is outside the permitted method range": EngineerMessage(
+        "SHEAR-STRUT-ANGLE-RANGE",
+        "The entered compression-strut range is outside the permitted range for "
+        "the selected method; restore the entered limits to the permitted band or "
+        "use a separately substantiated applicable method",
+    ),
     "stirrups (VRd,s)": EngineerMessage(
         "SHEAR-GOVERNS-STIRRUPS",
         "stirrups (VRd,s)",
@@ -268,6 +274,12 @@ _SHEAR_REASON_MESSAGES = {
     ),
 }
 _TORSION_REASON_MESSAGES = {
+    "selected strut-angle range is outside the permitted method range": EngineerMessage(
+        "TORSION-STRUT-ANGLE-RANGE",
+        "The entered compression-strut range is outside the permitted range for "
+        "the selected torsion method; restore the entered limits to the permitted "
+        "band or use a separately substantiated applicable method",
+    ),
     "stirrups (TRd,s)": EngineerMessage(
         "TORSION-GOVERNS-STIRRUPS",
         "stirrups (TRd,s)",
@@ -394,6 +406,12 @@ _TORSION_WALL_APPLICABILITY_REASONS = frozenset(
     if reason.startswith("torsion sub-tube reinforcement")
 )
 _COMBINED_REASON_MESSAGES = {
+    "selected strut-angle range is outside the permitted method range": EngineerMessage(
+        "COMBINED-STRUT-ANGLE-RANGE",
+        "The entered compression-strut range is outside the common permitted "
+        "range; restore the entered limits to the permitted band or use a "
+        "separately substantiated applicable method",
+    ),
     "no evaluable shared angle": EngineerMessage(
         "COMBINED-SHARED-ANGLE",
         "No common strut angle could be evaluated for the combined M-V-T check",
@@ -2916,6 +2934,9 @@ def result_summary_rows(inp, results, *, stale=False):
                 if selected_route == "concrete" and selected_resistance.get("valid"):
                     non_governing_util = links.get("util")
                     link_geometry = links.get("shear_geometry") or geometry_record
+                    angle_applicability = link_result.get(
+                        "angle_applicability"
+                    ) or links.get("angle_applicability")
                     link_note = (
                         "The concrete route is applicable because the action does "
                         "not exceed VRd,c. Provided-link resistance is context only; "
@@ -2944,6 +2965,30 @@ def result_summary_rows(inp, results, *, stale=False):
                                 context="non-governing provided-link resistance",
                             )
                         )
+                    if (
+                        isinstance(angle_applicability, dict)
+                        and angle_applicability.get("active", True) is True
+                        and angle_applicability.get("applicable") is False
+                    ):
+                        link_note += "; " + result_reason(
+                            link_result.get("reason"),
+                            "shear",
+                            context="inactive out-of-range provided-link result",
+                        )
+                        rows.append(_summary_row(
+                            f"Shear{suffix} with links",
+                            "plastic",
+                            "NOT ASSESSED",
+                            "-",
+                            "-",
+                            None,
+                            "Shear",
+                            link_note,
+                            inp,
+                            overview_key="shear:with_links",
+                            overview_parent="shear",
+                        ))
+                        return
                     chord_assessment = links.get("longitudinal_assessment")
                     chord_active = False
                     chord_status = "NOT APPLICABLE"

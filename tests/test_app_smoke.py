@@ -2097,8 +2097,9 @@ def test_capacity_result_contract_invalidates_capacity_without_bending_or_elasti
     )
     latest = at.session_state["_latest_inputs"]
     token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
-    assert token[-1] == "nominal-shear-resistance-route-v1"
-    pre_route_token = token[:-1]
+    route_marker = "nominal-shear-resistance-route-v1"
+    assert route_marker in token
+    pre_route_token = tuple(item for item in token if item != route_marker)
 
     for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
         assert tuple(latest[key]).count(token) == 1

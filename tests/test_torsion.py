@@ -3210,7 +3210,7 @@ def test_app_torsion_nu_v_toggle_raises_trd_max():
     assert t["trd_max"] > base
 
 
-def test_app_torsion_out_of_default_range_warns_and_retains_verdict():
+def test_app_torsion_outside_permitted_range_withholds_verdict():
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
@@ -3224,16 +3224,41 @@ def test_app_torsion_out_of_default_range_warns_and_retains_verdict():
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["out_of_limits"] is True
-    assert "code_applicable" not in t
+    assert t["valid"] is False
+    assert t["tube_valid"] is True
+    assert t["transverse_resistance_assessed"] is False
+    assert t["trd_s"] is None
+    assert t["trd_max"] is None
+    assert t["trd"] is None
+    assert t["util"] is None
+    assert t["asl_req"] is None
+    assert t["trd_c"] > 0.0
+    assert t["resistance_status"] == "NOT ASSESSED"
+    assert t["assessment_status"] == "NOT ASSESSED"
+    assert t["assessment_ok"] is None
+    assert t["angle_applicability"]["requested_max"] == 3.0
+    assert t["angle_applicability"]["permitted_max"] == 2.5
     _select_view(at, "Torsion")
-    assert any(
-        "actual values are used in the reported torsion and interaction "
-        "calculations" in w.value.lower()
-        for w in at.warning
+    assert not at.exception
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
     )
-    util_metric = next(
-        m for m in at.metric
-        if m.label == r"Transverse/strut utilisation $T_{Ed}/T_{Rd}$"
+    assert "transverse/strut resistance is NOT ASSESSED" in visible
+    assert "outside the permitted range" in visible
+    assert "1.000 to 3.000" in visible
+    assert "dependent interaction verdicts are withheld" in visible
+    assert not any(
+        metric.label
+        == r"Transverse/strut utilisation $T_{Ed}/T_{Rd}$"
+        for metric in at.metric
     )
-    assert util_metric.value == f"{t['util'] * 100:.1f} %"
-    assert not util_metric.delta
+    assert all(metric.delta not in {"PASS", "FAIL", "OK", "Over limit"}
+               for metric in at.metric)
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"

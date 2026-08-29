@@ -456,6 +456,101 @@ def unassessed_links_result(
     }
 
 
+STRUT_ANGLE_OUT_OF_RANGE_REASON = (
+    "selected strut-angle range is outside the permitted method range"
+)
+
+
+def strut_angle_applicability(
+    cot_min,
+    cot_max,
+    *,
+    permitted_min,
+    permitted_max,
+    method: str,
+    basis: str,
+    clause: str,
+    active: bool = True,
+) -> dict:
+    """Classify one requested compression-strut interval without tolerance.
+
+    The requested interval is retained separately from any later optimiser or
+    member-angle selection. Exact method boundaries are admissible; even the
+    immediately adjacent representable value outside a boundary is not.
+    """
+
+    if type(active) is not bool:
+        raise ValueError("strut-angle activity must be a Boolean")
+    values = tuple(
+        _finite_real(value)
+        for value in (cot_min, cot_max, permitted_min, permitted_max)
+    )
+    if any(value is None for value in values):
+        raise ValueError("strut-angle limits must be finite real numbers")
+    cot_a, cot_b, permitted_lo, permitted_hi = tuple(
+        value for value in values if value is not None
+    )
+    requested_lo = min(cot_a, cot_b)
+    requested_hi = max(cot_a, cot_b)
+    if requested_lo <= 0.0 or permitted_lo <= 0.0 or permitted_hi < permitted_lo:
+        raise ValueError("strut-angle limits must form positive ordered intervals")
+    outside_lower = requested_lo < permitted_lo
+    outside_upper = requested_hi > permitted_hi
+    applicable = not (outside_lower or outside_upper)
+    return {
+        "applicable": applicable,
+        "active": active,
+        "status": (
+            "NOT APPLICABLE"
+            if not active
+            else "ASSESSED"
+            if applicable
+            else "NOT ASSESSED"
+        ),
+        "reason": (
+            None
+            if not active or applicable
+            else STRUT_ANGLE_OUT_OF_RANGE_REASON
+        ),
+        "requested_min": requested_lo,
+        "requested_max": requested_hi,
+        "permitted_min": permitted_lo,
+        "permitted_max": permitted_hi,
+        "outside_lower": outside_lower,
+        "outside_upper": outside_upper,
+        "method": str(method),
+        "basis": str(basis),
+        "clause": str(clause),
+    }
+
+
+def unassessed_strut_angle_links_result(
+    *,
+    model: str,
+    applicability: dict,
+    bw_mm,
+    d_mm,
+    asw_over_s,
+    z_mm=None,
+) -> dict:
+    """Return a reinforced-shear payload with no code-domain verdict."""
+
+    result = unassessed_links_result(
+        model=model,
+        reason=STRUT_ANGLE_OUT_OF_RANGE_REASON,
+        bw_mm=bw_mm,
+        d_mm=d_mm,
+        asw_over_s=asw_over_s,
+        z_mm=z_mm,
+    )
+    result.update(
+        cot_min=applicability["requested_min"],
+        cot_max=applicability["requested_max"],
+        angle_applicability=dict(applicability),
+    )
+    return result
+
+
 def validate_gamma_v(value, *, label="gamma_v") -> float:
     """Return a positive factor that yields finite 2023 coefficients."""
 
@@ -807,8 +902,9 @@ def optimum_cot_theta(a: float, b: float, cot_min: float, cot_max: float) -> flo
     ``cot* = sqrt(b/a - 1)`` (where the two branches meet) when that is ``>= 1``, and
     ``cot = 1`` otherwise -- never below 1, since below it *both* branches fall.
     (``a = (Asw/s)*fywd``, ``b = alpha_cw*bw*nu1*fcd``; the lever arm ``z`` cancels.)
-    The result is clamped to the user band ``[cot_min, cot_max]``, which may be
-    widened past the code's ``1..2.5`` (the UI warns rather than blocks).
+    This numerical helper clamps to the supplied band. Callers that publish a
+    design verdict must first establish that the complete requested band is
+    permitted for the selected method.
     """
     return optimum_strut_angle(a, b, cot_min, cot_max).cot
 
@@ -838,7 +934,7 @@ def compression_field_limits_2023(
     v_abs = abs(float(v_ed_kn))
     upper = 2.5
     basis = "ordinary member; compression extension not credited"
-    axial_tension_applied = bool(n_tension > 0.0 and v_abs > 1.0e-12)
+    axial_tension_applied = bool(n_tension > 0.0 and v_abs > 0.0)
     if axial_tension_applied:
         upper = max(2.5 - 0.1 * n_tension / v_abs, 1.0)
         basis = "axial-tension limit"
@@ -945,6 +1041,8 @@ def vrd_links_2023(
     v_ed_kn: float = 0.0,
     n_ed_comp_kn: float = 0.0,
     ac_m2: Optional[float] = None,
+    ductility_class: str = "B",
+    angle_applicability: Optional[dict] = None,
 ) -> dict:
     """Shear resistance with vertical links, EN 1992-1-1:2023, 8.2.3.
 
@@ -1010,6 +1108,34 @@ def vrd_links_2023(
             angle_selection="none",
             angle_a=None,
             angle_b=None,
+        )
+    if angle_applicability is None:
+        limits = compression_field_limits_2023(
+            -float(n_ed_comp_kn),
+            v_ed_kn,
+            ductility_class,
+        )
+        angle_applicability = strut_angle_applicability(
+            cot_min,
+            cot_max,
+            permitted_min=limits["minimum"],
+            permitted_max=limits["maximum"],
+            method=getattr(code, "label", "DS/EN 1992-1-1:2023"),
+            basis=limits["basis"],
+            clause=limits["clause"],
+            active=abs(float(v_ed_kn)) > 0.0,
+        )
+    if (
+        angle_applicability.get("active", True) is True
+        and angle_applicability.get("applicable") is not True
+    ):
+        return unassessed_strut_angle_links_result(
+            model="2023",
+            applicability=angle_applicability,
+            bw_mm=bw_mm,
+            d_mm=d_mm,
+            asw_over_s=asw_over_s,
+            z_mm=z,
         )
     if (
         z is None
@@ -1114,7 +1240,14 @@ def vrd_links_2023(
         axial_applicability=axial_applicability,
         valid=True,
     )
-    result.update(_angle_fields(angle, a, b), fck=fck, bw=bw_mm, d=d_mm, fywk=fywk)
+    result.update(
+        _angle_fields(angle, a, b),
+        fck=fck,
+        bw=bw_mm,
+        d=d_mm,
+        fywk=fywk,
+        angle_applicability=dict(angle_applicability),
+    )
     return result
 
 
@@ -1123,7 +1256,9 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
               cot_max: float, z_mm: Optional[float] = None, *,
               fcd_mpa: Optional[float] = None,
               gamma_s: Optional[float] = None,
-              v_ed_kn: float = 0.0) -> dict:
+              v_ed_kn: float = 0.0,
+              ductility_class: str = "B",
+              angle_applicability: Optional[dict] = None) -> dict:
     """Shear resistance of a member with vertical links.
 
     Dispatches to the EN 1992-1-1:2023 compression-field method (8.2.3) or the
@@ -1147,6 +1282,31 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
             v_ed_kn=v_ed_kn,
             n_ed_comp_kn=n_ed_comp_kn,
             ac_m2=ac_m2,
+            ductility_class=ductility_class,
+            angle_applicability=angle_applicability,
+        )
+    if angle_applicability is None:
+        angle_applicability = strut_angle_applicability(
+            cot_min,
+            cot_max,
+            permitted_min=code.shear_cot_min_limit,
+            permitted_max=code.shear_cot_max_limit,
+            method=getattr(code, "label", "EN 1992-1-1:2005"),
+            basis="2005-family compression-strut range",
+            clause="EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
+            active=abs(float(v_ed_kn)) > 0.0,
+        )
+    if (
+        angle_applicability.get("active", True) is True
+        and angle_applicability.get("applicable") is not True
+    ):
+        return unassessed_strut_angle_links_result(
+            model="2005",
+            applicability=angle_applicability,
+            bw_mm=bw_mm,
+            d_mm=d_mm,
+            asw_over_s=asw_over_s,
+            z_mm=z_mm,
         )
     z = _explicit_links_lever_arm(z_mm)
     gs = code.gamma_s if gamma_s is None else float(gamma_s)
@@ -1191,5 +1351,8 @@ def vrd_links(fck: float, code, bw_mm: float, d_mm: float, asw_over_s: float,
                   fcd=fcd, gamma_s=gs, asw_over_s=asw_over_s,
                   governs=governs, valid=True, fck=fck, bw=bw_mm, d=d_mm,
                   fywk=fywk, model="2005")
-    result.update(_angle_fields(angle, a, b))
+    result.update(
+        _angle_fields(angle, a, b),
+        angle_applicability=dict(angle_applicability),
+    )
     return result

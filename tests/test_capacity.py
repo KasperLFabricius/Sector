@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from sector import capacity, codes, torsion
+from sector import capacity, codes, shear, torsion
 from sector import combined as combined_core
 from sector import section as section_core
 from sector.engineer_message import EngineerMessage
@@ -2519,6 +2519,74 @@ def _torsion_cracking_result(method, gamma_ct, demand=28.0):
     "method",
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
+def test_tube_torsion_angle_gate_precedes_angle_resistance_and_demand_kernels(
+    monkeypatch,
+    method,
+):
+    inp = _torsion_input(
+        torsion_on=True,
+        torsion_method=method,
+        torsion_gamma_ct=(
+            codes.EC2_2005.gamma_ct
+            if method == codes.EC2_2005.label
+            else codes.EC2_2005_DKNA.gamma_ct
+        ),
+        shear_links=True,
+        strut_cot_min=1.0,
+        strut_cot_max=3.0,
+        torsion_T=100.0,
+    )
+    context = capacity.build_torsion_context(inp, 0.0)
+
+    def forbidden(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("angle-dependent torsion kernel entered outside its range")
+
+    monkeypatch.setattr(shear, "optimum_strut_angle", forbidden)
+    monkeypatch.setattr(torsion, "trd_s_result", forbidden)
+    monkeypatch.setattr(torsion, "trd_max_result", forbidden)
+    monkeypatch.setattr(torsion, "asl_required_result", forbidden)
+
+    result = capacity.tube_torsion(
+        context["tube"], context["t_ed"], **context["_tk"]
+    )
+
+    assert result["tube_valid"] is True
+    assert result["valid"] is False
+    assert result["transverse_resistance_assessed"] is False
+    assert result["assessment_reason"] == shear.STRUT_ANGLE_OUT_OF_RANGE_REASON
+    assert result["trd_s"] is None
+    assert result["trd_max"] is None
+    assert result["trd"] is None
+    assert result["util"] is None
+    assert result["asl_req"] is None
+    assert result["trd_c"] > 0.0
+
+
+def test_zero_torsion_does_not_activate_an_out_of_range_interval():
+    inp = _torsion_input(
+        torsion_on=True,
+        shear_links=True,
+        strut_cot_min=1.0,
+        strut_cot_max=3.0,
+        torsion_T=0.0,
+    )
+    context = capacity.build_torsion_context(inp, 0.0)
+    result = capacity.tube_torsion(
+        context["tube"], context["t_ed"], **context["_tk"]
+    )
+
+    assert context["angle_applicability"]["active"] is False
+    assert context["angle_applicability"]["status"] == "NOT APPLICABLE"
+    assert result["valid"] is True
+    assert result["trd"] > 0.0
+    assert result["util"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "method",
+    [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
+)
 def test_tube_torsion_requires_current_closed_link_authority(method):
     absent_input = _torsion_input(
         torsion_on=True,
@@ -2575,11 +2643,22 @@ def test_tube_torsion_requires_current_closed_link_authority(method):
         below_unity_band_context["t_ed"],
         **below_unity_band_context["_tk"],
     )
-    assert below_unity_band["cot"] == pytest.approx(0.8)
-    assert below_unity_band["angle_selection"]["cot"] == pytest.approx(0.8)
-    assert below_unity_band["theta_deg"] == pytest.approx(
-        math.degrees(math.atan2(1.0, 0.8))
+    assert below_unity_band["valid"] is False
+    assert below_unity_band["tube_valid"] is True
+    assert below_unity_band["transverse_resistance_assessed"] is False
+    assert below_unity_band["assessment_reason"] == (
+        shear.STRUT_ANGLE_OUT_OF_RANGE_REASON
     )
+    assert below_unity_band["cot"] is None
+    assert below_unity_band["theta_deg"] is None
+    assert below_unity_band["trd_s"] is None
+    assert below_unity_band["trd_max"] is None
+    assert below_unity_band["trd"] is None
+    assert below_unity_band["util"] is None
+    assert below_unity_band["asl_req"] is None
+    assert below_unity_band["trd_c"] > 0.0
+    assert below_unity_band["angle_applicability"]["requested_min"] == 0.5
+    assert below_unity_band["angle_applicability"]["requested_max"] == 0.8
 
     stale_detail_kwargs = dict(absent_context["_tk"])
     stale_detail_kwargs["nu_detail"] = True

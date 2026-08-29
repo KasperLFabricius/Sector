@@ -5910,40 +5910,60 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
         assert "T Rd = min" not in text
 
 
-def test_report_directional_vt_table_retains_actual_verdict_outside_default_range():
+def test_report_directional_vt_outside_permitted_range_withholds_verdicts():
     out = _out()
     torsion = _torsion_out(interaction=True)
+    applicability = shear_core.strut_angle_applicability(
+        1.0,
+        3.0,
+        permitted_min=1.0,
+        permitted_max=2.5,
+        method=codes.EC2_2005_DKNA.label,
+        basis="first-generation torsion",
+        clause="6.3.2",
+    )
     directional = copy.deepcopy(torsion)
     directional.update(
         cot_max=3.0,
         out_of_limits=True,
+        valid=False,
+        transverse_resistance_assessed=False,
+        full_resistance_assessed=False,
+        resistance_status="NOT ASSESSED",
+        assessment_status="NOT ASSESSED",
+        assessment_ok=None,
+        reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+        assessment_reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+        angle_applicability=applicability,
+        trd_s=None,
+        trd_max=None,
+        trd=None,
+        cot=None,
+        theta_deg=None,
+        util=None,
+        asl_req=None,
+        interaction=None,
         directional_governing_face="negative",
-        directional_governing_cot=1.0,
+        directional_governing_cot=None,
         directional_min_reinf_governing_face="negative",
-        min_reinf=dict(
-            applicable=True, value=0.52, ok=True, t_ed=40.0,
-            trd_c=100.0, v_ed=12.0, vrd_c=100.0, solid=True,
-            model_2023=False,
-        ),
+        min_reinf=None,
     )
+    torsion.update(copy.deepcopy(directional))
     torsion["directional_interactions"] = {
-        "vx": directional,
+        "vx": copy.deepcopy(directional),
         "vy": copy.deepcopy(directional),
     }
     out["torsion"] = torsion
+    inp = _inp()
+    inp.update(torsion_on=True, shear_on=True, shear_links=True)
 
     text = " ".join(_pdf_text(
-        sector_report.build_report({}, _inp(), out, figures=False)
+        sector_report.build_report({}, inp, out, figures=False)
     ).split())
-    for label in ("Vx+T", "Vy+T"):
-        start = text.index(label)
-        # The local reference, caption and repeated context precede the retained
-        # row; keep the probe inside this compact interaction table.
-        assert "PASS" in text[start:start + 520]
-    assert "Directional minimum-reinforcement screens" in text
-    assert "low-action condition satisfied" in text
-    assert "Separate detailing" in text
-    assert "left (-x)" in text and "bottom (-y)" in text
+    assert "Torsion NOT ASSESSED" in text
+    assert "outside the permitted range" in text
+    assert "Vx+T" not in text and "Vy+T" not in text
+    assert "Directional minimum-reinforcement screens" not in text
 
 
 def test_report_compound_torsion_requires_subdivision():
@@ -7853,21 +7873,38 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block():
     assert all(f"{chr(0x2211)}(SEd/SRd)" in text for text in screen_blocks)
 
 
-def test_report_combined_out_of_range_retains_values_and_verdicts():
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_combined_out_of_range_withholds_values_and_verdicts(profile):
     out = _out()
     c = _combined_out()
     c["outside_default_range"] = True
-    c["longitudinal"] = dict(
-        valid=True, axis="x", z=0.54, m_ed=100.0, m_rd=400.0,
-        ftd_v=200.0, ftd_t=120.0, mv=108.0, mt=32.4,
-        m_total=240.4, util=240.4 / 400.0, ok=True, capped=False,
+    c.update(
+        valid=False,
+        dkna_valid=False,
+        dkna_sum=None,
+        r_n=None,
+        r_m=None,
+        r_v=None,
+        r_t=None,
+        action_alone=None,
+        crushing=None,
+        transverse=None,
+        longitudinal=None,
+        reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
     )
-    _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "selected method's default range" in txt
-    assert "actual values are used" in " ".join(txt.lower().split())
-    assert "NO CODE VERDICT" not in txt
+    inp = _inp()
+    inp.update(combined_on=True, shear_on=True, torsion_on=True)
+    txt = _pdf_text(
+        sector_report.build_report(
+            {}, inp, out, figures=False, profile=profile
+        )
+    )
+    flat = " ".join(txt.split())
+    assert "NOT ASSESSED" in flat
+    assert "permitted range" in flat
+    assert "actual values are used" not in flat.lower()
+    assert "60.1 %" not in flat
 
 
 def test_report_combined_longitudinal_check():
@@ -8588,28 +8625,98 @@ def test_report_profiles_fail_closed_for_2023_links_under_axial_compression(
         assert "- kN inf NOT ASSESSED" not in text
 
 
-def test_report_shear_links_out_of_limits_note():
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_shear_links_out_of_limits_are_not_assessed(profile):
     out = _out()
     sh = _shear_out()
     lk = _links_out()
-    lk["cot_max"], lk["out_of_limits"] = 3.0, True
+    applicability = shear_core.strut_angle_applicability(
+        1.0,
+        3.0,
+        permitted_min=1.0,
+        permitted_max=2.5,
+        method=codes.EC2_2005_DKNA.label,
+        basis="first-generation shear",
+        clause="6.2.3",
+    )
+    lk.update(
+        res=shear_core.unassessed_strut_angle_links_result(
+            model="2005",
+            applicability=applicability,
+            bw_mm=300.0,
+            d_mm=550.0,
+            asw_over_s=lk["asw_over_s"],
+            z_mm=495.0,
+        ),
+        util=None,
+        cot_max=3.0,
+        out_of_limits=True,
+        angle_applicability=applicability,
+        assessment_status="NOT ASSESSED",
+        assessment_reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+    )
     sh["links"] = lk
     out["shear"] = sh
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "outside the selected method's default range" in txt
-    assert "entered values are used" in txt.lower()
-    assert "NO CODE VERDICT" not in txt
+    inp = _inp()
+    inp.update(shear_on=True, shear_links=True)
+    txt = _pdf_text(
+        sector_report.build_report(
+            {}, inp, out, figures=False, profile=profile
+        )
+    )
+    flat = " ".join(txt.split())
+    assert "NOT ASSESSED" in flat
+    assert "permitted" in flat
+    assert "entered values are used" not in flat.lower()
+    assert "540.000" not in flat
 
 
-def test_report_torsion_out_of_limits_retains_values_and_verdict():
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_torsion_out_of_limits_withholds_values_and_verdict(profile):
     out = _out()
     t = _torsion_out()
-    t["cot_max"], t["out_of_limits"] = 3.0, True
+    applicability = shear_core.strut_angle_applicability(
+        1.0,
+        3.0,
+        permitted_min=1.0,
+        permitted_max=2.5,
+        method=codes.EC2_2005_DKNA.label,
+        basis="first-generation torsion",
+        clause="6.3.2",
+    )
+    t.update(
+        trd_s=None,
+        trd_max=None,
+        trd=None,
+        cot=None,
+        theta_deg=None,
+        util=None,
+        asl_req=None,
+        cot_max=3.0,
+        out_of_limits=True,
+        valid=False,
+        transverse_resistance_assessed=False,
+        full_resistance_assessed=False,
+        resistance_status="NOT ASSESSED",
+        assessment_status="NOT ASSESSED",
+        assessment_ok=None,
+        reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+        assessment_reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+        angle_applicability=applicability,
+    )
     out["torsion"] = t
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "outside the selected method's default range" in txt
-    assert "entered values are used" in txt.lower()
-    assert "NO CODE VERDICT" not in txt
+    inp = _inp()
+    inp.update(torsion_on=True, shear_links=True)
+    txt = _pdf_text(
+        sector_report.build_report(
+            {}, inp, out, figures=False, profile=profile
+        )
+    )
+    flat = " ".join(txt.split())
+    assert "NOT ASSESSED" in flat
+    assert "permitted" in flat
+    assert "entered values are used" not in flat.lower()
+    assert "76.4" not in flat
 
 
 def test_fig_png_preserves_timeout_signal(monkeypatch):

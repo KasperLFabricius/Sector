@@ -332,7 +332,23 @@ def select_nominal_shear_resistance(
     if links_selected:
         links = shear_result.get("links")
         link_result = links.get("res") if isinstance(links, Mapping) else None
-        if not isinstance(link_result, Mapping) or link_result.get("valid") is not True:
+        angle_applicability = (
+            link_result.get("angle_applicability")
+            if isinstance(link_result, Mapping)
+            else None
+        )
+        if (
+            concrete_applicable
+            and isinstance(angle_applicability, Mapping)
+            and angle_applicability.get("active", True) is True
+            and angle_applicability.get("applicable") is False
+        ):
+            # This link interval is outside its permitted method range while the
+            # concrete route applies.
+            # Geometry and other method failures remain fail-closed; only this
+            # explicit angle-domain state may leave VRd,c authoritative.
+            link_result = None
+        elif not isinstance(link_result, Mapping) or link_result.get("valid") is not True:
             reason = None
             if isinstance(links, Mapping):
                 reason = links.get("assessment_reason")
@@ -342,12 +358,13 @@ def select_nominal_shear_resistance(
                 "NOT ASSESSED",
                 reason or "the selected links resistance is unavailable",
             )
-        try:
-            link_resistance = _positive_finite_real(
-                link_result.get("vrd", _MISSING), "links shear resistance"
-            )
-        except CapacityInputError as exc:
-            return unavailable("NOT ASSESSED", exc)
+        if link_result is not None:
+            try:
+                link_resistance = _positive_finite_real(
+                    link_result.get("vrd", _MISSING), "links shear resistance"
+                )
+            except CapacityInputError as exc:
+                return unavailable("NOT ASSESSED", exc)
 
     if concrete_applicable or not links_selected:
         route = "concrete"
@@ -1426,6 +1443,7 @@ def tube_torsion(
     nu_detail,
     fctd,
     fyd_long,
+    angle_applicability=None,
 ):
     """Build the resistance/utilisation payload for one thin-walled tube."""
     wall_evidence = (
@@ -1453,6 +1471,34 @@ def tube_torsion(
             t_ed,
             closed_links_present=closed_links_present,
         )
+    shear = _module("shear")
+    if angle_applicability is None:
+        angle_applicability = shear.strut_angle_applicability(
+            cot_min,
+            cot_max,
+            permitted_min=tcode.shear_cot_min_limit,
+            permitted_max=tcode.shear_cot_max_limit,
+            method=getattr(tcode, "label", "EN 1992-1-1:2005"),
+            basis="first-generation torsion compression-strut range",
+            clause="EN 1992-1-1:2005, 6.3.2(2)",
+            active=abs(float(t_ed)) > 0.0,
+        )
+    if (
+        angle_applicability.get("active", True) is True
+        and angle_applicability.get("applicable") is not True
+    ):
+        torsion = _module("torsion")
+        cracking = torsion.trd_c_result(fctd, tube["Ak"], tube["tef"])
+        return unassessed_tube_torsion(
+            tube,
+            t_ed,
+            closed_links_present=closed_links_present,
+            tube_valid=True,
+            trd_c=cracking.trd_c,
+            cracking_resistance=asdict(cracking),
+            reason=shear.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+            angle_applicability=angle_applicability,
+        )
     closed_detailing_applied = bool(
         closed_links_present is True and nu_detail is True
     )
@@ -1462,7 +1508,6 @@ def tube_torsion(
     )
     a_t = asw_over_s * fywd
     b_t = nu_t * alpha_cw * fcd * tube["tef"]
-    shear = _module("shear")
     if a_t > 0.0:
         angle = shear.optimum_strut_angle(a_t, b_t, cot_min, cot_max)
         cot = angle.cot
@@ -1536,6 +1581,7 @@ def tube_torsion(
         "full_resistance_assessed": transverse_resistance_assessed,
         "assessment_reason": assessment_reason,
         "angle_selection": angle_selection,
+        "angle_applicability": dict(angle_applicability),
         "steel_resistance": asdict(steel),
         "strut_resistance": asdict(strut),
         "resistance_selection": asdict(selection),
@@ -1544,17 +1590,27 @@ def tube_torsion(
     }
 
 
-def unassessed_tube_torsion(tube, t_ed, *, closed_links_present):
+def unassessed_tube_torsion(
+    tube,
+    t_ed,
+    *,
+    closed_links_present,
+    tube_valid=False,
+    trd_c=None,
+    cracking_resistance=None,
+    reason=None,
+    angle_applicability=None,
+):
     """Retain one invalid tube without entering any angle or resistance kernel."""
 
-    reason = tube.get("reason") or "torsion tube evidence is invalid"
+    reason = reason or tube.get("reason") or "torsion tube evidence is invalid"
     return {
         "tube": tube,
         "t_ed": t_ed,
         "trd_s": None,
         "trd_max": None,
         "trd": None,
-        "trd_c": None,
+        "trd_c": trd_c,
         "cot": None,
         "theta_deg": None,
         "util": None,
@@ -1562,16 +1618,21 @@ def unassessed_tube_torsion(tube, t_ed, *, closed_links_present):
         "nu": None,
         "governs": None,
         "valid": False,
-        "tube_valid": False,
+        "tube_valid": bool(tube_valid),
         "closed_links_present": bool(closed_links_present),
         "transverse_resistance_assessed": False,
         "full_resistance_assessed": False,
         "assessment_reason": reason,
         "angle_selection": None,
+        "angle_applicability": (
+            None
+            if angle_applicability is None
+            else dict(angle_applicability)
+        ),
         "steel_resistance": None,
         "strut_resistance": None,
         "resistance_selection": None,
-        "cracking_resistance": None,
+        "cracking_resistance": cracking_resistance,
         "longitudinal_reinforcement": None,
     }
 
@@ -1853,6 +1914,16 @@ def _build_shear_face_context(
             "compression_extension_credited": False,
             "clause": "EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
         }
+    angle_applicability = shear.strut_angle_applicability(
+        cot_min,
+        cot_max,
+        permitted_min=angle_limits["minimum"],
+        permitted_max=angle_limits["maximum"],
+        method=str(inp["shear_method"]),
+        basis=angle_limits["basis"],
+        clause=angle_limits["clause"],
+        active=abs(float(v_ed)) > 0.0,
+    )
     asw = link_legs * _module("templates").bar_area(inp["shear_link_dia"])
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
     # Sector does not retain a selected N_Edw allocation or the action-state
@@ -1879,6 +1950,7 @@ def _build_shear_face_context(
     def links_at(
         cot_lo,
         cot_hi,
+        angle_applicability_override=None,
         _fck=fck,
         _code=code,
         _bw=shear_geometry.get("links_bw_mm"),
@@ -1902,6 +1974,12 @@ def _build_shear_face_context(
             fcd_mpa=inp["concrete"].fcd,
             gamma_s=inp["steel"].gamma_y,
             v_ed_kn=v_ed,
+            ductility_class=inp.get("transverse_ductility_class", "B"),
+            angle_applicability=(
+                angle_applicability
+                if angle_applicability_override is None
+                else angle_applicability_override
+            ),
         )
 
     context = {
@@ -1934,6 +2012,7 @@ def _build_shear_face_context(
         "m_prestress": m_prestress,
         "centroid": (cx, cy),
         "angle_limits": angle_limits,
+        "angle_applicability": angle_applicability,
     }
     return payload, context
 
@@ -2085,6 +2164,23 @@ def build_torsion_context(inp, n_ed_comp):
     )
     cot_min = min(inp["strut_cot_min"], inp["strut_cot_max"])
     cot_max = max(inp["strut_cot_min"], inp["strut_cot_max"])
+    angle_limits = {
+        "minimum": tcode.shear_cot_min_limit,
+        "maximum": tcode.shear_cot_max_limit,
+        "basis": "first-generation torsion compression-strut range",
+        "clause": "EN 1992-1-1:2005, 6.3.2(2)",
+    }
+    t_ed = inp["torsion_T"]
+    angle_applicability = _module("shear").strut_angle_applicability(
+        cot_min,
+        cot_max,
+        permitted_min=angle_limits["minimum"],
+        permitted_max=angle_limits["maximum"],
+        method=str(inp["torsion_method"]),
+        basis=angle_limits["basis"],
+        clause=angle_limits["clause"],
+        active=abs(float(t_ed)) > 0.0,
+    )
     nu_detail = bool(closed_links_present and nu_detail_requested)
     nu_detail_applied = bool(
         nu_detail
@@ -2099,7 +2195,6 @@ def build_torsion_context(inp, n_ed_comp):
     )
     fctk_005 = 0.7 * codes.fctm(fck)
     fctd = fctk_005 / gamma_ct
-    t_ed = inp["torsion_T"]
     tube_kwargs = {
         "closed_links_present": closed_links_present,
         "tcode": tcode,
@@ -2113,6 +2208,7 @@ def build_torsion_context(inp, n_ed_comp):
         "nu_detail": nu_detail,
         "fctd": fctd,
         "fyd_long": fyd_long,
+        "angle_applicability": angle_applicability,
     }
 
     subrects = inp.get("torsion_subrects") or []
@@ -2284,6 +2380,8 @@ def build_torsion_context(inp, n_ed_comp):
         "asw_over_s_t": asw_over_s,
         "tcot_min": cot_min,
         "tcot_max": cot_max,
+        "angle_limits": angle_limits,
+        "angle_applicability": angle_applicability,
         "nu_detail": nu_detail,
         "nu_detail_applied": nu_detail_applied,
         "fctk_005": fctk_005,
@@ -2828,6 +2926,13 @@ def finalize_combined(inp, out):
     have_v = shear_selection.valid
     have_t = torsion_out is not None and torsion_out["valid"]
     if not (have_m and have_v and have_t):
+        angle_applicability = None
+        if isinstance(torsion_out, Mapping):
+            angle_applicability = torsion_out.get("angle_applicability")
+        if angle_applicability is None and isinstance(links, Mapping):
+            angle_applicability = links.get("angle_applicability") or (
+                (links.get("res") or {}).get("angle_applicability")
+            )
         shear_reason = None
         if not shear_selection.valid:
             shear_reason = (
@@ -2853,8 +2958,19 @@ def finalize_combined(inp, out):
         if torsion_assessment_status is not None:
             payload["torsion_assessment_status"] = torsion_assessment_status
             payload["torsion_assessment_reason"] = torsion_assessment_reason
+        if (
+            isinstance(angle_applicability, Mapping)
+            and angle_applicability.get("active", True) is True
+            and angle_applicability.get("applicable") is False
+        ):
+            payload["outside_default_range"] = True
+            payload["angle_applicability"] = dict(angle_applicability)
         if shear_reason is not None:
             payload["reason"] = shear_reason
+        elif torsion_assessment_reason == (
+            _module("shear").STRUT_ANGLE_OUT_OF_RANGE_REASON
+        ):
+            payload["reason"] = torsion_assessment_reason
         out["combined"] = payload
         return
 

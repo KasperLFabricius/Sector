@@ -5906,6 +5906,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "torsion-wall-location-lower-bound-v1",
     "nominal-shear-resistance-route-v1",
     "combined-edition-scope-v1",
+    "compression-strut-applicability-v1",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",
@@ -7324,7 +7325,8 @@ def build_inputs(host=st):
         disabled=not _strut_model,
         help=r"Lower bound for the compression-strut angle shared by shear and "
              r"torsion. The 2005 family permits $1\leq\cot\theta\leq2.5$; "
-             "values outside the selected method's range are warned, not blocked.",
+             "an interval outside every active method's permitted band is "
+             "retained but the dependent design checks are not assessed.",
     )
     strut_cot_max = _seeded_number(
         strut_hi,
@@ -7337,7 +7339,8 @@ def build_inputs(host=st):
         disabled=not _strut_model,
         help=r"Upper bound for the same physical compression strut. Sector selects "
              "one angle within this range for all live shear, torsion, concrete, "
-             "stirrup and longitudinal-reinforcement checks.",
+             "stirrup and longitudinal-reinforcement checks. Exact permitted "
+             "boundaries are accepted.",
     )
     if _strut_model:
         active_strut_codes = []
@@ -7358,14 +7361,15 @@ def build_inputs(host=st):
         if _shear_2023 and transverse_ductility_class == "A":
             code_cot_max = min(code_cot_max, 2.0)
         if (
-            strut_cot_min < code_cot_min - 1e-9
-            or strut_cot_max > code_cot_max + 1e-9
+            strut_cot_min < code_cot_min
+            or strut_cot_max > code_cot_max
         ):
             sts.caption(
                 "Warning: the shared strut bounds fall outside the selected "
-                "method's default range "
-                f"{code_cot_min:g}..{code_cot_max:g}. The values are allowed, but "
-                "the entered values are used in every calculation."
+                "method's permitted range "
+                f"{code_cot_min:g}..{code_cot_max:g}. Dependent design checks "
+                "will be NOT ASSESSED unless a separately applicable method is "
+                "substantiated."
             )
     if "_capacity_steel_pending_material_id" in st.session_state:
         st.session_state["capacity_steel_material_id"] = st.session_state.pop(
@@ -9972,6 +9976,82 @@ def _run_uniaxial_capacity_checks(inp, out):
     if link_ctx is not None or tors_ctx is not None:
         v_ed_s = link_ctx["v_ed"] if link_ctx is not None else 0.0
         t_ed_s = tors_ctx["t_ed"] if tors_ctx is not None else 0.0
+        retained_vrd_c = (
+            link_ctx.get("vrd_c") if link_ctx is not None else None
+        )
+        concrete_route_applicable = bool(
+            retained_vrd_c is not None
+            and math.isfinite(float(retained_vrd_c))
+            and float(retained_vrd_c) > 0.0
+            and v_ed_s <= float(retained_vrd_c)
+        )
+        torsion_geometry_valid = bool(
+            tors_ctx is not None
+            and all(tb["valid"] for tb in tors_ctx["subtubes"])
+        )
+        torsion_angle_active = bool(
+            tors_ctx is not None
+            and tors_ctx["closed_links_present"]
+            and tors_ctx["asw_over_s_t"] > 0.0
+            and torsion_geometry_valid
+            and t_ed_s > 0.0
+        )
+        shear_angle_active = bool(
+            link_ctx is not None
+            and (link_ctx.get("shear_geometry") or {}).get("links_valid") is True
+            and v_ed_s > 0.0
+            and (
+                not concrete_route_applicable
+                or torsion_angle_active
+            )
+        )
+        if shear_angle_active and torsion_angle_active:
+            shear_limits = link_ctx["angle_limits"]
+            torsion_limits = tors_ctx["angle_limits"]
+            shared_limits = {
+                "minimum": max(
+                    shear_limits["minimum"], torsion_limits["minimum"]
+                ),
+                "maximum": min(
+                    shear_limits["maximum"], torsion_limits["maximum"]
+                ),
+                "basis": "shared shear and torsion permitted-range intersection",
+                "clause": (
+                    f"{shear_limits['clause']}; {torsion_limits['clause']}"
+                ),
+            }
+            shared_applicability = shear.strut_angle_applicability(
+                inp["strut_cot_min"],
+                inp["strut_cot_max"],
+                permitted_min=shared_limits["minimum"],
+                permitted_max=shared_limits["maximum"],
+                method=(
+                    f"{inp['shear_method']} with {inp['torsion_method']}"
+                ),
+                basis=shared_limits["basis"],
+                clause=shared_limits["clause"],
+                active=True,
+            )
+            original_links_build = link_ctx["build"]
+            link_ctx = dict(
+                link_ctx,
+                angle_limits=shared_limits,
+                angle_applicability=shared_applicability,
+                build=lambda cot_lo, cot_hi: original_links_build(
+                    cot_lo,
+                    cot_hi,
+                    angle_applicability_override=shared_applicability,
+                ),
+            )
+            tors_ctx = dict(
+                tors_ctx,
+                angle_limits=shared_limits,
+                angle_applicability=shared_applicability,
+                _tk=dict(
+                    tors_ctx["_tk"],
+                    angle_applicability=shared_applicability,
+                ),
+            )
         # Validity probes: a broken links result (no stirrup area / degenerate web)
         # or an invalid tube gives infinite utilisations at EVERY angle, which would
         # otherwise tie the scan and pin the angle at the band edge.
@@ -9983,31 +10063,22 @@ def _run_uniaxial_capacity_checks(inp, out):
             and (lk_probe.get("vrd_s") or 0.0) > 0.0
             and (lk_probe.get("vrd_max") or 0.0) > 0.0
         )
-        torsion_geometry_valid = bool(
-            tors_ctx is not None
-            and all(tb["valid"] for tb in tors_ctx["subtubes"])
-        )
         tors_valid = bool(
             tors_ctx is not None
             and tors_ctx["closed_links_present"]
             and tors_ctx["asw_over_s_t"] > 0.0
             and torsion_geometry_valid
+            and tors_ctx["angle_applicability"]["applicable"] is True
         )
-        retained_vrd_c = (
-            link_ctx.get("vrd_c") if link_ctx is not None else None
-        )
-        concrete_route_applicable = bool(
-            retained_vrd_c is not None
-            and math.isfinite(float(retained_vrd_c))
-            and float(retained_vrd_c) > 0.0
-            and v_ed_s <= float(retained_vrd_c)
-        )
+        tors_live = tors_valid and t_ed_s > 0.0
         shear_live = (
             links_valid
             and v_ed_s > 0.0
-            and not concrete_route_applicable
+            and (
+                not concrete_route_applicable
+                or tors_live
+            )
         )
-        tors_live = tors_valid and t_ed_s > 0.0
 
         # Longitudinal-chord parameters: the shear tension face's applied moment and
         # pure-axis capacity (the B1 machinery), available when the plastic
@@ -10384,7 +10455,10 @@ def _run_uniaxial_capacity_checks(inp, out):
                 trd = sum(r["trd"] for r in sub_res) if valid else None
                 asl_req = (
                     sum(r["asl_req"] for r in sub_res)
-                    if tube_valid
+                    if (
+                        tube_valid
+                        and tors_ctx["angle_applicability"]["applicable"] is True
+                    )
                     else None
                 )
                 primary = sub_res[0]
@@ -10426,7 +10500,10 @@ def _run_uniaxial_capacity_checks(inp, out):
             )
             required_by_tube = (
                 tuple(item["asl_req"] for item in (sub_res or [primary]))
-                if tube_valid
+                if (
+                    tube_valid
+                    and tors_ctx["angle_applicability"]["applicable"] is True
+                )
                 else ()
             )
             longitudinal_assessment = (
@@ -10463,9 +10540,13 @@ def _run_uniaxial_capacity_checks(inp, out):
             )
             tcode = tors_ctx["tcode"]
             tcot_min, tcot_max = tors_ctx["tcot_min"], tors_ctx["tcot_max"]
-            lo_t, hi_t = tcode.shear_cot_min_limit, tcode.shear_cot_max_limit
+            angle_limits = tors_ctx["angle_limits"]
+            angle_applicability = tors_ctx["angle_applicability"]
+            lo_t = angle_limits["minimum"]
+            hi_t = angle_limits["maximum"]
             torsion_out_of_limits = bool(
-                tcot_min < lo_t - 1e-9 or tcot_max > hi_t + 1e-9
+                angle_applicability.get("active", True)
+                and angle_applicability["applicable"] is False
             )
             out["torsion"] = dict(
                 tube=tube_main, trd_s=primary["trd_s"], trd_max=primary["trd_max"],
@@ -10499,6 +10580,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                 resistance_selection=primary["resistance_selection"],
                 reason=reason, cot_limit_lo=lo_t, cot_limit_hi=hi_t,
                 out_of_limits=torsion_out_of_limits,
+                angle_limits=angle_limits,
+                angle_applicability=angle_applicability,
                 subdivided=subdivide, subtubes=sub_res, primary=primary,
                 governing_sub=governing_sub,
                 compound_detected=tors_ctx["compound_detected"],
@@ -10549,8 +10632,8 @@ def _run_uniaxial_capacity_checks(inp, out):
             angle_limits = link_ctx["angle_limits"]
             lo, hi = angle_limits["minimum"], angle_limits["maximum"]
             links_out_of_limits = bool(
-                link_ctx["cot_min"] < lo - 1e-9
-                or link_ctx["cot_max"] > hi + 1e-9
+                link_ctx["angle_applicability"].get("active", True)
+                and link_ctx["angle_applicability"]["applicable"] is False
             )
             # The reported longitudinal-chord check (capped per 6.2.3(7)), on the
             # shear tension face; the torsion term is the web tube's share (zero
@@ -10677,6 +10760,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                 ),
                 cot_limit_lo=lo, cot_limit_hi=hi,
                 angle_limits=angle_limits,
+                angle_applicability=link_ctx["angle_applicability"],
                 model_2023=link_ctx.get("model_2023", False),
                 m_ed_2023=link_ctx.get("m_ed_2023"),
                 moment_reference_shift=link_ctx.get(
@@ -10779,7 +10863,12 @@ def _run_uniaxial_capacity_checks(inp, out):
             # pairing the shear with the PRIMARY (web) tube's torsion share.
             sh_links = out.get("shear", {}).get("links")
             p_tube, t_ed_p = primary["tube"], primary["t_ed"]
-            if sh_links is not None and sh_links["res"]["valid"] and p_tube["valid"]:
+            if (
+                sh_links is not None
+                and sh_links["res"]["valid"]
+                and p_tube["valid"]
+                and primary["transverse_resistance_assessed"]
+            ):
                 # The member angle when a load drives it; otherwise the
                 # least-conservative angle (cot = 1 clamped to the shared band).
                 pl_lo, pl_hi = link_ctx["cot_min"], link_ctx["cot_max"]
@@ -14268,6 +14357,9 @@ def shear_view(inp, results):
             "Separate link detailing assessment: " + detailing_status + "."
         )
         if not lk["valid"]:
+            angle_applicability = lk.get("angle_applicability") or links.get(
+                "angle_applicability"
+            )
             reason = presentation.result_reason(
                 links.get("assessment_reason")
                 or lk.get("reason")
@@ -14284,22 +14376,20 @@ def shear_view(inp, results):
                 "Review the reason above; link lever arm, resistance, utilisation "
                 "and status are withheld."
             )
+            if (
+                isinstance(angle_applicability, dict)
+                and angle_applicability.get("applicable") is False
+            ):
+                st.caption(
+                    f"Requested cot {_THETA}: "
+                    f"{angle_applicability['requested_min']:.3f} to "
+                    f"{angle_applicability['requested_max']:.3f}; permitted for "
+                    f"{angle_applicability['method']}: "
+                    f"{angle_applicability['permitted_min']:.3f} to "
+                    f"{angle_applicability['permitted_max']:.3f} "
+                    f"({angle_applicability['clause']})."
+                )
             return
-        if links["out_of_limits"]:
-            limit_ref = (
-                (links.get("angle_limits") or {}).get("clause")
-                or "EN 1992-1-1 6.7N / DK NA 6.7a NA"
-            )
-            _manual_warning(
-                st,
-                "method-applicability",
-                f"The strut angle bounds (cot {_THETA} in "
-                f"[{links['cot_min']:.2f}, {links['cot_max']:.2f}]) fall outside "
-                f"the selected method's default range "
-                f"[{links['cot_limit_lo']:.1f}, "
-                f"{links['cot_limit_hi']:.1f}] ({limit_ref}). The actual values "
-                "are used in the reported calculations.",
-            )
         req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if links["required"]
                    else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
                         "reinforcement rules still apply")
@@ -14884,6 +14974,41 @@ def torsion_view(inp, results):
             + "."
         )
     if tube_valid and not transverse_resistance_assessed:
+        angle_applicability = t.get("angle_applicability")
+        if (
+            isinstance(angle_applicability, dict)
+            and angle_applicability.get("applicable") is False
+        ):
+            guidance = presentation.result_reason(
+                t.get("assessment_reason") or t.get("reason"),
+                "torsion",
+                context="torsion strut-angle applicability reason",
+            )
+            _manual_warning(
+                st,
+                "method-applicability",
+                "The torsion transverse/strut resistance is NOT ASSESSED. "
+                + guidance
+                + ".",
+            )
+            st.caption(
+                f"Requested cot {_THETA}: "
+                f"{angle_applicability['requested_min']:.3f} to "
+                f"{angle_applicability['requested_max']:.3f}; permitted for "
+                f"{angle_applicability['method']}: "
+                f"{angle_applicability['permitted_min']:.3f} to "
+                f"{angle_applicability['permitted_max']:.3f} "
+                f"({angle_applicability['clause']}). Resistance, utilisation, "
+                "longitudinal demand and dependent interaction verdicts are "
+                "withheld."
+            )
+            m1, m2 = st.columns(2)
+            m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
+            m2.metric(
+                r"Angle-independent cracking $T_{Rd,c}$",
+                "-" if t.get("trd_c") is None else f"{t['trd_c']:.3f} kNm",
+            )
+            return
         raw_reason = (
             t.get("assessment_reason")
             or t.get("reason")
@@ -15090,16 +15215,6 @@ def torsion_view(inp, results):
                 "override, or check the geometry.",
             )
         return
-    if t["out_of_limits"]:
-        _manual_warning(
-            st,
-            "method-applicability",
-            f"The strut bounds (cot {_THETA} in [{t['cot_min']:.2f}, "
-            f"{t['cot_max']:.2f}]) fall outside the selected method's default "
-            f"range [{t['cot_limit_lo']:.1f}, {t['cot_limit_hi']:.1f}] "
-            "(6.7N / 6.7a NA). The actual values are used in the reported "
-            "torsion and interaction calculations.",
-        )
     util = t["util"]
     util_txt = _pct(util)
     resistance_status = str(t.get("resistance_status") or (
@@ -15582,6 +15697,15 @@ def combined_view(inp, results):
         )
         return
     aggregate = results["combined"]
+    if aggregate.get("outside_default_range"):
+        _manual_warning(
+            st,
+            "method-applicability",
+            "Combined M-V-T is NOT ASSESSED because the selected compression-"
+            "strut range is outside the permitted range for the selected methods. "
+            "Restore the entered limits to the permitted band and recalculate.",
+        )
+        return
     dkna_basis = presentation.combined_uses_dkna(aggregate)
     _member_material_note(inp)
     if aggregate.get("biaxial"):
@@ -15688,14 +15812,6 @@ def combined_view(inp, results):
             "Independent directional governing selection: "
             f"{viz.directional_face_label(component, c['governing_face'])}"
             f"{angle_note}."
-        )
-    if c.get("outside_default_range"):
-        _manual_warning(
-            st,
-            "method-applicability",
-            "The selected compression-strut bounds fall outside the selected "
-            "method's default range. The actual values are used in every "
-            "combined calculation.",
         )
     if not presentation.combined_uses_dkna(c):
         _render_base_en_combined(c)

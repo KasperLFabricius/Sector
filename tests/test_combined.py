@@ -10,7 +10,7 @@ import sys
 import numpy as np
 import pytest
 
-from sector import capacity, codes, combined
+from sector import capacity, codes, combined, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
@@ -1013,7 +1013,7 @@ def test_biaxial_combined_keeps_directional_failure_without_aggregate_verdict():
     assert "governing_component" not in combined
 
 
-def test_biaxial_directional_vt_table_retains_out_of_default_range_verdicts():
+def test_biaxial_directional_vt_outside_permitted_range_withholds_verdicts():
     at = _fresh()
     at.run()
     _set(
@@ -1039,16 +1039,47 @@ def test_biaxial_directional_vt_table_retains_out_of_default_range_verdicts():
         "directional_interactions"
     ]
     assert all(
-        "code_applicable" not in item["interaction"]
+        item["valid"] is False
+        and item["reason"] == shear.STRUT_ANGLE_OUT_OF_RANGE_REASON
+        and item["assessment_status"] == "NOT ASSESSED"
+        and item["resistance_status"] == "NOT ASSESSED"
+        and item["transverse_resistance_assessed"] is False
+        and item["util"] is None
+        and item.get("interaction") is None
+        and item["angle_applicability"]["applicable"] is False
         for item in interactions.values()
     )
-    _select_view(at, "Torsion")
-    table = next(
-        frame.value for frame in at.dataframe
-        if "Directional screen" in frame.value.columns
+    combined_directions = at.session_state["results"]["combined"]["directions"]
+    assert set(combined_directions) == {"vx", "vy"}
+    assert all(
+        item["valid"] is False
+        and item["torsion_assessment_status"] == "NOT ASSESSED"
+        and item["governing_cot"] is None
+        and "dkna_sum" not in item
+        and "action_alone" not in item
+        for item in combined_directions.values()
     )
-    assert "NOT ASSESSED" not in set(table["Status"])
-    assert set(table["Status"]) <= {"PASS", "FAIL"}
+    _select_view(at, "Torsion")
+    visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "NOT ASSESSED" in visible
+    assert "outside the permitted range" in visible
+    assert not any(
+        "Directional screen" in frame.value.columns
+        for frame in at.dataframe
+    )
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    rows = overview.loc[
+        overview["Check"].str.contains("Combined M-V-T", regex=False)
+    ]
+    assert not rows.empty
+    assert set(rows["Status"]) == {"NOT ASSESSED"}
+    assert set(rows["Result"]) == {"-"}
 
 
 
@@ -2069,6 +2100,87 @@ def test_mvt_m03_contract_recomputes_pre_scope_capacity_results():
         assert tuple(at.session_state[key]).count(token) == 1
 
 
+def test_mvt_m04_contract_recomputes_pre_range_capacity_results():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Both"),
+        ("number_input", "strut_cot_max", 3.0),
+    )
+    _enable_all(at)
+
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    scope_marker = "compression-strut-applicability-v1"
+    assert scope_marker in token
+    pre_scope_token = tuple(item for item in token if item != scope_marker)
+    for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
+        assert tuple(latest[key]).count(token) == 1
+
+    before = at.session_state["results"]
+    plastic_before = before["plastic"]
+    elastic_before = before["elastic"]
+    shear_before = before["shear"]
+    torsion_before = before["torsion"]
+    combined_before = before["combined"]
+    for family in (shear_before, torsion_before, combined_before):
+        family["pre_mvt_m04_marker"] = True
+    shear_before["links"]["res"].update(
+        valid=True,
+        vrd_s=999_000.0,
+        vrd_max=999_000.0,
+        vrd=999_000.0,
+        cot=3.0,
+    )
+    shear_before["links"]["util"] = 0.001
+    torsion_before.update(
+        valid=True,
+        transverse_resistance_assessed=True,
+        trd_s=999_000.0,
+        trd_max=999_000.0,
+        trd=999_000.0,
+        cot=3.0,
+        util=0.001,
+        resistance_status="PASS",
+    )
+    combined_before.update(valid=True, dkna_sum=0.001, dkna_ok=True)
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            pre_scope_token if item == token else item
+            for item in at.session_state[key]
+        )
+    assert at.session_state["result_sig"] != latest["signature"]
+
+    _calculate(at)
+    refreshed = at.session_state["results"]
+    assert refreshed["plastic"] is plastic_before
+    assert refreshed["elastic"] is elastic_before
+    assert refreshed["shear"] is not shear_before
+    assert refreshed["torsion"] is not torsion_before
+    assert refreshed["combined"] is not combined_before
+    for family_name in ("shear", "torsion", "combined"):
+        assert "pre_mvt_m04_marker" not in refreshed[family_name]
+    assert refreshed["shear"]["links"]["res"]["vrd"] is None
+    assert refreshed["torsion"]["trd"] is None
+    assert refreshed["combined"]["valid"] is False
+    assert "dkna_sum" not in refreshed["combined"]
+    assert refreshed["plastic_cases"][0]["reused"] is False
+    assert refreshed["elastic_cases"][0]["reused"] is True
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        assert tuple(at.session_state[key]).count(token) == 1
+
+
 def test_app_combined_incomplete_flags_missing(monkeypatch):
     monkeypatch.setattr(
         capacity,
@@ -2139,50 +2251,94 @@ def test_app_combined_view_renders():
     assert not any(lbl.startswith("Governing (") for lbl in labels)
 
 
-def test_app_combined_out_of_default_range_warns_and_retains_verdicts():
+def test_app_combined_outside_permitted_range_withholds_all_verdicts():
     at = _fresh()
     at.run()
     at.number_input(key="strut_cot_max").set_value(3.0).run()
     _enable_all(at)
     assert not at.exception
     c = at.session_state["results"]["combined"]
+    assert c["valid"] is False
+    assert c["reason"] == shear.STRUT_ANGLE_OUT_OF_RANGE_REASON
     assert c["outside_default_range"] is True
-    assert "code_applicable" not in c
-    assert "code_applicable" not in c["crushing"]
-    assert "code_applicable" not in c["longitudinal"]
+    assert c["angle_applicability"]["applicable"] is False
+    assert c["angle_applicability"]["requested_max"] == 3.0
+    assert c["angle_applicability"]["permitted_max"] == 2.5
+    assert "dkna_sum" not in c
+    assert "dkna_status" not in c
+    assert "action_alone" not in c
+    assert "transverse" not in c
+    assert "crushing" not in c
+    assert "longitudinal" not in c
     _select_view(at, "M-V-T Combined")
-    assert any(
-        "actual values are used in every combined calculation"
-        in w.value.lower()
-        for w in at.warning
+    assert not at.exception
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
     )
-    verdict_labels = (
-        r"$\sum(S_{Ed}/S_{Rd})$", "Sum",
-        r"$M_{Ed,\mathrm{total}}/M_{Rd}$",
-        "Concrete compression strut", "Closed stirrup",
-        "Longitudinal reinforcement", "Closed-stirrup utilisation",
+    assert "Combined M-V-T is NOT ASSESSED" in visible
+    assert "Torsion prerequisite is not assessed" in visible
+    assert "outside the permitted range" in visible
+    assert not at.metric
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    combined_rows = overview.loc[
+        overview["Check"].str.contains("Combined M-V-T", regex=False)
+    ]
+    assert not combined_rows.empty
+    assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
+    assert set(combined_rows["Result"]) == {"-"}
+
+
+def test_app_shared_2023_class_a_and_torsion_range_uses_the_intersection():
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("selectbox", "transverse_ductility_class", "A"),
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "torsion_on", True),
     )
-    verdict_metrics = [
-        m for m in at.metric
-        if m.label in verdict_labels
-    ]
-    assert verdict_metrics
-    dkna_sum_metrics = [
-        metric for metric in verdict_metrics
-        if metric.label == r"$\sum(S_{Ed}/S_{Rd})$"
-    ]
-    assert dkna_sum_metrics
-    assert all(not metric.delta for metric in dkna_sum_metrics)
-    for component_label in ("Sum", "Closed-stirrup utilisation"):
-        component_metrics = [
-            metric for metric in verdict_metrics
-            if metric.label == component_label
-        ]
-        assert component_metrics
-        assert all(
-            metric.delta in {"PASS", "FAIL"}
-            for metric in component_metrics
-        )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "strut_cot_max", 2.5),
+        ("number_input", "shear_V", 500.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+
+    assert not at.exception
+    blocked = at.session_state["results"]
+    link_angle = blocked["shear"]["links"]["angle_applicability"]
+    torsion_angle = blocked["torsion"]["angle_applicability"]
+    assert link_angle == torsion_angle
+    assert link_angle["applicable"] is False
+    assert link_angle["requested_max"] == 2.5
+    assert link_angle["permitted_max"] == 2.0
+    assert "shared shear and torsion" in link_angle["basis"]
+    assert blocked["shear"]["method"] == codes.EC2_2023.label
+    assert blocked["torsion"]["method"] == codes.EC2_2005_DKNA.label
+    assert blocked["shear"]["links"]["res"]["vrd"] is None
+    assert blocked["torsion"]["trd"] is None
+    assert blocked["torsion"].get("interaction") is None
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "strut_cot_max", 2.0),
+    )
+    recovered = at.session_state["results"]
+    assert recovered["shear"]["links"]["angle_applicability"][
+        "applicable"
+    ] is True
+    assert recovered["torsion"]["angle_applicability"]["applicable"] is True
+    assert recovered["shear"]["links"]["res"]["vrd"] > 0.0
+    assert recovered["torsion"]["trd"] > 0.0
 
 
 def test_app_strut_angle_responds_to_loads():

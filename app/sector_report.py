@@ -6899,9 +6899,10 @@ class ReportBuilder:
             )
             if links.get("out_of_limits") or aggregate.get("out_of_limits"):
                 self._small(
-                    "Warning: the selected compression-strut bounds are outside "
-                    "the selected method's default range. The actual entered "
-                    "bounds remain in the completed result."
+                    "The entered compression-strut range is outside the selected "
+                    "method's permitted range. Angle-dependent design checks are "
+                    "NOT ASSESSED; a separately applicable concrete-only shear "
+                    "route remains identified where relevant."
                 )
             if (reason := selected_failure_reason(aggregate)) is not None:
                 self._small(
@@ -6992,9 +6993,9 @@ class ReportBuilder:
             for item in directions.values()
         ):
             self._small(
-                "Warning: one or more directional compression-strut bands are "
-                "outside the selected method's default range. The actual entered "
-                "bounds remain in the completed results."
+                "One or more entered directional compression-strut ranges are "
+                "outside the selected method's permitted range. Their angle-"
+                "dependent design checks are NOT ASSESSED."
             )
         for component in ("vx", "vy"):
             item = directions.get(component)
@@ -7380,6 +7381,25 @@ class ReportBuilder:
                 + ". No link lever arm, resistance, utilisation or PASS/FAIL "
                   "verdict is published for this result."
             )
+            angle_applicability = lk.get("angle_applicability") or links.get(
+                "angle_applicability"
+            )
+            if (
+                isinstance(angle_applicability, dict)
+                and angle_applicability.get("applicable") is False
+            ):
+                self._small(
+                    "Requested cot theta: "
+                    f"{_fmt(angle_applicability.get('requested_min'), 3)} to "
+                    f"{_fmt(angle_applicability.get('requested_max'), 3)}; "
+                    "permitted for "
+                    + _html_escape(str(angle_applicability.get("method") or "-"))
+                    + ": "
+                    f"{_fmt(angle_applicability.get('permitted_min'), 3)} to "
+                    f"{_fmt(angle_applicability.get('permitted_max'), 3)} ("
+                    + _html_escape(str(angle_applicability.get("clause") or "-"))
+                    + ")."
+                )
             return
         req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if links["required"]
                else "not strictly required (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>); "
@@ -7407,18 +7427,6 @@ class ReportBuilder:
                 "terms are missing. Recalculate before issuing the report."
             )
             return
-        if links["out_of_limits"]:
-            limit_ref = (
-                (links.get("angle_limits") or {}).get("clause")
-                or "EN 1992-1-1:2005, 6.2.3(2)"
-            )
-            self._small(f"Warning: the strut bounds cot theta in "
-                        f"[{_fmt(links['cot_min'], 2)}, {_fmt(links['cot_max'], 2)}] "
-                        f"fall outside the selected method's default range "
-                        f"[{_fmt(links['cot_limit_lo'], 1)}, "
-                        f"{_fmt(links['cot_limit_hi'], 1)}] ({limit_ref}). "
-                        "The entered values are used in the links and dependent "
-                        "interaction calculations.")
         shear_geometry = links.get("shear_geometry") or {}
         effective_asw_over_s = links.get(
             "effective_asw_over_s", links.get("asw_over_s")
@@ -8070,6 +8078,18 @@ class ReportBuilder:
             )
             self._small(combined_blocker)
             return
+        if aggregate.get("outside_default_range"):
+            self._case_heading(
+                "Combined bending + shear + torsion (M-V-T)", "plastic"
+            )
+            self._h2("Compression-strut range: NOT ASSESSED")
+            self._small(
+                "The selected compression-strut range is outside the permitted "
+                "range for the selected methods. Restore the entered limits to "
+                "the permitted band and recalculate. No combined resistance, "
+                "utilisation or PASS/FAIL verdict is published."
+            )
+            return
         directions = aggregate.get("directions") or {}
         selected = self._selected_family("combined", self.inp)
         critical = selected is not None
@@ -8099,11 +8119,6 @@ class ReportBuilder:
             )
             if governing_note:
                 self._small(_html_escape(governing_note))
-            if aggregate.get("outside_default_range"):
-                self._small(
-                    "Warning: the selected shared compression-strut bounds are "
-                    "outside the selected method's default range."
-                )
             if not critical:
                 if aggregate.get("valid") and not aggregate.get("dkna_valid"):
                     self._h2("DK NA action-alone resistance assessment")
@@ -8171,8 +8186,9 @@ class ReportBuilder:
             for item in directions.values()
         ):
             self._small(
-                "Warning: one or more selected shared compression-strut bands are "
-                "outside the selected method's default range."
+                "One or more entered shared compression-strut ranges are outside "
+                "the permitted method range. Dependent combined checks are NOT "
+                "ASSESSED."
             )
         if not critical:
             self._small(
@@ -8291,10 +8307,6 @@ class ReportBuilder:
             "DK NA 6.3.2(6): "
             "&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) &#8804; 1"
         )
-        if c.get("outside_default_range"):
-            self._small("Warning: the shared compression-strut bounds fall outside "
-                        "the selected method's default range. The actual values are "
-                        "used in the combined calculations.")
         selection = c.get("dkna_selection")
         if not isinstance(selection, dict):
             self._h2("Worked combined calculation unavailable")
@@ -9124,13 +9136,27 @@ class ReportBuilder:
                 )
             )
         elif tube_valid and not transverse_resistance_assessed:
-            self._p(
-                "<b>NOT ASSESSED:</b> the torsion transverse/strut resistance "
-                "under method <b>"
-                + str(t["method"])
-                + "</b> requires current shared links / closed stirrups. Concrete "
-                "resistance and reinforcement demand remain as context."
-            )
+            angle_applicability = t.get("angle_applicability")
+            if (
+                isinstance(angle_applicability, dict)
+                and angle_applicability.get("applicable") is False
+            ):
+                self._p(
+                    "<b>NOT ASSESSED:</b> the entered compression-strut range is "
+                    "outside the permitted range for method <b>"
+                    + str(t["method"])
+                    + "</b>. Angle-dependent resistance, utilisation and "
+                    "reinforcement demand are withheld."
+                )
+            else:
+                self._p(
+                    "<b>NOT ASSESSED:</b> the torsion transverse/strut resistance "
+                    "under method <b>"
+                    + str(t["method"])
+                    + "</b> requires current shared links / closed stirrups. "
+                    "Concrete resistance and reinforcement demand remain as "
+                    "context."
+                )
         else:
             self._p(
                 "<b>NOT ASSESSED:</b> the thin-walled tube geometry is invalid. "
@@ -9283,6 +9309,50 @@ class ReportBuilder:
                         + "."
                     )
         if tube_valid and not transverse_resistance_assessed:
+            angle_applicability = t.get("angle_applicability")
+            if (
+                isinstance(angle_applicability, dict)
+                and angle_applicability.get("applicable") is False
+            ):
+                reason = _result_reason(
+                    t.get("assessment_reason") or t.get("reason"),
+                    "torsion",
+                    "report torsion strut-angle applicability reason",
+                )
+                self._small(
+                    "Torsion NOT ASSESSED: " + _html_escape(reason) + ". "
+                    "No torsion resistance, utilisation, longitudinal demand or "
+                    "dependent interaction verdict is published."
+                )
+                self._table(
+                    [
+                        ["Quantity", "Value", "Publication state"],
+                        [
+                            "T<sub>Ed</sub>",
+                            f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
+                            "Applied action",
+                        ],
+                        [
+                            "T<sub>Rd,c</sub>",
+                            f"{_fmt(t.get('trd_c'), 3)} kN&#183;m",
+                            "Angle-independent cracking context",
+                        ],
+                    ],
+                    [55 * mm, 45 * mm, 80 * mm],
+                )
+                self._small(
+                    "Requested cot theta: "
+                    f"{_fmt(angle_applicability.get('requested_min'), 3)} to "
+                    f"{_fmt(angle_applicability.get('requested_max'), 3)}; "
+                    "permitted for "
+                    + _html_escape(str(angle_applicability.get("method") or "-"))
+                    + ": "
+                    f"{_fmt(angle_applicability.get('permitted_min'), 3)} to "
+                    f"{_fmt(angle_applicability.get('permitted_max'), 3)} ("
+                    + _html_escape(str(angle_applicability.get("clause") or "-"))
+                    + ")."
+                )
+                return
             reason = _result_reason(
                 t.get("assessment_reason")
                 or t.get("reason")
@@ -9399,12 +9469,6 @@ class ReportBuilder:
                 self._small("Warning: the tube could not be formed (a degenerate or "
                             "too-thin section).")
             return
-        if t["out_of_limits"]:
-            self._small("Warning: the strut bounds cot theta in "
-                        f"[{_fmt(t['cot_min'], 2)}, {_fmt(t['cot_max'], 2)}] fall "
-                        "outside the selected method's default range 1..2.5 "
-                        "(6.7N / 6.7a NA). The entered values are used in the "
-                        "torsion and dependent interaction calculations.")
         longitudinal_assessment = t.get("longitudinal_assessment") or {}
         if longitudinal_assessment:
             self._h2("Longitudinal torsion reinforcement (Formula 6.28)")
