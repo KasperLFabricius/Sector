@@ -2170,7 +2170,13 @@ def build_torsion_context(inp, n_ed_comp):
         "basis": "first-generation torsion compression-strut range",
         "clause": "EN 1992-1-1:2005, 6.3.2(2)",
     }
-    t_ed = inp["torsion_T"]
+    # The entered torsion sign identifies the applied sense; every resistance,
+    # reinforcement-demand and interaction equation consumes its magnitude.  The
+    # case-table adapter already performs this conversion, but the public direct
+    # analysis path reaches this shared boundary without that adapter.
+    t_ed = abs(
+        _finite_solver_result(inp.get("torsion_T"), "entered torsion action")
+    )
     angle_applicability = _module("shear").strut_angle_applicability(
         cot_min,
         cot_max,

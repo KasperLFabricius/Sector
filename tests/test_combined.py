@@ -2344,6 +2344,87 @@ def test_app_shared_2023_class_a_and_torsion_range_uses_the_intersection(
     assert recovered["torsion"]["trd"] > 0.0
 
 
+def test_signed_torsion_has_identical_direct_and_case_table_results():
+    import case_analysis
+    import sector_app
+
+    def evidence(result):
+        torsion_result = result["torsion"]
+        combined_result = result["combined"]
+        return {
+            "torsion_demand": torsion_result["t_ed"],
+            "torsion_resistance": torsion_result["trd"],
+            "torsion_utilisation": torsion_result["util"],
+            "longitudinal_demand": torsion_result["asl_req"],
+            "selected_angle": torsion_result["cot"],
+            "formula_629": torsion_result["interaction"]["value"],
+            "combined_transverse": combined_result["transverse"]["governing"],
+            "combined_longitudinal": combined_result["longitudinal"]["util"],
+        }, {
+            "torsion_resistance": torsion_result["resistance_status"],
+            "torsion_overall": torsion_result["assessment_status"],
+            "combined_transverse": combined_result["transverse"]["ok"],
+            "combined_longitudinal": combined_result["longitudinal"]["ok"],
+        }
+
+    def assert_parity(reference, candidate):
+        reference_values, reference_statuses = evidence(reference)
+        candidate_values, candidate_statuses = evidence(candidate)
+        assert candidate_values == pytest.approx(reference_values)
+        assert candidate_statuses == reference_statuses
+
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("selectbox", "combined_method", codes.EC2_2005.label),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    assert not at.exception
+    positive_native = copy.deepcopy(at.session_state["results"])
+    positive_entry = positive_native["plastic_cases"][0]
+    assert positive_entry["actions"]["t_ed_knm"] == pytest.approx(40.0)
+
+    latest = at.session_state["_latest_inputs"]
+    record = latest["plastic_cases"].iloc[0].to_dict()
+    direct_input = case_analysis.plastic_case_input(latest, record)
+    for key in ("plastic_cases", "elastic_cases"):
+        direct_input.pop(key, None)
+    direct_input["torsion_T"] = 40.0
+    positive_direct = sector_app.run_analysis(
+        direct_input,
+        reuse_plastic=positive_native["plastic"],
+    )
+    negative_direct = sector_app.run_analysis(
+        dict(direct_input, torsion_T=-40.0),
+        reuse_plastic=positive_native["plastic"],
+    )
+    assert_parity(positive_direct, negative_direct)
+    assert_parity(positive_native, positive_direct)
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "torsion_T", -40.0),
+    )
+    assert not at.exception
+    negative_native = at.session_state["results"]
+    negative_entry = negative_native["plastic_cases"][0]
+    assert negative_entry["actions"]["t_ed_knm"] == pytest.approx(-40.0)
+    assert negative_native["torsion"]["t_ed"] == pytest.approx(40.0)
+    assert_parity(positive_native, negative_native)
+
+
 def test_app_strut_angle_responds_to_loads():
     # The user-reported defect: the auto strut angle sat at cot = 2.5 regardless of
     # VEd/MEd/NEd because it maximised the shear RESISTANCE alone. The member angle
