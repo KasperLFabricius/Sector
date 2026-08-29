@@ -11444,7 +11444,10 @@ def _transverse_detailing_result(inp, out):
                 )
                 torsion_specs.append({
                     "label": f"Tube {index}",
-                    "valid": bool(geometry_valid and tube.get("valid")),
+                    "valid": (
+                        geometry_valid is True
+                        and tube.get("valid") is True
+                    ),
                     "reason": tube.get("reason"),
                     "tef_mm": tube.get("tef", 0.0),
                     "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
@@ -11461,7 +11464,10 @@ def _transverse_detailing_result(inp, out):
             )
             torsion_specs.append({
                 "label": "Tube",
-                "valid": bool(geometry_valid and tube.get("valid")),
+                "valid": (
+                    geometry_valid is True
+                    and tube.get("valid") is True
+                ),
                 "reason": torsion_out.get("reason") or tube.get("reason"),
                 "tef_mm": tube.get("tef", 0.0),
                 "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,

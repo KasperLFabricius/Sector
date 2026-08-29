@@ -9,6 +9,7 @@ cot(theta) = 1.751 the stirrups and the struts meet at TRd ~ 76.4 kN.m.
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -3324,3 +3325,68 @@ def test_app_subdivided_out_of_range_keeps_each_tube_detailing():
         for check in torsion_detailing
     )
     assert all(check["utilisation"] is not None for check in torsion_detailing)
+
+
+@pytest.mark.parametrize("subdivided", (False, True), ids=("single", "subdivided"))
+@pytest.mark.parametrize("validity_key", ("tube_valid", "valid"))
+@pytest.mark.parametrize(
+    ("validity", "assessed"),
+    (
+        ("False", False),
+        (1, False),
+        (math.inf, False),
+        (True, True),
+    ),
+)
+def test_torsion_detailing_requires_literal_geometry_validity(
+    subdivided,
+    validity_key,
+    validity,
+    assessed,
+):
+    import sector_app
+
+    inp = {
+        "shear_on": False,
+        "torsion_on": True,
+        "detailing_edition": codes.EC2_2005_DKNA.label,
+        "concrete": SimpleNamespace(fck=35.0),
+        "shear_fywk": 500.0,
+        "shear_link_dia": 10.0,
+        "shear_link_s": 150.0,
+    }
+    tube = {
+        "valid": True,
+        "tef": 100.0,
+        "uk": 1.4,
+        "minimum_dimension_mm": 300.0,
+    }
+    retained = {
+        validity_key: validity,
+        "valid": False if validity_key == "tube_valid" else validity,
+        "tube": tube,
+    }
+    torsion_result = (
+        {"subtubes": [retained]}
+        if subdivided
+        else retained
+    )
+
+    result = sector_app._transverse_detailing_result(
+        inp,
+        {"torsion": torsion_result},
+    )
+
+    assert len(result["checks"]) == 2
+    if assessed:
+        assert all(
+            check["status"] in {"PASS", "FAIL"}
+            and check["utilisation"] is not None
+            for check in result["checks"]
+        )
+    else:
+        assert all(
+            check["status"] == "NOT ASSESSED"
+            and check["utilisation"] is None
+            for check in result["checks"]
+        )
