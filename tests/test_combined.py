@@ -2292,7 +2292,10 @@ def test_app_combined_outside_permitted_range_withholds_all_verdicts():
     assert set(combined_rows["Result"]) == {"-"}
 
 
-def test_app_shared_2023_class_a_and_torsion_range_uses_the_intersection():
+@pytest.mark.parametrize("torsion_action", (40.0, -40.0))
+def test_app_shared_2023_class_a_and_torsion_range_uses_the_intersection(
+    torsion_action,
+):
     at = _fresh()
     at.run()
     _set(
@@ -2309,7 +2312,7 @@ def test_app_shared_2023_class_a_and_torsion_range_uses_the_intersection():
         ("checkbox", "shear_links", True),
         ("number_input", "strut_cot_max", 2.5),
         ("number_input", "shear_V", 500.0),
-        ("number_input", "torsion_T", 40.0),
+        ("number_input", "torsion_T", torsion_action),
     )
 
     assert not at.exception

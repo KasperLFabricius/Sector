@@ -9994,7 +9994,7 @@ def _run_uniaxial_capacity_checks(inp, out):
             and tors_ctx["closed_links_present"]
             and tors_ctx["asw_over_s_t"] > 0.0
             and torsion_geometry_valid
-            and t_ed_s > 0.0
+            and abs(t_ed_s) > 0.0
         )
         shear_angle_active = bool(
             link_ctx is not None
@@ -10070,7 +10070,7 @@ def _run_uniaxial_capacity_checks(inp, out):
             and torsion_geometry_valid
             and tors_ctx["angle_applicability"]["applicable"] is True
         )
-        tors_live = tors_valid and t_ed_s > 0.0
+        tors_live = tors_valid and abs(t_ed_s) > 0.0
         shear_live = (
             links_valid
             and v_ed_s > 0.0
