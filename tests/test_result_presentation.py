@@ -1039,13 +1039,17 @@ def test_stale_summary_retains_last_status_as_evidence():
 
 
 def test_combined_summary_cannot_hide_subordinate_failure():
+    theta_deg = math.degrees(math.atan2(1.0, 1.5))
     combined = {
         "valid": True,
         "method": "DK NA",
         "dkna_sum": 0.80,
-        "crushing": {"valid": True, "value": 1.10, "cot": 1.5},
+        "crushing": {
+            "valid": True, "value": 1.10, "cot": 1.5,
+            "theta_deg": theta_deg,
+        },
         "transverse": {
-            "valid": True, "cot": 1.5,
+            "valid": True, "cot": 1.5, "theta_deg": theta_deg,
             "u_crush": 1.10, "u_stirrup": 0.75,
             "shear_fraction": 0.30, "torsion_fraction": 0.45,
             "governing": 1.10, "governs": "crushing",
