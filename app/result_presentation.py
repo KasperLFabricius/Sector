@@ -1999,16 +1999,24 @@ def combined_physical_components(combined):
         concrete_util = _publication_utilisation(
             transverse.get("u_crush"), allow_positive_infinity=True
         )
+        cot = _publication_metric(transverse.get("cot"))
+        if cot is not None and cot <= 0.0:
+            cot = None
         crushing = combined.get("crushing")
         concrete_evidence_consistent = True
         if isinstance(crushing, Mapping):
             interaction_util = _publication_utilisation(
                 crushing.get("value"), allow_positive_infinity=True
             )
+            interaction_cot = _publication_metric(crushing.get("cot"))
+            if interaction_cot is not None and interaction_cot <= 0.0:
+                interaction_cot = None
             concrete_evidence_consistent = bool(
                 crushing.get("valid") is True
                 and concrete_util is not None
                 and interaction_util is not None
+                and cot is not None
+                and interaction_cot is not None
                 and (
                     concrete_util == interaction_util
                     if not (
@@ -2022,16 +2030,18 @@ def combined_physical_components(combined):
                         abs_tol=1.0e-12,
                     )
                 )
+                and math.isclose(
+                    cot,
+                    interaction_cot,
+                    rel_tol=1.0e-12,
+                    abs_tol=1.0e-12,
+                )
             )
             if not concrete_evidence_consistent:
                 concrete_util = None
         stirrup_util = _publication_utilisation(
             transverse.get("u_stirrup"), allow_positive_infinity=True
         )
-        try:
-            cot = float(transverse.get("cot"))
-        except (TypeError, ValueError):
-            cot = None
         concrete = {
             "key": "concrete",
             "label": "Concrete compression strut",

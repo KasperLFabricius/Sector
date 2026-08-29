@@ -1514,24 +1514,36 @@ def test_combined_physical_components_tolerates_missing_strut_angle():
 
 
 @pytest.mark.parametrize(
-    ("transverse_util", "interaction_util", "expected_status", "expected_util"),
     (
-        (0.50, 0.50, "PASS", 0.50),
-        (True, 0.50, "NOT ASSESSED", None),
-        (0.40, 0.50, "NOT ASSESSED", None),
-        (0.50, True, "NOT ASSESSED", None),
+        "transverse_util",
+        "interaction_util",
+        "transverse_cot",
+        "interaction_cot",
+        "expected_status",
+        "expected_util",
+    ),
+    (
+        (0.50, 0.50, 1.50, 1.50, "PASS", 0.50),
+        (True, 0.50, 1.50, 1.50, "NOT ASSESSED", None),
+        (0.40, 0.50, 1.50, 1.50, "NOT ASSESSED", None),
+        (0.50, True, 1.50, 1.50, "NOT ASSESSED", None),
+        (0.50, 0.50, 1.50, 1.40, "NOT ASSESSED", None),
+        (0.50, 0.50, True, 1.00, "NOT ASSESSED", None),
+        (0.50, 0.50, 1.50, math.inf, "NOT ASSESSED", None),
     ),
 )
 def test_combined_physical_components_reconciles_formula_629_evidence(
     transverse_util,
     interaction_util,
+    transverse_cot,
+    interaction_cot,
     expected_status,
     expected_util,
 ):
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True,
-            "cot": 1.5,
+            "cot": transverse_cot,
             "u_crush": transverse_util,
             "u_stirrup": 0.60,
             "shear_fraction": 0.20,
@@ -1540,6 +1552,7 @@ def test_combined_physical_components_reconciles_formula_629_evidence(
         "crushing": {
             "valid": True,
             "value": interaction_util,
+            "cot": interaction_cot,
         },
     })
 

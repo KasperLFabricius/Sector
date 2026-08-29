@@ -15919,15 +15919,15 @@ def combined_view(inp, results):
             _verdict_metric(
                 cc1, "Sum", _pct(val), cr_status == "PASS",
             )
+            cc2.caption(
+                f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
+                f"($\\theta={cr['theta_deg']:.1f}^\\circ$). "
+                f"$T_{{Rd,max}}={cr['trd_max']:.1f}$ kNm, "
+                f"$V_{{Rd,max}}={cr['vrd_max']:.1f}$ kN."
+            )
         else:
             cc1.metric("Sum", "-")
             cc1.caption("NOT ASSESSED")
-        cc2.caption(
-            f"At a common strut $\\cot\\theta={cr['cot']:.2f}$ "
-            f"($\\theta={cr['theta_deg']:.1f}^\\circ$). "
-            f"$T_{{Rd,max}}={cr['trd_max']:.1f}$ kNm, "
-            f"$V_{{Rd,max}}={cr['vrd_max']:.1f}$ kN."
-        )
         if cr_status in {"PASS", "FAIL"}:
             st.plotly_chart(viz.vt_interaction_figure(
                 cr["vrd_max"], cr["trd_max"], cr["v_ed"], cr["t_ed"],

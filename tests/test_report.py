@@ -7000,7 +7000,12 @@ def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
     "method",
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
-def test_report_conflicting_formula_629_evidence_fails_closed(profile, method):
+@pytest.mark.parametrize("conflict", ["utilisation", "angle"])
+def test_report_conflicting_formula_629_evidence_fails_closed(
+    profile,
+    method,
+    conflict,
+):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -7014,8 +7019,13 @@ def test_report_conflicting_formula_629_evidence_fails_closed(profile, method):
         if method == codes.EC2_2005.label
         else _dkna_complete_combined_out()
     )
-    combined["transverse"]["u_crush"] = True
-    combined["crushing"]["value"] = 0.50
+    if conflict == "utilisation":
+        combined["transverse"]["u_crush"] = True
+        combined["crushing"]["value"] = 0.50
+    else:
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["transverse"]["cot"] = 1.50
+        combined["crushing"]["cot"] = 1.40
     out = {"plastic": _out()["plastic"], "combined": combined}
 
     text = " ".join(_pdf_text(sector_report.build_report(
@@ -7025,6 +7035,7 @@ def test_report_conflicting_formula_629_evidence_fails_closed(profile, method):
     assert "NOT ASSESSED" in text
     assert "Concrete compression strut 50.0 % PASS" not in text
     assert "50.0 % (OK)" not in text
+    assert "cot theta = 1.400" not in text
     if profile in {"Standard", "Audit"}:
         assert "Formula (6.29) evidence is incomplete" in text
         if method == codes.EC2_2005.label:

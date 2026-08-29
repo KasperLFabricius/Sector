@@ -1811,7 +1811,11 @@ def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
     "method",
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
-def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(method):
+@pytest.mark.parametrize("conflict", ["utilisation", "angle"])
+def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
+    method,
+    conflict,
+):
     at = _fresh()
     at.run()
     if method == codes.EC2_2005.label:
@@ -1833,8 +1837,13 @@ def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(method):
     else:
         _enable_all(at)
     combined = at.session_state["results"]["combined"]
-    combined["transverse"]["u_crush"] = True
-    combined["crushing"]["value"] = 0.50
+    if conflict == "utilisation":
+        combined["transverse"]["u_crush"] = True
+        combined["crushing"]["value"] = 0.50
+    else:
+        combined["transverse"]["u_crush"] = combined["crushing"]["value"]
+        combined["transverse"]["cot"] = 1.50
+        combined["crushing"]["cot"] = 1.40
 
     _select_view(at, "M-V-T Combined")
     assert not at.exception
@@ -1845,6 +1854,7 @@ def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(method):
     assert {str(metric.value) for metric in concrete_metrics} == {"-"}
     assert all(metric.delta in {None, ""} for metric in concrete_metrics)
     assert "50.0 %" not in {str(metric.value) for metric in at.metric}
+    assert not any("1.40" in str(caption.value) for caption in at.caption)
     assert any(
         "Formula (6.29) is NOT ASSESSED" in warning.value
         for warning in at.warning
