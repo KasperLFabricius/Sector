@@ -167,6 +167,12 @@ _TRANSVERSE_REASON_MESSAGES = {
     ),
 }
 _SHEAR_REASON_MESSAGES = {
+    "Enter a positive finite number of effective link legs for each active "
+    "shear direction": EngineerMessage(
+        "SHEAR-LINK-LEGS",
+        "Enter a positive finite number of effective link legs for each active "
+        "shear direction",
+    ),
     "selected strut-angle range is outside the permitted method range": EngineerMessage(
         "SHEAR-STRUT-ANGLE-RANGE",
         "The entered compression-strut range is outside the permitted range for "

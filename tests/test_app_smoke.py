@@ -7795,6 +7795,9 @@ def test_report_reuse_requires_one_current_coherent_calculation_tuple():
     state = {
         "results": results,
         "result_sig": inp["signature"],
+        sector_app._RESULT_CAPACITY_CONTRACT_KEY: (
+            sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+        ),
         "result_input_snapshot": copy.deepcopy(inp),
         "calculation_record": record,
     }
@@ -7828,6 +7831,11 @@ def test_report_reuse_requires_one_current_coherent_calculation_tuple():
         (
             "calculation_record",
             {**record, "result_sha256": "0" * 64},
+        ),
+        (sector_app._RESULT_CAPACITY_CONTRACT_KEY, None),
+        (
+            sector_app._RESULT_CAPACITY_CONTRACT_KEY,
+            ("capacity-result-contract", "superseded"),
         ),
         ("result_sig", ("engineering", 2.0)),
         ("result_input_snapshot", None),

@@ -3127,6 +3127,54 @@ def test_shear_angle_prerequisites_are_independent_of_range_applicability(
     assert links["angle_prerequisites_available"] is prerequisites_available
 
 
+@pytest.mark.parametrize(
+    "invalid_legs",
+    (True, np.bool_(True), float("nan"), float("inf"), -float("inf")),
+    ids=(
+        "boolean",
+        "numpy-boolean",
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+    ),
+)
+@pytest.mark.parametrize("entry", ("direct", "directional"))
+def test_invalid_shear_link_legs_cannot_satisfy_angle_prerequisites(
+    invalid_legs,
+    entry,
+):
+    inp = _member_input(
+        section=None,
+        shear_links=True,
+        shear_link_legs=invalid_legs,
+        shear_components={"vx": {"signed_v_ed": 75.0}},
+        shear_vx_link_legs=invalid_legs,
+        shear_vy_link_legs=2.0,
+    )
+
+    if entry == "direct":
+        _payload, links = capacity.build_shear_context(inp, 0.0, 0.0)
+    else:
+        directional = capacity.build_directional_shear_contexts(
+            inp, 0.0, 0.0
+        )
+        _payload, links = directional["vx"]["candidates"][0]
+
+    assert links is not None
+    assert links["link_legs"] is None
+    assert links["asw"] == 0.0
+    assert links["effective_asw_over_s"] == 0.0
+    assert links["angle_prerequisites_available"] is False
+    result = links["build"](1.0, 2.0)
+    assert result["valid"] is False
+    assert result["calculation_state"] == "NOT ASSESSED"
+    assert result["vrd"] is None
+    assert result["reason"] == (
+        "Enter a positive finite number of effective link legs for each active "
+        "shear direction"
+    )
+
+
 def test_2023_shear_context_uses_the_exact_selected_gamma_v():
     default, _ = capacity.build_shear_context(
         _member_input(

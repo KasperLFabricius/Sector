@@ -211,6 +211,7 @@ _REPORT_GENERATION_FAILED = EngineerMessage(
     "REPORT-GENERATION",
     "Report generation failed. Review the current inputs, recalculate, and try again",
 )
+_RESULT_CAPACITY_CONTRACT_KEY = "result_capacity_contract_sig"
 _MILD_RUPTURE_STRESS = EngineerMessage(
     "MILD-RUPTURE-STRESS",
     "Enter a positive ultimate tensile strength for the selected mild-steel curve",
@@ -3813,6 +3814,7 @@ def _apply_project_text(text: str) -> None:
     for key in (
         "results", "result_sig", "result_plastic_sig", "result_elastic_sig",
         "result_fatigue_sig",
+        _RESULT_CAPACITY_CONTRACT_KEY,
         "result_plastic_case_context_sig", "result_elastic_case_context_sig",
         "result_plastic_bending_context_sig",
         "result_input_snapshot", "_latest_inputs",
@@ -4178,6 +4180,10 @@ def _retained_analysis_for_report(
     )
     results, result_signature, input_snapshot, calculation = retained
     if not results or not isinstance(calculation, dict):
+        return None
+    if state.get(_RESULT_CAPACITY_CONTRACT_KEY) != (
+        _CAPACITY_RESULT_CONTRACT_TOKEN
+    ):
         return None
     if (
         calculation.get("sector_version") != product_version
@@ -10746,7 +10752,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                 effective_asw_over_s=link_ctx["effective_asw_over_s"],
                 asw_factor=link_ctx["asw_factor"],
                 shear_geometry=link_ctx["shear_geometry"],
-                legs=inp["shear_link_legs"], dia=inp["shear_link_dia"],
+                legs=link_ctx["link_legs"], dia=inp["shear_link_dia"],
                 s=inp["shear_link_s"], fywk=inp["shear_fywk"],
                 cot_min=link_ctx["cot_min"], cot_max=link_ctx["cot_max"],
                 delta_ftd=delta_ftd,
@@ -16428,6 +16434,9 @@ def _store_completed_analysis(
     st.session_state["result_plastic_sig"] = inp["plastic_sig"]
     st.session_state["result_elastic_sig"] = inp["elastic_sig"]
     st.session_state["result_fatigue_sig"] = inp["fatigue_sig"]
+    st.session_state[_RESULT_CAPACITY_CONTRACT_KEY] = (
+        _CAPACITY_RESULT_CONTRACT_TOKEN
+    )
     st.session_state["result_plastic_case_context_sig"] = inp[
         "plastic_case_context_sig"
     ]
@@ -16546,10 +16555,17 @@ def _analysis_workspace(inp):
             if st.session_state.get("result_elastic_sig") == inp["elastic_sig"]
             else None
         )
+        capacity_contract_current = (
+            st.session_state.get(_RESULT_CAPACITY_CONTRACT_KEY)
+            == _CAPACITY_RESULT_CONTRACT_TOKEN
+        )
         reuse_plastic_cases = (
             prev.get("plastic_cases")
-            if st.session_state.get("result_plastic_case_context_sig")
-            == inp["plastic_case_context_sig"]
+            if (
+                capacity_contract_current
+                and st.session_state.get("result_plastic_case_context_sig")
+                == inp["plastic_case_context_sig"]
+            )
             else None
         )
         reuse_elastic_cases = (
@@ -16605,7 +16621,11 @@ def _analysis_workspace(inp):
     # An invalid section (a void that disconnects the concrete, steel outside the
     # outline) makes run_analysis return {}. Treat that like no result so the badge
     # does not read green "up to date" for a calculation that produced nothing.
-    stale = bool(results) and st.session_state.get("result_sig") != inp["signature"]
+    stale = bool(results) and (
+        st.session_state.get("result_sig") != inp["signature"]
+        or st.session_state.get(_RESULT_CAPACITY_CONTRACT_KEY)
+        != _CAPACITY_RESULT_CONTRACT_TOKEN
+    )
     if not results:
         c_calc.caption("Not calculated yet")
     elif stale:

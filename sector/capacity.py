@@ -37,6 +37,10 @@ _TORSION_SUBDIVISION_WALL_INPUT = EngineerMessage(
     "TORSION-SUBDIVISION-WALL",
     "Set the torsion wall-thickness override to 0 mm when sub-tube subdivision is enabled",
 )
+_SHEAR_LINK_LEGS_INPUT = EngineerMessage(
+    "SHEAR-LINK-LEGS",
+    "Enter a positive finite number of effective link legs for each active shear direction",
+)
 
 
 def _module(name: str):
@@ -1729,7 +1733,7 @@ def shear_direction_specs(inp):
             "signed_v_ed": vx_signed,
             "face": inp.get("shear_face_x", "auto"),
             "bw": float(inp.get("shear_vx_bw", 0.0)),
-            "legs": float(inp.get("shear_vx_link_legs", 2.0)),
+            "legs": inp.get("shear_vx_link_legs", 2.0),
         },
         "vy": {
             "axis": "x",
@@ -1739,7 +1743,7 @@ def shear_direction_specs(inp):
             "signed_v_ed": vy_signed,
             "face": inp.get("shear_face_y", "auto"),
             "bw": float(inp.get("shear_vy_bw", 0.0)),
-            "legs": float(inp.get("shear_vy_link_legs", 2.0)),
+            "legs": inp.get("shear_vy_link_legs", 2.0),
         },
     }
 
@@ -1924,7 +1928,25 @@ def _build_shear_face_context(
         clause=angle_limits["clause"],
         active=abs(float(v_ed)) > 0.0,
     )
-    asw = link_legs * _module("templates").bar_area(inp["shear_link_dia"])
+    try:
+        validated_link_legs = _positive_finite_real(
+            link_legs,
+            "effective shear-link legs",
+            engineer_message=_SHEAR_LINK_LEGS_INPUT,
+        )
+    except CapacityInputError:
+        validated_link_legs = None
+    link_legs_reason = (
+        None
+        if validated_link_legs is not None
+        else _SHEAR_LINK_LEGS_INPUT.text
+    )
+    asw = (
+        validated_link_legs
+        * _module("templates").bar_area(inp["shear_link_dia"])
+        if validated_link_legs is not None
+        else 0.0
+    )
     asw_over_s = asw / inp["shear_link_s"] if inp["shear_link_s"] > 0.0 else 0.0
     # Sector does not retain a selected N_Edw allocation or the action-state
     # compression-chord depth needed to determine the applicable 8.2.3(11) branch.
@@ -1948,12 +1970,17 @@ def _build_shear_face_context(
     )
     angle_prerequisites_available = bool(
         shear_geometry["links_valid"] is True
+        and validated_link_legs is not None
         and z_mm is not None
         and type(z_mm).__name__ not in {"bool", "bool_"}
         and math.isfinite(float(z_mm))
         and float(z_mm) > 0.0
-        and d_mm > 0.0
-        and effective_asw_over_s > 0.0
+        and type(d_mm).__name__ not in {"bool", "bool_"}
+        and math.isfinite(float(d_mm))
+        and float(d_mm) > 0.0
+        and type(effective_asw_over_s).__name__ not in {"bool", "bool_"}
+        and math.isfinite(float(effective_asw_over_s))
+        and float(effective_asw_over_s) > 0.0
     )
 
     def links_at(
@@ -1968,10 +1995,14 @@ def _build_shear_face_context(
         _area=area,
         _z=z_mm,
     ):
-        if not shear_geometry["links_valid"]:
+        if not shear_geometry["links_valid"] or validated_link_legs is None:
             return shear.unassessed_links_result(
                 model="2023" if model_2023 else "2005",
-                reason=shear_geometry["links_reason"],
+                reason=(
+                    shear_geometry["links_reason"]
+                    if not shear_geometry["links_valid"]
+                    else link_legs_reason
+                ),
                 bw_mm=bw_mm,
                 d_mm=_d,
                 asw_over_s=_asw_over_s,
@@ -2014,7 +2045,8 @@ def _build_shear_face_context(
         "axis": axis,
         "tension_low": tension_low,
         "component": component,
-        "link_legs": link_legs,
+        "link_legs": validated_link_legs,
+        "link_legs_reason": link_legs_reason,
         "model_2023": model_2023,
         "m_ed_2023": m_ed_2023,
         "moment_reference_shift": moment_reference_shift,
@@ -2104,7 +2136,7 @@ def build_shear_context(inp, n_prestress, n_ed_comp):
         tension_low=bool(inp["shear_tension"]),
         v_ed=float(inp["shear_V"]),
         bw_override=float(inp["shear_bw"]),
-        link_legs=float(inp["shear_link_legs"]),
+        link_legs=inp["shear_link_legs"],
         face_mode="selected",
         code=code,
     )

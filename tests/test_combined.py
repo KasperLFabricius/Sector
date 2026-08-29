@@ -2179,6 +2179,180 @@ def test_mvt_m04_contract_recomputes_pre_range_capacity_results():
         "result_plastic_case_context_sig",
     ):
         assert tuple(at.session_state[key]).count(token) == 1
+    assert at.session_state[
+        sector_app._RESULT_CAPACITY_CONTRACT_KEY
+    ] == token
+
+
+def test_mvt_m04_contract_recomputes_when_stored_input_and_result_are_both_old():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Both"),
+        ("number_input", "strut_cot_max", 3.0),
+    )
+    _enable_all(at)
+
+    latest = copy.deepcopy(at.session_state["_latest_inputs"])
+    token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    scope_marker = "compression-strut-applicability-v1"
+    pre_scope_token = tuple(item for item in token if item != scope_marker)
+    before = at.session_state["results"]
+    plastic_before = before["plastic"]
+    elastic_before = before["elastic"]
+    shear_before = before["shear"]
+    torsion_before = before["torsion"]
+    combined_before = before["combined"]
+    for family in (shear_before, torsion_before, combined_before):
+        family["pre_mvt_m04_equal_signature_marker"] = True
+
+    pre_scope_inputs = copy.deepcopy(latest)
+    for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
+        pre_scope_inputs[key] = tuple(
+            pre_scope_token if item == token else item
+            for item in latest[key]
+        )
+    at.session_state["_latest_inputs"] = pre_scope_inputs
+    at.session_state["result_input_snapshot"] = copy.deepcopy(pre_scope_inputs)
+    at.session_state["result_sig"] = pre_scope_inputs["signature"]
+    at.session_state["result_plastic_sig"] = pre_scope_inputs["plastic_sig"]
+    at.session_state["result_plastic_case_context_sig"] = pre_scope_inputs[
+        "plastic_case_context_sig"
+    ]
+    del at.session_state[sector_app._RESULT_CAPACITY_CONTRACT_KEY]
+    assert at.session_state["result_sig"] == at.session_state[
+        "_latest_inputs"
+    ]["signature"]
+    assert at.session_state["result_plastic_case_context_sig"] == (
+        at.session_state["_latest_inputs"]["plastic_case_context_sig"]
+    )
+
+    _goto_page(at, "Report")
+    _goto_page(at, "Analysis")
+    assert any("recalculate" in item.value.lower() for item in at.caption)
+    _calculate(at)
+
+    refreshed = at.session_state["results"]
+    assert refreshed["plastic"] is plastic_before
+    assert refreshed["elastic"] is elastic_before
+    assert refreshed["shear"] is not shear_before
+    assert refreshed["torsion"] is not torsion_before
+    assert refreshed["combined"] is not combined_before
+    for family_name in ("shear", "torsion", "combined"):
+        assert "pre_mvt_m04_equal_signature_marker" not in refreshed[family_name]
+    assert refreshed["plastic_cases"][0]["reused"] is False
+    assert refreshed["elastic_cases"][0]["reused"] is True
+    assert at.session_state[
+        sector_app._RESULT_CAPACITY_CONTRACT_KEY
+    ] == token
+
+
+def test_invalid_shear_leg_evidence_does_not_narrow_valid_torsion():
+    import case_analysis
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("number_input", "pl_Mx", 100.0),
+        ("selectbox", "transverse_ductility_class", "A"),
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "strut_cot_max", 2.0),
+        ("number_input", "shear_V", 500.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    assert not at.exception
+
+    baseline = at.session_state["results"]
+    latest = at.session_state["_latest_inputs"]
+    record = latest["plastic_cases"].iloc[0].to_dict()
+    direct_input = case_analysis.plastic_case_input(latest, record)
+    for key in ("plastic_cases", "elastic_cases"):
+        direct_input.pop(key, None)
+
+    for invalid_legs in (True, float("inf")):
+        hostile_input = dict(
+            direct_input,
+            shear_link_legs=invalid_legs,
+            shear_vx_link_legs=invalid_legs,
+            shear_vy_link_legs=invalid_legs,
+            strut_cot_max=2.5,
+        )
+        result = sector_app.run_analysis(
+            hostile_input,
+            reuse_plastic=baseline["plastic"],
+        )
+
+        links = result["shear"]["links"]
+        assert links["legs"] is None
+        assert links["res"]["valid"] is False
+        assert links["res"]["calculation_state"] == "NOT ASSESSED"
+        assert links["res"]["vrd"] is None
+        assert "positive finite number" in links["res"]["reason"]
+
+        torsion_result = result["torsion"]
+        torsion_angle = torsion_result["angle_applicability"]
+        assert torsion_angle["applicable"] is True
+        assert torsion_angle["permitted_max"] == pytest.approx(2.5)
+        assert "shared shear and torsion" not in torsion_angle["basis"]
+        assert torsion_result["trd"] > 0.0
+        assert torsion_result["util"] is not None
+
+        combined_result = result["combined"]
+        assert combined_result["valid"] is False
+        assert "positive finite number" in combined_result["reason"]
+        assert "dkna_sum" not in combined_result
+
+    hostile_latest = copy.deepcopy(latest)
+    hostile_latest["shear_vx_link_legs"] = True
+    hostile_latest["shear_vy_link_legs"] = True
+    for key in ("plastic_case_context_sig", "plastic_sig", "signature"):
+        hostile_latest[key] = (
+            *hostile_latest[key],
+            ("hostile-shear-link-legs", key),
+        )
+    at.session_state["_latest_inputs"] = hostile_latest
+    _goto_page(at, "Report")
+    _goto_page(at, "Analysis")
+    _calculate(at)
+
+    assert not at.exception
+    native = at.session_state["results"]
+    native_links = native["shear"]["links"]
+    assert native_links["legs"] is None
+    assert native_links["res"]["calculation_state"] == "NOT ASSESSED"
+    assert native_links["res"]["vrd"] is None
+    assert native["torsion"]["trd"] > 0.0
+    assert native["torsion"]["angle_applicability"][
+        "permitted_max"
+    ] == pytest.approx(2.5)
+    assert "shared shear and torsion" not in native["torsion"][
+        "angle_applicability"
+    ]["basis"]
+
+    _select_view(at, "Shear")
+    visible = " ".join(
+        item.value
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "positive finite number of effective link legs" in visible
+    assert not any(
+        token in visible.lower()
+        for token in ("boolean", "infinity", "payload", "schema", "contract")
+    )
 
 
 def test_app_combined_incomplete_flags_missing(monkeypatch):
