@@ -36,6 +36,14 @@ def _blocked_input() -> dict:
         torsion_design_basis=capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
         torsion_member_scope=capacity.TORSION_MEMBER_OPEN,
     )
+    authorities = dict(inp[capacity.TORSION_CASE_AUTHORITIES_KEY])
+    authorities[inp["plastic_case"]["id"]] = {
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+            capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+        ),
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_OPEN,
+    }
+    inp[capacity.TORSION_CASE_AUTHORITIES_KEY] = authorities
     inp["plastic_case"]["t_ed_knm"] = -40.0
     inp["plastic_cases"][0]["t_ed_knm"] = -40.0
     return inp
