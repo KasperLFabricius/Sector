@@ -331,6 +331,33 @@ def test_retained_worked_family_is_reconciled_without_mutating_completed_state()
         "heightened_crack_control": None,
     }
     assert presentation.validated_worked_example_selection({}, out) == {}
+    valid_fine_coarse = [
+        {
+            "case_id": "EL-FINE",
+            "system": "fine",
+            "branch": "crack",
+            "label": "long-term (fine)",
+        },
+        {
+            "case_id": "EL-COARSE",
+            "system": "coarse",
+            "branch": "crack_coarse",
+            "label": "long-term (coarse)",
+        },
+    ]
+    assert presentation._valid_worked_crack_examples(valid_fine_coarse) is True
+    assert presentation._valid_worked_crack_examples([
+        valid_fine_coarse[0], {**valid_fine_coarse[0], "case_id": "EL-OTHER"},
+    ]) is False
+    assert presentation._valid_worked_crack_examples([
+        {
+            "case_id": "EL-GOVERNING",
+            "system": "governing",
+            "branch": "crack",
+            "label": "long-term",
+        },
+        valid_fine_coarse[1],
+    ]) is False
     assert presentation.validated_worked_example_selection({}, {}) == {}
 
 

@@ -3362,6 +3362,50 @@ def test_report_fails_closed_when_worked_example_selection_is_absent():
             "torsion_subchecks": {},
             "heightened_crack_control": None,
         },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [
+                {
+                    "case_id": "EL-FIRST",
+                    "system": "governing",
+                    "branch": "crack",
+                    "label": "long-term",
+                },
+                {
+                    "case_id": "EL-SECOND",
+                    "system": "governing",
+                    "branch": "crack_short",
+                    "label": "short-term",
+                },
+            ],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [
+                {
+                    "case_id": "EL-GOVERNING",
+                    "system": "governing",
+                    "branch": "crack",
+                    "label": "long-term",
+                },
+                {
+                    "case_id": "EL-COARSE",
+                    "system": "coarse",
+                    "branch": "crack_coarse",
+                    "label": "long-term (coarse)",
+                },
+            ],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
     ),
 )
 def test_report_fails_closed_on_corrupt_worked_example_selection(selection):

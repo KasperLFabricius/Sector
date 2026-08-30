@@ -1407,6 +1407,20 @@ _WORKED_FAMILY_KEYS = frozenset({
     "minimum_reinforcement",
     "transverse_reinforcement",
 })
+_WORKED_SELECTION_KEYS = frozenset({
+    "schema",
+    "families",
+    "crack_examples",
+    "crack_comparison",
+    "cracking_threshold",
+    "torsion_subchecks",
+    "heightened_crack_control",
+})
+_WORKED_DIRECTION_COMPONENTS = frozenset({None, "vx", "vy"})
+_WORKED_TORSION_SUBCHECK_KEYS = frozenset({
+    "interaction",
+    "minimum_reinforcement",
+})
 
 
 def _worked_case_identity(item, *, component=False):
@@ -1420,6 +1434,17 @@ def _worked_case_identity(item, *, component=False):
         if direction is not None and type(direction) is not str:
             return False
     return True
+
+
+def _valid_worked_family_identity(family, item):
+    if not _worked_case_identity(item):
+        return False
+    if family in {"minimum_reinforcement", "transverse_reinforcement"}:
+        return set(item) == {"case_id"}
+    return (
+        set(item) == {"case_id", "component"}
+        and item.get("component") in _WORKED_DIRECTION_COMPONENTS
+    )
 
 
 _WORKED_CRACK_EXAMPLE_SHAPES = frozenset({
@@ -1445,6 +1470,21 @@ def _valid_worked_crack_example(item):
     return values in _WORKED_CRACK_EXAMPLE_SHAPES
 
 
+def _valid_worked_crack_examples(items):
+    if not isinstance(items, (list, tuple)):
+        return False
+    if not all(_valid_worked_crack_example(item) for item in items):
+        return False
+    systems = tuple(item["system"] for item in items)
+    return systems in {
+        (),
+        ("governing",),
+        ("fine",),
+        ("coarse",),
+        ("fine", "coarse"),
+    }
+
+
 def validated_worked_example_selection(inp, out):
     """Validate retained family identities against the complete current result.
 
@@ -1457,6 +1497,7 @@ def validated_worked_example_selection(inp, out):
     retained = (out or {}).get("worked_example_selection")
     if (
         not isinstance(retained, Mapping)
+        or not set(retained).issubset(_WORKED_SELECTION_KEYS)
         or type(retained.get("schema")) is not int
         or retained.get("schema") != 1
     ):
@@ -1467,24 +1508,31 @@ def validated_worked_example_selection(inp, out):
     for family, item in families.items():
         if (
             family not in _WORKED_FAMILY_KEYS
-            or not _worked_case_identity(item, component=True)
+            or not _valid_worked_family_identity(family, item)
         ):
             return {}
     crack_examples = retained.get("crack_examples", ())
-    if (
-        not isinstance(crack_examples, (list, tuple))
-        or not all(_valid_worked_crack_example(item) for item in crack_examples)
+    if not _valid_worked_crack_examples(crack_examples):
+        return {}
+    comparison = retained.get("crack_comparison")
+    if comparison is not None and (
+        not _worked_case_identity(comparison)
+        or set(comparison) != {"case_id", "duration"}
+        or comparison.get("duration") not in {"long_term", "short_term"}
     ):
         return {}
-    for key in ("crack_comparison", "cracking_threshold"):
-        item = retained.get(key)
-        if item is not None and not _worked_case_identity(item):
-            return {}
+    threshold = retained.get("cracking_threshold")
+    if threshold is not None and (
+        not _worked_case_identity(threshold)
+        or set(threshold) != {"case_id"}
+    ):
+        return {}
     torsion_subchecks = retained.get("torsion_subchecks", {})
     if (
         not isinstance(torsion_subchecks, Mapping)
+        or not set(torsion_subchecks).issubset(_WORKED_TORSION_SUBCHECK_KEYS)
         or not all(
-            _worked_case_identity(item, component=True)
+            _valid_worked_family_identity("torsion", item)
             for item in torsion_subchecks.values()
         )
     ):
@@ -1492,15 +1540,12 @@ def validated_worked_example_selection(inp, out):
     heightened = retained.get("heightened_crack_control")
     if heightened is not None and (
         not isinstance(heightened, Mapping)
-        or type(heightened.get("result_key")) is not str
+        or set(heightened) != {"result_key"}
+        or heightened.get("result_key") != "heightened_crack_control"
     ):
         return {}
 
-    current = worked_example_selection(inp, out)
-    current_families = current.get("families") or {}
-    reconciled = dict(retained)
-    reconciled["families"] = dict(current_families)
-    return reconciled
+    return worked_example_selection(inp, out)
 
 
 def plastic_action_assessment(pl):
